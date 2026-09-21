@@ -242,7 +242,7 @@ final class EditorSelectionOverlay: NSView {
     var hitTestLayer: ((CGPoint, Double) throws -> String?)?
     var outlineForLayer: ((String) -> [CGPoint]?)?
     var onSelect: ((String?) -> Void)?
-    var onMove: ((String, CGFloat, CGFloat) -> Void)?
+    var onMove: ((String, CGFloat, CGFloat, Double) -> Void)?
     var onRotate: ((String, Double) -> Void)?
     var onResize: ((String, String, CGPoint, Double, Bool) -> Void)?
     var onError: ((Error) -> Void)?
@@ -259,6 +259,8 @@ final class EditorSelectionOverlay: NSView {
     private var resizeHandle: Int?
     private(set) var resizePreview: NativeEditorResizePreview?
     private var lockResizeAspect = false
+    private var moveDrag: NativeEditorMoveDrag?
+    private(set) var movePreview: NativeEditorResizePreview?
 
     static let resizeHandleNames = ["nw", "n", "ne", "e", "se", "s", "sw", "w"]
 
@@ -324,6 +326,11 @@ final class EditorSelectionOverlay: NSView {
                 }
             }
             hitLayerID = try hitTestLayer?(documentPoint, 8 / scale)
+            if let id = hitLayerID {
+                guard let documentJSON else { throw AppBridgeError.invalidResponse }
+                moveDrag = try NativeEditorMoveDrag.begin(documentJSON: documentJSON,
+                    layerID: id, displayScale: scale)
+            }
             transientOutline = hitLayerID.flatMap { outlineForLayer?($0) }
             startPoint = point; currentPoint = point; needsDisplay = true
         } catch { cancelGesture(); onError?(error) }
@@ -337,6 +344,18 @@ final class EditorSelectionOverlay: NSView {
         } else if let resizeDrag, let handle = resizeHandle {
             if let snap { lockResizeAspect = snap && handle.isMultiple(of: 2) }
             resizePreview = resizeDrag.preview(current: canvasPoint(for: point), lockAspect: lockResizeAspect)
+        } else if let moveDrag {
+            guard hypot(point.x - startPoint.x, point.y - startPoint.y) >= 3 else {
+                movePreview = nil; needsDisplay = true; return
+            }
+            let scale = presentedImageRect.width / canvasSize.width
+            movePreview = moveDrag.preview(delta: CGPoint(
+                x: (point.x - startPoint.x) / scale, y: (point.y - startPoint.y) / scale))
+            if movePreview == nil {
+                cancelGesture()
+                onError?(AppBridgeError.invalidResponse)
+                return
+            }
         }
         needsDisplay = true
     }
@@ -365,13 +384,14 @@ final class EditorSelectionOverlay: NSView {
         let distance = hypot(point.x - start.x, point.y - start.y)
         let scale = presentedImageRect.width / canvasSize.width
         cancelGesture()
-        if distance >= 3, let hit { onMove?(hit, (point.x - start.x) / scale, (point.y - start.y) / scale) }
+        if distance >= 3, let hit { onMove?(hit, (point.x - start.x) / scale, (point.y - start.y) / scale, scale) }
         else { onSelect?(hit) }
     }
     func cancelGesture() {
         startPoint = nil; currentPoint = nil; hitLayerID = nil; transientOutline = nil
         rotationStartOutline = nil; rotatingLayerID = nil; rotationPreview = nil; needsDisplay = true
         resizeDrag = nil; resizeHandle = nil; resizePreview = nil; lockResizeAspect = false
+        moveDrag = nil; movePreview = nil
     }
     override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self); begin(at: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
     override func mouseDragged(with event: NSEvent) { drag(to: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
@@ -387,26 +407,21 @@ final class EditorSelectionOverlay: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard canvasSize.width > 0, canvasSize.height > 0,
-              let outline = resizePreview?.outline ?? rotationPreview?.outline
+              let outline = resizePreview?.outline ?? movePreview?.outline ?? rotationPreview?.outline
                 ?? (startPoint == nil ? selectedOutline : transientOutline),
               outline.count == 4 else { return }
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         NSBezierPath(rect: bounds).addClip()
         let image = presentedImageRect, scale = image.width / canvasSize.width
-        let delta: CGPoint
-        if rotatingLayerID == nil, resizeDrag == nil, let startPoint, let currentPoint,
-           hypot(currentPoint.x-startPoint.x, currentPoint.y-startPoint.y) >= 3 {
-            delta = CGPoint(x: currentPoint.x-startPoint.x, y: currentPoint.y-startPoint.y)
-        } else { delta = .zero }
         let path = NSBezierPath()
         for (index, point) in outline.enumerated() {
-            let mapped = CGPoint(x: image.minX + point.x * scale + delta.x,
-                                 y: image.minY + point.y * scale + delta.y)
+            let mapped = CGPoint(x: image.minX + point.x * scale,
+                                 y: image.minY + point.y * scale)
             index == 0 ? path.move(to: mapped) : path.line(to: mapped)
         }
         path.close(); strokeColor.setStroke(); path.lineWidth = 2; path.stroke()
-        if let preview = resizePreview {
+        if let preview = resizePreview ?? movePreview {
             let guides = NSBezierPath()
             for guide in preview.guides {
                 if guide.orientation == .vertical {
@@ -701,7 +716,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             self?.state.snapshot?.layers.first(where: { $0.id == id })?.selectionOutline
         }
         selectionOverlay.onSelect = { [weak self] id in self?.selectCanvasLayer(id) }
-        selectionOverlay.onMove = { [weak self] id, dx, dy in self?.moveCanvasLayer(id, dx: dx, dy: dy) }
+        selectionOverlay.onMove = { [weak self] id, dx, dy, scale in
+            self?.moveCanvasLayer(id, dx: dx, dy: dy, displayScale: scale)
+        }
         selectionOverlay.onRotate = { [weak self] id, radians in self?.rotateCanvasLayer(id, radians: radians) }
         selectionOverlay.onResize = { [weak self] id, handle, current, scale, lockAspect in
             self?.resizeCanvasLayer(id, handle: handle, current: current,
@@ -1288,11 +1305,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         reconcileLayerSelection(state.snapshot?.layers ?? [], allowFallback: false)
     }
 
-    private func moveCanvasLayer(_ id: String, dx: CGFloat, dy: CGFloat) {
+    private func moveCanvasLayer(_ id: String, dx: CGFloat, dy: CGFloat, displayScale: Double) {
         guard !state.busy, let layer = state.snapshot?.layers.first(where: { $0.id == id }),
               !layer.locked else { return }
         command(["operation": "layer", "id": id,
-                 "edit": ["action": "translate", "delta_x": Double(dx), "delta_y": Double(dy)]],
+                 "edit": ["action": "drag_move", "delta_x": Double(dx), "delta_y": Double(dy),
+                          "display_scale": displayScale]],
                 message: "Moving layer…", preferredSelection: id)
     }
 

@@ -1652,7 +1652,13 @@ final class ScreenshotEditorTests: XCTestCase {
         var moves: [(String, CGFloat, CGFloat)] = []
         overlay.hitTestLayer = { point, tolerance in hits.append((point, tolerance)); return "front" }
         overlay.onSelect = { selections.append($0) }
-        overlay.onMove = { moves.append(($0, $1, $2)) }
+        overlay.onMove = { id, dx, dy, _ in moves.append((id, dx, dy)) }
+        let front = ["kind": "shape", "id": "front", "shape": "rectangle", "x": 20.0, "y": 20.0,
+                     "endX": 200.0, "endY": 150.0, "controls": [], "locked": false, "visible": true,
+                     "opacity": 100.0, "blendMode": "source-over",
+                     "style": ["color": "#ff3b5c", "fill": "#ff3b5c", "strokeWidth": 8.0]] as [String: Any]
+        overlay.documentJSON = String(decoding: try! JSONSerialization.data(withJSONObject:
+            ["width": 400.0, "height": 200.0, "elements": [front]]), as: UTF8.self)
 
         // The non-square canvas is fitted to 200 × 100 with ten-point letterboxing.
         overlay.begin(at: CGPoint(x: 20, y: 30)); overlay.end(at: CGPoint(x: 22.9, y: 30))
@@ -1671,7 +1677,7 @@ final class ScreenshotEditorTests: XCTestCase {
         let overlay = EditorSelectionOverlay(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
         overlay.canvasSize = NSSize(width: 100, height: 100); overlay.selectionEnabled = true
         var selections: [String?] = []; var moves = 0; var errors = 0
-        overlay.onSelect = { selections.append($0) }; overlay.onMove = { _, _, _ in moves += 1 }
+        overlay.onSelect = { selections.append($0) }; overlay.onMove = { _, _, _, _ in moves += 1 }
         overlay.onError = { _ in errors += 1 }; overlay.hitTestLayer = { _, _ in nil }
         overlay.begin(at: CGPoint(x: 20, y: 20)); overlay.end(at: CGPoint(x: 20, y: 20))
         XCTAssertEqual(selections.count, 1); XCTAssertNil(selections[0])
@@ -1679,6 +1685,12 @@ final class ScreenshotEditorTests: XCTestCase {
         overlay.begin(at: CGPoint(x: 30, y: 30)); overlay.end(at: CGPoint(x: 50, y: 50))
         XCTAssertEqual(errors, 1); XCTAssertEqual(moves, 0); XCTAssertEqual(selections.count, 1)
         overlay.hitTestLayer = { _, _ in "layer" }
+        let layer = ["kind": "shape", "id": "layer", "shape": "rectangle", "x": 10.0, "y": 10.0,
+                     "endX": 80.0, "endY": 80.0, "controls": [], "locked": false, "visible": true,
+                     "opacity": 100.0, "blendMode": "source-over",
+                     "style": ["color": "#ff3b5c", "fill": "#ff3b5c", "strokeWidth": 8.0]] as [String: Any]
+        overlay.documentJSON = String(decoding: try! JSONSerialization.data(withJSONObject:
+            ["width": 100.0, "height": 100.0, "elements": [layer]]), as: UTF8.self)
         overlay.begin(at: CGPoint(x: 30, y: 30)); overlay.cancelGesture(); overlay.end(at: CGPoint(x: 60, y: 60))
         XCTAssertEqual(moves, 0)
         overlay.begin(at: CGPoint(x: 30, y: 30)); overlay.setFrameSize(NSSize(width: 120, height: 100))
@@ -1686,6 +1698,53 @@ final class ScreenshotEditorTests: XCTestCase {
         overlay.begin(at: CGPoint(x: 30, y: 30)); overlay.selectionEnabled = false
         overlay.end(at: CGPoint(x: 60, y: 60))
         XCTAssertEqual(moves, 0); XCTAssertEqual(selections.count, 1)
+    }
+
+    func testCanvasMovePreviewSnapsNearEdgesWithStrictThresholdAndMultipleGuides() throws {
+        let moving: [String: Any] = [
+            "kind": "image", "id": "moving", "source": "imported", "src": "draft-asset:image",
+            "name": "image.png", "x": 41.25, "y": 37.5, "width": 83.5, "height": 46.25,
+            "naturalWidth": 183.0, "naturalHeight": 86.5, "locked": false, "visible": true,
+            "opacity": 73.0, "blendMode": "multiply",
+        ]
+        var sibling = moving
+        sibling["id"] = "same-size"; sibling["x"] = 190.0; sibling["y"] = 130.0
+        let data = try JSONSerialization.data(withJSONObject:
+            ["width": 300.0, "height": 220.0, "elements": [moving, sibling]])
+        let json = String(decoding: data, as: UTF8.self)
+        let drag = try NativeEditorMoveDrag.begin(documentJSON: json, layerID: "moving", displayScale: 1)
+
+        let exact = try XCTUnwrap(drag.preview(delta: CGPoint(x: -31.25, y: -27.5)))
+        XCTAssertEqual(exact.outline[0], CGPoint(x: 10, y: 10),
+                       "the exact ten-view-point threshold is strict")
+        XCTAssertTrue(exact.guides.isEmpty)
+        let nearEdge = try XCTUnwrap(drag.preview(delta: CGPoint(x: -31.251, y: -27.501)))
+        XCTAssertEqual(nearEdge.outline[0], .zero)
+        XCTAssertEqual(nearEdge.guides, [
+            NativeEditorAlignmentGuide(orientation: .vertical, position: 0),
+            NativeEditorAlignmentGuide(orientation: .horizontal, position: 0),
+        ])
+        let multiple = try XCTUnwrap(drag.preview(delta: CGPoint(x: 148.4, y: 92.4)))
+        XCTAssertEqual(multiple.outline[0], CGPoint(x: 190, y: 130))
+        XCTAssertEqual(multiple.guides.count, 4)
+        XCTAssertEqual(multiple.guides.map(\.position), [190, 273.5, 130, 176.25])
+
+        // A layer already inside the magnetic range must not jump on a click,
+        // or when a drag returns below the three-view-point movement threshold.
+        var near = moving; near["x"] = 5.0
+        let overlay = EditorSelectionOverlay(frame: NSRect(x: 0, y: 0, width: 300, height: 220))
+        overlay.canvasSize = NSSize(width: 300, height: 220); overlay.selectionEnabled = true
+        overlay.documentJSON = String(decoding: try JSONSerialization.data(withJSONObject:
+            ["width": 300.0, "height": 220.0, "elements": [near]]), as: UTF8.self)
+        overlay.hitTestLayer = { _, _ in "moving" }
+        overlay.begin(at: CGPoint(x: 40, y: 50))
+        XCTAssertNil(overlay.movePreview)
+        overlay.drag(to: CGPoint(x: 42.9, y: 50))
+        XCTAssertNil(overlay.movePreview)
+        overlay.drag(to: CGPoint(x: 44, y: 50))
+        XCTAssertEqual(overlay.movePreview?.outline[0].x, 0)
+        overlay.drag(to: CGPoint(x: 41, y: 50))
+        XCTAssertNil(overlay.movePreview)
     }
 
     func testCanvasRotationGripHasPriorityUsesReleaseAndNoOpDoesNotCommit() throws {
@@ -1879,18 +1938,20 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(worker.requests.count, 1)
             XCTAssertEqual(worker.requests[0]["id"] as? String, "right")
             let edit = try XCTUnwrap(worker.requests[0]["edit"] as? [String: Any])
+            XCTAssertEqual(edit["action"] as? String, "drag_move")
             XCTAssertEqual(try XCTUnwrap(edit["delta_x"] as? Double), 20, accuracy: 1e-7)
             XCTAssertEqual(try XCTUnwrap(edit["delta_y"] as? Double), 30, accuracy: 1e-7)
+            XCTAssertEqual(try XCTUnwrap(edit["display_scale"] as? Double), scale, accuracy: 1e-7)
             XCTAssertFalse(output.isEnabled); XCTAssertTrue(controller.state.busy)
             XCTAssertFalse(overlay.selectionEnabled)
             XCTAssertEqual(try field("Layer X", in: controller.root).stringValue, "40")
             worker.completePending(with: published)
             XCTAssertEqual(try field("Layer X", in: controller.root).stringValue, "240")
-            worker.deferRequests = false; worker.failLayerAction = "translate"
+            worker.deferRequests = false; worker.failLayerAction = "drag_move"
             overlay.begin(at: point(70, 70)); overlay.end(at: point(90, 90))
             XCTAssertEqual(try field("Layer X", in: controller.root).stringValue, "240")
             XCTAssertFalse(controller.state.busy)
-            try render(controller.root, name: "screenshot-editor-canvas-error-minimum-\(appearance)")
+            try render(controller.root, name: "screenshot-editor-move-error-minimum-\(appearance)")
         }
     }
 
@@ -1927,24 +1988,26 @@ final class ScreenshotEditorTests: XCTestCase {
             let overlay = controller.selectionOverlay
             let rect = overlay.presentedImageRect, scale = rect.width / 640
             let start = CGPoint(x: rect.minX + 150 * scale, y: rect.minY + 120 * scale)
-            let end = CGPoint(x: start.x + 40 * scale, y: start.y + 30 * scale)
+            let end = CGPoint(x: start.x - 95 * scale, y: start.y - 75 * scale)
             overlay.begin(at: start); overlay.drag(to: end)
             XCTAssertFalse(controller.state.snapshot!.unsavedChanges)
-            try render(controller.root, name: "screenshot-editor-canvas-active-outline-\(appearance)")
+            XCTAssertEqual(overlay.movePreview?.outline.first, .zero,
+                           "a raw near-edge move previews the independently derived snapped outline")
+            try render(controller.root, name: "screenshot-editor-move-active-\(appearance)")
             overlay.end(at: end)
             waitUntil { !controller.state.busy && controller.state.snapshot!.unsavedChanges }
             let moved = try request(["operation": "snapshot"], using: live)
             XCTAssertEqual(moved.snapshot.layers.first?.id, id)
-            XCTAssertEqual(try XCTUnwrap(moved.snapshot.layers.first?.x), 140, accuracy: 1e-7)
-            XCTAssertEqual(try XCTUnwrap(moved.snapshot.layers.first?.y), 110, accuracy: 1e-7)
+            XCTAssertEqual(try XCTUnwrap(moved.snapshot.layers.first?.x), 4, accuracy: 1e-7)
+            XCTAssertEqual(try XCTUnwrap(moved.snapshot.layers.first?.y), 4, accuracy: 1e-7)
             XCTAssertEqual(rgba(moved.image, x: 110, y: 90), [247, 247, 245, 255])
-            XCTAssertEqual(rgba(moved.image, x: 230, y: 150), [255, 59, 92, 255])
-            try render(controller.root, name: "screenshot-editor-canvas-moved-selection-\(appearance)")
+            XCTAssertEqual(rgba(moved.image, x: 10, y: 10), [255, 59, 92, 255])
+            try render(controller.root, name: "screenshot-editor-move-committed-\(appearance)")
             try button("Undo", in: controller.root).performClick(nil)
             waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == true }
             let undone = try request(["operation": "snapshot"], using: live)
             XCTAssertEqual(rgba(undone.image, x: 110, y: 90), [255, 59, 92, 255])
-            XCTAssertEqual(rgba(undone.image, x: 230, y: 150), [247, 247, 245, 255])
+            XCTAssertEqual(rgba(undone.image, x: 10, y: 10), [247, 247, 245, 255])
             try button("Redo", in: controller.root).performClick(nil)
             waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == false }
             try button("Save draft", in: controller.root).performClick(nil)
@@ -1955,7 +2018,7 @@ final class ScreenshotEditorTests: XCTestCase {
             reopened.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) { result in
                 if let value = try? result.get() {
                     XCTAssertEqual(value.snapshot.layers.first?.id, id)
-                    XCTAssertEqual(self.rgba(value.image, x: 230, y: 150), [255, 59, 92, 255])
+                    XCTAssertEqual(self.rgba(value.image, x: 10, y: 10), [255, 59, 92, 255])
                 } else { XCTFail("reopen failed") }
                 done.fulfill()
             }

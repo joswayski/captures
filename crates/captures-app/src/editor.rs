@@ -62,6 +62,22 @@ pub struct ResizeDrag {
     horizontal_lines: Vec<f64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct MovePreview {
+    pub element: Element,
+    pub outline: [Point; 4],
+    pub guides: Vec<AlignmentGuide>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MoveDrag {
+    element: Element,
+    initial_bounds: Rect,
+    display_scale: f64,
+    vertical_lines: Vec<f64>,
+    horizontal_lines: Vec<f64>,
+}
+
 const fn default_opacity() -> f64 {
     100.
 }
@@ -920,18 +936,7 @@ impl ResizeDrag {
             .ok_or("The selected layer no longer exists.")?
             .clone();
         let initial_bounds = element.selection_bounds()?;
-        let mut vertical_lines = vec![0., document.width];
-        let mut horizontal_lines = vec![0., document.height];
-        for other in &document.elements {
-            if other.base().id == id || !other.base().visible {
-                continue;
-            }
-            let bounds = painted_bounds(other)?;
-            push_unique_number(&mut vertical_lines, bounds.x);
-            push_unique_number(&mut vertical_lines, bounds.x + bounds.width);
-            push_unique_number(&mut horizontal_lines, bounds.y);
-            push_unique_number(&mut horizontal_lines, bounds.y + bounds.height);
-        }
+        let (vertical_lines, horizontal_lines) = collect_alignment_lines(document, id)?;
         Ok(Self {
             element,
             initial_bounds,
@@ -997,6 +1002,80 @@ impl ResizeDrag {
             guides,
         })
     }
+}
+
+impl MoveDrag {
+    pub fn new(document: &Document, id: &str, display_scale: f64) -> Result<Self, String> {
+        if !display_scale.is_finite() || display_scale <= 0. {
+            return Err("Move display scale must be finite and positive.".into());
+        }
+        let element = document
+            .elements
+            .iter()
+            .find(|element| element.base().id == id)
+            .ok_or("The selected layer no longer exists.")?
+            .clone();
+        if matches!(element, Element::Text(_)) {
+            return Err("Text movement is not supported by the native editor.".into());
+        }
+        let initial_bounds = painted_bounds(&element)?;
+        let (vertical_lines, horizontal_lines) = collect_alignment_lines(document, id)?;
+        Ok(Self {
+            element,
+            initial_bounds,
+            display_scale,
+            vertical_lines,
+            horizontal_lines,
+        })
+    }
+
+    pub fn preview(&self, delta: Point) -> Result<MovePreview, String> {
+        if !delta.x.is_finite() || !delta.y.is_finite() {
+            return Err("Move delta must be finite.".into());
+        }
+        let free = Rect {
+            x: self.initial_bounds.x + delta.x,
+            y: self.initial_bounds.y + delta.y,
+            ..self.initial_bounds
+        };
+        let threshold = ALIGNMENT_SNAP_SCREEN_PX / self.display_scale.max(0.01);
+        let (snapped, guides) = snap_translated_bounds(
+            free,
+            &self.vertical_lines,
+            &self.horizontal_lines,
+            threshold,
+        );
+        let mut element = self.element.clone();
+        element.translate_layer(delta.x + snapped.x - free.x, delta.y + snapped.y - free.y)?;
+        let outline = element.selection_outline()?;
+        if !finite_outline(&outline) {
+            return Err("Move must keep geometry finite.".into());
+        }
+        Ok(MovePreview {
+            element,
+            outline,
+            guides,
+        })
+    }
+}
+
+fn collect_alignment_lines(
+    document: &Document,
+    exclude_id: &str,
+) -> Result<(Vec<f64>, Vec<f64>), String> {
+    let mut vertical = vec![0., document.width];
+    let mut horizontal = vec![0., document.height];
+    for element in &document.elements {
+        if element.base().id == exclude_id || !element.base().visible {
+            continue;
+        }
+        let bounds = painted_bounds(element)?;
+        push_unique_number(&mut vertical, bounds.x);
+        push_unique_number(&mut vertical, bounds.x + bounds.width);
+        push_unique_number(&mut horizontal, bounds.y);
+        push_unique_number(&mut horizontal, bounds.y + bounds.height);
+    }
+    Ok((vertical, horizontal))
 }
 
 fn push_unique_number(values: &mut Vec<f64>, value: f64) {
@@ -1143,6 +1222,11 @@ pub enum LayerEdit {
     Translate {
         delta_x: f64,
         delta_y: f64,
+    },
+    DragMove {
+        delta_x: f64,
+        delta_y: f64,
+        display_scale: f64,
     },
     Rotate {
         radians: f64,
@@ -1542,6 +1626,29 @@ impl Document {
                     self.elements[index].translate_layer(delta_x, delta_y)?;
                 }
             }
+            LayerEdit::DragMove {
+                delta_x,
+                delta_y,
+                display_scale,
+            } => {
+                if !delta_x.is_finite() || !delta_y.is_finite() {
+                    return Err("Move delta must be finite.".into());
+                }
+                if !display_scale.is_finite() || display_scale <= 0. {
+                    return Err("Move display scale must be finite and positive.".into());
+                }
+                if !locked {
+                    let preview = MoveDrag::new(self, id, display_scale)?.preview(Point {
+                        x: delta_x,
+                        y: delta_y,
+                    })?;
+                    let bounds = painted_bounds(&preview.element)?;
+                    self.elements[index] = preview.element;
+                    if fully_outside_canvas(bounds, self.width, self.height) {
+                        self.expand_canvas_to_bounds(bounds);
+                    }
+                }
+            }
             LayerEdit::Rotate { radians } => {
                 let radians =
                     rotation_angle(radians, false).ok_or("Layer rotation must be finite.")?;
@@ -1871,6 +1978,65 @@ fn closest_snap(value: f64, lines: &[f64], threshold: f64) -> Option<f64> {
         }
     }
     best
+}
+
+fn snap_translated_bounds(
+    bounds: Rect,
+    vertical: &[f64],
+    horizontal: &[f64],
+    threshold: f64,
+) -> (Rect, Vec<AlignmentGuide>) {
+    if threshold <= 0. {
+        return (bounds, Vec::new());
+    }
+    let pick_axis = |edges: [f64; 2], lines: &[f64]| {
+        let mut best = None;
+        let mut best_abs = threshold;
+        for edge in edges {
+            if let Some(position) = closest_snap(edge, lines, threshold) {
+                let delta = position - edge;
+                let distance = delta.abs();
+                if distance < best_abs - 1e-9 {
+                    best_abs = distance;
+                    best = Some(delta);
+                }
+            }
+        }
+        best
+    };
+    let delta_x = pick_axis([bounds.x, bounds.x + bounds.width], vertical);
+    let delta_y = pick_axis([bounds.y, bounds.y + bounds.height], horizontal);
+    let next = Rect {
+        x: bounds.x + delta_x.unwrap_or(0.),
+        y: bounds.y + delta_y.unwrap_or(0.),
+        ..bounds
+    };
+    let mut guides = Vec::new();
+    let mut push_guide = |orientation: GuideOrientation, position: f64| {
+        if !guides.iter().any(|guide: &AlignmentGuide| {
+            guide.orientation == orientation && (guide.position - position).abs() <= 1e-6
+        }) {
+            guides.push(AlignmentGuide {
+                orientation,
+                position,
+            });
+        }
+    };
+    if delta_x.is_some() {
+        for edge in [next.x, next.x + next.width] {
+            if vertical.iter().any(|line| (line - edge).abs() <= 1e-6) {
+                push_guide(GuideOrientation::Vertical, edge);
+            }
+        }
+    }
+    if delta_y.is_some() {
+        for edge in [next.y, next.y + next.height] {
+            if horizontal.iter().any(|line| (line - edge).abs() <= 1e-6) {
+                push_guide(GuideOrientation::Horizontal, edge);
+            }
+        }
+    }
+    (next, guides)
 }
 
 fn snap_resized_bounds(

@@ -29,6 +29,7 @@ import {
   reorderScreenshotLayers,
   resizeDocumentCanvas,
   snapResizedBounds,
+  snapTranslatedBounds,
   snapShapeRotation,
   transformImageElement,
   translateElement,
@@ -383,6 +384,136 @@ function resizeOracle(input, id, handle, displayScale, current, lockAspect) {
   };
 }
 
+function moveOracle(input, id, displayScale, delta) {
+  const element = input.elements.find(candidate => candidate.id === id);
+  assert.ok(element);
+  const free = translateElement(element, delta.x, delta.y);
+  const freeBounds = elementBounds(free);
+  const lines = collectAlignmentSnapLines(input, id);
+  const snapped = snapTranslatedBounds(
+    freeBounds,
+    lines,
+    10 / Math.max(0.01, displayScale),
+  );
+  const moved = translateElement(
+    free,
+    snapped.bounds.x - freeBounds.x,
+    snapped.bounds.y - freeBounds.y,
+  );
+  let committed = {
+    ...input,
+    elements: input.elements.map(candidate => candidate.id === id ? moved : candidate),
+  };
+  const painted = elementBounds(moved);
+  if (isFullyOutsideCanvas(painted, committed)) {
+    committed = expandDocumentToFitBounds(committed, painted, 0);
+  }
+  return {
+    element: moved,
+    outline: resizeOutline(moved),
+    guides: snapped.guides,
+    committed,
+  };
+}
+
+function moveCases() {
+  const image = {
+    ...document.elements[0], id: 'move-image', visible: true, x: 41.25, y: 37.5,
+    width: 83.5, height: 46.25, orientation: 'transverse', futureMove: { keep: true },
+  };
+  const shape = {
+    ...document.elements[2], id: 'move-shape', shape: 'rectangle', x: 52.25, y: 61.5,
+    endX: 137.75, endY: 105.25, controls: [], rotation: 0.47,
+    style: { ...style, strokeWidth: 11.5, dropShadow: true }, futureMove: ['shape'],
+  };
+  const path = {
+    ...document.elements[3], id: 'move-path', x: 34.5, y: 45.25,
+    points: [{ x: 34.5, y: 45.25 }, { x: 91.75, y: 128.5 }, { x: 157.25, y: 69.75 }],
+    rotation: -0.39, style: { ...style, strokeWidth: 7.5, dropShadow: true },
+    futureMove: { path: 4 },
+  };
+  const arrow = {
+    ...document.elements[2], id: 'move-arrow', x: 43.25, y: 94.5,
+    endX: 176.75, endY: 37.25, controls: [{ x: 88.5, y: 22.75 }], rotation: 0.31,
+    style: { ...style, strokeWidth: 13.25, dropShadow: true }, futureMove: { arrow: true },
+  };
+  const sibling = (id, x, y, width = 35, height = 27, extra = {}) => ({
+    ...image, id, x, y, width, height, orientation: undefined, futureMove: { sibling: id }, ...extra,
+  });
+  const base = { width: 300, height: 220, background: null, futureMoveDocument: 4, elements: [image] };
+  const drags = [];
+  const add = (name, input, element, delta, displayScale = 1) => {
+    const oracle = moveOracle(input, element.id, displayScale, delta);
+    drags.push({ name, input, id: element.id, displayScale, delta,
+      expected: { element: oracle.element, outline: oracle.outline, guides: oracle.guides },
+      committed: oracle.committed });
+  };
+
+  add('asymmetric image free xy', base, image, { x: 23.125, y: -17.375 });
+  add('left and top canvas edges', base, image, { x: -39.5, y: -35.25 });
+  add('right and bottom canvas edges', base, image, { x: 167.2, y: 138.1 });
+  add('exact threshold does not snap', base, image, { x: -31.25, y: -27.5 });
+  add('just inside threshold snaps', base, image, { x: -31.251, y: -27.501 });
+  add('threshold scales with display', base, image, { x: -36.251, y: -32.501 }, 2);
+
+  const vertical = sibling('vertical', 160, 18, 40, 60);
+  const horizontal = sibling('horizontal', 12, 150, 60, 30);
+  add('sibling left and top axes', { ...base, elements: [image, vertical, horizontal] }, image,
+    { x: 110.1, y: 102.2 });
+  add('sibling right and bottom axes', { ...base, elements: [image, vertical, horizontal] }, image,
+    { x: 35.2, y: 66.1 });
+  add('cross edge right to left and bottom to top', { ...base, elements: [image, vertical, horizontal] }, image,
+    { x: 35.1, y: 66.2 });
+
+  const sameSize = sibling('same-size', 190, 130, image.width, image.height);
+  add('same width and height lights both edges', { ...base, elements: [image, sameSize] }, image,
+    { x: 148.4, y: 92.4 });
+  const tieEarlier = sibling('tie-earlier', 100, 20, 20, 20);
+  const tieLater = sibling('tie-later', 102, 90, 20, 20);
+  add('line tie chooses later line', { ...base, elements: [image, tieEarlier, tieLater] }, image,
+    { x: 59.75, y: 17.375 });
+  const edgeTie = sibling('edge-tie', 100, 100, image.width + 2, image.height + 2);
+  add('edge tie keeps first moving edge', { ...base, elements: [image, edgeTie] }, image,
+    { x: 59.75, y: 62.5 });
+
+  const locked = sibling('locked-sibling', 170, 120, 35, 27, { locked: true });
+  const hidden = sibling('hidden-sibling', 90, 80, 35, 27, { visible: false });
+  const transparent = sibling('transparent-sibling', 230, 40, 35, 27, { opacity: 0 });
+  add('visible locked sibling participates', { ...base, elements: [image, locked] }, image,
+    { x: 119.1, y: 82.2 });
+  add('hidden sibling is ignored', { ...base, elements: [image, hidden] }, image,
+    { x: 39.1, y: 42.2 });
+  add('zero opacity visible sibling participates', { ...base, elements: [image, transparent] }, image,
+    { x: 179.1, y: 2.2 });
+
+  add('rotated painted shape bounds snap', { ...base, elements: [shape, vertical] }, shape,
+    { x: 20.3, y: -29.4 });
+  add('rotated painted path bounds snap', { ...base, elements: [path, horizontal] }, path,
+    { x: 17.2, y: 15.3 });
+  add('rotated painted arrow bounds snap', { ...base, elements: [arrow, vertical] }, arrow,
+    { x: -11.4, y: 22.6 });
+
+  const expansionSibling = sibling('expansion-sibling', 2, 3, 5, 4, { locked: true });
+  add('partial positive overflow stays clipped',
+    { ...base, width: 80, height: 60, elements: [expansionSibling, image] }, image,
+    { x: 20, y: 5 });
+  add('fully lost positive expands without shifting sibling',
+    { ...base, width: 80, height: 60, elements: [expansionSibling, image] }, image,
+    { x: 100, y: 75 });
+  add('fully lost negative expands and shifts sibling',
+    { ...base, width: 80, height: 60, elements: [expansionSibling, image] }, image,
+    { x: -150, y: -110 });
+  add('partial negative overflow stays clipped',
+    { ...base, width: 80, height: 60, elements: [expansionSibling, image] }, image,
+    { x: -70, y: -50 });
+
+  add('image D4 and metadata preserved', base, image, { x: 7.125, y: 13.75 }, 1.25);
+  add('shape metadata preserved', { ...base, elements: [shape] }, shape, { x: 9.5, y: 11.25 });
+  add('path metadata preserved', { ...base, elements: [path] }, path, { x: -9.5, y: 8.25 });
+  add('arrow metadata preserved', { ...base, elements: [arrow] }, arrow, { x: 12.5, y: -8.25 });
+  return drags;
+}
+
 function resizeCases() {
   const image = {
     ...document.elements[0], id: 'resize-image', visible: true, x: 61.25, y: 47.5,
@@ -539,6 +670,7 @@ function shippingCases() {
     openShapeCreations: openShapeCreationCases(),
     freehandCreations: freehandCreationCases(),
     hitTests: hitTestCases(),
+    moves: moveCases(),
     resize: resizeCases(),
     rotations: rotationCases(),
     orientations: orientationCases(),
@@ -1058,6 +1190,7 @@ function fixtureText(cases) {
     `  "openShapeCreations": ${array(cases.openShapeCreations, '    ')},`,
     `  "freehandCreations": ${array(cases.freehandCreations, '    ')},`,
     `  "hitTests": ${array(cases.hitTests, '    ')},`,
+    `  "moves": ${array(cases.moves, '    ')},`,
     '  "resize": {',
     `    "hitTests": ${array(cases.resize.hitTests, '      ')},`,
     `    "drags": ${array(cases.resize.drags, '      ')}`,
@@ -1125,6 +1258,7 @@ if (process.argv.includes('--write')) {
     assert.ok(vectors.freehandCreations.some(entry => entry.expected.elements[0].x > entry.input.elements[0].x));
     assert.equal(vectors.resize.hitTests[0].queries.length, 9);
     assert.equal(vectors.resize.drags.length, 37);
+    assert.equal(vectors.moves.length, 26);
     assert.deepEqual(
       new Set(vectors.resize.drags.slice(0, 8).map(entry => entry.handle)),
       new Set(['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']),

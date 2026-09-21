@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, resize snapping, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen and save-new-copy | Move alignment snapping, pan/zoom, text/background/erase, remaining output controls and Tauri design parity; recording playback/timeline/editing/export |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen and save-new-copy | Pan/zoom, text/background/erase, remaining output controls and Tauri design parity; recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -84,7 +84,15 @@ their stroke width. Preview outlines and guides do not modify pixels or drafts.
 A release after three view points submits one worker transaction; cancellation,
 clicks and failures preserve the document, and fully outside content expands the
 canvas. Text resize still requires native font layout and is unsupported.
-Next implementation boundary: move alignment snapping and pan/zoom, then
+Canvas movement also retains immutable original geometry and snaps painted world
+bounds to canvas and visible-layer edges, including locked and zero-opacity layers
+but excluding hidden layers. Shared Rust matches Tauri's strict ten-view-point
+threshold, line/edge tie rules and up to four coincident-edge guides. Hosts keep
+clicks and movement below three view points unsnapped. A `drag_move` release
+commits once; numeric `translate` remains exact. Preview is outline-only, and
+fully outside moves expand the canvas. TypeScript oracle fixtures cover rotated
+geometry, threshold boundaries, ties, hidden/locked siblings and overflow.
+Next implementation boundary: pan/zoom, then
 text/background and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
 
@@ -703,7 +711,7 @@ Across both hosts, physical input/accessibility/IME acceptance remains open.
 The current native screenshot editor is a functional workbench, not a visual match
 for the shipping Tauri editor. Functional controls and inspected fixtures do not
 complete the editor layout/interaction/design parity gate.
-Move alignment snapping, pan/zoom, other drawing tools and AppKit
+Pan/zoom, other drawing tools and AppKit
 edited-image clipboard output are not connected. Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.
 

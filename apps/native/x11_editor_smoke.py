@@ -700,10 +700,18 @@ def main():
         assert draft.read_bytes() == canvas_before
         click(editor, 260, 200)  # Empty point before the unlocked copy clears selection.
         assert draft.read_bytes() == canvas_before
-        drag((591, 277), (631, 307))
+        # The raw horizontal delta lands just inside the canvas edge's magnetic
+        # range. The shared move geometry snaps the duplicate's left edge to the
+        # canvas/background layer edge while retaining the asymmetric raw Y move.
+        run("xdotool", "mousemove", "--sync", "--window", editor, "591", "277",
+            "sleep", ".2", "mousedown", "1", "sleep", ".2", "mousemove", "--sync",
+            "--window", editor, "367", "307", "sleep", ".3")
+        shot(editor, "layers-canvas-snapped-guides")
+        assert draft.read_bytes() == canvas_before
+        run("xdotool", "mouseup", "1", "sleep", ".2")
         # A 1000-point window leaves 754 points after the 230-point sidebar
         # and the canvas's two 8-point margins. The 640px image fits that width.
-        expected_position = (190 + 40 * 640 / 754, 70 + 30 * 640 / 754)
+        expected_position = (0, 70 + 30 * 640 / 754)
         moved_canvas = save_layers(
             lambda values: all(math.isclose(values[-1][axis], expected, abs_tol=1e-5)
                                for axis, expected in zip(("x", "y"), expected_position)),
@@ -711,10 +719,33 @@ def main():
         assert moved_canvas["id"] == copy_id
         shot(editor, "layers-canvas-moved-selection")
         pixel("layers-canvas-moved-selection", 591, 277, (40, 110, 166))
-        pixel("layers-canvas-moved-selection", 631, 307, (229, 179, 68))
+        pixel("layers-canvas-moved-selection", 367, 307, (229, 179, 68))
         click(editor, 35, 62)
         save_layers(lambda values: (values[-1]["x"], values[-1]["y"]) == (190, 70),
-                    "undo canvas move")
+                    "undo snapped canvas move")
+        click(editor, 98, 62)
+        save_layers(
+            lambda values: all(math.isclose(values[-1][axis], expected, abs_tol=1e-5)
+                               for axis, expected in zip(("x", "y"), expected_position)),
+            "redo snapped canvas move")
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "snapped layer draft closes")
+        editor = reopen()
+        reopened_move = layers()[-1]
+        assert reopened_move["id"] == copy_id
+        assert all(math.isclose(reopened_move[axis], expected, abs_tol=1e-5)
+                   for axis, expected in zip(("x", "y"), expected_position))
+        shot(editor, "layers-snapped-move-reopened")
+        pixel("layers-snapped-move-reopened", 367, 307, (229, 179, 68))
+        # Reopen starts in Geometry and undo history is intentionally not persisted.
+        # Switch to Layers and restore explicitly so downstream fixtures stay stable.
+        click(editor, 463, 62)
+        click(editor, 100, 158)
+        field(459, 190)
+        field(503, 70)
+        click(editor, 34, 547)
+        save_layers(lambda values: (values[-1]["x"], values[-1]["y"]) == (190, 70),
+                    "restore snapped move after reopen")
         field(415, 50)
         click(editor, 154, 415)
         save_layers(lambda values: values[-1]["opacity"] == 50, "half opacity")
@@ -1087,6 +1118,7 @@ def main():
                        "layer-rotation-free-cancel-shift-snap", "layer-rotation-undo-draft-reopen-pixels",
                        "explicit-discard", "save-error", "quit-error-retry", "original-unchanged",
                        "layer-duplicate-rename-move", "layer-canvas-click-drag-escape",
+                       "layer-canvas-snap-edge-pixels-undo-reopen",
                        "layer-opacity-visibility-pixels",
                        "layer-lock-order-delete", "layer-draft-reopen", "layer-undo-redo",
                        "layer-empty-undo", "image-transform-four-actions-pixels",

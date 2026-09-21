@@ -239,6 +239,20 @@ char *captures_editor_resize_begin_v1(const char *document_json, const char *lay
 bool captures_editor_resize_preview_v1(const CapturesEditorResizeDrag *drag,
     CapturesSelectionPoint current, bool lock_aspect, CapturesEditorResizePreview *output);
 void captures_editor_resize_free_v1(CapturesEditorResizeDrag *drag);
+/* Independent immutable drag-move, after body picking. Begin copies geometry
+ * and snap lines; rejects hidden/locked/unsupported layers. Returns owned usual
+ * {ok:true,result:{}} or {ok:false,error:string} JSON; output is NULL on error.
+ * Preview reuses the resize outline/guide descriptor. Delta is document-space
+ * displacement from the original press, not from the previous preview. There is
+ * no per-event JSON/session/render/I/O. False leaves output untouched. Strings
+ * are borrowed for begin; outputs are writable. Free response with settings_free,
+ * and drag exactly once after all preview calls/cancellation/completion. */
+typedef struct CapturesEditorMoveDrag CapturesEditorMoveDrag;
+char *captures_editor_move_begin_v1(const char *document_json, const char *layer_id,
+    double display_scale, CapturesEditorMoveDrag **output);
+bool captures_editor_move_preview_v1(const CapturesEditorMoveDrag *drag,
+    CapturesSelectionPoint delta, CapturesEditorResizePreview *output);
+void captures_editor_move_free_v1(CapturesEditorMoveDrag *drag);
 /* Stateless shared preview geometry; no session access or per-event JSON.
  * kind 0: arrow outline, exactly two signed document-space endpoints.
  * kind 1: smoothed Pen centerline, one or more accepted samples; one is a dot,

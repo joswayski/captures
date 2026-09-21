@@ -333,9 +333,13 @@ Eight border grips resize images, shapes and drawings. Shift keeps corner drags
 proportional; edge grips remain single-axis. Unrotated resizes snap to canvas and
 visible-layer edges with guide lines; rotated resizes retain the opposite anchor.
 Resizing uses an outline-only preview and commits on release.
+Canvas moves now snap painted bounds to canvas and visible-layer edges, including
+locked layers, with alignment guides. The snap range stays constant on screen;
+numeric X/Y edits remain exact and do not snap. Clicks and small pointer movements
+do not trigger snapping or change the document.
 Windows, Wayland and physical AppKit presentation remain unverified.
 The native editor still uses a workbench layout, not the shipping Tauri editor design.
-Move alignment snapping, pan/zoom, other drawing tools, text, overwrite-original, AppKit edited-image
+Pan/zoom, other drawing tools, text, overwrite-original, AppKit edited-image
 clipboard output, and recording editing remain unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
 single-instance relaunch and updates

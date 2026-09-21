@@ -16,9 +16,9 @@ use captures_app::{
         ARROW_MIN_DRAW_LENGTH, AlignmentGuide, AnnotationStylePatch, ClosedShapeCreate,
         ClosedShapeKind, CropDrag, Document, DropShadowStyle, DropShadowStylePatch, Element,
         ElementBase, ElementStyle, FreehandPathCreate, GuideOrientation, ImageTransform, LayerEdit,
-        LayerPlacement, OpenShapeCreate, OpenShapeKind, OptionalNullable, Point, Rect, ResizeDrag,
-        ResizeHandle, ShapeElement, arrow_fill_polygon, preview_rotation, rotation_angle,
-        rotation_handle, smooth_path_centerline,
+        LayerPlacement, MoveDrag, OpenShapeCreate, OpenShapeKind, OptionalNullable, Point, Rect,
+        ResizeDrag, ResizeHandle, ShapeElement, arrow_fill_polygon, preview_rotation,
+        rotation_angle, rotation_handle, smooth_path_centerline,
     },
     editor_output::{SavedExport, save_new_export},
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
@@ -598,7 +598,10 @@ impl View {
 enum LayerGestureKind {
     Move {
         id: Option<String>,
+        drag: Option<Box<MoveDrag>>,
         outline: Option<[Point; 4]>,
+        guides: Vec<AlignmentGuide>,
+        display_scale: f64,
     },
     Rotate {
         id: String,
@@ -1351,11 +1354,34 @@ fn show_layer_canvas(
                     }
                     match document.hit_test(point, 8. * bounds.width / f64::from(preview.width())) {
                         Ok(hit) => {
+                            let move_state = hit
+                                .map(|element| {
+                                    let drag = MoveDrag::new(
+                                        &document,
+                                        &element.base().id,
+                                        display_scale,
+                                    )?;
+                                    Ok::<_, String>((
+                                        element.base().id.clone(),
+                                        Box::new(drag),
+                                        element.selection_outline()?,
+                                    ))
+                                })
+                                .transpose();
+                            let move_state = match move_state {
+                                Ok(state) => state,
+                                Err(error) => {
+                                    view.error = Some(error);
+                                    continue;
+                                }
+                            };
                             view.layer_gesture = Some(LayerGesture {
                                 kind: LayerGestureKind::Move {
-                                    id: hit.map(|element| element.base().id.clone()),
-                                    outline: hit
-                                        .and_then(|element| element.selection_outline().ok()),
+                                    id: move_state.as_ref().map(|state| state.0.clone()),
+                                    drag: move_state.as_ref().map(|state| state.1.clone()),
+                                    outline: move_state.as_ref().map(|state| state.2),
+                                    guides: Vec::new(),
+                                    display_scale,
                                 },
                                 start: point,
                                 current: point,
@@ -1388,7 +1414,9 @@ fn show_layer_canvas(
                     };
                     let end = image_point(pos, preview, bounds);
                     match gesture.kind {
-                        LayerGestureKind::Move { id, .. } => {
+                        LayerGestureKind::Move {
+                            id, display_scale, ..
+                        } => {
                             let delta_x = end.x - gesture.start.x;
                             let delta_y = end.y - gesture.start.y;
                             let distance = (delta_x * f64::from(preview.width()) / bounds.width)
@@ -1402,7 +1430,11 @@ fn show_layer_canvas(
                                     tx,
                                     Request::Layer {
                                         id,
-                                        edit: LayerEdit::Translate { delta_x, delta_y },
+                                        edit: LayerEdit::DragMove {
+                                            delta_x,
+                                            delta_y,
+                                            display_scale,
+                                        },
                                     },
                                 );
                             } else {
@@ -1484,29 +1516,69 @@ fn show_layer_canvas(
         *outline = resize.outline;
         *guides = resize.guides;
     }
+    let move_preview = view.layer_gesture.as_ref().and_then(|gesture| {
+        let LayerGestureKind::Move {
+            drag: Some(drag),
+            id: Some(id),
+            ..
+        } = &gesture.kind
+        else {
+            return None;
+        };
+        let delta = Point {
+            x: gesture.current.x - gesture.start.x,
+            y: gesture.current.y - gesture.start.y,
+        };
+        let moving = (delta.x * f64::from(preview.width()) / bounds.width)
+            .hypot(delta.y * f64::from(preview.height()) / bounds.height)
+            >= 3.;
+        Some(if moving {
+            drag.preview(delta)
+                .map(|preview| (preview.outline, preview.guides))
+        } else {
+            document
+                .elements
+                .iter()
+                .find(|element| &element.base().id == id)?
+                .selection_outline()
+                .map(|outline| (outline, Vec::new()))
+        })
+    });
+    match move_preview {
+        Some(Ok((move_outline, move_guides))) => {
+            if let Some(LayerGesture {
+                kind:
+                    LayerGestureKind::Move {
+                        outline, guides, ..
+                    },
+                ..
+            }) = &mut view.layer_gesture
+            {
+                *outline = Some(move_outline);
+                *guides = move_guides;
+            }
+        }
+        Some(Err(error)) => {
+            view.cancel_layer_gesture();
+            view.error = Some(error);
+        }
+        _ => {}
+    }
     if response.hovered() || view.layer_gesture.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
     let (outline, delta, active_rotation, guides, show_grips) =
         if let Some(gesture) = &view.layer_gesture {
             match &gesture.kind {
-                LayerGestureKind::Move { outline, .. } => {
-                    let dx = gesture.current.x - gesture.start.x;
-                    let dy = gesture.current.y - gesture.start.y;
-                    let moving = (dx * f64::from(preview.width()) / bounds.width)
-                        .hypot(dy * f64::from(preview.height()) / bounds.height)
-                        >= 3.;
-                    (
-                        *outline,
-                        Point {
-                            x: if moving { dx } else { 0. },
-                            y: if moving { dy } else { 0. },
-                        },
-                        None,
-                        &[][..],
-                        false,
-                    )
-                }
+                LayerGestureKind::Move {
+                    outline, guides, ..
+                } => (
+                    *outline,
+                    Point { x: 0., y: 0. },
+                    None,
+                    guides.as_slice(),
+                    false,
+                ),
                 LayerGestureKind::Rotate {
                     outline,
                     initial_radians,
@@ -2666,8 +2738,33 @@ mod tests {
         frame(&mut view, vec![button(inside, true)]);
         frame(
             &mut view,
-            vec![egui::Event::PointerMoved(egui::pos2(122., 116.))],
+            vec![egui::Event::PointerMoved(egui::pos2(123., 120.))],
         );
+        match &view.layer_gesture.as_ref().unwrap().kind {
+            LayerGestureKind::Move {
+                outline, guides, ..
+            } => {
+                // Default ten-pixel stroke extends five pixels outside the shape.
+                assert_eq!(outline.unwrap()[0], Point { x: 15., y: 15. });
+                assert!(guides.is_empty(), "sub-threshold moves hide guides");
+            }
+            _ => unreachable!(),
+        }
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(egui::pos2(116., 120.))],
+        );
+        match &view.layer_gesture.as_ref().unwrap().kind {
+            LayerGestureKind::Move {
+                outline, guides, ..
+            } => {
+                assert_eq!(outline.unwrap()[0].x, 0., "preview snaps to canvas edge");
+                assert!(guides.iter().any(|guide| {
+                    guide.orientation == GuideOrientation::Vertical && guide.position == 0.
+                }));
+            }
+            _ => unreachable!(),
+        }
         assert!(rx.try_recv().is_err() && !view.pending);
         frame(
             &mut view,
@@ -2678,7 +2775,7 @@ mod tests {
         );
         assert!(view.pending && view.output.is_none() && view.selected_layer.is_none());
         assert!(
-            matches!(rx.recv().unwrap(), Job::Apply(Request::Layer { id: target, edit: LayerEdit::Translate { delta_x, delta_y } }) if target == id && delta_x == -70. && delta_y == -50.)
+            matches!(rx.recv().unwrap(), Job::Apply(Request::Layer { id: target, edit: LayerEdit::DragMove { delta_x, delta_y, display_scale } }) if target == id && delta_x == -70. && delta_y == -50. && display_scale == 0.5)
         );
         assert!(rx.try_recv().is_err(), "multipass must not submit twice");
         view.receive(&ctx, Err("move failed".into()));

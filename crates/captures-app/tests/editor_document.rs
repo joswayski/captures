@@ -1,6 +1,6 @@
 use captures_app::editor::{
     ClosedShapeCreate, CropDrag, Document, DocumentHistory, Element, FreehandPathCreate,
-    ImageTransform, LayerEdit, OpenShapeCreate, Point, Rect, ResizeDrag, ResizeHandle,
+    ImageTransform, LayerEdit, MoveDrag, OpenShapeCreate, Point, Rect, ResizeDrag, ResizeHandle,
     bounded_crop_rect, preview_rotation, rotation_angle, rotation_handle, smooth_path_centerline,
 };
 use captures_history::editor_draft::{self, SaveRequest};
@@ -21,6 +21,7 @@ struct Fixture {
     open_shape_creations: Vec<OpenShapeCreationCase>,
     freehand_creations: Vec<FreehandCreationCase>,
     hit_tests: Vec<HitTestCase>,
+    moves: Vec<MoveDragCase>,
     resize: ResizeFixture,
     rotations: Value,
     orientations: Vec<OrientationCase>,
@@ -59,6 +60,18 @@ struct ResizeDragCase {
     display_scale: f64,
     current: Point,
     lock_aspect: bool,
+    expected: Value,
+    committed: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MoveDragCase {
+    name: String,
+    input: Document,
+    id: String,
+    display_scale: f64,
+    delta: Point,
     expected: Value,
     committed: Value,
 }
@@ -393,6 +406,146 @@ fn assert_json_close(actual: Value, expected: Value, context: &str) {
         }
         (actual, expected) => assert_eq!(actual, expected, "{context}"),
     }
+}
+
+#[test]
+fn move_drag_previews_and_commits_match_shipping_typescript() {
+    for case in fixture().moves {
+        let original = case.input.clone();
+        let drag = MoveDrag::new(&case.input, &case.id, case.display_scale)
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let actual = drag
+            .preview(case.delta)
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let actual_json = json!({
+            "element": actual.element,
+            "outline": actual.outline,
+            "guides": actual.guides,
+        });
+        assert_json_close(actual_json.clone(), case.expected, &case.name);
+
+        // Gesture previews are always derived from the captured document, not
+        // accumulated from an earlier preview, and never mutate that document.
+        let _ = drag.preview(Point { x: -3.25, y: 7.75 }).unwrap();
+        let repeated = drag.preview(case.delta).unwrap();
+        assert_json_close(
+            serde_json::to_value(repeated).unwrap(),
+            actual_json,
+            &format!("{} repeated preview", case.name),
+        );
+        assert_eq!(case.input, original, "{} mutated preview input", case.name);
+
+        let mut committed = case.input;
+        committed
+            .edit_layer(
+                &case.id,
+                LayerEdit::DragMove {
+                    delta_x: case.delta.x,
+                    delta_y: case.delta.y,
+                    display_scale: case.display_scale,
+                },
+            )
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        assert_json_close(
+            serde_json::to_value(committed).unwrap(),
+            case.committed,
+            &case.name,
+        );
+    }
+}
+
+#[test]
+fn move_drag_rejects_invalid_and_unsupported_edits_and_honors_locking() {
+    let case = fixture().moves.remove(0);
+    assert!(MoveDrag::new(&case.input, "missing", 1.).is_err());
+    assert!(MoveDrag::new(&case.input, &case.id, f64::NAN).is_err());
+    assert!(MoveDrag::new(&case.input, &case.id, f64::INFINITY).is_err());
+    let drag = MoveDrag::new(&case.input, &case.id, 1.).unwrap();
+    assert!(drag.preview(Point { x: f64::NAN, y: 0. }).is_err());
+    assert!(
+        drag.preview(Point {
+            x: 0.,
+            y: f64::INFINITY
+        })
+        .is_err()
+    );
+
+    let mut invalid = case.input.clone();
+    let before = invalid.clone();
+    assert!(
+        invalid
+            .edit_layer(
+                &case.id,
+                LayerEdit::DragMove {
+                    delta_x: f64::NAN,
+                    delta_y: 1.,
+                    display_scale: 1.,
+                },
+            )
+            .is_err()
+    );
+    assert_eq!(invalid, before);
+
+    let mut missing = case.input.clone();
+    let before = missing.clone();
+    assert!(
+        missing
+            .edit_layer(
+                "missing",
+                LayerEdit::DragMove {
+                    delta_x: 1.,
+                    delta_y: 1.,
+                    display_scale: 1.,
+                },
+            )
+            .is_err()
+    );
+    assert_eq!(missing, before);
+
+    let mut locked = case.input;
+    locked
+        .edit_layer(&case.id, LayerEdit::Lock { locked: true })
+        .unwrap();
+    assert!(
+        MoveDrag::new(&locked, &case.id, 1.)
+            .unwrap()
+            .preview(Point { x: 10., y: 12. })
+            .is_ok()
+    );
+    let before = locked.clone();
+    locked
+        .edit_layer(
+            &case.id,
+            LayerEdit::DragMove {
+                delta_x: 10.,
+                delta_y: 12.,
+                display_scale: 1.,
+            },
+        )
+        .unwrap();
+    assert_eq!(locked, before);
+
+    let mut unsupported = fixture().moves.remove(0).input;
+    let mut text = fixture().document["elements"][1].clone();
+    text["locked"] = json!(false);
+    unsupported
+        .elements
+        .push(serde_json::from_value(text).unwrap());
+    assert!(MoveDrag::new(&unsupported, "locked-text", 1.).is_err());
+    let before = unsupported.clone();
+    assert!(
+        unsupported
+            .edit_layer(
+                "locked-text",
+                LayerEdit::DragMove {
+                    delta_x: 1.,
+                    delta_y: 2.,
+                    display_scale: 1.,
+                },
+            )
+            .is_err()
+    );
+    assert_eq!(unsupported, before);
 }
 
 #[test]
