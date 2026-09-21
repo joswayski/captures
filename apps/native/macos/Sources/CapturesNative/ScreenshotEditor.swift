@@ -124,6 +124,134 @@ class EditorViewportGestureView: NSView {
     }
 }
 
+final class EditorCropOverlay: EditorViewportGestureView {
+    var tokens: Tokens? { didSet { needsDisplay = true } }
+    var canvasSize = NSSize.zero { didSet { if canvasSize != oldValue { cancelGesture() } } }
+    var imageRect: (() -> NSRect)?
+    var selection: NSRect? { didSet { needsDisplay = true } }
+    var aspect = 0.0 { didSet { updateModifier(shift: shiftHeld) } }
+    var croppingEnabled = false {
+        didSet {
+            isHidden = !croppingEnabled
+            if !croppingEnabled { cancelGesture() }
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+    var onChange: ((NSRect) -> Void)?
+    var onCancel: (() -> Void)?
+    private var cropDrag: NativeEditorCropDrag?
+    private var startPoint: NSPoint?
+    private var currentPoint: NSPoint?
+    private var shiftHeld = false
+    private var moved = false
+
+    private func canvasPoint(_ point: NSPoint) -> NSPoint {
+        let image = imageRect?() ?? .zero
+        return NSPoint(x: (point.x - image.minX) * canvasSize.width / image.width,
+                       y: (point.y - image.minY) * canvasSize.height / image.height)
+    }
+
+    func begin(at point: NSPoint, shift: Bool = false) {
+        guard croppingEnabled, bounds.contains(point),
+              let image = imageRect?(), image.width > 0, image.height > 0 else { return }
+        cancelGesture()
+        cropDrag = NativeEditorCropDrag(origin: canvasPoint(point), canvas: canvasSize,
+                                         aspect: aspect, shift: shift)
+        startPoint = point; currentPoint = point; shiftHeld = shift
+    }
+
+    func drag(to point: NSPoint, shift: Bool = false) {
+        guard let startPoint else { return }
+        currentPoint = point; shiftHeld = shift
+        moved = moved || hypot(point.x - startPoint.x, point.y - startPoint.y) >= 3
+        guard moved, let rect = cropDrag?.update(current: canvasPoint(point), aspect: aspect, shift: shift)
+        else { return }
+        selection = rect; onChange?(rect)
+    }
+
+    func updateModifier(shift: Bool) {
+        shiftHeld = shift
+        if let currentPoint { drag(to: currentPoint, shift: shift) }
+    }
+
+    func end(at point: NSPoint, shift: Bool = false) {
+        drag(to: point, shift: shift)
+        cancelGesture() // Keep the candidate; only Apply crop changes the document.
+    }
+
+    func cancelGesture() {
+        cropDrag = nil; startPoint = nil; currentPoint = nil; moved = false
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if beginViewportPan(event) { cancelGesture(); return }
+        guard event.buttonNumber == 0 else { return }
+        window?.makeFirstResponder(self)
+        begin(at: convert(event.locationInWindow, from: nil), shift: event.modifierFlags.contains(.shift))
+    }
+    override func mouseDragged(with event: NSEvent) {
+        if continueViewportPan(event) { return }
+        drag(to: convert(event.locationInWindow, from: nil), shift: event.modifierFlags.contains(.shift))
+    }
+    override func mouseUp(with event: NSEvent) {
+        if isViewportPanning { _ = continueViewportPan(event); endViewportPan(); return }
+        end(at: convert(event.locationInWindow, from: nil), shift: event.modifierFlags.contains(.shift))
+    }
+    override func flagsChanged(with event: NSEvent) { updateModifier(shift: event.modifierFlags.contains(.shift)) }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { cancelGesture(); cancelViewportPan(); onCancel?() }
+        else { super.keyDown(with: event) }
+    }
+    override func resignFirstResponder() -> Bool { cancelGesture(); return super.resignFirstResponder() }
+    override func setFrameSize(_ newSize: NSSize) {
+        if newSize != frame.size { cancelGesture() }
+        super.setFrameSize(newSize)
+    }
+    override func resetCursorRects() {
+        if croppingEnabled { addCursorRect(bounds, cursor: .crosshair) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let tokens, let selection, selection.width > 0, selection.height > 0,
+              canvasSize.width > 0, canvasSize.height > 0, let image = imageRect?(),
+              image.width > 0, image.height > 0 else { return }
+        let scale = image.width / canvasSize.width
+        let rect = NSRect(x: image.minX + selection.minX * scale,
+                          y: image.minY + selection.minY * scale,
+                          width: selection.width * scale, height: selection.height * scale).intersection(image)
+        let visible = image.intersection(bounds)
+        guard !rect.isNull, !visible.isNull else { return }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: bounds.intersection(image)).addClip()
+        tokens.color("glass-veil-heavy").setFill()
+        for area in [NSRect(x: image.minX, y: image.minY, width: image.width, height: rect.minY - image.minY),
+                     NSRect(x: image.minX, y: rect.maxY, width: image.width, height: image.maxY - rect.maxY),
+                     NSRect(x: image.minX, y: rect.minY, width: rect.minX - image.minX, height: rect.height),
+                     NSRect(x: rect.maxX, y: rect.minY, width: image.maxX - rect.maxX, height: rect.height)] {
+            NSBezierPath(rect: area).fill()
+        }
+        let border = NSBezierPath(rect: rect)
+        border.lineWidth = tokens.number("s-1")
+        border.setLineDash([tokens.number("s-3"), tokens.number("s-2")], count: 2, phase: 0)
+        tokens.color("glass-text").setStroke(); border.stroke()
+        let label = NSAttributedString(string: String(format: "%.0f × %.0f", Double(selection.width), Double(selection.height)),
+            attributes: [.font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
+                         .foregroundColor: tokens.color("glass-text")])
+        let padding = tokens.number("s-2")
+        let size = label.size()
+        let origin = NSPoint(x: min(max(rect.midX - size.width / 2, visible.minX + padding),
+                                    max(visible.minX + padding, visible.maxX - size.width - padding)),
+                             y: min(max(rect.minY + padding, visible.minY + padding),
+                                    max(visible.minY + padding, visible.maxY - size.height - padding)))
+        tokens.color("glass-strong").setFill()
+        NSBezierPath(roundedRect: NSRect(origin: origin, size: size).insetBy(dx: -padding, dy: -padding),
+                     xRadius: tokens.number("r-sm"), yRadius: tokens.number("r-sm")).fill()
+        label.draw(at: origin)
+    }
+}
+
 final class EditorDrawOverlay: EditorViewportGestureView {
     enum Shape: String, CaseIterable {
         case rectangle, ellipse, line, arrow, pen, wand, erase, restore, text
@@ -584,16 +712,16 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
 }
 
 private final class ScreenshotEditorWindow: NSWindow {
-    var zoomShortcut: ((NSEvent) -> Bool)?
+    var editorShortcut: ((NSEvent) -> Bool)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if attachedSheet == nil, zoomShortcut?(event) == true { return true }
+        if attachedSheet == nil, editorShortcut?(event) == true { return true }
         return super.performKeyEquivalent(with: event)
     }
 
     override func sendEvent(_ event: NSEvent) {
         // Control shortcuts and focused field editors also reach this path.
-        if attachedSheet == nil, zoomShortcut?(event) == true { return }
+        if attachedSheet == nil, editorShortcut?(event) == true { return }
         super.sendEvent(event)
     }
 }
@@ -638,6 +766,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let outputContent = Surface()
     let drawOverlay = EditorDrawOverlay()
     let selectionOverlay = EditorSelectionOverlay()
+    let cropOverlay = EditorCropOverlay()
     private let layerName = NSTextField()
     private let layerOpacity = NSTextField()
     private let layerX = NSTextField()
@@ -710,6 +839,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var saveButton: CaptureButton!
     private var discardButton: CaptureButton!
     private var applyCropButton: CaptureButton!
+    private var drawCropButton: CaptureButton!
+    private let cropAspect = NSPopUpButton()
+    private var cropPrevious: [String]?
     private var resizeButton: CaptureButton!
     private var trimButton: CaptureButton!
     private var previewOutputButton: CaptureButton!
@@ -779,7 +911,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window = editorWindow
         super.init()
-        editorWindow.zoomShortcut = { [weak self] in self?.handleZoomShortcut($0) ?? false }
+        editorWindow.editorShortcut = { [weak self] in self?.handleEditorShortcut($0) ?? false }
         window.isReleasedWhenClosed = false; window.title = "Edit screenshot"
         window.delegate = self
         window.contentView = root
@@ -862,6 +994,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        cancelCrop()
         cancelDrawing()
         guard !hasStagedText else {
             showError("Apply or cancel pending text before closing.")
@@ -892,6 +1025,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        cancelCrop()
         cancelDrawing()
         cancelViewportPan()
     }
@@ -952,9 +1086,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         selectionOverlay.onError = { [weak self] error in self?.showError("Layer interaction failed: \(error.localizedDescription)") }
         viewportInput.addSubview(selectionOverlay)
-        for view in [viewportInput, drawOverlay, selectionOverlay] { configureViewportGestures(view) }
+        cropOverlay.frame = viewportInput.bounds
+        cropOverlay.autoresizingMask = [.width, .height]
+        cropOverlay.setAccessibilityLabel("Screenshot crop canvas")
+        cropOverlay.toolTip = "Drag to choose a crop. Hold Shift to lock the ratio. Escape cancels; Apply crop commits."
+        cropOverlay.onChange = { [weak self] rect in self?.setCropFields(rect) }
+        cropOverlay.onCancel = { [weak self] in self?.cancelCrop() }
+        viewportInput.addSubview(cropOverlay)
+        for view in [viewportInput, drawOverlay, selectionOverlay, cropOverlay] { configureViewportGestures(view) }
         drawOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         selectionOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
+        cropOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         let fit = button("Fit", frame: NSRect(x: 24, y: 650, width: 64, height: 30), parent: root) {
             [weak self] in self?.fitViewport()
         }
@@ -1004,10 +1146,20 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         geometryScroll.documentView = geometryContent
         geometryPanel.addSubview(geometryScroll)
 
-        panelLabel("Crop", frame: NSRect(x: 0, y: 0, width: 252, height: 24),
+        panelLabel("Crop", frame: NSRect(x: 0, y: 0, width: 118, height: 24),
                    size: 16, weight: .semibold, parent: geometryContent)
-        panelLabel("Shared Rust owns canvas geometry.", frame: NSRect(x: 0, y: 28, width: 252, height: 22),
-                   muted: true, parent: geometryContent)
+        drawCropButton = button("Draw crop", frame: NSRect(x: 128, y: 0, width: 124, height: 28),
+                                parent: geometryContent) { [weak self] in self?.toggleCrop() }
+        panelLabel("Aspect", frame: NSRect(x: 0, y: 34, width: 48, height: 22), muted: true,
+                   parent: geometryContent)
+        cropAspect.frame = NSRect(x: 54, y: 28, width: 198, height: 30)
+        cropAspect.setAccessibilityLabel("Crop aspect")
+        for (name, ratio) in [("Free", 0.0), ("1:1", 1.0), ("4:3", 4.0 / 3),
+                              ("3:2", 3.0 / 2), ("16:9", 16.0 / 9)] {
+            cropAspect.addItem(withTitle: name); cropAspect.lastItem?.representedObject = ratio
+        }
+        cropAspect.target = self; cropAspect.action = #selector(changeCropAspect)
+        geometryContent.addSubview(cropAspect)
         panelFieldLabel("X", x: 0, y: 66, parent: geometryContent)
         panelFieldLabel("Y", x: 134, y: 66, parent: geometryContent)
         configure(cropX, frame: NSRect(x: 0, y: 90, width: 118, height: 30), label: "Crop X",
@@ -1020,6 +1172,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                   parent: geometryContent)
         configure(cropHeight, frame: NSRect(x: 134, y: 152, width: 118, height: 30), label: "Crop height",
                   parent: geometryContent)
+        [cropX, cropY, cropWidth, cropHeight].forEach { $0.delegate = self }
         applyCropButton = button("Apply crop", frame: NSRect(x: 0, y: 194, width: 252, height: 34),
                                  parent: geometryContent) {
             [weak self] in self?.applyCrop()
@@ -1400,6 +1553,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     @objc private func changeSection() {
+        cancelCrop()
         cancelDrawing()
         cancelViewportPan()
         geometryPanel.isHidden = sectionControl.selectedSegment != Section.geometry
@@ -1479,6 +1633,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSTextField else { return }
+        if [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) {
+            publishCropSelection()
+            return
+        }
         if field === brushSize {
             if let value = Double(field.stringValue), value.isFinite {
                 drawOverlay.brushDiameter = CGFloat(min(120, max(4, value)))
@@ -1974,6 +2132,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func cancelDrawing() {
+        cropOverlay.cancelGesture()
         drawOverlay.cancelGesture()
         selectionOverlay.cancelGesture()
     }
@@ -1999,8 +2158,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         view.onViewportPanBegan = { [weak self] in self?.cancelDrawing() }
     }
 
-    private func handleZoomShortcut(_ event: NSEvent) -> Bool {
-        guard event.type == .keyDown, state.snapshot != nil,
+    private func handleEditorShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown else { return false }
+        if event.keyCode == 53, cropPrevious != nil { cancelCrop(); return true }
+        guard state.snapshot != nil,
               event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) else { return false }
         let key = event.charactersIgnoringModifiers ?? ""
         if key == "+" || key == "=" || event.keyCode == 24 || event.keyCode == 69 {
@@ -2064,14 +2225,21 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
     private func cancelViewportPan() {
         viewportInput.cancelViewportPan(); drawOverlay.cancelViewportPan(); selectionOverlay.cancelViewportPan()
+        cropOverlay.cancelViewportPan()
     }
     private func updateViewportGeometry() {
         preview.frame = presentedImageRect
         publishZoomPreset()
         drawOverlay.needsDisplay = true; selectionOverlay.needsDisplay = true
+        cropOverlay.needsDisplay = true
     }
 
     private func updateDrawing() {
+        let cropReady = sectionControl?.selectedSegment == Section.geometry && state.snapshot != nil && !state.busy
+        cropOverlay.croppingEnabled = cropReady && cropPrevious != nil
+        drawCropButton?.isEnabled = cropReady
+        drawCropButton?.title = cropPrevious == nil ? "Draw crop" : "Cancel crop"
+        cropAspect.isEnabled = cropReady && cropPrevious != nil
         let active = sectionControl?.selectedSegment == Section.draw
             && state.snapshot != nil && !state.busy
         drawTool?.isEnabled = state.snapshot != nil && !state.busy
@@ -2290,11 +2458,48 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                      message: up ? "Moving layer up…" : "Moving layer down…")
     }
 
+    private func toggleCrop() {
+        guard state.snapshot != nil, !state.busy else { return }
+        if cropPrevious != nil { cancelCrop(); return }
+        cropPrevious = [cropX, cropY, cropWidth, cropHeight].map(\.stringValue)
+        publishCropSelection()
+        updateControls()
+        window.makeFirstResponder(cropOverlay)
+    }
+
+    private func cancelCrop() {
+        guard let previous = cropPrevious else { return }
+        cropPrevious = nil
+        cropOverlay.cancelGesture()
+        for (field, value) in zip([cropX, cropY, cropWidth, cropHeight], previous) { field.stringValue = value }
+        publishCropSelection()
+        updateControls()
+    }
+
+    @objc private func changeCropAspect() {
+        cropOverlay.aspect = cropAspect.selectedItem?.representedObject as? Double ?? 0
+    }
+
+    private func setCropFields(_ rect: NSRect) {
+        cropX.stringValue = format(rect.minX); cropY.stringValue = format(rect.minY)
+        cropWidth.stringValue = format(rect.width); cropHeight.stringValue = format(rect.height)
+    }
+
+    private func publishCropSelection() {
+        guard let x = number(cropX), let y = number(cropY),
+              let width = positive(cropWidth), let height = positive(cropHeight) else {
+            cropOverlay.selection = nil; return
+        }
+        cropOverlay.selection = NSRect(x: x, y: y, width: width, height: height)
+    }
+
     private func applyCrop() {
         guard let x = number(cropX), let y = number(cropY),
               let width = positive(cropWidth), let height = positive(cropHeight) else {
             showError("Crop values must be finite numbers with positive width and height."); return
         }
+        cropPrevious = nil
+        cropOverlay.cancelGesture()
         command(["operation": "crop", "rect": [
             "x": x, "y": y, "width": width, "height": height,
         ]], message: "Applying crop…", resetCrop: true)
@@ -2392,20 +2597,24 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         viewportCanvasSize = NSSize(width: presentation.image.width, height: presentation.image.height)
         drawOverlay.canvasSize = NSSize(width: snapshot.width, height: snapshot.height)
         selectionOverlay.canvasSize = drawOverlay.canvasSize
+        cropOverlay.canvasSize = viewportCanvasSize // Match wgpu's rendered-pixel crop bounds.
         updateViewportGeometry()
         dimensions.stringValue = "\(format(snapshot.width)) × \(format(snapshot.height)) pixels"
         publishOutputDimensions()
         canvasWidth.stringValue = format(snapshot.width); canvasHeight.stringValue = format(snapshot.height)
         publishBackgroundFields()
         if resetCrop || cropWidth.stringValue.isEmpty {
+            cropPrevious = nil
             cropX.stringValue = "0"; cropY.stringValue = "0"
             cropWidth.stringValue = format(snapshot.width); cropHeight.stringValue = format(snapshot.height)
         }
+        publishCropSelection()
         reconcileLayerSelection(snapshot.layers)
         window.title = snapshot.unsavedChanges ? "Edit screenshot — Unsaved" : "Edit screenshot"
     }
 
     private func closeNow() {
+        cancelCrop()
         cancelDrawing()
         cancelPendingImport()
         closeAfterCommand = false; selectedLayerID = nil; preferredLayerID = nil
@@ -2552,6 +2761,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textEditor.textColor = tokens.color("text")
         textEditor.insertionPointColor = tokens.color("text")
         textEditor.font = .systemFont(ofSize: tokens.number("text-md"))
+        cropOverlay.tokens = tokens
         drawOverlay.fillColor = tokens.color("theme-accent").withAlphaComponent(0.22)
         drawOverlay.strokeColor = tokens.color("theme-accent")
         drawOverlay.brushOutlineColor = tokens.color("text")

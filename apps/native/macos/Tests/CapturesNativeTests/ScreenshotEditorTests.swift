@@ -327,6 +327,127 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(try button("Save draft", in: controller.root).isEnabled)
     }
 
+    func testCropOverlayMapsScaledImageCoordinatesAndLatchesSharedAspect() {
+        let overlay = EditorCropOverlay(frame: NSRect(x: 0, y: 0, width: 700, height: 400))
+        overlay.canvasSize = NSSize(width: 1200, height: 480)
+        overlay.imageRect = { NSRect(x: 30, y: 40, width: 600, height: 240) }
+        overlay.croppingEnabled = true
+        var values: [NSRect] = []
+        overlay.onChange = { values.append($0) }
+        overlay.begin(at: NSPoint(x: 40, y: 55))
+        overlay.end(at: NSPoint(x: 41, y: 55))
+        XCTAssertTrue(values.isEmpty, "a click must not replace the candidate with a 1px crop")
+        overlay.begin(at: NSPoint(x: 40, y: 55))
+        overlay.drag(to: NSPoint(x: 100, y: 75))
+        XCTAssertEqual(values.last, NSRect(x: 20, y: 30, width: 120, height: 40))
+        overlay.updateModifier(shift: true)
+        overlay.drag(to: NSPoint(x: 160, y: 85), shift: true)
+        XCTAssertEqual(values.last, NSRect(x: 20, y: 30, width: 240, height: 80))
+        overlay.updateModifier(shift: false)
+        XCTAssertEqual(values.last, NSRect(x: 20, y: 30, width: 240, height: 60))
+        overlay.aspect = 1
+        XCTAssertEqual(values.last, NSRect(x: 20, y: 30, width: 240, height: 240))
+        overlay.cancelGesture()
+        let count = values.count
+        overlay.end(at: NSPoint(x: 300, y: 200))
+        XCTAssertEqual(values.count, count, "cancelled input cannot later update the fields")
+        overlay.aspect = 0
+        overlay.begin(at: NSPoint(x: 100, y: 100))
+        overlay.end(at: NSPoint(x: -80, y: 600))
+        XCTAssertEqual(values.last, NSRect(x: 0, y: 120, width: 140, height: 360))
+    }
+
+    func testCropCandidateCancelFailureAndApplyUseOneWorkerTransaction() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        try button("Preview output", in: controller.root).performClick(nil)
+        let sections = try segmented("Editor section", in: controller.root)
+        sections.selectedSegment = 0; _ = sections.sendAction(sections.action, to: sections.target)
+        let fields = try ["Crop X", "Crop Y", "Crop width", "Crop height"].map { try field($0, in: controller.root) }
+        let previous = ["12", "7", "320", "180"]
+        for (field, value) in zip(fields, previous) { field.stringValue = value }
+        try button("Draw crop", in: controller.root).performClick(nil)
+        let image = controller.presentedImageRect
+        func drag() {
+            controller.cropOverlay.begin(at: NSPoint(x: image.minX + image.width * 0.75, y: image.minY + image.height * 0.8))
+            controller.cropOverlay.end(at: NSPoint(x: image.minX + image.width * 0.25, y: image.minY + image.height * 0.3))
+        }
+        drag()
+        XCTAssertEqual(fields.map(\.stringValue), ["160", "108", "320", "180"])
+        XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertFalse(controller.state.snapshot?.unsavedChanges ?? true)
+        XCTAssertTrue(try segmented("Output preview image", in: controller.root).isEnabled)
+        controller.cropOverlay.keyDown(with: try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}"))
+        XCTAssertEqual(fields.map(\.stringValue), previous)
+        XCTAssertFalse(controller.cropOverlay.croppingEnabled)
+        try button("Draw crop", in: controller.root).performClick(nil)
+        drag()
+        fields[0].selectText(nil)
+        controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}"))
+        XCTAssertEqual(fields.map(\.stringValue), previous, "Escape works with a numeric field focused")
+        XCTAssertTrue(try segmented("Output preview image", in: controller.root).isEnabled)
+        try button("Draw crop", in: controller.root).performClick(nil)
+        drag()
+        worker.failOperation = "crop"
+        try button("Apply crop", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.count, 1)
+        XCTAssertEqual(controller.state.snapshot?.width, 640)
+        XCTAssertEqual(fields.map(\.stringValue), ["160", "108", "320", "180"])
+        XCTAssertFalse(controller.cropOverlay.croppingEnabled)
+        worker.failOperation = nil; worker.deferRequests = true
+        try button("Apply crop", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.count, 2)
+        XCTAssertEqual(worker.requests.last?["rect"] as? [String: Double],
+                       ["x": 160, "y": 108, "width": 320, "height": 180])
+        XCTAssertFalse(try button("Draw crop", in: controller.root).isEnabled)
+        worker.completePending(with: snapshot(id: "shot", width: 320, height: 180, unsaved: true))
+        XCTAssertEqual(fields.map(\.stringValue), ["0", "0", "320", "180"])
+        XCTAssertTrue(controller.state.snapshot?.canUndo == true)
+    }
+
+    func testCropFieldsViewportCancellationAndMinimumRenderedStates() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try button("Draw crop", in: controller.root).performClick(nil)
+            let aspect = try popup("Crop aspect", in: controller.root)
+            XCTAssertEqual(aspect.itemTitles, ["Free", "1:1", "4:3", "3:2", "16:9"])
+            aspect.selectItem(withTitle: "4:3"); _ = aspect.sendAction(aspect.action, to: aspect.target)
+            let image = controller.presentedImageRect
+            controller.cropOverlay.begin(at: NSPoint(x: image.minX + image.width * 0.1, y: image.minY + image.height * 0.2))
+            controller.cropOverlay.drag(to: NSPoint(x: image.minX + image.width * 0.5, y: image.minY + image.height * 0.6))
+            XCTAssertEqual(controller.cropOverlay.selection, NSRect(x: 64, y: 72, width: 256, height: 192))
+            try render(controller.root, name: "screenshot-editor-crop-drag-\(appearance)")
+            try button("+", in: controller.root).performClick(nil)
+            let candidate = controller.cropOverlay.selection
+            controller.cropOverlay.end(at: NSPoint(x: 500, y: 400))
+            XCTAssertEqual(controller.cropOverlay.selection, candidate, "zoom cancels only the active pointer gesture")
+            let x = try field("Crop X", in: controller.root)
+            x.stringValue = "120"
+            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: x))
+            XCTAssertEqual(controller.cropOverlay.selection?.minX, 120)
+            controller.window.setContentSize(NSSize(width: 1000, height: 700))
+            let apply = try button("Apply crop", in: controller.root)
+            let scroll = try XCTUnwrap(apply.enclosingScrollView)
+            XCTAssertTrue(scroll.contentView.bounds.contains(apply.convert(apply.bounds, to: scroll.contentView)))
+            try render(controller.root, name: "screenshot-editor-crop-minimum-\(appearance)")
+            controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: controller.window))
+            XCTAssertFalse(controller.cropOverlay.croppingEnabled)
+            XCTAssertEqual(x.stringValue, "0")
+            XCTAssertTrue(worker.requests.isEmpty)
+            try button("Draw crop", in: controller.root).performClick(nil)
+            try showDraw(in: controller.root)
+            XCTAssertFalse(controller.cropOverlay.croppingEnabled, "leaving Geometry cancels crop mode")
+        }
+    }
+
     func testGeometryParsingAndFormattingUseTheSameCommaDecimalLocale() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: 640.5, height: 360.25))
@@ -336,6 +457,8 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         XCTAssertEqual((try field("Canvas width", in: controller.root)).stringValue, "640,5")
         XCTAssertEqual((try field("Canvas height", in: controller.root)).stringValue, "360,25")
+        XCTAssertEqual(controller.cropOverlay.canvasSize, NSSize(width: 640, height: 360),
+                       "pointer crops use the rendered pixels, like wgpu, rather than fractional document dimensions")
 
         (try field("Crop X", in: controller.root)).stringValue = "1,5"
         (try field("Crop Y", in: controller.root)).stringValue = "2,25"

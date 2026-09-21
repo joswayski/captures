@@ -3,6 +3,30 @@ import CoreGraphics
 import ImageIO
 import CCapturesSettings
 
+/// UI-thread-only owner of shared crop aspect-latching and clamping geometry.
+/// No worker session or JSON is borrowed during pointer feedback.
+final class NativeEditorCropDrag {
+    private let handle: OpaquePointer
+
+    init?(origin: CGPoint, canvas: CGSize, aspect: Double, shift: Bool) {
+        guard let handle = captures_editor_crop_begin_v1(
+            CapturesSelectionPoint(x: origin.x, y: origin.y),
+            CapturesSelectionBounds(width: canvas.width, height: canvas.height), aspect, shift)
+        else { return nil }
+        self.handle = handle
+    }
+
+    deinit { captures_editor_crop_free_v1(handle) }
+
+    func update(current: CGPoint, aspect: Double, shift: Bool) -> CGRect? {
+        var output = CapturesSelectionRect()
+        guard captures_editor_crop_update_v1(handle,
+            CapturesSelectionPoint(x: current.x, y: current.y), aspect, shift, &output)
+        else { return nil }
+        return CGRect(x: output.x, y: output.y, width: output.width, height: output.height)
+    }
+}
+
 /// UI-thread-only, ephemeral viewport geometry. This never crosses the editor
 /// session/JSON boundary and therefore cannot dirty a document or draft.
 struct NativeEditorViewport: Equatable {

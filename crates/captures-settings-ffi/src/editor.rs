@@ -3,8 +3,8 @@
 use super::region::{RegionPixels, response, text};
 use captures_app::{
     editor::{
-        Document, ElementBase, ElementStyle, GuideOrientation, MoveDrag, Point, ResizeDrag,
-        ShapeElement, arrow_fill_polygon, preview_rotation, rotation_handle,
+        CropDrag, Document, ElementBase, ElementStyle, GuideOrientation, MoveDrag, Point,
+        ResizeDrag, ShapeElement, arrow_fill_polygon, preview_rotation, rotation_handle,
         smooth_path_centerline,
     },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
@@ -24,6 +24,91 @@ use std::{
 };
 
 pub struct DrawGeometry(Vec<AbiPoint>);
+
+/// Owns crop preview geometry on the UI thread, independent of any document.
+/// Aspect zero means freeform; Shift latches the shared live aspect.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_editor_crop_begin_v1(
+    origin: AbiPoint,
+    canvas: captures_app::selection::Bounds,
+    aspect: f64,
+    shift: bool,
+) -> *mut CropDrag {
+    if ![origin.x, origin.y, canvas.width, canvas.height, aspect]
+        .into_iter()
+        .all(f64::is_finite)
+        || canvas.width < 1.
+        || canvas.height < 1.
+        || aspect < 0.
+    {
+        return ptr::null_mut();
+    }
+    Box::into_raw(Box::new(CropDrag::new(
+        Point {
+            x: origin.x,
+            y: origin.y,
+        },
+        captures_app::editor::Rect {
+            x: 0.,
+            y: 0.,
+            width: canvas.width,
+            height: canvas.height,
+        },
+        (aspect > 0.).then_some(aspect),
+        shift,
+    )))
+}
+
+/// # Safety
+/// Drag is null or a live exclusive owner from crop_begin_v1. Output is null or
+/// writable aligned rectangle storage, disjoint from the drag. No concurrent calls.
+/// Invalid input leaves both the drag and output unchanged.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_crop_update_v1(
+    drag: *mut CropDrag,
+    current: AbiPoint,
+    aspect: f64,
+    shift: bool,
+    output: *mut captures_app::selection::Rect,
+) -> bool {
+    if drag.is_null()
+        || output.is_null()
+        || ![current.x, current.y, aspect]
+            .into_iter()
+            .all(f64::is_finite)
+        || aspect < 0.
+    {
+        return false;
+    }
+    // SAFETY: caller supplies exclusive live geometry and separate writable output.
+    let rect = unsafe { &mut *drag }.update(
+        Point {
+            x: current.x,
+            y: current.y,
+        },
+        (aspect > 0.).then_some(aspect),
+        shift,
+    );
+    unsafe {
+        output.write(captures_app::selection::Rect {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+        })
+    };
+    true
+}
+
+/// # Safety
+/// Null or a live crop owner from begin, freed exactly once after all updates finish.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_crop_free_v1(drag: *mut CropDrag) {
+    if !drag.is_null() {
+        // SAFETY: caller transfers unique ownership.
+        drop(unsafe { Box::from_raw(drag) });
+    }
+}
 
 /// Ephemeral viewport geometry; inputs are copied and no document is accessed.
 /// # Safety
@@ -910,6 +995,136 @@ mod tests {
         ffi::{CStr, CString},
         mem::MaybeUninit,
     };
+
+    #[test]
+    fn crop_abi_latches_shift_clamps_and_rejects_invalid_input_without_mutation() {
+        let origin = AbiPoint { x: 20., y: 30. };
+        let canvas = captures_app::selection::Bounds {
+            width: 300.,
+            height: 180.,
+        };
+        let drag = captures_editor_crop_begin_v1(origin, canvas, 0., false);
+        assert!(!drag.is_null());
+        let mut output = captures_app::selection::Rect {
+            x: 9.,
+            y: 8.,
+            width: 7.,
+            height: 6.,
+        };
+        // SAFETY: one live exclusive owner, writable separate descriptor, freed once below.
+        unsafe {
+            assert!(captures_editor_crop_update_v1(
+                drag,
+                AbiPoint { x: 140., y: 70. },
+                0.,
+                false,
+                &mut output
+            ));
+            assert_eq!(
+                (output.x, output.y, output.width, output.height),
+                (20., 30., 120., 40.)
+            );
+            assert!(captures_editor_crop_update_v1(
+                drag,
+                AbiPoint { x: 260., y: 90. },
+                0.,
+                true,
+                &mut output
+            ));
+            assert_eq!(
+                (output.width, output.height),
+                (240., 80.),
+                "Shift retains 3:1, not square"
+            );
+            assert!(!captures_editor_crop_update_v1(
+                drag,
+                AbiPoint { x: f64::NAN, y: 1. },
+                0.,
+                false,
+                &mut output
+            ));
+            assert!(!captures_editor_crop_update_v1(
+                drag,
+                origin,
+                -1.,
+                false,
+                &mut output
+            ));
+            assert!(!captures_editor_crop_update_v1(
+                drag,
+                origin,
+                0.,
+                false,
+                ptr::null_mut()
+            ));
+            assert_eq!((output.width, output.height), (240., 80.));
+            assert!(captures_editor_crop_update_v1(
+                drag,
+                AbiPoint { x: 260., y: 120. },
+                0.,
+                true,
+                &mut output
+            ));
+            assert_eq!(
+                (output.width, output.height),
+                (270., 90.),
+                "invalid calls did not clear the latch"
+            );
+            assert!(captures_editor_crop_update_v1(
+                drag,
+                AbiPoint { x: 260., y: 90. },
+                0.,
+                false,
+                &mut output
+            ));
+            assert_eq!((output.width, output.height), (240., 60.));
+            assert!(captures_editor_crop_update_v1(
+                drag,
+                AbiPoint { x: 260., y: 90. },
+                1.,
+                true,
+                &mut output
+            ));
+            assert_eq!(
+                (output.width, output.height),
+                (150., 150.),
+                "preset wins and clamps to bottom"
+            );
+            assert!(captures_editor_crop_update_v1(
+                drag,
+                AbiPoint { x: -20., y: 400. },
+                0.,
+                false,
+                &mut output
+            ));
+            assert_eq!(
+                (output.x, output.y, output.width, output.height),
+                (0., 30., 20., 150.)
+            );
+            assert!(!captures_editor_crop_update_v1(
+                ptr::null_mut(),
+                origin,
+                0.,
+                false,
+                &mut output
+            ));
+            captures_editor_crop_free_v1(drag);
+            captures_editor_crop_free_v1(ptr::null_mut());
+        }
+        assert!(captures_editor_crop_begin_v1(origin, canvas, f64::NAN, false).is_null());
+        assert!(
+            captures_editor_crop_begin_v1(
+                origin,
+                captures_app::selection::Bounds {
+                    width: 0.,
+                    height: 180.
+                },
+                0.,
+                false
+            )
+            .is_null()
+        );
+    }
 
     #[test]
     fn viewport_abi_copies_geometry_and_leaves_invalid_outputs_untouched() {

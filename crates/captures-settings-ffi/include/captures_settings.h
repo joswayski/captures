@@ -54,6 +54,21 @@ bool captures_selection_drag_v1(uint32_t mode, CapturesSelectionPoint origin,
 bool captures_selection_constrain_v1(CapturesSelectionRect rect,
     CapturesSelectionBounds bounds, double aspect, CapturesSelectionRect *output);
 
+/* UI-thread-only screenshot crop geometry, independent of editor workers.
+ * Coordinates are top-left canvas pixels; bounds must be at least 1x1.
+ * Aspect 0 is freeform; positive is a preset. Shift latches the live crop ratio
+ * (square when starting with Shift), unlike the capture selector's force-square.
+ * begin returns NULL on invalid inputs. Updates allocate nothing and reject
+ * nonfinite/negative-aspect/null input without changing the owner or output.
+ * Output must be writable aligned storage disjoint from the live drag.
+ * Do not call concurrently; free each owner once after its last update. */
+typedef struct CapturesEditorCropDrag CapturesEditorCropDrag;
+CapturesEditorCropDrag *captures_editor_crop_begin_v1(CapturesSelectionPoint origin,
+    CapturesSelectionBounds canvas, double aspect, bool shift);
+bool captures_editor_crop_update_v1(CapturesEditorCropDrag *drag,
+    CapturesSelectionPoint current, double aspect, bool shift, CapturesSelectionRect *output);
+void captures_editor_crop_free_v1(CapturesEditorCropDrag *drag);
+
 /* Ephemeral screenshot viewport, never persisted in a document or draft.
  * All coordinates are top-left logical points. fit is the host layout's fitted
  * image rect; canvas is image-pixel size. zoom_percent=0 means Fit; pan remains
