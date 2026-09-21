@@ -653,7 +653,7 @@ It never replaces existing files; successful exports add a distinct History entr
 without modifying the original or draft. A post-publication History failure shows
 the saved path and warning. Accepted writes drain before application quit.
 The wgpu host also connects an output-folder picker and edited-image clipboard
-output. AppKit export controls are described below; its clipboard output,
+output. AppKit export and clipboard controls are described below;
 overwrite-original and physical-platform acceptance remain open.
 
 The AppKit editor host now enables **Edit screenshot** only for screenshot History
@@ -670,7 +670,17 @@ between the edited canvas and decoded output. Option or document changes invalid
 stale output; previewing has no draft, undo, clipboard or file side effects. **Save new
 copy** chooses a directory independently of the worker, then serializes publication on
 that worker. It never replaces a file or mutates the draft; successful publication adds
-a distinct History entry, and partial History failure preserves the saved path. Drafts use
+a distinct History entry, and partial History failure preserves the saved path.
+**Copy image** encodes the full-resolution edited frame as lossless PNG on that same
+worker, then publishes retained bytes to the AppKit pasteboard only if the session's
+generation and artifact still match. Export options (including invalid byte budgets)
+do not affect copy. Copy preserves encoded-preview selection, document, undo and draft
+state without writing files or History. Encoding/clipboard failures leave a retryable
+editor; stale completions after termination cannot write to the clipboard. Automated
+tests cover cropped PNG pixels on a named pasteboard and byte ownership after worker
+close; physical cross-application paste and accessibility acceptance remain open.
+Windows/X11/Wayland retain the existing wgpu clipboard path unchanged.
+Drafts use
 the same isolated sibling root and reopen with the screenshot. The Layers view also
 imports one still image at a time through AppKit's color-managed ImageIO decoder,
 normalizing EXIF orientation and straight-alpha sRGB RGBA8 pixels before the worker
@@ -719,8 +729,8 @@ Across both hosts, physical input/accessibility/IME acceptance remains open.
 The current native screenshot editor is a functional workbench, not a visual match
 for the shipping Tauri editor. Functional controls and inspected fixtures do not
 complete the editor layout/interaction/design parity gate.
-Remaining viewport controls, other drawing tools and AppKit
-edited-image clipboard output are not connected. Recording editing remains open on both hosts; the
+Remaining viewport controls and other drawing tools are not connected.
+Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to

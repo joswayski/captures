@@ -345,8 +345,10 @@ Fit retains each workbench's existing layout and can enlarge small images; Tauri
 fit policy, zoom slider, presets and keyboard shortcuts remain parity work.
 Windows, Wayland and physical AppKit presentation remain unverified.
 The native editor still uses a workbench layout, not the shipping Tauri editor design.
-Other drawing tools, text, overwrite-original, AppKit edited-image
-clipboard output, and recording editing remain unconnected. Shared editor support
+Both hosts can copy the full-resolution edited image without saving a file or draft;
+copy ignores export format and quality settings.
+Other drawing tools, text, overwrite-original, and recording editing remain
+unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
 single-instance relaunch and updates
 are not connected to the native hosts yet. Windows/Linux renderer selection and full

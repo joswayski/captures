@@ -600,6 +600,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var applyCropButton: CaptureButton!
     private var resizeButton: CaptureButton!
     private var previewOutputButton: CaptureButton!
+    private var copyImageButton: CaptureButton!
     private var changeOutputDirectoryButton: CaptureButton!
     private var saveNewCopyButton: CaptureButton!
     private var fields: [NSTextField] = []
@@ -615,6 +616,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var outputDirectory = ""
     private let directoryPicker: ((NSWindow, URL?, @escaping (URL?) -> Void) -> Void)?
     private let didSaveCopy: () -> Void
+    private let writeClipboard: (Data) -> Bool
     private let imagePicker: ((NSWindow, @escaping (URL?) -> Void) -> Void)?
     private let imageDecoder: (URL) throws -> EditorDecodedImage
     private static let imageDecodeQueue = DispatchQueue(label: "es.captures.native.editor-image-decode",
@@ -635,10 +637,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
          directoryPicker: ((NSWindow, URL?, @escaping (URL?) -> Void) -> Void)? = nil,
          didSaveCopy: @escaping () -> Void = {},
          imagePicker: ((NSWindow, @escaping (URL?) -> Void) -> Void)? = nil,
-         imageDecoder: @escaping (URL) throws -> EditorDecodedImage = EditorImageDecoder.decode) {
+         imageDecoder: @escaping (URL) throws -> EditorDecodedImage = EditorImageDecoder.decode,
+         writeClipboard: @escaping (Data) -> Bool = { png in
+             let pasteboard = NSPasteboard.general
+             pasteboard.clearContents()
+             return pasteboard.setData(png, forType: .png)
+         }) {
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
         self.directoryPicker = directoryPicker; self.didSaveCopy = didSaveCopy
         self.imagePicker = imagePicker; self.imageDecoder = imageDecoder
+        self.writeClipboard = writeClipboard
         editorNumberFormatter = NumberFormatter()
         outputIntegerFormatter = NumberFormatter()
         editorNumberFormatter.locale = numberLocale
@@ -980,9 +988,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             $0.formatter = outputIntegerFormatter; $0.delegate = self
         }
 
-        previewOutputButton = button("Preview output", frame: NSRect(x: 0, y: 240, width: 252, height: 34),
+        previewOutputButton = button("Preview output", frame: NSRect(x: 0, y: 240, width: 140, height: 34),
                                      parent: outputContent) { [weak self] in self?.previewOutput() }
         previewOutputButton.primary = true
+        copyImageButton = button("Copy image", frame: NSRect(x: 152, y: 240, width: 100, height: 34),
+                                 parent: outputContent) { [weak self] in self?.copyEditedImage() }
+        copyImageButton.setAccessibilityLabel("Copy edited screenshot")
+        copyImageButton.toolTip = "Copy full-resolution edited pixels as PNG. Export options are ignored; no file or draft is saved."
         outputPreviewMode = NSSegmentedControl(labels: ["Edited canvas", "Encoded output"],
                                                trackingMode: .selectOne, target: self,
                                                action: #selector(changeOutputPreview))
@@ -1184,6 +1196,32 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 guard self.state.fail(generation: generation) else { return }
                 self.invalidateOutput()
                 self.showError("Output preview failed: \(error.localizedDescription)")
+            }
+            self.updateControls()
+            self.submitPendingImportIfReady()
+        }
+    }
+
+    private func copyEditedImage() {
+        guard let artifactID = state.artifactID, let generation = state.beginCommand() else { return }
+        status.stringValue = "Copying edited image…"; updateControls()
+        // Copy the published edited frame, never the selected encoded preview or
+        // export budget. Encoding stays on the existing serialized editor worker.
+        worker.encode(["format": "png", "quality": "preserve", "quality_value": 100,
+                       "max_size_bytes": NSNull(), "png": ["max_colors": NSNull()]]) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let output):
+                guard self.state.completeOutput(generation: generation, artifactID: artifactID) else { return }
+                if self.writeClipboard(output.data) {
+                    self.status.textColor = self.tokens.color("text-muted")
+                    self.status.stringValue = "Edited image copied. No file or draft was saved."
+                } else {
+                    self.showError("Couldn’t copy the edited image. The clipboard is unavailable; try again.")
+                }
+            case .failure(let error):
+                guard self.state.fail(generation: generation) else { return }
+                self.showError("Couldn’t copy the edited image: \(error.localizedDescription)")
             }
             self.updateControls()
             self.submitPendingImportIfReady()
@@ -1783,6 +1821,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         sectionControl?.isEnabled = ready
         outputFormat?.isEnabled = ready; outputQuality?.isEnabled = ready
         previewOutputButton?.isEnabled = ready
+        copyImageButton?.isEnabled = ready
         outputFilename.isEnabled = ready
         changeOutputDirectoryButton?.isEnabled = ready
         saveNewCopyButton?.isEnabled = ready && !outputDirectory.isEmpty

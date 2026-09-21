@@ -310,6 +310,114 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(previewMode.isEnabled, "changed options cannot leave stale output current")
     }
 
+    func testCopyUsesEditedPixelsIgnoresExportOptionsAndPreservesOutputAndDraftState() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let original = snapshot(id: "shot", unsaved: true, draft: true)
+            let worker = FakeEditorWorker(snapshot: original)
+            var writes: [Data] = []; var clipboardAvailable = true
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                worker: worker, writeClipboard: { png in writes.append(png); return clipboardAvailable })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showOutput(in: controller.root)
+            try button("Preview output", in: controller.root).performClick(nil)
+            let mode = try segmented("Output preview image", in: controller.root)
+            let copy = try button("Copy image", in: controller.root)
+            XCTAssertEqual(copy.accessibilityLabel(), "Copy edited screenshot")
+            copy.performClick(nil)
+            XCTAssertEqual(mode.selectedSegment, 1, "Copy must not replace the encoded preview")
+            XCTAssertTrue(mode.isEnabled)
+            XCTAssertEqual(writes.count, 1)
+            XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Edited image copied") })
+            try render(controller.root, name: "screenshot-editor-clipboard-success-\(appearance)")
+
+            let format = try popup("Output format", in: controller.root)
+            format.selectItem(withTitle: "JPEG"); _ = format.sendAction(format.action, to: format.target)
+            let quality = try popup("Output quality mode", in: controller.root)
+            quality.selectItem(withTitle: "Maximum file size"); _ = quality.sendAction(quality.action, to: quality.target)
+            (try field("Output byte budget", in: controller.root)).stringValue = "invalid"
+            clipboardAvailable = false
+            copy.performClick(nil)
+            let options = try XCTUnwrap(worker.encodes.last)
+            XCTAssertEqual(options["format"] as? String, "png")
+            XCTAssertEqual(options["quality"] as? String, "preserve")
+            XCTAssertTrue(options["max_size_bytes"] is NSNull)
+            XCTAssertTrue((options["png"] as? [String: Any])?["max_colors"] is NSNull)
+            XCTAssertTrue(labels(in: controller.root).contains { $0.contains("clipboard is unavailable") })
+            XCTAssertFalse(controller.state.busy); XCTAssertTrue(copy.isEnabled)
+            try render(controller.root, name: "screenshot-editor-clipboard-error-minimum-\(appearance)")
+            clipboardAvailable = true; copy.performClick(nil)
+            XCTAssertEqual(writes.count, 3)
+            worker.failEncode = true; copy.performClick(nil)
+            XCTAssertEqual(writes.count, 3, "encoding failure must not touch the clipboard")
+            XCTAssertFalse(controller.state.busy); XCTAssertTrue(copy.isEnabled)
+            XCTAssertEqual(controller.state.snapshot, original)
+            XCTAssertTrue(worker.requests.isEmpty && worker.saves.isEmpty)
+        }
+    }
+
+    func testStaleClipboardCompletionCannotWriteAfterTermination() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        worker.deferEncodes = true
+        var writes = 0
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, writeClipboard: { _ in writes += 1; return true })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        let copy = try button("Copy image", in: controller.root)
+        copy.performClick(nil)
+        XCTAssertTrue(controller.state.busy); XCTAssertFalse(copy.isEnabled)
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        XCTAssertEqual(worker.closeCount, 0, "accepted worker work must not be freed during copy")
+        XCTAssertTrue(controller.prepareForTermination())
+        worker.completePendingEncode()
+        XCTAssertEqual(writes, 0)
+        XCTAssertNil(controller.state.artifactID)
+    }
+
+    func testRealClipboardContainsCroppedEditedPngAfterWorkerCloseWithoutCopyPersistence() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let originalURL = fixture.history.appendingPathComponent(fixture.id).appendingPathComponent("capture.png")
+        let original = try Data(contentsOf: originalURL)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let worker = EditorWorker()
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, writeClipboard: { png in
+                pasteboard.clearContents(); return pasteboard.setData(png, forType: .png)
+            })
+        defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
+        controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+        waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+        for (label, value) in [("Crop X", "2"), ("Crop Y", "1"), ("Crop width", "4"), ("Crop height", "2")] {
+            (try field(label, in: controller.root)).stringValue = value
+        }
+        try button("Apply crop", in: controller.root).performClick(nil)
+        waitUntil { controller.state.snapshot?.width == 4 && !controller.state.busy }
+        let edited = controller.state.snapshot
+        try showOutput(in: controller.root)
+        try button("Copy image", in: controller.root).performClick(nil)
+        waitUntil { !controller.state.busy && pasteboard.data(forType: .png) != nil }
+        let png = try XCTUnwrap(pasteboard.data(forType: .png))
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: png))
+        XCTAssertEqual(bitmap.pixelsWide, 4); XCTAssertEqual(bitmap.pixelsHigh, 2)
+        let color = try XCTUnwrap(bitmap.colorAt(x: 0, y: 0)?.usingColorSpace(.sRGB))
+        XCTAssertEqual(color.redComponent, 62.0 / 255, accuracy: 1.0 / 255)
+        XCTAssertEqual(color.greenComponent, 71.0 / 255, accuracy: 1.0 / 255)
+        XCTAssertEqual(color.blueComponent, 19.0 / 255, accuracy: 1.0 / 255)
+        XCTAssertEqual(controller.state.snapshot, edited)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.drafts.path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.history.path), [fixture.id])
+        XCTAssertEqual(try Data(contentsOf: originalURL), original)
+        worker.close(); EditorWorker.flush()
+        XCTAssertEqual(pasteboard.data(forType: .png), png, "pasteboard owns bytes after the editor worker closes")
+    }
+
     func testMaximumOutputRequiresLocaleParsedDefaultCapAndFailuresRemainRecoverable() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
