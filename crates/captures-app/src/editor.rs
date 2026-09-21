@@ -810,7 +810,7 @@ impl Element {
 
     /// Shipping unrotated selection bounds, including annotation padding, not
     /// painted-pixel bounds. The center is also the element's rotation pivot.
-    /// Text requires native font layout and is deliberately unsupported here.
+    /// Text follows shipping's estimated wrapping, not measured glyph ink.
     pub fn selection_bounds(&self) -> Result<Rect, String> {
         match self {
             Self::Image(image) => Ok(Rect {
@@ -819,7 +819,7 @@ impl Element {
                 width: image.width,
                 height: image.height,
             }),
-            Self::Text(_) => Err("Text selection requires native text layout.".into()),
+            Self::Text(text) => crate::editor_text::selection_bounds(text),
             Self::Shape(shape) => match shape.shape.as_str() {
                 "rectangle" | "ellipse" => Ok(closed_shape_bounds(shape)),
                 "line" | "arrow" => {
@@ -1068,9 +1068,6 @@ impl MoveDrag {
             .find(|element| element.base().id == id)
             .ok_or("The selected layer no longer exists.")?
             .clone();
-        if matches!(element, Element::Text(_)) {
-            return Err("Text movement is not supported by the native editor.".into());
-        }
         let initial_bounds = painted_bounds(&element)?;
         let (vertical_lines, horizontal_lines) = collect_alignment_lines(document, id)?;
         Ok(Self {
@@ -1317,8 +1314,8 @@ impl Document {
     /// hosts convert pointer/zoom coordinates and own selection/gesture state.
     ///
     /// A visible, unlocked unsupported element encountered before a hit returns
-    /// an error rather than silently selecting through it. Hidden/locked text
-    /// does not block picking. This query never edits the document or history.
+    /// an error rather than silently selecting through it. Hidden/locked layers
+    /// do not block picking. This query never edits the document or history.
     pub fn hit_test(&self, point: Point, tolerance: f64) -> Result<Option<&Element>, String> {
         if !point.x.is_finite() || !point.y.is_finite() || !tolerance.is_finite() || tolerance < 0.
         {
@@ -2207,7 +2204,7 @@ fn resize_element(element: &Element, initial: Rect, next: Rect) -> Result<Elemen
             image.width = (image.width * scale_x).max(1.);
             image.height = (image.height * scale_y).max(1.);
         }
-        Element::Text(_) => return Err("Text resize requires native text layout.".into()),
+        Element::Text(text) => *text = crate::editor_text::resize(text, initial, next)?,
         Element::Shape(shape) => {
             let start = map(Point {
                 x: shape.base.x,
@@ -2511,7 +2508,7 @@ fn point_and_tangent_at_length(
     (last, unit(samples[samples.len() - 2], last))
 }
 
-fn annotation_drop_shadow_pad(style: &ElementStyle) -> f64 {
+pub(crate) fn annotation_drop_shadow_pad(style: &ElementStyle) -> f64 {
     if !style.has_drop_shadow() {
         return 0.;
     }

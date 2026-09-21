@@ -2,8 +2,8 @@
 //!
 //! Image assets are supplied by exact document `src`, so rendering performs no
 //! filesystem, network, host-font, or UI access. The five closed annotation
-//! shapes, curved lines, tapered arrows, and freehand paths are rendered. Filled,
-//! unrotated text and plates additionally require explicit fonts and family mapping.
+//! shapes, curved lines, tapered arrows, and freehand paths are rendered. Filled
+//! text and plates additionally require explicit fonts and family mapping.
 
 use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 
@@ -34,8 +34,8 @@ pub fn render(
 
 /// Opt in to filled paragraph text using caller-owned fonts. `families` maps
 /// document family keys (such as `sans`) to names embedded in supplied font bytes.
-/// No installed fonts are scanned. Rotation, outlines and text shadows remain
-/// explicit errors. Existing editor sessions still use the no-font entry point.
+/// No installed fonts are scanned. Outlines and text shadows remain explicit
+/// errors. Text and plates rotate together around the shipping selection pivot.
 /// Retained text bitmaps are limited to 16M pixels across the visible document.
 pub fn render_with_text(
     document: &Document,
@@ -133,9 +133,9 @@ fn render_inner(
 
 fn validate_text(element: &TextElement, families: &BTreeMap<String, String>) -> Result<(), String> {
     let id = &element.base.id;
-    if element.outlined || element.has_drop_shadow() || element.base.rotation() != 0. {
+    if element.outlined || element.has_drop_shadow() {
         return Err(format!(
-            "text layer {id} rotation, outlines and shadows are not supported yet"
+            "text layer {id} outlines and shadows are not supported yet"
         ));
     }
     for (axis, value) in [
@@ -200,14 +200,20 @@ fn text_layers(
     })?;
     let mode = blend_mode(&element.base.blend_mode, "text", &element.base.id)?;
     let number = |value, axis| finite_layer_f32(value, "text", axis, &element.base.id);
+    let bounds = crate::editor_text::selection_bounds(element)?;
+    let rotation = radians_to_degrees(element.base.rotation(), "text", &element.base.id)?;
+    let origin = Point {
+        x: number(bounds.x + bounds.width / 2., "rotation x")?,
+        y: number(bounds.y + bounds.height / 2., "rotation y")?,
+    };
     let layer = |shape, color, fill| Layer {
         id,
         shape,
         color,
         fill,
         stroke_width: 0.,
-        rotation_degrees: 0.,
-        rotation_origin: None,
+        rotation_degrees: rotation,
+        rotation_origin: Some(origin),
         blend_mode: mode,
     };
     let mut layers = Vec::new();

@@ -265,9 +265,10 @@ drop shadows, without host I/O.
 A separate shared text prerequisite shapes and rasterizes single lines from explicit
 font bytes, including ligatures, combining marks and right-to-left text. Shared
 paragraph helpers now provide measured wrapping, alignment, auto-width boxes and
-background-plate geometry. An opt-in document renderer composites filled, unrotated
-text and square/rounded plates from those fonts, with opacity and blending. Text
-rotation, outlines and shadows are still unsupported. Editor workers can own explicit
+background-plate geometry. An opt-in document renderer composites filled text and
+square/rounded plates from those fonts, with rotation, opacity and blending. Shared
+text selection, movement and resizing follow the shipping editor's interaction rules;
+text outlines and shadows are still unsupported. Editor workers can own explicit
 fonts and preserve their exact bytes in local draft sidecars, so text edits, undo,
 export and reopening use the same fonts. Native Text tools and platform font
 acquisition are not connected yet; no fonts are discovered or downloaded automatically.

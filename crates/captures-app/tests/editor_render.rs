@@ -949,7 +949,7 @@ fn text_errors_are_explicit_hidden_layers_are_skipped_and_failed_render_is_retry
     for mutate in [
         |t: &mut TextElement| t.outlined = true,
         |t: &mut TextElement| t.drop_shadow = Some(true),
-        |t: &mut TextElement| t.base.rotation = Some(0.3),
+        |t: &mut TextElement| t.base.rotation = Some(f64::INFINITY),
         |t: &mut TextElement| t.text = "☃".into(),
         |t: &mut TextElement| t.text = "L\u{0085}L".into(),
         |t: &mut TextElement| t.font_family = "unknown".into(),
@@ -997,4 +997,66 @@ fn text_errors_are_explicit_hidden_layers_are_skipped_and_failed_render_is_retry
     let valid = document(200., 180., vec![Element::Text(text())]);
     let recovered = render_with_text(&valid, &BTreeMap::new(), &mut renderer, &families).unwrap();
     assert_eq!(recovered.get_pixel(22, 45).0, [255, 0, 0, 255]);
+}
+
+#[test]
+fn text_and_plate_rotate_together_around_selection_not_individual_paint_centers() {
+    let (mut renderer, families) = fonts();
+    for plate in [None, Some("#eeeeee".into())] {
+        let has_plate = plate.is_some();
+        let mut label = text();
+        label.base.x = 50.;
+        label.base.y = 50.;
+        label.background = plate;
+        label.rounded_background = true;
+        let before = render_with_text(
+            &document(200., 200., vec![Element::Text(label.clone())]),
+            &BTreeMap::new(),
+            &mut renderer,
+            &families,
+        )
+        .unwrap();
+        label.base.rotation = Some(std::f64::consts::FRAC_PI_2);
+        let rotated = render_with_text(
+            &document(200., 200., vec![Element::Text(label)]),
+            &BTreeMap::new(),
+            &mut renderer,
+            &families,
+        )
+        .unwrap();
+        assert_eq!(rotated.get_pixel(80, 55).0, [255, 0, 0, 255]);
+        assert_eq!(rotated.get_pixel(73, 90).0, [255, 0, 0, 255]);
+        if has_plate {
+            // Rotated plate: x32.4/y21.2, 135.2×157.6, radius27.2. Check
+            // interior and exterior pixels, not orientation-dependent curve AA.
+            assert_eq!(rotated.get_pixel(100, 25).0, [238, 238, 238, 255]);
+            assert_eq!(rotated.get_pixel(100, 175).0, [238, 238, 238, 255]);
+            for (x, y) in [(25, 100), (175, 100), (35, 24)] {
+                assert_eq!(rotated.get_pixel(x, y)[3], 0);
+            }
+        } else {
+            // Independent whole-bitmap quarter turn, pivot (100,100).
+            for (actual, expected) in rotated
+                .pixels()
+                .zip(image::imageops::rotate90(&before).pixels())
+            {
+                assert_pixel_near(actual.0, expected.0, 1);
+            }
+        }
+    }
+    let mut label = text();
+    label.base.x = 50.;
+    label.base.y = 50.;
+    label.text = "fi fi".into();
+    label.base.rotation = Some(std::f64::consts::FRAC_PI_2);
+    // Shaping fits one row (96px), but shipping's estimate wraps to two rows.
+    // Its interaction pivot is (100,150), not the painted plate/ink center.
+    let rotated = render_with_text(
+        &document(240., 240., vec![Element::Text(label)]),
+        &BTreeMap::new(),
+        &mut renderer,
+        &families,
+    )
+    .unwrap();
+    assert_eq!(rotated.get_pixel(170, 102).0, [255, 0, 0, 255]);
 }

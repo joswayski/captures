@@ -1,12 +1,11 @@
-//! Shipping editor paragraph and auto-width rules, with explicit font measurement.
+//! Shipping editor paragraph, auto-width and interaction rules.
 //!
-//! No estimated glyph widths or host font access. This is paint layout, not the
-//! shipping estimated selection geometry. Hosts still need font ownership, text
-//! commands and input before they can use it. Shadows and glyph ink are separate.
+//! Paint uses explicit font measurement. Selection/resize deliberately use the
+//! shipping UTF-16 width estimate, not glyph ink or host font access.
 
 use serde::Serialize;
 
-use crate::editor::{Rect, TextElement};
+use crate::editor::{ElementStyle, Point, Rect, TextElement, annotation_drop_shadow_pad};
 
 #[derive(Debug, PartialEq, Serialize)]
 pub struct TextRow {
@@ -198,6 +197,119 @@ pub fn layout(
     })
 }
 
+fn fitted_width(
+    text: &str,
+    size: f64,
+    measure: &mut impl FnMut(&str) -> Result<f64, String>,
+) -> Result<f64, String> {
+    let mut widest = 0_f64;
+    for line in text.split('\n') {
+        widest = widest.max(advance(line, measure)?);
+    }
+    if widest <= 0. {
+        widest = advance(" ", measure)?;
+    }
+    Ok(minimum_width(size).max((widest + size * 0.35).ceil()))
+}
+
+// JavaScript text.length counts UTF-16 code units, even though hard wrapping
+// splits oversized tokens by Unicode scalars. Keep these two rules distinct.
+fn estimate(text: &str, size: f64) -> Result<f64, String> {
+    Ok(text.encode_utf16().count().max(1) as f64 * size * 0.56)
+}
+
+fn interaction_pad(element: &TextElement, size: f64) -> Point {
+    let shadow = annotation_drop_shadow_pad(&ElementStyle {
+        color: element.color.clone(),
+        fill: None,
+        stroke_width: (size * 0.22).max(4.),
+        stroke_enabled: None,
+        drop_shadow: element.drop_shadow,
+        drop_shadow_style: element.drop_shadow_style.clone(),
+        extra: Default::default(),
+    });
+    let plate = element
+        .background
+        .as_deref()
+        .is_some_and(|color| !color.is_empty());
+    Point {
+        x: shadow + if plate { size * 0.36 } else { 0. },
+        y: shadow + if plate { size * 0.22 } else { 0. },
+    }
+}
+
+/// Unrotated shipping interaction bounds, including plate/shadow padding.
+/// These intentionally use estimated wrapping; painting uses real shaping.
+pub fn selection_bounds(element: &TextElement) -> Result<Rect, String> {
+    validate(element)?;
+    let width = element.width.max(minimum_width(element.font_size));
+    let rows = wrap(&element.text, width, &mut |line| {
+        estimate(line, element.font_size)
+    })?;
+    let pad = interaction_pad(element, element.font_size);
+    Ok(Rect {
+        x: element.base.x - pad.x,
+        y: element.base.y - pad.y,
+        width: width + pad.x * 2.,
+        height: rows.len() as f64 * element.font_size * 1.25 + pad.y * 2.,
+    })
+}
+
+/// Map a text layer between selection boxes. Side resizing reflows fixed-width
+/// text; other drags scale type. Auto-width labels refit rather than stretch ink.
+pub fn resize(element: &TextElement, initial: Rect, next: Rect) -> Result<TextElement, String> {
+    validate(element)?;
+    if ![
+        initial.width,
+        initial.height,
+        next.x,
+        next.y,
+        next.width,
+        next.height,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        || next.width <= 0.
+        || next.height <= 0.
+    {
+        return Err("Text resize requires finite, positive bounds.".into());
+    }
+    let scale_x = next.width / initial.width.max(1.);
+    let scale_y = next.height / initial.height.max(1.);
+    let width_only = (scale_y - 1.).abs() < 0.001 && (scale_x - 1.).abs() >= 0.001;
+    let height_only = (scale_x - 1.).abs() < 0.001 && (scale_y - 1.).abs() >= 0.001;
+    let auto = element.uses_auto_width();
+    let mut resized = element.clone();
+    if width_only && !auto {
+        let pad = interaction_pad(element, element.font_size);
+        resized.base.x = next.x + pad.x;
+        resized.base.y = next.y + pad.y;
+        resized.width = minimum_width(element.font_size).max(next.width - pad.x * 2.);
+    } else {
+        let scale = if width_only {
+            scale_x
+        } else if height_only {
+            scale_y
+        } else {
+            scale_x.abs().min(scale_y.abs())
+        }
+        .max(0.05);
+        let size = (element.font_size * scale).round().clamp(8., 512.);
+        let pad = interaction_pad(element, size);
+        resized.font_size = size;
+        resized.base.x = next.x + pad.x;
+        resized.base.y = next.y + pad.y;
+        resized.width = if auto {
+            fitted_width(&element.text, size, &mut |line| estimate(line, size))?
+        } else {
+            minimum_width(size).max(element.width * scale)
+        };
+    }
+    resized.auto_width = Some(auto);
+    validate(&resized)?;
+    Ok(resized)
+}
+
 /// Fit an auto-width element while preserving every unrelated document field.
 /// While editing, blank text retains the shipping eight-em composing field.
 pub fn fit_auto_width(
@@ -213,14 +325,7 @@ pub fn fit_auto_width(
     let width = if editing && element.text.trim_matches(whitespace).is_empty() {
         minimum.max((element.font_size * 8.).round())
     } else {
-        let mut widest = 0_f64;
-        for line in element.text.split('\n') {
-            widest = widest.max(advance(line, &mut measure)?);
-        }
-        if widest <= 0. {
-            widest = advance(" ", &mut measure)?;
-        }
-        minimum.max((widest + element.font_size * 0.35).ceil())
+        fitted_width(&element.text, element.font_size, &mut measure)?
     };
     let delta = width - element.width;
     let mut fitted = element.clone();

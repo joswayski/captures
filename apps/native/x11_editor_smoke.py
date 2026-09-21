@@ -303,6 +303,28 @@ def main():
             assert (draft.parent / "fonts/regular.font").read_bytes() == font_bytes
             assert json.loads(draft.read_text())["fonts"] == {
                 "families": {"sans": "Captures Shaping Test"}, "assets": ["regular"]}
+            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            click(editor, 470, 62)  # Layers; image origin (238,89), scale 1.
+            click(editor, 600, 230)  # Select the text plate, including non-ink pixels.
+            drag((600, 230), (625, 247))
+            save_layers(lambda values: (values[1]["x"], values[1]["y"]) == (275, 57), "text moved")
+            shot(editor, "text-moved")
+            click(editor, 35, 62)
+            save_layers(lambda values: (values[1]["x"], values[1]["y"]) == (250, 40), "text move undone")
+            drag((697, 229), (737, 229))
+            save_layers(lambda values: math.isclose(values[1]["width"], 220.2, abs_tol=1e-4)
+                        and values[1]["fontSize"] == 80, "text fixed-width side resize")
+            shot(editor, "text-resized")
+            click(editor, 35, 62)
+            save_layers(lambda values: values[1]["width"] == 180, "text resize undone")
+            # The top rotation handle would be outside the canvas; use the lower one.
+            drag((578, 375), (428, 229), shift=True)
+            save_layers(lambda values: math.isclose(values[1].get("rotation", 0), math.pi / 2, abs_tol=1e-6),
+                        "text quarter-turn")
+            run("xdotool", "mousemove", "0", "0")
+            shot(editor, "text-rotated")
+            click(editor, 35, 62)
+            save_layers(lambda values: values[1].get("rotation", 0) == 0, "text rotation undone")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "font-backed editor closes")
             editor = reopen()
@@ -327,10 +349,11 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["text-draft-restored", "font-bytes-preserved", "text-minimum-reopen",
+                "checks": ["text-draft-restored", "font-bytes-preserved", "text-canvas-move-undo",
+                           "text-canvas-resize-undo", "text-canvas-rotation-undo", "text-minimum-reopen",
                            "text-clipboard-dimensions-and-ink", "text-plate-and-original-unchanged"],
             }, indent=2) + "\n")
-            print("PASS native text draft: explicit fonts, save/reopen, minimum, clipboard ink and plate")
+            print("PASS native text draft: fonts, move/rotate/undo, save/reopen, minimum, clipboard pixels")
             return
 
         if args.brush_only:

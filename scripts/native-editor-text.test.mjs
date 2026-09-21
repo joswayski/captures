@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
+  elementLocalBounds, resizeElement,
   fitAutoWidthTextElement, fitEditingAutoWidthTextElement,
   textBackgroundPad, textBackgroundRadius, textHasBackgroundPlate,
   TEXT_LINE_HEIGHT_RATIO, wrapTextLines,
@@ -34,6 +35,11 @@ function cases() {
     { text: 'A', autoWidth: true, width: 14.5, fontSize: 20, align: 'right' },
     { text: '\ufeff \n', autoWidth: true, width: 40, align: 'center' },
     { text: '\u0085', autoWidth: true, width: 40, align: 'right' },
+    { text: '😀A', fontSize: 20, width: 33.6, background: null, dropShadow: false },
+    { text: '😀A', fontSize: 20, width: 33.599, background: null, dropShadow: false },
+    { text: 'AB\nC', autoWidth: true, dropShadowStyle: {
+      color: '#123456', opacity: 38, blur: 17, offsetX: -29, offsetY: 7,
+    } },
   ];
   return variants.map((variant, index) => {
     const element = {
@@ -68,7 +74,15 @@ function cases() {
     }
     const fitted = fitAutoWidthTextElement(element, recordedMeasure);
     const editing = fitEditingAutoWidthTextElement(element, recordedMeasure);
-    return { element, measurements, expected: { rows, content, plate }, fitted, editing };
+    const selection = elementLocalBounds(element);
+    const scales = [0, 11, 20].includes(index)
+      ? [[1.6, 1], [1, 0.7], [1.3, 1.6], [0.0001, 0.0002], [40, 30], [1.0005, 1.8], [1.0011, 1.8]] : [];
+    const resizes = scales
+      .map(([x, y]) => {
+        const next = { x: -31.5, y: 27.25, width: selection.width * x, height: selection.height * y };
+        return { next, expected: resizeElement(element, selection, next) };
+      });
+    return { element, measurements, expected: { rows, content, plate }, fitted, editing, selection, resizes };
   });
 }
 
@@ -87,5 +101,13 @@ if (process.argv.includes('--write')) {
     assert.equal(data[15].fitted.x, -12.75);
     assert.equal(data[16].editing.width, 188);
     assert.notEqual(data[17].editing.width, 188);
+    assert.equal(data[18].selection.height, 25);
+    assert.equal(data[19].selection.height, 50);
+    assert.equal(data[0].resizes[0].expected.fontSize, data[0].element.fontSize);
+    assert.equal(data[11].resizes[0].expected.fontSize, 38);
+    assert.equal(data[0].resizes[3].expected.fontSize, 8);
+    assert.equal(data[0].resizes[4].expected.fontSize, 512);
+    assert.equal(data[0].resizes[5].expected.fontSize, 42);
+    assert.equal(data[0].resizes[6].expected.fontSize, 24);
   });
 }
