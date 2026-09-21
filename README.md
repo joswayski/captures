@@ -279,6 +279,8 @@ outlines and shadow color, opacity, blur and offsets. New text uses
 bundled Liberation Sans, with Serif and Mono also available (OFL 1.1); exact font
 bytes and license notices stay with the draft. Older drafts offer only their saved
 fonts; adding new fonts to an existing draft is not implemented.
+Selected-text named styles use those pinned fonts; Rounded styles are unavailable
+without a pinned rounded face, which the native bundle does not provide.
 This is not Tauri system-font equivalence or universal Unicode coverage:
 missing glyphs remain errors, and fonts are never discovered or downloaded automatically.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/

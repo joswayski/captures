@@ -287,6 +287,17 @@ universal Unicode or Tauri system-font equivalence; missing glyphs are errors.
 Both hosts stage family changes with the other Text Apply/Cancel fields. Their
 family picker reads the session's actual pinned map, not host defaults. Older
 Sans-only drafts remain Sans-only; explicit font migration is still unimplemented.
+Both selected-text inspectors offer a Style menu staged with Apply/Cancel.
+Rust supplies the shipping seven-style catalog filtered by the session's pinned
+font families: the bundle offers Standard, Outlined, Mono, Box and Mono box;
+Sans-only drafts offer Standard, Outlined and Box. Rounded/Rounded box require an
+actual pinned `rounded` face and are not substituted with Sans. Presets change only
+family, plate/outline flags and (when no plate existed) the default plate color.
+They preserve content, size, alignment, traits, text color, custom plate colors,
+shadows and unknown metadata; the usual worker edit/refit rules still apply.
+Shipping-TypeScript fixtures check the catalog; staged failure/cancellation and
+font filtering are covered separately in host/session tests. This is not the
+shipping style-picker layout, immediate editing or a new-text-default picker.
 Reopening prefers the saved font set over host
 defaults; missing/corrupt fonts return errors without silently substituting or
 deleting the draft. Font cleanup follows successful manifest publication; the
@@ -301,7 +312,7 @@ fixtures do not provide Text input controls or establish macOS, Windows, Wayland
 or physical Text-tool presentation/input acceptance.
 The basic Text tool is implemented in AppKit and wgpu; host verification is recorded
 per slice, not inferred from shared tests. Additional font import and OS acquisition,
-presets, inline input and physical input/IME/accessibility remain open.
+new-text defaults, inline input and physical input/IME/accessibility remain open.
 No host text parity gate is closed.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.

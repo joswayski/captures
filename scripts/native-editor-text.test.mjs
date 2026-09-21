@@ -2,13 +2,16 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
-  elementLocalBounds, resizeElement,
+  applyTextStylePreset, elementLocalBounds, resizeElement,
   fitAutoWidthTextElement, fitEditingAutoWidthTextElement,
   textBackgroundPad, textBackgroundRadius, textHasBackgroundPlate,
   TEXT_LINE_HEIGHT_RATIO, wrapTextLines,
 } from '../apps/desktop/ui/src/lib/screenshotEditor.ts';
 
 const fixture = new URL('../crates/captures-app/tests/editor-text-golden.json', import.meta.url);
+const presetFixture = new URL('../crates/captures-app/tests/editor-text-presets-golden.json', import.meta.url);
+const presets = () => ['standard', 'rounded', 'outlined', 'mono', 'box', 'mono-box', 'rounded-box']
+  .map(id => ({ id, ...applyTextStylePreset({ background: null }, id) }));
 // Deliberately asymmetric, non-additive measurements. The callback is a test
 // oracle, not a production substitute for shaping. Rust consumes this table.
 const widths = { A: 7, B: 11, C: 5, i: 2, f: 4, ' ': 3, '😀': 13, '\u0301': 0 };
@@ -88,7 +91,11 @@ function cases() {
 
 if (process.argv.includes('--write')) {
   await writeFile(fixture, `${JSON.stringify(cases(), null, 2)}\n`);
+  await writeFile(presetFixture, `${JSON.stringify(presets(), null, 2)}\n`);
 } else {
+  test('native named style catalog matches shipping text presets', async () => {
+    assert.deepEqual(JSON.parse(await readFile(presetFixture, 'utf8')), presets());
+  });
   test('native paragraph vectors match shipping text helpers', async () => {
     assert.deepEqual(JSON.parse(await readFile(fixture, 'utf8')), cases());
   });
