@@ -19,10 +19,12 @@ use crate::{
     editor::{
         ClosedShapeCreate, Document, DocumentHistory, DropShadowStyle, Element, ElementBase,
         FreehandPathCreate, ImageElement, LayerEdit, OpenShapeCreate, OptionalNullable, Point,
-        Rect, image_bounds,
+        Rect, TextElement, image_bounds,
     },
     editor_image_background::{BrushMode, paint_stroke},
-    editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, render, render_with_text},
+    editor_render::{
+        MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, prepare_text_edit, render, render_with_text,
+    },
 };
 
 const ASSET_PREFIX: &str = "draft-asset:";
@@ -48,6 +50,84 @@ pub struct ImportImage {
     /// A document-space drag sample. Without one, shipping places the image
     /// below the selected/front-most visible image (or the canvas).
     pub point: Option<Point>,
+}
+
+/// Plain, left-aligned text. Native hosts own composition/cancellation and submit
+/// accepted content, never font bytes or an entire replacement document.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TextCreate {
+    pub point: Point,
+    pub text: String,
+    pub font_size: f64,
+    pub font_family: String,
+    pub color: String,
+}
+
+/// Filled-text property edits. Omitted fields preserve authored/unknown data;
+/// a null background removes the plate. Outlines/shadows remain unsupported.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TextPatch {
+    pub text: Option<String>,
+    pub font_size: Option<f64>,
+    pub font_family: Option<String>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub align: Option<String>,
+    pub color: Option<String>,
+    #[serde(default)]
+    pub background: OptionalNullable<String>,
+    pub rounded_background: Option<bool>,
+}
+
+impl TextPatch {
+    fn apply(self, element: &mut TextElement) -> Result<bool, String> {
+        if self
+            .font_size
+            .is_some_and(|size| !(8. ..=512.).contains(&size))
+        {
+            return Err("Text property size must be between 8 and 512.".into());
+        }
+        let refit = self.text.is_some()
+            || self.font_size.is_some()
+            || self.font_family.is_some()
+            || self.bold.is_some()
+            || self.italic.is_some();
+        if let Some(text) = self.text {
+            element.text = text;
+        }
+        if let Some(size) = self.font_size {
+            element.font_size = size;
+        }
+        if let Some(family) = self.font_family {
+            if family != "rounded" {
+                element.rounded_background = false;
+            }
+            element.font_family = family;
+        }
+        if let Some(bold) = self.bold {
+            element.bold = bold;
+        }
+        if let Some(italic) = self.italic {
+            element.italic = italic;
+        }
+        if let Some(align) = self.align {
+            element.align = align;
+        }
+        if let Some(color) = self.color {
+            element.color = color;
+        }
+        match self.background {
+            OptionalNullable::Missing => {}
+            OptionalNullable::Null => element.background = None,
+            OptionalNullable::Value(color) => element.background = Some(color),
+        }
+        if let Some(rounded) = self.rounded_background {
+            element.rounded_background = rounded;
+        }
+        Ok(refit)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,6 +167,14 @@ pub enum Request {
     CreateFreehandPath {
         #[serde(flatten)]
         create: FreehandPathCreate,
+    },
+    CreateText {
+        #[serde(flatten)]
+        create: TextCreate,
+    },
+    EditText {
+        id: String,
+        patch: TextPatch,
     },
     Layer {
         id: String,
@@ -594,6 +682,68 @@ impl EditorSession {
             Request::CreateFreehandPath { create } => {
                 let mut document = next.current().clone();
                 document.create_freehand_path(create)?;
+                next.commit(document);
+            }
+            Request::CreateText { create } => {
+                if !(8. ..=512.).contains(&create.font_size) {
+                    return Err("Text property size must be between 8 and 512.".into());
+                }
+                let mut document = next.current().clone();
+                let id = fresh_id(|id| document.elements.iter().any(|e| e.base().id == id));
+                let element = TextElement {
+                    base: ElementBase {
+                        id,
+                        x: create.point.x,
+                        y: create.point.y,
+                        rotation: None,
+                        locked: false,
+                        visible: true,
+                        opacity: 100.,
+                        blend_mode: "source-over".into(),
+                    },
+                    text: create.text,
+                    font_size: create.font_size,
+                    width: (create.font_size * 8.).round(),
+                    auto_width: Some(true),
+                    font_family: create.font_family,
+                    bold: false,
+                    italic: false,
+                    align: "left".into(),
+                    color: create.color,
+                    background: None,
+                    outlined: false,
+                    rounded_background: false,
+                    drop_shadow: None,
+                    drop_shadow_style: None,
+                    extra: Default::default(),
+                };
+                let fonts = self
+                    .fonts
+                    .as_mut()
+                    .ok_or("Text requires explicit font bytes.")?;
+                let element =
+                    prepare_text_edit(&element, true, &mut fonts.renderer, &fonts.assets.families)?;
+                document.elements.push(Element::Text(element));
+                next.commit(document);
+            }
+            Request::EditText { id, patch } => {
+                let mut document = next.current().clone();
+                let element = document
+                    .elements
+                    .iter_mut()
+                    .find(|e| e.base().id == id)
+                    .ok_or("The selected layer no longer exists.")?;
+                let Element::Text(element) = element else {
+                    return Err("The selected layer is not text.".into());
+                };
+                // Shipping property edits apply even to hidden/locked layers.
+                let refit = patch.apply(element)?;
+                let fonts = self
+                    .fonts
+                    .as_mut()
+                    .ok_or("Text requires explicit font bytes.")?;
+                *element =
+                    prepare_text_edit(element, refit, &mut fonts.renderer, &fonts.assets.families)?;
                 next.commit(document);
             }
             Request::Layer { id, edit } => {

@@ -174,6 +174,36 @@ fn canvas_text_line(line: &str) -> Cow<'_, str> {
     }
 }
 
+/// Validate property edits even on hidden text, using the same fonts and Canvas
+/// normalization as paint. Content/type edits refit; color/alignment edits do not.
+pub(crate) fn prepare_text_edit(
+    element: &TextElement,
+    refit: bool,
+    renderer: &mut TextRenderer,
+    families: &BTreeMap<String, String>,
+) -> Result<TextElement, String> {
+    validate_text(element, families)?;
+    let style = TextStyle {
+        family: &families[&element.font_family],
+        size: element.font_size as f32,
+        bold: element.bold,
+        italic: element.italic,
+        color: parse_color(&element.color, "text")?.0,
+    };
+    let mut measure = |line: &str| {
+        renderer
+            .measure_line(&canvas_text_line(line), &style)
+            .map(f64::from)
+    };
+    let fitted = if refit {
+        crate::editor_text::fit_auto_width(element, true, &mut measure)?
+    } else {
+        element.clone()
+    };
+    crate::editor_text::layout(&fitted, measure)?;
+    Ok(fitted)
+}
+
 fn text_layers(
     id: u64,
     element: &TextElement,
