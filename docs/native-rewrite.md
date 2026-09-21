@@ -173,7 +173,16 @@ when that is smaller), Highest keeps exact pixels with lossless packing.
 JPEG/WebP retain their lossy quality mapping. Custom
 numeric values/palettes remain available and labeled Custom when active. Preset
 changes invalidate encoded previews without editing documents, drafts or undo.
-Physical/platform output acceptance, output sizing and overwrite behavior remain open.
+Both hosts connect Original/75%/50%/Custom output dimensions and custom aspect lock.
+Shared Rust resolves percentage dimensions by rounding width first, then preserving
+the document ratio. Requested resized output is limited to 16,384 pixels per axis
+and 100M pixels. Worker-owned export pixels use premultiplied-alpha, sRGB Lanczos3;
+this prevents invisible RGB bleeding into edges but does not promise pixel identity
+with the browser's unspecified high-quality canvas filter. Original/equal-size output
+borrows exact pixels. Save-new uses the same once-resized frame for export, History
+dimensions, History PNG and thumbnail. Document/draft/undo and full-resolution copy
+remain unchanged; option changes invalidate encoded previews. Windows/Wayland
+presentation, physical macOS input, output acceptance and overwrite behavior remain open.
 The shared text prerequisite uses `cosmic-text` advanced shaping and CPU Swash
 rasterization for a single line from caller-supplied fonts, with fixed locale and
 no system-font scan. It returns logical advance, baseline, painted bounds and

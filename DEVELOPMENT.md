@@ -140,6 +140,8 @@ font-bearing draft manifests also retain it. Run `apps/native/x11_editor_smoke.p
 exercise real Text controls; `--text-draft-only` retains the synthetic-font regression.
 Use `--output-presets-only` to exercise native compression presets, PNG palette
 selection, exact Highest pixels, unchanged drafts/originals and minimum-size controls.
+Use `--output-size-only` to exercise percentage/custom dimensions, aspect locking,
+saved-file/History consistency, unchanged drafts and full-resolution clipboard copy.
 
 Native Record requires executable FFmpeg and FFprobe commands on `PATH`; native
 builds do not bundle their own media tools yet. AppKit also accepts `CAPTURES_FFMPEG`

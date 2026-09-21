@@ -7,7 +7,10 @@ mod export;
 mod png;
 pub mod text;
 pub use encoding::{composite_onto_white, encode_jpeg, encode_webp};
-pub use export::{ExportFormat, ExportOptions, ExportQuality, PngOptions, encode_export};
+pub use export::{
+    ExportFormat, ExportOptions, ExportQuality, ExportSize, PngOptions, encode_export,
+    resize_for_export,
+};
 pub use png::{
     PNG_MAXIMUM_COLOR_STEPS, encode_png_export, encode_png_export_dithered,
     png_palette_colors_for_quality,

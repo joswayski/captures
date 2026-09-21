@@ -24,8 +24,8 @@ use captures_app::{
     editor_output::{SavedExport, save_new_export},
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{
-        EditorSession, ExportFormat, ExportOptions, ExportQuality, ImportImage, OpenRequest,
-        PngOptions, Request, TextCreate, TextPatch,
+        EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize, ImportImage,
+        OpenRequest, PngOptions, Request, TextCreate, TextPatch,
     },
     editor_viewport::{Viewport, wheel_zoom_factor},
 };
@@ -300,6 +300,8 @@ struct View {
     last_solid_background: String,
     section: Section,
     export_options: ExportOptions,
+    custom_export_size: [u32; 2],
+    export_aspect_locked: bool,
     output: Option<(egui::TextureHandle, usize)>,
     show_output: bool,
     destination: String,
@@ -357,7 +359,10 @@ impl Default for View {
                 quality_value: 80,
                 max_size_bytes: None,
                 png: PngOptions::default(),
+                size: ExportSize::Original,
             },
+            custom_export_size: [1, 1],
+            export_aspect_locked: true,
             output: None,
             show_output: false,
             destination: String::new(),
@@ -2738,7 +2743,88 @@ fn show_crop(
 fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     ui.heading("Output preview");
     let previous = view.export_options;
+    let source_size = view
+        .presented
+        .as_ref()
+        .map(|presented| presented.pixels.dimensions())
+        .unwrap_or((0, 0));
     let options = &mut view.export_options;
+    ui.label("Output size");
+    egui::ComboBox::from_id_salt("output-size")
+        .selected_text(match options.size {
+            ExportSize::Original => "Original",
+            ExportSize::Percent { percent: 75 } => "75%",
+            ExportSize::Percent { .. } => "50%",
+            ExportSize::Custom { .. } => "Custom",
+        })
+        .width(160.)
+        .show_ui(ui, |ui| {
+            for (size, label) in [
+                (ExportSize::Original, "Original"),
+                (ExportSize::Percent { percent: 75 }, "75%"),
+                (ExportSize::Percent { percent: 50 }, "50%"),
+            ] {
+                ui.selectable_value(&mut options.size, size, label);
+            }
+            let custom = matches!(options.size, ExportSize::Custom { .. });
+            if ui.selectable_label(custom, "Custom").clicked() && !custom {
+                view.custom_export_size = [source_size.0, source_size.1];
+                options.size = ExportSize::Custom {
+                    width: source_size.0,
+                    height: source_size.1,
+                };
+            }
+        });
+    if matches!(options.size, ExportSize::Custom { .. }) {
+        let old = view.custom_export_size;
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::DragValue::new(&mut view.custom_export_size[0])
+                    .range(0..=16_384)
+                    .prefix("W "),
+            )
+            .on_hover_text("Custom output width");
+            ui.label("×");
+            ui.add(
+                egui::DragValue::new(&mut view.custom_export_size[1])
+                    .range(0..=16_384)
+                    .prefix("H "),
+            )
+            .on_hover_text("Custom output height");
+            ui.toggle_value(&mut view.export_aspect_locked, "Lock")
+                .on_hover_text("Keep the document aspect ratio");
+        });
+        if view.export_aspect_locked && source_size.0 > 0 && source_size.1 > 0 {
+            if view.custom_export_size[0] != old[0] {
+                view.custom_export_size[1] = ((u64::from(view.custom_export_size[0])
+                    * u64::from(source_size.1)
+                    + u64::from(source_size.0) / 2)
+                    / u64::from(source_size.0))
+                .max(1)
+                .min(u64::from(u32::MAX)) as u32;
+            } else if view.custom_export_size[1] != old[1] {
+                view.custom_export_size[0] = ((u64::from(view.custom_export_size[1])
+                    * u64::from(source_size.0)
+                    + u64::from(source_size.1) / 2)
+                    / u64::from(source_size.1))
+                .max(1)
+                .min(u64::from(u32::MAX)) as u32;
+            }
+        }
+        options.size = ExportSize::Custom {
+            width: view.custom_export_size[0],
+            height: view.custom_export_size[1],
+        };
+    }
+    let output_dimensions = options.size.dimensions(source_size.0, source_size.1);
+    match &output_dimensions {
+        Ok((width, height)) => {
+            ui.small(format!("Resolved size: {width} × {height} px"));
+        }
+        Err(message) => {
+            ui.colored_label(tokens.color("theme-signal"), message);
+        }
+    }
     ui.label("Format");
     ui.horizontal(|ui| {
         for (value, label) in [
@@ -2821,7 +2907,13 @@ fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
         view.invalidate_output();
     }
     ui.add_space(tokens.number("s-2"));
-    if ui.button("Preview output").clicked() {
+    if ui
+        .add_enabled(
+            output_dimensions.is_ok(),
+            egui::Button::new("Preview output"),
+        )
+        .clicked()
+    {
         view.preview(tx);
     }
     if let Some((_, length)) = &view.output {
@@ -2854,7 +2946,7 @@ fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
     ui.horizontal(|ui| {
         if ui
             .add_enabled(
-                view.folder_picker.is_none(),
+                view.folder_picker.is_none() && output_dimensions.is_ok(),
                 egui::Button::new("Save new copy"),
             )
             .clicked()
@@ -3302,6 +3394,8 @@ mod tests {
             output
                 .shapes
                 .iter()
+                // The preset's Custom label follows the Output size Custom button.
+                .rev()
                 .find_map(|shape| match &shape.shape {
                     egui::Shape::Text(text) if text.galley.job.text == label => {
                         Some(text.pos + text.galley.rect.center().to_vec2())
@@ -3342,6 +3436,88 @@ mod tests {
                 "a preset never encodes or edits"
             );
         }
+    }
+
+    #[test]
+    fn output_size_controls_use_document_dimensions_without_encoding_or_editing() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(false)));
+        let document = view.presented.as_ref().unwrap().document.clone();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(250., 900.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| show_output(ui, &tokens, view, &tx),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let position = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing UI label {label}"))
+        };
+        let click = |view: &mut View, pos| {
+            frame(view, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    view,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        pressed,
+                        button: egui::PointerButton::Primary,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            frame(view, vec![])
+        };
+
+        view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
+        view.show_output = true;
+        let output = frame(&mut view, vec![]);
+        let popup = click(&mut view, position(&output, "Original"));
+        click(&mut view, position(&popup, "75%"));
+        assert_eq!(
+            view.export_options.size,
+            ExportSize::Percent { percent: 75 }
+        );
+        assert_eq!(view.export_options.size.dimensions(7, 3), Ok((5, 2)));
+        assert!(view.output.is_none() && !view.show_output);
+
+        let output = frame(&mut view, vec![]);
+        let popup = click(&mut view, position(&output, "75%"));
+        click(&mut view, position(&popup, "Custom"));
+        assert_eq!(view.custom_export_size, [7, 3]);
+        assert_eq!(
+            view.export_options.size,
+            ExportSize::Custom {
+                width: 7,
+                height: 3
+            }
+        );
+        assert!(view.export_aspect_locked);
+        assert!(rx.try_recv().is_err() && !view.pending);
+        assert!(Arc::ptr_eq(
+            &document,
+            &view.presented.as_ref().unwrap().document
+        ));
     }
 
     #[test]
@@ -5924,6 +6100,70 @@ mod tests {
         assert!(view.output.is_none() && !view.show_output);
         assert!(view.presented.as_ref().unwrap().can_redo);
         assert!(!data.path().join("editor-drafts").exists());
+    }
+
+    #[test]
+    fn output_worker_previews_and_saves_asymmetric_size_without_resizing_session_pixels() {
+        let (data, id) = fixture();
+        let ctx = egui::Context::default();
+        let editor = Editor::open(
+            &ctx,
+            data.path().join("history"),
+            id,
+            data.path().join("exports"),
+            CaptureMode::Region,
+            |_| unreachable!("copy was not requested"),
+        );
+        receive(&editor, &ctx);
+        editor.view.lock().unwrap().submit(&editor.tx, crop());
+        receive(&editor, &ctx);
+        let session_pixels = editor
+            .view
+            .lock()
+            .unwrap()
+            .presented
+            .as_ref()
+            .unwrap()
+            .pixels
+            .clone();
+        {
+            let mut view = editor.view.lock().unwrap();
+            view.export_options.size = ExportSize::Custom {
+                width: 3,
+                height: 1,
+            };
+            view.preview(&editor.tx);
+        }
+        let preview = editor
+            .rx
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(preview.output.as_ref().unwrap().0.dimensions(), (3, 1));
+        assert_eq!(preview.pixels.dimensions(), (4, 2));
+        assert!(Arc::ptr_eq(&session_pixels, &preview.pixels));
+        editor.view.lock().unwrap().receive(&ctx, Ok(preview));
+
+        let destination = data.path().join("exports/asymmetric.png");
+        {
+            let mut view = editor.view.lock().unwrap();
+            view.destination = destination.to_string_lossy().into_owned();
+            view.save_new(&editor.tx);
+        }
+        let saved = editor
+            .rx
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            image::load_from_memory(&fs::read(destination).unwrap())
+                .unwrap()
+                .into_rgba8()
+                .dimensions(),
+            (3, 1)
+        );
+        assert_eq!(saved.pixels.dimensions(), (4, 2));
+        assert!(Arc::ptr_eq(&session_pixels, &saved.pixels));
     }
 
     #[test]

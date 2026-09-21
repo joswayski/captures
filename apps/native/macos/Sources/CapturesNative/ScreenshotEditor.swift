@@ -646,6 +646,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let outputPngPalette = NSTextField()
     private let outputByteBudget = NSTextField()
     private let outputCompressionPreset = NSPopUpButton()
+    private let outputWidth = NSTextField()
+    private let outputHeight = NSTextField()
+    private let outputAspectLock = NSButton(checkboxWithTitle: "Lock aspect ratio", target: nil, action: nil)
+    private let outputDimensions = NSTextField(labelWithString: "")
     private let outputFilename = NSTextField()
     private let outputLocation = NSTextField(labelWithString: "")
     private let outputSize = NSTextField(wrappingLabelWithString: "No encoded preview yet.")
@@ -653,6 +657,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var outputPngPaletteLabel: NSTextField!
     private var outputByteBudgetLabel: NSTextField!
     private var outputCompressionPresetLabel: NSTextField!
+    private var outputWidthLabel: NSTextField!
+    private var outputHeightLabel: NSTextField!
     private var sectionControl: NSSegmentedControl!
     private var drawTool: NSPopUpButton!
     private let wandTolerance = NSTextField()
@@ -682,6 +688,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var hasStagedText: Bool { acceptedTextStyle.map { !textFieldsMatch($0) } ?? false }
     private var outputFormat: NSPopUpButton!
     private var outputQuality: NSPopUpButton!
+    private var outputSizeMode: NSPopUpButton!
     private var outputPreviewMode: NSSegmentedControl!
     private var layerTable: NSTableView!
     private var visibilityButton: CaptureButton!
@@ -806,6 +813,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         self.outputDirectory = outputDirectory ?? URL(fileURLWithPath: historyRoot)
             .deletingLastPathComponent().path
         outputFilename.stringValue = defaultOutputFilename()
+        outputSizeMode?.selectItem(at: 0)
+        outputWidth.stringValue = ""; outputHeight.stringValue = ""
         publishOutputLocation()
         selectedLayerID = nil; selectedLayerIndex = 0; preferredLayerID = nil
         editedImage = nil; invalidateOutput(); preview.image = nil; window.title = "Edit screenshot"
@@ -1180,7 +1189,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let scroll = NSScrollView(frame: outputPanel.bounds)
         scroll.autoresizingMask = [.width, .height]
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
-        outputContent.frame = NSRect(x: 0, y: 0, width: 252, height: 628)
+        outputContent.frame = NSRect(x: 0, y: 0, width: 252, height: 778)
         scroll.documentView = outputContent
         outputPanel.addSubview(scroll)
 
@@ -1233,45 +1242,69 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             $0.formatter = outputIntegerFormatter; $0.delegate = self
         }
 
-        previewOutputButton = button("Preview output", frame: NSRect(x: 0, y: 240, width: 140, height: 34),
+        panelFieldLabel("Output size", x: 0, y: 240, parent: outputContent)
+        outputSizeMode = NSPopUpButton(frame: NSRect(x: 0, y: 260, width: 252, height: 30))
+        outputSizeMode.addItems(withTitles: ["Original", "75%", "50%", "Custom"])
+        outputSizeMode.setAccessibilityLabel("Output size")
+        outputSizeMode.target = self; outputSizeMode.action = #selector(outputSizeModeChanged)
+        outputContent.addSubview(outputSizeMode)
+        outputWidthLabel = panelFieldLabel("Width", x: 0, y: 298, parent: outputContent)
+        outputHeightLabel = panelFieldLabel("Height", x: 132, y: 298, parent: outputContent)
+        configure(outputWidth, frame: NSRect(x: 0, y: 318, width: 120, height: 30),
+                  label: "Custom output width", parent: outputContent)
+        configure(outputHeight, frame: NSRect(x: 132, y: 318, width: 120, height: 30),
+                  label: "Custom output height", parent: outputContent)
+        [outputWidth, outputHeight].forEach {
+            $0.formatter = outputIntegerFormatter; $0.delegate = self
+        }
+        outputAspectLock.frame = NSRect(x: 0, y: 352, width: 150, height: 24)
+        outputAspectLock.state = .on
+        outputAspectLock.setAccessibilityLabel("Lock output aspect ratio")
+        outputAspectLock.target = self; outputAspectLock.action = #selector(outputAspectLockChanged)
+        outputContent.addSubview(outputAspectLock)
+        outputDimensions.frame = NSRect(x: 0, y: 376, width: 252, height: 20)
+        outputDimensions.setAccessibilityLabel("Output dimensions")
+        outputContent.addSubview(outputDimensions)
+
+        previewOutputButton = button("Preview output", frame: NSRect(x: 0, y: 402, width: 140, height: 34),
                                      parent: outputContent) { [weak self] in self?.previewOutput() }
         previewOutputButton.primary = true
-        copyImageButton = button("Copy image", frame: NSRect(x: 152, y: 240, width: 100, height: 34),
+        copyImageButton = button("Copy image", frame: NSRect(x: 152, y: 402, width: 100, height: 34),
                                  parent: outputContent) { [weak self] in self?.copyEditedImage() }
         copyImageButton.setAccessibilityLabel("Copy edited screenshot")
         copyImageButton.toolTip = "Copy full-resolution edited pixels as PNG. Export options are ignored; no file or draft is saved."
         outputPreviewMode = NSSegmentedControl(labels: ["Edited canvas", "Encoded output"],
                                                trackingMode: .selectOne, target: self,
                                                action: #selector(changeOutputPreview))
-        outputPreviewMode.frame = NSRect(x: 0, y: 286, width: 252, height: 28)
+        outputPreviewMode.frame = NSRect(x: 0, y: 448, width: 252, height: 28)
         outputPreviewMode.selectedSegment = 0
         outputPreviewMode.setAccessibilityLabel("Output preview image")
         outputContent.addSubview(outputPreviewMode)
-        outputSize.frame = NSRect(x: 0, y: 326, width: 252, height: 58)
+        outputSize.frame = NSRect(x: 0, y: 488, width: 252, height: 58)
         outputSize.maximumNumberOfLines = 3
         outputSize.setAccessibilityLabel("Encoded output size")
         outputContent.addSubview(outputSize)
 
-        panelLabel("Save new copy", frame: NSRect(x: 0, y: 402, width: 252, height: 24),
+        panelLabel("Save new copy", frame: NSRect(x: 0, y: 564, width: 252, height: 24),
                    size: 16, weight: .semibold, parent: outputContent)
         panelLabel("Publish a new file and History item. Existing files are never replaced.",
-                   frame: NSRect(x: 0, y: 430, width: 252, height: 38), muted: true,
+                   frame: NSRect(x: 0, y: 592, width: 252, height: 38), muted: true,
                    parent: outputContent)
-        panelFieldLabel("Filename", x: 0, y: 474, parent: outputContent)
-        outputFilename.frame = NSRect(x: 0, y: 494, width: 252, height: 30)
+        panelFieldLabel("Filename", x: 0, y: 636, parent: outputContent)
+        outputFilename.frame = NSRect(x: 0, y: 656, width: 252, height: 30)
         outputFilename.setAccessibilityLabel("Output filename")
         outputFilename.placeholderString = "Captures_…_edited.png"
         outputContent.addSubview(outputFilename)
-        panelFieldLabel("Save location", x: 0, y: 532, parent: outputContent)
-        outputLocation.frame = NSRect(x: 0, y: 552, width: 166, height: 24)
+        panelFieldLabel("Save location", x: 0, y: 694, parent: outputContent)
+        outputLocation.frame = NSRect(x: 0, y: 714, width: 166, height: 24)
         outputLocation.lineBreakMode = .byTruncatingMiddle
         outputLocation.setAccessibilityLabel("Output save location")
         outputContent.addSubview(outputLocation)
-        changeOutputDirectoryButton = button("Change…", frame: NSRect(x: 174, y: 548, width: 78, height: 30),
+        changeOutputDirectoryButton = button("Change…", frame: NSRect(x: 174, y: 710, width: 78, height: 30),
                                              parent: outputContent) {
             [weak self] in self?.chooseOutputDirectory()
         }
-        saveNewCopyButton = button("Save new copy", frame: NSRect(x: 0, y: 584, width: 252, height: 34),
+        saveNewCopyButton = button("Save new copy", frame: NSRect(x: 0, y: 744, width: 252, height: 34),
                                    parent: outputContent) { [weak self] in self?.saveNewCopy() }
         saveNewCopyButton.primary = true
         updateOutputOptionControls()
@@ -1429,6 +1462,22 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateControls()
     }
 
+    @objc private func outputSizeModeChanged() {
+        if outputSizeMode.indexOfSelectedItem == 3, let snapshot = state.snapshot {
+            outputWidth.stringValue = format(snapshot.width)
+            outputHeight.stringValue = format(snapshot.height)
+        }
+        publishOutputDimensions()
+        invalidateOutput(optionsChanged: true)
+        updateOutputOptionControls()
+        updateControls()
+    }
+
+    @objc private func outputAspectLockChanged() {
+        publishOutputDimensions()
+        updateControls()
+    }
+
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSTextField else { return }
         if field === brushSize {
@@ -1437,9 +1486,22 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             }
             return
         }
-        guard
-              [outputQualityValue, outputPngPalette, outputByteBudget].contains(where: { $0 === field })
-        else { return }
+        if field === outputWidth || field === outputHeight {
+            if outputAspectLock.state == .on, let snapshot = state.snapshot,
+               snapshot.width > 0, snapshot.height > 0, let value = outputInteger(field),
+               (1...16_384).contains(value) {
+                if field === outputWidth {
+                    outputHeight.stringValue = String(max(1, UInt64((Double(value) * snapshot.height / snapshot.width).rounded())))
+                } else {
+                    outputWidth.stringValue = String(max(1, UInt64((Double(value) * snapshot.width / snapshot.height).rounded())))
+                }
+            }
+            publishOutputDimensions()
+            invalidateOutput(optionsChanged: true)
+            updateControls()
+            return
+        }
+        guard [outputQualityValue, outputPngPalette, outputByteBudget].contains(where: { $0 === field }) else { return }
         synchronizeOutputCompressionPreset()
         invalidateOutput(optionsChanged: true)
         updateControls()
@@ -1663,6 +1725,20 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         var options: [String: Any] = [
             "format": format, "quality": quality, "quality_value": qualityValue, "png": png,
         ]
+        switch outputSizeMode.indexOfSelectedItem {
+        case 0: options["size"] = ["mode": "original"]
+        case 1: options["size"] = ["mode": "percent", "percent": 75]
+        case 2: options["size"] = ["mode": "percent", "percent": 50]
+        case 3:
+            guard let width = outputInteger(outputWidth), let height = outputInteger(outputHeight),
+                  (1...16_384).contains(width), (1...16_384).contains(height),
+                  width <= 100_000_000 / height else {
+                showError("Custom output dimensions must be whole numbers from 1 through 16,384 and no more than 100 million pixels.")
+                return nil
+            }
+            options["size"] = ["mode": "custom", "width": width, "height": height]
+        default: return nil
+        }
         if quality == "maximum" {
             guard let budget = outputInteger(outputByteBudget), budget >= 10_000 else {
                 showError("Enter an output byte budget of at least 10,000."); return nil
@@ -1699,6 +1775,35 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputPngPalette.isEnabled = ready && pngPalette
         outputByteBudget.isEnabled = ready && maximum
         outputCompressionPreset.isEnabled = ready && compress
+        outputSizeMode?.isEnabled = ready
+        let custom = outputSizeMode?.indexOfSelectedItem == 3
+        outputWidth.isHidden = !custom; outputHeight.isHidden = !custom
+        outputWidthLabel?.isHidden = !custom; outputHeightLabel?.isHidden = !custom
+        outputAspectLock.isHidden = !custom
+        outputWidth.isEnabled = ready && custom; outputHeight.isEnabled = ready && custom
+        outputAspectLock.isEnabled = ready && custom
+    }
+
+    private func publishOutputDimensions() {
+        guard let snapshot = state.snapshot else { outputDimensions.stringValue = ""; return }
+        let width: UInt64, height: UInt64
+        switch outputSizeMode?.indexOfSelectedItem ?? 0 {
+        case 1, 2:
+            let percent = outputSizeMode.indexOfSelectedItem == 1 ? 75.0 : 50.0
+            width = max(1, UInt64((snapshot.width * percent / 100).rounded()))
+            height = max(1, UInt64((Double(width) * snapshot.height / snapshot.width).rounded()))
+        case 3:
+            guard let customWidth = outputInteger(outputWidth), let customHeight = outputInteger(outputHeight),
+                  (1...16_384).contains(customWidth), (1...16_384).contains(customHeight),
+                  customWidth <= 100_000_000 / customHeight else {
+                outputDimensions.stringValue = "Invalid output dimensions."
+                return
+            }
+            width = customWidth; height = customHeight
+        default:
+            width = UInt64(snapshot.width.rounded()); height = UInt64(snapshot.height.rounded())
+        }
+        outputDimensions.stringValue = "Output: \(formatInteger(Int(width))) × \(formatInteger(Int(height))) pixels"
     }
 
     private static let outputCompressionPresets: [(name: String, value: UInt64)] = [
@@ -2280,6 +2385,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.canvasSize = drawOverlay.canvasSize
         updateViewportGeometry()
         dimensions.stringValue = "\(format(snapshot.width)) × \(format(snapshot.height)) pixels"
+        publishOutputDimensions()
         canvasWidth.stringValue = format(snapshot.width); canvasHeight.stringValue = format(snapshot.height)
         publishBackgroundFields()
         if resetCrop || cropWidth.stringValue.isEmpty {

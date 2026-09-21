@@ -397,6 +397,60 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(previewMode.isEnabled, "changed options cannot leave stale output current")
     }
 
+    func testOutputSizingControlsSendOptionsLockAspectAndRetainDocument() throws {
+        _ = NSApplication.shared
+        let original = snapshot(id: "shot", width: 641, height: 359, unsaved: true, draft: true)
+        let worker = FakeEditorWorker(snapshot: original)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        let size = try popup("Output size", in: controller.root)
+        let width = try field("Custom output width", in: controller.root)
+        let height = try field("Custom output height", in: controller.root)
+        let lock = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "Lock output aspect ratio" })
+        let previewMode = try segmented("Output preview image", in: controller.root)
+
+        size.selectItem(withTitle: "75%"); _ = size.sendAction(size.action, to: size.target)
+        XCTAssertTrue(labels(in: controller.root).contains("Output: 481 × 269 pixels"))
+        try button("Preview output", in: controller.root).performClick(nil)
+        XCTAssertEqual((worker.encodes.last?["size"] as? [String: Any])?["mode"] as? String, "percent")
+        XCTAssertEqual((worker.encodes.last?["size"] as? [String: Any])?["percent"] as? Int, 75)
+        XCTAssertEqual(previewMode.selectedSegment, 1)
+
+        size.selectItem(withTitle: "Custom"); _ = size.sendAction(size.action, to: size.target)
+        XCTAssertEqual(width.stringValue, "641"); XCTAssertEqual(height.stringValue, "359")
+        XCTAssertFalse(previewMode.isEnabled, "size changes invalidate an encoded preview without encoding")
+        XCTAssertEqual(worker.encodes.count, 1)
+        width.stringValue = "320"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: width))
+        XCTAssertEqual(height.stringValue, "179", "locked output dimensions use the document ratio")
+        lock.performClick(nil)
+        height.stringValue = "123"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: height))
+        XCTAssertEqual(width.stringValue, "320", "unlocked axes change independently")
+        try button("Preview output", in: controller.root).performClick(nil)
+        let custom = try XCTUnwrap(worker.encodes.last?["size"] as? [String: Any])
+        XCTAssertEqual(custom["mode"] as? String, "custom")
+        XCTAssertEqual(custom["width"] as? UInt64, 320); XCTAssertEqual(custom["height"] as? UInt64, 123)
+        XCTAssertEqual(controller.state.snapshot, original)
+        XCTAssertTrue(worker.requests.isEmpty)
+
+        width.stringValue = "16385"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: width))
+        let count = worker.encodes.count
+        try button("Preview output", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.encodes.count, count)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("100 million pixels") })
+        XCTAssertEqual(controller.state.snapshot, original)
+        lock.performClick(nil)
+        width.stringValue = String(UInt64.max)
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: width))
+        XCTAssertTrue(labels(in: controller.root).contains("Invalid output dimensions."))
+        XCTAssertEqual(worker.encodes.count, count, "invalid text must not overflow or encode")
+    }
+
     func testOutputCompressionPresetsMapExactValuesClearPngOverrideAndTrackCustomEdits() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
@@ -1342,6 +1396,13 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(preset.isHidden)
             try render(controller.root, name: "screenshot-editor-output-normal-\(appearance)")
 
+            let size = try popup("Output size", in: controller.root)
+            size.selectItem(withTitle: "Custom"); _ = size.sendAction(size.action, to: size.target)
+            let width = try field("Custom output width", in: controller.root)
+            width.stringValue = "420"
+            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: width))
+            try render(controller.root, name: "screenshot-editor-output-size-custom-\(appearance)")
+
             let quality = try popup("Output quality mode", in: controller.root)
             quality.selectItem(withTitle: "Compress")
             _ = quality.sendAction(quality.action, to: quality.target)
@@ -1590,6 +1651,14 @@ final class ScreenshotEditorTests: XCTestCase {
                        "the default editor background composites transparent source pixels")
         XCTAssertEqual(renderedAlphaRange(try XCTUnwrap(outputs["jpeg"]?.image)), 255...255,
                        "lossy output remains opaque")
+        let resized = expectation(description: "encode asymmetric custom output")
+        worker.encode(["format": "png", "quality": "preserve", "quality_value": 100, "png": [:],
+                       "size": ["mode": "custom", "width": 5, "height": 2]]) { result in
+            let output = try? result.get()
+            XCTAssertEqual(output?.image.width, 5); XCTAssertEqual(output?.image.height, 2)
+            resized.fulfill()
+        }
+        wait(for: [resized], timeout: 5)
         worker.close(); EditorWorker.flush()
         XCTAssertFalse(outputs["webp"]?.data.isEmpty ?? true,
                        "copied export bytes remain valid after session close")
@@ -1613,7 +1682,7 @@ final class ScreenshotEditorTests: XCTestCase {
             "history_root": fixture.history.path,
             "destination": output.path,
             "options": ["format": "jpeg", "quality": "compress", "quality_value": 73,
-                        "png": [:]],
+                        "png": [:], "size": ["mode": "custom", "width": 4, "height": 6]],
             "mode": "display",
         ]
         let saved = expectation(description: "save new copy")
@@ -1631,6 +1700,10 @@ final class ScreenshotEditorTests: XCTestCase {
             published.appendingPathComponent("metadata.json"))) as? [String: Any]
         XCTAssertEqual(metadata?["mode"] as? String, "display")
         XCTAssertEqual(metadata?["saved_path"] as? String, output.path)
+        XCTAssertEqual(metadata?["width"] as? Int, 4); XCTAssertEqual(metadata?["height"] as? Int, 6)
+        let savedSource = try XCTUnwrap(CGImageSourceCreateWithURL(output as CFURL, nil))
+        let savedImage = try XCTUnwrap(CGImageSourceCreateImageAtIndex(savedSource, 0, nil))
+        XCTAssertEqual(savedImage.width, 4); XCTAssertEqual(savedImage.height, 6)
 
         let collision = expectation(description: "reject overwrite")
         worker.saveNew(request) { result in
@@ -3273,9 +3346,15 @@ final class ScreenshotEditorTests: XCTestCase {
     private func scrollOutputSaveControlsVisible(in view: NSView) throws {
         let filename = try field("Output filename", in: view)
         let scroll = try XCTUnwrap(filename.enclosingScrollView)
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: 238))
+        let document = try XCTUnwrap(scroll.documentView)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height)))
         scroll.reflectScrolledClipView(scroll.contentView)
         view.layoutSubtreeIfNeeded()
+        let controls: [NSView] = [filename, try button("Save new copy", in: view)]
+        for control in controls {
+            XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)),
+                          "Export filename and save action must be reachable after output sizing controls")
+        }
     }
 
     private func scrollImageImportVisible(in view: NSView) throws {
