@@ -12,7 +12,7 @@ use std::{
 
 use captures_capture::CaptureMode;
 use captures_history::{ArtifactKind, HistoryEntry};
-use captures_image::{ExportFormat, ExportOptions};
+use captures_image::{ExportFormat, ExportOptions, ExportSize};
 use chrono::Utc;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
@@ -60,6 +60,13 @@ pub fn save_new_export(
     mode: CaptureMode,
 ) -> Result<SavedExport, Error> {
     let parent = validate_destination(destination, options.format)?;
+    let resized = captures_image::resize_for_export(image, options.size).map_err(Error::Image)?;
+    let image = resized.as_ref();
+    // The export and its History pixels share the same once-resized frame.
+    let options = ExportOptions {
+        size: ExportSize::Original,
+        ..options
+    };
     let output = captures_image::encode_export(image, options).map_err(Error::Image)?;
     let history_png = captures_history::encode_png(image)?;
     let preview_png = captures_history::encode_thumbnail_png(image)?;
@@ -188,7 +195,59 @@ mod tests {
             quality_value: 100,
             max_size_bytes: None,
             png: PngOptions::default(),
+            size: ExportSize::Original,
         }
+    }
+
+    #[test]
+    fn resized_publication_uses_one_frame_for_file_history_and_thumbnail() {
+        let data = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let image = RgbaImage::from_pixel(5, 8, Rgba([19, 71, 193, 255]));
+        let destination = output.path().join("half.png");
+        let SavedExport::Saved { artifact, .. } = save_new_export(
+            data.path(),
+            &image,
+            &destination,
+            ExportOptions {
+                size: ExportSize::Percent { percent: 50 },
+                ..options(ExportFormat::Png)
+            },
+            CaptureMode::Region,
+        )
+        .unwrap() else {
+            panic!("missing History item")
+        };
+        assert_eq!((artifact.entry.width, artifact.entry.height), (3, 5));
+        let expected = RgbaImage::from_pixel(3, 5, Rgba([19, 71, 193, 255]));
+        for path in [&destination, &artifact.image_path, &artifact.preview_path] {
+            assert_eq!(image::open(path).unwrap().to_rgba8(), expected);
+        }
+        assert_eq!(image.dimensions(), (5, 8));
+        let invalid = output.path().join("absent/oversized.png");
+        assert!(
+            save_new_export(
+                data.path(),
+                &image,
+                &invalid,
+                ExportOptions {
+                    size: ExportSize::Custom {
+                        width: 10_001,
+                        height: 10_000
+                    },
+                    ..options(ExportFormat::Png)
+                },
+                CaptureMode::Region
+            )
+            .is_err()
+        );
+        assert!(!invalid.parent().unwrap().exists());
+        assert_eq!(
+            captures_history::load(data.path(), Utc::now())
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ use crate::{
 const ASSET_PREFIX: &str = "draft-asset:";
 const MAX_METADATA_BYTES: u64 = 8 * 1024 * 1024;
 
-pub use captures_image::{ExportFormat, ExportOptions, ExportQuality, PngOptions};
+pub use captures_image::{ExportFormat, ExportOptions, ExportQuality, ExportSize, PngOptions};
 
 #[derive(Debug, Deserialize)]
 pub struct OpenRequest {

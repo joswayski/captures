@@ -568,6 +568,23 @@ fn exports_encode_current_pixels_without_mutating_session_or_original_files() {
             "format":format, "quality":"preserve", "quality_value":100, "png":{},
         }))
         .unwrap();
+        assert_eq!(options.size, captures_image::ExportSize::Original);
+        let resized = editor
+            .encode_export(ExportOptions {
+                size: captures_image::ExportSize::Custom {
+                    width: 3,
+                    height: 1,
+                },
+                ..options
+            })
+            .unwrap();
+        assert_eq!(
+            image::load_from_memory(&resized)
+                .unwrap()
+                .into_rgba8()
+                .dimensions(),
+            (3, 1)
+        );
         let bytes = editor.encode_export(options).unwrap();
         let decoded = image::load_from_memory(&bytes).unwrap().into_rgba8();
         assert_eq!(decoded.dimensions(), (6, 3));

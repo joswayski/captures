@@ -609,6 +609,7 @@ fn encode_export_with_limit(
             quality,
             quality_value: jpeg_quality,
             max_size_bytes,
+            size: captures_image::ExportSize::Original,
             png: captures_image::PngOptions {
                 max_colors: png_max_colors,
             },

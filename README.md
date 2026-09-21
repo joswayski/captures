@@ -323,6 +323,9 @@ PNG/JPEG/WebP output previews
 that report exact encoded size without saving. Both native Output panels offer
 **Tiny, Smaller, Balanced, High and Highest** compression presets alongside custom
 values. Highest PNG preserves pixels with lossless packing; JPEG/WebP presets are lossy.
+Both hosts also offer **Original, 75%, 50% and Custom** output dimensions, with an
+aspect lock for custom sizes. Preview/save resize only the exported pixels and the
+new History copy; the editable document, draft and full-resolution clipboard are unchanged.
 Its **Save new copy** controls choose
 a folder and filename, publish without replacing files, and preserve the draft. AppKit
 also imports one still image at a time as a new image layer using its color-managed
