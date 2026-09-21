@@ -442,59 +442,62 @@ def main():
             assert created["text"] == "" and created["fontFamily"] == "sans"
             assert created["align"] == "left" and created.get("autoWidth") is True
             shot(editor, f"text-empty-{args.appearance}")
+            click(editor, 90, 357)
+            shot(editor, f"text-style-menu-{args.appearance}")
+            run("xdotool", "key", "Escape")
             # Text properties precede generic layer geometry in the sidebar.
-            click(editor, 100, 420)
+            click(editor, 100, 431)
             shot(editor, f"text-font-menu-{args.appearance}")
-            click(editor, 100, 550)  # Liberation Serif.
-            click(editor, 105, 494)
+            click(editor, 100, 561)  # Liberation Serif.
+            click(editor, 105, 505)
             run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--delay", "35",
                 "--", "Readable native text")
             time.sleep(.2)
-            click(editor, 95, 562)   # Bold.
-            click(editor, 146, 562)  # Italic.
-            click(editor, 74, 853)   # Apply without plate or shadow first.
+            click(editor, 95, 573)   # Bold.
+            click(editor, 146, 573)  # Italic.
+            click(editor, 74, 864)   # Apply without plate or shadow first.
             save_layers(lambda values: values[-1]["text"] == "Readable native text"
                         and values[-1]["fontFamily"] == "serif", "plain text applied")
             shot(editor, "text-without-shadow")
-            click(editor, 92, 809)   # Stage Drop shadow, leaving the plate off.
+            click(editor, 92, 820)   # Stage Drop shadow, leaving the plate off.
             before_shadow = draft.read_bytes()
-            for x, y, value in [(95, 880, "#3b82f6"), (128, 924, "65"),
-                                (60, 968, "3"), (80, 1012, "17.5"), (80, 1056, "-8")]:
+            for x, y, value in [(95, 891, "#3b82f6"), (128, 935, "65"),
+                                (60, 979, "3"), (80, 1023, "17.5"), (80, 1067, "-8")]:
                 click(editor, x, y)
                 run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--", value)
                 run("xdotool", "key", "Return")
             shot(editor, "text-shadow-staged")
             assert draft.read_bytes() == before_shadow
-            click(editor, 74, 1099)
+            click(editor, 74, 1110)
             save_layers(lambda values: values[-1].get("dropShadow") is True
                         and values[-1]["background"] is None, "glyph shadow applied")
             custom_shadow = {"color": "#3b82f6", "opacity": 65, "blur": 3,
                              "offsetX": 17.5, "offsetY": -8}
             assert layers()[-1]["dropShadowStyle"] == custom_shadow
             shot(editor, "text-glyph-shadow")
-            def text_pixels(name):
-                return run("convert", str(output / f"{name}.png"), "-crop", "640x360+238+89",
+            def text_pixels(name, crop="640x360+238+89"):
+                return run("convert", str(output / f"{name}.png"), "-crop", crop,
                            "-depth", "8", "rgba:-")
             assert text_pixels("text-shadow-staged") == text_pixels("text-without-shadow")
             assert text_pixels("text-glyph-shadow") != text_pixels("text-without-shadow")
-            click(editor, 92, 809)   # Cancellation must preserve the accepted shadow.
-            click(editor, 74, 898)
+            click(editor, 92, 820)   # Cancellation must preserve the accepted shadow.
+            click(editor, 74, 909)
             shot(editor, "text-shadow-cancelled")
             assert text_pixels("text-shadow-cancelled") == text_pixels("text-glyph-shadow")
-            click(editor, 170, 809)  # Outline shares the shadow row.
+            click(editor, 170, 820)  # Outline shares the shadow row.
             shot(editor, "text-outline-staged")
             assert text_pixels("text-outline-staged") == text_pixels("text-glyph-shadow")
-            click(editor, 74, 1099)
+            click(editor, 74, 1110)
             save_layers(lambda values: values[-1]["outlined"], "text outline applied")
             shot(editor, "text-outline")
             assert text_pixels("text-outline") != text_pixels("text-glyph-shadow")
-            click(editor, 170, 809)
-            click(editor, 74, 1144)
+            click(editor, 170, 820)
+            click(editor, 74, 1155)
             shot(editor, "text-outline-cancelled")
             assert text_pixels("text-outline-cancelled") == text_pixels("text-outline")
-            click(editor, 92, 765)   # Background plate.
+            click(editor, 92, 776)   # Background plate.
             shot(editor, f"text-staged-{args.appearance}")
-            click(editor, 74, 1220)   # Apply text; plate owns the shadow now.
+            click(editor, 74, 1231)   # Apply text; plate owns the shadow now.
             edited = save_layers(
                 lambda values: values[-1]["text"] == "Readable native text"
                 and values[-1]["bold"] and values[-1]["italic"]
@@ -503,12 +506,12 @@ def main():
                 "readable styled text applied")[-1]
             assert edited["id"] == created["id"]
             shot(editor, f"text-edited-{args.appearance}")
-            click(editor, 100, 420)
-            click(editor, 100, 460)  # Stage Mono without applying.
+            click(editor, 100, 431)
+            click(editor, 100, 471)  # Stage Mono without applying.
             save_layers(lambda values: values[-1]["fontFamily"] == "serif",
                         "saving accepted pixels preserves staged family")
             shot(editor, f"text-family-pending-{args.appearance}")
-            click(editor, 74, 1265)  # Cancel changes; later close must not be blocked.
+            click(editor, 74, 1276)  # Cancel changes; later close must not be blocked.
             click(editor, 35, 62)
             save_layers(lambda values: values[-1]["background"] is None
                         and values[-1].get("dropShadow") is True, "undo shadowed plate")
@@ -529,6 +532,33 @@ def main():
             save_layers(lambda values: values[-1]["outlined"], "redo text outline")
             click(editor, 98, 62)
             save_layers(lambda values: values[-1]["background"] is not None, "redo shadowed plate")
+            before_preset = draft.read_bytes()
+            click(editor, 90, 357)
+            click(editor, 90, 577)  # Mono box, preserving the accepted plate color.
+            shot(editor, "text-preset-staged")
+            assert draft.read_bytes() == before_preset
+            assert text_pixels("text-preset-staged") == text_pixels(f"text-edited-{args.appearance}")
+            click(editor, 74, 1276)
+            shot(editor, "text-preset-cancelled")
+            assert text_pixels("text-preset-cancelled", "205x64+8+390") == text_pixels(
+                f"text-edited-{args.appearance}", "205x64+8+390"), "Cancel restores the font field"
+            click(editor, 90, 357)
+            click(editor, 90, 577)
+            click(editor, 74, 1231)
+            preset = save_layers(lambda values: values[-1]["fontFamily"] == "mono"
+                                 and not values[-1]["outlined"], "named style applied")[-1]
+            for key in ["text", "fontSize", "bold", "italic", "align", "color", "background", "dropShadowStyle"]:
+                assert preset[key] == edited[key], f"preset must preserve {key}"
+            shot(editor, f"text-preset-applied-{args.appearance}")
+            click(editor, 35, 62)
+            save_layers(lambda values: values[-1]["fontFamily"] == "serif" and values[-1]["outlined"],
+                        "named style undo")
+            click(editor, 98, 62)
+            save_layers(lambda values: values[-1]["fontFamily"] == "mono" and not values[-1]["outlined"],
+                        "named style redo")
+            click(editor, 35, 62)
+            save_layers(lambda values: values[-1]["fontFamily"] == "serif" and values[-1]["outlined"],
+                        "restore accepted style for reopen")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "text editor closes")
             editor = reopen()
@@ -563,6 +593,7 @@ def main():
                            "text-font-family", "text-family-cancel", "text-bold-italic-plate",
                            "text-glyph-shadow-pixels", "text-shadow-stage-cancel",
                            "text-custom-shadow-settings-reopen",
+                           "text-named-style-staging-cancel", "text-named-style-preserve-undo-redo",
                            "text-plate-shadow", "text-shadow-undo-redo-reopen",
                            "text-outline-pixels", "text-outline-stage-cancel", "text-outline-undo-redo-reopen",
                            "text-undo-redo", "text-draft-reopen",
