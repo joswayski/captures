@@ -2292,13 +2292,13 @@ fn text_failures_preserve_frames_redo_and_saved_drafts_without_fallback() {
     editor.execute(Request::Undo).unwrap();
     let before = serde_json::to_value(editor.snapshot()).unwrap();
     let frame = editor.pixels();
-    for rotation in [false, true] {
+    for outline in [false, true] {
         let mut document = editor.snapshot().document.clone();
         let Element::Text(label) = document.elements.last_mut().unwrap() else {
             panic!()
         };
-        if rotation {
-            label.base.rotation = Some(30.);
+        if outline {
+            label.outlined = true;
         } else {
             label.font_family = "missing".into();
         }
@@ -2323,4 +2323,74 @@ fn text_failures_preserve_frames_redo_and_saved_drafts_without_fallback() {
     assert_eq!(fs::read(draft.join("manifest.json")).unwrap(), manifest);
     fs::write(font_path, bytes).unwrap();
     assert_eq!(open(data.path(), &id).unwrap().pixels(), painted);
+}
+
+#[test]
+fn text_selection_move_resize_rotation_and_saved_pixels_share_one_session() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    assert_eq!(
+        editor
+            .snapshot()
+            .document
+            .hit_test(Point { x: 60., y: 60. }, 0.)
+            .unwrap()
+            .unwrap()
+            .base()
+            .id,
+        "label"
+    );
+    editor
+        .execute(Request::Layer {
+            id: "label".into(),
+            edit: LayerEdit::DragMove {
+                delta_x: 30.,
+                delta_y: 40.,
+                display_scale: 2.,
+            },
+        })
+        .unwrap();
+    assert_eq!(editor.pixels().get_pixel(52, 85).0, [255, 0, 0, 255]);
+    editor
+        .execute(Request::Layer {
+            id: "label".into(),
+            edit: LayerEdit::Rotate {
+                radians: std::f64::consts::FRAC_PI_2,
+            },
+        })
+        .unwrap();
+    assert_eq!(editor.pixels().get_pixel(120, 65).0, [255, 0, 0, 255]);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 61 })
+        .unwrap();
+    assert_eq!(open(data.path(), &id).unwrap().pixels(), editor.pixels());
+    editor.execute(Request::Undo).unwrap();
+    editor
+        .execute(Request::Layer {
+            id: "label".into(),
+            edit: LayerEdit::Resize {
+                handle: captures_app::editor::ResizeHandle::E,
+                current: Point { x: 200., y: 110. },
+                display_scale: 2.,
+                lock_aspect: false,
+            },
+        })
+        .unwrap();
+    let Element::Text(text) = editor.snapshot().document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        (text.base.x, text.base.y, text.width, text.font_size),
+        (50., 60., 150., 80.)
+    );
+    assert_eq!(text.auto_width, Some(false));
+    let resized = editor.pixels();
+    editor.execute(Request::Undo).unwrap();
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.pixels(), resized);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 62 })
+        .unwrap();
+    assert_eq!(open(data.path(), &id).unwrap().pixels(), resized);
 }

@@ -198,8 +198,17 @@ painting, following Canvas text preparation; remaining interior line-control
 characters are rejected by the single-line shaper, not silently omitted.
 Text bitmaps have a shared 16,777,216-pixel budget across the visible document,
 in addition to individual line budgets. Missing fonts/glyphs, invalid styles and
-budget failures return errors without changing the document or assets. Rotation,
-outlines and text shadows remain explicit unsupported cases.
+budget failures return errors without changing the document or assets. Text outlines
+and shadows remain explicit unsupported cases. Text and plate paints now share the
+shipping selection pivot for rotation, including when estimated wrapping differs
+from actual glyph layout. Shared selection/hit testing, move snapping, Trim and
+resize accept text geometry. Fixed-width side drags reflow without changing type
+size; other drags scale type, while auto-width labels refit. Interaction bounds
+use shipping's UTF-16 width estimate and rounded minimum, not measured paint or
+glyph bounds; plate and default/custom shadow padding are included. Shipping-generated
+vectors exercise Unicode wrapping, fractional widths, side/corner classification,
+8–512 resize clamps and metadata preservation. Session tests cover accepted pixels,
+undo/redo and reopening after text transforms. This does not add text creation/input.
 Editor sessions now accept explicit trusted fonts and own the shaper on their
 serialized worker. Commit/crop/import/undo/redo and output use the same font-backed
 frame; failed text renders preserve accepted pixels and history. Drafts store family
@@ -211,14 +220,15 @@ existing image save order is still per-file atomic, not a whole-draft transactio
 Discard removes the draft and restores the capture while retaining the worker's
 font capability. Original generated-font tests cover exact restored/exported pixels,
 changed defaults, failure recovery and storage limits. Light/dark private-X11 tests
-restore a seeded font-backed draft, save/reopen it and verify clipboard ink/plate
-pixels; normal and minimum-size captures were inspected. These synthetic-font
+restore a seeded font-backed draft, select/move/resize/quarter-turn it with undo,
+save/reopen it and verify clipboard ink/plate pixels (eight checks per appearance);
+transformed and minimum-size captures were inspected. These synthetic-font
 fixtures do not provide Text input controls or establish macOS, Windows, Wayland
 or physical Text-tool presentation/input acceptance.
 Hosts still supply no fonts for new drafts and have no native Text tool. Trusted
-platform acquisition/fallback/licensing policy, rotation/outlines/shadows, interactive
-text geometry and typed creation/style commands, both host controls and
-physical input/IME/accessibility remain open. No host text parity gate is closed.
+platform acquisition/fallback/licensing policy, outlines/shadows, typed creation/style
+commands, both host Text controls and physical input/IME/accessibility remain open.
+No host text parity gate is closed.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
 

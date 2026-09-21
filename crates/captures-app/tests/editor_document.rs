@@ -536,6 +536,7 @@ fn move_drag_rejects_invalid_and_unsupported_edits_and_honors_locking() {
     let mut unsupported = fixture().moves.remove(0).input;
     let mut text = fixture().document["elements"][1].clone();
     text["locked"] = json!(false);
+    text["fontSize"] = json!(0);
     unsupported
         .elements
         .push(serde_json::from_value(text).unwrap());
@@ -686,6 +687,7 @@ fn resize_rejects_invalid_locked_and_unsupported_edits_transactionally() {
     let mut unsupported = case.input;
     let mut text = fixture().document["elements"][1].clone();
     text["locked"] = json!(false);
+    text["fontSize"] = json!(0);
     unsupported
         .elements
         .push(serde_json::from_value(text).unwrap());
@@ -754,18 +756,14 @@ fn canvas_selection_bounds_and_hits_match_typescript() {
 }
 
 #[test]
-fn canvas_selection_reports_unsupported_layout_and_invalid_pointer_inputs() {
+fn canvas_selection_reports_invalid_layout_and_pointer_inputs() {
     let mut input = fixture().hit_tests.remove(0).input;
     let point = Point { x: 0., y: 20. };
     let mut text = fixture().document["elements"][1].clone();
     text["locked"] = json!(false);
+    text["fontSize"] = json!(0);
     input.elements.push(serde_json::from_value(text).unwrap());
-    assert!(
-        input
-            .hit_test(point, 0.)
-            .unwrap_err()
-            .contains("text layout")
-    );
+    assert!(input.hit_test(point, 0.).unwrap_err().contains("Text size"));
     assert!(input.elements[1].selection_bounds().is_err());
     let Element::Text(text) = &mut input.elements[1] else {
         panic!()

@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use captures_app::{
-    editor::TextElement,
-    editor_text::{fit_auto_width, layout},
+    editor::{Element, Rect, TextElement},
+    editor_text::{fit_auto_width, layout, resize, selection_bounds},
 };
 use captures_image::text::{TextRenderer, TextStyle};
 use serde::Deserialize;
@@ -15,6 +15,14 @@ struct Case {
     expected: Value,
     fitted: TextElement,
     editing: TextElement,
+    selection: Rect,
+    resizes: Vec<ResizeCase>,
+}
+
+#[derive(Deserialize)]
+struct ResizeCase {
+    next: Rect,
+    expected: Value,
 }
 
 fn cases() -> Vec<Case> {
@@ -68,6 +76,29 @@ fn matches_shipping_wrap_alignment_plates_and_auto_width_without_losing_metadata
             fit_auto_width(&case.element, true, measure).unwrap(),
             case.editing
         );
+    }
+}
+
+#[test]
+fn selection_and_resize_match_shipping_utf16_wrap_plate_shadow_and_type_scaling() {
+    for case in cases() {
+        compare(
+            &serde_json::to_value(selection_bounds(&case.element).unwrap()).unwrap(),
+            &serde_json::to_value(case.selection).unwrap(),
+        );
+        assert_eq!(
+            Element::Text(case.element.clone())
+                .selection_bounds()
+                .unwrap(),
+            selection_bounds(&case.element).unwrap()
+        );
+        for resized in case.resizes {
+            compare(
+                &serde_json::to_value(resize(&case.element, case.selection, resized.next).unwrap())
+                    .unwrap(),
+                &resized.expected,
+            );
+        }
     }
 }
 
