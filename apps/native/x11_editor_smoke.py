@@ -316,10 +316,16 @@ def main():
             shot(editor, "output-preset-menu")
             click(editor, 45, 406)  # Tiny.
             click(editor, 65, 454)  # Preview PNG with automatic palette selection.
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "Tiny preview encoded")
+            shot(editor, "output-preset-tiny-preview")
             exports = output / "exports"
             exports.mkdir()
             tiny = exports / "tiny.png"
             field(706, tiny)
+            click(editor, 78, 706)
+            run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+            assert run("xclip", "-selection", "clipboard", "-o").decode() == str(tiny)
             click(editor, 65, 745)
             wait(tiny.exists, "Tiny PNG saved")
             shot(editor, "output-preset-tiny")
@@ -330,8 +336,14 @@ def main():
             click(editor, 65, 362)
             click(editor, 45, 582)  # Highest, not an arbitrary high numeric value.
             click(editor, 65, 454)
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "Highest preview encoded")
+            shot(editor, "output-preset-highest-preview")
             highest = exports / "highest.png"
             field(706, highest)
+            click(editor, 78, 706)
+            run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+            assert run("xclip", "-selection", "clipboard", "-o").decode() == str(highest)
             click(editor, 65, 745)
             wait(highest.exists, "Highest PNG saved")
             shot(editor, "output-preset-highest")
