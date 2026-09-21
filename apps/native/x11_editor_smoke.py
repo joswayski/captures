@@ -87,6 +87,8 @@ def main():
                         help="Exercise the real Text tool UI, undo/redo and draft reopen")
     parser.add_argument("--polygon-only", action="store_true",
                         help="Exercise Triangle/Diamond/Star previews, cancellation and saved pixels")
+    parser.add_argument("--rotation-snap-only", action="store_true",
+                        help="Exercise custom Shift rotation stops without saving the UI setting")
     parser.add_argument("--output-presets-only", action="store_true",
                         help="Exercise compression presets and real saved PNG pixels")
     parser.add_argument("--output-size-only", action="store_true",
@@ -312,6 +314,63 @@ def main():
             if expected is not None:
                 assert actual == bytes(expected), (x, y, actual, expected)
             return actual
+
+        if args.rotation_snap_only:
+            run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
+            click(editor, 463, 62)
+            click(editor, 79, 300)  # Unlock the original image for canvas rotation.
+            save_layers(lambda values: not values[0]["locked"], "unlocked original")
+            shot(editor, "rotation-snap-controls")
+            before = draft.read_bytes()
+            field(743, 37, x=50)
+            shot(editor, "rotation-snap-custom")
+            assert draft.read_bytes() == before, "snap preference must not edit or save a draft"
+            # Full-canvas image uses the inset top grip at (558,117), pivot (558,269).
+            # Vector (0,-152) to (100,-110) is 42.27°, giving 37°, not default 45°.
+            run("xdotool", "mousemove", "--sync", "--window", editor, "558", "117",
+                "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                "658", "159", "keydown", "Shift_L", "sleep", ".3")
+            shot(editor, "rotation-snap-transient")
+            assert draft.read_bytes() == before
+            run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "keyup", "Shift_L")
+            assert draft.read_bytes() == before
+            drag((558, 117), (658, 159), shift=True)
+            angle = 37 * math.pi / 180
+            save_layers(lambda values: math.isclose(values[0].get("rotation", 0), angle, abs_tol=1e-12),
+                        "custom 37-degree rotation")
+            shot(editor, "rotation-snap-committed")
+            # Independently rotate the original yellow rectangle's interior point (150,130).
+            yellow = (round(238 + 320 - 170 * math.cos(angle) + 50 * math.sin(angle)),
+                      round(89 + 180 - 170 * math.sin(angle) - 50 * math.cos(angle)))
+            pixel("rotation-snap-committed", *yellow, (229, 179, 68))
+            click(editor, 35, 62)
+            save_layers(lambda values: values[0].get("rotation", 0) == 0, "custom rotation undo")
+            click(editor, 98, 62)
+            save_layers(lambda values: math.isclose(values[0].get("rotation", 0), angle, abs_tol=1e-12),
+                        "custom rotation redo")
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "14", "5")
+            shot(editor, "rotation-snap-minimum")
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "custom rotation closes")
+            editor = reopen()
+            run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
+            click(editor, 463, 62)
+            shot(editor, "rotation-snap-reopened-default")
+            assert math.isclose(layers()[0]["rotation"], angle, abs_tol=1e-12)
+            pixel("rotation-snap-reopened-default", *yellow, (229, 179, 68))
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "rotation snap suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["setting-no-draft-write", "custom-shift-preview-cancel", "custom-37-not-default-45",
+                           "independent-rotated-pixels", "single-undo-redo", "minimum-controls",
+                           "saved-angle-reopen", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native rotation snap: custom angle, no preference edit, cancel, undo, draft, pixels")
+            return
 
         if args.polygon_only:
             run("xdotool", "windowsize", "--sync", editor, "886", "700")
@@ -1203,7 +1262,10 @@ def main():
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "discard open-shape edits")
 
-        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        # Leave room below the annotation form for the session's rotation-snap
+        # controls. At this height the bottom-scrolled style fields retain their
+        # coordinates; the narrow/minimum-size scroll path is exercised below.
+        run("xdotool", "windowsize", "--sync", editor, "886", "843")
         click(editor, 736, 62)
         click(editor, 105, 133)  # Rectangle follows Text.
         drag((320, 250), (480, 370))

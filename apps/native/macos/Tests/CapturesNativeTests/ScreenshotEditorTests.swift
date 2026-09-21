@@ -2596,6 +2596,51 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(overlay.rotationPreview?.radians), angle, accuracy: 1e-12)
         overlay.end(at: current)
         XCTAssertEqual(rotations[1].1, angle, accuracy: 1e-12)
+
+        overlay.rotationSnapDegrees = 37
+        overlay.begin(at: grip.handle); overlay.drag(to: current)
+        overlay.flagsChanged(with: try flags(.shift))
+        XCTAssertEqual(try XCTUnwrap(overlay.rotationPreview?.radians), 37 * Double.pi / 180, accuracy: 1e-12)
+        overlay.end(at: current, snap: true)
+        XCTAssertEqual(rotations[2].1, 37 * Double.pi / 180, accuracy: 1e-12)
+        overlay.begin(at: grip.handle); overlay.drag(to: current, snap: true)
+        overlay.rotationSnapDegrees = 45
+        overlay.end(at: current, snap: true)
+        XCTAssertEqual(rotations.count, 3, "changing the increment cancels an active gesture")
+    }
+
+    func testRotationSnapControlsDoNotEditDocumentOrInvalidateOutput() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [
+                layer(id: "image", name: "Image", x: 10, y: 20, visible: true, locked: false, opacity: 100),
+            ]))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                worker: worker, numberLocale: Locale(identifier: "fr_FR"))
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showOutput(in: controller.root)
+            try button("Preview output", in: controller.root).performClick(nil)
+            let outputMode = try segmented("Output preview image", in: controller.root)
+            let snapshot = controller.state.snapshot
+            try showLayers(in: controller.root)
+            let field = try field("Shift rotation snap", in: controller.root)
+            XCTAssertEqual(field.stringValue, "15")
+            for (input, expected) in [("0", 1.0), ("181", 180.0), ("37,5", 38.0), ("invalid", 38.0)] {
+                field.stringValue = input
+                _ = field.sendAction(field.action, to: field.target)
+                XCTAssertEqual(controller.selectionOverlay.rotationSnapDegrees, expected)
+            }
+            field.stringValue = "37"
+            controller.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification, object: field))
+            XCTAssertEqual(controller.selectionOverlay.rotationSnapDegrees, 37)
+            XCTAssertTrue(worker.requests.isEmpty)
+            XCTAssertEqual(controller.state.snapshot, snapshot)
+            XCTAssertEqual(outputMode.selectedSegment, 1)
+            XCTAssertTrue(outputMode.isEnabled)
+            field.scrollToVisible(field.bounds)
+            try render(controller.root, name: "screenshot-editor-rotation-snap-\(appearance)")
+        }
     }
 
     func testCanvasRotationCancellationNeverCommits() throws {

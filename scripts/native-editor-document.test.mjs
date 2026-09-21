@@ -710,6 +710,11 @@ function rotationCases() {
   const angles = [-Math.PI * 7, -Math.PI, Math.PI, Math.PI * 9, -1e-11, 1e-11,
     -Math.PI / 24, Math.PI / 24, -0.131, -0.1308, 0.1308, 0.131, 0.73]
     .flatMap(radians => [false, true].map(snap => ({ radians, snap, expected: snapShapeRotation(radians, snap) })));
+  angles.push(...[0, 1, 7.5, 37, 45, 180, 200].flatMap(snapDegrees =>
+    [-Math.PI / 8 - 1e-9, -Math.PI / 8, -Math.PI / 8 + 1e-9,
+      Math.PI / 8 - 1e-9, Math.PI / 8, Math.PI / 8 + 1e-9, 0.73].map(radians => ({
+      radians, snap: true, snapDegrees, expected: snapShapeRotation(radians, true, snapDegrees),
+    }))));
   const handles = elements.flatMap(element => [0.5, 1, 2].flatMap(scale => [
     { width: 713, height: 257 }, { width: 1, height: 1 },
   ].map(canvas => ({
@@ -719,17 +724,17 @@ function rotationCases() {
       handle: elementRotationHandlePoint(element, scale, canvas), hit_radius: 12.5 / scale,
     } : null,
   }))));
-  const gestures = elements.flatMap(element => [false, true].map(snap => {
+  const gestures = elements.flatMap(element => [15, 37].flatMap(snapDegrees => [false, true].map(snap => {
     const local = elementLocalBounds(element);
     const origin = { x: local.x + local.width / 2, y: local.y + local.height / 2 };
     const start = { x: origin.x - 31, y: origin.y - 77 };
     const current = { x: origin.x + 53, y: origin.y - 19 };
     const radians = snapShapeRotation(elementRotation(element)
       + Math.atan2(current.y - origin.y, current.x - origin.x)
-      - Math.atan2(start.y - origin.y, start.x - origin.x), snap);
-    return { outline: outlines(element), initial: elementRotation(element), start, current, snap,
+      - Math.atan2(start.y - origin.y, start.x - origin.x), snap, snapDegrees);
+    return { outline: outlines(element), initial: elementRotation(element), start, current, snap, snapDegrees,
       expected: { radians, outline: outlines(withElementRotation(element, radians)) } };
-  }));
+  })));
   const edits = elements.flatMap(element => [0, Math.PI / 2, -0.71].map(radians => {
     const input = { ...document, elements: [element] };
     let expected = { ...input, elements: [withElementRotation(element, radians)] };
