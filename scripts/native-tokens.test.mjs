@@ -53,7 +53,9 @@ test('prepare writes portable app resources without an implicit test oracle', as
 
   await prepare(output);
 
-  assert.deepEqual((await readdir(output)).sort(), ['dust.json', 'icon.svg', 'tokens.json']);
+  assert.deepEqual((await readdir(output)).sort(), ['EDITOR-FONT-LICENSE.txt', 'dust.json', 'icon.svg', 'tokens.json']);
+  assert.equal(await readFile(join(output, 'EDITOR-FONT-LICENSE.txt'), 'utf8'),
+    await readFile(new URL('../crates/captures-app/fonts/liberation-sans/LICENSE', import.meta.url), 'utf8'));
   const tokens = JSON.parse(await readFile(join(output, 'tokens.json'), 'utf8'));
   const dust = JSON.parse(await readFile(join(output, 'dust.json'), 'utf8'));
   assert.ok(tokens['light-cobalt']);

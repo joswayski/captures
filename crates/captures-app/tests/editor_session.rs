@@ -2158,6 +2158,7 @@ fn image_header_limits_reject_before_decode_and_invalid_numbers_preserve_history
 fn text_fonts() -> captures_history::editor_draft::FontAssets {
     captures_history::editor_draft::FontAssets {
         families: BTreeMap::from([("sans".into(), "Captures Shaping Test".into())]),
+        notices: String::new(),
         files: BTreeMap::from([(
             "regular".into(),
             Arc::from(include_bytes!("../../captures-image/tests/shaping-regular.ttf").as_slice()),
@@ -2641,4 +2642,83 @@ fn rejected_text_commands_preserve_redo_frame_and_saved_draft_including_hidden_l
         panic!()
     };
     assert_eq!(label.color, "#0000ff");
+}
+
+#[test]
+fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen() {
+    use captures_app::editor_fonts;
+    let fonts = editor_fonts::bundled();
+    let second = editor_fonts::bundled();
+    assert_eq!(fonts.files.len(), 4);
+    assert_eq!(
+        fonts.files.values().map(|b| b.len()).sum::<usize>(),
+        1_649_980
+    );
+    for (id, bytes) in &fonts.files {
+        assert!(Arc::ptr_eq(bytes, &second.files[id]));
+    }
+    assert_eq!(fonts.notices, editor_fonts::NOTICE);
+    assert!(fonts.notices.contains("SIL OPEN FONT LICENSE Version 1.1"));
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, fonts.clone()).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 70 })
+        .unwrap();
+    let image_only =
+        captures_history::editor_draft::load(&data.path().join("drafts"), &id, |_, id| {
+            format!("draft-asset:{id}")
+        })
+        .unwrap()
+        .unwrap();
+    // Offering Text must not add 1.65 MB to every image-only draft.
+    assert!(image_only.fonts.is_none());
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 640.,
+            height: 360.,
+        })
+        .unwrap();
+    editor.execute(create_text_request("Native Ωé")).unwrap();
+    let text_id = editor
+        .snapshot()
+        .document
+        .elements
+        .last()
+        .unwrap()
+        .base()
+        .id
+        .clone();
+    let mut frames = vec![editor.pixels()];
+    for (bold, italic) in [(true, false), (false, true), (true, true)] {
+        editor
+            .execute(edit_text_request(
+                &text_id,
+                json!({"bold":bold,"italic":italic}),
+            ))
+            .unwrap();
+        let frame = editor.pixels();
+        assert!(frames.iter().all(|previous| **previous != *frame));
+        frames.push(frame);
+    }
+    let accepted = editor.pixels();
+    assert!(
+        editor
+            .execute(edit_text_request(&text_id, json!({"text":"雪"})))
+            .is_err()
+    );
+    assert!(Arc::ptr_eq(&accepted, &editor.pixels()));
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 73 })
+        .unwrap();
+    let saved = captures_history::editor_draft::load(&data.path().join("drafts"), &id, |_, id| {
+        format!("draft-asset:{id}")
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(saved.fonts, Some(fonts));
+    // A different host's supplied defaults cannot change the persisted text.
+    assert_eq!(
+        open_text(data.path(), &id, text_fonts()).unwrap().pixels(),
+        accepted
+    );
 }

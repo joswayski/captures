@@ -820,7 +820,15 @@ impl EditorSession {
                 assets,
                 updated_at_ms,
             },
-            self.fonts.as_ref().map(|fonts| &fonts.assets),
+            self.fonts
+                .as_ref()
+                .filter(|_| {
+                    document
+                        .elements
+                        .iter()
+                        .any(|element| matches!(element, Element::Text(_)))
+                })
+                .map(|fonts| &fonts.assets),
         )
         .map_err(|error| error.to_string())?;
         self.persisted = document.clone();

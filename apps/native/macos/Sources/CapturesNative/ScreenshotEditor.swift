@@ -126,7 +126,7 @@ class EditorViewportGestureView: NSView {
 
 final class EditorDrawOverlay: EditorViewportGestureView {
     enum Shape: String, CaseIterable {
-        case rectangle, ellipse, line, arrow, pen, wand, erase, restore
+        case rectangle, ellipse, line, arrow, pen, wand, erase, restore, text
 
         var isBackgroundBrush: Bool { self == .erase || self == .restore }
     }
@@ -187,7 +187,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
 
     func begin(at point: NSPoint) {
         guard drawingEnabled, presentedImageRect.width > 0 else { return }
-        if (shape == .wand || shape.isBackgroundBrush)
+        if (shape == .wand || shape == .text || shape.isBackgroundBrush)
             && (!bounds.contains(point) || !presentedImageRect.contains(point)) { return }
         cancelGesture()
         startPoint = point; currentPoint = point; needsDisplay = true
@@ -226,6 +226,11 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             onWand?(start)
             return
         }
+        if shape == .text {
+            guard arrowLength < 3, bounds.contains(point), presentedImageRect.contains(point) else { return }
+            onComplete?(shape, start, start, [])
+            return
+        }
         if shape.isBackgroundBrush {
             // Shipping stamps the release even at the last natural pixel: soft
             // edges accumulate, so deduplicating samples would change alpha.
@@ -241,6 +246,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
                   let geometry = NativeEditorDrawGeometry(arrow: true, samples: [start, end]),
                   !geometry.points.isEmpty else { return }
         case .line, .pen: break
+        case .text: preconditionFailure("handled above")
         case .wand: preconditionFailure("handled above")
         case .erase, .restore: preconditionFailure("handled above")
         }
@@ -295,7 +301,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         NSBezierPath(rect: bounds).addClip()
-        if shape == .wand { return }
+        if shape == .wand || shape == .text { return }
         if shape.isBackgroundBrush {
             let image = presentedImageRect
             let scale = image.width / canvasSize.width
@@ -655,6 +661,23 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var brushSizeLabel: NSTextField!
     private var brushSoftnessLabel: NSTextField!
     private var drawHelper: NSTextField!
+    private let textEditor = NSTextView()
+    private let textSize = NSTextField()
+    private let textColor = NSTextField()
+    private let textFamily = NSPopUpButton()
+    private let textTraits = NSSegmentedControl(labels: ["Bold", "Italic"], trackingMode: .selectAny,
+                                                target: nil, action: nil)
+    private let textAlignment = NSSegmentedControl(labels: ["Left", "Center", "Right"], trackingMode: .selectOne,
+                                                   target: nil, action: nil)
+    private let textPlate = NSPopUpButton()
+    private let textPlateColor = NSTextField()
+    private var textApplyButton: CaptureButton!
+    private var textCancelButton: CaptureButton!
+    private var textControls: [NSView] = []
+    private var textFieldsID: String?
+    private var acceptedTextStyle: NativeTextStyle?
+    private var textApplyPending = false
+    private var hasStagedText: Bool { acceptedTextStyle.map { !textFieldsMatch($0) } ?? false }
     private var outputFormat: NSPopUpButton!
     private var outputQuality: NSPopUpButton!
     private var outputPreviewMode: NSSegmentedControl!
@@ -808,6 +831,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func prepareForTermination() -> Bool {
+        guard !hasStagedText else {
+            showError("Apply or cancel pending text before quitting.")
+            window.makeKeyAndOrderFront(nil)
+            return false
+        }
         cancelDrawing()
         cancelPendingImport()
         let result = worker.prepareForTermination()
@@ -824,6 +852,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         cancelDrawing()
+        guard !hasStagedText else {
+            showError("Apply or cancel pending text before closing.")
+            return false
+        }
         guard !state.busy else {
             status.stringValue = "Wait for the current editor action to finish."
             return false
@@ -1064,7 +1096,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         panelFieldLabel("Tool", x: 0, y: 78, parent: content)
         drawTool = NSPopUpButton()
         drawTool.addItems(withTitles: ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand",
-                                           "Erase", "Restore"])
+                                           "Erase", "Restore", "Text"])
         drawTool.target = self; drawTool.action = #selector(changeDrawTool)
         drawTool.frame = NSRect(x: 0, y: 100, width: 252, height: 30)
         drawTool.selectItem(at: 0)
@@ -1093,9 +1125,53 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         softnessFormatter.maximum = 100
         brushSoftness.formatter = softnessFormatter; brushSoftness.stringValue = "18"
         drawHelper = panelLabel("Other tools create one annotation layer on release.",
-                                frame: NSRect(x: 0, y: 278, width: 252, height: 72), muted: true,
+                                frame: NSRect(x: 0, y: 278, width: 252, height: 42), muted: true,
                                 parent: content)
+        buildTextControls(in: content)
         publishDrawToolControls()
+    }
+
+    private func buildTextControls(in content: NSView) {
+        content.frame.size.height = 720
+        let heading = panelLabel("Selected text", frame: NSRect(x: 0, y: 326, width: 252, height: 24),
+                                 size: 16, weight: .semibold, parent: content)
+        let familyLabel = panelFieldLabel("Font", x: 0, y: 356, parent: content)
+        textFamily.frame = NSRect(x: 0, y: 378, width: 252, height: 30)
+        textFamily.addItem(withTitle: "Bundled Sans"); textFamily.lastItem?.representedObject = "sans"
+        textFamily.setAccessibilityLabel("Text font")
+        content.addSubview(textFamily)
+        let contentLabel = panelFieldLabel("Content", x: 0, y: 416, parent: content)
+        let textScroll = NSScrollView(frame: NSRect(x: 0, y: 438, width: 252, height: 82))
+        textScroll.hasVerticalScroller = true; textScroll.borderType = .lineBorder
+        textEditor.frame = NSRect(x: 0, y: 0, width: 234, height: 82)
+        textEditor.isRichText = false; textEditor.isVerticallyResizable = true
+        textEditor.allowsUndo = true
+        textEditor.isHorizontallyResizable = false; textEditor.textContainer?.widthTracksTextView = true
+        textEditor.setAccessibilityLabel("Text content"); textScroll.documentView = textEditor
+        content.addSubview(textScroll)
+        let sizeLabel = panelFieldLabel("Size (8–512)", x: 0, y: 528, parent: content)
+        configure(textSize, frame: NSRect(x: 0, y: 550, width: 78, height: 30), label: "Text size", parent: content)
+        textSize.formatter = nil; textSize.stringValue = "32"
+        textTraits.frame = NSRect(x: 86, y: 550, width: 166, height: 30)
+        textTraits.setAccessibilityLabel("Text traits"); content.addSubview(textTraits)
+        textAlignment.frame = NSRect(x: 0, y: 588, width: 252, height: 30)
+        textAlignment.setAccessibilityLabel("Text alignment"); content.addSubview(textAlignment)
+        let colorLabel = panelFieldLabel("Text color", x: 0, y: 626, parent: content)
+        configure(textColor, frame: NSRect(x: 0, y: 648, width: 118, height: 30), label: "Text color", parent: content)
+        textColor.formatter = nil; textColor.stringValue = "#111111"
+        textPlate.frame = NSRect(x: 126, y: 648, width: 126, height: 30)
+        textPlate.addItems(withTitles: ["No plate", "Square plate", "Rounded plate"])
+        textPlate.setAccessibilityLabel("Text plate"); content.addSubview(textPlate)
+        configure(textPlateColor, frame: NSRect(x: 0, y: 686, width: 118, height: 30),
+                  label: "Text plate color", parent: content)
+        textPlateColor.formatter = nil; textPlateColor.stringValue = "#ffffff"
+        textApplyButton = button("Apply", frame: NSRect(x: 126, y: 686, width: 60, height: 30),
+                                 parent: content) { [weak self] in self?.applyTextEdits() }
+        textCancelButton = button("Cancel", frame: NSRect(x: 192, y: 686, width: 60, height: 30),
+                                  parent: content) { [weak self] in self?.publishTextFields() }
+        textControls = [heading, familyLabel, textFamily, contentLabel, textScroll, sizeLabel, textSize,
+                        textTraits, textAlignment, colorLabel, textColor, textPlate, textPlateColor,
+                        textApplyButton, textCancelButton]
     }
 
     private func buildOutputPanel() {
@@ -1317,7 +1393,21 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             ? "Wand removes matching pixels from the frontmost visible image."
             : brush
                 ? "The outline previews brush size and path only. Pixels apply on release."
-                : "This tool creates one annotation layer on release."
+                : shape == .text
+                    ? "Click once to create empty auto-width text. Edit it below, then Apply."
+                    : "This tool creates one annotation layer on release."
+        let textSelected = selectedLayer?.kind == .text
+        textControls.forEach { $0.isHidden = !textSelected }
+        // Text needs no Wand/brush fields. Collapse their reserved space instead
+        // of opening its inspector below an empty block.
+        let compact = textSelected && !wand && !brush
+        drawHelper.frame.origin.y = compact ? 148 : 278
+        if let heading = textControls.first, let content = heading.superview {
+            let offset = (compact ? 196.0 : 326.0) - heading.frame.minY
+            for control in textControls { control.frame.origin.y += offset }
+            content.frame.size.height = textSelected
+                ? textCancelButton.frame.maxY + 8 : drawHelper.frame.maxY + 8
+        }
     }
 
     @objc private func outputOptionsChanged() {
@@ -1607,7 +1697,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func createDrawing(shape: EditorDrawOverlay.Shape, start: NSPoint, end: NSPoint, points: [NSPoint]) {
         guard shape != .wand, let layers = state.snapshot?.layers else { return }
         let request: [String: Any]
-        if shape == .pen {
+        if shape == .text {
+            request = ["operation": "create_text", "point": ["x": start.x, "y": start.y],
+                       "text": "", "fontSize": 32, "fontFamily": "sans", "color": "#111111"]
+        } else if shape == .pen {
             request = ["operation": "create_freehand_path", "points": points.map { ["x": $0.x, "y": $0.y] }]
         } else {
             request = ["operation": shape == .line || shape == .arrow ? "create_open_shape" : "create_closed_shape",
@@ -1615,6 +1708,77 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                        "start": ["x": start.x, "y": start.y], "end": ["x": end.x, "y": end.y]]
         }
         command(request, message: "Drawing \(shape.rawValue)…", createdLayerExistingIDs: Set(layers.map(\.id)))
+    }
+
+    private func textFieldsMatch(_ style: NativeTextStyle) -> Bool {
+        textEditor.string == style.text && textSize.stringValue == format(style.fontSize)
+            && textColor.stringValue == style.color
+            && textTraits.isSelected(forSegment: 0) == style.bold
+            && textTraits.isSelected(forSegment: 1) == style.italic
+            && textAlignment.selectedSegment == ["left", "center", "right"].firstIndex(of: style.align)
+            && textPlate.indexOfSelectedItem == (style.background == nil ? 0 : style.roundedBackground ? 2 : 1)
+            && (style.background == nil || textPlateColor.stringValue == style.background)
+    }
+
+    private func publishTextFields(preserveStaged: Bool = false) {
+        guard let style = selectedLayer?.textStyle else {
+            textControls.forEach { $0.isHidden = true }
+            textFieldsID = nil; acceptedTextStyle = nil
+            return
+        }
+        textControls.forEach { $0.isHidden = false }
+        let preserve = preserveStaged && !textApplyPending && textFieldsID == selectedLayer?.id
+            && acceptedTextStyle.map { !textFieldsMatch($0) } == true
+        textFieldsID = selectedLayer?.id; acceptedTextStyle = style
+        if preserve { return }
+        textEditor.string = style.text; textSize.stringValue = format(style.fontSize)
+        textColor.stringValue = style.color; textPlateColor.stringValue = style.background ?? "#ffffff"
+        textTraits.setSelected(style.bold, forSegment: 0)
+        textTraits.setSelected(style.italic, forSegment: 1)
+        textAlignment.selectedSegment = ["left", "center", "right"].firstIndex(of: style.align) ?? 0
+        textPlate.selectItem(at: style.background == nil ? 0 : style.roundedBackground ? 2 : 1)
+        textFamily.removeAllItems()
+        textFamily.addItem(withTitle: "Bundled Sans"); textFamily.lastItem?.representedObject = "sans"
+        if style.fontFamily == "sans" {
+            textFamily.selectItem(at: 0)
+        } else {
+            textFamily.addItem(withTitle: "Saved font: \(style.fontFamily)")
+            textFamily.lastItem?.representedObject = style.fontFamily
+            textFamily.selectItem(at: 1)
+        }
+        textFamily.isEnabled = false
+    }
+
+    private func applyTextEdits() {
+        guard let layer = selectedLayer, let style = layer.textStyle, !state.busy else { return }
+        guard let size = Double(textSize.stringValue), size.isFinite,
+              size == style.fontSize || (8...512).contains(size) else {
+            showError("Text size must be from 8 to 512."); return
+        }
+        guard !textColor.stringValue.isEmpty else { showError("Enter a text color."); return }
+        var patch: [String: Any] = [:]
+        if textEditor.string != style.text { patch["text"] = textEditor.string }
+        if size != style.fontSize { patch["fontSize"] = size }
+        if textTraits.isSelected(forSegment: 0) != style.bold { patch["bold"] = !style.bold }
+        if textTraits.isSelected(forSegment: 1) != style.italic { patch["italic"] = !style.italic }
+        let align = ["left", "center", "right"][max(0, textAlignment.selectedSegment)]
+        if align != style.align { patch["align"] = align }
+        if textColor.stringValue != style.color { patch["color"] = textColor.stringValue }
+        let background = textPlate.indexOfSelectedItem == 0 ? nil : textPlateColor.stringValue
+        if background != nil {
+            guard !textPlateColor.stringValue.isEmpty else { showError("Enter a plate color."); return }
+        }
+        if background != style.background {
+            if let background { patch["background"] = background }
+            else { patch["background"] = NSNull() }
+        }
+        let rounded = background == nil ? style.roundedBackground : textPlate.indexOfSelectedItem == 2
+        if rounded != style.roundedBackground { patch["roundedBackground"] = rounded }
+        guard !patch.isEmpty else { return }
+        textApplyPending = true
+        command(["operation": "edit_text", "id": layer.id, "patch": patch],
+                message: "Applying text…", preferredSelection: layer.id,
+                preserveStagedTextOnFailure: true)
     }
 
     private func removeImageBackground(at point: NSPoint) {
@@ -1753,6 +1917,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawTool?.isEnabled = state.snapshot != nil && !state.busy
         wandTolerance.isEnabled = active; wandContiguous.isEnabled = active
         brushSize.isEnabled = active; brushSoftness.isEnabled = active
+        let textReady = active && selectedLayer?.kind == .text
+        textEditor.isEditable = textReady
+        let textFields: [NSControl] = [textSize, textColor, textTraits,
+                                       textAlignment, textPlate, textPlateColor]
+        textFields.forEach { $0.isEnabled = textReady }
+        textApplyButton?.isEnabled = textReady; textCancelButton?.isEnabled = textReady
         drawOverlay.drawingEnabled = active
         selectionOverlay.selectionEnabled = sectionControl?.selectedSegment == Section.layers
             && state.snapshot != nil && !state.busy && !importLoading
@@ -2017,7 +2187,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func command(_ object: [String: Any], message: String, resetCrop: Bool = false,
                          preferredSelection: String? = nil,
-                         createdLayerExistingIDs: Set<String>? = nil) {
+                         createdLayerExistingIDs: Set<String>? = nil,
+                         preserveStagedTextOnFailure: Bool = false) {
         guard let generation = state.beginCommand() else { return }
         invalidateOutput()
         preferredLayerID = preferredSelection
@@ -2041,9 +2212,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.preferredLayerID = nil
                 self.closeAfterCommand = false
                 self.showError("Editor action failed: \(error.localizedDescription)")
-                self.publishSelectedLayerFields()
+                if !preserveStagedTextOnFailure { self.publishSelectedLayerFields() }
                 self.publishBackgroundFields()
             }
+            self.textApplyPending = false
             self.updateControls()
             self.submitPendingImportIfReady()
         }
@@ -2160,6 +2332,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func publishSelectedLayerFields() {
         annotationControls?.setStyle(selectedLayer?.annotation)
+        publishTextFields(preserveStaged: true)
+        publishDrawToolControls()
         selectionOverlay.documentJSON = state.snapshot?.documentJSON
         selectionOverlay.selectedOutline = selectedLayer?.selectionOutline
         selectionOverlay.selectedLayerID = selectedLayer?.id
@@ -2212,6 +2386,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         status.textColor = tokens.color("text-muted"); dimensions.textColor = tokens.color("text-muted")
         outputSize.textColor = tokens.color("text-muted")
+        textEditor.backgroundColor = tokens.color("surface-sunken")
+        textEditor.textColor = tokens.color("text")
+        textEditor.insertionPointColor = tokens.color("text")
+        textEditor.font = .systemFont(ofSize: tokens.number("text-md"))
         drawOverlay.fillColor = tokens.color("theme-accent").withAlphaComponent(0.22)
         drawOverlay.strokeColor = tokens.color("theme-accent")
         drawOverlay.brushOutlineColor = tokens.color("text")

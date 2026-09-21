@@ -17,7 +17,7 @@ use captures_app::{
         ClosedShapeKind, CropDrag, Document, DropShadowStyle, DropShadowStylePatch, Element,
         ElementBase, ElementStyle, FreehandPathCreate, GuideOrientation, ImageTransform, LayerEdit,
         LayerPlacement, MoveDrag, OpenShapeCreate, OpenShapeKind, OptionalNullable, Point, Rect,
-        ResizeDrag, ResizeHandle, ShapeElement, arrow_fill_polygon, preview_rotation,
+        ResizeDrag, ResizeHandle, ShapeElement, TextElement, arrow_fill_polygon, preview_rotation,
         rotation_angle, rotation_handle, smooth_path_centerline,
     },
     editor_image_background::BrushMode,
@@ -25,7 +25,7 @@ use captures_app::{
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{
         EditorSession, ExportFormat, ExportOptions, ExportQuality, ImportImage, OpenRequest,
-        PngOptions, Request,
+        PngOptions, Request, TextCreate, TextPatch,
     },
     editor_viewport::{Viewport, wheel_zoom_factor},
 };
@@ -92,6 +92,7 @@ enum Section {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DrawShape {
+    Text,
     Rectangle,
     Ellipse,
     Line,
@@ -139,7 +140,7 @@ impl DrawShape {
                     },
                 })
             }
-            Self::Wand | Self::Erase | Self::Restore => None,
+            Self::Text | Self::Wand | Self::Erase | Self::Restore => None,
             _ => None,
         }
     }
@@ -156,6 +157,64 @@ const CROP_ASPECTS: [(&str, Option<f64>); 5] = [
 struct AnnotationFields {
     style: ElementStyle,
     shadow: DropShadowStyle,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TextFields {
+    id: String,
+    accepted: TextValues,
+    staged: TextValues,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TextValues {
+    text: String,
+    font_size: f64,
+    font_family: String,
+    bold: bool,
+    italic: bool,
+    align: String,
+    color: String,
+    background: Option<String>,
+    rounded_background: bool,
+}
+
+impl TextValues {
+    fn from_element(text: &TextElement) -> Self {
+        Self {
+            text: text.text.clone(),
+            font_size: text.font_size,
+            font_family: text.font_family.clone(),
+            bold: text.bold,
+            italic: text.italic,
+            align: text.align.clone(),
+            color: text.color.clone(),
+            background: text.background.clone(),
+            rounded_background: text.rounded_background,
+        }
+    }
+
+    fn patch(&self, accepted: &Self) -> TextPatch {
+        TextPatch {
+            text: (self.text != accepted.text).then(|| self.text.clone()),
+            font_size: (self.font_size != accepted.font_size).then_some(self.font_size),
+            // Preserve unknown/reopened families: this first UI does not offer a family picker.
+            font_family: None,
+            bold: (self.bold != accepted.bold).then_some(self.bold),
+            italic: (self.italic != accepted.italic).then_some(self.italic),
+            align: (self.align != accepted.align).then(|| self.align.clone()),
+            color: (self.color != accepted.color).then(|| self.color.clone()),
+            background: if self.background == accepted.background {
+                OptionalNullable::Missing
+            } else {
+                self.background
+                    .clone()
+                    .map_or(OptionalNullable::Null, OptionalNullable::Value)
+            },
+            rounded_background: (self.rounded_background != accepted.rounded_background)
+                .then_some(self.rounded_background),
+        }
+    }
 }
 
 impl AnnotationFields {
@@ -237,6 +296,8 @@ struct View {
     layer_opacity: f64,
     layer_position: [f64; 2],
     annotation: Option<AnnotationFields>,
+    text: Option<TextFields>,
+    text_apply_pending: bool,
     pending: bool,
     closed: bool,
     close_requested: bool,
@@ -293,6 +354,8 @@ impl Default for View {
             layer_opacity: 100.,
             layer_position: [0., 0.],
             annotation: None,
+            text: None,
+            text_apply_pending: false,
             pending: true,
             closed: false,
             close_requested: false,
@@ -354,6 +417,15 @@ impl View {
         self.cancel_drawing();
         self.cancel_layer_gesture();
         self.pending_layer_selection = None;
+        if self
+            .text
+            .as_ref()
+            .is_some_and(|fields| fields.staged != fields.accepted)
+        {
+            self.error = Some("Apply or cancel pending text before closing.".into());
+            self.section = Section::Layers;
+            return;
+        }
         if self.pending || self.unsaved() {
             self.close_requested = true;
         } else {
@@ -368,6 +440,7 @@ impl View {
         self.pending = false;
         match result {
             Ok(mut presented) => {
+                let text_apply_pending = self.text_apply_pending;
                 let changed = self
                     .presented
                     .as_ref()
@@ -429,6 +502,11 @@ impl View {
                 });
                 self.presented = Some(presented);
                 self.select_layer(selected);
+                self.text_apply_pending = false;
+                if self.draw_shape == DrawShape::Text && self.text.is_some() && !text_apply_pending
+                {
+                    self.section = Section::Layers;
+                }
                 self.reset_background_fields();
                 self.error = None;
                 if self.close_after_save || (self.close_requested && !self.unsaved()) {
@@ -438,7 +516,11 @@ impl View {
             Err(error) => {
                 self.pending_layer_selection = None;
                 self.error = Some(error);
-                self.select_layer_exact(self.selected_layer.clone());
+                // A rejected explicit text Apply keeps the user's staged composition.
+                if !self.text_apply_pending {
+                    self.select_layer_exact(self.selected_layer.clone());
+                }
+                self.text_apply_pending = false;
                 self.reset_background_fields();
             }
         }
@@ -611,6 +693,7 @@ impl View {
     }
 
     fn select_layer(&mut self, id: Option<String>) {
+        let previous_text = self.text.clone();
         let elements = self
             .presented
             .as_ref()
@@ -627,6 +710,24 @@ impl View {
             Element::Path(path) => Some(AnnotationFields::new(&path.style)),
             _ => None,
         });
+        self.text = layer.and_then(|element| match element {
+            Element::Text(text) => {
+                let accepted = TextValues::from_element(text);
+                let staged = previous_text
+                    .filter(|fields| {
+                        fields.id == text.base.id
+                            && fields.staged != fields.accepted
+                            && !self.text_apply_pending
+                    })
+                    .map_or_else(|| accepted.clone(), |fields| fields.staged);
+                Some(TextFields {
+                    id: text.base.id.clone(),
+                    accepted,
+                    staged,
+                })
+            }
+            _ => None,
+        });
         if let Some(layer) = layer {
             self.layer_name = layer_label(layer).into();
             self.layer_opacity = layer.base().opacity;
@@ -638,6 +739,7 @@ impl View {
         if id.is_none() {
             self.selected_layer = None;
             self.annotation = None;
+            self.text = None;
             self.layer_name.clear();
             self.layer_opacity = 100.;
             self.layer_position = [0., 0.];
@@ -836,11 +938,14 @@ impl Editor {
         let (out, rx) = mpsc::channel();
         let wake_ctx = ctx.clone();
         let worker = thread::spawn(move || {
-            let opened = EditorSession::open(OpenRequest {
-                drafts_root: root.with_file_name("editor-drafts"),
-                history_root: root.clone(),
-                artifact_id,
-            });
+            let opened = EditorSession::open_with_fonts(
+                OpenRequest {
+                    drafts_root: root.with_file_name("editor-drafts"),
+                    history_root: root.clone(),
+                    artifact_id,
+                },
+                Some(captures_app::editor_fonts::bundled()),
+            );
             let mut session = match opened {
                 Ok(session) => {
                     let _ = out.send(Ok(Presented::from_session(&session)));
@@ -864,6 +969,7 @@ impl Editor {
                                 Request::CreateClosedShape { .. }
                                     | Request::CreateOpenShape { .. }
                                     | Request::CreateFreehandPath { .. }
+                                    | Request::CreateText { .. }
                             );
                             session.execute(request)?;
                             let mut presented = Presented::from_session(session);
@@ -1196,6 +1302,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 ui.heading("Draw shapes");
                 let previous_tool = view.draw_shape;
                 ui.horizontal_wrapped(|ui| {
+                    ui.selectable_value(&mut view.draw_shape, DrawShape::Text, "Text");
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Rectangle, "Rectangle");
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Ellipse, "Ellipse");
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Line, "Line");
@@ -1230,6 +1337,9 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     });
                     ui.label("Drag over an image, then release to apply the pixels as one undo step.");
                     ui.small("Erase makes pixels transparent. Restore uses the image’s retained original pixels.");
+                } else if view.draw_shape == DrawShape::Text {
+                    ui.label("Click the canvas to place text, then edit it in Layers.");
+                    ui.small("New text uses bundled Sans. Text changes are applied explicitly as one undo step.");
                 } else {
                     ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
                     ui.small("New shapes use the default annotation color. Change fill, stroke, shadow, opacity, position and ordering in Layers.");
@@ -2130,13 +2240,39 @@ fn show_shape(
     let response = ui.interact(
         available,
         ui.scope_id().with("shape-canvas"),
-        if view.draw_shape == DrawShape::Wand {
+        if matches!(view.draw_shape, DrawShape::Text | DrawShape::Wand) {
             egui::Sense::click()
         } else {
             egui::Sense::drag()
         },
     );
     let first_pass = ui.ctx().current_pass_index() == 0;
+    if view.draw_shape == DrawShape::Text {
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        }
+        if first_pass
+            && !view.pending
+            && !viewport_intercepted
+            && response.clicked_by(egui::PointerButton::Primary)
+            && let Some(position) = response.interact_pointer_pos()
+            && preview.contains(position)
+        {
+            view.submit(
+                tx,
+                Request::CreateText {
+                    create: TextCreate {
+                        point: image_point(position, preview, bounds),
+                        text: String::new(),
+                        font_size: 32.,
+                        font_family: "sans".into(),
+                        color: "#111111".into(),
+                    },
+                },
+            );
+        }
+        return;
+    }
     if view.draw_shape == DrawShape::Wand {
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -2417,7 +2553,7 @@ fn show_shape(
                     fill,
                 )));
             }
-            DrawShape::Wand | DrawShape::Erase | DrawShape::Restore => {
+            DrawShape::Text | DrawShape::Wand | DrawShape::Erase | DrawShape::Restore => {
                 unreachable!("pixel tools do not start shape drags")
             }
         }
@@ -2768,6 +2904,10 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
             view.submit_layer(tx, LayerEdit::Lock { locked });
         }
     });
+    if matches!(element, Element::Text(_)) {
+        show_text(ui, view, tx);
+        ui.separator();
+    }
     if matches!(element, Element::Image(_)) {
         ui.label("Name");
         ui.horizontal(|ui| {
@@ -2880,6 +3020,7 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
         });
     }
     match element {
+        Element::Text(_) => {}
         Element::Shape(shape) => show_annotation(
             ui,
             view,
@@ -2894,6 +3035,81 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
         _ => {
             ui.small("Hidden and locked images can transform.");
         }
+    }
+}
+
+fn show_text(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
+    let mut request = None;
+    let Some(fields) = &mut view.text else {
+        return;
+    };
+    ui.separator();
+    ui.heading("Text");
+    let label = ui.label("Content");
+    ui.add(
+        egui::TextEdit::multiline(&mut fields.staged.text)
+            .desired_width(f32::INFINITY)
+            .desired_rows(4),
+    )
+    .labelled_by(label.id);
+    ui.horizontal(|ui| {
+        ui.label("Size");
+        ui.add(
+            egui::DragValue::new(&mut fields.staged.font_size)
+                .range(8. ..=512.)
+                .speed(1.),
+        );
+        ui.checkbox(&mut fields.staged.bold, "Bold");
+        ui.checkbox(&mut fields.staged.italic, "Italic");
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Align");
+        for (value, label) in [("left", "Left"), ("center", "Center"), ("right", "Right")] {
+            ui.selectable_value(&mut fields.staged.align, value.into(), label);
+        }
+    });
+    annotation_color(ui, "Text color", &mut fields.staged.color);
+    let mut plate = fields.staged.background.is_some();
+    if ui.checkbox(&mut plate, "Background plate").changed() {
+        fields.staged.background = plate.then(|| "#f7f7f5".into());
+    }
+    if let Some(background) = &mut fields.staged.background {
+        annotation_color(ui, "Plate color", background);
+        ui.checkbox(&mut fields.staged.rounded_background, "Rounded plate");
+    }
+    let changed = fields.staged != fields.accepted;
+    let invalid_color = egui::Color32::from_hex(&fields.staged.color).is_err()
+        || fields
+            .staged
+            .background
+            .as_deref()
+            .is_some_and(|color| egui::Color32::from_hex(color).is_err());
+    let apply = ui
+        .add_enabled(changed, egui::Button::new("Apply text"))
+        .clicked();
+    let cancel = ui
+        .add_enabled(changed, egui::Button::new("Cancel changes"))
+        .clicked();
+    if cancel {
+        fields.staged = fields.accepted.clone();
+        view.error = None;
+    } else if apply {
+        if invalid_color {
+            view.error =
+                Some("Use a hex color such as #ff3b5c. Text changes were not applied.".into());
+        } else {
+            let id = fields.id.clone();
+            let patch = fields.staged.patch(&fields.accepted);
+            request = Some(Request::EditText { id, patch });
+        }
+    }
+    ui.small(format!(
+        "Font: {}. New text uses bundled Liberation Sans. Apply commits all text fields as one undo step.",
+        fields.staged.font_family
+    ));
+    if let Some(request) = request {
+        view.text_apply_pending = true;
+        view.submit(tx, request);
     }
 }
 
@@ -3327,6 +3543,137 @@ mod tests {
             unsaved,
             has_draft: !unsaved,
         }
+    }
+
+    fn presented_text(id: &str, text: &str) -> Presented {
+        let mut value = presented(true);
+        Arc::make_mut(&mut value.document)
+            .elements
+            .push(Element::Text(TextElement {
+                base: ElementBase {
+                    id: id.into(),
+                    x: 2.,
+                    y: 1.,
+                    rotation: None,
+                    locked: false,
+                    visible: true,
+                    opacity: 100.,
+                    blend_mode: "source-over".into(),
+                },
+                text: text.into(),
+                font_size: 32.,
+                width: 80.,
+                auto_width: Some(true),
+                font_family: "saved-unknown-family".into(),
+                bold: false,
+                italic: false,
+                align: "left".into(),
+                color: "#ff3b5c".into(),
+                background: None,
+                outlined: false,
+                rounded_background: false,
+                drop_shadow: None,
+                drop_shadow_style: None,
+                extra: Default::default(),
+            }));
+        value.created_layer = Some(id.into());
+        value
+    }
+
+    #[test]
+    fn text_staging_survives_async_updates_and_errors_then_accepts_or_cancels_cleanly() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented_text("fresh", "accepted")));
+        assert_eq!(view.selected_layer.as_deref(), Some("fresh"));
+        assert_eq!(
+            view.text.as_ref().unwrap().staged.font_family,
+            "saved-unknown-family"
+        );
+
+        view.text.as_mut().unwrap().staged.text = "composing".into();
+        view.request_close();
+        assert!(!view.closed && !view.close_requested);
+        assert!(view.error.as_deref().unwrap().contains("pending text"));
+        let mut unrelated = presented_text("fresh", "accepted");
+        unrelated.created_layer = None;
+        view.receive(&ctx, Ok(unrelated));
+        assert_eq!(view.text.as_ref().unwrap().staged.text, "composing");
+
+        view.text_apply_pending = true;
+        view.receive(&ctx, Err("transaction rejected".into()));
+        assert_eq!(view.text.as_ref().unwrap().staged.text, "composing");
+        assert_eq!(view.text.as_ref().unwrap().accepted.text, "accepted");
+
+        let accepted = view.text.as_ref().unwrap().accepted.clone();
+        view.text.as_mut().unwrap().staged = accepted;
+        assert_eq!(view.text.as_ref().unwrap().staged.text, "accepted");
+        view.text.as_mut().unwrap().staged.text = "applied".into();
+        view.text_apply_pending = true;
+        view.output = Some((view.texture.as_ref().unwrap().clone(), 9));
+        view.show_output = true;
+        view.receive(&ctx, Ok(presented_text("fresh", "applied")));
+        let fields = view.text.as_ref().unwrap();
+        assert_eq!(fields.staged, fields.accepted);
+        assert_eq!(fields.accepted.text, "applied");
+        assert!(view.output.is_none() && !view.show_output);
+    }
+
+    #[test]
+    fn text_click_placement_is_coalesced_across_egui_passes() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(false)));
+        view.draw_shape = DrawShape::Text;
+        let (tx, rx) = mpsc::channel();
+        let area = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(140., 60.));
+        let click = egui::pos2(70., 30.);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: click,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let run = |view: &mut View, events, discard| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(area),
+                    events,
+                    focused: true,
+                    ..Default::default()
+                },
+                |_| {
+                    let mut ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("text-placement-test"),
+                        egui::UiBuilder::new().max_rect(area),
+                    );
+                    show_shape(&mut ui, view, &tx, area, area, false);
+                    if discard && ctx.current_pass_index() == 0 {
+                        ctx.request_discard("verify text placement is one command");
+                    }
+                },
+            )
+        };
+        let mut hover = run(&mut view, vec![], false);
+        hover.textures_delta.clear();
+        let mut priming = run(
+            &mut view,
+            vec![egui::Event::PointerMoved(click), button(true)],
+            false,
+        );
+        priming.textures_delta.clear();
+        assert!(rx.try_recv().is_err());
+        let mut output = run(&mut view, vec![button(false)], true);
+        assert!(output.platform_output.num_completed_passes >= 2);
+        output.textures_delta.clear();
+        let Job::Apply(Request::CreateText { create }) = rx.try_recv().unwrap() else {
+            panic!()
+        };
+        assert_eq!(create.point, Point { x: 3.5, y: 1.5 });
+        assert!(create.text.is_empty());
+        assert_eq!(create.font_family, "sans");
+        assert!(rx.try_recv().is_err(), "multipass click creates one layer");
     }
 
     fn layer_frame(

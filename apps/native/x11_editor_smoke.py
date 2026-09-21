@@ -82,6 +82,8 @@ def main():
                         help="Exercise viewport gestures, toolbar and keyboard zoom without editing")
     parser.add_argument("--text-draft-only", action="store_true",
                         help="Restore explicit-font text, save/reopen and copy pixels (no Text input UI)")
+    parser.add_argument("--text-only", action="store_true",
+                        help="Exercise the real Text tool UI, undo/redo and draft reopen")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -296,6 +298,70 @@ def main():
                 assert actual == bytes(expected), (x, y, actual, expected)
             return actual
 
+        if args.text_only:
+            run("xdotool", "windowsize", "--sync", editor, "1000", "800")
+            click(editor, 736, 62)  # Draw.
+            click(editor, 34, 128)  # Text is the first tool.
+            click(editor, 430, 250)  # Place one empty, selected auto-width text layer.
+            save_layers(lambda values: len(values) == 2 and values[-1]["kind"] == "text",
+                        "empty text placed once")
+            created = layers()[-1]
+            assert created["text"] == "" and created["fontFamily"] == "sans"
+            assert created["align"] == "left" and created.get("autoWidth") is True
+            shot(editor, f"text-empty-{args.appearance}")
+            # Text properties precede generic layer geometry in the sidebar.
+            click(editor, 105, 410)
+            run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--delay", "35",
+                "--", "Readable native text")
+            time.sleep(.2)
+            click(editor, 95, 478)   # Bold.
+            click(editor, 146, 478)  # Italic.
+            click(editor, 92, 681)   # Background plate.
+            shot(editor, f"text-staged-{args.appearance}")
+            run("xdotool", "mousemove", "--window", editor, "120", "680",
+                "click", "5", "click", "5", "click", "5", "click", "5", "sleep", ".3")
+            shot(editor, f"text-scrolled-{args.appearance}")
+            click(editor, 74, 540)   # Apply text.
+            edited = save_layers(
+                lambda values: values[-1]["text"] == "Readable native text"
+                and values[-1]["bold"] and values[-1]["italic"]
+                and values[-1]["background"] is not None,
+                "readable styled text applied")[-1]
+            assert edited["id"] == created["id"] and edited["fontFamily"] == "sans"
+            shot(editor, f"text-edited-{args.appearance}")
+            click(editor, 35, 62)
+            save_layers(lambda values: values[-1]["text"] == "", "text edit undo")
+            click(editor, 98, 62)
+            save_layers(lambda values: values[-1]["text"] == "Readable native text",
+                        "text edit redo")
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "text editor closes")
+            editor = reopen()
+            click(editor, 464, 62)  # Layers, with the restored text selected explicitly.
+            click(editor, 100, 153)
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            shot(editor, f"text-minimum-reopened-{args.appearance}")
+            before_scroll = draft.read_bytes()
+            run("xdotool", "mousemove", "--window", editor, "120", "440",
+                "click", "--repeat", "4", "--delay", "80", "5", "sleep", ".3")
+            shot(editor, f"text-minimum-controls-{args.appearance}")
+            assert draft.read_bytes() == before_scroll, "scrolling text controls must not edit"
+            reopened = layers()[-1]
+            assert reopened["id"] == created["id"] and reopened["text"] == "Readable native text"
+            assert reopened["bold"] and reopened["italic"] and reopened["background"] is not None
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "text suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["text-click-once-fresh-selection", "text-readable-explicit-apply",
+                           "text-bold-italic-plate", "text-undo-redo", "text-draft-reopen",
+                           "text-minimum-appearance", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native Text UI: create, style, undo/redo, save/reopen, minimum")
+            return
+
         if args.text_draft_only:
             shot(editor, "text-draft-restored")
             save_until(lambda: json.loads(draft.read_text())["updated_at_ms"] > 1,
@@ -335,8 +401,13 @@ def main():
             click(editor, 535, 62)
             click(editor, 65, 366)
             click(editor, 170, 657)
+            shot(editor, "text-draft-output-copy")
             png = output / "clipboard-text.png"
-            png.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
+            # Encoding and clipboard publication complete asynchronously. Wait
+            # for bytes, without resubmitting the accepted Copy action.
+            png.write_bytes(wait(lambda: subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+                env=env, capture_output=True, timeout=5).stdout or None, "text clipboard PNG"))
             assert run("identify", "-format", "%wx%h", str(png)) == b"640x360"
             # Known font metrics: right-aligned L at x374/y58, fi at x394/y162.
             for x, y, rgba in [(375, 65, (255, 0, 0, 255)), (396, 170, (255, 0, 0, 255)),
@@ -361,11 +432,11 @@ def main():
             save(640, 360, 0, 0)
             source = layers()[0]["src"]
             click(editor, 736, 62)
-            click(editor, 100, 226)  # Restore before the first edit reports a recoverable error.
+            click(editor, 170, 221)  # Restore before the first edit reports a recoverable error.
             click(editor, 338, 189)
             shot(editor, "brush-restore-error")
             save_layers(lambda values: values[0]["src"] == source, "restore without original is atomic")
-            click(editor, 35, 226)  # Erase; keep shipping diameter/softness defaults.
+            click(editor, 101, 221)  # Erase; keep shipping diameter/softness defaults.
             shot(editor, "brush-controls")
             before = draft.read_bytes()
             run("xdotool", "mousemove", "--window", editor, "338", "189", "mousedown", "1",
@@ -388,7 +459,7 @@ def main():
             save_layers(lambda values: values[0]["src"] == source, "one-step brush undo")
             click(editor, 98, 62)
             save_layers(lambda values: values[0]["src"] == erased["src"], "brush redo")
-            click(editor, 100, 226)
+            click(editor, 170, 221)
             drag((338, 189), (438, 229))
             restored = save_layers(lambda values: values[0]["src"] != erased["src"], "restore stroke")[0]
             assert restored["originalSrc"] == source
@@ -402,7 +473,7 @@ def main():
             asset_pixel(layers()[0], 150, 120, (0, 0, 0, 0))
             run("xdotool", "windowsize", "--sync", editor, "886", "700")
             click(editor, 736, 62)
-            click(editor, 35, 226)
+            click(editor, 101, 221)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "brush-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
@@ -432,7 +503,7 @@ def main():
             save(640, 360, 0, 0)
             source = layers()[0]["src"]
             click(editor, 736, 62)
-            click(editor, 150, 182)
+            click(editor, 36, 221)
             shot(editor, "wand-controls")
             # Fitted image origin (238,89), scale 1. Original capture stays locked.
             click(editor, 338, 189)
@@ -465,7 +536,7 @@ def main():
             asset_pixel(layers()[0], 310, 60, (0, 0, 0, 0))
             run("xdotool", "windowsize", "--sync", editor, "886", "700")
             click(editor, 736, 62)
-            click(editor, 150, 182)
+            click(editor, 36, 221)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "wand-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
@@ -705,7 +776,7 @@ def main():
             print("PASS native zoom: wheel, pan, toolbar, keyboard, presets, custom zoom, focused field, no draft")
             return
         click(editor, 736, 62)
-        click(editor, 95, 176)  # Pen follows Arrow on the second tool row.
+        click(editor, 154, 177)  # Pen follows Arrow on the second tool row.
         run("xdotool", "mousemove", "--window", editor, "318", "329", "mousedown", "1", "sleep", ".2")
         for x, y in [(378, 209), (438, 329), (518, 249)]:
             run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y), "sleep", ".2")
@@ -763,7 +834,7 @@ def main():
         run("xdotool", "windowsize", "--sync", editor, "886", "700")
         click(editor, 736, 62)
         shot(editor, "open-shape-tools")
-        click(editor, 190, 132)  # Line follows Rectangle and Ellipse.
+        click(editor, 32, 177)  # Line starts the second tool row.
         drag((320, 310), (500, 310))
         horizontal = save_layers(lambda values: len(values) == 2, "horizontal line")[-1]
         assert horizontal["shape"] == "line" and horizontal["style"]["fill"] is None
@@ -777,7 +848,7 @@ def main():
         click(editor, 700, 420)
         point_line = save_layers(lambda values: len(values) == 4, "zero-length line click")[-1]
         assert (point_line["x"], point_line["y"]) == (point_line["endX"], point_line["endY"])
-        click(editor, 40, 176)  # Arrow wraps onto the next row.
+        click(editor, 94, 176)  # Arrow follows Line.
         before_arrow = draft.read_bytes()
         run("xdotool", "mousemove", "--window", editor, "750", "320", "mousedown", "1",
             "sleep", ".2", "mousemove", "--sync", "--window", editor, "580", "190", "sleep", ".3")
@@ -817,7 +888,7 @@ def main():
 
         run("xdotool", "windowsize", "--sync", editor, "886", "700")
         click(editor, 736, 62)
-        click(editor, 50, 132)
+        click(editor, 105, 133)  # Rectangle follows Text.
         drag((320, 250), (480, 370))
         annotation = save_layers(lambda values: len(values) == 2, "annotation fixture")[-1]
         click(editor, 463, 62)
@@ -1281,7 +1352,7 @@ def main():
         pixel("shape-undone", 600, 230, (40, 110, 166))
         click(editor, 98, 62)
         save_layers(lambda values: len(values) == 2 and values[-1]["id"] == rectangle["id"], "shape redo keeps id")
-        click(editor, 138, 138)  # Ellipse.
+        click(editor, 185, 133)  # Ellipse.
         drag((608, 349), (778, 399))
         ellipse = save_layers(lambda values: len(values) == 3, "ellipse layer")[-1]
         assert ellipse["shape"] == "ellipse" and ellipse["id"] != rectangle["id"]
