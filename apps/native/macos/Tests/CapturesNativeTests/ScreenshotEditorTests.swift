@@ -3346,9 +3346,15 @@ final class ScreenshotEditorTests: XCTestCase {
     private func scrollOutputSaveControlsVisible(in view: NSView) throws {
         let filename = try field("Output filename", in: view)
         let scroll = try XCTUnwrap(filename.enclosingScrollView)
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: 238))
+        let document = try XCTUnwrap(scroll.documentView)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height)))
         scroll.reflectScrolledClipView(scroll.contentView)
         view.layoutSubtreeIfNeeded()
+        let controls: [NSView] = [filename, try button("Save new copy", in: view)]
+        for control in controls {
+            XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)),
+                          "Export filename and save action must be reachable after output sizing controls")
+        }
     }
 
     private func scrollImageImportVisible(in view: NSView) throws {
