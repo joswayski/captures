@@ -107,19 +107,31 @@ enum DrawShape {
     Wand,
     Erase,
     Restore,
+    Triangle,
+    Diamond,
+    Star,
 }
 
 impl DrawShape {
+    fn closed_kind(self) -> Option<ClosedShapeKind> {
+        match self {
+            Self::Rectangle => Some(ClosedShapeKind::Rectangle),
+            Self::Ellipse => Some(ClosedShapeKind::Ellipse),
+            Self::Triangle => Some(ClosedShapeKind::Triangle),
+            Self::Diamond => Some(ClosedShapeKind::Diamond),
+            Self::Star => Some(ClosedShapeKind::Star),
+            _ => None,
+        }
+    }
+
     fn request(self, start: Point, end: Point, display_scale: f64) -> Option<Request> {
         match self {
-            Self::Rectangle | Self::Ellipse if start.x != end.x && start.y != end.y => {
+            Self::Rectangle | Self::Ellipse | Self::Triangle | Self::Diamond | Self::Star
+                if start.x != end.x && start.y != end.y =>
+            {
                 Some(Request::CreateClosedShape {
                     create: ClosedShapeCreate {
-                        shape: if self == Self::Rectangle {
-                            ClosedShapeKind::Rectangle
-                        } else {
-                            ClosedShapeKind::Ellipse
-                        },
+                        shape: self.closed_kind().expect("closed shape"),
                         start,
                         end,
                         style: ElementStyle::default(),
@@ -1369,6 +1381,9 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Wand, "Wand");
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Erase, "Erase");
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Restore, "Restore");
+                    ui.selectable_value(&mut view.draw_shape, DrawShape::Triangle, "Triangle");
+                    ui.selectable_value(&mut view.draw_shape, DrawShape::Diamond, "Diamond");
+                    ui.selectable_value(&mut view.draw_shape, DrawShape::Star, "Star");
                 });
                 if view.draw_shape != previous_tool { view.cancel_drawing(); }
                 if view.draw_shape == DrawShape::Wand {
@@ -2574,6 +2589,18 @@ fn show_shape(
                     fill,
                 ));
             }
+            DrawShape::Triangle | DrawShape::Diamond | DrawShape::Star => {
+                let points = view
+                    .draw_shape
+                    .closed_kind()
+                    .expect("closed shape")
+                    .polygon(start, end)
+                    .expect("polygon kind");
+                painter.add(egui::Shape::mesh(polygon_mesh(
+                    points.into_iter().map(position).collect(),
+                    fill,
+                )));
+            }
             DrawShape::Line => {
                 painter.line_segment(
                     [position(start), position(end)],
@@ -2654,14 +2681,19 @@ fn show_shape(
 }
 
 fn polygon_mesh(points: Vec<egui::Pos2>, color: egui::Color32) -> egui::Mesh {
-    // epaint's filled paths require convex polygons. Tapered arrow necks are concave.
+    // epaint's filled paths require convex polygons. Arrow necks and stars are concave.
     let coordinates: Vec<_> = points
         .iter()
         .flat_map(|point| [f64::from(point.x), f64::from(point.y)])
         .collect();
     let indices = earcutr::earcut(&coordinates, &[], 2)
-        .expect("shared arrow polygon has finite two-dimensional coordinates");
+        .expect("shared polygon has finite two-dimensional coordinates");
     let mut mesh = egui::Mesh::default();
+    // A press or axis-aligned drag has vertices but no triangles. Do not send
+    // orphan vertices to egui-wgpu: its zero-length index-buffer slice panics.
+    if indices.is_empty() {
+        return mesh;
+    }
     for point in points {
         mesh.colored_vertex(point, color);
     }
@@ -5324,6 +5356,28 @@ mod tests {
     }
 
     #[test]
+    fn degenerate_polygon_previews_have_no_orphan_gpu_vertices() {
+        for kind in [
+            ClosedShapeKind::Triangle,
+            ClosedShapeKind::Diamond,
+            ClosedShapeKind::Star,
+        ] {
+            let start = Point { x: 50., y: 30. };
+            for end in [start, Point { x: 50., y: 90. }, Point { x: 120., y: 30. }] {
+                let points = kind
+                    .polygon(start, end)
+                    .unwrap()
+                    .into_iter()
+                    .map(|point| egui::pos2(point.x as f32, point.y as f32))
+                    .collect();
+                let mesh = polygon_mesh(points, egui::Color32::RED);
+                assert!(mesh.indices.is_empty());
+                assert!(mesh.vertices.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn shape_drag_maps_reverse_and_outside_points_without_committing_until_release() {
         let ctx = egui::Context::default();
         let mut view = View::default();
@@ -5361,6 +5415,9 @@ mod tests {
         for kind in [
             DrawShape::Rectangle,
             DrawShape::Ellipse,
+            DrawShape::Triangle,
+            DrawShape::Diamond,
+            DrawShape::Star,
             DrawShape::Line,
             DrawShape::Arrow,
         ] {
@@ -5388,14 +5445,7 @@ mod tests {
             frame(&mut view, vec![button(end, false)]);
             let (start, end, style, opacity) = match rx.try_recv().unwrap() {
                 Job::Apply(Request::CreateClosedShape { create }) => {
-                    assert_eq!(
-                        kind,
-                        if create.shape == ClosedShapeKind::Rectangle {
-                            DrawShape::Rectangle
-                        } else {
-                            DrawShape::Ellipse
-                        }
-                    );
+                    assert_eq!(kind.closed_kind(), Some(create.shape));
                     (create.start, create.end, create.style, create.opacity)
                 }
                 Job::Apply(Request::CreateOpenShape { create }) => {

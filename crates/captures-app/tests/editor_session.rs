@@ -1442,6 +1442,77 @@ fn closed_shape_json_creation_renders_and_rolls_back_history_before_draft_reopen
 }
 
 #[test]
+fn polygon_creation_selectable_bounds_failure_undo_and_draft_restore() {
+    for shape in ["triangle", "diamond", "star"] {
+        let (data, id, _) = setup();
+        let mut editor = open(data.path(), &id).unwrap();
+        let mut document = editor.snapshot().document.clone();
+        document.width = 100.;
+        document.height = 80.;
+        document.background = None;
+        let Element::Image(background) = &mut document.elements[0] else {
+            panic!()
+        };
+        background.base.visible = false;
+        editor.execute(Request::Commit { document }).unwrap();
+        let baseline = editor.snapshot().document.clone();
+        editor
+            .execute(
+                serde_json::from_value(json!({
+                    "operation": "create_closed_shape", "shape": shape,
+                    "start": {"x": 90, "y": 70}, "end": {"x": 10, "y": 20}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let created = editor.snapshot().document.clone();
+        let element = created.elements.last().unwrap();
+        assert_eq!(serde_json::to_value(element).unwrap()["shape"], shape);
+        assert!(!element.base().id.is_empty());
+        let bounds = element.selection_bounds().unwrap();
+        assert_eq!(
+            (bounds.x, bounds.y, bounds.width, bounds.height),
+            (5., 15., 90., 60.)
+        );
+        let pixels = editor.pixels();
+        assert_eq!(pixels.get_pixel(50, 45).0, [255, 59, 92, 255]);
+        assert_eq!(pixels.get_pixel(12, 22).0, [0, 0, 0, 0]);
+        editor.execute(Request::Undo).unwrap();
+        assert_eq!(editor.snapshot().document, &baseline);
+        let before_failure = serde_json::to_value(editor.snapshot()).unwrap();
+        let retained = editor.pixels();
+        for end in [json!({"x": 10, "y": 70}), json!({"x": 90, "y": 20})] {
+            assert!(
+                editor
+                    .execute(
+                        serde_json::from_value(json!({
+                            "operation": "create_closed_shape", "shape": shape,
+                            "start": {"x": 10, "y": 20}, "end": end
+                        }))
+                        .unwrap()
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                serde_json::to_value(editor.snapshot()).unwrap(),
+                before_failure
+            );
+            assert!(Arc::ptr_eq(&retained, &editor.pixels()));
+        }
+        editor.execute(Request::Redo).unwrap();
+        assert_eq!(editor.snapshot().document, &created);
+        assert_eq!(editor.pixels(), pixels);
+        editor
+            .execute(Request::SaveDraft { updated_at_ms: 2 })
+            .unwrap();
+        drop(editor);
+        let restored = open(data.path(), &id).unwrap();
+        assert_eq!(restored.snapshot().document, &created);
+        assert_eq!(restored.pixels(), pixels);
+    }
+}
+
+#[test]
 fn open_shape_json_creation_renders_expands_and_restores_draft_history() {
     let (data, id, _) = setup();
     let mut editor = open(data.path(), &id).unwrap();

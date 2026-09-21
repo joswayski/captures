@@ -142,6 +142,8 @@ Use `--output-presets-only` to exercise native compression presets, PNG palette
 selection, exact Highest pixels, unchanged drafts/originals and minimum-size controls.
 Use `--output-size-only` to exercise percentage/custom dimensions, aspect locking,
 saved-file/History consistency, unchanged drafts and full-resolution clipboard copy.
+Use `--polygon-only` to exercise Triangle/Diamond/Star transient and committed pixels,
+concave star notches, cancelled/degenerate gestures, undo/redo and saved-draft reopening.
 
 Native Record requires executable FFmpeg and FFprobe commands on `PATH`; native
 builds do not bundle their own media tools yet. AppKit also accepts `CAPTURES_FFMPEG`

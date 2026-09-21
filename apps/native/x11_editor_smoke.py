@@ -85,6 +85,8 @@ def main():
                         help="Restore explicit-font text, save/reopen and copy pixels (no Text input UI)")
     parser.add_argument("--text-only", action="store_true",
                         help="Exercise the real Text tool UI, undo/redo and draft reopen")
+    parser.add_argument("--polygon-only", action="store_true",
+                        help="Exercise Triangle/Diamond/Star previews, cancellation and saved pixels")
     parser.add_argument("--output-presets-only", action="store_true",
                         help="Exercise compression presets and real saved PNG pixels")
     parser.add_argument("--output-size-only", action="store_true",
@@ -310,6 +312,71 @@ def main():
             if expected is not None:
                 assert actual == bytes(expected), (x, y, actual, expected)
             return actual
+
+        if args.polygon_only:
+            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            save(640, 360, 0, 0)
+            click(editor, 736, 62)
+            shot(editor, "polygon-tools")
+            ids = []
+            for name, tool_x, start, end, center in [
+                ("triangle", 45, (418, 239), (278, 119), (348, 179)),
+                ("diamond", 125, (598, 289), (498, 129), (548, 209)),
+                ("star", 192, (818, 419), (658, 299), (738, 359)),
+            ]:
+                click(editor, tool_x, 265)
+                before = draft.read_bytes()
+                run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                    "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                    *map(str, end), "sleep", ".3")
+                shot(editor, f"polygon-{name}-transient")
+                pixel(f"polygon-{name}-transient", *center, (255, 59, 92))
+                assert draft.read_bytes() == before, "transient polygon cannot write the draft"
+                run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
+                assert draft.read_bytes() == before
+                drag(start, (start[0], end[1]))
+                save_layers(lambda values: len(values) == len(ids) + 1, "zero-width polygon rejected")
+                drag(start, end)
+                created = save_layers(lambda values: len(values) == len(ids) + 2, f"{name} created")[-1]
+                assert created["shape"] == name and created["id"] not in ids
+                assert (created["x"], created["y"], created["endX"], created["endY"]) == (
+                    start[0] - 238, start[1] - 89, end[0] - 238, end[1] - 89)
+                shot(editor, f"polygon-{name}-committed")
+                pixel(f"polygon-{name}-committed", *center, (255, 59, 92))
+                click(editor, 35, 62)
+                save_layers(lambda values: len(values) == len(ids) + 1, f"{name} undo")
+                click(editor, 98, 62)
+                save_layers(lambda values: values[-1]["id"] == created["id"], f"{name} redo stable ID")
+                ids.append(created["id"])
+            # A convex hull or fan triangulation would incorrectly fill this star notch.
+            pixel("polygon-star-transient", 738, 409, (46, 158, 113))
+            pixel("polygon-star-committed", 738, 409, (46, 158, 113))
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            shot(editor, "polygon-minimum")
+            run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "5", "5")
+            shot(editor, "polygon-minimum-scrolled")
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "polygon draft closes")
+            editor = reopen()
+            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            shot(editor, "polygon-reopened")
+            for center in [(348, 179), (548, 209), (738, 359)]:
+                pixel("polygon-reopened", *center, (255, 59, 92))
+            pixel("polygon-reopened", 738, 409, (46, 158, 113))
+            assert [layer["id"] for layer in layers()[1:]] == ids
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "polygon suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["three-shared-polygon-previews", "transient-no-draft-write", "escape-cancels",
+                           "zero-width-no-layer", "reverse-coordinates", "three-committed-silhouettes",
+                           "star-concave-notch", "single-undo-redo-stable-ids", "minimum-controls",
+                           "draft-reopen-exact-pixels", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native polygons: previews, cancellation, silhouettes, undo/redo, minimum, draft")
+            return
 
         if args.output_size_only:
             run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
@@ -763,7 +830,7 @@ def main():
             save_layers(lambda values: values[0]["src"] == edited["src"], "wand redo")
             click(editor, 35, 62)
             save_layers(lambda values: values[0]["src"] == source, "undo before global removal")
-            click(editor, 128, 264)  # Disable Contiguous below the three tool rows.
+            click(editor, 128, 308)  # Disable Contiguous below the four tool rows.
             click(editor, 338, 189)
             global_edit = save_layers(lambda values: values[0]["src"] != source, "global wand")[0]
             asset_pixel(global_edit, 100, 100, (0, 0, 0, 0))
