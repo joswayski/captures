@@ -1725,9 +1725,12 @@ final class ScreenshotEditorTests: XCTestCase {
             NativeEditorAlignmentGuide(orientation: .horizontal, position: 0),
         ])
         let multiple = try XCTUnwrap(drag.preview(delta: CGPoint(x: 148.4, y: 92.4)))
-        XCTAssertEqual(multiple.outline[0], CGPoint(x: 190, y: 130))
+        XCTAssertEqual(multiple.outline[0].x, 190, accuracy: 1e-7)
+        XCTAssertEqual(multiple.outline[0].y, 130, accuracy: 1e-7)
         XCTAssertEqual(multiple.guides.count, 4)
-        XCTAssertEqual(multiple.guides.map(\.position), [190, 273.5, 130, 176.25])
+        for (guide, expected) in zip(multiple.guides, [190.0, 273.5, 130, 176.25]) {
+            XCTAssertEqual(guide.position, expected, accuracy: 1e-7)
+        }
 
         // A layer already inside the magnetic range must not jump on a click,
         // or when a drag returns below the three-view-point movement threshold.
@@ -1998,8 +2001,9 @@ final class ScreenshotEditorTests: XCTestCase {
             waitUntil { !controller.state.busy && controller.state.snapshot!.unsavedChanges }
             let moved = try request(["operation": "snapshot"], using: live)
             XCTAssertEqual(moved.snapshot.layers.first?.id, id)
-            XCTAssertEqual(try XCTUnwrap(moved.snapshot.layers.first?.x), 4, accuracy: 1e-7)
-            XCTAssertEqual(try XCTUnwrap(moved.snapshot.layers.first?.y), 4, accuracy: 1e-7)
+            // The default ten-pixel stroke extends five pixels outside the shape.
+            XCTAssertEqual(try XCTUnwrap(moved.snapshot.layers.first?.x), 5, accuracy: 1e-7)
+            XCTAssertEqual(try XCTUnwrap(moved.snapshot.layers.first?.y), 5, accuracy: 1e-7)
             XCTAssertEqual(rgba(moved.image, x: 110, y: 90), [247, 247, 245, 255])
             XCTAssertEqual(rgba(moved.image, x: 10, y: 10), [255, 59, 92, 255])
             try render(controller.root, name: "screenshot-editor-move-committed-\(appearance)")
