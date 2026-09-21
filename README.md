@@ -301,7 +301,9 @@ off-canvas transformed images expand the canvas so they are not lost. Shared
 interactive crop geometry also matches shipping bounds, aspect presets and Shift
 locking; physical input acceptance remains separate work.
 The Windows/Linux candidate opens screenshots from History in a native crop,
-canvas-size and draft editor with undo/redo. **Draw crop** selects directly on the
+canvas-size and draft editor with undo/redo. Both native hosts place their scrolling
+inspector to the right of the canvas; their workbench layout still differs from the
+shipping Tauri editor. **Draw crop** selects directly on the
 preview with free or preset aspect ratios and Shift ratio locking. Apply commits
 the selection; Cancel or Escape leaves the document unchanged. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.

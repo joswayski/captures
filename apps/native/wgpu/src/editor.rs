@@ -1470,7 +1470,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     {
         view.cancel_layer_gesture();
     }
-    egui::Panel::left("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
+    egui::Panel::right("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
         ui.add_enabled_ui(!view.pending && view.presented.is_some() && view.confirm_replace.is_none(), |ui| {
             if view.section == Section::Output {
