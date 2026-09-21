@@ -406,10 +406,11 @@ final class ScreenshotEditorTests: XCTestCase {
         let png = try XCTUnwrap(pasteboard.data(forType: .png))
         let bitmap = try XCTUnwrap(NSBitmapImageRep(data: png))
         XCTAssertEqual(bitmap.pixelsWide, 4); XCTAssertEqual(bitmap.pixelsHigh, 2)
-        let color = try XCTUnwrap(bitmap.colorAt(x: 0, y: 0)?.usingColorSpace(.sRGB))
-        XCTAssertEqual(color.redComponent, 62.0 / 255, accuracy: 1.0 / 255)
-        XCTAssertEqual(color.greenComponent, 71.0 / 255, accuracy: 1.0 / 255)
-        XCTAssertEqual(color.blueComponent, 19.0 / 255, accuracy: 1.0 / 255)
+        // Check encoded samples, not AppKit's display-profile conversion of an
+        // untagged PNG. The independent fixture's source pixel (2,1) is RGBA.
+        var pixel = [UInt](repeating: 0, count: bitmap.samplesPerPixel)
+        bitmap.getPixel(&pixel, atX: 0, y: 0)
+        XCTAssertEqual(pixel, [62, 71, 19, 255])
         XCTAssertEqual(controller.state.snapshot, edited)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.drafts.path))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.history.path), [fixture.id])
