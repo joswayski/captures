@@ -105,6 +105,10 @@ mini-preview Share icon and opens a native upload/settings popup, tracked as an
 explicit [rewrite integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--required-not-implemented)
 regardless of which backend or rewrite changes merge first.
 
+For local cloud testing, the [Docker Compose setup](DEVELOPMENT.md#cloud-sharing-with-docker-compose-and-aws-sso)
+runs the website, API, database and Worker using your AWS SSO login and the
+development R2 bucket. No production deployment is required.
+
 ## Wishlist
 
 - Scrolling capture for content larger than the screen

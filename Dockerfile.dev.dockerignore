@@ -1,0 +1,16 @@
+.git
+.amp
+.github
+**/node_modules
+**/target
+**/dist
+**/.output
+**/.wrangler
+**/.env
+**/.env.*
+**/.dev.vars*
+apps/desktop/src-tauri
+apps/desktop/ui
+apps/desktop/assets
+scripts
+**/*.log

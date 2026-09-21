@@ -1,0 +1,14 @@
+# Local website and Worker tools; secrets are injected at runtime, never copied.
+FROM node:24-bookworm-slim
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/
+COPY apps/desktop/package.json apps/desktop/
+COPY apps/media-worker/package.json apps/media-worker/
+RUN npm ci --workspace @captures/web --workspace @captures/media-worker --include-workspace-root
+
+COPY apps/web apps/web
+COPY apps/media-worker apps/media-worker
+COPY shared shared
+COPY docs/images docs/images

@@ -1,0 +1,11 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "captures-media-compose-local",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-20",
+  "workers_dev": false,
+  "preview_urls": false,
+  "r2_buckets": [
+    { "binding": "ASSETS", "bucket_name": "staging-captures", "remote": true }
+  ]
+}
