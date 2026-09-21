@@ -810,6 +810,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let textPlateColor = NSTextField()
     private let textShadow = NSButton(checkboxWithTitle: "Drop shadow", target: nil, action: nil)
     private let textOutline = NSButton(checkboxWithTitle: "Outline", target: nil, action: nil)
+    private let textPreset = NSPopUpButton(frame: .zero, pullsDown: true)
+    private var textPresetRounded: Bool?
     private let textShadowPanel = Surface()
     private var textShadowFields: [String: NSTextField] = [:]
     private let textShadowNumbers: [(String, KeyPath<NativeTextShadowStyle, Double>)] = [
@@ -1304,8 +1306,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func buildTextControls(in content: NSView) {
         content.frame.size.height = 720
-        let heading = panelLabel("Selected text", frame: NSRect(x: 0, y: 326, width: 252, height: 24),
+        let heading = panelLabel("Text", frame: NSRect(x: 0, y: 326, width: 118, height: 24),
                                  size: 16, weight: .semibold, parent: content)
+        textPreset.frame = NSRect(x: 126, y: 322, width: 126, height: 30)
+        textPreset.setAccessibilityLabel("Text style preset")
+        textPreset.target = self; textPreset.action = #selector(stageTextPreset)
+        content.addSubview(textPreset)
         let familyLabel = panelFieldLabel("Font", x: 0, y: 356, parent: content)
         textFamily.frame = NSRect(x: 0, y: 378, width: 252, height: 30)
         textFamily.setAccessibilityLabel("Text font")
@@ -1359,7 +1365,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                  parent: content) { [weak self] in self?.applyTextEdits() }
         textCancelButton = button("Cancel", frame: NSRect(x: 134, y: 724, width: 118, height: 30),
                                   parent: content) { [weak self] in self?.publishTextFields() }
-        textControls = [heading, familyLabel, textFamily, contentLabel, textScroll, sizeLabel, textSize,
+        textControls = [heading, textPreset, familyLabel, textFamily, contentLabel, textScroll, sizeLabel, textSize,
                         textTraits, textAlignment, colorLabel, textColor, textPlate, textPlateColor,
                         textShadow, textOutline, textShadowPanel, textApplyButton, textCancelButton]
     }
@@ -2063,11 +2069,30 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             && textAlignment.selectedSegment == ["left", "center", "right"].firstIndex(of: style.align)
             && textPlate.indexOfSelectedItem == (style.background == nil ? 0 : style.roundedBackground ? 2 : 1)
             && (style.background == nil || textPlateColor.stringValue == style.background)
+            && (textPlate.indexOfSelectedItem != 0 || (textPresetRounded ?? style.roundedBackground) == style.roundedBackground)
             && (textShadow.state == .on) == style.dropShadow
             && (textOutline.state == .on) == style.outlined
     }
 
     @objc private func textShadowChanged() { updateTextShadowControls() }
+
+    @objc private func stageTextPreset() {
+        let index = textPreset.indexOfSelectedItem - 1
+        guard let presets = state.snapshot?.textStylePresets,
+              presets.indices.contains(index), !state.busy else { return }
+        let preset = presets[index]
+        guard let family = textFamily.itemArray.firstIndex(where: {
+            $0.representedObject as? String == preset.fontFamily
+        }) else { return }
+        textFamily.selectItem(at: family)
+        if let color = preset.background {
+            if textPlate.indexOfSelectedItem == 0 { textPlateColor.stringValue = color }
+            textPlate.selectItem(at: preset.roundedBackground ? 2 : 1)
+        } else { textPlate.selectItem(at: 0) }
+        textOutline.state = preset.outlined ? .on : .off
+        textPresetRounded = preset.roundedBackground
+        textPreset.selectItem(at: 0)
+    }
 
     private func updateTextShadowControls() {
         let expanded = selectedLayer?.kind == .text && textShadow.state == .on
@@ -2091,7 +2116,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let preserve = preserveStaged && !textApplyPending && textFieldsID == selectedLayer?.id
             && acceptedTextStyle.map { !textFieldsMatch($0) } == true
         textFieldsID = selectedLayer?.id; acceptedTextStyle = style
+        textPreset.removeAllItems()
+        textPreset.addItem(withTitle: "Style…")
+        for preset in state.snapshot?.textStylePresets ?? [] { textPreset.addItem(withTitle: preset.label) }
         if preserve { return }
+        textPresetRounded = nil
         textEditor.string = style.text; textSize.stringValue = format(style.fontSize)
         textColor.stringValue = style.color; textPlateColor.stringValue = style.background ?? "#ffffff"
         textTraits.setSelected(style.bold, forSegment: 0)
@@ -2146,7 +2175,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             if let background { patch["background"] = background }
             else { patch["background"] = NSNull() }
         }
-        let rounded = background == nil ? style.roundedBackground : textPlate.indexOfSelectedItem == 2
+        let rounded = background == nil ? (textPresetRounded ?? style.roundedBackground) : textPlate.indexOfSelectedItem == 2
         if rounded != style.roundedBackground { patch["roundedBackground"] = rounded }
         if (textShadow.state == .on) != style.dropShadow { patch["dropShadow"] = textShadow.state == .on }
         if (textOutline.state == .on) != style.outlined { patch["outlined"] = textOutline.state == .on }
@@ -2327,6 +2356,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let textReady = active && selectedLayer?.kind == .text
         textEditor.isEditable = textReady
         textFamily.isEnabled = textReady && textFamily.numberOfItems > 1
+        textPreset.isEnabled = textReady && textPreset.numberOfItems > 1
         let textFields: [NSControl] = [textSize, textColor, textTraits,
                                        textAlignment, textPlate, textPlateColor, textShadow, textOutline]
         textFields.forEach { $0.isEnabled = textReady }

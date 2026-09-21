@@ -1,0 +1,51 @@
+[
+  {
+    "id": "standard",
+    "background": null,
+    "fontFamily": "sans",
+    "outlined": false,
+    "roundedBackground": false
+  },
+  {
+    "id": "rounded",
+    "background": null,
+    "fontFamily": "rounded",
+    "outlined": false,
+    "roundedBackground": false
+  },
+  {
+    "id": "outlined",
+    "background": null,
+    "fontFamily": "sans",
+    "outlined": true,
+    "roundedBackground": false
+  },
+  {
+    "id": "mono",
+    "background": null,
+    "fontFamily": "mono",
+    "outlined": false,
+    "roundedBackground": false
+  },
+  {
+    "id": "box",
+    "background": "#111318",
+    "fontFamily": "sans",
+    "outlined": false,
+    "roundedBackground": false
+  },
+  {
+    "id": "mono-box",
+    "background": "#111318",
+    "fontFamily": "mono",
+    "outlined": false,
+    "roundedBackground": false
+  },
+  {
+    "id": "rounded-box",
+    "background": "#111318",
+    "fontFamily": "rounded",
+    "outlined": false,
+    "roundedBackground": true
+  }
+]

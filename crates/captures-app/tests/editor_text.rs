@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use captures_app::{
     editor::{Element, Rect, TextElement},
-    editor_text::{fit_auto_width, layout, resize, selection_bounds},
+    editor_text::{TEXT_STYLE_PRESETS, fit_auto_width, layout, resize, selection_bounds},
 };
 use captures_image::text::{TextRenderer, TextStyle};
 use serde::Deserialize;
@@ -27,6 +27,17 @@ struct ResizeCase {
 
 fn cases() -> Vec<Case> {
     serde_json::from_str(include_str!("editor-text-golden.json")).unwrap()
+}
+
+#[test]
+fn named_style_catalog_matches_shipping_preset_flags_fonts_and_plate_defaults() {
+    let expected: Value =
+        serde_json::from_str(include_str!("editor-text-presets-golden.json")).unwrap();
+    let mut actual = serde_json::to_value(TEXT_STYLE_PRESETS).unwrap();
+    for preset in actual.as_array_mut().unwrap() {
+        preset.as_object_mut().unwrap().remove("label");
+    }
+    assert_eq!(actual, expected);
 }
 
 fn compare(actual: &Value, expected: &Value) {

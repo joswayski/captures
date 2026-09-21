@@ -28,7 +28,7 @@ use captures_app::{
         EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize, ImportImage,
         OpenRequest, PngOptions, Request, TextCreate, TextPatch,
     },
-    editor_text::shadow_style,
+    editor_text::{TextStylePreset, shadow_style},
     editor_viewport::{Viewport, wheel_zoom_factor},
 };
 use captures_capture::CaptureMode;
@@ -57,6 +57,7 @@ struct Presented {
     document: Arc<Document>,
     pixels: Arc<RgbaImage>,
     font_families: BTreeMap<String, String>,
+    text_style_presets: Vec<TextStylePreset>,
     output: Option<(RgbaImage, usize)>,
     saved: Option<SavedExport>,
     copied: bool,
@@ -74,6 +75,7 @@ impl Presented {
             document: Arc::new(snapshot.document.clone()),
             pixels: session.pixels(),
             font_families: snapshot.font_families.cloned().unwrap_or_default(),
+            text_style_presets: snapshot.text_style_presets,
             output: None,
             saved: None,
             copied: false,
@@ -220,6 +222,15 @@ impl TextValues {
             shadow: shadow_style(text, text.font_size).resolved_drop_shadow_style(),
             outlined: text.outlined,
         }
+    }
+
+    fn apply_preset(&mut self, preset: &TextStylePreset) {
+        self.font_family = preset.font_family.into();
+        self.background = preset
+            .background
+            .map(|color| self.background.clone().unwrap_or_else(|| color.into()));
+        self.outlined = preset.outlined;
+        self.rounded_background = preset.rounded_background;
     }
 
     fn patch(&self, accepted: &Self) -> TextPatch {
@@ -3208,7 +3219,19 @@ fn show_text(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
         return;
     };
     ui.separator();
-    ui.heading("Text");
+    ui.horizontal(|ui| {
+        ui.heading("Text");
+        ui.menu_button("Style…", |ui| {
+            if let Some(presented) = &view.presented {
+                for preset in &presented.text_style_presets {
+                    if ui.button(preset.label).clicked() {
+                        fields.staged.apply_preset(preset);
+                        ui.close();
+                    }
+                }
+            }
+        });
+    });
     if let Some(presented) = &view.presented {
         ui.label("Font");
         egui::ComboBox::from_id_salt("text-font-family")
@@ -3923,6 +3946,7 @@ mod tests {
             document: Arc::new(Document::new_capture("fixture", 7., 3., None)),
             pixels: Arc::new(RgbaImage::new(7, 3)),
             font_families: captures_app::editor_fonts::bundled().families,
+            text_style_presets: captures_app::editor_text::TEXT_STYLE_PRESETS.into(),
             output: None,
             saved: None,
             copied: false,
@@ -4033,6 +4057,59 @@ mod tests {
         assert_eq!(fields.staged, fields.accepted);
         assert_eq!(fields.accepted.text, "applied");
         assert!(view.output.is_none() && !view.show_output);
+    }
+
+    #[test]
+    fn text_presets_stage_only_treatment_fields_and_preserve_custom_plate_and_shadow() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented_text("fresh", "keep this")));
+        let fields = view.text.as_mut().unwrap();
+        fields.accepted.background = Some("#123456".into());
+        fields.accepted.rounded_background = true;
+        fields.accepted.drop_shadow = true;
+        fields.accepted.shadow.offset_y = -12.75;
+        fields.accepted.bold = true;
+        fields.accepted.align = "right".into();
+        fields.staged = fields.accepted.clone();
+        let presets = captures_app::editor_text::TEXT_STYLE_PRESETS;
+        fields.staged.apply_preset(
+            presets
+                .iter()
+                .find(|preset| preset.id == "mono-box")
+                .unwrap(),
+        );
+        assert_eq!(
+            fields.staged.patch(&fields.accepted),
+            TextPatch {
+                font_family: Some("mono".into()),
+                rounded_background: Some(false),
+                ..Default::default()
+            }
+        );
+        assert_eq!(fields.staged.background.as_deref(), Some("#123456"));
+        fields.staged.background = None;
+        fields
+            .staged
+            .apply_preset(presets.iter().find(|preset| preset.id == "box").unwrap());
+        assert_eq!(fields.staged.background.as_deref(), Some("#111318"));
+        fields.staged.apply_preset(
+            presets
+                .iter()
+                .find(|preset| preset.id == "outlined")
+                .unwrap(),
+        );
+        assert_eq!(
+            fields.staged.patch(&fields.accepted),
+            TextPatch {
+                font_family: Some("sans".into()),
+                background: OptionalNullable::Null,
+                outlined: Some(true),
+                rounded_background: Some(false),
+                ..Default::default()
+            }
+        );
+        assert_eq!(fields.accepted.background.as_deref(), Some("#123456"));
     }
 
     #[test]

@@ -391,6 +391,24 @@ struct NativeTextStyle: Equatable {
     }
 }
 
+struct NativeTextPreset: Equatable {
+    let label: String
+    let fontFamily: String
+    let background: String?
+    let outlined: Bool
+    let roundedBackground: Bool
+
+    init?(_ value: [String: Any]) {
+        guard let label = value["label"] as? String,
+              let family = value["fontFamily"] as? String,
+              let outlined = value["outlined"] as? Bool,
+              let rounded = value["roundedBackground"] as? Bool else { return nil }
+        self.label = label; fontFamily = family
+        background = value["background"] as? String
+        self.outlined = outlined; roundedBackground = rounded
+    }
+}
+
 struct NativeEditorSnapshot: Equatable {
     let artifactID: String
     let width: Double
@@ -401,6 +419,7 @@ struct NativeEditorSnapshot: Equatable {
     let unsavedChanges: Bool
     let hasDraft: Bool
     let fontFamilies: [String: String]
+    let textStylePresets: [NativeTextPreset]
     /// Shared documents store back-to-front. Native layer panels display front-to-back.
     let layers: [NativeEditorLayer]
     /// Stable, sorted JSON used by pointer-down hit testing without touching the session.
@@ -436,6 +455,9 @@ struct NativeEditorSnapshot: Equatable {
         self.canUndo = canUndo; self.canRedo = canRedo
         self.unsavedChanges = unsavedChanges; self.hasDraft = hasDraft
         self.fontFamilies = value["font_families"] as? [String: String] ?? [:]
+        let presets = value["text_style_presets"] as? [[String: Any]] ?? []
+        textStylePresets = presets.compactMap(NativeTextPreset.init)
+        guard presets.count == textStylePresets.count else { return nil }
         self.layers = Array(layers.reversed())
         self.documentJSON = String(decoding: documentData, as: UTF8.self)
     }

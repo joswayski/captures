@@ -231,6 +231,7 @@ pub struct Snapshot<'a> {
     /// Only these pinned session fonts are available; host defaults never replace
     /// a reopened draft's exact files or expand its font set implicitly.
     pub font_families: Option<&'a BTreeMap<String, String>>,
+    pub text_style_presets: Vec<crate::editor_text::TextStylePreset>,
     pub annotation_controls: BTreeMap<&'a str, AnnotationControls<'a>>,
     /// Resolved display defaults; reading them never authors custom shadow data.
     pub text_shadow_styles: BTreeMap<&'a str, DropShadowStyle>,
@@ -355,6 +356,15 @@ impl EditorSession {
             artifact_id: &self.artifact_id,
             document: self.history.current(),
             font_families: self.fonts.as_ref().map(|fonts| &fonts.assets.families),
+            text_style_presets: crate::editor_text::TEXT_STYLE_PRESETS
+                .iter()
+                .filter(|preset| {
+                    self.fonts
+                        .as_ref()
+                        .is_some_and(|fonts| fonts.assets.families.contains_key(preset.font_family))
+                })
+                .copied()
+                .collect(),
             text_shadow_styles: self
                 .history
                 .current()

@@ -2980,6 +2980,15 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
         .id
         .clone();
     assert_eq!(editor.snapshot().font_families, Some(&fonts.families));
+    assert_eq!(
+        editor
+            .snapshot()
+            .text_style_presets
+            .iter()
+            .map(|preset| preset.id)
+            .collect::<Vec<_>>(),
+        ["standard", "outlined", "mono", "box", "mono-box"]
+    );
     let mut frames = Vec::new();
     for family in ["sans", "serif", "mono"] {
         for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
@@ -3038,6 +3047,15 @@ fn older_drafts_offer_only_their_persisted_fonts_without_implicit_font_migration
     let accepted = editor.pixels();
     let mut reopened = open_text(data.path(), &id, captures_app::editor_fonts::bundled()).unwrap();
     assert_eq!(reopened.snapshot().font_families, Some(&legacy.families));
+    assert_eq!(
+        reopened
+            .snapshot()
+            .text_style_presets
+            .iter()
+            .map(|preset| preset.id)
+            .collect::<Vec<_>>(),
+        ["standard", "outlined", "box"]
+    );
     assert_eq!(reopened.pixels(), accepted);
     let text_id = reopened
         .snapshot()

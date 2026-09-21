@@ -3136,6 +3136,46 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(oldFamily.isEnabled, "host defaults must not expand a saved font set")
     }
 
+    func testNamedTextStylesStagePreserveCustomValuesAndCancelAfterFailure() throws {
+        _ = NSApplication.shared
+        let fonts = ["sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"]
+        var original = textLayer(id: "copy", text: "keep this", family: "serif")
+        original["background"] = "#abcdef"; original["roundedBackground"] = true
+        original["dropShadow"] = true; original["bold"] = true; original["align"] = "right"
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original], fonts: fonts))
+        worker.failOperation = "edit_text"
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let picker = try popup("Text style preset", in: controller.root)
+        XCTAssertEqual(picker.itemTitles, ["Style…", "Standard", "Outlined", "Mono", "Box", "Mono box"])
+        func choose(_ name: String) {
+            picker.selectItem(withTitle: name); _ = picker.sendAction(picker.action, to: picker.target)
+        }
+        choose("Mono box")
+        XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertEqual(try field("Text plate color", in: controller.root).stringValue, "#abcdef")
+        XCTAssertEqual(try popup("Text font", in: controller.root).titleOfSelectedItem, "Liberation Mono")
+        XCTAssertFalse(controller.prepareForTermination())
+        try button("Apply", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.last?["patch"] as? NSDictionary,
+                       ["fontFamily": "mono", "roundedBackground": false] as NSDictionary)
+        XCTAssertEqual(try popup("Text font", in: controller.root).titleOfSelectedItem, "Liberation Mono")
+        try button("Cancel", in: controller.root).performClick(nil)
+        XCTAssertEqual(try popup("Text plate", in: controller.root).indexOfSelectedItem, 2)
+        choose("Outlined")
+        try button("Apply", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.last?["patch"] as? NSDictionary,
+                       ["fontFamily": "sans", "background": NSNull(), "outlined": true,
+                        "roundedBackground": false] as NSDictionary)
+        choose("Box")
+        XCTAssertEqual(try field("Text plate color", in: controller.root).stringValue, "#111318")
+        try button("Cancel", in: controller.root).performClick(nil)
+        XCTAssertEqual(try field("Text plate color", in: controller.root).stringValue, "#abcdef")
+        XCTAssertTrue(controller.prepareForTermination())
+    }
+
     func testTextShadowIsStagedAndOnlyPatchesTheEnabledFlag() throws {
         _ = NSApplication.shared
         let original = textLayer(id: "copy", text: "accepted")
@@ -3654,6 +3694,13 @@ final class ScreenshotEditorTests: XCTestCase {
             "artifact_id": id, "document": ["width": width, "height": height,
                                                   "elements": layers],
             "font_families": fonts,
+            "text_style_presets": ([
+                ["label": "Standard", "fontFamily": "sans", "background": NSNull(), "outlined": false, "roundedBackground": false],
+                ["label": "Outlined", "fontFamily": "sans", "background": NSNull(), "outlined": true, "roundedBackground": false],
+                ["label": "Mono", "fontFamily": "mono", "background": NSNull(), "outlined": false, "roundedBackground": false],
+                ["label": "Box", "fontFamily": "sans", "background": "#111318", "outlined": false, "roundedBackground": false],
+                ["label": "Mono box", "fontFamily": "mono", "background": "#111318", "outlined": false, "roundedBackground": false],
+            ] as [[String: Any]]).filter { fonts[$0["fontFamily"] as! String] != nil },
             "annotation_controls": annotations,
             "text_shadow_styles": textShadows ?? Dictionary(uniqueKeysWithValues: layers.compactMap { layer in
                 guard layer["kind"] as? String == "text", let id = layer["id"] as? String else { return nil }

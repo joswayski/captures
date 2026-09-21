@@ -7,6 +7,78 @@ use serde::Serialize;
 
 use crate::editor::{ElementStyle, Point, Rect, TextElement, annotation_drop_shadow_pad};
 
+/// Named shipping treatments. Hosts stage these fields, preserving an existing
+/// plate color and all content, size, alignment, shadow and geometry fields.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextStylePreset {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub font_family: &'static str,
+    pub background: Option<&'static str>,
+    pub outlined: bool,
+    pub rounded_background: bool,
+}
+
+pub const TEXT_STYLE_PRESETS: [TextStylePreset; 7] = [
+    TextStylePreset {
+        id: "standard",
+        label: "Standard",
+        font_family: "sans",
+        background: None,
+        outlined: false,
+        rounded_background: false,
+    },
+    TextStylePreset {
+        id: "rounded",
+        label: "Rounded",
+        font_family: "rounded",
+        background: None,
+        outlined: false,
+        rounded_background: false,
+    },
+    TextStylePreset {
+        id: "outlined",
+        label: "Outlined",
+        font_family: "sans",
+        background: None,
+        outlined: true,
+        rounded_background: false,
+    },
+    TextStylePreset {
+        id: "mono",
+        label: "Mono",
+        font_family: "mono",
+        background: None,
+        outlined: false,
+        rounded_background: false,
+    },
+    TextStylePreset {
+        id: "box",
+        label: "Box",
+        font_family: "sans",
+        background: Some("#111318"),
+        outlined: false,
+        rounded_background: false,
+    },
+    TextStylePreset {
+        id: "mono-box",
+        label: "Mono box",
+        font_family: "mono",
+        background: Some("#111318"),
+        outlined: false,
+        rounded_background: false,
+    },
+    TextStylePreset {
+        id: "rounded-box",
+        label: "Rounded box",
+        font_family: "rounded",
+        background: Some("#111318"),
+        outlined: false,
+        rounded_background: true,
+    },
+];
+
 #[derive(Debug, PartialEq, Serialize)]
 pub struct TextRow {
     pub text: String,
