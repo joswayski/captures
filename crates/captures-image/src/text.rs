@@ -72,7 +72,14 @@ impl TextRenderer {
         result
     }
 
-    fn render_line_inner(&mut self, text: &str, style: &TextStyle<'_>) -> Result<TextLine, String> {
+    /// Shape without allocating glyph bitmaps; wrapping measures many candidate lines.
+    /// Advances may exceed the raster extent limit so callers can break long tokens.
+    pub fn measure_line(&mut self, text: &str, style: &TextStyle<'_>) -> Result<f32, String> {
+        let buffer = self.shape_line(text, style)?;
+        Ok(buffer.layout_runs().next().expect("validated line").line_w)
+    }
+
+    fn shape_line(&mut self, text: &str, style: &TextStyle<'_>) -> Result<Buffer, String> {
         if text.len() > MAX_LINE_BYTES
             || text.contains([
                 '\r', '\n', '\u{000b}', '\u{000c}', '\u{0085}', '\u{2028}', '\u{2029}',
@@ -112,16 +119,25 @@ impl TextRenderer {
             .layout_runs()
             .next()
             .ok_or("Text layout produced no line.")?;
-        if !run.line_w.is_finite() || run.line_w > MAX_EXTENT {
+        if !run.line_w.is_finite() || run.line_w < 0. {
+            return Err("Text line has an invalid advance.".into());
+        }
+        if run.glyphs.iter().any(|glyph| glyph.glyph_id == 0) {
+            return Err("Supplied fonts cannot shape every text glyph.".into());
+        }
+        Ok(buffer)
+    }
+
+    fn render_line_inner(&mut self, text: &str, style: &TextStyle<'_>) -> Result<TextLine, String> {
+        let buffer = self.shape_line(text, style)?;
+        let run = buffer.layout_runs().next().expect("validated line");
+        if run.line_w > MAX_EXTENT {
             return Err("Text line exceeds the raster bounds limit.".into());
         }
         let mut placements = Vec::new();
         let mut bounds: Option<(i32, i32, i32, i32)> = None;
         let mut glyph_pixels = 0_u64;
         for glyph in run.glyphs {
-            if glyph.glyph_id == 0 {
-                return Err("Supplied fonts cannot shape every text glyph.".into());
-            }
             let physical = glyph.physical((0., run.line_y), 1.);
             let Some(image) = self.raster.get_image(&mut self.fonts, physical.cache_key) else {
                 continue; // Spaces and other nonpainting glyphs still contribute advance.

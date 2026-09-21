@@ -263,8 +263,9 @@ and editor shapes, including closed annotations, curved lines, tapered arrows an
 freehand paths with crop geometry, rotation, opacity, blending and enabled shape/path
 drop shadows, without host I/O.
 A separate shared text prerequisite shapes and rasterizes single lines from explicit
-font bytes, including ligatures, combining marks and right-to-left text. Native Text
-tools, paragraph layout and document integration are not connected yet.
+font bytes, including ligatures, combining marks and right-to-left text. Shared
+paragraph helpers now provide measured wrapping, alignment, auto-width boxes and
+background-plate geometry. Native Text tools and document rendering are not connected yet.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
 pixel frames for native hosts. Typed rectangle/ellipse, straight-line/arrow and

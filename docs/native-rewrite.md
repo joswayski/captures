@@ -177,9 +177,20 @@ Color-outline and embedded-bitmap glyphs use different alpha representations;
 the primitive normalizes outlines before compositing and retains bitmap RGB.
 Swash's color-outline flattening has integer alpha-rounding loss. Font bytes must
 come from a trusted source; output budgets are not a font-parser sandbox.
+Shared paragraph helpers now use explicit, fallible measurements for shipping word
+wrapping, scalar-based hard breaks, ECMAScript whitespace, alignment, auto-width
+anchor preservation and composing widths, plus square/rounded plate geometry.
+The paint minimum and wrap minimum remain distinct for narrow/fractional boxes.
+TypeScript-generated vectors and original-font tests exercise threshold boundaries,
+non-additive shaping, Unicode, metadata preservation and measurement failures.
+Measurement avoids glyph bitmaps and permits advances beyond the raster extent
+so long tokens can wrap; rasterization retains its extent/pixel budgets. Paragraph
+inputs are limited to 4096 UTF-8 bytes and type sizes greater than zero through 512.
+These helpers describe measured paint layout, not Tauri's estimated selection bounds;
+font-specific control-character support remains the supplied measurer's contract.
 This does not replace the legacy `Shape::Text` primitive or enable text in editor
-documents. Font acquisition/persistence, Tauri paragraph wrapping and plates,
-outlines/shadows, text geometry and transactional commands, both host controls and
+documents. Font acquisition/persistence, paragraph raster composition and plates,
+outlines/shadows, interactive text geometry and transactional commands, both host controls and
 physical input/IME/accessibility remain open. No host text parity gate is closed.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.

@@ -22,6 +22,24 @@ fn style() -> TextStyle<'static> {
 }
 
 #[test]
+fn measurement_shares_shaping_validation_but_not_the_raster_extent_limit() {
+    let mut engine = renderer();
+    for text in ["fi", "f i", "A\u{301}", "אב", " ", ""] {
+        assert_eq!(
+            engine.measure_line(text, &style()).unwrap(),
+            engine.render_line(text, &style()).unwrap().advance
+        );
+    }
+    let long = "L".repeat(240);
+    assert_eq!(engine.measure_line(&long, &style()).unwrap(), 16_800.);
+    assert!(engine.render_line(&long, &style()).is_err());
+    for text in ["☃", "A\nL", &"L".repeat(4097)] {
+        assert!(engine.measure_line(text, &style()).is_err());
+    }
+    assert_eq!(engine.measure_line("fi", &style()).unwrap(), 45.);
+}
+
+#[test]
 fn ligatures_use_shaped_advances_not_individual_characters() {
     let mut renderer = renderer();
     let fi = renderer.render_line("fi", &style()).unwrap();
