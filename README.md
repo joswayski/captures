@@ -320,7 +320,10 @@ Closing can save or keep the previous draft; explicit Discard edits restores the
 original. Failed draft saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
-window, along with native image-layer controls, lossless rotate/flip actions, and
+window. **Draw crop** also uses the shared aspect presets and Shift ratio locking;
+the candidate stays separate from the document until Apply, and Cancel/Escape
+restores the prior fields. Numeric crop fields and the overlay stay synchronized.
+It includes native image-layer controls, lossless rotate/flip actions, and
 PNG/JPEG/WebP output previews
 that report exact encoded size without saving. Both native Output panels offer
 **Tiny, Smaller, Balanced, High and Highest** compression presets alongside custom
