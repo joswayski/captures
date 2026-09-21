@@ -274,7 +274,8 @@ when one is enabled. Editor workers can own explicit
 fonts and preserve their exact bytes in local draft sidecars, so text edits, undo,
 export and reopening use the same fonts. Typed commands create plain text and edit
 content, type, alignment, color and plates transactionally. Both native hosts now
-connect a basic **Draw → Text** tool with staged Apply/Cancel controls. New text uses
+connect a basic **Draw → Text** tool with staged Apply/Cancel controls, including
+outlines and shadow color, opacity, blur and offsets. New text uses
 bundled Liberation Sans, with Serif and Mono also available (OFL 1.1); exact font
 bytes and license notices stay with the draft. Older drafts offer only their saved
 fonts; adding new fonts to an existing draft is not implemented.

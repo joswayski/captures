@@ -810,6 +810,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let textPlateColor = NSTextField()
     private let textShadow = NSButton(checkboxWithTitle: "Drop shadow", target: nil, action: nil)
     private let textOutline = NSButton(checkboxWithTitle: "Outline", target: nil, action: nil)
+    private let textShadowPanel = Surface()
+    private var textShadowFields: [String: NSTextField] = [:]
+    private let textShadowNumbers: [(String, KeyPath<NativeTextShadowStyle, Double>)] = [
+        ("opacity", \.opacity), ("blur", \.blur), ("offsetX", \.offsetX), ("offsetY", \.offsetY)
+    ]
     private var textApplyButton: CaptureButton!
     private var textCancelButton: CaptureButton!
     private var textControls: [NSView] = []
@@ -1335,13 +1340,28 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textPlateColor.formatter = nil; textPlateColor.stringValue = "#ffffff"
         textShadow.frame = NSRect(x: 126, y: 686, width: 126, height: 30)
         textShadow.setAccessibilityLabel("Text drop shadow"); content.addSubview(textShadow)
+        textShadow.target = self; textShadow.action = #selector(textShadowChanged)
+        textShadowPanel.frame = NSRect(x: 0, y: 724, width: 252, height: 0)
+        content.addSubview(textShadowPanel)
+        for (index, row) in [("color", "Shadow color"), ("opacity", "Shadow opacity"),
+                             ("blur", "Shadow blur"), ("offsetX", "Shadow X"),
+                             ("offsetY", "Shadow Y")].enumerated() {
+            let y = CGFloat(index * 38)
+            let label = panelFieldLabel(row.1, x: 0, y: y + 4, parent: textShadowPanel)
+            label.frame.size.width = 118
+            let field = NSTextField()
+            configure(field, frame: NSRect(x: 126, y: y, width: 126, height: 30),
+                      label: "Text \(row.1.lowercased())", parent: textShadowPanel)
+            field.formatter = nil
+            textShadowFields[row.0] = field
+        }
         textApplyButton = button("Apply", frame: NSRect(x: 0, y: 724, width: 118, height: 30),
                                  parent: content) { [weak self] in self?.applyTextEdits() }
         textCancelButton = button("Cancel", frame: NSRect(x: 134, y: 724, width: 118, height: 30),
                                   parent: content) { [weak self] in self?.publishTextFields() }
         textControls = [heading, familyLabel, textFamily, contentLabel, textScroll, sizeLabel, textSize,
                         textTraits, textAlignment, colorLabel, textColor, textPlate, textPlateColor,
-                        textShadow, textOutline, textApplyButton, textCancelButton]
+                        textShadow, textOutline, textShadowPanel, textApplyButton, textCancelButton]
     }
 
     private func buildOutputPanel() {
@@ -1608,6 +1628,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if let heading = textControls.first, let content = heading.superview {
             let offset = (compact ? 196.0 : 326.0) - heading.frame.minY
             for control in textControls { control.frame.origin.y += offset }
+            updateTextShadowControls()
             content.frame.size.height = textSelected
                 ? textCancelButton.frame.maxY + 8 : drawHelper.frame.maxY + 8
         }
@@ -2029,7 +2050,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func textFieldsMatch(_ style: NativeTextStyle) -> Bool {
-        textEditor.string == style.text && textSize.stringValue == format(style.fontSize)
+        let shadowMatches = textShadow.state != .on || (style.shadowStyle.map { shadow in
+            textShadowFields["color"]?.stringValue == shadow.color && textShadowNumbers.allSatisfy {
+                textShadowFields[$0.0]?.stringValue == format(shadow[keyPath: $0.1])
+            }
+        } ?? true)
+        return shadowMatches && textEditor.string == style.text && textSize.stringValue == format(style.fontSize)
             && (textFamily.selectedItem?.representedObject as? String) == style.fontFamily
             && textColor.stringValue == style.color
             && textTraits.isSelected(forSegment: 0) == style.bold
@@ -2039,6 +2065,20 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             && (style.background == nil || textPlateColor.stringValue == style.background)
             && (textShadow.state == .on) == style.dropShadow
             && (textOutline.state == .on) == style.outlined
+    }
+
+    @objc private func textShadowChanged() { updateTextShadowControls() }
+
+    private func updateTextShadowControls() {
+        let expanded = selectedLayer?.kind == .text && textShadow.state == .on
+            && acceptedTextStyle?.shadowStyle != nil
+        textShadowPanel.isHidden = !expanded
+        textShadowPanel.frame.size.height = expanded ? 190 : 0
+        textApplyButton.frame.origin.y = textShadowPanel.frame.maxY
+        textCancelButton.frame.origin.y = textShadowPanel.frame.maxY
+        if selectedLayer?.kind == .text {
+            textShadowPanel.superview?.frame.size.height = textCancelButton.frame.maxY + 8
+        }
     }
 
     private func publishTextFields(preserveStaged: Bool = false) {
@@ -2060,6 +2100,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textPlate.selectItem(at: style.background == nil ? 0 : style.roundedBackground ? 2 : 1)
         textShadow.state = style.dropShadow ? .on : .off
         textOutline.state = style.outlined ? .on : .off
+        textShadowFields["color"]?.stringValue = style.shadowStyle?.color ?? ""
+        for (key, path) in textShadowNumbers {
+            textShadowFields[key]?.stringValue = style.shadowStyle.map { format($0[keyPath: path]) } ?? ""
+        }
+        updateTextShadowControls()
         textFamily.removeAllItems()
         let families = state.snapshot?.fontFamilies ?? [:]
         for key in families.keys.sorted() {
@@ -2105,6 +2150,24 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if rounded != style.roundedBackground { patch["roundedBackground"] = rounded }
         if (textShadow.state == .on) != style.dropShadow { patch["dropShadow"] = textShadow.state == .on }
         if (textOutline.state == .on) != style.outlined { patch["outlined"] = textOutline.state == .on }
+        if textShadow.state == .on, let shadow = style.shadowStyle {
+            var shadowPatch: [String: Any] = [:]
+            if let color = textShadowFields["color"]?.stringValue, color != shadow.color {
+                guard !color.isEmpty else { showError("Enter a shadow color."); return }
+                shadowPatch["color"] = color
+            }
+            for (key, path) in textShadowNumbers {
+                guard let field = textShadowFields[key] else { continue }
+                // Formatting unchanged display values must not round authored precision.
+                if field.stringValue != format(shadow[keyPath: path]) {
+                    guard let value = Double(field.stringValue), value.isFinite else {
+                        showError("Enter a finite shadow \(key) value."); return
+                    }
+                    shadowPatch[key] = value
+                }
+            }
+            if !shadowPatch.isEmpty { patch["dropShadowStyle"] = shadowPatch }
+        }
         guard !patch.isEmpty else { return }
         textApplyPending = true
         command(["operation": "edit_text", "id": layer.id, "patch": patch],
@@ -2265,6 +2328,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let textFields: [NSControl] = [textSize, textColor, textTraits,
                                        textAlignment, textPlate, textPlateColor, textShadow, textOutline]
         textFields.forEach { $0.isEnabled = textReady }
+        textShadowFields.values.forEach { $0.isEnabled = textReady }
         textApplyButton?.isEnabled = textReady; textCancelButton?.isEnabled = textReady
         drawOverlay.drawingEnabled = active
         selectionOverlay.selectionEnabled = sectionControl?.selectedSegment == Section.layers

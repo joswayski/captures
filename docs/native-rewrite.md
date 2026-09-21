@@ -242,9 +242,12 @@ canvas-space offsets, blur and blend mode. Shadow work is clipped to output plus
 blur support; existing vector shadow/crisp passes are unchanged. Font-backed text
 uses the shipping paragraph paint order: all glyph shadow/source passes precede
 all crisp glyph passes. With a plate, only the plate receives a shadow. Both hosts
-stage a Drop shadow toggle with Apply/Cancel; existing saved custom style values
-survive toggling. Shadow-only edits do not refit text. Custom shadow color/blur/offset
-controls remain open, and legacy low-level `Shape::Text` shadows remain unsupported.
+stage a Drop shadow toggle and custom color, opacity, blur and X/Y offsets with
+Apply/Cancel. Both hosts use Rust-resolved defaults and submit only changed enabled
+fields; saved precision and unknown style metadata survive toggling. Shadow-only
+edits do not refit text. Failed transactions retain staged input, and disabled
+shadow fields do not block Apply or closing. Legacy low-level `Shape::Text`
+shadows remain unsupported.
 Text and plate paints now share the
 shipping selection pivot for rotation, including when estimated wrapping differs
 from actual glyph layout. Shared selection/hit testing, move snapping, Trim and
@@ -298,7 +301,7 @@ fixtures do not provide Text input controls or establish macOS, Windows, Wayland
 or physical Text-tool presentation/input acceptance.
 The basic Text tool is implemented in AppKit and wgpu; host verification is recorded
 per slice, not inferred from shared tests. Additional font import and OS acquisition,
-custom shadow controls, presets, inline input and physical input/IME/accessibility remain open.
+presets, inline input and physical input/IME/accessibility remain open.
 No host text parity gate is closed.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
