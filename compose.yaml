@@ -52,17 +52,17 @@ services:
       AUTH_ALLOWED_ORIGIN: http://localhost:5174
       AUTH_INSECURE_LOOPBACK_COOKIE: "true"
       AUTH_TRUST_CF_CONNECTING_IP: "false"
-      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env.local}
-      MEDIA_WORKER_SECRET: ${MEDIA_WORKER_SECRET:?Set MEDIA_WORKER_SECRET in .env.local}
-      AWS_PROFILE: ${AWS_PROFILE:?Set your AWS SSO profile in .env.local}
-      AWS_REGION: ${AWS_REGION:?Set the SES region in .env.local}
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env}
+      MEDIA_WORKER_SECRET: ${MEDIA_WORKER_SECRET:?Set MEDIA_WORKER_SECRET in .env}
+      AWS_PROFILE: ${AWS_PROFILE:?Set your AWS SSO profile in .env}
+      AWS_REGION: ${AWS_REGION:?Set the SES region in .env}
       AWS_EC2_METADATA_DISABLED: "true"
-      SES_FROM_ADDRESS: ${SES_FROM_ADDRESS:?Set the verified SES sender in .env.local}
-      SES_CONFIGURATION_SET: ${SES_CONFIGURATION_SET:?Set the SES configuration set in .env.local}
-      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:?Set R2_ACCOUNT_ID in .env.local}
+      SES_FROM_ADDRESS: ${SES_FROM_ADDRESS:?Set the verified SES sender in .env}
+      SES_CONFIGURATION_SET: ${SES_CONFIGURATION_SET:?Set the SES configuration set in .env}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:?Set R2_ACCOUNT_ID in .env}
       R2_BUCKET: staging-captures
-      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:?Set staging R2 credentials in .env.local}
-      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:?Set staging R2 credentials in .env.local}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:?Set staging R2 credentials in .env}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:?Set staging R2 credentials in .env}
     volumes:
       - type: bind
         source: ${HOME}/.aws
@@ -78,9 +78,9 @@ services:
       dockerfile: Dockerfile.dev
     network_mode: service:web
     environment:
-      CLOUDFLARE_ACCOUNT_ID: ${R2_ACCOUNT_ID:?Set R2_ACCOUNT_ID in .env.local}
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:?Set a Cloudflare development API token in .env.local}
-      MEDIA_WORKER_SECRET: ${MEDIA_WORKER_SECRET:?Set MEDIA_WORKER_SECRET in .env.local}
+      CLOUDFLARE_ACCOUNT_ID: ${R2_ACCOUNT_ID:?Set R2_ACCOUNT_ID in .env}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:?Set a Cloudflare development API token in .env}
+      MEDIA_WORKER_SECRET: ${MEDIA_WORKER_SECRET:?Set MEDIA_WORKER_SECRET in .env}
       WRANGLER_SEND_METRICS: "false"
       BROWSER: "false"
     # Only these two values enter the Worker's bindings, not the Cloudflare token.

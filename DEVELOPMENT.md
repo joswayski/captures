@@ -44,8 +44,11 @@ real SES email and uploads to the **real `staging-captures` R2 bucket**, not
 production. No native app is required. Install Docker Desktop (or Docker Engine
 with Compose v2) and AWS CLI v2; Rust and Node run inside the images.
 
-1. Copy `.env.example` to `.env.local`, without overwriting an existing file,
-   and restrict it with `chmod 600 .env.local`. Fill in your AWS SSO profile, SES
+1. Copy `.env.example` to `.env`, without overwriting an existing file,
+   and restrict it with `chmod 600 .env`. Compose reads it automatically from
+   the repository root. If you previously created `.env.local`, rename it to
+   `.env` only if `.env` does not already exist; otherwise merge the settings.
+   Fill in your AWS SSO profile, SES
    settings, staging R2 credentials and Cloudflare API token. Set `LOCAL_UID` and
    `LOCAL_GID` to the outputs of `id -u` and `id -g` on your host. Generate two
    independent values with `openssl rand -hex 32` for `AUTH_SECRET` and
@@ -76,8 +79,8 @@ with Compose v2) and AWS CLI v2; Rust and Node run inside the images.
 4. From the repository root:
 
    ```sh
-   docker compose --env-file .env.local up --build -d
-   docker compose --env-file .env.local logs -f api worker web
+   docker compose up --build -d
+   docker compose logs -f api worker web
    ```
 
    Wait for the API's `captures API listening` and Wrangler's ready message, then
@@ -100,14 +103,14 @@ the shared development database role is deliberately local-only.
 
 ```sh
 # Stop containers; retain the database.
-docker compose --env-file .env.local down
+docker compose down
 
 # After changing source code, rebuild/recreate the local stack.
-docker compose --env-file .env.local up --build -d
+docker compose up --build -d
 
 # If your SSO session expires, log in on the host again and restart the API.
 aws sso login --profile YOUR_PROFILE
-docker compose --env-file .env.local restart api
+docker compose restart api
 ```
 
 These are built source snapshots, not bind-mounted hot reload. The first Rust

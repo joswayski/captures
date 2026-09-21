@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -11,13 +11,11 @@ const binary = process.env.COMPOSE_TEST_BINARY || 'docker';
 const prefix = process.env.COMPOSE_TEST_BINARY ? [] : ['compose'];
 const available = spawnSync(binary, [...prefix, 'version'], { encoding: 'utf8' }).status === 0;
 
-test('Compose keeps local services isolated and routes both storage paths to staging', { skip: !available && 'Docker Compose is not installed' }, () => {
+test('Compose auto-loads .env, isolates local services and pins storage to staging', { skip: !available && 'Docker Compose is not installed' }, () => {
   const scratch = mkdtempSync(path.join(tmpdir(), 'captures-compose-'));
   try {
-    const envFile = path.join(scratch, 'empty.env');
-    writeFileSync(envFile, '');
-    const env = {
-      PATH: process.env.PATH, HOME: scratch,
+    copyFileSync(path.join(root, 'compose.yaml'), path.join(scratch, 'compose.yaml'));
+    const settings = {
       LOCAL_UID: '501', LOCAL_GID: '20',
       AUTH_SECRET: 'a'.repeat(64), MEDIA_WORKER_SECRET: 'b'.repeat(64),
       AWS_PROFILE: 'test-sso', AWS_REGION: 'us-east-1',
@@ -27,8 +25,10 @@ test('Compose keeps local services isolated and routes both storage paths to sta
       // A stale developer environment must not select production storage.
       R2_BUCKET: 'production-captures',
     };
-    const args = [...prefix, '--env-file', envFile, '-f', path.join(root, 'compose.yaml'), 'config', '--format', 'json'];
-    const result = spawnSync(binary, args, { env, encoding: 'utf8' });
+    writeFileSync(path.join(scratch, '.env'), Object.entries(settings).map(([key, value]) => `${key}=${value}`).join('\n'));
+    const env = { PATH: process.env.PATH, HOME: scratch };
+    const args = [...prefix, 'config', '--format', 'json'];
+    const result = spawnSync(binary, args, { cwd: scratch, env, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
     const { services } = JSON.parse(result.stdout);
     assert.deepEqual(Object.keys(services).sort(), ['api', 'db', 'web', 'worker']);
@@ -57,7 +57,7 @@ test('Compose keeps local services isolated and routes both storage paths to sta
     assert.equal(services.worker.environment.R2_SECRET_ACCESS_KEY, undefined);
     const worker = JSON.parse(readFileSync(path.join(root, 'apps/media-worker/wrangler.compose.jsonc'), 'utf8'));
     assert.deepEqual(worker.r2_buckets, [{ binding: 'ASSETS', bucket_name: 'staging-captures', remote: true }]);
-    const missing = spawnSync(binary, args, { env: { ...env, MEDIA_WORKER_SECRET: '' }, encoding: 'utf8' });
+    const missing = spawnSync(binary, args, { cwd: scratch, env: { ...env, MEDIA_WORKER_SECRET: '' }, encoding: 'utf8' });
     assert.notEqual(missing.status, 0);
     assert.match(missing.stderr, /MEDIA_WORKER_SECRET/);
   } finally {
