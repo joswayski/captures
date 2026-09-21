@@ -2638,7 +2638,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(controller.state.snapshot, snapshot)
             XCTAssertEqual(outputMode.selectedSegment, 1)
             XCTAssertTrue(outputMode.isEnabled)
-            field.scrollRectToVisible(field.bounds)
+            field.scrollToVisible(field.bounds)
             try render(controller.root, name: "screenshot-editor-rotation-snap-\(appearance)")
         }
     }

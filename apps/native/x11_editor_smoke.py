@@ -1262,7 +1262,10 @@ def main():
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "discard open-shape edits")
 
-        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        # Leave room below the annotation form for the session's rotation-snap
+        # controls. At this height the bottom-scrolled style fields retain their
+        # coordinates; the narrow/minimum-size scroll path is exercised below.
+        run("xdotool", "windowsize", "--sync", editor, "886", "843")
         click(editor, 736, 62)
         click(editor, 105, 133)  # Rectangle follows Text.
         drag((320, 250), (480, 370))
