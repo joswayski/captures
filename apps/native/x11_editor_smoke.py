@@ -431,7 +431,7 @@ def main():
             return
 
         if args.text_only:
-            run("xdotool", "windowsize", "--sync", editor, "1000", "800")
+            run("xdotool", "windowsize", "--sync", editor, "1000", "1100")
             click(editor, 736, 62)  # Draw.
             click(editor, 34, 128)  # Text is the first tool.
             click(editor, 430, 250)  # Place one empty, selected auto-width text layer.
@@ -442,27 +442,34 @@ def main():
             assert created["align"] == "left" and created.get("autoWidth") is True
             shot(editor, f"text-empty-{args.appearance}")
             # Text properties precede generic layer geometry in the sidebar.
-            click(editor, 105, 410)
+            click(editor, 100, 420)
+            shot(editor, f"text-font-menu-{args.appearance}")
+            click(editor, 100, 550)  # Liberation Serif.
+            click(editor, 105, 494)
             run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--delay", "35",
                 "--", "Readable native text")
             time.sleep(.2)
-            click(editor, 95, 478)   # Bold.
-            click(editor, 146, 478)  # Italic.
-            click(editor, 92, 681)   # Background plate.
+            click(editor, 95, 562)   # Bold.
+            click(editor, 146, 562)  # Italic.
+            click(editor, 92, 765)   # Background plate.
             shot(editor, f"text-staged-{args.appearance}")
-            run("xdotool", "mousemove", "--window", editor, "120", "680",
-                "click", "5", "click", "5", "click", "5", "click", "5", "sleep", ".3")
-            shot(editor, f"text-scrolled-{args.appearance}")
-            click(editor, 74, 540)   # Apply text.
+            click(editor, 74, 930)   # Apply text.
             edited = save_layers(
                 lambda values: values[-1]["text"] == "Readable native text"
                 and values[-1]["bold"] and values[-1]["italic"]
-                and values[-1]["background"] is not None,
+                and values[-1]["background"] is not None and values[-1]["fontFamily"] == "serif",
                 "readable styled text applied")[-1]
-            assert edited["id"] == created["id"] and edited["fontFamily"] == "sans"
+            assert edited["id"] == created["id"]
             shot(editor, f"text-edited-{args.appearance}")
+            click(editor, 100, 420)
+            click(editor, 100, 460)  # Stage Mono without applying.
+            save_layers(lambda values: values[-1]["fontFamily"] == "serif",
+                        "saving accepted pixels preserves staged family")
+            shot(editor, f"text-family-pending-{args.appearance}")
+            click(editor, 74, 975)  # Cancel changes; later close must not be blocked.
             click(editor, 35, 62)
-            save_layers(lambda values: values[-1]["text"] == "", "text edit undo")
+            save_layers(lambda values: values[-1]["text"] == "" and values[-1]["fontFamily"] == "sans",
+                        "text edit undo")
             click(editor, 98, 62)
             save_layers(lambda values: values[-1]["text"] == "Readable native text",
                         "text edit redo")
@@ -475,11 +482,14 @@ def main():
             shot(editor, f"text-minimum-reopened-{args.appearance}")
             before_scroll = draft.read_bytes()
             run("xdotool", "mousemove", "--window", editor, "120", "440",
-                "click", "--repeat", "4", "--delay", "80", "5", "sleep", ".3")
+                "click", "--repeat", "7", "--delay", "80", "5", "sleep", ".3")
             shot(editor, f"text-minimum-controls-{args.appearance}")
             assert draft.read_bytes() == before_scroll, "scrolling text controls must not edit"
             reopened = layers()[-1]
             assert reopened["id"] == created["id"] and reopened["text"] == "Readable native text"
+            assert reopened["fontFamily"] == "serif"
+            assert json.loads(draft.read_text())["fonts"]["families"] == {
+                "sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"}
             assert reopened["bold"] and reopened["italic"] and reopened["background"] is not None
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
@@ -488,7 +498,8 @@ def main():
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
                 "checks": ["text-click-once-fresh-selection", "text-readable-explicit-apply",
-                           "text-bold-italic-plate", "text-undo-redo", "text-draft-reopen",
+                           "text-font-family", "text-family-cancel", "text-bold-italic-plate",
+                           "text-undo-redo", "text-draft-reopen",
                            "text-minimum-appearance", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native Text UI: create, style, undo/redo, save/reopen, minimum")

@@ -211,6 +211,9 @@ pub struct AnnotationControls<'a> {
 pub struct Snapshot<'a> {
     pub artifact_id: &'a str,
     pub document: &'a Document,
+    /// Only these pinned session fonts are available; host defaults never replace
+    /// a reopened draft's exact files or expand its font set implicitly.
+    pub font_families: Option<&'a BTreeMap<String, String>>,
     pub annotation_controls: BTreeMap<&'a str, AnnotationControls<'a>>,
     pub selection_outlines: BTreeMap<&'a str, [Point; 4]>,
     pub can_undo: bool,
@@ -332,6 +335,7 @@ impl EditorSession {
         Snapshot {
             artifact_id: &self.artifact_id,
             document: self.history.current(),
+            font_families: self.fonts.as_ref().map(|fonts| &fonts.assets.families),
             selection_outlines: self
                 .history
                 .current()

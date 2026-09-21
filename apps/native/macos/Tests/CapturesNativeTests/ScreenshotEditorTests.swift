@@ -2940,11 +2940,57 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.text, "applied")
     }
 
+    func testTextFamilyChangesAreStagedAndUseOnlySessionFonts() throws {
+        _ = NSApplication.shared
+        let families = ["sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"]
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot",
+            layers: [textLayer(id: "copy", text: "accepted")], fonts: families))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let family = try popup("Text font", in: controller.root)
+        XCTAssertEqual(family.itemTitles, ["Liberation Mono", "Liberation Sans", "Liberation Serif"])
+        XCTAssertEqual(family.titleOfSelectedItem, "Liberation Sans")
+        family.selectItem(withTitle: "Liberation Serif")
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        XCTAssertTrue(worker.requests.isEmpty, "choosing a font must not commit an edit")
+        worker.failOperation = "edit_text"
+        try button("Apply", in: controller.root).performClick(nil)
+        XCTAssertEqual(family.titleOfSelectedItem, "Liberation Serif", "failed Apply retains staged font")
+        XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.fontFamily, "sans")
+        let patch = try XCTUnwrap(worker.requests.last?["patch"] as? [String: String])
+        XCTAssertEqual(patch, ["fontFamily": "serif"])
+        try button("Cancel", in: controller.root).performClick(nil)
+        XCTAssertEqual(family.titleOfSelectedItem, "Liberation Sans")
+        XCTAssertEqual(worker.requests.count, 1)
+        worker.failOperation = nil
+        family.selectItem(withTitle: "Liberation Mono")
+        worker.deferRequests = true
+        try button("Apply", in: controller.root).performClick(nil)
+        XCTAssertFalse(family.isEnabled, "in-flight text edits freeze the family picker")
+        worker.completePending(with: snapshot(id: "shot", unsaved: true,
+            layers: [textLayer(id: "copy", text: "accepted", family: "mono")], fonts: families))
+        XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.fontFamily, "mono")
+        XCTAssertEqual(family.titleOfSelectedItem, "Liberation Mono")
+        XCTAssertTrue(family.isEnabled)
+
+        let pinned = FakeEditorWorker(snapshot: snapshot(id: "pinned",
+            layers: [textLayer(id: "copy", text: "old")], fonts: ["sans": "Liberation Sans"]))
+        let old = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: pinned)
+        defer { old.window.orderOut(nil) }
+        old.present(artifact: artifact(id: "pinned"), historyRoot: "/native/History")
+        let oldFamily = try popup("Text font", in: old.root)
+        XCTAssertEqual(oldFamily.itemTitles, ["Liberation Sans"])
+        XCTAssertFalse(oldFamily.isEnabled, "host defaults must not expand a saved font set")
+    }
+
     func testTextControlsRenderedAtNormalAndMinimumSizes() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
             let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true,
-                layers: [textLayer(id: "copy", text: "First line\nSecond line", family: "sans")]))
+                layers: [textLayer(id: "copy", text: "First line\nSecond line", family: "serif")],
+                fonts: ["sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"]))
             let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
@@ -3193,6 +3239,56 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
+    func testRealBridgeFontFamiliesRenderAndReopenExactPixels() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker(); defer { worker.close(); EditorWorker.flush() }
+        let opened = expectation(description: "open text fixture")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+            result in XCTAssertNotNil(try? result.get()); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        func request(_ object: [String: Any]) throws -> EditorPresentation {
+            let done = expectation(description: "text request")
+            var response: Result<EditorPresentation, Error>?
+            worker.request(object) { response = $0; done.fulfill() }
+            wait(for: [done], timeout: 5)
+            return try XCTUnwrap(response).get()
+        }
+        _ = try request(["operation": "resize_canvas", "width": 640, "height": 360])
+        let sans = try request(["operation": "create_text", "point": ["x": 50, "y": 80],
+            "text": "Native Ωé", "fontFamily": "sans", "fontSize": 64, "color": "#111111"])
+        XCTAssertEqual(sans.snapshot.fontFamilies,
+            ["sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"])
+        let id = try XCTUnwrap(sans.snapshot.layers.first?.id)
+        let serif = try request(["operation": "edit_text", "id": id, "patch": ["fontFamily": "serif"]])
+        let mono = try request(["operation": "edit_text", "id": id, "patch": ["fontFamily": "mono"]])
+        func pixels(_ value: EditorPresentation) throws -> Data {
+            try XCTUnwrap(value.image.dataProvider?.data) as Data
+        }
+        XCTAssertNotEqual(try pixels(sans), try pixels(serif))
+        XCTAssertNotEqual(try pixels(serif), try pixels(mono))
+        let undone = try request(["operation": "undo"])
+        XCTAssertEqual(try pixels(undone), try pixels(serif))
+        let redone = try request(["operation": "redo"])
+        XCTAssertEqual(try pixels(redone), try pixels(mono))
+        _ = try request(["operation": "save_draft", "updated_at_ms": 9753])
+        worker.close(); EditorWorker.flush()
+        let reopened = expectation(description: "reopen saved font bytes")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+            result in
+            do {
+                let value = try result.get()
+                XCTAssertEqual(value.snapshot.fontFamilies, mono.snapshot.fontFamilies)
+                XCTAssertEqual(value.snapshot.layers.first?.textStyle?.fontFamily, "mono")
+                XCTAssertEqual(try pixels(value), try pixels(mono))
+            } catch { XCTFail("\(error)") }
+            reopened.fulfill()
+        }
+        wait(for: [reopened], timeout: 5)
+    }
+
     func testRealBridgeWandEditsAsymmetricPixelAndUndoRedo() throws {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
@@ -3267,10 +3363,12 @@ final class ScreenshotEditorTests: XCTestCase {
     private func snapshot(id: String, width: Double = 640, height: Double = 360,
                           unsaved: Bool = false, draft: Bool = false,
                           layers: [[String: Any]] = [],
-                          annotations: [String: [String: Any]] = [:]) -> NativeEditorSnapshot {
+                          annotations: [String: [String: Any]] = [:],
+                          fonts: [String: String] = [:]) -> NativeEditorSnapshot {
         NativeEditorSnapshot([
             "artifact_id": id, "document": ["width": width, "height": height,
                                                   "elements": layers],
+            "font_families": fonts,
             "annotation_controls": annotations,
             "can_undo": unsaved, "can_redo": false,
             "unsaved_changes": unsaved, "has_draft": draft,

@@ -246,12 +246,15 @@ serialized worker. Commit/crop/import/undo/redo and output use the same font-bac
 frame; failed text renders preserve accepted pixels and history. Drafts store family
 mappings plus immutable font sidecars, not raw bytes in JSON, within the existing
 80 MiB image-plus-font save budget (including bounded full license notices in the
-manifest). New native sessions use four unmodified Liberation Sans 2.1.5 static
-faces (1,649,980 bytes, shared across workers), with complete OFL 1.1 notices in
+manifest). New native sessions use twelve unmodified Liberation Sans/Serif/Mono
+2.1.5 static faces (4,359,164 bytes, shared across workers), with complete OFL 1.1 notices in
 native resources, `--font-license` output and text-bearing saved drafts. Image-only
 drafts do not persist the worker's unused font set. No OS fonts are copied
 and no network fallback occurs. This Latin/Greek/Cyrillic-oriented default is not
 universal Unicode or Tauri system-font equivalence; missing glyphs are errors.
+Both hosts stage family changes with the other Text Apply/Cancel fields. Their
+family picker reads the session's actual pinned map, not host defaults. Older
+Sans-only drafts remain Sans-only; explicit font migration is still unimplemented.
 Reopening prefers the saved font set over host
 defaults; missing/corrupt fonts return errors without silently substituting or
 deleting the draft. Font cleanup follows successful manifest publication; the
@@ -265,7 +268,7 @@ transformed and minimum-size captures were inspected. These synthetic-font
 fixtures do not provide Text input controls or establish macOS, Windows, Wayland
 or physical Text-tool presentation/input acceptance.
 The basic Text tool is implemented in AppKit and wgpu; host verification is recorded
-per slice, not inferred from shared tests. Broader font families and OS acquisition,
+per slice, not inferred from shared tests. Additional font families/import and OS acquisition,
 outlines/shadows, presets, inline input and physical input/IME/accessibility remain open.
 No host text parity gate is closed.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
