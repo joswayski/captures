@@ -81,6 +81,8 @@ def main():
                         help="Exercise canvas trimming, undo/redo, draft and output dimensions")
     parser.add_argument("--zoom-only", action="store_true",
                         help="Exercise viewport gestures, toolbar and keyboard zoom without editing")
+    parser.add_argument("--history-shortcuts-only", action="store_true",
+                        help="Exercise document Undo/Redo keys without stealing field undo")
     parser.add_argument("--text-draft-only", action="store_true",
                         help="Restore explicit-font text, save/reopen and copy pixels (no Text input UI)")
     parser.add_argument("--text-only", action="store_true",
@@ -325,6 +327,45 @@ def main():
             if expected is not None:
                 assert actual == bytes(expected), (x, y, actual, expected)
             return actual
+
+        if args.history_shortcuts_only:
+            click(editor, 736, 62)
+            click(editor, 105, 133)
+            drag((320, 250), (480, 370))
+            shape = save_layers(lambda values: len(values) == 2, "shortcut shape fixture")[-1]
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 1, "keyboard undo")
+            click(editor, 396, 62)
+            click(editor, 75, 428)
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 1, "field focus does not redo document")
+            click(editor, 736, 62)
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 2, "keyboard redo")[-1] == shape
+
+            click(editor, 396, 62)  # Geometry.
+            click(editor, 75, 428)  # Focus canvas width, not a document action.
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 2, "field focus keeps document")[-1] == shape
+            click(editor, 270, 62)  # Open discard confirmation.
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            click(editor, 190, 128)  # Cancel discard.
+            assert save_layers(lambda values: len(values) == 2, "confirmation owns shortcuts")[-1] == shape
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 1, "document shortcut restored after dialog")
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 2, "redo after dialog")[-1] == shape
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "shortcut suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["keyboard-undo", "keyboard-redo-exact-layer", "field-undo-focus", "field-redo-focus",
+                           "confirmation-focus", "shortcut-restored-after-dialog", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native history shortcuts: undo, redo, field/dialog focus and original unchanged")
+            return
 
         if args.overwrite_only:
             run("xdotool", "windowsize", "--sync", editor, "1000", "1100")
@@ -1209,7 +1250,7 @@ def main():
         assert viewport_pixels("viewport-actual-key") == viewport_pixels("viewport-actual-button")
         assert viewport_pixels("viewport-125-key") == viewport_pixels("viewport-125-button")
         assert viewport_pixels("viewport-actual-key") != viewport_pixels("viewport-125-key")
-        click(editor, 140, 428)  # Focus the canvas width field; shortcuts still zoom.
+        click(editor, 75, 428)  # Focus the canvas width field; shortcuts still zoom.
         run("xdotool", "key", "ctrl+minus", "sleep", ".3")
         shot(editor, "viewport-field-key")
         assert viewport_pixels("viewport-field-key") == viewport_pixels("viewport-actual-button")

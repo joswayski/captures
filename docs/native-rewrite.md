@@ -123,6 +123,15 @@ editor events in the editor window. Sheets/confirmation popups retain keyboard
 ownership. This does not register new OS-global shortcuts. Automated host tests
 cover bounds, event ordering, field focus, cancellation and no document/output writes;
 physical keyboard layouts and accessibility acceptance remain open.
+Both hosts route editor-local Cmd/Ctrl Z and Shift Z through existing Undo/Redo
+commands. wgpu uses egui's text-edit focus state, leaving typing undo untouched
+while allowing document history from focused action buttons; open popups and
+confirmation/closing states retain keyboard ownership. Events are consumed once
+across layout passes, and repeats never queue behind accepted work. AppKit checks
+the native first responder before routing either modifier, replacing unconditional
+button key equivalents. Disabled history actions do nothing. These bindings retain
+normal output invalidation and render-before-publish behavior; they do not save
+drafts or register OS-global shortcuts. Physical input/IME/accessibility remain open.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete
 custom rows are removed. Selecting a preset uses the existing shared viewport
