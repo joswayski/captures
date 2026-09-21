@@ -361,8 +361,9 @@ def main():
             copied = save_layers(lambda values: len(values) == 3, "keyboard duplicate")[-1]
             assert copied["id"] != shape["id"]
             expected = dict(shape, id=copied["id"], x=shape["x"] + 24, y=shape["y"] + 24,
+                            endX=shape["endX"] + 24, endY=shape["endY"] + 24,
                             visible=True, locked=False)
-            assert copied == expected
+            assert copied == expected, (copied, expected)
             click(editor, 396, 62)
             click(editor, 75, 428)
             run("xdotool", "key", "ctrl+d", "Delete", "sleep", ".3")
