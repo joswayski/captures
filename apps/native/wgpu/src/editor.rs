@@ -26,6 +26,7 @@ use captures_app::{
         EditorSession, ExportFormat, ExportOptions, ExportQuality, ImportImage, OpenRequest,
         PngOptions, Request,
     },
+    editor_viewport::{Viewport, wheel_zoom_factor},
 };
 use captures_capture::CaptureMode;
 use eframe::egui::{self, RichText};
@@ -229,6 +230,11 @@ struct View {
     close_after_save: bool,
     confirm_discard: bool,
     error: Option<String>,
+    viewport: Viewport,
+    viewport_pan: Option<(egui::PointerButton, egui::Pos2)>,
+    viewport_area: Option<egui::Rect>,
+    viewport_image_size: Option<egui::Vec2>,
+    viewport_intercepted: bool,
 }
 
 impl Default for View {
@@ -272,6 +278,11 @@ impl Default for View {
             close_after_save: false,
             confirm_discard: false,
             error: None,
+            viewport: Viewport::default(),
+            viewport_pan: None,
+            viewport_area: None,
+            viewport_image_size: None,
+            viewport_intercepted: false,
         }
     }
 }
@@ -291,6 +302,18 @@ impl View {
 
     fn cancel_layer_gesture(&mut self) {
         self.layer_gesture = None;
+    }
+
+    fn cancel_edit_gestures(&mut self) {
+        self.crop_drag = None;
+        self.cancel_drawing();
+        self.cancel_layer_gesture();
+    }
+
+    fn reset_viewport(&mut self) {
+        self.cancel_edit_gestures();
+        self.viewport = Viewport::default();
+        self.viewport_pan = None;
     }
 
     fn title(&self) -> &'static str {
@@ -332,6 +355,7 @@ impl View {
                     self.output_notice = None;
                     self.cancel_crop();
                     self.cancel_drawing();
+                    self.viewport_pan = None;
                     let image = &presented.pixels;
                     self.texture = Some(ctx.load_texture(
                         "edited-screenshot",
@@ -1003,6 +1027,7 @@ impl Drop for Editor {
 }
 
 fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
+    let previous_section = view.section;
     if !ui.ctx().egui_wants_keyboard_input()
         && !egui::Popup::is_any_open(ui.ctx())
         && ui.input(|input| input.key_pressed(egui::Key::Escape))
@@ -1017,6 +1042,25 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             ui.label(RichText::new(if view.pending { "Working…" } else if view.unsaved() { "Unsaved edits" }
                 else if view.presented.as_ref().is_some_and(|p| p.has_draft) { "Draft saved" } else { "Original screenshot" })
                 .color(tokens.color("text-muted")));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Recenter").on_hover_text("Center the current zoom without changing it").clicked() {
+                    view.cancel_edit_gestures();
+                    view.viewport.recenter();
+                    view.viewport_pan = None;
+                }
+                if ui.button("+").on_hover_text("Zoom in 1.25×").clicked() {
+                    change_viewport_zoom(view, 1.25, None);
+                }
+                if ui.button("−").on_hover_text("Zoom out 1.25×").clicked() {
+                    change_viewport_zoom(view, 1. / 1.25, None);
+                }
+                if ui.button("100%").on_hover_text("Show one image pixel per logical point").clicked() {
+                    set_viewport_zoom(view, 100., None);
+                }
+                if ui.button("Fit").on_hover_text("Fit the image in the editor").clicked() {
+                    view.reset_viewport();
+                }
+            });
         });
         ui.add_enabled_ui(!view.pending, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -1061,6 +1105,9 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             });
         }
     });
+    if view.section != previous_section {
+        view.viewport_pan = None;
+    }
     if view.section != Section::Geometry {
         view.cancel_crop();
     }
@@ -1165,28 +1212,42 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             view.texture.as_ref()
         };
         if let Some(texture) = texture {
+            let texture = texture.clone();
             let available = ui.available_rect_before_wrap();
-            let image = ui.add(
-                egui::Image::new(texture)
-                    .fit_to_exact_size(ui.available_size())
-                    .maintain_aspect_ratio(true),
-            );
+            if view.viewport_area != Some(available) {
+                view.viewport_pan = None;
+                view.viewport_area = Some(available);
+            }
+            let size = texture.size_vec2();
+            view.viewport_image_size = Some(size);
+            let fit = fitted_image_rect(available, size);
+            let intercepted = handle_viewport_input(ui, view, available);
+            let preview = viewport_rect(view.viewport, fit, size).unwrap_or(fit);
+            ui.allocate_rect(available, egui::Sense::hover());
+            ui.painter()
+                .with_clip_rect(available.intersect(ui.clip_rect()))
+                .image(
+                    texture.id(),
+                    preview,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                    egui::Color32::WHITE,
+                );
             if view.crop_previous.is_some() && !view.pending {
-                show_crop(ui, tokens, view, available, image.rect);
+                show_crop(ui, tokens, view, available, preview, intercepted);
             }
             if view.section == Section::Draw
                 && !view.pending
                 && !view.close_requested
                 && !view.confirm_discard
             {
-                show_shape(ui, view, tx, available, image.rect);
+                show_shape(ui, view, tx, available, preview, intercepted);
             }
             if view.section == Section::Layers
                 && !view.pending
                 && !view.close_requested
                 && !view.confirm_discard
             {
-                show_layer_canvas(ui, tokens, view, tx, available, image.rect);
+                show_layer_canvas(ui, tokens, view, tx, available, preview, intercepted);
             }
         } else if view.pending {
             ui.centered_and_justified(|ui| {
@@ -1198,6 +1259,175 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             });
         }
     });
+}
+
+fn fitted_image_rect(available: egui::Rect, image: egui::Vec2) -> egui::Rect {
+    let scale = (available.width() / image.x).min(available.height() / image.y);
+    // Match the previous Image widget's top-left alignment so Fit preserves
+    // established workbench coordinates and leaves spare space below/right.
+    egui::Rect::from_min_size(available.min, image * scale)
+}
+
+fn viewport_rect(viewport: Viewport, fit: egui::Rect, image: egui::Vec2) -> Option<egui::Rect> {
+    viewport
+        .rect(
+            Rect {
+                x: fit.left().into(),
+                y: fit.top().into(),
+                width: fit.width().into(),
+                height: fit.height().into(),
+            },
+            image.x.into(),
+            image.y.into(),
+        )
+        .map(|rect| {
+            egui::Rect::from_min_size(
+                egui::pos2(rect.x as f32, rect.y as f32),
+                egui::vec2(rect.width as f32, rect.height as f32),
+            )
+        })
+}
+
+fn set_viewport_zoom(view: &mut View, percent: f64, anchor: Option<egui::Pos2>) {
+    let (Some(area), Some(size)) = (view.viewport_area, view.viewport_image_size) else {
+        return;
+    };
+    let fit = fitted_image_rect(area, size);
+    let anchor = anchor.unwrap_or(area.center());
+    if let Some(next) = view.viewport.zoom_at(
+        Rect {
+            x: fit.left().into(),
+            y: fit.top().into(),
+            width: fit.width().into(),
+            height: fit.height().into(),
+        },
+        size.x.into(),
+        size.y.into(),
+        percent,
+        Point {
+            x: anchor.x.into(),
+            y: anchor.y.into(),
+        },
+    ) {
+        view.cancel_edit_gestures();
+        view.viewport = next;
+        view.viewport_pan = None;
+    }
+}
+
+fn change_viewport_zoom(view: &mut View, factor: f64, anchor: Option<egui::Pos2>) {
+    let current = if view.viewport.zoom_percent == 0. {
+        let (Some(area), Some(size)) = (view.viewport_area, view.viewport_image_size) else {
+            return;
+        };
+        f64::from(fitted_image_rect(area, size).width() / size.x) * 100.
+    } else {
+        view.viewport.zoom_percent
+    };
+    set_viewport_zoom(view, current * factor, anchor);
+}
+
+fn handle_viewport_input(ui: &egui::Ui, view: &mut View, available: egui::Rect) -> bool {
+    if ui.ctx().current_pass_index() != 0 {
+        return view.viewport_intercepted;
+    }
+    view.viewport_intercepted = false;
+    let focused = ui.input(|input| input.focused);
+    if !focused
+        || view.close_requested
+        || view.confirm_discard
+        || egui::Popup::is_any_open(ui.ctx())
+    {
+        view.viewport_pan = None;
+        view.cancel_edit_gestures();
+        return false;
+    }
+    let events = ui.input(|input| input.events.clone());
+    let anchor = ui
+        .input(|input| input.pointer.hover_pos())
+        .filter(|point| available.contains(*point));
+    let has_command_wheel = events.iter().any(|event| {
+        matches!(event,
+        egui::Event::MouseWheel { modifiers, .. } if (modifiers.command || modifiers.ctrl) && anchor.is_some())
+    });
+    let mut intercepted = view.viewport_pan.is_some();
+    for event in events {
+        match event {
+            egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+                ..
+            } if (modifiers.command || modifiers.ctrl) && anchor.is_some() => {
+                let pixels = match unit {
+                    egui::MouseWheelUnit::Point => f64::from(delta.y),
+                    egui::MouseWheelUnit::Line => f64::from(delta.y) * 16.,
+                    egui::MouseWheelUnit::Page => f64::from(delta.y * available.height()),
+                };
+                // egui reports content motion, opposite to browser wheel deltaY.
+                if let Some(factor) = wheel_zoom_factor(-pixels) {
+                    change_viewport_zoom(view, factor, anchor);
+                    intercepted = true;
+                }
+            }
+            egui::Event::Zoom(factor) if !has_command_wheel && anchor.is_some() => {
+                change_viewport_zoom(view, f64::from(factor), anchor);
+                intercepted = true;
+            }
+            egui::Event::PointerButton {
+                pos,
+                button,
+                pressed: true,
+                modifiers,
+                ..
+            } if available.contains(pos)
+                && (button == egui::PointerButton::Middle
+                    || (button == egui::PointerButton::Primary
+                        && (modifiers.command || modifiers.ctrl))) =>
+            {
+                view.cancel_edit_gestures();
+                view.viewport_pan = Some((button, pos));
+                intercepted = true;
+            }
+            egui::Event::PointerMoved(pos) => {
+                if let Some((_, last)) = &mut view.viewport_pan {
+                    view.viewport.pan_x += f64::from(pos.x - last.x);
+                    view.viewport.pan_y += f64::from(pos.y - last.y);
+                    *last = pos;
+                    intercepted = true;
+                }
+            }
+            egui::Event::PointerButton {
+                pos,
+                button,
+                pressed: false,
+                ..
+            } if view
+                .viewport_pan
+                .is_some_and(|(active, _)| active == button) =>
+            {
+                if let Some((_, last)) = view.viewport_pan.take() {
+                    view.viewport.pan_x += f64::from(pos.x - last.x);
+                    view.viewport.pan_y += f64::from(pos.y - last.y);
+                }
+                intercepted = true;
+            }
+            egui::Event::PointerGone
+            | egui::Event::Key {
+                key: egui::Key::Escape,
+                pressed: true,
+                ..
+            } => {
+                view.viewport_pan = None;
+            }
+            _ => {}
+        }
+    }
+    if view.viewport_pan.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    view.viewport_intercepted = intercepted;
+    intercepted
 }
 
 fn image_point(position: egui::Pos2, preview: egui::Rect, bounds: Rect) -> Point {
@@ -1214,6 +1444,7 @@ fn show_layer_canvas(
     tx: &Sender<Job>,
     available: egui::Rect,
     preview: egui::Rect,
+    viewport_intercepted: bool,
 ) {
     let Some(presented) = &view.presented else {
         return;
@@ -1245,7 +1476,7 @@ fn show_layer_canvas(
     if !input_enabled {
         view.cancel_layer_gesture();
     }
-    if first_pass && input_enabled {
+    if first_pass && input_enabled && !viewport_intercepted {
         if let Some(LayerGesture { kind, .. }) = &mut view.layer_gesture {
             let shift = ui.input(|input| input.modifiers.shift);
             match kind {
@@ -1726,6 +1957,7 @@ fn show_shape(
     tx: &Sender<Job>,
     available: egui::Rect,
     preview: egui::Rect,
+    viewport_intercepted: bool,
 ) {
     let Some(presented) = &view.presented else {
         return;
@@ -1744,6 +1976,7 @@ fn show_shape(
     let first_pass = ui.ctx().current_pass_index() == 0;
     let started = response.drag_started_by(egui::PointerButton::Primary);
     if first_pass
+        && !viewport_intercepted
         && started
         && let Some(origin) = ui.input(|input| input.pointer.press_origin())
     {
@@ -1753,7 +1986,11 @@ fn show_shape(
             view.freehand_points = vec![start];
         }
     }
-    if first_pass && view.draw_shape == DrawShape::Freehand && view.shape_drag.is_some() {
+    if first_pass
+        && !viewport_intercepted
+        && view.draw_shape == DrawShape::Freehand
+        && view.shape_drag.is_some()
+    {
         let minimum = 1.5 * bounds.width / f64::from(preview.width());
         // Keep every accepted movement in this frame, not just its final pointer
         // position. Ignore hover events preceding the press and moves after release.
@@ -1782,6 +2019,7 @@ fn show_shape(
         });
     }
     if first_pass
+        && !viewport_intercepted
         && (response.dragged_by(egui::PointerButton::Primary)
             || response.drag_stopped_by(egui::PointerButton::Primary))
         && let Some(position) = response.interact_pointer_pos()
@@ -1875,6 +2113,7 @@ fn show_shape(
         }
     }
     if first_pass
+        && !viewport_intercepted
         && response.drag_stopped_by(egui::PointerButton::Primary)
         && let Some((start, end)) = view.shape_drag.take()
     {
@@ -1918,6 +2157,7 @@ fn show_crop(
     view: &mut View,
     available: egui::Rect,
     preview: egui::Rect,
+    viewport_intercepted: bool,
 ) {
     let Some(presented) = &view.presented else {
         return;
@@ -1935,7 +2175,8 @@ fn show_crop(
     );
     let aspect = CROP_ASPECTS[view.crop_aspect].1;
     let shift = ui.input(|input| input.modifiers.shift);
-    if response.drag_started_by(egui::PointerButton::Primary)
+    if !viewport_intercepted
+        && response.drag_started_by(egui::PointerButton::Primary)
         && let Some(origin) = ui.input(|input| input.pointer.press_origin())
     {
         view.crop_drag = Some(CropDrag::new(
@@ -1945,8 +2186,9 @@ fn show_crop(
             shift,
         ));
     }
-    if (response.dragged_by(egui::PointerButton::Primary)
-        || response.drag_stopped_by(egui::PointerButton::Primary))
+    if !viewport_intercepted
+        && (response.dragged_by(egui::PointerButton::Primary)
+            || response.drag_stopped_by(egui::PointerButton::Primary))
         && let Some(position) = response.interact_pointer_pos()
         && let Some(drag) = &mut view.crop_drag
     {
@@ -2472,6 +2714,119 @@ mod tests {
     use super::*;
     use std::{fs, time::Duration};
 
+    #[test]
+    fn viewport_events_anchor_zoom_pan_once_and_never_submit_edits() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(200, 100));
+        value.document = Arc::new(Document::new_capture("viewport", 200., 100., None));
+        let original = value.document.clone();
+        view.receive(&ctx, Ok(value));
+        view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
+        let area = egui::Rect::from_min_size(egui::pos2(100., 80.), egui::vec2(400., 200.));
+        let size = egui::vec2(200., 100.);
+        view.viewport_area = Some(area);
+        view.viewport_image_size = Some(size);
+        let (tx, rx) = mpsc::channel();
+        let frame = |view: &mut View, events, focused| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(700., 500.),
+                    )),
+                    events,
+                    focused,
+                    ..Default::default()
+                },
+                |root| {
+                    let mut ui = root.new_child(egui::UiBuilder::new().max_rect(area));
+                    let intercepted = handle_viewport_input(&ui, view, area);
+                    let preview = viewport_rect(view.viewport, area, size).unwrap();
+                    show_shape(&mut ui, view, &tx, area, preview, intercepted);
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("viewport multipass");
+                    }
+                },
+            );
+            output.textures_delta.clear();
+        };
+        let command = egui::Modifiers {
+            command: true,
+            ctrl: true,
+            ..Default::default()
+        };
+        let anchor = egui::pos2(220., 140.);
+        view.shape_drag = Some((Point { x: 3., y: 7. }, Point { x: 20., y: 30. }));
+        frame(
+            &mut view,
+            vec![
+                egui::Event::PointerMoved(anchor),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0., 80.),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: command,
+                },
+            ],
+            true,
+        );
+        assert_eq!(
+            view.viewport.zoom_percent, 234.7,
+            "positive egui scroll zooms in once"
+        );
+        let preview = viewport_rect(view.viewport, area, size).unwrap();
+        let point = image_point(
+            anchor,
+            preview,
+            Rect {
+                x: 0.,
+                y: 0.,
+                width: 200.,
+                height: 100.,
+            },
+        );
+        assert!((point.x - 60.).abs() < 1e-5 && (point.y - 30.).abs() < 1e-5);
+        assert!(
+            view.shape_drag.is_none(),
+            "zoom cancels an uncommitted drawing"
+        );
+        let before = view.viewport;
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: command,
+        };
+        frame(
+            &mut view,
+            vec![
+                button(anchor, true),
+                egui::Event::PointerMoved(anchor + egui::vec2(17., -11.)),
+                button(anchor + egui::vec2(23., -7.), false),
+                egui::Event::PointerMoved(egui::pos2(350., 250.)),
+            ],
+            true,
+        );
+        assert_eq!(view.viewport.pan_x, before.pan_x + 23.);
+        assert_eq!(view.viewport.pan_y, before.pan_y - 7.);
+        assert!(view.viewport_pan.is_none());
+        assert!(rx.try_recv().is_err() && !view.pending && view.output.is_some());
+        assert_eq!(view.presented.as_ref().unwrap().document, original);
+        frame(&mut view, vec![button(anchor, true)], true);
+        assert!(view.viewport_pan.is_some());
+        frame(&mut view, vec![], false);
+        assert!(view.viewport_pan.is_none());
+        set_viewport_zoom(&mut view, 100., None);
+        view.viewport.recenter();
+        assert_eq!(view.viewport.zoom_percent, 100.);
+        assert_eq!(view.viewport.pan_x, 0.);
+        view.reset_viewport();
+        assert_eq!(viewport_rect(view.viewport, area, size), Some(area));
+        assert!(rx.try_recv().is_err() && view.output.is_some());
+    }
+
     fn presented(unsaved: bool) -> Presented {
         Presented {
             document: Arc::new(Document::new_capture("fixture", 7., 3., None)),
@@ -2512,7 +2867,7 @@ mod tests {
                     egui::UiBuilder::new().max_rect(screen),
                 );
                 let tokens = crate::tokens::load().into_values().next().unwrap();
-                show_layer_canvas(&mut ui, &tokens, view, tx, screen, preview);
+                show_layer_canvas(&mut ui, &tokens, view, tx, screen, preview, false);
                 if ctx.current_pass_index() == 0 {
                     ctx.request_discard("multipass");
                 }
@@ -2682,7 +3037,7 @@ mod tests {
                         egui::UiBuilder::new().max_rect(screen),
                     );
                     let tokens = crate::tokens::load().into_values().next().unwrap();
-                    show_layer_canvas(&mut ui, &tokens, view, &tx, screen, preview);
+                    show_layer_canvas(&mut ui, &tokens, view, &tx, screen, preview, false);
                     if ctx.current_pass_index() == 0 {
                         ctx.request_discard("multipass");
                     }
@@ -3229,7 +3584,7 @@ mod tests {
                         egui::Id::unique("freehand-test"),
                         egui::UiBuilder::new().max_rect(screen),
                     );
-                    show_shape(&mut ui, view, &tx, screen, preview);
+                    show_shape(&mut ui, view, &tx, screen, preview, false);
                     if ctx.current_pass_index() == 0 {
                         ctx.request_discard("exercise multipass event replay");
                     }
@@ -3406,7 +3761,7 @@ mod tests {
                 egui::Id::unique("shape-test"),
                 egui::UiBuilder::new().max_rect(screen),
             );
-            show_shape(&mut ui, view, &tx, screen, preview);
+            show_shape(&mut ui, view, &tx, screen, preview, false);
             let mut output = ctx.end_pass();
             output.textures_delta.clear();
         };
@@ -3702,6 +4057,7 @@ mod tests {
                 view,
                 screen,
                 preview,
+                false,
             );
             let mut output = ctx.end_pass();
             output.textures_delta.clear();

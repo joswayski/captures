@@ -54,6 +54,22 @@ bool captures_selection_drag_v1(uint32_t mode, CapturesSelectionPoint origin,
 bool captures_selection_constrain_v1(CapturesSelectionRect rect,
     CapturesSelectionBounds bounds, double aspect, CapturesSelectionRect *output);
 
+/* Ephemeral screenshot viewport, never persisted in a document or draft.
+ * All coordinates are top-left logical points. fit is the host layout's fitted
+ * image rect; canvas is image-pixel size. zoom_percent=0 means Fit; pan remains
+ * applicable in Fit. Set all fields to zero for Fit+recenter, or just pan_x/y for
+ * recenter at the current zoom. Zoom anchors a document point, clamps to 5–800%
+ * and rounds to 0.1%. Inputs are copied; false leaves output untouched. Output
+ * must be null or writable aligned storage. No allocation, I/O or worker access. */
+typedef struct { double zoom_percent, pan_x, pan_y; } CapturesEditorViewport;
+bool captures_editor_viewport_rect_v1(CapturesEditorViewport viewport,
+    CapturesSelectionRect fit, CapturesSelectionBounds canvas, CapturesSelectionRect *output);
+bool captures_editor_viewport_zoom_v1(CapturesEditorViewport viewport,
+    CapturesSelectionRect fit, CapturesSelectionBounds canvas, double percent,
+    CapturesSelectionPoint anchor, CapturesEditorViewport *output);
+/* Native hosts normalize wheel delta to pixels; zero result means invalid input. */
+double captures_editor_viewport_wheel_factor_v1(double delta_pixels);
+
 /* Shared preview placement. Monitor bounds are PHYSICAL pixels in desktop
  * top-left coordinates (negative origins allowed), including the actual usable
  * work area. Output/origin are LOGICAL coordinates in that same orientation.

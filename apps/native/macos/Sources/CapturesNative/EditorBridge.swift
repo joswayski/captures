@@ -3,6 +3,40 @@ import CoreGraphics
 import ImageIO
 import CCapturesSettings
 
+/// UI-thread-only, ephemeral viewport geometry. This never crosses the editor
+/// session/JSON boundary and therefore cannot dirty a document or draft.
+struct NativeEditorViewport: Equatable {
+    var zoomPercent = 0.0
+    var panX = 0.0
+    var panY = 0.0
+
+    private var native: CapturesEditorViewport {
+        CapturesEditorViewport(zoom_percent: zoomPercent, pan_x: panX, pan_y: panY)
+    }
+
+    func rect(fit: CGRect, canvas: CGSize) -> CGRect? {
+        var output = CapturesSelectionRect()
+        guard captures_editor_viewport_rect_v1(native,
+            CapturesSelectionRect(x: fit.minX, y: fit.minY, width: fit.width, height: fit.height),
+            CapturesSelectionBounds(width: canvas.width, height: canvas.height), &output) else { return nil }
+        return CGRect(x: output.x, y: output.y, width: output.width, height: output.height)
+    }
+
+    func zoomed(to percent: Double, anchor: CGPoint, fit: CGRect, canvas: CGSize) -> Self? {
+        var output = CapturesEditorViewport()
+        guard captures_editor_viewport_zoom_v1(native,
+            CapturesSelectionRect(x: fit.minX, y: fit.minY, width: fit.width, height: fit.height),
+            CapturesSelectionBounds(width: canvas.width, height: canvas.height), percent,
+            CapturesSelectionPoint(x: anchor.x, y: anchor.y), &output) else { return nil }
+        return Self(zoomPercent: output.zoom_percent, panX: output.pan_x, panY: output.pan_y)
+    }
+
+    static func wheelFactor(deltaPixels: Double) -> Double? {
+        let value = captures_editor_viewport_wheel_factor_v1(deltaPixels)
+        return value.isFinite && value > 0 ? value : nil
+    }
+}
+
 /// Copies shared preview geometry out of its short-lived C owner. No session
 /// worker or JSON is involved in drawing pointer feedback.
 struct NativeEditorDrawGeometry {

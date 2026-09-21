@@ -9,6 +9,7 @@ use captures_app::{
     },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{EditorSession, ExportOptions, ImportImage, OpenRequest, Request},
+    editor_viewport::{Viewport, wheel_zoom_factor},
     selection::Point as AbiPoint,
 };
 use image::RgbaImage;
@@ -23,6 +24,85 @@ use std::{
 };
 
 pub struct DrawGeometry(Vec<AbiPoint>);
+
+/// Ephemeral viewport geometry; inputs are copied and no document is accessed.
+/// # Safety
+/// Output is null or writable storage for one rectangle. False leaves it untouched.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_viewport_rect_v1(
+    viewport: Viewport,
+    fit: captures_app::selection::Rect,
+    canvas: captures_app::selection::Bounds,
+    output: *mut captures_app::selection::Rect,
+) -> bool {
+    if output.is_null() {
+        return false;
+    }
+    let Some(rect) = viewport.rect(
+        captures_app::editor::Rect {
+            x: fit.x,
+            y: fit.y,
+            width: fit.width,
+            height: fit.height,
+        },
+        canvas.width,
+        canvas.height,
+    ) else {
+        return false;
+    };
+    // SAFETY: caller supplies writable output; copied geometry only.
+    unsafe {
+        output.write(captures_app::selection::Rect {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+        })
+    };
+    true
+}
+
+/// # Safety
+/// Output is null or writable storage for one viewport. False leaves it untouched.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_viewport_zoom_v1(
+    viewport: Viewport,
+    fit: captures_app::selection::Rect,
+    canvas: captures_app::selection::Bounds,
+    percent: f64,
+    anchor: AbiPoint,
+    output: *mut Viewport,
+) -> bool {
+    if output.is_null() {
+        return false;
+    }
+    let Some(next) = viewport.zoom_at(
+        captures_app::editor::Rect {
+            x: fit.x,
+            y: fit.y,
+            width: fit.width,
+            height: fit.height,
+        },
+        canvas.width,
+        canvas.height,
+        percent,
+        Point {
+            x: anchor.x,
+            y: anchor.y,
+        },
+    ) else {
+        return false;
+    };
+    // SAFETY: caller supplies writable output; copied state only.
+    unsafe { output.write(next) };
+    true
+}
+
+/// Returns zero for invalid delta; otherwise the shared positive zoom factor.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_editor_viewport_wheel_factor_v1(delta_pixels: f64) -> f64 {
+    wheel_zoom_factor(delta_pixels).unwrap_or(0.)
+}
 
 #[repr(C)]
 pub struct RotationHandle {
@@ -830,6 +910,76 @@ mod tests {
         ffi::{CStr, CString},
         mem::MaybeUninit,
     };
+
+    #[test]
+    fn viewport_abi_copies_geometry_and_leaves_invalid_outputs_untouched() {
+        let fit = captures_app::selection::Rect {
+            x: 30.,
+            y: 80.,
+            width: 400.,
+            height: 150.,
+        };
+        let canvas = captures_app::selection::Bounds {
+            width: 800.,
+            height: 300.,
+        };
+        let mut viewport = Viewport::default();
+        let mut rect = fit;
+        // SAFETY: descriptors are live and writable; null outputs are supported.
+        unsafe {
+            assert!(captures_editor_viewport_zoom_v1(
+                viewport,
+                fit,
+                canvas,
+                125.,
+                AbiPoint { x: 130., y: 120. },
+                &mut viewport
+            ));
+            assert!(captures_editor_viewport_rect_v1(
+                viewport, fit, canvas, &mut rect
+            ));
+            assert_eq!(
+                (rect.x, rect.y, rect.width, rect.height),
+                (-120., 20., 1000., 375.)
+            );
+            let before = viewport;
+            assert!(!captures_editor_viewport_zoom_v1(
+                viewport,
+                fit,
+                canvas,
+                f64::NAN,
+                AbiPoint { x: 0., y: 0. },
+                &mut viewport
+            ));
+            assert_eq!(viewport, before);
+            assert!(!captures_editor_viewport_rect_v1(
+                viewport,
+                fit,
+                captures_app::selection::Bounds {
+                    width: 0.,
+                    height: 1.
+                },
+                &mut rect
+            ));
+            assert_eq!(rect.x, -120.);
+            assert!(!captures_editor_viewport_rect_v1(
+                viewport,
+                fit,
+                canvas,
+                ptr::null_mut()
+            ));
+            assert!(!captures_editor_viewport_zoom_v1(
+                viewport,
+                fit,
+                canvas,
+                100.,
+                AbiPoint { x: 0., y: 0. },
+                ptr::null_mut()
+            ));
+        }
+        assert_eq!(captures_editor_viewport_wheel_factor_v1(f64::NAN), 0.);
+        assert!(captures_editor_viewport_wheel_factor_v1(-80.) > 1.);
+    }
 
     #[test]
     fn move_abi_retains_original_geometry_and_rejects_invalid_output() {

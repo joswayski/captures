@@ -337,9 +337,15 @@ Canvas moves now snap painted bounds to canvas and visible-layer edges, includin
 locked layers, with alignment guides. The snap range stays constant on screen;
 numeric X/Y edits remain exact and do not snap. Clicks and small pointer movements
 do not trigger snapping or change the document.
+Both hosts connect view-only zoom and pan: Fit, 100%, zoom steps, Recenter,
+Cmd/Ctrl-wheel zoom and Cmd/Ctrl-drag or middle-button pan. AppKit also connects
+native magnification. Zoom stays anchored under the pointer and shares the image's
+coordinate mapping with editing tools. These controls do not change drafts or undo.
+Fit retains each workbench's existing layout and can enlarge small images; Tauri's
+fit policy, zoom slider, presets and keyboard shortcuts remain parity work.
 Windows, Wayland and physical AppKit presentation remain unverified.
 The native editor still uses a workbench layout, not the shipping Tauri editor design.
-Pan/zoom, other drawing tools, text, overwrite-original, AppKit edited-image
+Other drawing tools, text, overwrite-original, AppKit edited-image
 clipboard output, and recording editing remain unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
 single-instance relaunch and updates

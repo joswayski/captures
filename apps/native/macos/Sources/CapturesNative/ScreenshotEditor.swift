@@ -62,7 +62,69 @@ private final class EditorLayerCell: NSTableCellView {
     }
 }
 
-final class EditorDrawOverlay: NSView {
+class EditorViewportGestureView: NSView {
+    var onViewportZoom: ((Double, NSPoint) -> Void)?
+    var onViewportPan: ((NSPoint) -> Void)?
+    var onViewportPanBegan: (() -> Void)?
+    private var viewportPanPoint: NSPoint?
+    var isViewportPanning: Bool { viewportPanPoint != nil }
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let target = super.hitTest(point)
+        return target is NSImageView ? self : target
+    }
+
+    func claimsViewportPan(_ event: NSEvent) -> Bool {
+        (event.type == .otherMouseDown && event.buttonNumber == 2)
+            || (event.type == .leftMouseDown && !event.modifierFlags.intersection([.command, .control]).isEmpty)
+    }
+    func beginViewportPan(_ event: NSEvent) -> Bool {
+        guard claimsViewportPan(event) else { return false }
+        window?.makeFirstResponder(self)
+        onViewportPanBegan?()
+        viewportPanPoint = convert(event.locationInWindow, from: nil); return true
+    }
+    func continueViewportPan(_ event: NSEvent) -> Bool {
+        guard let previous = viewportPanPoint else { return false }
+        let next = convert(event.locationInWindow, from: nil)
+        viewportPanPoint = next
+        onViewportPan?(NSPoint(x: next.x - previous.x, y: next.y - previous.y)); return true
+    }
+    func endViewportPan() { viewportPanPoint = nil }
+    override func mouseDown(with event: NSEvent) { if !beginViewportPan(event) { super.mouseDown(with: event) } }
+    override func mouseDragged(with event: NSEvent) { if !continueViewportPan(event) { super.mouseDragged(with: event) } }
+    override func mouseUp(with event: NSEvent) { _ = continueViewportPan(event); endViewportPan() }
+    override func otherMouseDown(with event: NSEvent) { _ = beginViewportPan(event) }
+    override func otherMouseDragged(with event: NSEvent) { _ = continueViewportPan(event) }
+    override func otherMouseUp(with event: NSEvent) { _ = continueViewportPan(event); endViewportPan() }
+    override func scrollWheel(with event: NSEvent) {
+        guard !event.modifierFlags.intersection([.command, .control]).isEmpty
+        else { super.scrollWheel(with: event); return }
+        let pixels = event.hasPreciseScrollingDeltas ? -event.scrollingDeltaY : -event.scrollingDeltaY * 10
+        guard let factor = NativeEditorViewport.wheelFactor(deltaPixels: pixels) else { return }
+        onViewportZoom?(factor, convert(event.locationInWindow, from: nil))
+    }
+    override func magnify(with event: NSEvent) {
+        let factor = 1 + Double(event.magnification)
+        guard factor.isFinite, factor > 0 else { return }
+        onViewportZoom?(factor, convert(event.locationInWindow, from: nil))
+    }
+    func cancelViewportPan() { viewportPanPoint = nil }
+    override func setFrameSize(_ newSize: NSSize) {
+        if newSize != frame.size { cancelViewportPan() }
+        super.setFrameSize(newSize)
+    }
+    override var acceptsFirstResponder: Bool { true }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { cancelViewportPan() }
+        else { super.keyDown(with: event) }
+    }
+    override func resignFirstResponder() -> Bool {
+        cancelViewportPan(); return super.resignFirstResponder()
+    }
+}
+
+final class EditorDrawOverlay: EditorViewportGestureView {
     enum Shape: String, CaseIterable {
         case rectangle, ellipse, line, arrow, pen
     }
@@ -81,6 +143,7 @@ final class EditorDrawOverlay: NSView {
     var onComplete: ((Shape, NSPoint, NSPoint, [NSPoint]) -> Void)?
     var fillColor = NSColor.controlAccentColor.withAlphaComponent(0.22)
     var strokeColor = NSColor.controlAccentColor
+    var imageRect: (() -> NSRect)?
     private(set) var startPoint: NSPoint?
     private(set) var currentPoint: NSPoint?
     private(set) var penPoints: [NSPoint] = []
@@ -94,6 +157,7 @@ final class EditorDrawOverlay: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     var presentedImageRect: NSRect {
+        if let imageRect { return imageRect() }
         guard canvasSize.width > 0, canvasSize.height > 0,
               bounds.width > 0, bounds.height > 0 else { return .zero }
         let scale = min(bounds.width / canvasSize.width, bounds.height / canvasSize.height)
@@ -162,20 +226,23 @@ final class EditorDrawOverlay: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if beginViewportPan(event) { cancelGesture(); return }
         window?.makeFirstResponder(self)
         begin(at: convert(event.locationInWindow, from: nil))
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if continueViewportPan(event) { return }
         drag(to: convert(event.locationInWindow, from: nil))
     }
 
     override func mouseUp(with event: NSEvent) {
+        if isViewportPanning { _ = continueViewportPan(event); endViewportPan(); return }
         end(at: convert(event.locationInWindow, from: nil))
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { cancelGesture() }
+        if event.keyCode == 53 { cancelGesture(); cancelViewportPan() }
         else { super.keyDown(with: event) }
     }
 
@@ -229,7 +296,7 @@ final class EditorDrawOverlay: NSView {
     }
 }
 
-final class EditorSelectionOverlay: NSView {
+final class EditorSelectionOverlay: EditorViewportGestureView {
     var canvasSize = NSSize.zero { didSet { cancelGesture(); needsDisplay = true } }
     var selectionEnabled = false { didSet { if !selectionEnabled { cancelGesture() }; isHidden = !selectionEnabled } }
     var selectedOutline: [CGPoint]? { didSet { needsDisplay = true } }
@@ -239,6 +306,7 @@ final class EditorSelectionOverlay: NSView {
     var rotationEnabled = false { didSet { if !rotationEnabled { cancelGesture() }; needsDisplay = true } }
     var resizeEnabled = false { didSet { if !resizeEnabled { cancelGesture() }; needsDisplay = true } }
     var strokeColor = NSColor.controlAccentColor { didSet { needsDisplay = true } }
+    var imageRect: (() -> NSRect)?
     var hitTestLayer: ((CGPoint, Double) throws -> String?)?
     var outlineForLayer: ((String) -> [CGPoint]?)?
     var onSelect: ((String?) -> Void)?
@@ -282,6 +350,7 @@ final class EditorSelectionOverlay: NSView {
         super.setFrameSize(newSize)
     }
     var presentedImageRect: NSRect {
+        if let imageRect { return imageRect() }
         guard canvasSize.width > 0, canvasSize.height > 0, bounds.width > 0, bounds.height > 0 else { return .zero }
         let scale = min(bounds.width / canvasSize.width, bounds.height / canvasSize.height)
         let size = NSSize(width: canvasSize.width * scale, height: canvasSize.height * scale)
@@ -393,10 +462,10 @@ final class EditorSelectionOverlay: NSView {
         resizeDrag = nil; resizeHandle = nil; resizePreview = nil; lockResizeAspect = false
         moveDrag = nil; movePreview = nil
     }
-    override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self); begin(at: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
-    override func mouseDragged(with event: NSEvent) { drag(to: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
-    override func mouseUp(with event: NSEvent) { end(at: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
-    override func keyDown(with event: NSEvent) { event.keyCode == 53 ? cancelGesture() : super.keyDown(with: event) }
+    override func mouseDown(with event: NSEvent) { if beginViewportPan(event) { cancelGesture(); return }; window?.makeFirstResponder(self); begin(at: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
+    override func mouseDragged(with event: NSEvent) { if continueViewportPan(event) { return }; drag(to: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
+    override func mouseUp(with event: NSEvent) { if isViewportPanning { _ = continueViewportPan(event); endViewportPan(); return }; end(at: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
+    override func keyDown(with event: NSEvent) { if event.keyCode == 53 { cancelGesture(); cancelViewportPan() } else { super.keyDown(with: event) } }
     override func flagsChanged(with event: NSEvent) {
         if rotatingLayerID != nil || resizeDrag != nil, let currentPoint {
             drag(to: currentPoint, snap: event.modifierFlags.contains(.shift))
@@ -465,6 +534,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let outputIntegerFormatter: NumberFormatter
     private var tokens: Tokens
     private let preview = NSImageView()
+    private let viewportInput = EditorViewportGestureView()
+    private(set) var viewport = NativeEditorViewport()
+    private var viewportCanvasSize = NSSize.zero
+    private var viewportBounds = NSRect.zero
+    private var viewportButtons: [CaptureButton] = []
     private let cropX = NSTextField()
     private let cropY = NSTextField()
     private let cropWidth = NSTextField()
@@ -680,6 +754,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     func windowDidResignKey(_ notification: Notification) {
         cancelDrawing()
+        cancelViewportPan()
     }
 
     private func build() {
@@ -690,20 +765,28 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
         let previewPanel = Surface(frame: NSRect(x: 24, y: 90, width: 640, height: 550))
         previewPanel.wantsLayer = true
+        previewPanel.layer?.masksToBounds = true
         previewPanel.layer?.cornerRadius = tokens.number("r-xl")
         previewPanel.layer?.borderWidth = 1
         root.addSubview(previewPanel)
-        preview.frame = previewPanel.bounds.insetBy(dx: 18, dy: 18)
-        preview.imageScaling = .scaleProportionallyUpOrDown
+        viewportBounds = previewPanel.bounds.insetBy(dx: 18, dy: 18)
+        viewportInput.frame = viewportBounds
+        viewportInput.autoresizingMask = []
+        viewportInput.wantsLayer = true
+        viewportInput.layer?.masksToBounds = true
+        viewportInput.setAccessibilityLabel("Screenshot viewport")
+        previewPanel.addSubview(viewportInput)
+        preview.frame = viewportInput.bounds
+        preview.imageScaling = .scaleAxesIndependently
         preview.setAccessibilityLabel("Edited screenshot preview")
-        previewPanel.addSubview(preview)
-        drawOverlay.frame = preview.frame
+        viewportInput.addSubview(preview)
+        drawOverlay.frame = viewportInput.bounds
         drawOverlay.autoresizingMask = [.width, .height]
         drawOverlay.setAccessibilityLabel("Screenshot drawing canvas")
         drawOverlay.onComplete = { [weak self] shape, start, end, points in
             self?.createDrawing(shape: shape, start: start, end: end, points: points)
         }
-        previewPanel.addSubview(drawOverlay)
+        viewportInput.addSubview(drawOverlay)
         selectionOverlay.frame = preview.frame
         selectionOverlay.autoresizingMask = [.width, .height]
         selectionOverlay.setAccessibilityLabel("Screenshot layer selection canvas")
@@ -725,8 +808,25 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                     displayScale: scale, lockAspect: lockAspect)
         }
         selectionOverlay.onError = { [weak self] error in self?.showError("Layer interaction failed: \(error.localizedDescription)") }
-        previewPanel.addSubview(selectionOverlay)
-        dimensions.frame = NSRect(x: 24, y: 654, width: 640, height: 20)
+        viewportInput.addSubview(selectionOverlay)
+        for view in [viewportInput, drawOverlay, selectionOverlay] { configureViewportGestures(view) }
+        drawOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
+        selectionOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
+        let controls: [(String, String, () -> Void)] = [
+            ("Fit", "Fit screenshot in viewport", { [weak self] in self?.fitViewport() }),
+            ("100%", "Show screenshot at 100 percent", { [weak self] in self?.setViewportZoom(100) }),
+            ("−", "Zoom out", { [weak self] in self?.scaleViewport(by: 1 / 1.25) }),
+            ("+", "Zoom in", { [weak self] in self?.scaleViewport(by: 1.25) }),
+            ("Recenter", "Recenter screenshot", { [weak self] in self?.recenterViewport() }),
+        ]
+        var x: CGFloat = 24
+        for (title, accessibility, action) in controls {
+            let width: CGFloat = title == "Recenter" ? 92 : 64
+            let control = button(title, frame: NSRect(x: x, y: 650, width: width, height: 30),
+                                 parent: root, action: action)
+            control.setAccessibilityLabel(accessibility); viewportButtons.append(control); x += width + 8
+        }
+        dimensions.frame = NSRect(x: 440, y: 654, width: 224, height: 20)
         dimensions.setAccessibilityLabel("Edited canvas dimensions"); root.addSubview(dimensions)
 
         sectionControl = NSSegmentedControl(labels: ["Geometry", "Layers", "Draw", "Output"], trackingMode: .selectOne,
@@ -1008,6 +1108,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     @objc private func changeSection() {
         cancelDrawing()
+        cancelViewportPan()
         geometryPanel.isHidden = sectionControl.selectedSegment != Section.geometry
         layersPanel.isHidden = sectionControl.selectedSegment != Section.layers
         drawPanel.isHidden = sectionControl.selectedSegment != Section.draw
@@ -1016,6 +1117,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             changeOutputPreview()
         } else {
             preview.image = editedImage
+            if let editedImage { viewportCanvasSize = editedImage.size }
+            updateViewportGeometry()
         }
         updateDrawing()
     }
@@ -1046,10 +1149,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             preview.image = NSImage(cgImage: encodedOutput.image,
                                     size: NSSize(width: encodedOutput.image.width,
                                                  height: encodedOutput.image.height))
+            viewportCanvasSize = NSSize(width: encodedOutput.image.width,
+                                        height: encodedOutput.image.height)
         } else {
             outputPreviewMode.selectedSegment = 0
             preview.image = editedImage
+            if let editedImage { viewportCanvasSize = editedImage.size }
         }
+        updateViewportGeometry()
     }
 
     private func previewOutput() {
@@ -1232,6 +1339,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         encodedOutput = nil
         outputPreviewMode?.selectedSegment = 0
         preview.image = editedImage
+        if let editedImage { viewportCanvasSize = editedImage.size; updateViewportGeometry() }
         if optionsChanged && hadOutput {
             outputSize.stringValue = "Options changed. Preview output again."
         } else if !optionsChanged {
@@ -1287,6 +1395,63 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func cancelDrawing() {
         drawOverlay.cancelGesture()
         selectionOverlay.cancelGesture()
+    }
+
+    private var fittedImageRect: NSRect {
+        guard viewportCanvasSize.width > 0, viewportCanvasSize.height > 0 else { return .zero }
+        let scale = min(viewportBounds.width / viewportCanvasSize.width,
+                        viewportBounds.height / viewportCanvasSize.height)
+        let size = NSSize(width: viewportCanvasSize.width * scale,
+                          height: viewportCanvasSize.height * scale)
+        return NSRect(x: (viewportBounds.width - size.width) / 2,
+                      y: (viewportBounds.height - size.height) / 2,
+                      width: size.width, height: size.height)
+    }
+
+    var presentedImageRect: NSRect {
+        viewport.rect(fit: fittedImageRect, canvas: viewportCanvasSize) ?? fittedImageRect
+    }
+
+    private func configureViewportGestures(_ view: EditorViewportGestureView) {
+        view.onViewportZoom = { [weak self] factor, anchor in self?.scaleViewport(by: factor, anchor: anchor) }
+        view.onViewportPan = { [weak self] delta in self?.panViewport(by: delta) }
+        view.onViewportPanBegan = { [weak self] in self?.cancelDrawing() }
+    }
+
+    private func fitViewport() { cancelViewportPan(); changeViewport(to: NativeEditorViewport()) }
+    private func recenterViewport() {
+        cancelViewportPan()
+        var next = viewport; next.panX = 0; next.panY = 0; changeViewport(to: next)
+    }
+    private func setViewportZoom(_ percent: Double) {
+        zoomViewport(to: percent, anchor: NSPoint(x: viewportBounds.width / 2, y: viewportBounds.height / 2))
+    }
+    private func scaleViewport(by factor: Double, anchor: NSPoint? = nil) {
+        guard factor.isFinite, factor > 0 else { return }
+        let current = viewport.zoomPercent == 0
+            ? fittedImageRect.width / max(1, viewportCanvasSize.width) * 100 : viewport.zoomPercent
+        zoomViewport(to: current * factor,
+                     anchor: anchor ?? NSPoint(x: viewportBounds.width / 2, y: viewportBounds.height / 2))
+    }
+    private func zoomViewport(to percent: Double, anchor: NSPoint) {
+        guard let next = viewport.zoomed(to: percent, anchor: anchor,
+            fit: fittedImageRect, canvas: viewportCanvasSize) else { return }
+        cancelViewportPan()
+        changeViewport(to: next)
+    }
+    private func panViewport(by delta: NSPoint) {
+        guard delta.x.isFinite, delta.y.isFinite else { return }
+        var next = viewport; next.panX += delta.x; next.panY += delta.y; changeViewport(to: next)
+    }
+    private func changeViewport(to next: NativeEditorViewport) {
+        cancelDrawing(); viewport = next; updateViewportGeometry()
+    }
+    private func cancelViewportPan() {
+        viewportInput.cancelViewportPan(); drawOverlay.cancelViewportPan(); selectionOverlay.cancelViewportPan()
+    }
+    private func updateViewportGeometry() {
+        preview.frame = presentedImageRect
+        drawOverlay.needsDisplay = true; selectionOverlay.needsDisplay = true
     }
 
     private func updateDrawing() {
@@ -1578,8 +1743,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             size: NSSize(width: CGFloat(presentation.image.width),
                          height: CGFloat(presentation.image.height)))
         preview.image = editedImage
+        cancelViewportPan()
+        viewportCanvasSize = NSSize(width: presentation.image.width, height: presentation.image.height)
         drawOverlay.canvasSize = NSSize(width: snapshot.width, height: snapshot.height)
         selectionOverlay.canvasSize = drawOverlay.canvasSize
+        updateViewportGeometry()
         dimensions.stringValue = "\(format(snapshot.width)) × \(format(snapshot.height)) pixels"
         canvasWidth.stringValue = format(snapshot.width); canvasHeight.stringValue = format(snapshot.height)
         if resetCrop || cropWidth.stringValue.isEmpty {
@@ -1595,6 +1763,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelPendingImport()
         closeAfterCommand = false; selectedLayerID = nil; preferredLayerID = nil
         state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
+        cancelViewportPan()
+        viewport = NativeEditorViewport(); viewportCanvasSize = .zero
         worker.close(); window.orderOut(nil); updateControls()
     }
 
@@ -1613,6 +1783,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         changeOutputDirectoryButton?.isEnabled = ready
         saveNewCopyButton?.isEnabled = ready && !outputDirectory.isEmpty
         outputPreviewMode?.isEnabled = ready && encodedOutput != nil
+        viewportButtons.forEach { $0.isEnabled = ready }
         updateOutputOptionControls()
         updateDrawing()
         layerTable?.isEnabled = ready

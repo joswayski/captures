@@ -3,6 +3,125 @@ import XCTest
 @testable import CapturesNative
 
 final class ScreenshotEditorTests: XCTestCase {
+    func testViewportBridgeKeepsAsymmetricAnchorAfterPanAndRejectsInvalidInput() throws {
+        let fit = CGRect(x: 17, y: 29, width: 503, height: 251.5)
+        let canvas = CGSize(width: 1600, height: 800)
+        let anchor = CGPoint(x: 411, y: 87)
+        let panned = NativeEditorViewport(zoomPercent: 175, panX: -83, panY: 41)
+        let before = try XCTUnwrap(panned.rect(fit: fit, canvas: canvas))
+        let document = CGPoint(x: (anchor.x - before.minX) * canvas.width / before.width,
+                               y: (anchor.y - before.minY) * canvas.height / before.height)
+        let zoomed = try XCTUnwrap(panned.zoomed(to: 287.5, anchor: anchor,
+                                                 fit: fit, canvas: canvas))
+        let after = try XCTUnwrap(zoomed.rect(fit: fit, canvas: canvas))
+        XCTAssertEqual(after.minX + document.x * after.width / canvas.width, anchor.x,
+                       accuracy: 0.001)
+        XCTAssertEqual(after.minY + document.y * after.height / canvas.height, anchor.y,
+                       accuracy: 0.001)
+        XCTAssertNil(NativeEditorViewport.wheelFactor(deltaPixels: .nan))
+        XCTAssertNil(NativeEditorViewport().rect(fit: fit, canvas: .zero))
+    }
+
+    func testViewportControlsAreAccessibleAndDoNotMutateEditorState() throws {
+        _ = NSApplication.shared
+        let original = snapshot(id: "shot", unsaved: true, draft: true)
+        let worker = FakeEditorWorker(snapshot: original)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        let labels = ["Fit screenshot in viewport", "Show screenshot at 100 percent",
+                      "Zoom out", "Zoom in", "Recenter screenshot"]
+        let controls = descendants(in: controller.root).compactMap { $0 as? CaptureButton }
+            .filter { labels.contains($0.accessibilityLabel() ?? "") }
+        XCTAssertEqual(controls.count, 5)
+        controls.first { $0.accessibilityLabel() == "Show screenshot at 100 percent" }?.performClick(nil)
+        XCTAssertEqual(controller.viewport.zoomPercent, 100)
+        controls.first { $0.accessibilityLabel() == "Zoom in" }?.performClick(nil)
+        XCTAssertEqual(controller.viewport.zoomPercent, 125)
+        controls.first { $0.accessibilityLabel() == "Recenter screenshot" }?.performClick(nil)
+        XCTAssertEqual(controller.viewport.zoomPercent, 125)
+        controls.first { $0.accessibilityLabel() == "Fit screenshot in viewport" }?.performClick(nil)
+        XCTAssertEqual(controller.viewport, NativeEditorViewport())
+        XCTAssertEqual(controller.state.snapshot, original)
+        XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertTrue(controls.allSatisfy { controller.root.bounds.contains($0.convert($0.bounds, to: controller.root)) })
+    }
+
+    func testViewportPanEventsUseReleasePointAndZoomCancelsDrawing() throws {
+        _ = NSApplication.shared
+        let original = snapshot(id: "shot", width: 640, height: 360, unsaved: false, draft: false)
+        let worker = FakeEditorWorker(snapshot: original)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let overlay = controller.drawOverlay
+        func event(_ type: NSEvent.EventType, _ point: CGPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: overlay.convert(point, to: nil),
+                modifierFlags: [.command], timestamp: 0, windowNumber: controller.window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        overlay.begin(at: CGPoint(x: 120, y: 140))
+        XCTAssertNotNil(overlay.startPoint)
+        overlay.mouseDown(with: event(.leftMouseDown, CGPoint(x: 120, y: 140)))
+        XCTAssertNil(overlay.startPoint, "pan has priority over drawing")
+        overlay.mouseDragged(with: event(.leftMouseDragged, CGPoint(x: 137, y: 129)))
+        overlay.mouseUp(with: event(.leftMouseUp, CGPoint(x: 143, y: 133)))
+        XCTAssertEqual(controller.viewport.panX, 23, accuracy: 1e-7)
+        XCTAssertEqual(controller.viewport.panY, -7, accuracy: 1e-7)
+        XCTAssertFalse(overlay.isViewportPanning)
+        overlay.begin(at: CGPoint(x: 120, y: 140))
+        try button("100%", in: controller.root).performClick(nil)
+        XCTAssertNil(overlay.startPoint, "toolbar zoom cancels the original gesture")
+        overlay.end(at: CGPoint(x: 240, y: 200))
+        XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertEqual(controller.state.snapshot, original)
+        XCTAssertTrue(overlay.superview?.layer?.masksToBounds == true,
+                      "pixels and overlays clip to the same viewport, not the outer panel")
+    }
+
+    func testHighZoomUsesOneRectForDrawingAndSelectionAndCancelsGestures() {
+        let rect = CGRect(x: -137, y: 53, width: 2400, height: 1200)
+        let draw = EditorDrawOverlay(frame: CGRect(x: 0, y: 0, width: 604, height: 468))
+        let selection = EditorSelectionOverlay(frame: draw.frame)
+        draw.canvasSize = CGSize(width: 1600, height: 800)
+        selection.canvasSize = draw.canvasSize
+        draw.imageRect = { rect }; selection.imageRect = { rect }
+        let viewPoint = CGPoint(x: 463, y: 353)
+        XCTAssertEqual(draw.canvasPoint(for: viewPoint), selection.canvasPoint(for: viewPoint))
+        XCTAssertEqual(draw.canvasPoint(for: viewPoint).x, 400, accuracy: 0.001)
+        XCTAssertEqual(draw.canvasPoint(for: viewPoint).y, 200, accuracy: 0.001)
+        draw.drawingEnabled = true; draw.begin(at: viewPoint)
+        selection.selectionEnabled = true; selection.begin(at: viewPoint)
+        draw.cancelGesture(); selection.cancelGesture()
+        XCTAssertNil(draw.startPoint); XCTAssertNil(selection.startPoint)
+    }
+
+    func testManualZoomAndPanRenderWithoutDraftOrPixelWork() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let original = snapshot(id: "shot", width: 1200, height: 500,
+                                    unsaved: true, draft: true)
+            let worker = FakeEditorWorker(snapshot: original)
+            let controller = ScreenshotEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            let controls = descendants(in: controller.root).compactMap { $0 as? CaptureButton }
+            controls.first { $0.accessibilityLabel() == "Show screenshot at 100 percent" }?.performClick(nil)
+            let input = try XCTUnwrap(descendants(in: controller.root)
+                .compactMap { $0 as? EditorViewportGestureView }
+                .first { $0.accessibilityLabel() == "Screenshot viewport" })
+            input.onViewportPan?(NSPoint(x: -117, y: 63))
+            XCTAssertEqual(controller.viewport.panX, -117)
+            XCTAssertEqual(controller.viewport.panY, 63)
+            XCTAssertEqual(controller.state.snapshot, original)
+            XCTAssertTrue(worker.requests.isEmpty)
+            XCTAssertTrue(worker.encodes.isEmpty)
+            try render(controller.root, name: "screenshot-editor-viewport-manual-\(appearance)")
+        }
+    }
+
     func testStateRejectsStaleOpenAndCommandCompletions() throws {
         var state = ScreenshotEditorState()
         let first = state.beginOpen(artifactID: "first")
@@ -1725,9 +1844,12 @@ final class ScreenshotEditorTests: XCTestCase {
             NativeEditorAlignmentGuide(orientation: .horizontal, position: 0),
         ])
         let multiple = try XCTUnwrap(drag.preview(delta: CGPoint(x: 148.4, y: 92.4)))
-        XCTAssertEqual(multiple.outline[0], CGPoint(x: 190, y: 130))
+        XCTAssertEqual(multiple.outline[0].x, 190, accuracy: 1e-7)
+        XCTAssertEqual(multiple.outline[0].y, 130, accuracy: 1e-7)
         XCTAssertEqual(multiple.guides.count, 4)
-        XCTAssertEqual(multiple.guides.map(\.position), [190, 273.5, 130, 176.25])
+        for (guide, expected) in zip(multiple.guides, [190.0, 273.5, 130, 176.25]) {
+            XCTAssertEqual(guide.position, expected, accuracy: 1e-7)
+        }
 
         // A layer already inside the magnetic range must not jump on a click,
         // or when a drag returns below the three-view-point movement threshold.
@@ -1998,8 +2120,9 @@ final class ScreenshotEditorTests: XCTestCase {
             waitUntil { !controller.state.busy && controller.state.snapshot!.unsavedChanges }
             let moved = try request(["operation": "snapshot"], using: live)
             XCTAssertEqual(moved.snapshot.layers.first?.id, id)
-            XCTAssertEqual(try XCTUnwrap(moved.snapshot.layers.first?.x), 4, accuracy: 1e-7)
-            XCTAssertEqual(try XCTUnwrap(moved.snapshot.layers.first?.y), 4, accuracy: 1e-7)
+            // The default ten-pixel stroke extends five pixels outside the shape.
+            XCTAssertEqual(try XCTUnwrap(moved.snapshot.layers.first?.x), 5, accuracy: 1e-7)
+            XCTAssertEqual(try XCTUnwrap(moved.snapshot.layers.first?.y), 5, accuracy: 1e-7)
             XCTAssertEqual(rgba(moved.image, x: 110, y: 90), [247, 247, 245, 255])
             XCTAssertEqual(rgba(moved.image, x: 10, y: 10), [255, 59, 92, 255])
             try render(controller.root, name: "screenshot-editor-move-committed-\(appearance)")

@@ -247,6 +247,30 @@ def main():
             return layers()
 
         run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        # Viewport state is host-only. Exercise anchored wheel zoom and an
+        # ordered middle-button pan before the coordinate-sensitive fixtures.
+        run("xdotool", "mousemove", "--sync", "--window", editor, "520", "250",
+            "keydown", "ctrl", "click", "4", "click", "4", "keyup", "ctrl", "sleep", ".3")
+        shot(editor, f"viewport-zoom-{args.appearance}")
+        assert not draft.exists(), "zoom must not create a draft"
+        run("xdotool", "mousemove", "--sync", "--window", editor, "520", "250",
+            "mousedown", "2", "mousemove", "--sync", "--window", editor, "585", "290",
+            "sleep", ".3")
+        shot(editor, f"viewport-pan-active-{args.appearance}")
+        assert not draft.exists(), "active pan must not enqueue an edit"
+        run("xdotool", "mouseup", "2", "sleep", ".3")
+        shot(editor, f"viewport-pan-settled-{args.appearance}")
+        assert not draft.exists(), "settled pan must not enqueue an edit"
+        # Recenter keeps zoom; Fit restores the historical fixture geometry.
+        click(editor, 840, 25)
+        shot(editor, f"viewport-recenter-{args.appearance}")
+        click(editor, 660, 25)
+        shot(editor, f"viewport-fit-{args.appearance}")
+        pixel(f"viewport-fit-{args.appearance}", 320, 150, (229, 179, 68))
+        click(editor, 710, 25)  # 100%
+        click(editor, 790, 25)  # + (1.25x)
+        assert not draft.exists(), "toolbar zoom must remain outside draft state"
+        click(editor, 660, 25)  # Fit also cancels any viewport gesture and restores coordinates.
         click(editor, 736, 62)
         click(editor, 95, 176)  # Pen follows Arrow on the second tool row.
         run("xdotool", "mousemove", "--window", editor, "318", "329", "mousedown", "1", "sleep", ".2")
@@ -1099,7 +1123,9 @@ def main():
         assert (artifact / "capture.png").read_bytes() == original
         (output / "result.json").write_text(json.dumps({
             "passed": True, "appearance": args.appearance,
-            "checks": ["crop", "crop-pointer-reverse", "crop-escape-no-mutation", "crop-transient-no-write",
+            "checks": ["viewport-wheel-anchor", "viewport-toolbar-fit-100-step-recenter",
+                       "viewport-pan-active-settled-no-draft", "viewport-fit-pixels",
+                       "crop", "crop-pointer-reverse", "crop-escape-no-mutation", "crop-transient-no-write",
                        "crop-shift-square", "crop-outside-start-clamping", "crop-preset-precedes-shift",
                        "crop-cancel-restores-fields", "crop-popup-escape",
                        "shape-reverse-rectangle-ellipse-pixels", "shape-single-undo-redo-stable-id",
