@@ -93,7 +93,8 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(draw.canvasPoint(for: viewPoint).y, 200, accuracy: 0.001)
         draw.drawingEnabled = true; draw.begin(at: viewPoint)
         selection.selectionEnabled = true; selection.begin(at: viewPoint)
-        draw.cancelGesture(); selection.cancelGesture()
+        draw.setFrameSize(NSSize(width: 500, height: 420))
+        selection.setFrameSize(NSSize(width: 500, height: 420))
         XCTAssertNil(draw.startPoint); XCTAssertNil(selection.startPoint)
     }
 

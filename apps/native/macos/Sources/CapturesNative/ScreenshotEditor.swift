@@ -155,6 +155,10 @@ final class EditorDrawOverlay: EditorViewportGestureView {
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+    override func setFrameSize(_ newSize: NSSize) {
+        if newSize != frame.size { cancelGesture() }
+        super.setFrameSize(newSize)
+    }
 
     var presentedImageRect: NSRect {
         if let imageRect { return imageRect() }

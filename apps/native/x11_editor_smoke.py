@@ -249,9 +249,12 @@ def main():
         run("xdotool", "windowsize", "--sync", editor, "886", "700")
         # Viewport state is host-only. Exercise anchored wheel zoom and an
         # ordered middle-button pan before the coordinate-sensitive fixtures.
+        shot(editor, f"viewport-before-{args.appearance}")
+        pixel(f"viewport-before-{args.appearance}", 310, 200, (40, 110, 166))
         run("xdotool", "mousemove", "--sync", "--window", editor, "520", "250",
             "keydown", "ctrl", "click", "4", "click", "4", "keyup", "ctrl", "sleep", ".3")
         shot(editor, f"viewport-zoom-{args.appearance}")
+        pixel(f"viewport-zoom-{args.appearance}", 310, 200, (229, 179, 68))
         assert not draft.exists(), "zoom must not create a draft"
         run("xdotool", "mousemove", "--sync", "--window", editor, "520", "250",
             "mousedown", "2", "mousemove", "--sync", "--window", editor, "585", "290",
@@ -260,17 +263,20 @@ def main():
         assert not draft.exists(), "active pan must not enqueue an edit"
         run("xdotool", "mouseup", "2", "sleep", ".3")
         shot(editor, f"viewport-pan-settled-{args.appearance}")
+        pixel(f"viewport-pan-settled-{args.appearance}", 310, 200, (40, 110, 166))
+        pixel(f"viewport-pan-settled-{args.appearance}", 490, 200, (229, 179, 68))
         assert not draft.exists(), "settled pan must not enqueue an edit"
         # Recenter keeps zoom; Fit restores the historical fixture geometry.
         click(editor, 840, 25)
         shot(editor, f"viewport-recenter-{args.appearance}")
-        click(editor, 660, 25)
+        click(editor, 630, 18)
         shot(editor, f"viewport-fit-{args.appearance}")
-        pixel(f"viewport-fit-{args.appearance}", 320, 150, (229, 179, 68))
-        click(editor, 710, 25)  # 100%
-        click(editor, 790, 25)  # + (1.25x)
+        pixel(f"viewport-fit-{args.appearance}", 340, 200, (229, 179, 68))
+        pixel(f"viewport-fit-{args.appearance}", 310, 200, (40, 110, 166))
+        click(editor, 686, 18)  # 100%
+        click(editor, 778, 18)  # + (1.25x)
         assert not draft.exists(), "toolbar zoom must remain outside draft state"
-        click(editor, 660, 25)  # Fit also cancels any viewport gesture and restores coordinates.
+        click(editor, 630, 18)  # Fit also cancels any viewport gesture and restores coordinates.
         click(editor, 736, 62)
         click(editor, 95, 176)  # Pen follows Arrow on the second tool row.
         run("xdotool", "mousemove", "--window", editor, "318", "329", "mousedown", "1", "sleep", ".2")

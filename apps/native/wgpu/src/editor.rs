@@ -1215,6 +1215,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             let texture = texture.clone();
             let available = ui.available_rect_before_wrap();
             if view.viewport_area != Some(available) {
+                view.cancel_edit_gestures();
                 view.viewport_pan = None;
                 view.viewport_area = Some(available);
             }
@@ -1497,7 +1498,7 @@ fn show_layer_canvas(
                     ..
                 } if !view.pending => {
                     view.cancel_layer_gesture();
-                    if !preview.contains(pos) {
+                    if !available.contains(pos) || !preview.contains(pos) {
                         continue;
                     }
                     let point = image_point(pos, preview, bounds);
@@ -2744,7 +2745,12 @@ mod tests {
                     let mut ui = root.new_child(egui::UiBuilder::new().max_rect(area));
                     let intercepted = handle_viewport_input(&ui, view, area);
                     let preview = viewport_rect(view.viewport, area, size).unwrap();
-                    show_shape(&mut ui, view, &tx, area, preview, intercepted);
+                    if view.section == Section::Layers {
+                        let tokens = crate::tokens::load().into_values().next().unwrap();
+                        show_layer_canvas(&mut ui, &tokens, view, &tx, area, preview, intercepted);
+                    } else {
+                        show_shape(&mut ui, view, &tx, area, preview, intercepted);
+                    }
                     if ctx.current_pass_index() == 0 {
                         ctx.request_discard("viewport multipass");
                     }
@@ -2825,6 +2831,22 @@ mod tests {
         view.reset_viewport();
         assert_eq!(viewport_rect(view.viewport, area, size), Some(area));
         assert!(rx.try_recv().is_err() && view.output.is_some());
+        view.section = Section::Layers;
+        set_viewport_zoom(&mut view, 500., None);
+        frame(
+            &mut view,
+            vec![egui::Event::PointerButton {
+                pos: egui::pos2(50., 140.),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            true,
+        );
+        assert!(
+            view.layer_gesture.is_none(),
+            "zoomed pixels behind the sidebar cannot receive layer input"
+        );
     }
 
     fn presented(unsaved: bool) -> Presented {
