@@ -1141,11 +1141,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         selectionOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         cropOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
-        let fit = button("Fit", frame: NSRect(x: 24, y: 650, width: 64, height: 30), parent: root) {
+        let fit = button("Fit", frame: NSRect(x: 24, y: 650, width: 40, height: 30), parent: root) {
             [weak self] in self?.fitViewport()
         }
         fit.setAccessibilityLabel("Fit screenshot in viewport"); viewportButtons.append(fit)
-        zoomPreset.frame = NSRect(x: 96, y: 650, width: 80, height: 30)
+        zoomPreset.frame = NSRect(x: 72, y: 650, width: 80, height: 30)
         zoomPreset.setAccessibilityLabel("Canvas zoom preset")
         zoomPreset.target = self; zoomPreset.action = #selector(changeZoomPreset)
         root.addSubview(zoomPreset)
@@ -1155,19 +1155,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             ("+", "Zoom in", { [weak self] in self?.scaleViewport(by: 1.25) }),
             ("Recenter", "Recenter screenshot", { [weak self] in self?.recenterViewport() }),
         ]
-        var x: CGFloat = 184
+        var x: CGFloat = 160
         for (title, accessibility, action) in controls {
-            let width: CGFloat = title == "Recenter" ? 92 : 40
+            let width: CGFloat = title == "Recenter" ? 84 : 32
             let control = button(title, frame: NSRect(x: x, y: 650, width: width, height: 30),
                                  parent: root, action: action)
             control.setAccessibilityLabel(accessibility); viewportButtons.append(control); x += width + 8
         }
-        zoomSlider.frame = NSRect(x: 384, y: 650, width: 124, height: 30)
+        zoomSlider.frame = NSRect(x: 332, y: 650, width: 100, height: 30)
         zoomSlider.isContinuous = true
         zoomSlider.setAccessibilityLabel("Canvas zoom")
         zoomSlider.target = self; zoomSlider.action = #selector(changeZoomSlider)
         root.addSubview(zoomSlider)
-        dimensions.frame = NSRect(x: 516, y: 654, width: 148, height: 20)
+        dimensions.frame = NSRect(x: 440, y: 654, width: 224, height: 20)
         dimensions.setAccessibilityLabel("Edited canvas dimensions"); root.addSubview(dimensions)
 
         sectionControl = NSSegmentedControl(labels: ["Geometry", "Layers", "Draw", "Output"], trackingMode: .selectOne,
