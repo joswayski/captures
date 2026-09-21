@@ -1063,6 +1063,7 @@ impl Drop for Editor {
 
 fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let previous_section = view.section;
+    handle_viewport_shortcuts(ui.ctx(), view);
     if !ui.ctx().egui_wants_keyboard_input()
         && !egui::Popup::is_any_open(ui.ctx())
         && ui.input(|input| input.key_pressed(egui::Key::Escape))
@@ -1371,6 +1372,60 @@ fn viewport_rect(viewport: Viewport, fit: egui::Rect, image: egui::Vec2) -> Opti
                 egui::vec2(rect.width as f32, rect.height as f32),
             )
         })
+}
+
+fn handle_viewport_shortcuts(ctx: &egui::Context, view: &mut View) {
+    // Consume editor shortcuts before egui's end-of-pass global UI zoom.
+    // Keep event order and repeats; several key presses may arrive in one pass.
+    let keys = ctx.input_mut(|input| {
+        let mut keys = Vec::new();
+        input.events.retain(|event| {
+            let egui::Event::Key {
+                key,
+                physical_key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            else {
+                return true;
+            };
+            let zoom_key = |key: &egui::Key| {
+                matches!(
+                    key,
+                    egui::Key::Plus | egui::Key::Equals | egui::Key::Minus | egui::Key::Num0
+                )
+            };
+            let key = if zoom_key(key) {
+                Some(*key)
+            } else {
+                physical_key.filter(|key| matches!(key, egui::Key::Equals | egui::Key::Minus))
+            };
+            if let Some(key) = key.filter(|_| modifiers.command || modifiers.ctrl) {
+                keys.push(key);
+                false
+            } else {
+                true
+            }
+        });
+        keys
+    });
+    if ctx.current_pass_index() != 0
+        || !ctx.input(|input| input.focused)
+        || view.close_requested
+        || view.confirm_discard
+        || egui::Popup::is_any_open(ctx)
+    {
+        return;
+    }
+    // Shipping zoom shortcuts also work while a numeric/text field has focus.
+    for key in keys {
+        match key {
+            egui::Key::Num0 => set_viewport_zoom(view, 100., None),
+            egui::Key::Minus => change_viewport_zoom(view, 1. / 1.25, None),
+            _ => change_viewport_zoom(view, 1.25, None),
+        }
+    }
 }
 
 fn set_viewport_zoom(view: &mut View, percent: f64, anchor: Option<egui::Pos2>) {
@@ -2949,6 +3004,114 @@ fn show_annotation(
 mod tests {
     use super::*;
     use std::{fs, time::Duration};
+
+    #[test]
+    fn zoom_shortcuts_keep_event_order_cancel_gestures_and_do_not_zoom_ui_or_edit() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(false)));
+        let document = view.presented.as_ref().unwrap().document.clone();
+        view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
+        view.viewport_area = Some(egui::Rect::from_min_size(
+            egui::pos2(31., 47.),
+            egui::vec2(400., 200.),
+        ));
+        view.viewport_image_size = Some(egui::vec2(200., 100.));
+        view.shape_drag = Some((Point { x: 3., y: 7. }, Point { x: 20., y: 30. }));
+        let key = |key, command| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: if command {
+                egui::Modifiers::COMMAND
+            } else {
+                egui::Modifiers::NONE
+            },
+        };
+        let frame = |view: &mut View, events, focused| {
+            let mut text = "unchanged".to_owned();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    focused,
+                    ..Default::default()
+                },
+                |ui| {
+                    handle_viewport_shortcuts(&ctx, view);
+                    ui.add(egui::TextEdit::singleline(&mut text).id(egui::Id::new("zoom-field")))
+                        .request_focus();
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("shortcut multipass");
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            assert_eq!(text, "unchanged");
+            assert_eq!(
+                ctx.zoom_factor(),
+                1.,
+                "document shortcuts must not scale every window"
+            );
+        };
+        frame(&mut view, vec![], true);
+        frame(
+            &mut view,
+            vec![
+                key(egui::Key::Num0, true),
+                key(egui::Key::Equals, true),
+                key(egui::Key::Plus, true),
+                key(egui::Key::Minus, true),
+            ],
+            true,
+        );
+        assert_eq!(
+            view.viewport.zoom_percent, 125.,
+            "ordered events, not one action per frame"
+        );
+        assert!(view.shape_drag.is_none());
+        frame(&mut view, vec![key(egui::Key::Num0, true)], true);
+        assert_eq!(
+            view.viewport.zoom_percent, 100.,
+            "zero is actual size, not Fit (200%)"
+        );
+        frame(&mut view, vec![key(egui::Key::Plus, false)], true);
+        assert_eq!(view.viewport.zoom_percent, 100.);
+        let physical = |physical_key| egui::Event::Key {
+            key: egui::Key::Slash,
+            physical_key: Some(physical_key),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        };
+        frame(
+            &mut view,
+            vec![physical(egui::Key::Equals), physical(egui::Key::Num0)],
+            true,
+        );
+        assert_eq!(
+            view.viewport.zoom_percent, 125.,
+            "physical Equal works; arbitrary shifted zero does not reset"
+        );
+        frame(&mut view, vec![physical(egui::Key::Minus)], true);
+        assert_eq!(view.viewport.zoom_percent, 100.);
+        view.confirm_discard = true;
+        frame(&mut view, vec![key(egui::Key::Plus, true)], true);
+        assert_eq!(view.viewport.zoom_percent, 100.);
+        view.confirm_discard = false;
+        frame(&mut view, vec![key(egui::Key::Plus, true)], false);
+        assert_eq!(view.viewport.zoom_percent, 100.);
+        frame(&mut view, vec![key(egui::Key::Plus, true); 20], true);
+        assert_eq!(view.viewport.zoom_percent, 800.);
+        frame(&mut view, vec![key(egui::Key::Minus, true); 30], true);
+        assert_eq!(view.viewport.zoom_percent, 5.);
+        assert_eq!(view.presented.as_ref().unwrap().document, document);
+        assert!(view.output.is_some());
+        assert!(!view.pending);
+    }
 
     #[test]
     fn viewport_events_anchor_zoom_pan_once_and_never_submit_edits() {

@@ -47,6 +47,55 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controls.allSatisfy { controller.root.bounds.contains($0.convert($0.bounds, to: controller.root)) })
     }
 
+    func testZoomShortcutsUseActualSizeAndWorkInFieldsWithoutEditing() throws {
+        _ = NSApplication.shared
+        let original = snapshot(id: "shot", width: 640, height: 360)
+        let worker = FakeEditorWorker(snapshot: original)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        func event(_ key: String, code: UInt16, flags: NSEvent.ModifierFlags) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                timestamp: 0, windowNumber: controller.window.windowNumber, context: nil,
+                characters: key, charactersIgnoringModifiers: key, isARepeat: true, keyCode: code)!
+        }
+        try showDraw(in: controller.root)
+        controller.drawOverlay.begin(at: NSPoint(x: 120, y: 140))
+        XCTAssertNotNil(controller.drawOverlay.startPoint)
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: event("0", code: 29, flags: .command)))
+        XCTAssertEqual(controller.viewport.zoomPercent, 100, "zero is actual size, not Fit")
+        XCTAssertNil(controller.drawOverlay.startPoint)
+        let section = try segmented("Editor section", in: controller.root)
+        section.selectedSegment = 0; _ = section.sendAction(section.action, to: section.target)
+        let field = try field("Canvas width", in: controller.root)
+        field.selectText(nil)
+        let content = field.stringValue
+        controller.window.sendEvent(event("=", code: 24, flags: .control))
+        XCTAssertEqual(controller.viewport.zoomPercent, 125)
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: event("+", code: 69, flags: .command)))
+        XCTAssertEqual(controller.viewport.zoomPercent, 156.3)
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: event("_", code: 27, flags: [.command, .shift])))
+        XCTAssertEqual(controller.viewport.zoomPercent, 125)
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: event("-", code: 78, flags: .command)))
+        XCTAssertEqual(controller.viewport.zoomPercent, 100)
+        XCTAssertEqual(field.stringValue, content)
+        XCTAssertFalse(controller.window.performKeyEquivalent(with: event("+", code: 69, flags: [])))
+        for _ in 0..<20 { controller.window.sendEvent(event("+", code: 69, flags: .command)) }
+        XCTAssertEqual(controller.viewport.zoomPercent, 800)
+        for _ in 0..<30 { controller.window.sendEvent(event("-", code: 78, flags: .command)) }
+        XCTAssertEqual(controller.viewport.zoomPercent, 5)
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: event("0", code: 82, flags: .control)))
+        XCTAssertEqual(controller.viewport.zoomPercent, 100)
+        let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 120, height: 80),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+        controller.window.beginSheet(sheet)
+        _ = controller.window.performKeyEquivalent(with: event("+", code: 69, flags: .command))
+        XCTAssertEqual(controller.viewport.zoomPercent, 100, "a sheet owns keyboard input")
+        controller.window.endSheet(sheet)
+        XCTAssertEqual(controller.state.snapshot, original)
+        XCTAssertTrue(worker.requests.isEmpty)
+    }
+
     func testViewportPanEventsUseReleasePointAndZoomCancelsDrawing() throws {
         _ = NSApplication.shared
         let original = snapshot(id: "shot", width: 640, height: 360, unsaved: false, draft: false)

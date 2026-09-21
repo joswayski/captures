@@ -341,8 +341,10 @@ Both hosts connect view-only zoom and pan: Fit, 100%, zoom steps, Recenter,
 Cmd/Ctrl-wheel zoom and Cmd/Ctrl-drag or middle-button pan. AppKit also connects
 native magnification. Zoom stays anchored under the pointer and shares the image's
 coordinate mapping with editing tools. These controls do not change drafts or undo.
+Cmd/Ctrl +/− zoom in 1.25× steps; Cmd/Ctrl 0 shows 100% (not Fit), including while
+an editor field has focus. Zoom shortcuts cancel unfinished canvas gestures.
 Fit retains each workbench's existing layout and can enlarge small images; Tauri's
-fit policy, zoom slider, presets and keyboard shortcuts remain parity work.
+fit policy, zoom slider and presets remain parity work.
 Windows, Wayland and physical AppKit presentation remain unverified.
 The native editor still uses a workbench layout, not the shipping Tauri editor design.
 Both hosts can copy the full-resolution edited image without saving a file or draft;

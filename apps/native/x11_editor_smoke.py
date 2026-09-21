@@ -78,6 +78,8 @@ def main():
                         help="Exercise erase/restore gestures, cancellation, draft and clipboard")
     parser.add_argument("--trim-only", action="store_true",
                         help="Exercise canvas trimming, undo/redo, draft and output dimensions")
+    parser.add_argument("--zoom-only", action="store_true",
+                        help="Exercise viewport gestures, toolbar and keyboard zoom without editing")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -534,9 +536,39 @@ def main():
         pixel(f"viewport-fit-{args.appearance}", 340, 200, (229, 179, 68))
         pixel(f"viewport-fit-{args.appearance}", 310, 200, (40, 110, 166))
         click(editor, 686, 18)  # 100%
+        shot(editor, "viewport-actual-button")
         click(editor, 778, 18)  # + (1.25x)
+        shot(editor, "viewport-125-button")
+        run("xdotool", "key", "ctrl+0", "sleep", ".3")
+        shot(editor, "viewport-actual-key")
+        run("xdotool", "key", "ctrl+equal", "sleep", ".3")
+        shot(editor, "viewport-125-key")
+
+        def viewport_pixels(name):
+            return run("convert", str(output / f"{name}.png"), "-crop", "640x500+238+89", "-depth", "8", "rgba:-")
+
+        assert viewport_pixels("viewport-actual-key") == viewport_pixels("viewport-actual-button")
+        assert viewport_pixels("viewport-125-key") == viewport_pixels("viewport-125-button")
+        assert viewport_pixels("viewport-actual-key") != viewport_pixels("viewport-125-key")
+        click(editor, 140, 428)  # Focus the canvas width field; shortcuts still zoom.
+        run("xdotool", "key", "ctrl+minus", "sleep", ".3")
+        shot(editor, "viewport-field-key")
+        assert viewport_pixels("viewport-field-key") == viewport_pixels("viewport-actual-button")
+        run("xdotool", "key", "Escape")
         assert not draft.exists(), "toolbar zoom must remain outside draft state"
         click(editor, 630, 18)  # Fit also cancels any viewport gesture and restores coordinates.
+        if args.zoom_only:
+            close(root)
+            wait(lambda: app.poll() is not None, "zoom suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["viewport-wheel-anchor", "viewport-toolbar-fit-100-step-recenter",
+                           "viewport-pan-active-settled-no-draft", "viewport-fit-pixels",
+                           "viewport-keyboard-actual-and-step-pixels", "viewport-field-key-no-draft"],
+            }, indent=2) + "\n")
+            print("PASS native zoom: wheel, pan, toolbar, keyboard, focused field, no draft")
+            return
         click(editor, 736, 62)
         click(editor, 95, 176)  # Pen follows Arrow on the second tool row.
         run("xdotool", "mousemove", "--window", editor, "318", "329", "mousedown", "1", "sleep", ".2")
@@ -1390,6 +1422,7 @@ def main():
         (output / "result.json").write_text(json.dumps({
             "passed": True, "appearance": args.appearance,
             "checks": ["viewport-wheel-anchor", "viewport-toolbar-fit-100-step-recenter",
+                       "viewport-keyboard-actual-and-step-pixels", "viewport-field-key-no-draft",
                        "viewport-pan-active-settled-no-draft", "viewport-fit-pixels",
                        "crop", "crop-pointer-reverse", "crop-escape-no-mutation", "crop-transient-no-write",
                        "crop-shift-square", "crop-outside-start-clamping", "crop-preset-precedes-shift",

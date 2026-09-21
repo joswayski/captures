@@ -577,6 +577,21 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     }
 }
 
+private final class ScreenshotEditorWindow: NSWindow {
+    var zoomShortcut: ((NSEvent) -> Bool)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if attachedSheet == nil, zoomShortcut?(event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        // Control shortcuts and focused field editors also reach this path.
+        if attachedSheet == nil, zoomShortcut?(event) == true { return }
+        super.sendEvent(event)
+    }
+}
+
 final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewDataSource,
                                         NSTableViewDelegate, NSTextFieldDelegate {
     let window: NSWindow
@@ -727,9 +742,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputIntegerFormatter.minimum = 0
         let bounds = NSRect(x: 0, y: 0, width: 1000, height: 700)
         root = Surface(frame: bounds)
-        window = NSWindow(contentRect: bounds, styleMask: [.titled, .closable, .miniaturizable],
-                          backing: .buffered, defer: false)
+        let editorWindow = ScreenshotEditorWindow(contentRect: bounds,
+            styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        window = editorWindow
         super.init()
+        editorWindow.zoomShortcut = { [weak self] in self?.handleZoomShortcut($0) ?? false }
         window.isReleasedWhenClosed = false; window.title = "Edit screenshot"
         window.delegate = self
         window.contentView = root
@@ -1648,6 +1665,22 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         view.onViewportZoom = { [weak self] factor, anchor in self?.scaleViewport(by: factor, anchor: anchor) }
         view.onViewportPan = { [weak self] delta in self?.panViewport(by: delta) }
         view.onViewportPanBegan = { [weak self] in self?.cancelDrawing() }
+    }
+
+    private func handleZoomShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, state.snapshot != nil,
+              event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) else { return false }
+        let key = event.charactersIgnoringModifiers ?? ""
+        if key == "+" || key == "=" || event.keyCode == 24 || event.keyCode == 69 {
+            scaleViewport(by: 1.25)
+        } else if key == "-" || key == "_" || event.keyCode == 27 || event.keyCode == 78 {
+            scaleViewport(by: 1 / 1.25)
+        } else if key == "0" || event.keyCode == 82 {
+            setViewportZoom(100)
+        } else {
+            return false
+        }
+        return true
     }
 
     private func fitViewport() { cancelViewportPan(); changeViewport(to: NativeEditorViewport()) }

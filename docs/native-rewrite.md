@@ -98,8 +98,16 @@ and Cmd/Ctrl-primary or middle-button pan. Manual zoom uses Tauri's 5–800% bou
 and tenth-percent rounding. Pixels and edit overlays share the transformed rect
 and viewport clip. Viewport changes cancel active edit gestures without document,
 draft, undo or encoded-output changes. Fit resets pan; Recenter preserves zoom.
+Both hosts accept Cmd/Ctrl +/− (1.25× steps) and 0 (100%, not Fit), also with a
+text/numeric field focused. They cancel pending canvas gestures and use the viewport
+center as zoom anchor. wgpu consumes ordered/repeated key events before egui global
+UI zoom and acts once across layout passes; AppKit routes key equivalents and field
+editor events in the editor window. Sheets/confirmation popups retain keyboard
+ownership. This does not register new OS-global shortcuts. Automated host tests
+cover bounds, event ordering, field focus, cancellation and no document/output writes;
+physical keyboard layouts and accessibility acceptance remain open.
 The workbenches retain their existing fit layout, including small-image enlargement;
-Tauri's capped fit, slider/presets, keyboard zoom and full layout remain open.
+Tauri's capped fit, slider/presets and full layout remain open.
 Physical trackpad/mouse behavior still requires platform acceptance.
 Both hosts connect canvas fill/transparency in Geometry. Apply background submits
 one `set_background` worker transaction; the shared renderer validates hex colors
