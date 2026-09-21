@@ -62,6 +62,11 @@ pub enum Request {
     SetBackground {
         color: Option<String>,
     },
+    RemoveImageBackground {
+        point: Point,
+        tolerance: f64,
+        contiguous: bool,
+    },
     CreateClosedShape {
         #[serde(flatten)]
         create: ClosedShapeCreate,
@@ -335,16 +340,94 @@ impl EditorSession {
         Ok(layer_id)
     }
 
+    fn remove_image_background(
+        &mut self,
+        point: Point,
+        tolerance: f64,
+        contiguous: bool,
+    ) -> Result<(), String> {
+        if !point.x.is_finite() || !point.y.is_finite() || !tolerance.is_finite() {
+            return Err("Background removal requires finite coordinates and tolerance.".into());
+        }
+        let (index, image, pixel) = self
+            .history
+            .current()
+            .elements
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, element)| match element {
+                Element::Image(image) if image.base.visible => image
+                    .natural_pixel_at(point)
+                    .map(|pixel| (index, image, pixel)),
+                _ => None,
+            })
+            .ok_or("Click inside a visible image layer to sample a color.")?;
+        // Locked image layers remain editable, as in the shipping wand. Other
+        // layer kinds and hidden images do not block image-background picking.
+        let source = self
+            .assets
+            .get(&image.src)
+            .ok_or("The editor image asset is unavailable.")?;
+        let mut edited = (**source).clone();
+        let changed = crate::editor_image_background::remove_color(
+            &mut edited,
+            pixel,
+            tolerance.round().clamp(0., 255.) as u8,
+            contiguous,
+        );
+        if changed == 0 {
+            return Err("No matching pixels were found. Try a higher tolerance.".into());
+        }
+        validate_import_dimensions(
+            edited.width(),
+            edited.height(),
+            retained_asset_pixels(&self.assets)?,
+        )?;
+        let asset_id = fresh_id(|id| self.assets.contains_key(&format!("{ASSET_PREFIX}{id}")));
+        let source = format!("{ASSET_PREFIX}{asset_id}");
+        let mut document = self.history.current().clone();
+        let Element::Image(image) = &mut document.elements[index] else {
+            unreachable!()
+        };
+        if !matches!(image.original_src, OptionalNullable::Value(_)) {
+            image.original_src = OptionalNullable::Value(image.src.clone());
+        }
+        image.src = source.clone();
+        document.background = None;
+        let mut assets = self.assets.clone();
+        assets.insert(source, Arc::new(edited));
+        let pixels = render(&document, &assets)?;
+        // Assets, rendered frame and history change together. Failed/no-op
+        // requests keep redo and the pre-edit source for a later restore brush.
+        let mut history = self.history.clone();
+        history.commit(document);
+        self.assets = assets;
+        self.history = history;
+        self.pixels = Arc::new(pixels);
+        Ok(())
+    }
+
     pub fn execute(&mut self, request: Request) -> Result<(), String> {
         let request = match request {
             Request::Snapshot => return Ok(()),
             Request::SaveDraft { updated_at_ms } => return self.save_draft(updated_at_ms),
             Request::DiscardDraft => return self.discard_draft(),
+            Request::RemoveImageBackground {
+                point,
+                tolerance,
+                contiguous,
+            } => {
+                return self.remove_image_background(point, tolerance, contiguous);
+            }
             edit => edit,
         };
         let mut next = self.history.clone();
         match request {
-            Request::Snapshot | Request::SaveDraft { .. } | Request::DiscardDraft => unreachable!(),
+            Request::Snapshot
+            | Request::SaveDraft { .. }
+            | Request::DiscardDraft
+            | Request::RemoveImageBackground { .. } => unreachable!(),
             Request::Undo => {
                 next.undo();
             }

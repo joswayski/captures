@@ -101,6 +101,160 @@ fn background_commands_preserve_layers_and_are_transactional_undoable_and_persis
 }
 
 #[test]
+fn image_background_edits_retain_original_assets_and_preserve_redo_on_failure() {
+    let (data, id, original) = setup();
+    let path = data.path().join("history").join(&id).join("capture.png");
+    let original_file = fs::read(&path).unwrap();
+    let mut editor = open(data.path(), &id).unwrap();
+    let retained_frame = editor.pixels();
+    let wand = |x| Request::RemoveImageBackground {
+        point: Point { x, y: 1.5 },
+        tolerance: 0.,
+        contiguous: true,
+    };
+    let Element::Image(initial) = &editor.snapshot().document.elements[0] else {
+        panic!()
+    };
+    let original_source = initial.src.clone();
+    assert!(
+        initial.base.locked,
+        "the original capture must be editable without unlocking"
+    );
+    editor.execute(wand(2.5)).unwrap();
+    let Element::Image(first) = &editor.snapshot().document.elements[0] else {
+        panic!()
+    };
+    let first_source = first.src.clone();
+    assert_ne!(first_source, original_source);
+    assert_eq!(
+        first.original_src,
+        OptionalNullable::Value(original_source.clone())
+    );
+    assert_eq!(first.base.id, "capture-background");
+    assert_eq!(editor.snapshot().document.background, None);
+    let mut expected = original.clone();
+    expected.put_pixel(2, 1, Rgba([0; 4]));
+    assert_eq!(*editor.pixels(), expected);
+    editor.execute(wand(3.5)).unwrap();
+    editor.execute(Request::Undo).unwrap();
+    let before = serde_json::to_value(editor.snapshot()).unwrap();
+    let pixels = editor.pixels();
+    for x in [2.5, 7., f64::NAN] {
+        assert!(editor.execute(wand(x)).is_err());
+        assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+        assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+        assert!(editor.snapshot().can_redo);
+    }
+    editor.execute(Request::Redo).unwrap();
+    expected.put_pixel(3, 1, Rgba([0; 4]));
+    assert_eq!(*editor.pixels(), expected);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 29 })
+        .unwrap();
+    let mut reopened = open(data.path(), &id).unwrap();
+    assert_eq!(*reopened.pixels(), expected);
+    reopened.execute(wand(4.5)).unwrap();
+    let Element::Image(reopened_image) = &reopened.snapshot().document.elements[0] else {
+        panic!()
+    };
+    assert_eq!(
+        reopened_image.original_src,
+        OptionalNullable::Value(original_source)
+    );
+    assert_ne!(reopened_image.src, first_source);
+    assert_eq!(
+        *retained_frame, original,
+        "old UI frames and source bitmaps remain immutable"
+    );
+    assert_eq!(fs::read(path).unwrap(), original_file);
+}
+
+#[test]
+fn wand_picks_front_visible_locked_image_without_modifying_hidden_or_underlying_images() {
+    let (data, id, original) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    editor
+        .import_image(ImportImage {
+            pixels: RgbaImage::from_pixel(7, 3, Rgba([201, 43, 71, 255])),
+            name: "Overlay".into(),
+            selected_id: None,
+            point: Some(Point { x: 3.5, y: 1.5 }),
+        })
+        .unwrap();
+    let mut document = editor.snapshot().document.clone();
+    let Element::Image(front) = &mut document.elements[1] else {
+        panic!()
+    };
+    front.base.x = 0.;
+    front.base.y = 0.;
+    front.base.locked = true;
+    front.width = 7.;
+    front.height = 3.;
+    let source = front.src.clone();
+    let mut hidden = front.clone();
+    hidden.base.id = "hidden-front".into();
+    hidden.base.visible = false;
+    document.elements.push(Element::Image(hidden));
+    editor.execute(Request::Commit { document }).unwrap();
+    editor
+        .execute(Request::RemoveImageBackground {
+            point: Point { x: 2.5, y: 1.5 },
+            tolerance: 0.,
+            contiguous: true,
+        })
+        .unwrap();
+    let snapshot = editor.snapshot();
+    let Element::Image(front) = &snapshot.document.elements[1] else {
+        panic!()
+    };
+    let Element::Image(hidden) = &snapshot.document.elements[2] else {
+        panic!()
+    };
+    assert_ne!(front.src, source);
+    assert_eq!(hidden.src, source);
+    assert_eq!(
+        *editor.pixels(),
+        original,
+        "clearing the top visible image reveals the unmodified capture"
+    );
+    let before = serde_json::to_value(editor.snapshot()).unwrap();
+    assert!(
+        editor
+            .execute(Request::RemoveImageBackground {
+                point: Point { x: 2.5, y: 1.5 },
+                tolerance: 0.,
+                contiguous: true,
+            })
+            .is_err(),
+        "a transparent top image must not expose the underlying image to the wand"
+    );
+    assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+}
+
+#[test]
+fn wand_tolerance_rounds_and_clamps_like_shipping_controls() {
+    for (tolerance, cleared) in [(-1., 1), (30.49, 1), (30.5, 2), (256., 21)] {
+        let (data, id, _) = setup();
+        let mut editor = open(data.path(), &id).unwrap();
+        editor
+            .execute(Request::RemoveImageBackground {
+                point: Point { x: 0., y: 0. },
+                tolerance,
+                contiguous: true,
+            })
+            .unwrap();
+        assert_eq!(
+            editor
+                .pixels()
+                .pixels()
+                .filter(|pixel| pixel[3] == 0)
+                .count(),
+            cleared
+        );
+    }
+}
+
+#[test]
 fn exports_encode_current_pixels_without_mutating_session_or_original_files() {
     use captures_app::editor_session::ExportOptions;
 

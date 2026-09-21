@@ -712,6 +712,59 @@ impl ImageElement {
         self.orientation.unwrap_or(ImageOrientation::Normal)
     }
 
+    /// Map document coordinates through layer rotation and D4 orientation into
+    /// natural-resolution pixels. Right/bottom edges are exclusive, unlike
+    /// selection chrome; hidden/locked policy belongs to the caller.
+    #[must_use]
+    pub fn natural_pixel_at(&self, point: Point) -> Option<(u32, u32)> {
+        if ![
+            point.x,
+            point.y,
+            self.width,
+            self.height,
+            self.natural_width,
+            self.natural_height,
+        ]
+        .into_iter()
+        .all(f64::is_finite)
+            || self.width <= 0.
+            || self.height <= 0.
+            || self.natural_width < 1.
+            || self.natural_height < 1.
+        {
+            return None;
+        }
+        let local = rotate_point(
+            point,
+            Point {
+                x: self.base.x + self.width / 2.,
+                y: self.base.y + self.height / 2.,
+            },
+            -self.base.rotation(),
+        );
+        let x = local.x - self.base.x;
+        let y = local.y - self.base.y;
+        if x < 0. || y < 0. || x >= self.width || y >= self.height {
+            return None;
+        }
+        let matrix = self.resolved_orientation().matrix();
+        let (width, height) = if matrix.a == 0 {
+            (self.height, self.width)
+        } else {
+            (self.width, self.height)
+        };
+        let dx = x - self.width / 2.;
+        let dy = y - self.height / 2.;
+        let source_x = f64::from(matrix.a) * dx + f64::from(matrix.b) * dy;
+        let source_y = f64::from(matrix.c) * dx + f64::from(matrix.d) * dy;
+        Some((
+            (((source_x + width / 2.) / width * self.natural_width).floor())
+                .clamp(0., self.natural_width - 1.) as u32,
+            (((source_y + height / 2.) / height * self.natural_height).floor())
+                .clamp(0., self.natural_height - 1.) as u32,
+        ))
+    }
+
     /// Left-compose a lossless transform in displayed axes and preserve center.
     pub fn transform(&mut self, action: ImageTransform) {
         let operation = match action {

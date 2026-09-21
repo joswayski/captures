@@ -110,6 +110,16 @@ switching back. Color changes participate in undo/redo and draft reopen; copy/ex
 use the newly rendered pixels. These are canvas fills, not image-background removal,
 text backgrounds or the shipping color-picker layout. AppKit Geometry scrolls to keep
 the existing crop/canvas controls and new background controls reachable.
+The shared image-background prerequisite now maps document clicks through image
+rotation/orientation and supports contiguous/global magic-wand removal. It picks
+the frontmost visible image even when locked; transparent pixels do not let the
+wand reach an underlying image. Edited pixels become a fresh owned asset, retain
+the first pre-edit source for future restore, and clear the solid canvas fill in
+one undoable render-before-publish transaction. Invalid/no-match requests leave
+history and assets unchanged; retained originals survive draft reopen. The existing
+100-million decoded-pixel asset budget also counts retained edits/undo sources.
+Native toolbar bindings, erase/restore brushes and their physical acceptance are
+still unconnected; shared primitives alone do not complete the editor gate.
 Next implementation boundary: text/image-background and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
 
