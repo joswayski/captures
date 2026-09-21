@@ -2310,13 +2310,13 @@ fn text_failures_preserve_frames_redo_and_saved_drafts_without_fallback() {
     editor.execute(Request::Undo).unwrap();
     let before = serde_json::to_value(editor.snapshot()).unwrap();
     let frame = editor.pixels();
-    for outline in [false, true] {
+    for missing_glyph in [false, true] {
         let mut document = editor.snapshot().document.clone();
         let Element::Text(label) = document.elements.last_mut().unwrap() else {
             panic!()
         };
-        if outline {
-            label.outlined = true;
+        if missing_glyph {
+            label.text = "☃".into();
         } else {
             label.font_family = "missing".into();
         }
@@ -2423,6 +2423,90 @@ fn create_text_request(text: &str) -> Request {
 
 fn edit_text_request(id: &str, patch: serde_json::Value) -> Request {
     serde_json::from_value(json!({"operation":"edit_text", "id":id, "patch":patch})).unwrap()
+}
+
+#[test]
+fn outlined_text_is_paint_only_transactional_undoable_and_persisted() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    let mut document = editor.snapshot().document.clone();
+    let Element::Text(label) = document.elements.last_mut().unwrap() else {
+        panic!()
+    };
+    label.auto_width = Some(true);
+    label.width = 110.; // Do not refit this authored width on a paint-only change.
+    label.base.locked = true;
+    editor.execute(Request::Commit { document }).unwrap();
+    let before = editor.pixels();
+    editor
+        .execute(edit_text_request("label", json!({"outlined":true})))
+        .unwrap();
+    let enabled = editor.snapshot().document.clone();
+    let Element::Text(label) = enabled.elements.last().unwrap() else {
+        panic!()
+    };
+    assert!(label.outlined);
+    assert_eq!((label.base.x, label.base.y, label.width), (20., 20., 110.));
+    let painted = editor.pixels();
+    assert_ne!(painted, before);
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.pixels(), before);
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.pixels(), painted);
+    let accepted = editor.pixels();
+    assert!(
+        editor
+            .execute(edit_text_request(
+                "label",
+                json!({"outlined":false,"color":"invalid"})
+            ))
+            .is_err()
+    );
+    assert_eq!(editor.snapshot().document, &enabled);
+    assert!(Arc::ptr_eq(&editor.pixels(), &accepted));
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 83 })
+        .unwrap();
+    let reopened = open(data.path(), &id).unwrap();
+    assert_eq!(reopened.snapshot().document, &enabled);
+    assert_eq!(reopened.pixels(), painted);
+    editor
+        .execute(edit_text_request("label", json!({"outlined":false})))
+        .unwrap();
+    assert_eq!(editor.pixels(), before);
+}
+
+#[test]
+fn unsupported_outline_glyphs_reject_visible_and_hidden_property_edits() {
+    for visible in [true, false] {
+        let (data, id, _) = setup();
+        let mut fonts = text_fonts();
+        fonts.files.insert(
+            "regular".into(),
+            Arc::from(include_bytes!("../../captures-image/tests/shaping-bitmap.ttf").as_slice()),
+        );
+        let mut editor = open_text(data.path(), &id, fonts).unwrap();
+        add_text(&mut editor);
+        let mut document = editor.snapshot().document.clone();
+        let Element::Text(label) = document.elements.last_mut().unwrap() else {
+            panic!()
+        };
+        label.text = "A".into();
+        label.base.visible = visible;
+        editor.execute(Request::Commit { document }).unwrap();
+        let before = serde_json::to_value(editor.snapshot()).unwrap();
+        let frame = editor.pixels();
+        assert!(
+            editor
+                .execute(edit_text_request("label", json!({"outlined":true})))
+                .err()
+                .unwrap()
+                .contains("monochrome scalable")
+        );
+        assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+        assert!(Arc::ptr_eq(&editor.pixels(), &frame));
+    }
 }
 
 #[test]

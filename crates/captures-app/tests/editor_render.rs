@@ -1021,10 +1021,51 @@ fn text_plate_casts_one_shadow_without_a_second_glyph_pool() {
 }
 
 #[test]
+fn outlined_text_and_its_shadow_keep_hollow_ink_after_rotation() {
+    let (mut renderer, families) = fonts();
+    for (rotation, ink, hollow, shadow, shadow_hollow) in [
+        (0., (20, 60), (26, 60), (100, 60), (106, 60)),
+        (
+            std::f64::consts::FRAC_PI_2,
+            (79, 20),
+            (79, 26),
+            (159, 20),
+            (159, 26),
+        ),
+    ] {
+        let mut label = text();
+        label.outlined = true;
+        label.base.rotation = Some(rotation);
+        label.base.opacity = 50.;
+        label.drop_shadow = Some(true);
+        label.drop_shadow_style = Some(DropShadowStyle {
+            color: "#0000ff".into(),
+            opacity: 100.,
+            blur: 0.,
+            offset_x: 80.,
+            offset_y: 0.,
+            extra: Default::default(),
+        });
+        let actual = render_with_text(
+            &document(220., 180., vec![Element::Text(label)]),
+            &BTreeMap::new(),
+            &mut renderer,
+            &families,
+        )
+        .unwrap();
+        // Size80 uses a centered 6.4px contour stroke around a 12px L stem.
+        // Glyph paints twice with a shadow; the offset blue shadow paints once.
+        assert_eq!(actual.get_pixel(ink.0, ink.1).0, [255, 0, 0, 192]);
+        assert_eq!(actual.get_pixel(hollow.0, hollow.1)[3], 0);
+        assert_eq!(actual.get_pixel(shadow.0, shadow.1).0, [0, 0, 255, 128]);
+        assert_eq!(actual.get_pixel(shadow_hollow.0, shadow_hollow.1)[3], 0);
+    }
+}
+
+#[test]
 fn text_errors_are_explicit_hidden_layers_are_skipped_and_failed_render_is_retryable() {
     let (mut renderer, families) = fonts();
     for mutate in [
-        |t: &mut TextElement| t.outlined = true,
         |t: &mut TextElement| t.base.rotation = Some(f64::INFINITY),
         |t: &mut TextElement| t.text = "☃".into(),
         |t: &mut TextElement| t.text = "L\u{0085}L".into(),

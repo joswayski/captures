@@ -209,8 +209,12 @@ preserving shaped advances, baseline, explicit faces and fractional glyph placem
 This uses scalable glyph paths, not bitmap dilation; colored and bitmap glyphs return
 explicit outline errors. Filled and outlined masks cannot leak between operations
 or stroke widths, and the existing raster bounds/pixel budgets still apply.
-This is a shared rendering prerequisite only: outlined document text, commands,
-native controls and physical/platform acceptance are not connected by this slice.
+Both hosts now stage Outline with Text Apply/Cancel. Document rendering uses
+Tauri's max(1.5, font size × 0.08) stroke width, including plates, shadows and rotation.
+Outline-only edits preserve authored width/position, invalidate output transactionally,
+and participate in undo/redo and saved reopen. Unsupported glyphs reject property
+edits even on hidden text; accepted pixels and staged host input survive failures.
+This does not establish physical input or platform acceptance.
 Shared paragraph helpers now use explicit, fallible measurements for shipping word
 wrapping, scalar-based hard breaks, ECMAScript whitespace, alignment, auto-width
 anchor preservation and composing widths, plus square/rounded plate geometry.
@@ -223,7 +227,7 @@ inputs are limited to 4096 UTF-8 bytes and type sizes greater than zero through 
 These helpers describe measured paint layout, not Tauri's estimated selection bounds;
 font-specific control-character support remains the supplied measurer's contract.
 An opt-in document renderer now accepts caller-owned fonts and explicit mappings
-from document family keys to supplied font names. It composites filled paragraphs
+from document family keys to supplied font names. It composites filled/outlined paragraphs
 and square/rounded plates in layer order, including alignment, italic bearings,
 per-paint opacity, blend modes and canvas clipping. It centers raster ink vertically;
 pixel-aligned ink boxes can differ subpixel-wise from Canvas outline metrics.
@@ -232,8 +236,7 @@ painting, following Canvas text preparation; remaining interior line-control
 characters are rejected by the single-line shaper, not silently omitted.
 Text bitmaps have a shared 16,777,216-pixel budget across the visible document,
 in addition to individual line budgets. Missing fonts/glyphs, invalid styles and
-budget failures return errors without changing the document or assets. Text outlines
-remain an explicit unsupported case. The lower-level bitmap compositor
+budget failures return errors without changing the document or assets. The lower-level bitmap compositor
 now supports a shadow/source pass using transformed pixel alpha, layer opacity,
 canvas-space offsets, blur and blend mode. Shadow work is clipped to output plus
 blur support; existing vector shadow/crisp passes are unchanged. Font-backed text
@@ -295,7 +298,7 @@ fixtures do not provide Text input controls or establish macOS, Windows, Wayland
 or physical Text-tool presentation/input acceptance.
 The basic Text tool is implemented in AppKit and wgpu; host verification is recorded
 per slice, not inferred from shared tests. Additional font import and OS acquisition,
-outlines, custom shadow controls, presets, inline input and physical input/IME/accessibility remain open.
+custom shadow controls, presets, inline input and physical input/IME/accessibility remain open.
 No host text parity gate is closed.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.

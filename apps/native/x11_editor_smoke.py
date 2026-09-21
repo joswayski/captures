@@ -472,6 +472,17 @@ def main():
             click(editor, 74, 898)
             shot(editor, "text-shadow-cancelled")
             assert text_pixels("text-shadow-cancelled") == text_pixels("text-glyph-shadow")
+            click(editor, 170, 809)  # Outline shares the shadow row.
+            shot(editor, "text-outline-staged")
+            assert text_pixels("text-outline-staged") == text_pixels("text-glyph-shadow")
+            click(editor, 74, 853)
+            save_layers(lambda values: values[-1]["outlined"], "text outline applied")
+            shot(editor, "text-outline")
+            assert text_pixels("text-outline") != text_pixels("text-glyph-shadow")
+            click(editor, 170, 809)
+            click(editor, 74, 898)
+            shot(editor, "text-outline-cancelled")
+            assert text_pixels("text-outline-cancelled") == text_pixels("text-outline")
             click(editor, 92, 765)   # Background plate.
             shot(editor, f"text-staged-{args.appearance}")
             click(editor, 74, 974)   # Apply text; plate owns the shadow now.
@@ -493,6 +504,9 @@ def main():
             save_layers(lambda values: values[-1]["background"] is None
                         and values[-1].get("dropShadow") is True, "undo shadowed plate")
             click(editor, 35, 62)
+            save_layers(lambda values: not values[-1]["outlined"]
+                        and values[-1].get("dropShadow") is True, "undo text outline")
+            click(editor, 35, 62)
             save_layers(lambda values: not values[-1].get("dropShadow", False), "undo glyph shadow")
             click(editor, 35, 62)
             save_layers(lambda values: values[-1]["text"] == "" and values[-1]["fontFamily"] == "sans",
@@ -502,6 +516,8 @@ def main():
                         "text edit redo")
             click(editor, 98, 62)
             save_layers(lambda values: values[-1].get("dropShadow") is True, "redo glyph shadow")
+            click(editor, 98, 62)
+            save_layers(lambda values: values[-1]["outlined"], "redo text outline")
             click(editor, 98, 62)
             save_layers(lambda values: values[-1]["background"] is not None, "redo shadowed plate")
             close(editor)
@@ -523,6 +539,7 @@ def main():
                 "sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"}
             assert reopened["bold"] and reopened["italic"] and reopened["background"] is not None
             assert reopened.get("dropShadow") is True
+            assert reopened["outlined"]
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "text suite quits")
@@ -533,6 +550,7 @@ def main():
                            "text-font-family", "text-family-cancel", "text-bold-italic-plate",
                            "text-glyph-shadow-pixels", "text-shadow-stage-cancel",
                            "text-plate-shadow", "text-shadow-undo-redo-reopen",
+                           "text-outline-pixels", "text-outline-stage-cancel", "text-outline-undo-redo-reopen",
                            "text-undo-redo", "text-draft-reopen",
                            "text-minimum-appearance", "original-unchanged"],
             }, indent=2) + "\n")
