@@ -301,9 +301,11 @@ def main():
             shot(editor, "wand-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
             click(editor, 535, 62)
+            click(editor, 65, 366)  # Preview PNG before copying the edited frame.
             click(editor, 170, 657)
             wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
                  "wand clipboard copy")
+            shot(editor, "wand-output-copied")
             png = output / "clipboard-wand.png"
             png.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
             assert run("identify", "-format", "%wx%h", str(png)) == b"640x360"
