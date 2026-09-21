@@ -145,8 +145,8 @@ export default defineConfig(async ({ command }) => {
                 "/api/**": {
                   proxy: `${process.env.CAPTURES_API_ORIGIN || "http://127.0.0.1:3001"}/api/**`,
                 },
-                "/media/**": {
-                  proxy: `${process.env.CAPTURES_MEDIA_ORIGIN || "http://127.0.0.1:8787"}/media/**`,
+                "/api/files/**": {
+                  proxy: `${process.env.CAPTURES_MEDIA_ORIGIN || "http://127.0.0.1:8787"}/api/files/**`,
                 },
               }
             : {}),
@@ -176,11 +176,11 @@ export default defineConfig(async ({ command }) => {
       // Nitro handles fetch/HTML requests; Vite handles image subresources in
       // development. Both paths must reach the same API, not the static fallback.
       proxy: {
+        "/api/files": {
+          target: process.env.CAPTURES_MEDIA_ORIGIN || "http://127.0.0.1:8787",
+        },
         "/api": {
           target: process.env.CAPTURES_API_ORIGIN || "http://127.0.0.1:3001",
-        },
-        "/media": {
-          target: process.env.CAPTURES_MEDIA_ORIGIN || "http://127.0.0.1:8787",
         },
       },
       fs: {

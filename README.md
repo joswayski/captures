@@ -88,8 +88,8 @@ Preview builds automatically publish installed-app changes from `main`, and may 
 Local screenshots, GIFs, and recordings never require an account and never upload
 automatically. The website and Rust API implement optional email-code sign-in and
 sharing, disabled until the operator explicitly enables and configures the services.
-When enabled, `/account` accepts screenshots, GIFs, videos, and other files and
-preserves their original bytes. Uploads stay private until you create an
+When enabled, `/dashboard` shows your gallery and accepts screenshots, GIFs,
+videos, and other files, preserving their original bytes. Uploads stay private until you create an
 anyone-with-the-link URL, optionally with a password or expiry; share pages request
 no indexing. Uploads go directly to private R2; a Cloudflare Worker delivers downloads
 after an uncached API authorization check, without sending file bytes through the API.

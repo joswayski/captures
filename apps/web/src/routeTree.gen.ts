@@ -10,7 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AccountRouteImport } from './routes/account'
+import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as HealthRouteImport } from './routes/health'
 import { Route as SIdRouteImport } from './routes/s.$id'
 
@@ -19,9 +19,9 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AccountRoute = AccountRouteImport.update({
-  id: '/account',
-  path: '/account',
+const DashboardRoute = DashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HealthRoute = HealthRouteImport.update({
@@ -37,34 +37,34 @@ const SIdRoute = SIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/account': typeof AccountRoute
+  '/dashboard': typeof DashboardRoute
   '/health': typeof HealthRoute
   '/s/$id': typeof SIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/account': typeof AccountRoute
+  '/dashboard': typeof DashboardRoute
   '/health': typeof HealthRoute
   '/s/$id': typeof SIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/account': typeof AccountRoute
+  '/dashboard': typeof DashboardRoute
   '/health': typeof HealthRoute
   '/s/$id': typeof SIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/account' | '/health' | '/s/$id'
+  fullPaths: '/' | '/dashboard' | '/health' | '/s/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/account' | '/health' | '/s/$id'
-  id: '__root__' | '/' | '/account' | '/health' | '/s/$id'
+  to: '/' | '/dashboard' | '/health' | '/s/$id'
+  id: '__root__' | '/' | '/dashboard' | '/health' | '/s/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AccountRoute: typeof AccountRoute
+  DashboardRoute: typeof DashboardRoute
   HealthRoute: typeof HealthRoute
   SIdRoute: typeof SIdRoute
 }
@@ -78,11 +78,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/account': {
-      id: '/account'
-      path: '/account'
-      fullPath: '/account'
-      preLoaderRoute: typeof AccountRouteImport
+    '/dashboard': {
+      id: '/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/health': {
@@ -104,7 +104,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AccountRoute: AccountRoute,
+  DashboardRoute: DashboardRoute,
   HealthRoute: HealthRoute,
   SIdRoute: SIdRoute,
 }

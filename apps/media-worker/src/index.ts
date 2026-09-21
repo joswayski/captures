@@ -128,7 +128,7 @@ function disposition(name: string, inline: boolean): string {
 
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
   if (request.method !== "GET" && request.method !== "HEAD") return error(405);
-  const match = /^\/media\/(assets|shares)\/([A-Za-z0-9_-]{12})$/.exec(new URL(request.url).pathname);
+  const match = /^\/api\/files\/(assets|shares)\/([A-Za-z0-9_-]{12})$/.exec(new URL(request.url).pathname);
   if (!match || !ID.test(match[2])) return error(404);
   const kind = match[1] as MediaKind;
   const id = match[2];

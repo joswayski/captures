@@ -125,8 +125,8 @@ trusted Cloudflare selection as rate limiting and is never logged. Behind a prox
 the visitor address requires the explicitly trusted Cloudflare configuration;
 otherwise the address is the socket peer, not a claim about the visitor's identity.
 User-agent is client supplied. OTP storage
-remains HMAC-only. Do not cache `/api/*`, `/account`,
-`/s/*`, or `/media/*` in a proxy/CDN.
+remains HMAC-only. Do not cache `/api`, `/dashboard`, or `/s`, including
+descendants, in a proxy/CDN.
 
 ## Shared cluster, dedicated database, separate credentials
 
@@ -331,8 +331,11 @@ overwriting the image. Publication does not deploy or configure secrets.
 
 - `captur.es/api/*` and `api.captur.es/api/*` route to `captures-api`, including
   feedback, Preview updater manifests, accounts, and asset sharing.
-- Before sharing activation, route `captur.es/media/*` to the media Worker; keep
-  `/api/*` on the API origin so authorization subrequests cannot loop into the Worker.
+- Before sharing activation, route `captur.es/api/files/*` to the media Worker;
+  keep other `/api/*` paths, especially `/api/media/*`, on the API origin so
+  authorization subrequests cannot loop into the Worker. This supersedes the
+  earlier root-level `/media/*` delivery route. `/dashboard` is the gallery and
+  `/s/<id>` remains the only shareable page URL; file-loading routes are not pages.
   Other `captur.es` requests route to `captures-web`.
 - Keep Rust `/health` internal. No native login or token storage is implemented or
   claimed tested on macOS, Windows, or Linux.

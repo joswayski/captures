@@ -25,10 +25,10 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
   return (response.status === 204 ? undefined : await response.json()) as T;
 }
 
-export const Route = createFileRoute("/account")({
+export const Route = createFileRoute("/dashboard")({
   head: () => ({
     meta: [
-      { title: "Account — Captures" },
+      { title: "Dashboard — Captures" },
       { name: "robots", content: "noindex, nofollow" },
       { name: "referrer", content: "no-referrer" },
     ],
@@ -666,7 +666,7 @@ function UploadCard({
 }
 
 function AssetPreview({ asset }: { asset: Asset }) {
-  const url = `/media/assets/${encodeURIComponent(asset.id)}`;
+  const url = `/api/files/assets/${encodeURIComponent(asset.id)}`;
   const kind = assetMediaKind(asset.contentType);
   if (kind === "image")
     return <img src={url} alt={asset.name} loading="lazy" />;

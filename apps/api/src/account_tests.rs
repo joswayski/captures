@@ -779,6 +779,19 @@ async fn postgres_share_updates_passwords_expiry_and_revocation() {
         .to_owned();
     assert!(!set_cookie.to_ascii_lowercase().contains("max-age"));
     let cookie = set_cookie.split(';').next().unwrap();
+    let metadata = body(
+        call(
+            &app,
+            "GET",
+            &format!("/api/shares/{sid}"),
+            None,
+            Some(cookie),
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(metadata["mediaUrl"], format!("/api/files/shares/{sid}"));
     let media = call(
         &app,
         "GET",

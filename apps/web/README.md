@@ -65,12 +65,13 @@ The Node process serves the site:
    request headers.
 3. Hashed `/assets/*` files and other public files are served as static assets
    with long-lived cache headers.
-4. `/account` provides optional sign-in and the capture library; `/s/<id>` renders
+4. `/dashboard` provides optional sign-in and the capture gallery; `/s/<id>` renders
    access-controlled share pages, with fresh server-side metadata.
 5. Unknown paths return the in-app 404 page.
 
-Nitro is the Node adapter. The Rust API owns `captur.es/api/*`; the frontend
-does not define API routes.
+Nitro is the Node adapter. The Rust API owns `captur.es/api/*`, except the
+Worker's `/api/files/*` file-loading requests; the frontend defines no API routes.
+There are no individual owner-file pages. `/s/<id>` is the shareable page URL.
 
 ## AWS
 
@@ -133,7 +134,7 @@ does not update live Cloudflare rules.
 | Rule | Match | Action |
 | --- | --- | --- |
 | Hashed assets | hostname is `captur.es` and URI Path starts with `/assets/` | Eligible for cache, Edge TTL 1 year, respect origin `Cache-Control` |
-| Dynamic | hostname is `captur.es` and (URI Path equals `/`, `/account`, `/api`, `/s`, or `/media`, or starts with `/account/`, `/api/`, `/s/`, or `/media/`) | Bypass cache |
+| Dynamic | hostname is `captur.es` and (URI Path equals `/`, `/dashboard`, `/api`, or `/s`, or starts with `/dashboard/`, `/api/`, or `/s/`) | Bypass cache |
 
 The homepage already sends `Cache-Control: private` and `Vary` on the OS hint
 headers, so a missed Bypass rule still should not share one download button
@@ -144,7 +145,7 @@ a purge. Purge `/` only if a stale homepage HTML response is stuck at the edge.
 
 ## Optional accounts
 
-`/account` uses the Rust API's email-code sign-in and secure HttpOnly cookie,
+`/dashboard` uses the Rust API's email-code sign-in and secure HttpOnly cookie,
 then lists owner captures and their links. Authentication is optional; no tokens
 are stored in localStorage. When the API disables accounts, the page shows an
 unavailable notice. Multipart direct-to-R2 uploads, deletion, one editable share
@@ -162,13 +163,14 @@ Share-page SSR forwards the viewer cookie to that origin only, rejects redirects
 and never caches metadata. Node receives no database, SES or R2 credentials.
 See [`../api`](../api/README.md) for auth and storage configuration.
 
-`/account` and `/s/*` send `no-store` and `Referrer-Policy: no-referrer`; every
+`/dashboard` and `/s/*` send `no-store` and `Referrer-Policy: no-referrer`; every
 share state also sends `noindex`. Noindex is a crawler instruction, not access
-control. The Cloudflare media Worker serves `/media/*` from private R2 after
+control. The Cloudflare media Worker serves `/api/files/*` from private R2 after
 Rust authorizes each request, so stale page HTML cannot bypass revocation. Configure
 the same-origin Worker route, API routing, and dynamic cache bypass before activation.
-The development Vite proxy routes `/api` to the local API and `/media` to the local
-Worker at port 8787 (`CAPTURES_MEDIA_ORIGIN` overrides this development-only target).
+The development Vite proxy routes `/api/files` to the local Worker before the
+general `/api` route to the local API. The Worker uses port 8787 by default
+(`CAPTURES_MEDIA_ORIGIN` overrides this development-only target).
 Production routing must be configured separately; Node never proxies file bytes.
 See the [Worker activation checklist](../media-worker/README.md).
 

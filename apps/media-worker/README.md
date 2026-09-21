@@ -1,6 +1,6 @@
 # Captures media Worker
 
-GET/HEAD `/media/assets/<id>` and `/media/shares/<id>` authorize with the Rust API,
+GET/HEAD `/api/files/assets/<id>` and `/api/files/shares/<id>` authorize with the Rust API,
 then stream original bytes from a private R2 binding. IDs are 12-character NanoIDs.
 The API never receives file bytes. Uploads remain direct presigned multipart R2
 uploads, managed by the API. The Worker does not issue signed GET URLs.
@@ -33,11 +33,12 @@ browser memory, or saved download cannot be recalled.
 Before enabling sharing, separately approve and configure:
 
 1. Matching API/Worker secrets, a compatible API image, and the API origin above.
-2. The same-origin `captur.es/media/*` Worker route. Keep `/api/*` routed to the
-   API, not this Worker. Host-only account/viewer cookies then work without
+2. The same-origin `captur.es/api/files/*` Worker route. Keep other `/api/*`
+   requests, especially `/api/media/*` authorization, routed to the API, not
+   this Worker. Host-only account/viewer cookies then work without
    broadening their domain or exposing tokens to JavaScript.
-3. Cache bypass for `/media` and descendants **and** all existing `/api`, `/s`,
-   and `/account` paths. Keep R2 private with no public bucket endpoints. Worker
+3. Cache bypass for `/api`, `/s`, and `/dashboard`, including descendants.
+   Keep R2 private with no public bucket endpoints. Worker
    headers alone are not a substitute for auditing overriding cache rules.
 4. Real SES sign-in and direct R2 upload, owner download, password unlock,
    cross-viewer isolation, video seeking, expiry/password edit/stop-share denial,
@@ -70,5 +71,5 @@ npx wrangler dev --local --env staging --config apps/media-worker/wrangler.jsonc
 
 This uses emulated R2, not the real staging bucket; seed test objects with
 `wrangler r2 object put ... --local` using the same environment/config. The web
-dev server proxies `/media/*` to port 8787 by default (`CAPTURES_MEDIA_ORIGIN`
+dev server proxies `/api/files/*` to port 8787 by default (`CAPTURES_MEDIA_ORIGIN`
 overrides it). Never use live bucket data or credentials for local tests.

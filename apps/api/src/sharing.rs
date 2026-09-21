@@ -603,7 +603,7 @@ async fn metadata(
     let a = access(&s, &id).await?;
     let can = permitted(&s, &a, &h).await?;
     Ok(Json(
-        json!({"id":a.id,"name":a.name,"contentType":a.content_type,"byteSize":a.byte_size,"passwordRequired":a.password_hash.is_some(),"expiresAt":a.expires_at,"mediaUrl":can.then(||format!("/media/shares/{id}"))}),
+        json!({"id":a.id,"name":a.name,"contentType":a.content_type,"byteSize":a.byte_size,"passwordRequired":a.password_hash.is_some(),"expiresAt":a.expires_at,"mediaUrl":can.then(||format!("/api/files/shares/{id}"))}),
     ))
 }
 async fn shared_media(

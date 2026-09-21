@@ -35,8 +35,8 @@ test("authorizes every viewer and denies before R2", async () => {
     ? Response.json({ key: `assets/${id}`, name: "shot.png", contentType: "image/png", byteSize: 10 })
     : new Response(null, { status: 403 }));
   try {
-    assert.equal((await handleRequest(new Request(`https://media.test/media/assets/${id}`, { headers: { cookie: "session=allowed" } }), fixture.env)).status, 200);
-    assert.equal((await handleRequest(new Request(`https://media.test/media/assets/${id}`, { headers: { cookie: "session=other" } }), fixture.env)).status, 403);
+    assert.equal((await handleRequest(new Request(`https://media.test/api/files/assets/${id}`, { headers: { cookie: "session=allowed" } }), fixture.env)).status, 200);
+    assert.equal((await handleRequest(new Request(`https://media.test/api/files/assets/${id}`, { headers: { cookie: "session=other" } }), fixture.env)).status, 403);
     assert.equal(fixture.gets, 1);
     assert.deepEqual(fixture.calls, ["session=allowed|null", "session=other|null"]);
   } finally { fixture.restore(); }
@@ -46,7 +46,7 @@ test("owner-prefixed keys use external IDs while legacy keys remain readable", a
   for (const key of [`assets/UserNano1234/${id}`, `assets/${id}`, `assets/42/${id}`, `assets/UserNano1234/OtherAsset12`, `assets/UserNano1234/../${id}`]) {
     const fixture = setup(() => Response.json({ key, name: "file.png", contentType: "image/png", byteSize: 10 }));
     try {
-      const response = await handleRequest(new Request(`https://x/media/assets/${id}`), fixture.env);
+      const response = await handleRequest(new Request(`https://x/api/files/assets/${id}`), fixture.env);
       const expected = key === `assets/UserNano1234/${id}` || key === `assets/${id}`;
       assert.equal(response.status, expected ? 200 : 502, key);
       assert.equal(fixture.gets, expected ? 1 : 0, key);
@@ -58,9 +58,9 @@ test("revocation is checked on the next request", async () => {
   let allowed = true;
   const fixture = setup(() => allowed ? Response.json({ key: `assets/${id}`, name: "x", contentType: "image/png", byteSize: 10 }) : new Response(null, { status: 404 }));
   try {
-    assert.equal((await handleRequest(new Request(`https://x/media/assets/${id}`), fixture.env)).status, 200);
+    assert.equal((await handleRequest(new Request(`https://x/api/files/assets/${id}`), fixture.env)).status, 200);
     allowed = false;
-    assert.equal((await handleRequest(new Request(`https://x/media/assets/${id}`), fixture.env)).status, 404);
+    assert.equal((await handleRequest(new Request(`https://x/api/files/assets/${id}`), fixture.env)).status, 404);
     assert.equal(fixture.gets, 1);
   } finally { fixture.restore(); }
 });
@@ -69,10 +69,10 @@ test("supports bounded, open, suffix, and unsatisfiable ranges", async () => {
   const fixture = setup();
   try {
     for (const [value, expected, content] of [["bytes=2-4", "bytes 2-4/10", "234"], ["bytes=7-", "bytes 7-9/10", "789"], ["bytes=-3", "bytes 7-9/10", "789"]]) {
-      const response = await handleRequest(new Request(`https://x/media/assets/${id}`, { headers: { range: value } }), fixture.env);
+      const response = await handleRequest(new Request(`https://x/api/files/assets/${id}`, { headers: { range: value } }), fixture.env);
       assert.equal(response.status, 206); assert.equal(response.headers.get("content-range"), expected); assert.equal(await response.text(), content);
     }
-    const invalid = await handleRequest(new Request(`https://x/media/assets/${id}`, { headers: { range: "bytes=20-30" } }), fixture.env);
+    const invalid = await handleRequest(new Request(`https://x/api/files/assets/${id}`, { headers: { range: "bytes=20-30" } }), fixture.env);
     assert.equal(invalid.status, 416); assert.equal(invalid.headers.get("content-range"), "bytes */10");
   } finally { fixture.restore(); }
 });
@@ -80,7 +80,7 @@ test("supports bounded, open, suffix, and unsatisfiable ranges", async () => {
 test("HEAD authorizes and does not get object bytes", async () => {
   const fixture = setup();
   try {
-    const response = await handleRequest(new Request(`https://x/media/assets/${id}`, { method: "HEAD", headers: { authorization: "Bearer viewer" } }), fixture.env);
+    const response = await handleRequest(new Request(`https://x/api/files/assets/${id}`, { method: "HEAD", headers: { authorization: "Bearer viewer" } }), fixture.env);
     assert.equal(response.status, 200); assert.equal(fixture.gets, 0); assert.equal(fixture.calls[0], "null|Bearer viewer");
   } finally { fixture.restore(); }
 });
@@ -88,17 +88,17 @@ test("HEAD authorizes and does not get object bytes", async () => {
 test("fails closed for redirect, timeout, malformed authorization, and storage mismatch", async () => {
   for (const api of [() => new Response(null, { status: 302, headers: { location: "https://untrusted.example" } }), () => { throw new DOMException("timed out", "TimeoutError"); }, () => Response.json({ key: "wrong", name: "x", contentType: "image/png", byteSize: 10 })]) {
     const fixture = setup(api);
-    try { assert.ok((await handleRequest(new Request(`https://x/media/assets/${id}`), fixture.env)).status >= 500); } finally { fixture.restore(); }
+    try { assert.ok((await handleRequest(new Request(`https://x/api/files/assets/${id}`), fixture.env)).status >= 500); } finally { fixture.restore(); }
   }
   const fixture = setup();
   fixture.env.ASSETS.get = async () => ({ size: 9, body: new Blob([bytes]).stream() });
-  try { assert.equal((await handleRequest(new Request(`https://x/media/assets/${id}`), fixture.env)).status, 502); } finally { fixture.restore(); }
+  try { assert.equal((await handleRequest(new Request(`https://x/api/files/assets/${id}`), fixture.env)).status, 502); } finally { fixture.restore(); }
 });
 
 test("unsafe HTML is an octet-stream attachment with security headers", async () => {
   const fixture = setup(() => Response.json({ key: `assets/${id}`, name: "résumé.html", contentType: "text/html", byteSize: 10 }));
   try {
-    const response = await handleRequest(new Request(`https://x/media/assets/${id}`), fixture.env);
+    const response = await handleRequest(new Request(`https://x/api/files/assets/${id}`), fixture.env);
     assert.equal(response.headers.get("content-type"), "application/octet-stream");
     assert.match(response.headers.get("content-disposition")!, /^attachment;.*filename\*=UTF-8''r%C3%A9sum%C3%A9\.html$/);
     assert.equal(response.headers.get("cache-control"), "private, no-store");
@@ -120,7 +120,7 @@ test("share ID resolves to a distinct asset key; credentials cannot override the
     return { size: 10, body: new Blob([bytes]).stream() };
   };
   try {
-    const response = await handleRequest(new Request(`https://x/media/shares/${share}`, { headers: {
+    const response = await handleRequest(new Request(`https://x/api/files/shares/${share}`, { headers: {
       "x-captures-media-key": "attacker", "if-none-match": "old-etag", "cf-connecting-ip": "127.0.0.1",
     } }), fixture.env);
     assert.equal(response.status, 200);
@@ -136,7 +136,7 @@ test("authorization timeout aborts the fetch and never reaches R2", async () => 
   // AbortSignal.timeout uses an unref timer in Node.
   const keepAlive = setTimeout(() => {}, 1000);
   try {
-    const response = await handleRequest(new Request(`https://x/media/assets/${id}`), fixture.env);
+    const response = await handleRequest(new Request(`https://x/api/files/assets/${id}`), fixture.env);
     assert.equal(response.status, 504);
     assert.equal(fixture.gets, 0);
   } finally { clearTimeout(keepAlive); fixture.restore(); }
@@ -146,17 +146,28 @@ test("malformed and multiple ranges fail; HEAD ignores Range; storage failure de
   const fixture = setup();
   try {
     for (const range of ["bytes=-0", "bytes=7-2", "bytes=1-2,4-5", "bytes=+2-4", "items=0-2", "bytes=9007199254740992-"]) {
-      assert.equal((await handleRequest(new Request(`https://x/media/assets/${id}`, { headers: { range } }), fixture.env)).status, 416);
+      assert.equal((await handleRequest(new Request(`https://x/api/files/assets/${id}`, { headers: { range } }), fixture.env)).status, 416);
     }
-    const head = await handleRequest(new Request(`https://x/media/assets/${id}`, { method: "HEAD", headers: { range: "bytes=2-4" } }), fixture.env);
+    const head = await handleRequest(new Request(`https://x/api/files/assets/${id}`, { method: "HEAD", headers: { range: "bytes=2-4" } }), fixture.env);
     assert.equal(head.status, 200);
     assert.equal(head.headers.get("content-length"), "10");
     assert.equal(await head.text(), "");
     assert.equal(fixture.gets, 0);
     fixture.env.ASSETS.get = async () => { throw new Error("private storage failure"); };
-    const error = await handleRequest(new Request(`https://x/media/assets/${id}`), fixture.env);
+    const error = await handleRequest(new Request(`https://x/api/files/assets/${id}`), fixture.env);
     assert.equal(error.status, 502);
     assert.equal(await error.text(), "");
     assert.equal(error.headers.get("cloudflare-cdn-cache-control"), "no-store");
+  } finally { fixture.restore(); }
+});
+
+test("file loading only accepts API routes, not pages or old root-level routes", async () => {
+  const fixture = setup();
+  try {
+    for (const path of [`/s/${id}`, `/dashboard`, `/assets/${id}`, `/assets/shares/${id}`, `/media/assets/${id}`, `/media/shares/${id}`, `/api/media/assets/${id}`]) {
+      assert.equal((await handleRequest(new Request(`https://x${path}`), fixture.env)).status, 404, path);
+    }
+    assert.equal(fixture.calls.length, 0);
+    assert.equal(fixture.gets, 0);
   } finally { fixture.restore(); }
 });
