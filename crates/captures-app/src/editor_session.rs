@@ -64,8 +64,8 @@ pub struct TextCreate {
     pub color: String,
 }
 
-/// Filled-text property edits. Omitted fields preserve authored/unknown data;
-/// a null background removes the plate. Outlines remain unsupported.
+/// Text property edits. Omitted fields preserve authored/unknown data;
+/// a null background removes the plate. Paint-only changes do not refit text.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TextPatch {
@@ -80,6 +80,7 @@ pub struct TextPatch {
     pub background: OptionalNullable<String>,
     pub rounded_background: Option<bool>,
     pub drop_shadow: Option<bool>,
+    pub outlined: Option<bool>,
 }
 
 impl TextPatch {
@@ -129,6 +130,9 @@ impl TextPatch {
         }
         if let Some(enabled) = self.drop_shadow {
             element.drop_shadow = Some(enabled);
+        }
+        if let Some(outlined) = self.outlined {
+            element.outlined = outlined;
         }
         Ok(refit)
     }

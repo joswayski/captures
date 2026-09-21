@@ -2,8 +2,8 @@
 //!
 //! Image assets are supplied by exact document `src`, so rendering performs no
 //! filesystem, network, host-font, or UI access. The five closed annotation
-//! shapes, curved lines, tapered arrows, and freehand paths are rendered. Filled
-//! text and plates additionally require explicit fonts and family mapping.
+//! shapes, curved lines, tapered arrows, and freehand paths are rendered. Text
+//! and plates additionally require explicit fonts and family mapping.
 
 use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 
@@ -32,9 +32,9 @@ pub fn render(
     render_inner(document, assets, None)
 }
 
-/// Opt in to filled paragraph text using caller-owned fonts. `families` maps
+/// Opt in to paragraph text using caller-owned fonts. `families` maps
 /// document family keys (such as `sans`) to names embedded in supplied font bytes.
-/// No installed fonts are scanned. Outlines remain explicit errors. Text and
+/// No installed fonts are scanned. Outlines require monochrome scalable glyphs. Text and
 /// plates rotate together around the shipping selection pivot; shadow offsets
 /// stay in canvas space. Plates shadow once, otherwise glyph lines shadow first
 /// and all crisp glyph passes follow, matching shipping paint order.
@@ -154,9 +154,6 @@ fn render_inner(
 
 fn validate_text(element: &TextElement, families: &BTreeMap<String, String>) -> Result<(), String> {
     let id = &element.base.id;
-    if element.outlined {
-        return Err(format!("text layer {id} outlines are not supported yet"));
-    }
     for (axis, value) in [
         ("x", element.base.x),
         ("y", element.base.y),
@@ -220,6 +217,11 @@ pub(crate) fn prepare_text_edit(
         element.clone()
     };
     crate::editor_text::layout(&fitted, measure)?;
+    if fitted.outlined && !fitted.base.visible {
+        // Visible text is checked by the candidate document render. Hidden text
+        // must still reject unsupported outline glyphs before accepting an edit.
+        text_layers(0, &fitted, renderer, families, &mut 16_777_216)?;
+    }
     Ok(fitted)
 }
 
@@ -283,7 +285,16 @@ fn text_layers(
         ));
     }
     for row in layout.rows {
-        let line = renderer.render_line(&canvas_text_line(&row.text), &style)?;
+        let sample = canvas_text_line(&row.text);
+        let line = if element.outlined {
+            renderer.render_outline_line(
+                &sample,
+                &style,
+                (element.font_size * 0.08).max(1.5) as f32,
+            )?
+        } else {
+            renderer.render_line(&sample, &style)?
+        };
         if line.pixels.width() == 0 || line.pixels.height() == 0 {
             continue;
         }

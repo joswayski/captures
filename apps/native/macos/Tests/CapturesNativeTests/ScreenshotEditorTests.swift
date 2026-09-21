@@ -3169,11 +3169,45 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controller.prepareForTermination(), "successful Apply clears staging")
     }
 
+    func testTextOutlineStagesCancelsAndKeepsFailedInput() throws {
+        _ = NSApplication.shared
+        let original = textLayer(id: "copy", text: "accepted")
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let outline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "Text outline" })
+        XCTAssertEqual(outline.state, .off)
+        outline.performClick(nil)
+        XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertFalse(controller.prepareForTermination())
+        worker.failOperation = "edit_text"
+        try button("Apply", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.last?["patch"] as? [String: Bool], ["outlined": true])
+        XCTAssertEqual(outline.state, .on)
+        XCTAssertFalse(controller.state.snapshot?.layers.first?.textStyle?.outlined ?? true)
+        try button("Cancel", in: controller.root).performClick(nil)
+        XCTAssertEqual(outline.state, .off)
+        outline.performClick(nil)
+        worker.failOperation = nil
+        worker.response = { _ in
+            var accepted = original; accepted["outlined"] = true
+            return self.snapshot(id: "shot", unsaved: true, layers: [accepted])
+        }
+        try button("Apply", in: controller.root).performClick(nil)
+        XCTAssertTrue(controller.state.snapshot?.layers.first?.textStyle?.outlined == true)
+        XCTAssertEqual(outline.state, .on)
+        XCTAssertTrue(controller.prepareForTermination())
+    }
+
     func testTextControlsRenderedAtNormalAndMinimumSizes() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
             var label = textLayer(id: "copy", text: "First line\nSecond line", family: "serif")
             label["dropShadow"] = true
+            label["outlined"] = true
             let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true,
                 layers: [label],
                 fonts: ["sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"]))

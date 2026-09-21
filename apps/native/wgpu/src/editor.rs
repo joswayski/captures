@@ -199,6 +199,7 @@ struct TextValues {
     background: Option<String>,
     rounded_background: bool,
     drop_shadow: bool,
+    outlined: bool,
 }
 
 impl TextValues {
@@ -214,6 +215,7 @@ impl TextValues {
             background: text.background.clone(),
             rounded_background: text.rounded_background,
             drop_shadow: text.has_drop_shadow(),
+            outlined: text.outlined,
         }
     }
 
@@ -237,6 +239,7 @@ impl TextValues {
             rounded_background: (self.rounded_background != accepted.rounded_background)
                 .then_some(self.rounded_background),
             drop_shadow: (self.drop_shadow != accepted.drop_shadow).then_some(self.drop_shadow),
+            outlined: (self.outlined != accepted.outlined).then_some(self.outlined),
         }
     }
 }
@@ -3239,7 +3242,10 @@ fn show_text(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
         annotation_color(ui, "Plate color", background);
         ui.checkbox(&mut fields.staged.rounded_background, "Rounded plate");
     }
-    ui.checkbox(&mut fields.staged.drop_shadow, "Drop shadow");
+    ui.horizontal_wrapped(|ui| {
+        ui.checkbox(&mut fields.staged.drop_shadow, "Drop shadow");
+        ui.checkbox(&mut fields.staged.outlined, "Outline");
+    });
     let changed = fields.staged != fields.accepted;
     let invalid_color = egui::Color32::from_hex(&fields.staged.color).is_err()
         || fields
@@ -3953,7 +3959,9 @@ mod tests {
         view.text.as_mut().unwrap().staged.text = "composing".into();
         view.text.as_mut().unwrap().staged.font_family = "serif".into();
         view.text.as_mut().unwrap().staged.drop_shadow = true;
+        view.text.as_mut().unwrap().staged.outlined = true;
         let fields = view.text.as_ref().unwrap();
+        assert_eq!(fields.staged.patch(&fields.accepted).outlined, Some(true));
         assert_eq!(
             fields.staged.patch(&fields.accepted).drop_shadow,
             Some(true)
@@ -3976,6 +3984,7 @@ mod tests {
         assert_eq!(view.text.as_ref().unwrap().accepted.text, "accepted");
         assert_eq!(view.text.as_ref().unwrap().staged.font_family, "serif");
         assert!(view.text.as_ref().unwrap().staged.drop_shadow);
+        assert!(view.text.as_ref().unwrap().staged.outlined);
         assert_eq!(
             view.text.as_ref().unwrap().accepted.font_family,
             "saved-unknown-family"
@@ -3989,6 +3998,8 @@ mod tests {
         assert!(fields.staged.patch(&fields.accepted).font_family.is_none());
         assert!(!fields.staged.drop_shadow);
         assert!(fields.staged.patch(&fields.accepted).drop_shadow.is_none());
+        assert!(!fields.staged.outlined);
+        assert!(fields.staged.patch(&fields.accepted).outlined.is_none());
         view.text.as_mut().unwrap().staged.text = "applied".into();
         view.text_apply_pending = true;
         view.output = Some((view.texture.as_ref().unwrap().clone(), 9));

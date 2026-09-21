@@ -347,6 +347,7 @@ struct NativeTextStyle: Equatable {
     let background: String?
     let roundedBackground: Bool
     let dropShadow: Bool
+    let outlined: Bool
 
     init?(_ value: [String: Any]) {
         guard let text = value["text"] as? String,
@@ -354,6 +355,7 @@ struct NativeTextStyle: Equatable {
               let family = value["fontFamily"] as? String, !family.isEmpty,
               let bold = value["bold"] as? Bool,
               let italic = value["italic"] as? Bool,
+              let outlined = value["outlined"] as? Bool,
               let align = value["align"] as? String,
               ["left", "center", "right"].contains(align),
               let color = value["color"] as? String,
@@ -362,6 +364,7 @@ struct NativeTextStyle: Equatable {
         self.bold = bold; self.italic = italic; self.align = align; self.color = color
         background = value["background"] as? String; roundedBackground = rounded
         dropShadow = value["dropShadow"] as? Bool ?? false
+        self.outlined = outlined
     }
 }
 
