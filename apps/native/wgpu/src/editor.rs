@@ -2681,14 +2681,19 @@ fn show_shape(
 }
 
 fn polygon_mesh(points: Vec<egui::Pos2>, color: egui::Color32) -> egui::Mesh {
-    // epaint's filled paths require convex polygons. Tapered arrow necks are concave.
+    // epaint's filled paths require convex polygons. Arrow necks and stars are concave.
     let coordinates: Vec<_> = points
         .iter()
         .flat_map(|point| [f64::from(point.x), f64::from(point.y)])
         .collect();
     let indices = earcutr::earcut(&coordinates, &[], 2)
-        .expect("shared arrow polygon has finite two-dimensional coordinates");
+        .expect("shared polygon has finite two-dimensional coordinates");
     let mut mesh = egui::Mesh::default();
+    // A press or axis-aligned drag has vertices but no triangles. Do not send
+    // orphan vertices to egui-wgpu: its zero-length index-buffer slice panics.
+    if indices.is_empty() {
+        return mesh;
+    }
     for point in points {
         mesh.colored_vertex(point, color);
     }
@@ -5348,6 +5353,28 @@ mod tests {
                 .indices
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn degenerate_polygon_previews_have_no_orphan_gpu_vertices() {
+        for kind in [
+            ClosedShapeKind::Triangle,
+            ClosedShapeKind::Diamond,
+            ClosedShapeKind::Star,
+        ] {
+            let start = Point { x: 50., y: 30. };
+            for end in [start, Point { x: 50., y: 90. }, Point { x: 120., y: 30. }] {
+                let points = kind
+                    .polygon(start, end)
+                    .unwrap()
+                    .into_iter()
+                    .map(|point| egui::pos2(point.x as f32, point.y as f32))
+                    .collect();
+                let mesh = polygon_mesh(points, egui::Color32::RED);
+                assert!(mesh.indices.is_empty());
+                assert!(mesh.vertices.is_empty());
+            }
+        }
     }
 
     #[test]

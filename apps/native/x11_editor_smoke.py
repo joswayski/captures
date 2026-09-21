@@ -353,6 +353,8 @@ def main():
             pixel("polygon-star-committed", 738, 409, (46, 158, 113))
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "polygon-minimum")
+            run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "5", "5")
+            shot(editor, "polygon-minimum-scrolled")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "polygon draft closes")
             editor = reopen()
