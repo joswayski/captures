@@ -3,6 +3,43 @@ import XCTest
 @testable import CapturesNative
 
 final class ScreenshotEditorTests: XCTestCase {
+    func testZoomSliderUsesSharedLogScaleAndRetainsDocumentAndOutput() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let original = snapshot(id: "shot", width: 160, height: 90, unsaved: true, draft: true)
+            let worker = FakeEditorWorker(snapshot: original)
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            let slider = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSSlider }
+                .first { $0.accessibilityLabel() == "Canvas zoom" })
+            XCTAssertEqual(slider.doubleValue, 0.5902718572045537, accuracy: 1e-12,
+                           "Fit uses the small image's actual 100%, not the zero sentinel")
+            XCTAssertTrue(slider.isContinuous)
+            try showOutput(in: controller.root)
+            try button("Preview output", in: controller.root).performClick(nil)
+            let mode = try segmented("Output preview image", in: controller.root)
+            for (position, percent) in [(0.0, 5.0), (0.5, 63.2), (0.75, 224.9), (1.0, 800.0)] {
+                slider.doubleValue = position
+                _ = slider.sendAction(slider.action, to: slider.target)
+                XCTAssertEqual(controller.viewport.zoomPercent, percent)
+                XCTAssertEqual(controller.state.snapshot, original)
+                XCTAssertEqual(mode.selectedSegment, 1)
+                XCTAssertTrue(mode.isEnabled)
+                XCTAssertEqual(slider.accessibilityValueDescription(), "\(percent == floor(percent) ? String(Int(percent)) : String(percent))%")
+            }
+            XCTAssertTrue(worker.requests.isEmpty)
+            XCTAssertEqual(worker.encodes.count, 1)
+            try render(controller.root, name: "screenshot-editor-zoom-slider-maximum-\(appearance)")
+            try button("Fit", in: controller.root).performClick(nil)
+            XCTAssertEqual(controller.viewport, NativeEditorViewport())
+            XCTAssertEqual(slider.doubleValue, 0.5902718572045537, accuracy: 1e-12)
+            try render(controller.root, name: "screenshot-editor-zoom-slider-fit-\(appearance)")
+        }
+        XCTAssertNil(NativeEditorViewport.sliderZoom(position: .nan))
+        XCTAssertNil(NativeEditorViewport.sliderPosition(percent: .infinity))
+    }
+
     func testReplaceOriginalRequiresConfirmationAndUsesImmutableRequest() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", originalExportPath: "/exports/original.png"))

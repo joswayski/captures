@@ -761,6 +761,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var viewportBounds = NSRect.zero
     private var viewportButtons: [CaptureButton] = []
     private let zoomPreset = NSPopUpButton()
+    private let zoomSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
     private let cropX = NSTextField()
     private let cropY = NSTextField()
     private let cropWidth = NSTextField()
@@ -1140,11 +1141,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         selectionOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         cropOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
-        let fit = button("Fit", frame: NSRect(x: 24, y: 650, width: 64, height: 30), parent: root) {
+        let fit = button("Fit", frame: NSRect(x: 24, y: 650, width: 40, height: 30), parent: root) {
             [weak self] in self?.fitViewport()
         }
         fit.setAccessibilityLabel("Fit screenshot in viewport"); viewportButtons.append(fit)
-        zoomPreset.frame = NSRect(x: 96, y: 650, width: 80, height: 30)
+        zoomPreset.frame = NSRect(x: 72, y: 650, width: 80, height: 30)
         zoomPreset.setAccessibilityLabel("Canvas zoom preset")
         zoomPreset.target = self; zoomPreset.action = #selector(changeZoomPreset)
         root.addSubview(zoomPreset)
@@ -1154,13 +1155,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             ("+", "Zoom in", { [weak self] in self?.scaleViewport(by: 1.25) }),
             ("Recenter", "Recenter screenshot", { [weak self] in self?.recenterViewport() }),
         ]
-        var x: CGFloat = 184
+        var x: CGFloat = 160
         for (title, accessibility, action) in controls {
-            let width: CGFloat = title == "Recenter" ? 92 : 64
+            let width: CGFloat = title == "Recenter" ? 84 : 32
             let control = button(title, frame: NSRect(x: x, y: 650, width: width, height: 30),
                                  parent: root, action: action)
             control.setAccessibilityLabel(accessibility); viewportButtons.append(control); x += width + 8
         }
+        zoomSlider.frame = NSRect(x: 332, y: 650, width: 100, height: 30)
+        zoomSlider.isContinuous = true
+        zoomSlider.setAccessibilityLabel("Canvas zoom")
+        zoomSlider.target = self; zoomSlider.action = #selector(changeZoomSlider)
+        root.addSubview(zoomSlider)
         dimensions.frame = NSRect(x: 440, y: 654, width: 224, height: 20)
         dimensions.setAccessibilityLabel("Edited canvas dimensions"); root.addSubview(dimensions)
 
@@ -2459,8 +2465,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if value == 0 { fitViewport() } else { setViewportZoom(value) }
     }
 
+    @objc private func changeZoomSlider() {
+        guard let percent = NativeEditorViewport.sliderZoom(position: zoomSlider.doubleValue) else { return }
+        setViewportZoom(percent)
+    }
+
     private func publishZoomPreset() {
         let current = viewport.zoomPercent
+        let displayed = current == 0
+            ? fittedImageRect.width / max(1, viewportCanvasSize.width) * 100 : current
+        zoomSlider.doubleValue = NativeEditorViewport.sliderPosition(percent: displayed) ?? 0
+        let description = current == 0 ? "Fit (\(format(displayed))%)" : "\(format(current))%"
+        zoomSlider.setAccessibilityValueDescription(description)
+        zoomSlider.toolTip = "Canvas zoom: \(description). Drag to zoom from 5% to 800%."
         var values: [Double] = [0, 50, 100, 200]
         if !values.contains(current) { values.insert(current, at: 1) }
         if zoomPreset.itemArray.compactMap({ $0.representedObject as? Double }) != values {
@@ -2941,6 +2958,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputPreviewMode?.isEnabled = ready && encodedOutput != nil
         viewportButtons.forEach { $0.isEnabled = ready }
         zoomPreset.isEnabled = ready
+        zoomSlider.isEnabled = ready && !awaitingReplaceConfirmation
         updateOutputOptionControls()
         updateDrawing()
         layerTable?.isEnabled = ready

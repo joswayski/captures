@@ -30,7 +30,7 @@ use captures_app::{
         OpenRequest, PngOptions, Request, TextCreate, TextPatch,
     },
     editor_text::{TextStylePreset, shadow_style},
-    editor_viewport::{Viewport, wheel_zoom_factor},
+    editor_viewport::{Viewport, wheel_zoom_factor, zoom_from_slider, zoom_slider_position},
 };
 use captures_capture::CaptureMode;
 use eframe::egui::{self, RichText};
@@ -1374,6 +1374,20 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 if ui.button("Fit").on_hover_text("Fit the image in the editor").clicked() {
                     view.reset_viewport();
                 }
+                if let Some(percent) = displayed_zoom(view) {
+                    let mut position = zoom_slider_position(percent).unwrap_or(0.);
+                    ui.scope(|ui| {
+                        ui.spacing_mut().slider_width = tokens.number("s-12") * 2.;
+                        let response = ui.add_enabled(!view.pending && view.confirm_replace.is_none(),
+                            egui::Slider::new(&mut position, 0.0..=1.0).show_value(false))
+                            .on_hover_text(format!("Canvas zoom: {percent:.1}%. Drag from 5% to 800%."));
+                        response.widget_info(|| egui::WidgetInfo::labeled(
+                            egui::WidgetType::Slider, response.enabled(), format!("Canvas zoom: {percent:.1}%")));
+                        if response.changed() && let Some(zoom) = zoom_from_slider(position) {
+                            set_viewport_zoom(view, zoom, None);
+                        }
+                    });
+                }
             });
         });
         ui.add_enabled_ui(!view.pending && view.confirm_replace.is_none(), |ui| {
@@ -1778,16 +1792,20 @@ fn set_viewport_zoom(view: &mut View, percent: f64, anchor: Option<egui::Pos2>) 
     }
 }
 
-fn change_viewport_zoom(view: &mut View, factor: f64, anchor: Option<egui::Pos2>) {
-    let current = if view.viewport.zoom_percent == 0. {
-        let (Some(area), Some(size)) = (view.viewport_area, view.viewport_image_size) else {
-            return;
-        };
-        f64::from(fitted_image_rect(area, size).width() / size.x) * 100.
+fn displayed_zoom(view: &View) -> Option<f64> {
+    if view.viewport.zoom_percent == 0. {
+        let area = view.viewport_area?;
+        let size = view.viewport_image_size?;
+        Some(f64::from(fitted_image_rect(area, size).width() / size.x) * 100.)
     } else {
-        view.viewport.zoom_percent
-    };
-    set_viewport_zoom(view, current * factor, anchor);
+        Some(view.viewport.zoom_percent)
+    }
+}
+
+fn change_viewport_zoom(view: &mut View, factor: f64, anchor: Option<egui::Pos2>) {
+    if let Some(current) = displayed_zoom(view) {
+        set_viewport_zoom(view, current * factor, anchor);
+    }
 }
 
 fn handle_viewport_input(ui: &egui::Ui, view: &mut View, available: egui::Rect) -> bool {
@@ -3843,6 +3861,34 @@ mod tests {
             assert_eq!(fit.size(), expected);
             assert_eq!(viewport_rect(Viewport::default(), fit, image), Some(fit));
         }
+    }
+
+    #[test]
+    fn slider_tracks_actual_fit_and_cancels_gestures_without_changing_output() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        assert_eq!(displayed_zoom(&view), None);
+        view.receive(&ctx, Ok(presented(false)));
+        let document = view.presented.as_ref().unwrap().document.clone();
+        view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
+        view.show_output = true;
+        view.viewport_area = Some(egui::Rect::from_min_size(
+            egui::pos2(31., 47.),
+            egui::vec2(400., 200.),
+        ));
+        view.viewport_image_size = Some(egui::vec2(800., 400.));
+        assert_eq!(displayed_zoom(&view), Some(50.));
+        view.shape_drag = Some((Point { x: 3., y: 7. }, Point { x: 20., y: 30. }));
+        set_viewport_zoom(&mut view, zoom_from_slider(0.75).unwrap(), None);
+        assert_eq!(displayed_zoom(&view), Some(224.9));
+        assert!(view.shape_drag.is_none());
+        assert!(view.output.is_some() && view.show_output && !view.pending);
+        assert!(Arc::ptr_eq(
+            &document,
+            &view.presented.as_ref().unwrap().document
+        ));
+        view.reset_viewport();
+        assert_eq!(displayed_zoom(&view), Some(50.));
     }
 
     #[test]

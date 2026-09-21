@@ -1267,6 +1267,19 @@ def main():
             click(editor, 542, 18)
             shot(editor, "viewport-presets-custom-menu-minimum")
             run("xdotool", "key", "Escape")
+            click(editor, 465, 18)  # Fit resets the viewport-center anchor.
+            click(editor, 311, 18)  # Left end of the logarithmic slider: 5%.
+            shot(editor, "viewport-slider-minimum")
+            pixel("viewport-slider-minimum", 480, 321, (40, 110, 166))
+            pixel("viewport-slider-minimum", 478, 321, surface)
+            pixel("viewport-slider-minimum", 512, 321, surface)
+            pixel("viewport-slider-minimum", 480, 339, surface)
+            click(editor, 437, 18)  # Right end: 800%, preserving the same anchor.
+            shot(editor, "viewport-slider-maximum")
+            pixel("viewport-slider-maximum", 240, 150, (40, 110, 166))
+            pixel("viewport-slider-maximum", 750, 530, (40, 110, 166))
+            assert not draft.exists(), "slider changes must not create a draft"
+            assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "zoom suite quits")
             assert app.returncode == 0
@@ -1277,7 +1290,8 @@ def main():
                            "viewport-keyboard-actual-and-step-pixels", "viewport-field-key-no-draft",
                            "viewport-presets-50-200-pixels", "viewport-custom-preset-menu",
                            "viewport-preset-fit-no-draft", "viewport-reselect-fit-clears-pan",
-                           "viewport-fit-no-upscale", "viewport-custom-menu-minimum"],
+                           "viewport-fit-no-upscale", "viewport-custom-menu-minimum",
+                           "viewport-slider-5-percent-pixels", "viewport-slider-800-percent-pixels"],
             }, indent=2) + "\n")
             print("PASS native zoom: wheel, pan, toolbar, keyboard, presets, custom zoom, focused field, no draft")
             return

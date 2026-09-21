@@ -84,6 +84,11 @@ bool captures_editor_viewport_zoom_v1(CapturesEditorViewport viewport,
     CapturesSelectionPoint anchor, CapturesEditorViewport *output);
 /* Native hosts normalize wheel delta to pixels; zero result means invalid input. */
 double captures_editor_viewport_wheel_factor_v1(double delta_pixels);
+/* Shared logarithmic slider: 0–1 position ↔ 5–800 percent. Finite inputs clamp;
+ * percent rounds to 0.1%. Fit supplies actual displayed percent, not zero.
+ * Non-finite input returns NaN. No allocation or worker/session access. */
+double captures_editor_viewport_slider_position_v1(double percent);
+double captures_editor_viewport_slider_zoom_v1(double position);
 
 /* Shared preview placement. Monitor bounds are PHYSICAL pixels in desktop
  * top-left coordinates (negative origins allowed), including the actual usable

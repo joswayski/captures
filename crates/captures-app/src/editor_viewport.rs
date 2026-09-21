@@ -91,6 +91,21 @@ pub fn wheel_zoom_factor(delta_pixels: f64) -> Option<f64> {
         .then(|| (-delta_pixels.clamp(-240., 240.) * 0.002).exp())
 }
 
+/// Tauri's logarithmic slider. Fit callers supply their actual displayed percent.
+pub fn zoom_slider_position(percent: f64) -> Option<f64> {
+    percent.is_finite().then(|| {
+        let rounded = (percent.clamp(5., 800.) * 10.).round() / 10.;
+        (rounded / 5.).ln() / 160_f64.ln()
+    })
+}
+
+pub fn zoom_from_slider(position: f64) -> Option<f64> {
+    position.is_finite().then(|| {
+        let percent = 5. * (position.clamp(0., 1.) * 160_f64.ln()).exp();
+        (percent.clamp(5., 800.) * 10.).round() / 10.
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +196,30 @@ mod tests {
         assert_eq!(wheel_zoom_factor(400.), wheel_zoom_factor(240.));
         assert_eq!(wheel_zoom_factor(-400.), wheel_zoom_factor(-240.));
         assert_eq!(wheel_zoom_factor(f64::NAN), None);
+    }
+
+    #[test]
+    fn logarithmic_slider_matches_shipping_values_rounding_and_limits() {
+        // Independently evaluated shipping JS values, not a round-trip oracle.
+        for (position, percent) in [
+            (-0.2, 5.),
+            (0., 5.),
+            (0.25, 17.8),
+            (0.5, 63.2),
+            (0.75, 224.9),
+            (1., 800.),
+            (1.2, 800.),
+        ] {
+            assert_eq!(zoom_from_slider(position), Some(percent));
+        }
+        assert!((zoom_slider_position(100.).unwrap() - 0.5902718572045537).abs() < 1e-12);
+        assert_eq!(zoom_slider_position(2.), Some(0.));
+        assert_eq!(zoom_slider_position(900.), Some(1.));
+        assert_eq!(zoom_slider_position(123.46), zoom_slider_position(123.5));
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(zoom_from_slider(invalid), None);
+            assert_eq!(zoom_slider_position(invalid), None);
+        }
     }
 
     #[test]
