@@ -1711,7 +1711,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let preset = (outputFormat.indexOfSelectedItem != 0 || outputPngPalette.stringValue.isEmpty)
             ? Self.outputCompressionPresets.first(where: { $0.value == value }) : nil
         if let preset {
-            outputCompressionPreset.removeItem(withTitle: "Custom")
+            if outputCompressionPreset.item(withTitle: "Custom") != nil {
+                outputCompressionPreset.removeItem(withTitle: "Custom")
+            }
             outputCompressionPreset.selectItem(withTitle: preset.name)
         } else {
             if outputCompressionPreset.item(withTitle: "Custom") == nil {
