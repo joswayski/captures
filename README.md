@@ -300,11 +300,12 @@ bytes and license notices stay with the draft. Older drafts offer only their sav
 fonts; adding new fonts to an existing draft is not implemented.
 Selected-text named styles use those pinned fonts; Rounded styles are unavailable
 without a pinned rounded face, which the native bundle does not provide.
-The Windows/Linux candidate now offers an on-canvas multiline composing field.
-Typing previews text without saving or adding undo steps; finishing commits one
-edit, while Cancel restores the previous document. The composing field uses the
-UI font and is unrotated, not the Tauri editor's styled inline layout. AppKit
-composition and physical input/IME/accessibility acceptance remain separate work.
+The Windows/Linux candidate and AppKit host separately connect on-canvas native
+multiline composing fields to the same shared transaction. Typing previews text
+without saving or adding undo steps; finishing commits one edit, while Cancel
+restores the previous document. The composing fields use each host's UI font and
+an unrotated box, not the Tauri editor's styled inline layout. Physical macOS,
+Windows, Wayland, IME and accessibility acceptance remain unverified.
 This is not Tauri system-font equivalence or universal Unicode coverage:
 missing glyphs remain errors, and fonts are never discovered or downloaded automatically.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
@@ -469,8 +470,8 @@ Text controls support multiline content, pinned font families, size, bold/italic
 alignment, color, square/rounded background plates, outlines and a Drop shadow toggle.
 Apply changes the document in one undo step; Cancel restores accepted values.
 Custom shadows and pinned-font named styles are connected, including style/size/color
-choices for new text. Font import, inline canvas typing and physical
-input/IME/accessibility acceptance remain open.
+choices for new text. Font import and physical input/IME/accessibility acceptance
+remain open.
 Other drawing tools, post-save source adoption, and recording editing remain
 unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
