@@ -413,7 +413,8 @@ Done, Escape or focus loss commits one undo step, while Cancel restores the comp
 pre-input document. Blank new input is discarded and blank existing input removes
 the layer. Save, copy, import and unrelated document actions remain blocked until
 the transaction resolves. Begin/update/finish failures keep retryable input, and
-close/quit flush the latest local buffer before draft handling. Shared pinned-font
+close/quit drain accepted work, preserving either the latest commit buffer or a
+pending cancellation before draft handling. Shared pinned-font
 layout and pixels remain authoritative: the AppKit composing field intentionally
 uses the UI font and an axis-aligned clipped box, so exact family glyphs, text
 effects, blending and rotated composing-field geometry remain parity work. Existing
