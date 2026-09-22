@@ -63,7 +63,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     func present(artifact: CaptureArtifact, historyRoot: String, outputDirectory: String) {
-        if artifactID != nil, artifactID != artifact.id, (busy || dirty) {
+        if artifactID == artifact.id {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        if artifactID != nil, busy || pickerOpen || dirty {
             showError("Finish, cancel, save, or discard the current recording edits first.")
             window.makeKeyAndOrderFront(nil); return
         }
@@ -71,6 +76,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let current = generation
         artifactID = artifact.id; presentation = nil; savedEdit = nil; savedExport = nil
         estimate = nil; activeCancel = nil; busy = true; pickerOpen = false
+        preview.image = nil
         destination.stringValue = URL(fileURLWithPath: outputDirectory)
             .appendingPathComponent("recording-edit-\(artifact.id.prefix(8)).mp4").path
         sourceLabel.stringValue = "Opening recording…"
@@ -152,6 +158,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         trimPanel.addSubview(label("Start", muted: true)); trimPanel.addSubview(trimStart)
         trimPanel.addSubview(label("End", muted: true)); trimPanel.addSubview(trimEnd)
         applyButton = button("Apply edits") { [weak self] in self?.applyEdits() }
+        trimPanel.addSubview(applyButton)
 
         format.addItems(withTitles: ["MP4", "GIF"])
         format.target = self; format.action = #selector(formatChanged)
@@ -346,8 +353,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                     case .saved(let path):
                         self.status.stringValue = "Saved new copy: \(path)"; self.didSaveCopy()
                     case .savedWithoutHistory(let path, let warning):
-                        self.status.stringValue = "Saved new copy: \(path)"
-                        self.showError("The file was saved, but History could not be updated: \(warning)")
+                        self.showError("Saved new copy: \(path). History could not be updated: \(warning)")
                     }
                 case .failure(let error): self.showError("Save failed: \(error.localizedDescription)")
                 }

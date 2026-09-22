@@ -6,7 +6,7 @@ import XCTest
 final class RecordingEditorTests: XCTestCase {
     func testStagedTrimFormatFailureRetainsAcceptedFrameAndValues() throws {
         _ = NSApplication.shared
-        let worker = FakeRecordingEditorWorker(presentation: presentation())
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
         let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
                                                    worker: worker, confirmDiscard: { false })
         defer { controller.window.orderOut(nil) }
@@ -38,7 +38,7 @@ final class RecordingEditorTests: XCTestCase {
 
     func testAcceptedSeekEstimateSaveWarningAndDirtyLifecycle() throws {
         _ = NSApplication.shared
-        let worker = FakeRecordingEditorWorker(presentation: presentation())
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
         var historyReloads = 0
         let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
             worker: worker, didSaveCopy: { historyReloads += 1 }, confirmDiscard: { false })
@@ -49,7 +49,7 @@ final class RecordingEditorTests: XCTestCase {
         start.stringValue = "100"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: start))
-        let accepted = presentation(start: 100, end: nil, position: 0, revision: 1)
+        let accepted = try presentation(start: 100, end: nil, position: 0, revision: 1)
         worker.requestResult = .success(accepted)
         try button("Apply edits", in: controller.root).performClick(nil)
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
@@ -57,7 +57,7 @@ final class RecordingEditorTests: XCTestCase {
 
         let seek = try slider("Recording frame position", in: controller.root)
         seek.doubleValue = 700
-        worker.requestResult = .success(presentation(start: 100, end: nil, position: 700, revision: 2))
+        worker.requestResult = .success(try presentation(start: 100, end: nil, position: 700, revision: 2))
         _ = seek.sendAction(seek.action, to: seek.target)
         XCTAssertEqual(worker.requests.last?["operation"] as? String, "seek")
         XCTAssertEqual((worker.requests.last?["position_ms"] as? NSNumber)?.uint64Value, 700)
@@ -76,10 +76,71 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(worker.closeCount, 1)
     }
 
+    func testSameArtifactReentryPreservesEditsAndInFlightSave() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        var historyReloads = 0
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, didSaveCopy: { historyReloads += 1 }, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        let artifact = recordingArtifact()
+        controller.present(artifact: artifact, historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(worker.openCount, 1)
+
+        let start = try field("Trim start milliseconds", in: controller.root)
+        start.stringValue = "100"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: start))
+        controller.present(artifact: artifact, historyRoot: "/History", outputDirectory: "/Elsewhere")
+        XCTAssertEqual(worker.openCount, 1)
+        XCTAssertEqual(start.stringValue, "100", "same-item focus retains staged values")
+
+        worker.requestResult = .success(try presentation(start: 100, revision: 1))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertTrue(controller.dirty)
+        controller.present(artifact: artifact, historyRoot: "/History", outputDirectory: "/Elsewhere")
+        XCTAssertEqual(worker.openCount, 1)
+        XCTAssertEqual(start.stringValue, "100", "same-item focus retains accepted dirty edits")
+
+        worker.deferSave = true
+        try button("Save new copy", in: controller.root).performClick(nil)
+        XCTAssertNotNil(worker.observedSaveCancel)
+        controller.present(artifact: artifact, historyRoot: "/History", outputDirectory: "/Elsewhere")
+        controller.present(artifact: recordingArtifact(id: "another-recording"),
+                           historyRoot: "/History", outputDirectory: "/Elsewhere")
+        XCTAssertEqual(worker.openCount, 1, "busy same/different-item requests cannot reopen the session")
+        XCTAssertNotNil(worker.observedSaveCancel, "same-item focus retains the independent cancel token")
+        XCTAssertFalse(try button("Cancel operation", in: controller.root).isHiddenOrHasHiddenAncestor)
+        worker.completeSave(.success(.saved(path: "/Exports/recording-edit-recordin.mp4")))
+        XCTAssertEqual(historyReloads, 1, "accepted save completion still publishes to History")
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("recording-edit-recordin.mp4") })
+        XCTAssertFalse(controller.dirty)
+    }
+
+    func testNewOpenClearsPreviousFrameBeforeFailure() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { true })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let image = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSImageView }.first)
+        XCTAssertNotNil(image.image)
+
+        worker.deferOpen = true
+        controller.present(artifact: recordingArtifact(id: "another-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertNil(image.image, "a genuinely new open cannot display the previous recording frame")
+        worker.completeOpen(.failure(AppBridgeError.backend("source missing")))
+        XCTAssertNil(image.image)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("source missing") })
+    }
+
     func testBusyCloseQuitCancellationAndRenderedStates() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
-            let worker = FakeRecordingEditorWorker(presentation: presentation())
+            let worker = FakeRecordingEditorWorker(presentation: try presentation())
             let controller = RecordingEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
                                                        worker: worker, confirmDiscard: { false })
             defer { controller.window.orderOut(nil) }
@@ -141,9 +202,10 @@ final class RecordingEditorTests: XCTestCase {
     }
 
     private func presentation(start: UInt64 = 0, end: UInt64? = nil,
-                              position: UInt64 = 0, revision: UInt64 = 0) -> RecordingEditorPresentation {
+                              position: UInt64 = 0, revision: UInt64 = 0) throws
+        -> RecordingEditorPresentation {
         let endValue: Any = end.map { NSNumber(value: $0) } ?? NSNull()
-        let snapshot = NativeRecordingEditorSnapshot([
+        let snapshot = try XCTUnwrap(NativeRecordingEditorSnapshot([
             "artifact_id": "recording-id", "source": ["kind": "video", "mime_type": "video/mp4",
                 "width": 320, "height": 180, "duration_ms": 2_000, "size_bytes": 1_024],
             "edit": ["trim_start_ms": start, "trim_end_ms": endValue,
@@ -156,15 +218,15 @@ final class RecordingEditorTests: XCTestCase {
                 "max_size_bytes": NSNull(), "frames_per_second": NSNull(),
                 "gif_max_colors": NSNull()],
             "position_ms": position, "revision": revision,
-        ])!
-        return RecordingEditorPresentation(snapshot: snapshot, image: fixtureImage())
+        ]))
+        return RecordingEditorPresentation(snapshot: snapshot, image: try fixtureImage())
     }
 
-    private func recordingArtifact() -> CaptureArtifact {
-        CaptureArtifact(["entry": ["id": "recording-id", "kind": "video", "width": 320,
+    private func recordingArtifact(id: String = "recording-id") -> CaptureArtifact {
+        CaptureArtifact(["entry": ["id": id, "kind": "video", "width": 320,
             "height": 180, "created_at": "2026-09-22T00:00:00Z"],
-            "preview_path": "/History/recording-id/preview.png",
-            "media_path": "/History/recording-id/media.mp4"])!
+            "preview_path": "/History/\(id)/preview.png",
+            "media_path": "/History/\(id)/media.mp4"])!
     }
 
     private func makeRecordingFixture(tools: NativeMediaTools) throws
@@ -195,14 +257,14 @@ final class RecordingEditorTests: XCTestCase {
         return (root, history, source, id)
     }
 
-    private func fixtureImage() -> CGImage {
+    private func fixtureImage() throws -> CGImage {
         let bytes = [UInt8](repeating: 80, count: 16 * 9 * 4)
-        let provider = CGDataProvider(data: Data(bytes) as CFData)!
-        return CGImage(width: 16, height: 9, bitsPerComponent: 8, bitsPerPixel: 32,
+        let provider = try XCTUnwrap(CGDataProvider(data: Data(bytes) as CFData))
+        return try XCTUnwrap(CGImage(width: 16, height: 9, bitsPerComponent: 8, bitsPerPixel: 32,
                        bytesPerRow: 64, space: CGColorSpace(name: CGColorSpace.sRGB)!,
                        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
                        provider: provider, decode: nil, shouldInterpolate: false,
-                       intent: .defaultIntent)!
+                       intent: .defaultIntent))
     }
 
     private func descendants(in view: NSView) -> [NSView] {
@@ -238,6 +300,8 @@ final class RecordingEditorTests: XCTestCase {
 
 private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var initial: RecordingEditorPresentation
+    var openCount = 0
+    var deferOpen = false
     var requests: [[String: Any]] = []
     var requestResult: Result<RecordingEditorPresentation, Error>?
     var estimateResult: Result<RecordingEditorEstimate, Error> = .failure(AppBridgeError.backend("estimate unavailable"))
@@ -245,12 +309,19 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var saves: [(destination: String, export: [String: Any])] = []
     var deferSave = false
     var closeCount = 0
+    weak var observedSaveCancel: NativeRecordingEditorCancel?
+    private var pendingOpen: ((Result<RecordingEditorPresentation, Error>) -> Void)?
     private var pendingSave: ((Result<RecordingEditorSaveResult, Error>) -> Void)?
 
     init(presentation: RecordingEditorPresentation) { initial = presentation }
     func open(historyRoot: String, artifactID: String,
               completion: @escaping (Result<RecordingEditorPresentation, Error>) -> Void) {
-        completion(.success(initial))
+        openCount += 1
+        if deferOpen { pendingOpen = completion }
+        else { completion(.success(initial)) }
+    }
+    func completeOpen(_ result: Result<RecordingEditorPresentation, Error>) {
+        let completion = pendingOpen; pendingOpen = nil; completion?(result)
     }
     func request(_ object: [String: Any],
                  completion: @escaping (Result<RecordingEditorPresentation, Error>) -> Void) {
@@ -264,6 +335,7 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
               progress: @escaping (RecordingEditorProgress) -> Void,
               completion: @escaping (Result<RecordingEditorSaveResult, Error>) -> Void) {
         saves.append((destination, export))
+        observedSaveCancel = cancel
         if deferSave { pendingSave = completion }
         else { completion(saveResult) }
     }
