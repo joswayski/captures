@@ -3,6 +3,7 @@ mod feedback;
 mod preview;
 mod recording;
 mod recording_editor;
+mod recording_timeline;
 mod region;
 mod selection;
 mod shortcuts;

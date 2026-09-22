@@ -384,6 +384,38 @@ char *captures_editor_save_new_v1(const CapturesEditorSession *session, const ch
 char *captures_editor_save_original_v1(const CapturesEditorSession *session,
     const char *request_json);
 
+/* Allocation-free recording trim-handle geometry in host logical points and
+ * source-relative fractional milliseconds. Edge 0 is start; edge 1 is end.
+ * begin validates a staged range of at least 1ms and captures immutable origin.
+ * update applies the shipping 3px threshold (exactly 3 starts), permits fast
+ * in-track movement, and ignores samples farther than one track width outside
+ * either edge without advancing last_x. The returned drag is the next gesture
+ * state and time_ms is the staged trim/playhead value. Pointer up/cancel/lost
+ * capture requires no call: discard drag without rolling back host-staged time.
+ * Finite duration/width values below 1 normalize to 1 like shipping Tauri.
+ * False means null/nonfinite/invalid input and leaves output untouched. Inputs
+ * and outputs are copied; functions allocate nothing and access no session/I/O. */
+#define CAPTURES_RECORDING_TIMELINE_TRIM_START 0
+#define CAPTURES_RECORDING_TIMELINE_TRIM_END 1
+typedef struct {
+    double start_time_ms, start_x, last_x, min_time_ms, max_time_ms, duration_ms;
+    bool dragging;
+} CapturesRecordingTimelineTrimDrag;
+typedef struct {
+    CapturesRecordingTimelineTrimDrag drag;
+    double time_ms;
+} CapturesRecordingTimelineTrimUpdate;
+bool captures_recording_timeline_ratio_v1(double time_ms, double duration_ms,
+    double *output);
+bool captures_recording_timeline_time_at_x_v1(double client_x, double track_left,
+    double track_width, double duration_ms, double *output);
+bool captures_recording_timeline_trim_begin_v1(uint8_t edge, double pointer_x,
+    double trim_start_ms, double trim_end_ms, double duration_ms,
+    CapturesRecordingTimelineTrimDrag *output);
+bool captures_recording_timeline_trim_update_v1(CapturesRecordingTimelineTrimDrag drag,
+    double client_x, double track_left, double track_width,
+    CapturesRecordingTimelineTrimUpdate *output);
+
 /* Shared recording editor prerequisite. Open on one serialized worker with
  * {history_root,artifact_id,ffmpeg,ffprobe}; the artifact must be a real History
  * recording. Success output is owned {ok:true,result:snapshot}; error output is

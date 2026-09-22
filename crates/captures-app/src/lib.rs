@@ -12,6 +12,7 @@ pub mod editor_text;
 pub mod editor_viewport;
 pub mod preview;
 pub mod recording_editor;
+pub mod recording_timeline;
 pub mod region;
 pub mod selection;
 pub mod shortcuts;
