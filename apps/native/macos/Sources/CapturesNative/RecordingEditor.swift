@@ -53,6 +53,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         super.init()
         window.title = "Recording editor"
         window.minSize = NSSize(width: 760, height: 540)
+        window.appearance = NSAppearance(named: tokens.color("text").brightnessComponent > 0.5
+            ? .darkAqua : .aqua)
         window.delegate = self
         root.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 960, height: 760)
         root.autoresizingMask = [.width, .height]
