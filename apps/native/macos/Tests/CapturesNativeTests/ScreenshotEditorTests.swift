@@ -4328,9 +4328,8 @@ final class ScreenshotEditorTests: XCTestCase {
         editor.string = "accepted before disk failure"
         controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
 
-        let accepted = snapshot(id: "shot",
-            layers: [textLayer(id: "fresh", text: "accepted before disk failure")],
-            unsaved: true)
+        let accepted = snapshot(id: "shot", unsaved: true,
+            layers: [textLayer(id: "fresh", text: "accepted before disk failure")])
         worker.terminationResult = .failure(EditorTerminationFailure(
             cause: AppBridgeError.backend("disk unavailable"),
             acceptedPresentation: EditorPresentation(snapshot: accepted,
