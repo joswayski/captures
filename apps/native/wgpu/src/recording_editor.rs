@@ -72,6 +72,7 @@ struct View {
     start_ms: u64,
     end_ms: u64,
     crop: Option<CropRect>,
+    crop_aspect_unlocked: bool,
     output_size: Option<(u32, u32)>,
     max_resolution: MaxResolution,
     audio: AudioEdit,
@@ -263,6 +264,29 @@ pub struct Editor {
     events: Sender<Event>,
     rx: Receiver<Event>,
     worker: Option<thread::JoinHandle<()>>,
+}
+
+// Match the shipping editor's numeric crop resize: preserve the current ratio,
+// round to source pixels, and fit the coupled dimensions at the current origin.
+fn resize_crop_dimension(crop: &mut CropRect, source: (u32, u32), horizontal: bool, value: u32) {
+    let ratio = crop.width as f64 / crop.height.max(1) as f64;
+    let max_width = source.0.saturating_sub(crop.x).max(2);
+    let max_height = source.1.saturating_sub(crop.y).max(2);
+    if horizontal {
+        crop.width = value.clamp(2, max_width);
+        crop.height = ((crop.width as f64 / ratio).round() as u32).max(2);
+        if crop.height > max_height {
+            crop.height = max_height;
+            crop.width = ((crop.height as f64 * ratio).round() as u32).max(2);
+        }
+    } else {
+        crop.height = value.clamp(2, max_height);
+        crop.width = ((crop.height as f64 * ratio).round() as u32).max(2);
+        if crop.width > max_width {
+            crop.width = max_width;
+            crop.height = ((crop.width as f64 / ratio).round() as u32).max(2);
+        }
+    }
 }
 
 fn wake(ctx: &egui::Context, viewport: egui::ViewportId) {
@@ -652,24 +676,46 @@ fn show(
                 ui.group(|ui| {
                     ui.strong("Crop & size");
                     let mut crop_enabled = view.crop.is_some();
-                    if ui.checkbox(&mut crop_enabled, "Crop recording").changed() {
-                        view.crop = crop_enabled.then_some(CropRect {
-                            x: 0,
-                            y: 0,
-                            width: source_size.0,
-                            height: source_size.1,
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.checkbox(&mut crop_enabled, "Crop recording").changed() {
+                            view.crop = crop_enabled.then_some(CropRect {
+                                x: 0,
+                                y: 0,
+                                width: source_size.0,
+                                height: source_size.1,
+                            });
+                        }
+                        ui.add_enabled_ui(crop_enabled, |ui| {
+                            let mut locked = !view.crop_aspect_unlocked;
+                            if ui.checkbox(&mut locked, "Lock aspect ratio").changed() {
+                                view.crop_aspect_unlocked = !locked;
+                            }
                         });
-                    }
+                    });
                     if let Some(crop) = &mut view.crop {
                         ui.horizontal_wrapped(|ui| {
                             for (label, value, minimum, maximum) in [
                                 ("X", &mut crop.x, 0, source_size.0.saturating_sub(2)),
                                 ("Y", &mut crop.y, 0, source_size.1.saturating_sub(2)),
-                                ("Width", &mut crop.width, 2, source_size.0),
-                                ("Height", &mut crop.height, 2, source_size.1),
                             ] {
                                 ui.label(label);
                                 ui.add(egui::DragValue::new(value).range(minimum..=maximum));
+                            }
+                            for (label, horizontal, maximum) in [
+                                ("Width", true, source_size.0),
+                                ("Height", false, source_size.1),
+                            ] {
+                                let mut value = if horizontal { crop.width } else { crop.height };
+                                ui.label(label);
+                                if ui.add(egui::DragValue::new(&mut value).range(2..=maximum).update_while_editing(false)).changed() {
+                                    if !view.crop_aspect_unlocked {
+                                        resize_crop_dimension(crop, source_size, horizontal, value);
+                                    } else if horizontal {
+                                        crop.width = value;
+                                    } else {
+                                        crop.height = value;
+                                    }
+                                }
                             }
                         });
                     }
@@ -898,6 +944,36 @@ mod tests {
         assert_eq!((edit.output_width, edit.output_height), (None, None));
         view.request_close();
         assert!(view.confirm_close && !view.closed);
+    }
+
+    #[test]
+    fn locked_crop_dimensions_follow_current_ratio_and_origin_bounds() {
+        for (source, initial, horizontal, value, expected) in [
+            ((320, 180), (0, 0, 320, 180), true, 160, (160, 90)),
+            ((640, 1440), (0, 0, 640, 1440), false, 720, (320, 720)),
+            ((320, 180), (10, 60, 160, 90), true, 300, (213, 120)),
+            ((320, 180), (200, 6, 80, 60), false, 170, (120, 90)),
+            ((320, 180), (10, 6, 160, 90), true, 0, (2, 2)),
+            ((320, 180), (10, 6, 90, 160), false, 0, (2, 2)),
+            ((400, 300), (20, 30, 101, 61), true, 73, (73, 44)),
+        ] {
+            let mut crop = CropRect {
+                x: initial.0,
+                y: initial.1,
+                width: initial.2,
+                height: initial.3,
+            };
+            resize_crop_dimension(&mut crop, source, horizontal, value);
+            assert_eq!((crop.width, crop.height), expected);
+            assert_eq!((crop.x, crop.y), (initial.0, initial.1));
+        }
+        let mut view = opened();
+        assert!(
+            !view.crop_aspect_unlocked,
+            "crop starts locked, as in Tauri"
+        );
+        view.crop_aspect_unlocked = true;
+        assert!(!view.dirty(), "the input preference alone is not an edit");
     }
 
     #[test]

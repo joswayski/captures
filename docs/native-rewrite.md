@@ -425,8 +425,12 @@ reference; this slice does not reproduce its layout or live pixel dragging.
 History's **Edit recording** resolves the selected artifact through the shared
 `RecordingEditorSession`, probes retained media and opens a separate window with a
 decoded frame, source-relative scrubbing, numeric trim/crop, custom output size and
-a fixed save bar. Crop uses source-pixel coordinates; custom width/height are
-independent (no aspect lock yet). Original, 1080p maximum and 720p maximum presets
+a fixed save bar. Crop uses source-pixel coordinates. Numeric crop dimensions start
+aspect-locked, follow the current crop ratio and fit the remaining source bounds;
+unlocking permits independent dimensions, and relocking uses the adjusted ratio.
+Typed dimensions commit on Enter/focus loss so partial input does not change the
+ratio. The lock is an input preference, not an export edit. Custom output width/height
+remain independent (no output aspect lock). Original, 1080p maximum and 720p maximum presets
 reuse shared `MaxResolution::constrain`: cap height without upscaling, preserve
 the current crop's aspect ratio and round to even pixels. Presets stay selected
 after Apply/seek so later crop changes recompute the dimensions; Custom overrides

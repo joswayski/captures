@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--appearance", choices=("light", "dark"), default="dark")
     parser.add_argument("--audio", action="store_true", help="Exercise separate system/microphone export controls")
     parser.add_argument("--presets", action="store_true", help="Exercise output presets on a portrait source")
+    parser.add_argument("--crop-aspect", action="store_true", help="Exercise locked/unlocked numeric crop dimensions")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -191,6 +192,51 @@ def main():
         shot(editor, "original")
         dominant(output / "original.png", 0)
         run("xdotool", "windowminimize", root, "sleep", ".5")
+        if args.crop_aspect:
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            click(editor, 22, 683)
+            field(editor, 208, 727, source_width // 2)
+            shot(editor, "locked-width-staged")
+
+            def save_crop(name, expected):
+                path = exports / f"{name}.mp4"
+                field(editor, 360, 1038, path)
+                click(editor, 899, 1082)
+                assert not path.exists(), "unapplied crop gates save"
+                click(editor, 793, 1082)
+                shot(editor, f"{name}-preview")
+                count = len(list(history.glob("*/metadata.json")))
+                click(editor, 899, 1082)
+                wait(lambda: len(list(history.glob("*/metadata.json"))) == count + 1, name)
+                info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)))
+                stream = next(s for s in info["streams"] if s["codec_type"] == "video")
+                assert (stream["width"], stream["height"]) == expected, (name, stream)
+
+            save_crop("locked-width", (source_width // 2, source_height // 2 // 2 * 2))
+            field(editor, 309, 727, source_height)
+            save_crop("locked-height", (source_width, source_height))
+            click(editor, 205, 683)  # Unlock. Only width changes now.
+            field(editor, 208, 727, 160)
+            save_crop("unlocked-width", (160, source_height))
+            # Relocking uses the current crop ratio, not the original source.
+            click(editor, 205, 683)
+            field(editor, 309, 727, source_height // 2)
+            save_crop("relocked-height", (80, source_height // 2 // 2 * 2))
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "12", "--delay", "60", "5", "sleep", ".5")
+            shot(editor, "minimum-locked-crop")
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            close(editor)
+            wait(lambda: not windows("Recording editor"), "saved editor closes")
+            close(root)
+            wait(lambda: app.poll() is not None, "quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "checks": ["locked-width", "locked-height", "unlocked-width", "relocked-current-ratio",
+                    "unapplied-save-gate", "export-dimensions", "history-publication", "minimum-controls",
+                    "immutable-source", "saved-close-and-quit"]}, indent=2) + "\n")
+            print("PASS recording crop aspect: locked width/height, unlocked, relocked, save gate, exports, immutable source")
+            return
         # Numeric fields exercise exact source-relative times, independently of
         # slider geometry and the trim start.
         field(editor, 136, 520, 1500)
@@ -247,6 +293,7 @@ def main():
         # resize-only implementations, and accidental loss of the accepted trim.
         run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
         click(editor, 22, 683)  # Crop recording.
+        click(editor, 205, 683)  # Unlock for independent asymmetric crop fields.
         field(editor, 51, 727, 10)
         field(editor, 114, 727, 6)
         field(editor, 208, 727, source_width)  # Valid width alone, invalid with X=10.
