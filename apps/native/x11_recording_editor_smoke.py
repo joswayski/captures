@@ -327,6 +327,7 @@ def main():
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             motion_click()
             wait(playing, "minimum Play")
+            run("import", "-window", editor, str(output / "playback-minimum-running.png"))
             close(editor)
             idle(editor)
             shot(editor, "playback-close-confirmation")

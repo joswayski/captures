@@ -1864,6 +1864,38 @@ mod tests {
     }
 
     #[test]
+    fn seek_after_playback_replaces_transient_frame_and_resume_position() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let (tx, jobs) = mpsc::channel();
+        view.request_playback(&tx);
+        jobs.recv().unwrap();
+        view.receive_playback_frame(
+            &ctx,
+            PlaybackFrame {
+                position_ms: 1800,
+                pixels: Arc::new(RgbaImage::new(2, 1)),
+            },
+        );
+        view.pause_playback();
+        view.receive(&ctx, Event::PlaybackFinished(Ok(PlaybackEnd::Paused)));
+        view.send(
+            &tx,
+            Job::Apply(RecordingEditorRequest::Seek { position_ms: 950 }),
+        );
+        assert!(matches!(jobs.recv().unwrap(), Job::Apply(_)));
+        let mut presentation = opened().presented.unwrap();
+        presentation.position_ms = 950;
+        view.receive(&ctx, Event::Presented(Ok(presentation)));
+        assert_eq!(view.texture.as_ref().unwrap().size(), [4, 2]);
+        assert_eq!(view.position_ms, 950);
+        assert!(view.playback_position_ms.is_none() && !view.playback_ended);
+        view.request_playback(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(950, _)));
+        assert!(!view.dirty());
+    }
+
+    #[test]
     fn playback_error_restores_still_and_close_retains_dirty_confirmation() {
         let ctx = egui::Context::default();
         let mut view = opened();
@@ -2150,6 +2182,7 @@ mod tests {
                 }
                 let mut rects = Vec::new();
                 for label in [
+                    "Play",
                     "123456789012 bytes (exact)",
                     "Estimate size",
                     "Apply edits",
