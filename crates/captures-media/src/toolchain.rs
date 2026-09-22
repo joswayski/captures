@@ -1630,13 +1630,11 @@ fn atomic_copy(source: &Path, destination: &Path) -> Result<(), MediaToolError> 
 }
 
 fn commit_temporary(temporary: &Path, destination: &Path) -> Result<(), MediaToolError> {
-    if destination.exists() {
-        return Err(MediaToolError::Process(format!(
-            "refusing to replace existing file {}",
-            destination.display()
-        )));
-    }
-    fs::rename(temporary, destination)?;
+    let file = fs::File::open(temporary)?;
+    let path = tempfile::TempPath::try_from_path(temporary)?;
+    tempfile::NamedTempFile::from_parts(file, path)
+        .persist_noclobber(destination)
+        .map_err(|error| error.error)?;
     Ok(())
 }
 
