@@ -114,6 +114,10 @@ fn whitespace(c: char) -> bool {
         '\u{205f}' | '\u{3000}' | '\u{feff}')
 }
 
+pub(crate) fn is_blank(text: &str) -> bool {
+    text.trim_matches(whitespace).is_empty()
+}
+
 fn validate(element: &TextElement) -> Result<(), String> {
     if element.text.len() > 4096 {
         return Err("Text paragraphs support at most 4096 UTF-8 bytes.".into());
@@ -400,7 +404,7 @@ pub fn fit_auto_width(
     }
     validate(element)?;
     let minimum = minimum_width(element.font_size);
-    let width = if editing && element.text.trim_matches(whitespace).is_empty() {
+    let width = if editing && is_blank(&element.text) {
         minimum.max((element.font_size * 8.).round())
     } else {
         fitted_width(&element.text, element.font_size, &mut measure)?

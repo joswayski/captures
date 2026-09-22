@@ -55,7 +55,7 @@ pub struct ImportImage {
 /// Text placed with either the caller's explicit family or a shared named style.
 /// Native hosts own composition/cancellation and submit accepted content, never
 /// font bytes or an entire replacement document.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TextCreate {
     pub point: Point,
@@ -65,6 +65,14 @@ pub struct TextCreate {
     pub color: String,
     #[serde(default)]
     pub style_preset: Option<String>,
+}
+
+/// The text layer edited by a transient inline-input transaction.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TextInputTarget {
+    Existing { id: String },
+    New { create: TextCreate },
 }
 
 /// Text property edits. Omitted fields preserve authored/unknown data;
@@ -196,6 +204,18 @@ pub enum Request {
         id: String,
         patch: TextPatch,
     },
+    BeginTextInput {
+        input_id: String,
+        target: TextInputTarget,
+    },
+    UpdateTextInput {
+        input_id: String,
+        text: String,
+    },
+    FinishTextInput {
+        input_id: String,
+        commit: bool,
+    },
     Layer {
         id: String,
         edit: LayerEdit,
@@ -241,6 +261,9 @@ pub struct Snapshot<'a> {
     /// Shipping's initial placement size, pinned to the capture rather than the
     /// editable canvas. Hosts adopt it once and retain subsequent user choices.
     pub initial_text_size: f64,
+    /// Present while a host-owned inline input is active. Hosts must use this
+    /// lifecycle marker rather than committed history or unsaved flags.
+    pub active_text_input: Option<ActiveTextInput<'a>>,
     pub document: &'a Document,
     /// Only these pinned session fonts are available; host defaults never replace
     /// a reopened draft's exact files or expand its font set implicitly.
@@ -250,12 +273,22 @@ pub struct Snapshot<'a> {
     /// Resolved display defaults; reading them never authors custom shadow data.
     pub text_shadow_styles: BTreeMap<&'a str, DropShadowStyle>,
     pub selection_outlines: BTreeMap<&'a str, [Point; 4]>,
+    /// Capabilities for committed document history. Transient text previews do
+    /// not add or clear undo/redo entries.
     pub can_undo: bool,
     pub can_redo: bool,
     pub can_paste_layer: bool,
-    /// Changes since the last successful draft save (or open), not since capture.
+    /// Committed changes since the last successful draft save (or open), not
+    /// transient text previews and not changes since capture.
     pub unsaved_changes: bool,
     pub has_draft: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ActiveTextInput<'a> {
+    pub input_id: &'a str,
+    pub layer_id: &'a str,
+    pub is_new: bool,
 }
 
 pub struct EditorSession {
@@ -273,6 +306,15 @@ pub struct EditorSession {
     has_draft: bool,
     layer_clipboard: Option<Element>,
     layer_paste_count: u32,
+    text_input: Option<TransientTextInput>,
+}
+
+struct TransientTextInput {
+    input_id: String,
+    layer_id: String,
+    is_new: bool,
+    document: Document,
+    original_pixels: Arc<RgbaImage>,
 }
 
 struct SessionFonts {
@@ -375,16 +417,29 @@ impl EditorSession {
             has_draft,
             layer_clipboard: None,
             layer_paste_count: 0,
+            text_input: None,
         })
+    }
+
+    fn visible_document(&self) -> &Document {
+        self.text_input
+            .as_ref()
+            .map_or_else(|| self.history.current(), |input| &input.document)
     }
 
     #[must_use]
     pub fn snapshot(&self) -> Snapshot<'_> {
+        let document = self.visible_document();
         Snapshot {
             artifact_id: &self.artifact_id,
             original_export_path: self.original_export_path.as_deref(),
             initial_text_size: self.initial_text_size,
-            document: self.history.current(),
+            active_text_input: self.text_input.as_ref().map(|input| ActiveTextInput {
+                input_id: &input.input_id,
+                layer_id: &input.layer_id,
+                is_new: input.is_new,
+            }),
+            document,
             font_families: self.fonts.as_ref().map(|fonts| &fonts.assets.families),
             text_style_presets: crate::editor_text::TEXT_STYLE_PRESETS
                 .iter()
@@ -396,8 +451,7 @@ impl EditorSession {
                 .copied()
                 .collect(),
             text_shadow_styles: self
-                .history
-                .current()
+                .visible_document()
                 .elements
                 .iter()
                 .filter_map(|element| match element {
@@ -410,8 +464,7 @@ impl EditorSession {
                 })
                 .collect(),
             selection_outlines: self
-                .history
-                .current()
+                .visible_document()
                 .elements
                 .iter()
                 .filter_map(|element| {
@@ -422,8 +475,7 @@ impl EditorSession {
                 })
                 .collect(),
             annotation_controls: self
-                .history
-                .current()
+                .visible_document()
                 .elements
                 .iter()
                 .filter_map(|element| {
@@ -467,6 +519,7 @@ impl EditorSession {
         destination: &Path,
         options: ExportOptions,
     ) -> Result<crate::editor_output::SavedExport, String> {
+        self.require_finished_text_input()?;
         let expected = self.original_export_path.as_deref().ok_or_else(|| {
             "This screenshot did not have an original saved file to replace.".to_owned()
         })?;
@@ -497,12 +550,14 @@ impl EditorSession {
     /// outlive edits/close. This does not save a draft, change undo/redo, or write
     /// any files; hosts own file publication and clipboard operations.
     pub fn encode_export(&self, options: ExportOptions) -> Result<Vec<u8>, String> {
+        self.require_finished_text_input()?;
         captures_image::encode_export(&self.pixels, options)
     }
 
     /// Import one decoded image as a single undoable edit. Asset ownership,
     /// document history, and rendered pixels are published atomically.
     pub fn import_image(&mut self, request: ImportImage) -> Result<String, String> {
+        self.require_finished_text_input()?;
         let (width, height) = request.pixels.dimensions();
         validate_import_dimensions(width, height, retained_asset_pixels(&self.assets)?)?;
         if request
@@ -732,9 +787,156 @@ impl EditorSession {
         Ok(())
     }
 
+    fn require_finished_text_input(&self) -> Result<(), String> {
+        if self.text_input.is_some() {
+            Err("Finish or cancel the active text input before continuing.".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn begin_text_input(
+        &mut self,
+        input_id: String,
+        target: TextInputTarget,
+    ) -> Result<(), String> {
+        if input_id.is_empty() {
+            return Err("Text input requires a nonempty token.".into());
+        }
+        if self.text_input.is_some() {
+            return Err("Finish or cancel the active text input before beginning another.".into());
+        }
+
+        let original_pixels = self.pixels.clone();
+        let mut document = self.history.current().clone();
+        let (layer_id, is_new, pixels) = match target {
+            TextInputTarget::Existing { id } => {
+                let element = document
+                    .elements
+                    .iter()
+                    .find(|element| element.base().id == id)
+                    .ok_or("The selected layer no longer exists.")?;
+                let Element::Text(text) = element else {
+                    return Err("The selected layer is not text.".into());
+                };
+                if !text.base.visible || text.base.locked {
+                    return Err("Inline text input requires a visible, unlocked text layer.".into());
+                }
+                (id, false, original_pixels.clone())
+            }
+            TextInputTarget::New { create } => {
+                let id = prepare_text_create(&mut document, create, self.fonts.as_mut())?;
+                let pixels = Arc::new(render_frame(&document, &self.assets, self.fonts.as_mut())?);
+                (id, true, pixels)
+            }
+        };
+        self.text_input = Some(TransientTextInput {
+            input_id,
+            layer_id,
+            is_new,
+            document,
+            original_pixels,
+        });
+        self.pixels = pixels;
+        Ok(())
+    }
+
+    fn update_text_input(&mut self, input_id: &str, text: String) -> Result<(), String> {
+        let input = self
+            .text_input
+            .as_ref()
+            .filter(|input| input.input_id == input_id)
+            .ok_or("The text input token is stale.")?;
+        let layer_id = input.layer_id.clone();
+        let mut document = input.document.clone();
+        let element = document
+            .elements
+            .iter_mut()
+            .find(|element| element.base().id == layer_id)
+            .expect("active text input layer remains in its private document");
+        let Element::Text(element) = element else {
+            unreachable!("active text input layer remains text")
+        };
+        element.text = text;
+        let fonts = self
+            .fonts
+            .as_mut()
+            .ok_or("Text requires explicit font bytes.")?;
+        *element = prepare_text_edit(element, true, &mut fonts.renderer, &fonts.assets.families)?;
+        let pixels = render_frame(&document, &self.assets, self.fonts.as_mut())?;
+
+        self.text_input
+            .as_mut()
+            .expect("validated active text input")
+            .document = document;
+        self.pixels = Arc::new(pixels);
+        Ok(())
+    }
+
+    fn finish_text_input(&mut self, input_id: &str, commit: bool) -> Result<(), String> {
+        let input = self
+            .text_input
+            .as_ref()
+            .filter(|input| input.input_id == input_id)
+            .ok_or("The text input token is stale.")?;
+        if !commit {
+            self.pixels = input.original_pixels.clone();
+            self.text_input = None;
+            return Ok(());
+        }
+
+        let mut document = input.document.clone();
+        let index = document
+            .elements
+            .iter()
+            .position(|element| element.base().id == input.layer_id)
+            .expect("active text input layer remains in its private document");
+        let Element::Text(text) = &document.elements[index] else {
+            unreachable!("active text input layer remains text")
+        };
+        if crate::editor_text::is_blank(&text.text) {
+            document.elements.remove(index);
+        }
+
+        let pixels = if &document == self.history.current() {
+            input.original_pixels.clone()
+        } else {
+            Arc::new(render_frame(&document, &self.assets, self.fonts.as_mut())?)
+        };
+        let mut history = self.history.clone();
+        history.commit(document);
+        self.history = history;
+        self.pixels = pixels;
+        self.text_input = None;
+        Ok(())
+    }
+
     pub fn execute(&mut self, request: Request) -> Result<(), String> {
+        if self.text_input.is_some() {
+            match request {
+                Request::Snapshot => return Ok(()),
+                Request::UpdateTextInput { input_id, text } => {
+                    return self.update_text_input(&input_id, text);
+                }
+                Request::FinishTextInput { input_id, commit } => {
+                    return self.finish_text_input(&input_id, commit);
+                }
+                Request::BeginTextInput { .. } => {
+                    return Err(
+                        "Finish or cancel the active text input before beginning another.".into(),
+                    );
+                }
+                _ => return self.require_finished_text_input(),
+            }
+        }
         let request = match request {
             Request::Snapshot => return Ok(()),
+            Request::BeginTextInput { input_id, target } => {
+                return self.begin_text_input(input_id, target);
+            }
+            Request::UpdateTextInput { .. } | Request::FinishTextInput { .. } => {
+                return Err("The text input token is stale.".into());
+            }
             Request::SaveDraft { updated_at_ms } => return self.save_draft(updated_at_ms),
             Request::DiscardDraft => return self.discard_draft(),
             Request::CopyLayer { id } => {
@@ -768,6 +970,9 @@ impl EditorSession {
         let mut next = self.history.clone();
         match request {
             Request::Snapshot
+            | Request::BeginTextInput { .. }
+            | Request::UpdateTextInput { .. }
+            | Request::FinishTextInput { .. }
             | Request::SaveDraft { .. }
             | Request::DiscardDraft
             | Request::RemoveImageBackground { .. }
@@ -802,67 +1007,8 @@ impl EditorSession {
                 next.commit(document);
             }
             Request::CreateText { create } => {
-                if !(8. ..=512.).contains(&create.font_size) {
-                    return Err("Text property size must be between 8 and 512.".into());
-                }
-                let preset = create
-                    .style_preset
-                    .as_deref()
-                    .map(|id| {
-                        crate::editor_text::TEXT_STYLE_PRESETS
-                            .iter()
-                            .find(|preset| preset.id == id)
-                            .copied()
-                            .ok_or_else(|| format!("Unknown text style preset: {id}"))
-                    })
-                    .transpose()?;
-                let font_family = preset
-                    .map(|preset| preset.font_family)
-                    .unwrap_or(&create.font_family);
-                let fonts = self
-                    .fonts
-                    .as_mut()
-                    .ok_or("Text requires explicit font bytes.")?;
-                if preset.is_some() && !fonts.assets.families.contains_key(font_family) {
-                    return Err(format!(
-                        "Text style requires unavailable font family: {font_family}"
-                    ));
-                }
                 let mut document = next.current().clone();
-                let id = fresh_id(|id| document.elements.iter().any(|e| e.base().id == id));
-                let width = (create.font_size * 8.).round();
-                let centered = preset
-                    .is_some_and(|preset| matches!(preset.id, "box" | "mono-box" | "rounded-box"));
-                let element = TextElement {
-                    base: ElementBase {
-                        id,
-                        x: create.point.x - if centered { width / 2. } else { 0. },
-                        y: create.point.y,
-                        rotation: None,
-                        locked: false,
-                        visible: true,
-                        opacity: 100.,
-                        blend_mode: "source-over".into(),
-                    },
-                    text: create.text,
-                    font_size: create.font_size,
-                    width,
-                    auto_width: Some(true),
-                    font_family: font_family.into(),
-                    bold: false,
-                    italic: false,
-                    align: if centered { "center" } else { "left" }.into(),
-                    color: create.color,
-                    background: preset.and_then(|preset| preset.background.map(str::to_owned)),
-                    outlined: preset.is_some_and(|preset| preset.outlined),
-                    rounded_background: preset.is_some_and(|preset| preset.rounded_background),
-                    drop_shadow: None,
-                    drop_shadow_style: None,
-                    extra: Default::default(),
-                };
-                let element =
-                    prepare_text_edit(&element, true, &mut fonts.renderer, &fonts.assets.families)?;
-                document.elements.push(Element::Text(element));
+                prepare_text_create(&mut document, create, self.fonts.as_mut())?;
                 next.commit(document);
             }
             Request::EditText { id, patch } => {
@@ -1025,6 +1171,75 @@ impl EditorSession {
         self.layer_paste_count = 0;
         Ok(())
     }
+}
+
+fn prepare_text_create(
+    document: &mut Document,
+    create: TextCreate,
+    fonts: Option<&mut SessionFonts>,
+) -> Result<String, String> {
+    if !(8. ..=512.).contains(&create.font_size) {
+        return Err("Text property size must be between 8 and 512.".into());
+    }
+    let preset = create
+        .style_preset
+        .as_deref()
+        .map(|id| {
+            crate::editor_text::TEXT_STYLE_PRESETS
+                .iter()
+                .find(|preset| preset.id == id)
+                .copied()
+                .ok_or_else(|| format!("Unknown text style preset: {id}"))
+        })
+        .transpose()?;
+    let font_family = preset
+        .map(|preset| preset.font_family)
+        .unwrap_or(&create.font_family);
+    let fonts = fonts.ok_or("Text requires explicit font bytes.")?;
+    if preset.is_some() && !fonts.assets.families.contains_key(font_family) {
+        return Err(format!(
+            "Text style requires unavailable font family: {font_family}"
+        ));
+    }
+    let id = fresh_id(|id| {
+        document
+            .elements
+            .iter()
+            .any(|element| element.base().id == id)
+    });
+    let width = (create.font_size * 8.).round();
+    let centered =
+        preset.is_some_and(|preset| matches!(preset.id, "box" | "mono-box" | "rounded-box"));
+    let element = TextElement {
+        base: ElementBase {
+            id: id.clone(),
+            x: create.point.x - if centered { width / 2. } else { 0. },
+            y: create.point.y,
+            rotation: None,
+            locked: false,
+            visible: true,
+            opacity: 100.,
+            blend_mode: "source-over".into(),
+        },
+        text: create.text,
+        font_size: create.font_size,
+        width,
+        auto_width: Some(true),
+        font_family: font_family.into(),
+        bold: false,
+        italic: false,
+        align: if centered { "center" } else { "left" }.into(),
+        color: create.color,
+        background: preset.and_then(|preset| preset.background.map(str::to_owned)),
+        outlined: preset.is_some_and(|preset| preset.outlined),
+        rounded_background: preset.is_some_and(|preset| preset.rounded_background),
+        drop_shadow: None,
+        drop_shadow_style: None,
+        extra: Default::default(),
+    };
+    let element = prepare_text_edit(&element, true, &mut fonts.renderer, &fonts.assets.families)?;
+    document.elements.push(Element::Text(element));
+    Ok(id)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
