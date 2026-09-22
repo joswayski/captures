@@ -72,13 +72,32 @@ impl PasteInput {
         if let Some(modifiers) = state.pending.remove(&window)
             && input.focused
         {
-            input.events.push(egui::Event::Key {
-                key: egui::Key::V,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers,
-            });
+            // A quick tap can press and release before the next redraw. Keep
+            // our recovered down before winit's normal up, avoiding stuck V.
+            let index = input
+                .events
+                .iter()
+                .position(|event| {
+                    matches!(
+                        event,
+                        egui::Event::Key {
+                            key: egui::Key::V,
+                            pressed: false,
+                            ..
+                        }
+                    )
+                })
+                .unwrap_or(input.events.len());
+            input.events.insert(
+                index,
+                egui::Event::Key {
+                    key: egui::Key::V,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+            );
         }
     }
 }
@@ -103,10 +122,17 @@ mod tests {
         bridge.append(&mut input);
         assert!(input.events.is_empty());
         bridge.end_event();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::V,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL,
+        });
         bridge.begin_event(first, &WindowEvent::RedrawRequested);
         bridge.append(&mut input);
         bridge.append(&mut input);
-        assert_eq!(input.events.len(), 1);
+        assert_eq!(input.events.len(), 2);
         assert!(matches!(
             input.events[0],
             egui::Event::Key {
@@ -114,6 +140,10 @@ mod tests {
                 pressed: true,
                 ..
             }
+        ));
+        assert!(matches!(
+            input.events[1],
+            egui::Event::Key { pressed: false, .. }
         ));
         bridge.end_event();
         bridge

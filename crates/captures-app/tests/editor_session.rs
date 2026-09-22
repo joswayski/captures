@@ -181,6 +181,49 @@ fn layer_clipboard_is_a_stable_session_snapshot_with_transactional_offsets() {
 }
 
 #[test]
+fn paste_render_failure_preserves_clipboard_history_pixels_and_saved_draft() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let mut document = editor.snapshot().document.clone();
+    let Element::Image(image) = &mut document.elements[0] else {
+        panic!()
+    };
+    // A legacy hidden layer may carry paint unsupported by the renderer.
+    // Pasting makes it visible, which must reject before publishing history.
+    image.base.visible = false;
+    image.base.blend_mode = "future-blend".into();
+    let source = image.base.id.clone();
+    editor.execute(Request::Commit { document }).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 11.,
+            height: 5.,
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 71 })
+        .unwrap();
+    let pixels = editor.pixels();
+    let before = editor.snapshot().document.clone();
+    editor.execute(Request::CopyLayer { id: source }).unwrap();
+    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    assert!(editor.snapshot().can_redo && !editor.snapshot().unsaved_changes);
+    let error = editor
+        .execute(Request::PasteLayer {
+            new_id: "rejected".into(),
+            after_id: None,
+        })
+        .unwrap_err();
+    assert!(error.contains("unsupported blend mode"), "{error}");
+    assert!(editor.snapshot().can_paste_layer && editor.snapshot().can_redo);
+    assert!(!editor.snapshot().unsaved_changes);
+    assert_eq!(editor.snapshot().document, &before);
+    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    assert_eq!(open(data.path(), &id).unwrap().snapshot().document, &before);
+}
+
+#[test]
 fn layer_clipboards_are_isolated_between_open_sessions() {
     let (data, artifact_id, _) = setup();
     let mut first = open(data.path(), &artifact_id).unwrap();

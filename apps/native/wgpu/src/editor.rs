@@ -663,7 +663,9 @@ impl View {
                 {
                     self.section = Section::Layers;
                 }
-                self.reset_background_fields();
+                if !copied_layer {
+                    self.reset_background_fields();
+                }
                 self.error = None;
                 if self.close_after_save || (self.close_requested && !self.unsaved()) {
                     self.closed = true;
@@ -4770,6 +4772,7 @@ mod tests {
         view.section = Section::Draw;
         view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
         view.show_output = true;
+        view.background_color = "#123456".into();
         let original_id = view.selected_layer.clone().unwrap();
         let (tx, rx) = mpsc::channel();
         let frame = |view: &mut View, events| {
@@ -4808,6 +4811,10 @@ mod tests {
         assert_eq!(view.section, Section::Draw);
         assert_eq!(view.selected_layer.as_ref(), Some(&original_id));
         assert!(view.output.is_some() && view.show_output);
+        assert_eq!(
+            view.background_color, "#123456",
+            "copy preserves staged fields"
+        );
         frame(
             &mut view,
             vec![
