@@ -1093,6 +1093,9 @@ fn export_attempts(
     };
 
     if spec.format == ExportFormat::Gif {
+        // Fit the last retry by width, using the same even-dimension rules as
+        // the first attempt. Custom output must not lose its aspect ratio.
+        let (retry_height, retry_width) = fit_even(source_height, source_width, 320);
         return Ok(vec![
             video_attempt(
                 (source_width, source_height),
@@ -1119,7 +1122,7 @@ fn export_attempts(
                 gif_colors.min(96),
             ),
             video_attempt(
-                (source_width.min(320), source_height),
+                (retry_width, retry_height),
                 source_fps.min(8),
                 None,
                 0,
@@ -1520,9 +1523,17 @@ fn gif_export_filter(edit: &EditSpec, attempt: &VideoAttempt) -> String {
     let crop = edit.crop.map_or_else(String::new, |crop| {
         format!("crop={}:{}:{}:{},", crop.width, crop.height, crop.x, crop.y)
     });
+    let scale = if edit.output_width.zip(edit.output_height).is_some() {
+        format!(
+            "{}:{}:flags=lanczos,setsar=1",
+            attempt.width, attempt.height
+        )
+    } else {
+        format!("'min({},iw)':-2:flags=lanczos", attempt.width)
+    };
     format!(
-        "{crop}fps={},scale='min({},iw)':-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors={}:stats_mode=diff[p];[s1][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle",
-        attempt.frames_per_second, attempt.width, attempt.gif_colors
+        "{crop}fps={},scale={scale},split[s0][s1];[s0]palettegen=max_colors={}:stats_mode=diff[p];[s1][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle",
+        attempt.frames_per_second, attempt.gif_colors
     )
 }
 
@@ -2035,6 +2046,46 @@ mod tests {
         );
         assert!(filter.starts_with("crop=640:360:10:20,fps=12"));
         assert!(filter.contains("palettegen=max_colors=128"));
+    }
+
+    #[test]
+    fn gif_custom_dimensions_match_preview_and_keep_the_ratio_in_size_retries() {
+        for (width, height, first, last) in [
+            (81, 61, "scale=80:60:", "scale=80:60:"),
+            (801, 601, "scale=800:600:", "scale=320:240:"),
+        ] {
+            let edit = EditSpec {
+                crop: Some(CropRect {
+                    x: 10,
+                    y: 6,
+                    width: 160,
+                    height: 90,
+                }),
+                output_width: Some(width),
+                output_height: Some(height),
+                ..EditSpec::default()
+            };
+            let attempts = export_attempts(
+                &probe(),
+                &edit,
+                &ExportSpec {
+                    format: ExportFormat::Gif,
+                    quality: QualityPreset::Preserve,
+                    max_size_bytes: Some(100_000),
+                    frames_per_second: None,
+                    gif_max_colors: None,
+                },
+            )
+            .unwrap();
+            for (attempt, expected) in [(&attempts[0], first), (&attempts[3], last)] {
+                let filter = gif_export_filter(&edit, attempt);
+                assert!(filter.starts_with("crop=160:90:10:6,"), "{filter}");
+                assert!(filter.contains(expected), "{filter}");
+                assert!(filter.contains("setsar=1"), "{filter}");
+            }
+            let uncapped = gif_export_filter(&EditSpec::default(), &attempts[0]);
+            assert!(uncapped.contains("':-2:flags=lanczos"), "{uncapped}");
+        }
     }
 
     #[test]

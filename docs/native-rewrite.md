@@ -21,7 +21,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; wgpu frame scrubbing, numeric trim and MP4/GIF save-new-copy | AppKit recording editor, playback, graphical timeline, crop/size/audio controls, audio meter/device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; wgpu frame scrubbing, numeric trim/crop, custom output size and MP4/GIF save-new-copy | AppKit recording editor, playback, graphical timeline/crop, resolution presets, audio controls, audio meter/device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording playback/graphical timeline and remaining controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
@@ -424,22 +424,31 @@ reference; this slice does not reproduce its layout or live pixel dragging.
 
 History's **Edit recording** resolves the selected artifact through the shared
 `RecordingEditorSession`, probes retained media and opens a separate window with a
-decoded frame, source-relative scrubbing, numeric trim and a fixed save bar.
+decoded frame, source-relative scrubbing, numeric trim/crop, custom output size and
+a fixed save bar. Crop uses source-pixel coordinates; custom width/height are
+independent (no aspect lock or resolution presets yet). Apply edits stages these
+values together and previews the even-pixel crop/resize. Shared GIF encoding now
+honors both explicit dimensions, including square-pixel aspect and proportional
+size-budget retries, instead of silently ignoring output height. Re-encoded MP4 on
+Windows/Linux still fits within 3840 × 2160 (portrait: 2160 × 3840); the current
+frame preview does not reflect that cap for oversized edits. Format-aware preview
+and large-output acceptance remain open.
 The preview/timeline/save hierarchy follows the shipping recording editor, but
 the UI is not a visual match and has no playback or thumbnail timeline yet.
 One worker serializes media operations; failed seek/edit preserves the accepted
-frame, and unapplied trim values gate scrubbing/export. MP4/GIF Save new copy uses
+frame, and unapplied trim/crop/size values gate scrubbing/export. Failed edits keep
+the staged values available for correction. MP4/GIF Save new copy uses
 shared encoding, reports progress and accepts independent cancellation. Existing
 files and the original History artifact are never replaced. Post-publication
 History failure reports the successfully saved path rather than inviting re-export.
-Close blocks accepted work; unsaved trims require explicit discard, and normal quit
+Close blocks accepted work; unsaved edits require explicit discard, and normal quit
 is refused until they are saved or closed. Recording drafts are not implemented.
 
 Platform status: shared Rust/C ABI is available to both hosts; the wgpu controls
 are implemented for Windows/Linux. Private X11/software-GL exercises provide
 implementation evidence only. Windows and Wayland presentation, physical input,
 accessibility and AppKit host integration remain open. Playback/audio output,
-graphical trim/crop/size/audio controls, draft restoration and original replacement
+graphical trim/crop handles, resolution presets/audio controls, draft restoration and original replacement
 remain later slices. No recording-editor or cross-platform parity gate closes.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
