@@ -395,7 +395,9 @@ and open dialogs. Typing retains its own Undo; commands do not queue while the
 editor is busy. These are editor-local shortcuts, not global capture shortcuts.
 Cmd/Ctrl D duplicates the selected layer; Delete/Backspace removes an unlocked
 selection. Locked and hidden layers can still be duplicated, and typing fields
-keep their own deletion keys.
+keep their own deletion keys. Arrow keys nudge an unlocked selection by one image
+pixel, or ten with Shift, without snapping or expanding the canvas. Hidden layers
+can be nudged too. Focused fields and zoom controls retain their arrow keys.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
 Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit
 scale and preserves the viewport-center image point when dragged.

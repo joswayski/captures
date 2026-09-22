@@ -137,7 +137,13 @@ to delete it unless locked. Hidden/locked selections can be duplicated through t
 existing shared command. Duplication selects the fresh ID after acceptance; failed
 keyboard duplication retains the original selection. Text fields and dialogs keep
 keyboard ownership, accepted shortcuts cancel transient gestures, and repeats do
-not queue behind the worker. Clipboard-layer paste and arrow-key nudging remain open.
+not queue behind the worker. Arrow keys now nudge an unlocked selection by one
+image pixel, or ten with Shift, through shared `LayerEdit::Translate`. Hidden
+layers remain editable; keyboard movement neither snaps nor expands the canvas.
+Each accepted nudge retains normal undo and output invalidation. AppKit protects
+field/selector/slider responders; wgpu reserves arrows for any focused widget.
+Clipboard-layer paste remains open, as does physical keyboard/IME/accessibility
+acceptance on macOS, Windows, X11 and Wayland.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete
 custom rows are removed. Selecting a preset uses the existing shared viewport

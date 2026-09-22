@@ -3,6 +3,47 @@ import XCTest
 @testable import CapturesNative
 
 final class ScreenshotEditorTests: XCTestCase {
+    func testArrowNudgesKeepTypingLocksAndOneAcceptedCommand() throws {
+        _ = NSApplication.shared
+        let hidden = layer(id: "hidden", name: "Hidden", x: 8, y: 21,
+                           visible: false, locked: false, opacity: 60)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [hidden]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showLayers(in: controller.root)
+        func arrow(_ code: UInt16, shift: Bool = false) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: shift ? .shift : [], timestamp: 0,
+                windowNumber: controller.window.windowNumber, context: nil,
+                characters: "", charactersIgnoringModifiers: "", isARepeat: true, keyCode: code))
+        }
+        XCTAssertTrue(controller.window.makeFirstResponder(try field("Layer name", in: controller.root)))
+        controller.window.sendEvent(try arrow(123))
+        XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertTrue(controller.window.makeFirstResponder(try button("Duplicate", in: controller.root)))
+        worker.deferRequests = true
+        let cases: [(UInt16, Bool, Double, Double)] = [
+            (123, false, -1, 0), (124, true, 10, 0), (126, true, 0, -10), (125, false, 0, 1),
+        ]
+        for (index, item) in cases.enumerated() {
+            controller.window.sendEvent(try arrow(item.0, shift: item.1))
+            controller.window.sendEvent(try arrow(item.0, shift: item.1))
+            XCTAssertEqual(worker.requests.count, index + 1, "busy repeats cannot queue movement")
+            XCTAssertEqual(worker.requests.last?["id"] as? String, "hidden")
+            let edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+            XCTAssertEqual(edit["action"] as? String, "translate", "keyboard movement must not snap or expand")
+            XCTAssertEqual(edit["delta_x"] as? Double, item.2)
+            XCTAssertEqual(edit["delta_y"] as? Double, item.3)
+            let result = index == 3
+                ? layer(id: "hidden", name: "Hidden", x: 8, y: 21, visible: false, locked: true, opacity: 60)
+                : hidden
+            worker.completePending(with: snapshot(id: "shot", layers: [result]))
+        }
+        controller.window.sendEvent(try arrow(123, shift: true))
+        XCTAssertEqual(worker.requests.count, 4, "locked selection cannot be nudged")
+    }
+
     func testLayerShortcutsRespectTypingLocksAcceptedSelectionAndBusyCommands() throws {
         _ = NSApplication.shared
         let original = layer(id: "original", name: "Original", x: 8, y: 21,
