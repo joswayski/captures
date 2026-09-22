@@ -239,7 +239,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         }
         addLabel("Native development build", frame: NSRect(x: 22, y: root.bounds.height - 62, width: 160, height: 20),
                  size: 11, muted: true, parent: nav).autoresizingMask = [.minYMargin]
-        addLabel(liveCaptureAvailable ? "Display capture enabled" : "Capture engine not connected", frame: NSRect(x: 22, y: root.bounds.height - 40, width: 166, height: 20),
+        addLabel(liveCaptureAvailable ? "Display capture enabled" : "Capture workspace not active", frame: NSRect(x: 22, y: root.bounds.height - 40, width: 166, height: 20),
                  size: 11, muted: true, parent: nav).autoresizingMask = [.minYMargin]
 
         addLabel("Preferences", frame: NSRect(x: 224, y: 18, width: 220, height: 28), size: 20, weight: .semibold, parent: root)

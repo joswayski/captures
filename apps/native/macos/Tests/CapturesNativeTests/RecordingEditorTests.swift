@@ -489,7 +489,7 @@ final class RecordingEditorTests: XCTestCase {
             try render(controller.root, name: "recording-editor-normal-\(appearance)")
             let systemVolume = try field("System audio volume percent", in: controller.root)
             let microphoneVolume = try field("Microphone volume percent", in: controller.root)
-            systemVolume.stringValue = "25"; microphoneVolume.stringValue = "175"
+            systemVolume.stringValue = "25%"; microphoneVolume.stringValue = "175%"
             controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                          object: systemVolume))
             try render(controller.root, name: "recording-editor-audio-staged-\(appearance)")
