@@ -4,6 +4,159 @@ import XCTest
 @testable import CapturesNative
 
 final class RecordingEditorTests: XCTestCase {
+    func testTimelineBridgeThresholdWildSampleRecoveryAndFractionalTime() throws {
+        XCTAssertEqual(try XCTUnwrap(NativeRecordingTimeline.ratio(milliseconds: 4_375,
+            durationMilliseconds: 8_750)), 0.5, accuracy: 0.000_001)
+        XCTAssertEqual(try XCTUnwrap(NativeRecordingTimeline.time(atX: 500, trackLeft: 0,
+            trackWidth: 1_000, durationMilliseconds: 8_750)), 4_375, accuracy: 0.000_001)
+        XCTAssertNil(NativeRecordingTimeline.ratio(milliseconds: .nan,
+                                                    durationMilliseconds: 8_750))
+
+        var drag = try XCTUnwrap(NativeRecordingTimelineDrag.begin(edge: .start,
+            pointerX: 228.571_428_571_428_58, startMilliseconds: 2_000,
+            endMilliseconds: 6_750, durationMilliseconds: 8_750))
+        XCTAssertEqual(try XCTUnwrap(drag.update(pointerX: 231.570_428_571_428_58,
+            trackLeft: 0, trackWidth: 1_000)), 2_000, accuracy: 0.000_001,
+            "movement below the shared 3-point threshold does not stage")
+        XCTAssertEqual(try XCTUnwrap(drag.update(pointerX: 9_000, trackLeft: 0,
+            trackWidth: 1_000)), 2_000, accuracy: 0.000_001,
+            "a wild sample is ignored without losing recoverability")
+        XCTAssertEqual(try XCTUnwrap(drag.update(pointerX: 278.571_428_571_428_56,
+            trackLeft: 0, trackWidth: 1_000)), 2_437.5, accuracy: 0.000_001)
+    }
+
+    func testTimelineDragStagesOnlyAndApplyPublishesOnce() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingTrimTimeline }.first)
+        let start = try field("Trim start milliseconds", in: controller.root)
+        let trackLeft: CGFloat = 10
+        let trackWidth = timeline.bounds.width - 20
+
+        XCTAssertTrue(timeline.beginDrag(edge: .start, at: trackLeft))
+        timeline.continueDrag(at: trackLeft + 2.999)
+        XCTAssertEqual(start.stringValue, "0")
+        timeline.continueDrag(at: trackLeft + trackWidth * 0.125)
+        XCTAssertEqual(start.stringValue, "250", "fractional shared time rounds only when staged")
+        XCTAssertTrue(worker.requests.isEmpty, "pointer movement stages values without decoding")
+        XCTAssertFalse(try slider("Recording frame position", in: controller.root).isEnabled)
+        XCTAssertFalse(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
+        timeline.endDrag()
+        timeline.continueDrag(at: trackLeft + trackWidth * 0.25)
+        XCTAssertEqual(start.stringValue, "250", "lost capture retains the staged value and ends the gesture")
+
+        worker.requestResult = .success(try presentation(start: 250, revision: 1))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.count, 1)
+        XCTAssertEqual(worker.requests.first?["operation"] as? String, "update_preview")
+        XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
+    }
+
+    func testTimelineWindowHitTestingPointerDispatchAndResignKey() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(start: 200, end: 1_800))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingTrimTimeline }.first)
+        let startHandle = try XCTUnwrap(descendants(in: timeline)
+            .compactMap { $0 as? RecordingTrimHandle }
+            .first { $0.edge == .start })
+        let endHandle = try XCTUnwrap(descendants(in: timeline)
+            .compactMap { $0 as? RecordingTrimHandle }
+            .first { $0.edge == .end })
+        let start = try field("Trim start milliseconds", in: controller.root)
+        let end = try field("Trim end milliseconds", in: controller.root)
+
+        for size in [NSSize(width: 960, height: 760), NSSize(width: 760, height: 540)] {
+            controller.window.setContentSize(size)
+            XCTAssertTrue(try windowHit(startHandle, in: controller) === startHandle)
+            XCTAssertTrue(try windowHit(endHandle, in: controller) === endHandle)
+        }
+
+        start.stringValue = "1000"; end.stringValue = "1002"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: start))
+        XCTAssertTrue(try windowHit(startHandle, in: controller) === startHandle,
+                      "near-overlapping grips still select start at its displayed position")
+        XCTAssertTrue(try windowHit(endHandle, in: controller) === endHandle,
+                      "near-overlapping grips still select end at its displayed position")
+
+        start.stringValue = "200"; end.stringValue = "1800"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: start))
+        let originalStart = start.stringValue
+        try dispatchMouse(.leftMouseDown, to: startHandle, in: controller)
+        try dispatchMouse(.leftMouseDragged, to: startHandle, in: controller, deltaX: 30)
+        try dispatchMouse(.leftMouseUp, to: startHandle, in: controller, deltaX: 30)
+        XCTAssertNotEqual(start.stringValue, originalStart)
+        XCTAssertTrue(worker.requests.isEmpty, "real pointer dispatch only stages the start handle")
+
+        let originalEnd = end.stringValue
+        try dispatchMouse(.leftMouseDown, to: endHandle, in: controller)
+        try dispatchMouse(.leftMouseDragged, to: endHandle, in: controller, deltaX: -30)
+        let stagedEnd = end.stringValue
+        XCTAssertNotEqual(stagedEnd, originalEnd)
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification,
+                                                   object: controller.window))
+        try dispatchMouse(.leftMouseDragged, to: endHandle, in: controller, deltaX: -60)
+        XCTAssertEqual(end.stringValue, stagedEnd,
+                       "window deactivation drops capture without reverting the last stage")
+        try dispatchMouse(.leftMouseUp, to: endHandle, in: controller, deltaX: -60)
+        XCTAssertTrue(worker.requests.isEmpty, "real pointer dispatch never seeks or decodes")
+    }
+
+    func testTimelineKeyboardStepsBoundsAndNumericSynchronization() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingTrimTimeline }.first)
+        let start = try field("Trim start milliseconds", in: controller.root)
+        let end = try field("Trim end milliseconds", in: controller.root)
+        timeline.nudge(edge: .start, direction: 1, page: false)
+        XCTAssertEqual(start.stringValue, "1", "short recordings use one-millisecond arrows")
+        timeline.nudge(edge: .start, direction: 1, page: true)
+        XCTAssertEqual(start.stringValue, "1001", "Page Up stages one second")
+        timeline.nudge(edge: .end, direction: -1, page: true)
+        XCTAssertEqual(end.stringValue, "1002", "handles retain the shared one-millisecond span")
+
+        start.stringValue = "200"; end.stringValue = "1500"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: start))
+        XCTAssertEqual(timeline.startMilliseconds, 200)
+        XCTAssertEqual(timeline.endMilliseconds, 1500)
+        start.stringValue = "invalid"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: start))
+        XCTAssertFalse(timeline.editingEnabled)
+        XCTAssertEqual(timeline.startMilliseconds, 200,
+                       "partial numeric input does not corrupt the last drawable range")
+
+        let longTimeline = RecordingTrimTimeline(tokens: Tokens.variants["light-mustard"]!)
+        longTimeline.frame = NSRect(x: 0, y: 0, width: 500, height: 28)
+        longTimeline.setValues(start: 20, end: 70_000, duration: 70_000)
+        longTimeline.setEditingEnabled(true)
+        var staged: UInt64?
+        longTimeline.onStage = { _, value in staged = value }
+        longTimeline.nudge(edge: .start, direction: 1, page: false)
+        XCTAssertEqual(staged, 30, "recordings at or above 60 seconds use ten-millisecond arrows")
+    }
+
     func testStagedTrimFormatFailureRetainsAcceptedFrameAndValues() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation())
@@ -150,6 +303,14 @@ final class RecordingEditorTests: XCTestCase {
             controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                                outputDirectory: "/Exports")
             try render(controller.root, name: "recording-editor-normal-\(appearance)")
+            let timeline = try XCTUnwrap(descendants(in: controller.root)
+                .compactMap { $0 as? RecordingTrimTimeline }.first)
+            timeline.nudge(edge: .start, direction: 1, page: true)
+            let startHandle = try XCTUnwrap(descendants(in: timeline)
+                .first { $0.accessibilityLabel() == "Recording trim start handle" })
+            XCTAssertTrue(controller.window.makeFirstResponder(startHandle))
+            try render(controller.root, name: "recording-editor-trim-staged-\(appearance)")
+            timeline.nudge(edge: .start, direction: -1, page: true)
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             XCTAssertTrue(controller.root.subviews.allSatisfy {
                 $0.isHidden || controller.root.bounds.intersects($0.frame)
@@ -287,6 +448,27 @@ final class RecordingEditorTests: XCTestCase {
     }
     private func button(_ title: String, in view: NSView) throws -> CaptureButton {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }.first { $0.title == title })
+    }
+    private func windowHit(_ handle: RecordingTrimHandle,
+                           in controller: RecordingEditorController) throws -> NSView {
+        let point = handle.convert(NSPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil)
+        return try XCTUnwrap(controller.window.contentView?.hitTest(point))
+    }
+    private func dispatchMouse(_ type: NSEvent.EventType, to handle: RecordingTrimHandle,
+                               in controller: RecordingEditorController,
+                               deltaX: CGFloat = 0) throws {
+        var point = handle.convert(NSPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil)
+        point.x += deltaX
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point,
+            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: controller.window.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1))
+        switch type {
+        case .leftMouseDown: try XCTUnwrap(controller.window.contentView?.hitTest(point)).mouseDown(with: event)
+        case .leftMouseDragged: handle.mouseDragged(with: event)
+        case .leftMouseUp: handle.mouseUp(with: event)
+        default: XCTFail("Unsupported pointer event")
+        }
     }
     private func labels(in view: NSView) -> [String] {
         descendants(in: view).compactMap { ($0 as? NSTextField)?.stringValue }

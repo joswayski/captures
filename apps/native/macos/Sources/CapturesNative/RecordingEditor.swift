@@ -1,6 +1,228 @@
 import AppKit
 import UniformTypeIdentifiers
 
+final class RecordingTrimHandle: NSView {
+    let edge: NativeRecordingTimelineEdge
+    weak var timeline: RecordingTrimTimeline?
+    var enabled = false { didSet { updateAccessibility(); needsDisplay = true } }
+
+    init(edge: NativeRecordingTimelineEdge, timeline: RecordingTrimTimeline) {
+        self.edge = edge; self.timeline = timeline
+        super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.slider)
+        setAccessibilityLabel(edge == .start ? "Recording trim start handle"
+                                             : "Recording trim end handle")
+        updateAccessibility()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var acceptsFirstResponder: Bool { enabled }
+
+    override func mouseDown(with event: NSEvent) {
+        guard enabled, let timeline else { return }
+        window?.makeFirstResponder(self)
+        timeline.beginDrag(edge: edge, at: timeline.convert(event.locationInWindow, from: nil).x)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        timeline?.continueDrag(at: timeline?.convert(event.locationInWindow, from: nil).x ?? 0)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let timeline else { return }
+        timeline.continueDrag(at: timeline.convert(event.locationInWindow, from: nil).x)
+        timeline.endDrag()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard let timeline else { return }
+        let direction: Int
+        let page: Bool
+        switch event.keyCode {
+        case 123, 125: direction = -1; page = false
+        case 124, 126: direction = 1; page = false
+        case 116: direction = 1; page = true
+        case 121: direction = -1; page = true
+        case 53: timeline.endDrag(); return
+        default: super.keyDown(with: event); return
+        }
+        timeline.nudge(edge: edge, direction: direction, page: page)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        timeline?.endDrag()
+        let accepted = super.resignFirstResponder()
+        needsDisplay = true
+        return accepted
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        needsDisplay = true
+        return accepted
+    }
+
+    override func accessibilityPerformIncrement() -> Bool {
+        guard enabled, let timeline else { return false }
+        timeline.nudge(edge: edge, direction: 1, page: false); return true
+    }
+
+    override func accessibilityPerformDecrement() -> Bool {
+        guard enabled, let timeline else { return false }
+        timeline.nudge(edge: edge, direction: -1, page: false); return true
+    }
+
+    func updateAccessibility() {
+        guard let timeline else { return }
+        setAccessibilityEnabled(enabled)
+        setAccessibilityMinValue(NSNumber(value: edge == .start ? 0 : timeline.startMilliseconds + 1))
+        setAccessibilityMaxValue(NSNumber(value: edge == .start
+            ? max(0, timeline.endMilliseconds - 1) : timeline.durationMilliseconds))
+        setAccessibilityValue(NSNumber(value: edge == .start
+            ? timeline.startMilliseconds : timeline.endMilliseconds))
+        setAccessibilityValueDescription("\(edge == .start ? timeline.startMilliseconds : timeline.endMilliseconds) milliseconds")
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let timeline else { return }
+        let focused = window?.firstResponder === self
+        let rect = bounds.insetBy(dx: 4, dy: 2)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
+        timeline.tokens.color(enabled ? "theme-accent" : "text-faint").setFill(); path.fill()
+        timeline.tokens.color(focused ? "text" : "theme-accent-ink").setStroke()
+        path.lineWidth = focused ? 2 : 1; path.stroke()
+    }
+}
+
+final class RecordingTrimTimeline: NSView {
+    fileprivate let tokens: Tokens
+    fileprivate(set) var durationMilliseconds: UInt64 = 1
+    fileprivate(set) var startMilliseconds: UInt64 = 0
+    fileprivate(set) var endMilliseconds: UInt64 = 1
+    var onStage: ((NativeRecordingTimelineEdge, UInt64) -> Void)?
+    private var drag: NativeRecordingTimelineDrag?
+    private var dragEdge: NativeRecordingTimelineEdge?
+    private(set) var editingEnabled = false
+    private lazy var startHandle = RecordingTrimHandle(edge: .start, timeline: self)
+    private lazy var endHandle = RecordingTrimHandle(edge: .end, timeline: self)
+
+    init(tokens: Tokens) {
+        self.tokens = tokens
+        super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("Recording trim range")
+        addSubview(startHandle); addSubview(endHandle)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var isFlipped: Bool { true }
+    private var trackRect: NSRect {
+        NSRect(x: 10, y: bounds.midY - 3, width: max(1, bounds.width - 20), height: 6)
+    }
+
+    func setValues(start: UInt64, end: UInt64, duration: UInt64) {
+        guard duration > 0, start < end, end <= duration else { return }
+        durationMilliseconds = duration; startMilliseconds = start; endMilliseconds = end
+        updateHandles(); needsDisplay = true
+    }
+
+    func setEditingEnabled(_ enabled: Bool) {
+        editingEnabled = enabled
+        startHandle.enabled = enabled; endHandle.enabled = enabled
+        if !enabled { endDrag() }
+    }
+
+    @discardableResult func beginDrag(edge: NativeRecordingTimelineEdge, at pointerX: CGFloat) -> Bool {
+        guard editingEnabled,
+              let value = NativeRecordingTimelineDrag.begin(edge: edge, pointerX: Double(pointerX),
+                startMilliseconds: Double(startMilliseconds),
+                endMilliseconds: Double(endMilliseconds),
+                durationMilliseconds: Double(durationMilliseconds)) else { return false }
+        drag = value; dragEdge = edge; return true
+    }
+
+    func continueDrag(at pointerX: CGFloat) {
+        guard editingEnabled, let edge = dragEdge, var value = drag,
+              let milliseconds = value.update(pointerX: Double(pointerX),
+                  trackLeft: Double(trackRect.minX),
+                  trackWidth: Double(trackRect.width)) else { return }
+        drag = value
+        stage(edge: edge, milliseconds: UInt64(milliseconds.rounded()))
+    }
+
+    func endDrag() { drag = nil; dragEdge = nil }
+
+    func nudge(edge: NativeRecordingTimelineEdge, direction: Int, page: Bool) {
+        guard editingEnabled, direction == -1 || direction == 1 else { return }
+        let step: UInt64 = page ? 1_000 : durationMilliseconds < 60_000 ? 1 : 10
+        let current = edge == .start ? startMilliseconds : endMilliseconds
+        let minimum = edge == .start ? 0 : startMilliseconds + 1
+        let maximum = edge == .start ? endMilliseconds - 1 : durationMilliseconds
+        let next = direction > 0 ? min(maximum, current.addingReportingOverflow(step).overflow
+            ? maximum : current + step) : max(minimum, current > step ? current - step : 0)
+        stage(edge: edge, milliseconds: next)
+    }
+
+    private func stage(edge: NativeRecordingTimelineEdge, milliseconds: UInt64) {
+        let next = edge == .start ? min(milliseconds, endMilliseconds - 1)
+                                  : max(startMilliseconds + 1, min(milliseconds, durationMilliseconds))
+        guard next != (edge == .start ? startMilliseconds : endMilliseconds) else { return }
+        if edge == .start { startMilliseconds = next } else { endMilliseconds = next }
+        updateHandles(); needsDisplay = true; onStage?(edge, next)
+    }
+
+    private func updateHandles() {
+        let track = trackRect
+        let startRatio = NativeRecordingTimeline.ratio(milliseconds: Double(startMilliseconds),
+                                                        durationMilliseconds: Double(durationMilliseconds)) ?? 0
+        let endRatio = NativeRecordingTimeline.ratio(milliseconds: Double(endMilliseconds),
+                                                      durationMilliseconds: Double(durationMilliseconds)) ?? 1
+        startHandle.frame = NSRect(x: track.minX + track.width * CGFloat(startRatio) - 10,
+                                   y: 0, width: 20, height: bounds.height)
+        endHandle.frame = NSRect(x: track.minX + track.width * CGFloat(endRatio) - 10,
+                                 y: 0, width: 20, height: bounds.height)
+        startHandle.updateAccessibility(); endHandle.updateAccessibility()
+        startHandle.needsDisplay = true; endHandle.needsDisplay = true
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        endDrag(); super.setFrameSize(newSize); updateHandles()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { endDrag() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = superview.map { convert(point, from: $0) } ?? point
+        guard editingEnabled, bounds.contains(local) else { return nil }
+        let startDistance = abs(local.x - startHandle.frame.midX)
+        let endDistance = abs(local.x - endHandle.frame.midX)
+        if min(startDistance, endDistance) <= 10 {
+            if startDistance == endDistance, window?.firstResponder === startHandle {
+                return startHandle
+            }
+            return startDistance < endDistance ? startHandle : endHandle
+        }
+        return nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let track = trackRect
+        let background = NSBezierPath(roundedRect: track, xRadius: 3, yRadius: 3)
+        tokens.color("control-border").setFill(); background.fill()
+        let selected = NSRect(x: startHandle.frame.midX, y: track.minY,
+                              width: max(0, endHandle.frame.midX - startHandle.frame.midX),
+                              height: track.height)
+        let selection = NSBezierPath(roundedRect: selected, xRadius: 3, yRadius: 3)
+        tokens.color(editingEnabled ? "theme-accent" : "text-faint").setFill(); selection.fill()
+    }
+}
+
 final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     let window: NSWindow
     let root = Surface()
@@ -28,6 +250,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let trimPanel = Surface()
     private let trimStart = NSTextField()
     private let trimEnd = NSTextField()
+    private let trimTimeline: RecordingTrimTimeline
     private let format = NSPopUpButton()
     private let quality = NSPopUpButton()
     private let destination = NSTextField()
@@ -47,6 +270,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
         self.didSaveCopy = didSaveCopy
         self.confirmDiscard = confirmDiscard ?? RecordingEditorController.confirmDiscardAlert
+        trimTimeline = RecordingTrimTimeline(tokens: tokens)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 760),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
@@ -128,7 +352,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     func windowDidResize(_ notification: Notification) { layout() }
-    func controlTextDidChange(_ notification: Notification) { estimate = nil; updateControls() }
+    func windowDidResignKey(_ notification: Notification) { trimTimeline.endDrag() }
+    func controlTextDidChange(_ notification: Notification) {
+        estimate = nil; syncTimelineFromFields(); updateControls()
+    }
 
     private func buildUI() {
         root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
@@ -157,6 +384,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         configureNumberField(trimStart, label: "Trim start milliseconds")
         configureNumberField(trimEnd, label: "Trim end milliseconds")
         trimPanel.addSubview(label("Trim (milliseconds)", size: 14, weight: .semibold))
+        trimTimeline.onStage = { [weak self] edge, milliseconds in
+            guard let self else { return }
+            (edge == .start ? self.trimStart : self.trimEnd).stringValue = String(milliseconds)
+            self.estimate = nil; self.updateControls()
+        }
+        trimPanel.addSubview(trimTimeline)
         trimPanel.addSubview(label("Start", muted: true)); trimPanel.addSubview(trimStart)
         trimPanel.addSubview(label("End", muted: true)); trimPanel.addSubview(trimEnd)
         applyButton = button("Apply edits") { [weak self] in self?.applyEdits() }
@@ -193,8 +426,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         root.subviews.first { $0.identifier?.rawValue == "recording-editor-note" }?.frame =
             NSRect(x: 24, y: 48, width: width - 48, height: 20)
         let saveHeight: CGFloat = 150
-        let trimHeight: CGFloat = 92
-        let previewHeight = max(170, height - saveHeight - trimHeight - 150)
+        let trimHeight: CGFloat = 116
+        let previewHeight = max(150, height - saveHeight - trimHeight - 116)
         previewPanel.frame = NSRect(x: 24, y: 76, width: width - 48, height: previewHeight)
         preview.frame = previewPanel.bounds.insetBy(dx: 12, dy: 12)
         let seekY = previewPanel.frame.maxY + 10
@@ -204,15 +437,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         trimPanel.frame = NSRect(x: 24, y: seekY + 30, width: width - 48, height: trimHeight)
         let labels = trimPanel.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isEditable }
         labels.first { $0.stringValue == "Trim (milliseconds)" }?.frame = NSRect(x: 14, y: 12, width: 150, height: 20)
-        labels.first { $0.stringValue == "Start" }?.frame = NSRect(x: 180, y: 14, width: 42, height: 18)
-        labels.first { $0.stringValue == "End" }?.frame = NSRect(x: 354, y: 14, width: 34, height: 18)
-        trimStart.frame = NSRect(x: 222, y: 8, width: 116, height: 28)
-        trimEnd.frame = NSRect(x: 390, y: 8, width: 116, height: 28)
-        applyButton.frame = NSRect(x: trimPanel.bounds.width - 126, y: 8, width: 112, height: 30)
+        trimTimeline.frame = NSRect(x: 174, y: 8, width: trimPanel.bounds.width - 188, height: 28)
+        labels.first { $0.stringValue == "Start" }?.frame = NSRect(x: 14, y: 82, width: 42, height: 18)
+        labels.first { $0.stringValue == "End" }?.frame = NSRect(x: 188, y: 82, width: 34, height: 18)
+        trimStart.frame = NSRect(x: 56, y: 76, width: 116, height: 28)
+        trimEnd.frame = NSRect(x: 224, y: 76, width: 116, height: 28)
+        applyButton.frame = NSRect(x: trimPanel.bounds.width - 126, y: 76, width: 112, height: 30)
         let explanation = labels.first { $0.stringValue.hasPrefix("Apply before") }
             ?? label("Apply before seeking or saving. The original is immutable.", muted: true,
                      parent: trimPanel)
-        explanation.frame = NSRect(x: 14, y: 52, width: trimPanel.bounds.width - 28, height: 20)
+        explanation.frame = NSRect(x: 14, y: 46, width: trimPanel.bounds.width - 28, height: 20)
 
         let barY = height - saveHeight
         status.frame = NSRect(x: 24, y: barY + 8, width: width - 48, height: 36)
@@ -242,6 +476,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             ?? value.snapshot.durationMilliseconds
         trimStart.stringValue = String(start)
         trimEnd.stringValue = String(end)
+        trimTimeline.setValues(start: start, end: end,
+                               duration: value.snapshot.durationMilliseconds)
         select(format, value: value.snapshot.export["format"] as? String ?? "mp4")
         select(quality, value: value.snapshot.export["quality"] as? String ?? "preserve")
         if initialize {
@@ -387,10 +623,18 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
     @objc private func stageChanged() { estimate = nil; updateControls() }
 
+    private func syncTimelineFromFields() {
+        guard let duration = presentation?.snapshot.durationMilliseconds,
+              let start = UInt64(trimStart.stringValue), let end = UInt64(trimEnd.stringValue),
+              start < end, end <= duration else { return }
+        trimTimeline.setValues(start: start, end: end, duration: duration)
+    }
+
     private func updateControls() {
         let available = presentation != nil && !busy && !pickerOpen
         let valid = stagedEdit != nil && stagedExport != nil
         [trimStart, trimEnd, format, quality, destination].forEach { $0.isEnabled = available }
+        trimTimeline.setEditingEnabled(available && stagedEdit != nil)
         applyButton?.isEnabled = available && valid && stagedDiffers
         seekSlider.isEnabled = available && valid && !stagedDiffers
         changeButton?.isEnabled = available
