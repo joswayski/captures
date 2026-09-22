@@ -1293,6 +1293,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineTextCancelButton = button("Cancel", frame: .zero, parent: viewportInput) { [weak self] in
             self?.finishInlineTextInput(commit: false)
         }
+        inlineTextCancelButton.glass = true
         inlineTextCancelButton.setAccessibilityLabel("Cancel inline screenshot text")
         inlineTextDoneButton.isHidden = true; inlineTextCancelButton.isHidden = true
         for view in [viewportInput, drawOverlay, selectionOverlay, cropOverlay] { configureViewportGestures(view) }

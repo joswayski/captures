@@ -4370,6 +4370,8 @@ final class ScreenshotEditorTests: XCTestCase {
             let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
             controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
             let editor = try textView("Inline screenshot text", in: controller.root)
+            XCTAssertTrue(try button("Cancel", in: controller.root).glass,
+                          "the cancel action needs a media-safe surface over arbitrary pixels")
             editor.string = "Native multiline\nΩ and 日本語"
             try render(controller.root, name: "screenshot-editor-inline-text-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
