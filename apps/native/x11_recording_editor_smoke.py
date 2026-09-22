@@ -195,7 +195,10 @@ def main():
         click(editor, 899, 882)
         shot(editor, "collision")
         assert destination.read_bytes() == saved_bytes and len(list(history.glob("*/metadata.json"))) == 2
-        click(editor, 87, 882)  # GIF changes only the export format/path, not the edit.
+        click(editor, 87, 882)
+        click(editor, 899, 882)  # Format changes cannot save unaccepted preview settings.
+        assert not destination.with_suffix(".gif").exists()
+        click(editor, 793, 882)
         click(editor, 899, 882)
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 3, "GIF published in History")
         gif = destination.with_suffix(".gif")
@@ -241,6 +244,7 @@ def main():
         click(editor, 899, 1082)
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 4, "cropped MP4 in History")
         click(editor, 87, 1082)
+        click(editor, 793, 1082)
         click(editor, 899, 1082)
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 5, "cropped GIF in History")
         for path in (crop_destination, crop_destination.with_suffix(".gif")):
@@ -260,6 +264,41 @@ def main():
         shot(editor, "crop-saved")
         run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
         shot(editor, "minimum-saved")
+
+        # Request wider-than-encoder output without a huge frame allocation.
+        # MP4 fits the shared encoder limit; GIF retains the explicit dimensions.
+        run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+        run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "20", "--delay", "60", "4", "sleep", ".5")
+        field(editor, 227, 598, 1300)
+        field(editor, 78, 815, 4001)
+        field(editor, 170, 815, 601)
+        click(editor, 33, 1082)
+        large_destination = exports / "encoder-sized.mp4"
+        field(editor, 360, 1038, large_destination)
+        click(editor, 793, 1082)
+        shot(editor, "mp4-encoder-preview")
+        click(editor, 899, 1082)
+        wait(lambda: len(list(history.glob("*/metadata.json"))) == 6, "encoder-sized MP4 in History")
+        click(editor, 87, 1082)
+        click(editor, 899, 1082)
+        assert not large_destination.with_suffix(".gif").exists()
+        shot(editor, "format-staged")
+        click(editor, 793, 1082)
+        shot(editor, "gif-sized-preview")
+        click(editor, 899, 1082)
+        wait(lambda: len(list(history.glob("*/metadata.json"))) == 7, "explicit-sized GIF in History")
+        for path, width, height in ((large_destination, 3840, 576), (large_destination.with_suffix(".gif"), 4000, 600)):
+            info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)))
+            stream = info["streams"][0]
+            assert (stream["width"], stream["height"]) == (width, height), info
+            assert abs(float(info["format"]["duration"]) - .2) < .1, info
+            frame = run("ffmpeg", "-v", "error", "-i", str(path), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
+            assert len(frame) == width * height * 3
+            white = frame[(80 * width + 400) * 3:(80 * width + 400) * 3 + 3]
+            green = frame[(300 * width + 2000) * 3:(300 * width + 2000) * 3 + 3]
+            assert min(white) > 210, (path, white)
+            assert green[1] > 90 and green[1] > max(green[0], green[2]) + 40, (path, green)
+        shot(editor, "format-saved")
         assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
         close(editor)
         wait(lambda: not windows("Recording editor"), "saved editor closes")
@@ -273,7 +312,8 @@ def main():
                 "gif-green", "gif-blue", "minimum-saved", "immutable-source", "saved-close-and-quit",
                 "worker-completion-with-minimized-root", "invalid-crop-retains-frame", "unapplied-save-gate",
                 "cropped-preview", "minimum-crop-controls", "crop-preserves-trim", "even-output-dimensions",
-                "mp4-crop-origin-and-resize", "gif-crop-origin-and-resize"],
+                "mp4-crop-origin-and-resize", "gif-crop-origin-and-resize", "format-save-gate",
+                "mp4-encoder-dimensions", "gif-explicit-dimensions", "format-specific-pixels"],
             "source_sha256": hashlib.sha256(original).hexdigest()}, indent=2) + "\n")
         print("PASS recording editor: seeks, trim/crop/resize, MP4/GIF pixels, History, immutable source")
     finally:
