@@ -235,6 +235,76 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
     }
 
+    func testAudioPercentagesRoundTripAtF32BoundaryWithoutRegating() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            hasSystemAudio: true, hasMicrophoneAudio: true))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let system = try field("System audio volume percent", in: controller.root)
+        let microphone = try field("Microphone volume percent", in: controller.root)
+        system.stringValue = "12.34%"; microphone.stringValue = "33.3%"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: system))
+        worker.requestResult = .success(try presentation(revision: 1,
+            hasSystemAudio: true, hasMicrophoneAudio: true,
+            systemVolume: Double(Float(0.1234)), microphoneVolume: Double(Float(0.333))))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertEqual(system.stringValue, "12.34%")
+        XCTAssertEqual(microphone.stringValue, "33.3%")
+        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
+
+        let seek = try slider("Recording frame position", in: controller.root)
+        worker.requestResult = .success(try presentation(position: 500, revision: 2,
+            hasSystemAudio: true, hasMicrophoneAudio: true,
+            systemVolume: Double(Float(0.1234)), microphoneVolume: Double(Float(0.333))))
+        seek.doubleValue = 500; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(system.stringValue, "12.34%")
+        XCTAssertEqual(microphone.stringValue, "33.3%")
+        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
+
+        microphone.stringValue = "29%"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: microphone))
+        worker.requestResult = .success(try presentation(position: 500, revision: 3,
+            hasSystemAudio: true, hasMicrophoneAudio: true,
+            systemVolume: Double(Float(0.1234)), microphoneVolume: Double(Float(0.29))))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertEqual(system.stringValue, "12.34%")
+        XCTAssertEqual(microphone.stringValue, "29%")
+        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Estimate size", in: controller.root).isEnabled)
+
+        let start = try field("Trim start milliseconds", in: controller.root)
+        start.stringValue = "100"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: start))
+        let format = try popup("Recording export format", in: controller.root)
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        let muteSystem = try checkbox("Mute system audio", in: controller.root)
+        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+        muteSystem.state = .on; _ = muteSystem.sendAction(muteSystem.action, to: muteSystem.target)
+        worker.requestResult = .success(try presentation(start: 100, position: 500, revision: 4,
+            hasSystemAudio: true, hasMicrophoneAudio: true,
+            systemVolume: Double(Float(0.1234)), microphoneVolume: Double(Float(0.29)),
+            muteSystem: true))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        let request = try XCTUnwrap(worker.requests.last)
+        let edit = try XCTUnwrap(request["edit"] as? [String: Any])
+        let audio = try XCTUnwrap(edit["audio"] as? [String: Any])
+        XCTAssertEqual((audio["system_volume"] as? NSNumber)?.floatValue, Float(0.1234))
+        XCTAssertEqual((audio["microphone_volume"] as? NSNumber)?.floatValue, Float(0.29))
+        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
+    }
+
     func testAudioFailureGifRetentionAndUnavailableTracks() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation(
@@ -495,29 +565,35 @@ final class RecordingEditorTests: XCTestCase {
         var gainEdit = opened.1.snapshot.edit
         gainEdit["trim_start_ms"] = 100; gainEdit["trim_end_ms"] = 1_900
         var gainAudio = try XCTUnwrap(gainEdit["audio"] as? [String: Any])
-        gainAudio["system_volume"] = 0.25; gainAudio["microphone_volume"] = 1.75
+        gainAudio["system_volume"] = Float(0.1234); gainAudio["microphone_volume"] = Float(0.333)
         gainEdit["audio"] = gainAudio
         let gain = try session.request(["operation": "update_preview", "edit": gainEdit,
                                         "export": export])
         XCTAssertTrue(gain.snapshot.hasSystemAudio); XCTAssertTrue(gain.snapshot.hasMicrophoneAudio)
+        let acceptedGain = try XCTUnwrap(gain.snapshot.edit["audio"] as? [String: Any])
+        XCTAssertEqual((acceptedGain["system_volume"] as? NSNumber)?.floatValue, Float(0.1234))
+        XCTAssertEqual((acceptedGain["microphone_volume"] as? NSNumber)?.floatValue, Float(0.333))
         let gainPath = fixture.root.appendingPathComponent("gain.mp4")
         _ = try session.save(destination: gainPath.path, export: export,
                              cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
         XCTAssertEqual(try audioChannelCount(gainPath, tools: tools), 2)
         try assertTones(gainPath, tools: tools, channels: 2,
-                        expected: [[0.025, 0.14], [0.0125, 0.14]])
+                        expected: [[0.01234, 0.02664], [0.00617, 0.02664]])
 
         var systemEdit = gain.snapshot.edit
         var systemAudio = try XCTUnwrap(systemEdit["audio"] as? [String: Any])
+        systemAudio["system_volume"] = Float(0.29)
         systemAudio["mute_microphone"] = true; systemEdit["audio"] = systemAudio
         let system = try session.request(["operation": "update_preview", "edit": systemEdit,
                                           "export": export])
+        let acceptedSystem = try XCTUnwrap(system.snapshot.edit["audio"] as? [String: Any])
+        XCTAssertEqual((acceptedSystem["system_volume"] as? NSNumber)?.floatValue, Float(0.29))
         let systemPath = fixture.root.appendingPathComponent("system-only.mp4")
         _ = try session.save(destination: systemPath.path, export: export,
                              cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
         XCTAssertEqual(try audioChannelCount(systemPath, tools: tools), 2)
         try assertTones(systemPath, tools: tools, channels: 2,
-                        expected: [[0.025, 0], [0.0125, 0]])
+                        expected: [[0.029, 0], [0.0145, 0]])
 
         var microphoneEdit = system.snapshot.edit
         var microphoneAudio = try XCTUnwrap(microphoneEdit["audio"] as? [String: Any])
@@ -532,7 +608,7 @@ final class RecordingEditorTests: XCTestCase {
                              cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
         XCTAssertEqual(try audioChannelCount(microphonePath, tools: tools), 1)
         try assertTones(microphonePath, tools: tools, channels: 1,
-                        expected: [[0, 0.14 * sqrt(2.0)]])
+                        expected: [[0, 0.02664 * sqrt(2.0)]])
 
         XCTAssertEqual(try historyAudioIdentity(for: systemPath.path, history: fixture.history),
                        AudioIdentity(system: true, microphone: false))

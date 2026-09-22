@@ -335,7 +335,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     var dirty: Bool {
         guard let snapshot = presentation?.snapshot else { return false }
-        return stagedDiffers || canonical(snapshot.edit) != savedEdit
+        return stagedDiffers || canonicalEdit(snapshot.edit) != savedEdit
             || canonical(snapshot.export) != savedExport
     }
 
@@ -464,7 +464,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         seekLabel.frame = NSRect(x: width * 0.77, y: seekY, width: width * 0.2 - 24, height: 20)
         let controlGap: CGFloat = 12
         let controlsWidth = width - 48
-        let audioWidth = max(292, min(360, controlsWidth * 0.4))
+        let audioWidth = max(304, min(360, controlsWidth * 0.4))
         trimPanel.frame = NSRect(x: 24, y: seekY + 30,
                                  width: controlsWidth - audioWidth - controlGap, height: trimHeight)
         audioPanel.frame = NSRect(x: trimPanel.frame.maxX + controlGap, y: seekY + 30,
@@ -532,8 +532,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         select(format, value: value.snapshot.export["format"] as? String ?? "mp4")
         select(quality, value: value.snapshot.export["quality"] as? String ?? "preserve")
         if initialize {
-            savedEdit = canonical(value.snapshot.edit); savedExport = canonical(value.snapshot.export)
-        } else if canonical(old?.edit) != canonical(value.snapshot.edit)
+            savedEdit = canonicalEdit(value.snapshot.edit); savedExport = canonical(value.snapshot.export)
+        } else if canonicalEdit(old?.edit) != canonicalEdit(value.snapshot.edit)
                     || canonical(old?.export) != canonical(value.snapshot.export) {
             estimate = nil
         }
@@ -576,7 +576,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private var stagedDiffers: Bool {
         guard let snapshot = presentation?.snapshot else { return false }
-        return canonical(stagedEdit) != canonical(snapshot.edit)
+        return canonicalEdit(stagedEdit) != canonicalEdit(snapshot.edit)
             || canonical(stagedExport) != canonical(snapshot.export)
     }
 
@@ -649,7 +649,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 switch result {
                 case .success(let saved):
                     if let snapshot = self.presentation?.snapshot {
-                        self.savedEdit = self.canonical(snapshot.edit)
+                        self.savedEdit = self.canonicalEdit(snapshot.edit)
                         self.savedExport = self.canonical(snapshot.export)
                     }
                     switch saved {
@@ -710,8 +710,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         microphoneMute.isHidden = !hasMicrophone
         monoOutput.isHidden = !hasAudio
         audioNote.stringValue = !hasAudio ? "No audio tracks."
-            : gif ? "GIF silent · MP4 kept"
-            : "Frame preview silent"
+            : gif ? "GIF · MP4 kept"
+            : "Silent preview"
         systemVolume.isEnabled = available && !gif && systemMute.state != .on
         microphoneVolume.isEnabled = available && !gif && microphoneMute.state != .on
         systemMute.isEnabled = available && !gif
@@ -745,6 +745,17 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         value.flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }
     }
 
+    private func canonicalEdit(_ value: [String: Any]?) -> Data? {
+        guard var value else { return nil }
+        if var audio = value["audio"] as? [String: Any] {
+            for key in ["system_volume", "microphone_volume"] {
+                if let number = audio[key] as? NSNumber { audio[key] = number.floatValue }
+            }
+            value["audio"] = audio
+        }
+        return canonical(value)
+    }
+
     private func time(_ milliseconds: UInt64) -> String {
         String(format: "%llu:%02llu.%03llu", milliseconds / 60_000,
                (milliseconds / 1_000) % 60, milliseconds % 1_000)
@@ -767,19 +778,24 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         field.placeholderString = "%"
     }
 
-    private func volume(_ field: NSTextField) -> Double? {
+    private func volume(_ field: NSTextField) -> Float? {
         let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "%"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let percent = Double(text), percent.isFinite,
               (0...200).contains(percent) else { return nil }
-        return percent / 100
+        return Float(percent / 100)
     }
 
     private func volumePercent(_ value: Any?) -> String {
-        let percent = ((value as? NSNumber)?.doubleValue ?? 1) * 100
-        let value = percent.rounded() == percent ? String(Int(percent)) : String(format: "%.1f", percent)
-        return "\(value)%"
+        let gain = (value as? NSNumber)?.floatValue ?? 1
+        let percent = Double(gain) * 100
+        for digits in 1...9 {
+            let text = String(format: "%.*g", locale: Locale(identifier: "en_US_POSIX"),
+                              digits, percent)
+            if let parsed = Double(text), Float(parsed / 100) == gain { return "\(text)%" }
+        }
+        return "\(percent)%"
     }
 
     @discardableResult private func label(_ text: String, size: CGFloat = 12,
