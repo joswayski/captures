@@ -1260,7 +1260,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineTextScroll.backgroundColor = tokens.color("surface-raised")
         inlineTextScroll.wantsLayer = true
         inlineTextScroll.layer?.cornerRadius = tokens.number("r-sm")
-        inlineTextScroll.layer?.borderColor = tokens.color("focus-ring").cgColor
+        inlineTextScroll.layer?.borderColor = tokens.color("theme-accent").cgColor
         inlineTextScroll.layer?.borderWidth = 2
         inlineTextEditor.isRichText = false
         inlineTextEditor.isHorizontallyResizable = false
@@ -3830,7 +3830,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textEditor.insertionPointColor = tokens.color("text")
         textEditor.font = .systemFont(ofSize: tokens.number("text-md"))
         inlineTextScroll.backgroundColor = tokens.color("surface-raised")
-        inlineTextScroll.layer?.borderColor = tokens.color("focus-ring").cgColor
+        inlineTextScroll.layer?.borderColor = tokens.color("theme-accent").cgColor
         inlineTextEditor.backgroundColor = tokens.color("surface-raised")
         inlineTextEditor.textColor = tokens.color("text")
         inlineTextEditor.insertionPointColor = tokens.color("text")
