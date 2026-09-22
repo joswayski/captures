@@ -153,6 +153,9 @@ final class RecordingEditorTests: XCTestCase {
                            outputDirectory: "/Exports")
         let play = try button("Play", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
+        let preview = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first)
+        let acceptedFrame = preview.image
 
         play.performClick(nil)
         XCTAssertEqual(worker.playbackStarts, [1_937])
@@ -165,6 +168,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(labels(in: controller.root).contains("Pausing silent playback…"))
         XCTAssertEqual(seek.doubleValue, 1_937,
                        "zero-frame Pause retains the accepted still that was actually displayed")
+        XCTAssertTrue(preview.image === acceptedFrame)
         worker.completePlayback(.success(.cancelled))
 
         play.performClick(nil)
@@ -273,6 +277,8 @@ final class RecordingEditorTests: XCTestCase {
         worker.completePlayback(.success(.cancelled))
         XCTAssertEqual(worker.closeCount, 1,
                        "session close is queued only after playback Drop finishes")
+        XCTAssertFalse(controller.window.isVisible,
+                       "the completed close is not reentrant with playback teardown")
     }
 
     func testSilentPlaybackRenderedStates() throws {

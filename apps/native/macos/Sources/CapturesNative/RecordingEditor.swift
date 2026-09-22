@@ -341,6 +341,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var playbackCancel: NativeRecordingEditorCancel?
     private var playbackPositionMilliseconds: UInt64?
     private var playbackReachedEOF = false
+    private var playbackFramePresented = false
     private var playbackStopActions: [() -> Void] = []
     private var closeAfterPlayback = false
     private var terminateAfterPlayback = false
@@ -445,7 +446,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let current = generation
         artifactID = artifact.id; presentation = nil; savedEdit = nil; savedExport = nil
         estimate = nil; activeCancel = nil; thumbnailCancel = nil; busy = true; pickerOpen = false
-        playbackPositionMilliseconds = nil; playbackReachedEOF = false
+        playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         stagedCrop = nil; cropAspectUnlocked = false
         resolutionPreset = .original; customOutput = false
         preview.image = nil
@@ -511,7 +512,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 pausePlayback { [weak self] in
                     guard let self else { return }
                     self.closeAfterPlayback = false
-                    self.window.performClose(nil)
+                    if self.windowShouldClose(self.window) { self.window.close() }
                 }
             }
             return false
@@ -760,7 +761,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private func publish(_ value: RecordingEditorPresentation, initialize: Bool = false) {
         let old = presentation?.snapshot
         presentation = value
-        playbackPositionMilliseconds = nil; playbackReachedEOF = false
+        playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         trimTimeline.setPlaybackPosition(nil)
         preview.image = NSImage(cgImage: value.image,
                                 size: NSSize(width: CGFloat(value.image.width),
@@ -944,6 +945,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                       self.playbackCancel === cancel,
                       self.playbackState != .idle else { return }
                 self.playbackPositionMilliseconds = value.positionMilliseconds
+                self.playbackFramePresented = true
                 self.preview.image = NSImage(cgImage: value.image,
                     size: NSSize(width: CGFloat(value.image.width), height: CGFloat(value.image.height)))
                 self.updatePlaybackPosition(value.positionMilliseconds)
@@ -995,11 +997,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func restoreAcceptedPresentation() {
         guard let presentation else { return }
-        playbackPositionMilliseconds = nil; playbackReachedEOF = false
+        let restoreFrame = playbackFramePresented
+        playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         trimTimeline.setPlaybackPosition(nil)
-        preview.image = NSImage(cgImage: presentation.image,
-                                size: NSSize(width: CGFloat(presentation.image.width),
-                                             height: CGFloat(presentation.image.height)))
+        if restoreFrame {
+            preview.image = NSImage(cgImage: presentation.image,
+                                    size: NSSize(width: CGFloat(presentation.image.width),
+                                                 height: CGFloat(presentation.image.height)))
+        }
         sourceLabel.stringValue = "\(presentation.snapshot.width) × \(presentation.snapshot.height) source frame"
         seekSlider.doubleValue = Double(presentation.snapshot.positionMilliseconds)
         seekLabel.stringValue = "\(time(presentation.snapshot.positionMilliseconds)) / \(time(presentation.snapshot.durationMilliseconds))"
@@ -1364,7 +1369,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         generation += 1; artifactID = nil; presentation = nil; activeCancel = nil
         thumbnailCancel = nil; thumbnailRetryAvailable = false
         playbackCancel = nil; playbackState = .idle
-        playbackPositionMilliseconds = nil; playbackReachedEOF = false
+        playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackStopActions.removeAll(); closeAfterPlayback = false
         terminateAfterPlayback = false; switchAfterPlayback = nil
         trimTimeline.setPlaybackPosition(nil)
