@@ -400,6 +400,11 @@ selection. Locked and hidden layers can still be duplicated, and typing fields
 keep their own deletion keys. Arrow keys nudge an unlocked selection by one image
 pixel, or ten with Shift, without snapping or expanding the canvas. Hidden layers
 can be nudged too. Focused fields and zoom controls retain their arrow keys.
+With canvas focus, V selects layers, C starts Crop, T selects Text, R Rectangle,
+O Ellipse, L Line, D Diamond, S Star, A Arrow, P Pen, and B the last-used
+Wand/Erase/Restore mode (initially Wand). Switching tools cancels unfinished
+gestures without applying them; selecting the same tool again preserves them.
+Focused native controls retain typing and letter navigation.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
 Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit
 scale and preserves the viewport-center image point when dragged.

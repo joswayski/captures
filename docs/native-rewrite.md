@@ -144,6 +144,19 @@ Each accepted nudge retains normal undo and output invalidation. AppKit protects
 field/selector/slider responders; wgpu reserves arrows for any focused widget.
 Clipboard-layer paste remains open, as does physical keyboard/IME/accessibility
 acceptance on macOS, Windows, X11 and Wayland.
+Both hosts connect Tauri's tool keys to their existing tools: V Select, C Crop,
+T Text, R Rectangle, O Ellipse, L Line, D Diamond, S Star, A Arrow, P Pen and
+B background removal. B recalls Wand/Erase/Restore, initially Wand. These
+case-insensitive canvas keys accept Shift but not Cmd/Ctrl/Alt. Focused native
+controls retain typing and letter navigation; pending work and dialogs block
+switching. A different tool cancels transient drawing, layer transforms, crop and
+pan; repeating the current tool preserves its candidate. C starts crop mode but
+never applies it, and tool selection does not change the document, undo or output.
+wgpu consumes each event once across layout passes. Host tests cover the map,
+background-mode recall, repeated tools, cancellation and focus/accepted-work
+gates; the X11 shortcut suite also creates Star/Rectangle with keys, moves the
+same layer with V and cancels a crop without publishing it. Physical keyboard,
+IME, accessibility and Windows/Wayland presentation acceptance remain open.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete
 custom rows are removed. Selecting a preset uses the existing shared viewport
