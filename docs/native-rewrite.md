@@ -21,9 +21,9 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, graphical/numeric trim, numeric crop, preset/custom output size, track volume/mute/mono and MP4/GIF save-new-copy | Playback, thumbnail timeline/graphical crop, audio meter/device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, numeric crop, preset/custom output size, track volume/mute/mono and MP4/GIF save-new-copy | Playback, graphical crop, audio meter/device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording playback/graphical timeline and remaining controls |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording playback/graphical crop and remaining controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -451,10 +451,18 @@ gesture without rolling back staged values. Handles accept focused arrow keys
 (1 ms under 60 seconds, otherwise 10 ms) and Page Up/Down (1 second). They never
 decode or publish media during drag: numeric values and the range update together,
 while the accepted frame remains unchanged until the existing Apply/Seek actions.
-Unapplied trim continues to gate seek, estimation and save. No thumbnails or
-playback are implied. Raw-input tests exercise multi-pass delivery, keyboard focus,
+Unapplied trim continues to gate seek, estimation and save. The wgpu track now
+displays the shared 12-frame full-source thumbnail strip, center-cropped vertically
+to the compact row. Excluded ranges are dimmed and grips retain the same hit regions.
+Generation runs once on the serialized worker after open, with independent cancel
+and retry; failure leaves editing available. Edits/seek retain the source strip and
+never regenerate it or change the accepted preview. Close/quit waits for generation.
+AppKit integration is a separate slice; playback remains unimplemented.
+Raw-input tests exercise multi-pass delivery, keyboard focus,
 thresholds, cancellation and busy gates; private-X11 tests cover staged values,
-exported duration/colors and immutable source. Physical input remains unverified.
+thumbnail loading/cancel/failure/retry and temporal pixels, exported duration/colors
+and immutable source. Windows presentation and physical macOS/Windows/X11/Wayland
+input/accessibility remain unverified; no parity gate closes.
 Crop uses source-pixel coordinates. Numeric crop dimensions start
 aspect-locked, follow the current crop ratio and fit the remaining source bounds;
 unlocking permits independent dimensions, and relocking uses the adjusted ratio.

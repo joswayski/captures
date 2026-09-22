@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import select
+import shutil
 import subprocess
 import threading
 import time
@@ -32,7 +33,10 @@ def main():
     parser.add_argument("--crop-aspect", action="store_true", help="Exercise locked/unlocked numeric crop dimensions")
     parser.add_argument("--estimate", action="store_true", help="Exercise exact size estimates and missing-source retry")
     parser.add_argument("--timeline", action="store_true", help="Exercise graphical trim staging, keyboard input and export")
+    parser.add_argument("--thumbnails", action="store_true", help="Exercise source thumbnails, cancellation, failure/retry and trim")
     args = parser.parse_args()
+    if args.thumbnails:
+        args.timeline = True
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -181,6 +185,24 @@ def main():
             "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
             "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
             "auto_copy_to_clipboard": False, "show_mini_previews": False}))
+        if args.thumbnails:
+            # Delay only the real sprite command to exercise cancellation without
+            # racing a tiny fixture. Pixel generation still uses real FFmpeg.
+            tools = output / "tools"
+            tools.mkdir()
+            started = output / "thumbnail-calls.txt"
+            allowed = output / "allow-thumbnails"
+            ffmpeg = shutil.which("ffmpeg")
+            assert ffmpeg
+            wrapper = tools / "ffmpeg"
+            wrapper.write_text(
+                "#!/usr/bin/python3\nimport os, sys, time\nfrom pathlib import Path\n"
+                "if any('tile=' in arg for arg in sys.argv[1:]):\n"
+                f"    with Path({str(started)!r}).open('a') as log: log.write('call\\n')\n"
+                f"    while not Path({str(allowed)!r}).exists(): time.sleep(.05)\n"
+                f"os.execv({ffmpeg!r}, [{ffmpeg!r}, *sys.argv[1:]])\n")
+            wrapper.chmod(0o755)
+            env["PATH"] = str(tools) + os.pathsep + env["PATH"]
         app = spawn("app", [str(binary), "--live", "--history-root", str(history),
                     "--settings-file", str(settings), "--quit-after", "900"])
         root = wait(lambda: windows("Captures"), "History")[0]
@@ -190,6 +212,31 @@ def main():
         editor = wait(lambda: windows("Recording editor"), "recording editor opens")[0]
         run("xdotool", "windowmove", "--sync", editor, "80", "60")
         run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
+        if args.thumbnails:
+            wait(started.exists, "initial source thumbnail request")
+            run("xdotool", "windowactivate", "--sync", editor, "windowfocus", "--sync", editor,
+                "mousemove", "--sync", "--window", editor, "80", "794", "sleep", ".5")
+            run("import", "-window", editor, str(output / "thumbnails-loading.png"))
+            # Deliberately bypass idle(): this cancels an accepted running job.
+            run("xdotool", "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
+            shot(editor, "thumbnails-cancelled")
+            allowed.touch()
+            missing = output / "temporarily-moved.mp4"
+            source.rename(missing)
+            try:
+                click(editor, 250, 794)
+                shot(editor, "thumbnails-missing-source")
+            finally:
+                missing.rename(source)
+            click(editor, 250, 794)
+            shot(editor, "thumbnails-retried")
+            assert started.read_text().splitlines() == ["call"] * 3
+            assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
+            for x, channel in ((120, 0), (500, 1), (890, 2)):
+                pixel = run("convert", str(output / "thumbnails-retried.png"),
+                            "-crop", f"1x1+{x}+563", "-depth", "8", "rgb:-")
+                assert len(pixel) == 3 and pixel[channel] > 90, (x, pixel)
+                assert all(pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel), (x, pixel)
         wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(), "decode")
         shot(editor, "original")
         dominant(output / "original.png", 0)
@@ -257,6 +304,8 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "timeline-minimum-saved")
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            if args.thumbnails:
+                assert started.read_text().splitlines() == ["call"] * 3, "edits/seek/export never regenerate source thumbnails"
             close(editor)
             wait(lambda: not windows("Recording editor"), "saved timeline editor closes")
             close(root)

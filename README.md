@@ -242,6 +242,9 @@ width and height independently. Apply edits accepts the format, quality and edit
 together before saving; failed updates leave the last accepted frame intact.
 Trim handles stage changes without decoding on each pointer move; Apply updates
 the preview. Focused handles also accept arrow keys and Page Up/Page Down.
+The trim track shows retained full-source thumbnails, independent of the edited
+preview. Thumbnail generation can be canceled or retried without losing edits;
+it does not add playback or change the source recording.
 The preview identifies its accepted format/quality, and saving uses those settings.
 **Estimate size** checks those accepted settings without publishing an export.
 Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
