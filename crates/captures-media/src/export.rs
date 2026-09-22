@@ -24,11 +24,67 @@ pub struct MediaMetadata {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(C)]
 pub struct CropRect {
     pub x: u32,
     pub y: u32,
     pub width: u32,
     pub height: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum CropResizeAxis {
+    Width = 0,
+    Height = 1,
+}
+
+impl TryFrom<u8> for CropResizeAxis {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Width),
+            1 => Ok(Self::Height),
+            _ => Err(()),
+        }
+    }
+}
+
+impl CropRect {
+    /// Resize one numeric crop dimension while preserving the current ratio and
+    /// fitting the coupled dimensions inside the source from this crop's origin.
+    #[must_use]
+    pub fn resize_aspect_locked(
+        mut self,
+        source_width: u32,
+        source_height: u32,
+        axis: CropResizeAxis,
+        value: u32,
+    ) -> Self {
+        let ratio = f64::from(self.width) / f64::from(self.height.max(1));
+        let max_width = source_width.saturating_sub(self.x).max(2);
+        let max_height = source_height.saturating_sub(self.y).max(2);
+        match axis {
+            CropResizeAxis::Width => {
+                self.width = value.clamp(2, max_width);
+                self.height = ((f64::from(self.width) / ratio).round() as u32).max(2);
+                if self.height > max_height {
+                    self.height = max_height;
+                    self.width = ((f64::from(self.height) * ratio).round() as u32).max(2);
+                }
+            }
+            CropResizeAxis::Height => {
+                self.height = value.clamp(2, max_height);
+                self.width = ((f64::from(self.height) * ratio).round() as u32).max(2);
+                if self.width > max_width {
+                    self.width = max_width;
+                    self.height = ((f64::from(self.width) / ratio).round() as u32).max(2);
+                }
+            }
+        }
+        self
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -257,10 +313,83 @@ pub fn sampled_export_spec(export: &ExportSpec, window_ms: u64, total_ms: u64) -
 #[cfg(test)]
 mod tests {
     use super::{
-        ESTIMATE_SAMPLE_WINDOW_MS, ExportFormat, ExportSpec, GifExportAttempt, QualityPreset,
-        SizeBudgetError, calculate_size_budget, estimate_sample_windows, extrapolate_sampled_size,
-        gif_export_attempts, sampled_export_spec,
+        CropRect, CropResizeAxis, ESTIMATE_SAMPLE_WINDOW_MS, ExportFormat, ExportSpec,
+        GifExportAttempt, QualityPreset, SizeBudgetError, calculate_size_budget,
+        estimate_sample_windows, extrapolate_sampled_size, gif_export_attempts,
+        sampled_export_spec,
     };
+
+    #[test]
+    fn aspect_locked_crop_resize_preserves_ratio_rounding_and_origin_bounds() {
+        for (source, initial, axis, value, expected) in [
+            (
+                (320, 180),
+                (0, 0, 320, 180),
+                CropResizeAxis::Width,
+                160,
+                (160, 90),
+            ),
+            (
+                (640, 1_440),
+                (0, 0, 640, 1_440),
+                CropResizeAxis::Height,
+                720,
+                (320, 720),
+            ),
+            (
+                (320, 180),
+                (10, 60, 160, 90),
+                CropResizeAxis::Width,
+                300,
+                (213, 120),
+            ),
+            (
+                (320, 180),
+                (200, 6, 80, 60),
+                CropResizeAxis::Height,
+                170,
+                (120, 90),
+            ),
+            (
+                (320, 180),
+                (10, 6, 160, 90),
+                CropResizeAxis::Width,
+                0,
+                (2, 2),
+            ),
+            (
+                (320, 180),
+                (10, 6, 90, 160),
+                CropResizeAxis::Height,
+                0,
+                (2, 2),
+            ),
+            (
+                (400, 300),
+                (20, 30, 101, 61),
+                CropResizeAxis::Width,
+                73,
+                (73, 44),
+            ),
+            (
+                (320, 180),
+                (300, 20, 100, 50),
+                CropResizeAxis::Width,
+                100,
+                (20, 10),
+            ),
+        ] {
+            let crop = CropRect {
+                x: initial.0,
+                y: initial.1,
+                width: initial.2,
+                height: initial.3,
+            }
+            .resize_aspect_locked(source.0, source.1, axis, value);
+            assert_eq!((crop.width, crop.height), expected);
+            assert_eq!((crop.x, crop.y), (initial.0, initial.1));
+        }
+    }
 
     #[test]
     fn preserve_quality_is_the_default() {
