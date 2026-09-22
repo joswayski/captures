@@ -52,10 +52,11 @@ final class HistoryClearTests: XCTestCase {
             try button("Video 2").performClick(nil)
             try waitUntil { table.numberOfRows == 2 && detailContains("H.264 MP4") }
             XCTAssertFalse(try button("Copy image").isEnabled)
-            XCTAssertFalse(try button("Edit screenshot").isEnabled)
+            XCTAssertTrue(try button("Edit recording").isEnabled)
             try button("GIF 1").performClick(nil)
-            try waitUntil { table.numberOfRows == 1 && detailContains("GIF · Editor unavailable") }
+            try waitUntil { table.numberOfRows == 1 && detailContains("GIF · Editor available") }
             XCTAssertEqual(try button("GIF 1").state, .on)
+            XCTAssertTrue(try button("Edit recording").isEnabled)
             XCTAssertTrue(try button("Save file").isEnabled)
             XCTAssertFalse(try button("Show in Folder").isEnabled)
             try button("Save file").performClick(nil)
@@ -145,7 +146,7 @@ final class HistoryClearTests: XCTestCase {
             } else {
                 XCTAssertEqual(table.selectedRow, -1)
                 XCTAssertTrue(root.subviews.compactMap { $0 as? CaptureButton }
-                    .filter { ["Edit screenshot", "Copy image", "Save image", "Delete from history"].contains($0.title) }
+                    .filter { ["Edit screenshot", "Edit recording", "Copy image", "Save image", "Delete from history"].contains($0.title) }
                     .allSatisfy { !$0.isEnabled })
             }
             if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
