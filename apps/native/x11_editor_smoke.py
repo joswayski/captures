@@ -660,7 +660,7 @@ def main():
             return
 
         if args.polygon_only:
-            resize_editor(886, 701)
+            resize_editor(942, 701)
             save(640, 360, 0, 0)
             click(editor, 736, 62)
             shot(editor, "polygon-tools")
@@ -705,7 +705,7 @@ def main():
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "polygon draft closes")
             editor = reopen()
-            resize_editor(886, 701)
+            resize_editor(942, 701)
             shot(editor, "polygon-reopened")
             for center in [(348, 179), (548, 209), (738, 359)]:
                 pixel("polygon-reopened", *canvas_point(center), (255, 59, 92))
@@ -1103,7 +1103,7 @@ def main():
             assert (draft.parent / "fonts/regular.font").read_bytes() == font_bytes
             assert json.loads(draft.read_text())["fonts"] == {
                 "families": {"sans": "Captures Shaping Test"}, "assets": ["regular"]}
-            resize_editor(886, 701)
+            resize_editor(942, 701)
             click(editor, 470, 62)  # Layers.
             fixture_click((370, 230))  # Select the text plate, including non-ink pixels.
             drag((600, 230), (625, 247))
@@ -1162,7 +1162,7 @@ def main():
             return
 
         if args.brush_only:
-            resize_editor(886, 701)
+            resize_editor(942, 701)
             save(640, 360, 0, 0)
             source = layers()[0]["src"]
             click(editor, 736, 62)
@@ -1207,7 +1207,7 @@ def main():
             wait(lambda: not windows("Screenshot editor"), "brush draft closes")
             editor = reopen()
             asset_pixel(layers()[0], 150, 120, (0, 0, 0, 0))
-            resize_editor(886, 701)
+            resize_editor(942, 701)
             click(editor, 736, 62)
             inspector_click(101, 221)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
@@ -1235,7 +1235,7 @@ def main():
             return
 
         if args.wand_only:
-            resize_editor(886, 701)
+            resize_editor(942, 701)
             save(640, 360, 0, 0)
             source = layers()[0]["src"]
             click(editor, 736, 62)
@@ -1270,7 +1270,7 @@ def main():
             wait(lambda: not windows("Screenshot editor"), "wand draft closes")
             editor = reopen()
             asset_pixel(layers()[0], 310, 60, (0, 0, 0, 0))
-            resize_editor(886, 701)
+            resize_editor(942, 701)
             click(editor, 736, 62)
             inspector_click(36, 221)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
@@ -1453,7 +1453,7 @@ def main():
         shot(editor, "viewport-125-key")
 
         def viewport_pixels(name):
-            return run("convert", str(output / f"{name}.png"), "-crop", "640x500+8+89", "-depth", "8", "rgba:-")
+            return run("convert", str(output / f"{name}.png"), "-crop", "584x500+64+89", "-depth", "8", "rgba:-")
 
         assert viewport_pixels("viewport-actual-key") == viewport_pixels("viewport-actual-button")
         assert viewport_pixels("viewport-125-key") == viewport_pixels("viewport-125-button")
@@ -1466,12 +1466,13 @@ def main():
         click(editor, 668, 18)
         click(editor, 660, 101)  # 50% preset.
         shot(editor, "viewport-preset-50")
-        # 640×360 at 50% is 320×180, centered in the 640×603 viewport.
-        pixel("viewport-preset-50", 170, 310, (40, 110, 166))
-        pixel("viewport-preset-50", 225, 340, (229, 179, 68))
-        pixel("viewport-preset-50", 163, 310,
+        # 640×360 at 50% is 320×180, centered in the 584×603 viewport.
+        # The 56px rail moves the viewport center right by 28px.
+        pixel("viewport-preset-50", 198, 310, (40, 110, 166))
+        pixel("viewport-preset-50", 253, 340, (229, 179, 68))
+        pixel("viewport-preset-50", 191, 310,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
-        pixel("viewport-preset-50", 488, 310,
+        pixel("viewport-preset-50", 516, 310,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
         click(editor, 668, 18)
         click(editor, 660, 189)  # 200% preset.
@@ -1505,12 +1506,12 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "1180", "900", "sleep", ".3")
             shot(editor, "viewport-fit-no-upscale")
             surface = (245, 245, 247) if args.appearance == "light" else (16, 16, 20)
-            # Client 1180×900 minus the inspector and central-panel margins
-            # leaves x=8..942, y=89..892. Its center is (475,490.5), so the
-            # 640×360 source spans x=155..795, y=310.5..670.5. Raster sample
+            # Client 1180×900 minus the rail, inspector and central-panel margins
+            # leaves x=64..942, y=89..892. Its center is (503,490.5), so the
+            # 640×360 source spans x=183..823, y=310.5..670.5. Raster sample
             # centers at the bottom edge are excluded by the top-left fill rule.
-            pixel("viewport-fit-no-upscale", 794, 400, (40, 110, 166))
-            pixel("viewport-fit-no-upscale", 795, 400, surface)
+            pixel("viewport-fit-no-upscale", 822, 400, (40, 110, 166))
+            pixel("viewport-fit-no-upscale", 823, 400, surface)
             pixel("viewport-fit-no-upscale", 300, 669, (40, 110, 166))
             pixel("viewport-fit-no-upscale", 300, 670, surface)
             assert not draft.exists(), "Fit resizing must not create a draft"
@@ -1523,15 +1524,15 @@ def main():
             click(editor, 465, 18)  # Fit resets the viewport-center anchor.
             click(editor, 311, 18)  # Left end of the logarithmic slider: 5%.
             shot(editor, "viewport-slider-minimum")
-            # Wrapped toolbar leaves x=8..522, y=133..532, center (265,332.5).
-            # The 5% source is 32×18, starting at (249,323.5).
-            pixel("viewport-slider-minimum", 250, 325, (40, 110, 166))
-            pixel("viewport-slider-minimum", 248, 325, surface)
-            pixel("viewport-slider-minimum", 281, 325, surface)
-            pixel("viewport-slider-minimum", 250, 341, surface)
+            # Wrapped toolbar leaves x=64..522, y=133..532, center (293,332.5).
+            # The 5% source is 32×18, starting at (277,323.5).
+            pixel("viewport-slider-minimum", 278, 325, (40, 110, 166))
+            pixel("viewport-slider-minimum", 276, 325, surface)
+            pixel("viewport-slider-minimum", 309, 325, surface)
+            pixel("viewport-slider-minimum", 278, 341, surface)
             click(editor, 437, 18)  # Right end: 800%, preserving the same anchor.
             shot(editor, "viewport-slider-maximum")
-            pixel("viewport-slider-maximum", 10, 150, (40, 110, 166))
+            pixel("viewport-slider-maximum", 66, 150, (40, 110, 166))
             pixel("viewport-slider-maximum", 520, 530, (40, 110, 166))
             assert not draft.exists(), "slider changes must not create a draft"
             assert (artifact / "capture.png").read_bytes() == original
@@ -1550,7 +1551,8 @@ def main():
             }, indent=2) + "\n")
             print("PASS native zoom: wheel, pan, toolbar, keyboard, presets, custom zoom, focused field, no draft")
             return
-        resize_editor(886, 701)
+        # Preserve a pixel-aligned 640px viewport beside the new 56px rail.
+        resize_editor(942, 701)
         click(editor, 736, 62)
         inspector_click(154, 177)  # Pen follows Arrow on the second tool row.
         fixture_move((88, 329), "mousedown", "1", "sleep", ".2")
@@ -1601,7 +1603,7 @@ def main():
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "freehand editor closes")
         editor = reopen()
-        resize_editor(886, 701)
+        resize_editor(942, 701)
         shot(editor, "freehand-reopened")
         fixture_pixel("freehand-reopened", 141, 254, (255, 59, 92))
         assert layers()[1]["id"] == curve["id"] and layers()[1]["points"] == curve["points"]
@@ -1610,7 +1612,7 @@ def main():
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "discard freehand edits")
 
-        resize_editor(886, 701)
+        resize_editor(942, 701)
         click(editor, 736, 62)
         shot(editor, "open-shape-tools")
         inspector_click(32, 177)  # Line starts the second tool row.
@@ -1658,7 +1660,7 @@ def main():
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "open-shape editor closes")
         editor = reopen()
-        resize_editor(886, 701)
+        resize_editor(942, 701)
         shot(editor, "open-shape-reopened")
         fixture_pixel("open-shape-reopened", 435, 255, (255, 59, 92))
         assert layers()[-1]["id"] == arrow["id"]
@@ -1670,7 +1672,7 @@ def main():
         # Leave room below the annotation form for rotation-snap controls and
         # the 80px pinned export row. This preserves the bottom-scrolled form's
         # coordinates; the narrow/minimum-size scroll path is exercised below.
-        run("xdotool", "windowsize", "--sync", editor, "886", "923")
+        run("xdotool", "windowsize", "--sync", editor, "942", "923")
         click(editor, 736, 62)
         inspector_click(105, 133)  # Rectangle follows Text.
         drag((320, 250), (480, 370))
@@ -1747,7 +1749,7 @@ def main():
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "styled editor closes")
         editor = reopen()
-        resize_editor(886, 701)
+        resize_editor(942, 701)
         shot(editor, "annotation-reopened")
         fixture_pixel("annotation-reopened", 279, 310, (212, 131, 33), tolerance=1)
         assert layers()[-1]["style"] == styled["style"]
@@ -1863,7 +1865,7 @@ def main():
         # at 1:1 scale, where the desired edge lands on an exact pointer pixel.
         click(editor, 463, 62)  # Reopened editors start in Geometry, not Layers.
         inspector_click(100, 158)
-        resize_editor(886, 701, "sleep", ".3")
+        resize_editor(942, 701, "sleep", ".3")
         drag((round(238 + 260 + resized_width), 489), (618, 489))
         save_layers(lambda values: values[-1]["width"] == 120 and values[-1]["height"] == 80,
                     "restore imported size after draft reopen")
@@ -2132,7 +2134,7 @@ def main():
         click(editor, 398, 62)  # Geometry has an independent scroll position.
 
         # Odd height keeps the centered 1:1 document origin pixel-aligned.
-        resize_editor(886, 701)
+        resize_editor(942, 701)
 
         click(editor, 736, 62)  # Draw keeps the chosen shape active after each release.
         drag((658, 289), (538, 169))
@@ -2172,7 +2174,7 @@ def main():
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "saved shapes close")
         editor = reopen()
-        resize_editor(886, 701)
+        resize_editor(942, 701)
         shot(editor, "shape-reopened")
         fixture_pixel("shape-reopened", 370, 230, (255, 59, 92))
         fixture_pixel("shape-reopened", 463, 374, (255, 59, 92))
@@ -2194,7 +2196,7 @@ def main():
         shot(editor, "crop-selection")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "crop-selection-minimum")
-        resize_editor(886, 701)
+        resize_editor(942, 701)
         assert not draft.exists(), "selection must not write a draft"
         assert (artifact / "capture.png").read_bytes() == original
         run("xdotool", "key", "Escape", "sleep", ".2")
