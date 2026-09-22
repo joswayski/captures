@@ -38,6 +38,8 @@ use image::{ImageDecoder, ImageFormat, ImageReader, RgbaImage};
 
 use crate::tokens::Tokens;
 
+mod text_input;
+
 enum Job {
     Apply(Request),
     Import {
@@ -54,7 +56,10 @@ enum Job {
         destination: PathBuf,
         options: ExportOptions,
     },
-    Flush(Sender<Result<(), String>>),
+    Flush {
+        input: Option<(String, String, bool)>,
+        reply: Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -75,6 +80,7 @@ struct Presented {
     can_undo: bool,
     can_redo: bool,
     can_paste_layer: bool,
+    active_text_input: Option<(String, String)>,
     unsaved: bool,
     has_draft: bool,
 }
@@ -99,6 +105,9 @@ impl Presented {
             can_undo: snapshot.can_undo,
             can_redo: snapshot.can_redo,
             can_paste_layer: snapshot.can_paste_layer,
+            active_text_input: snapshot
+                .active_text_input
+                .map(|input| (input.input_id.to_owned(), input.layer_id.to_owned())),
             unsaved: snapshot.unsaved_changes,
             has_draft: snapshot.has_draft,
         }
@@ -393,6 +402,7 @@ struct View {
     annotation: Option<AnnotationFields>,
     text: Option<TextFields>,
     text_apply_pending: bool,
+    inline: Option<text_input::InlineText>,
     pending: bool,
     closed: bool,
     close_requested: bool,
@@ -462,6 +472,7 @@ impl Default for View {
             annotation: None,
             text: None,
             text_apply_pending: false,
+            inline: None,
             pending: true,
             closed: false,
             close_requested: false,
@@ -544,6 +555,9 @@ impl View {
     }
 
     fn request_close(&mut self) {
+        if self.close_inline() {
+            return;
+        }
         self.confirm_replace = None;
         self.cancel_drawing();
         self.cancel_layer_gesture();
@@ -656,7 +670,8 @@ impl View {
                 self.text_apply_pending = false;
                 if pasted_layer {
                     self.activate_tool(Section::Layers, None);
-                } else if !copied_layer
+                } else if self.inline.is_none()
+                    && !copied_layer
                     && self.draw_shape == DrawShape::Text
                     && self.text.is_some()
                     && !text_apply_pending
@@ -667,6 +682,7 @@ impl View {
                     self.reset_background_fields();
                 }
                 self.error = None;
+                self.received_inline();
                 if self.close_after_save || (self.close_requested && !self.unsaved()) {
                     self.closed = true;
                 }
@@ -674,6 +690,7 @@ impl View {
             Err(error) => {
                 self.pending_layer_selection = None;
                 self.error = Some(error);
+                self.inline_failed();
                 // A rejected explicit text Apply keeps the user's staged composition.
                 if !self.text_apply_pending {
                     self.select_layer_exact(self.selected_layer.clone());
@@ -838,7 +855,11 @@ impl View {
         }
         // Preserve the one-in-flight edit contract. A selected file waits until
         // an accepted edit or a discard confirmation has finished.
-        if self.pending || self.confirm_discard || self.confirm_replace.is_some() {
+        if self.pending
+            || self.inline.is_some()
+            || self.confirm_discard
+            || self.confirm_replace.is_some()
+        {
             return false;
         }
         let Some(result) = self.import_picker.as_ref().map(Receiver::try_recv) else {
@@ -863,6 +884,19 @@ impl View {
     }
 
     fn submit_job(&mut self, tx: &Sender<Job>, job: Job) {
+        if self.inline.is_some()
+            && !matches!(
+                &job,
+                Job::Apply(
+                    Request::BeginTextInput { .. }
+                        | Request::UpdateTextInput { .. }
+                        | Request::FinishTextInput { .. }
+                )
+            )
+        {
+            self.error = Some("Finish or cancel text input before another editor action.".into());
+            return;
+        }
         self.confirm_replace = None;
         self.cancel_layer_gesture();
         match tx.send(job) {
@@ -984,6 +1018,9 @@ pub struct Editor {
 }
 
 fn save_dirty(session: &mut EditorSession) -> Result<(), String> {
+    if session.snapshot().active_text_input.is_some() {
+        return Err("Finish or cancel text input before saving a draft.".into());
+    }
     if session.snapshot().unsaved_changes {
         session.execute(Request::SaveDraft {
             updated_at_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
@@ -1206,6 +1243,11 @@ impl Editor {
                         .as_ref()
                         .ok_or_else(|| "Editor is unavailable.".to_owned())
                         .and_then(|session| {
+                            if session.snapshot().active_text_input.is_some() {
+                                return Err(
+                                    "Finish or cancel text input before copying pixels.".into()
+                                );
+                            }
                             copy(session.pixels())?;
                             let mut presented = Presented::from_session(session);
                             presented.copied = true;
@@ -1218,6 +1260,11 @@ impl Editor {
                         .as_ref()
                         .ok_or_else(|| "Editor is unavailable.".to_owned())
                         .and_then(|session| {
+                            if session.snapshot().active_text_input.is_some() {
+                                return Err(
+                                    "Finish or cancel text input before saving pixels.".into()
+                                );
+                            }
                             let saved = save_new_export(
                                 &root,
                                 &session.pixels(),
@@ -1243,8 +1290,18 @@ impl Editor {
                             presented.saved = Some(saved);
                             Ok(presented)
                         }),
-                    Job::Flush(reply) => {
-                        let result = session.as_mut().map_or(Ok(()), save_dirty);
+                    Job::Flush { input, reply } => {
+                        let result = session.as_mut().map_or(Ok(()), |session| {
+                            if let Some((input_id, text, finishing)) = input {
+                                if session.snapshot().active_text_input.is_some() {
+                                    session.execute(Request::UpdateTextInput { input_id: input_id.clone(), text })?;
+                                    session.execute(Request::FinishTextInput { input_id, commit: true })?;
+                                } else if !finishing {
+                                    return Err("Text input could not be finished. Retry or cancel before quitting.".into());
+                                }
+                            }
+                            save_dirty(session)
+                        });
                         let _ = reply.send(result.clone());
                         match (result, session.as_ref()) {
                             (Ok(()), Some(session)) => Ok(Presented::from_session(session)),
@@ -1297,6 +1354,7 @@ impl Editor {
             self.view.lock().unwrap().receive(ctx, result);
             ctx.request_repaint_of(self.viewport);
         }
+        self.view.lock().unwrap().drain_inline(&self.tx);
         if self.view.lock().unwrap().receive_import(&self.tx) {
             ctx.request_repaint_of(self.viewport);
         }
@@ -1312,8 +1370,9 @@ impl Editor {
         // enqueue a new import after the worker has finished its final save.
         self.view.lock().unwrap().import_picker = None;
         let (tx, rx) = mpsc::channel();
+        let input = self.view.lock().unwrap().inline_for_flush();
         self.tx
-            .send(Job::Flush(tx))
+            .send(Job::Flush { input, reply: tx })
             .map_err(|_| "Editor worker stopped.".to_owned())?;
         let result = rx.recv().map_err(|_| "Editor worker stopped.".to_owned())?;
         self.receive(ctx);
@@ -1379,7 +1438,8 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     handle_viewport_shortcuts(ui.ctx(), view);
     handle_document_shortcuts(ui.ctx(), view, tx);
     handle_tool_shortcuts(ui.ctx(), view);
-    if !ui.ctx().egui_wants_keyboard_input()
+    if view.inline.is_none()
+        && !ui.ctx().egui_wants_keyboard_input()
         && !egui::Popup::is_any_open(ui.ctx())
         && ui.input(|input| input.key_pressed(egui::Key::Escape))
     {
@@ -1447,7 +1507,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 }
             });
         });
-        ui.add_enabled_ui(!view.pending && view.confirm_replace.is_none(), |ui| {
+        ui.add_enabled_ui(!view.pending && view.inline.is_none() && view.confirm_replace.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(view.presented.as_ref().is_some_and(|p| p.can_undo), egui::Button::new("Undo")).clicked() { view.submit(tx, Request::Undo); }
                 if ui.add_enabled(view.presented.as_ref().is_some_and(|p| p.can_redo), egui::Button::new("Redo")).clicked() { view.submit(tx, Request::Redo); }
@@ -1528,7 +1588,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             .resizable(false).exact_size(tokens.number("s-12") + tokens.number("s-6"))
             .show(ui, |ui| show_export_actions(ui, view, tx));
         egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
-        ui.add_enabled_ui(!view.pending && view.presented.is_some() && view.confirm_replace.is_none(), |ui| {
+        ui.add_enabled_ui(!view.pending && view.inline.is_none() && view.presented.is_some() && view.confirm_replace.is_none(), |ui| {
             if view.section == Section::Output {
                 show_output(ui, tokens, view, tx);
                 return;
@@ -1605,7 +1665,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                         ui.add(egui::DragValue::new(&mut view.new_text_size).range(8. ..=512.).speed(1.));
                     });
                     annotation_color(ui, "Color", &mut view.new_text_color);
-                    ui.label("Click the canvas to place text, then edit it in Layers.");
+                    ui.label("Click to type on the canvas, or click existing text to edit it.");
                     ui.small("These defaults apply only to new text in this editor. Box styles center on the click.");
                 } else {
                     ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
@@ -1715,10 +1775,11 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
                     egui::Color32::WHITE,
                 );
-            if view.crop_previous.is_some() && !view.pending {
+            if view.crop_previous.is_some() && !view.pending && view.inline.is_none() {
                 show_crop(ui, tokens, view, available, preview, intercepted);
             }
             if view.section == Section::Draw
+                && view.inline.is_none()
                 && !view.pending
                 && view.confirm_replace.is_none()
                 && !view.close_requested
@@ -1727,6 +1788,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 show_shape(ui, view, tx, available, preview, intercepted);
             }
             if view.section == Section::Layers
+                && view.inline.is_none()
                 && !view.pending
                 && view.confirm_replace.is_none()
                 && !view.close_requested
@@ -1734,6 +1796,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             {
                 show_layer_canvas(ui, tokens, view, tx, available, preview, intercepted);
             }
+            text_input::show(ui, tokens, view, available, preview);
         } else if view.pending {
             ui.centered_and_justified(|ui| {
                 ui.spinner();
@@ -1744,6 +1807,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             });
         }
     });
+    view.drain_inline(tx);
 }
 
 fn show_tool_rail(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
@@ -1763,6 +1827,7 @@ fn show_tool_rail(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             ui.visuals_mut().widgets.inactive.weak_bg_fill = tokens.color("surface-raised");
             let enabled = view.presented.is_some()
                 && !view.pending
+                && view.inline.is_none()
                 && !view.closed
                 && !view.close_requested
                 && !view.confirm_discard
@@ -2045,6 +2110,7 @@ fn handle_tool_shortcuts(ctx: &egui::Context, view: &mut View) {
         || egui::Popup::is_any_open(ctx)
         || view.presented.is_none()
         || view.pending
+        || view.inline.is_some()
         || view.closed
         || view.close_requested
         || view.confirm_discard
@@ -2100,6 +2166,7 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
         || ctx.input(|input| input.pointer.any_pressed())
         || ctx.text_edit_focused()
         || egui::Popup::is_any_open(ctx)
+        || view.inline.is_some()
         || view.closed
         || view.close_requested
         || view.confirm_discard
@@ -2915,11 +2982,25 @@ fn show_shape(
             && let Some(position) = response.interact_pointer_pos()
             && preview.contains(position)
         {
-            view.submit(
-                tx,
-                Request::CreateText {
+            let point = image_point(position, preview, bounds);
+            let hit = match presented
+                .document
+                .hit_test(point, 8. * bounds.width / f64::from(preview.width()))
+            {
+                Ok(hit) => hit,
+                Err(error) => {
+                    view.error = Some(error);
+                    return;
+                }
+            };
+            let target = if let Some(Element::Text(element)) = hit {
+                captures_app::editor_session::TextInputTarget::Existing {
+                    id: element.base.id.clone(),
+                }
+            } else {
+                captures_app::editor_session::TextInputTarget::New {
                     create: TextCreate {
-                        point: image_point(position, preview, bounds),
+                        point,
                         text: String::new(),
                         font_size: view.new_text_size,
                         font_family: view
@@ -2936,8 +3017,9 @@ fn show_shape(
                         color: view.new_text_color.clone(),
                         style_preset: view.new_text_preset.clone(),
                     },
-                },
-            );
+                }
+            };
+            view.begin_inline(tx, target, point);
         }
         return;
     }
@@ -3405,6 +3487,7 @@ fn show_crop(
 fn show_export_actions(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
     let ready = view.presented.is_some()
         && !view.pending
+        && view.inline.is_none()
         && !view.closed
         && !view.close_requested
         && !view.confirm_discard
@@ -3688,6 +3771,7 @@ enum LayerAction {
 
 fn layer_action_enabled(view: &View, action: LayerAction, target_id: Option<&str>) -> bool {
     if view.pending
+        || view.inline.is_some()
         || view.closed
         || view.close_requested
         || view.confirm_discard
@@ -5732,7 +5816,7 @@ mod tests {
         );
     }
 
-    fn presented(unsaved: bool) -> Presented {
+    pub(super) fn presented(unsaved: bool) -> Presented {
         Presented {
             document: Arc::new(Document::new_capture("fixture", 7., 3., None)),
             pixels: Arc::new(RgbaImage::new(7, 3)),
@@ -5750,12 +5834,13 @@ mod tests {
             can_undo: unsaved,
             can_redo: false,
             can_paste_layer: false,
+            active_text_input: None,
             unsaved,
             has_draft: !unsaved,
         }
     }
 
-    fn presented_text(id: &str, text: &str) -> Presented {
+    pub(super) fn presented_text(id: &str, text: &str) -> Presented {
         let mut value = presented(true);
         Arc::make_mut(&mut value.document)
             .elements
@@ -5999,7 +6084,11 @@ mod tests {
         let mut output = run(&mut view, vec![button(false)], true);
         assert!(output.platform_output.num_completed_passes >= 2);
         output.textures_delta.clear();
-        let Job::Apply(Request::CreateText { create }) = rx.try_recv().unwrap() else {
+        let Job::Apply(Request::BeginTextInput {
+            target: captures_app::editor_session::TextInputTarget::New { create },
+            ..
+        }) = rx.try_recv().unwrap()
+        else {
             panic!()
         };
         assert_eq!(create.point, Point { x: 3.5, y: 1.5 });

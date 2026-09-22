@@ -89,6 +89,8 @@ def main():
                         help="Exercise the real Text tool UI, undo/redo and draft reopen")
     parser.add_argument("--text-defaults-only", action="store_true",
                         help="Exercise pre-placement Text style/size/color and centered box placement")
+    parser.add_argument("--text-input-only", action="store_true",
+                        help="Exercise on-canvas text composition, finish, blank discard, undo and quit")
     parser.add_argument("--polygon-only", action="store_true",
                         help="Exercise Triangle/Diamond/Star previews, cancellation and saved pixels")
     parser.add_argument("--rotation-snap-only", action="store_true",
@@ -358,10 +360,14 @@ def main():
         pixel("editor-original", 520, 690,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
 
+        def type_text(value, delay=10):
+            # xdotool type consumes all remaining arguments; do not chain keys after it.
+            run("xdotool", "type", "--clearmodifiers", "--delay", str(delay), "--", str(value))
+
         def field(y, value, x=78):
             inspector_click(x, y)
             run("xdotool", "key", "ctrl+a")
-            run("xdotool", "type", "--clearmodifiers", "--delay", "60", "--", str(value))
+            type_text(value, 60)
             run("xdotool", "key", "Return", "sleep", ".2")
 
         draft = output / "editor-drafts" / artifact_id / "manifest.json"
@@ -921,6 +927,82 @@ def main():
             print("PASS native output presets: Tiny palette, Highest exact pixels, no edits, minimum")
             return
 
+        if args.text_input_only:
+            save_layers(lambda values: len(values) == 1, "composition baseline")
+
+            def begin_input(point):
+                click(editor, 736, 62)
+                inspector_click(34, 128)
+                click(editor, *document_point(point))
+
+            before = draft.read_bytes()
+            begin_input((80, 60))
+            shot(editor, "text-input-empty")
+            assert draft.read_bytes() == before
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            save_layers(lambda values: len(values) == 1, "blank input creates no layer")
+
+            before = draft.read_bytes()
+            begin_input((80, 60))
+            type_text("Alpha", 1)
+            run("xdotool", "key", "Return")
+            type_text("Beta", 1)
+            time.sleep(.3)
+            shot(editor, "text-input-typing")
+            assert draft.read_bytes() == before, "typing previews must not persist a draft"
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            created = save_layers(lambda values: len(values) == 2, "multiline input finished")[-1]
+            assert created["text"] == "Alpha\nBeta"
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 1, "one undo removes complete text input")
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 2, "text input redo")[-1] == created
+
+            begin_input((85, 70))
+            run("xdotool", "key", "ctrl+a")
+            type_text("Revised", 1)
+            run("xdotool", "key", "Return")
+            type_text("line two", 1)
+            time.sleep(.3)
+            shot(editor, "text-input-existing")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            revised = save_layers(lambda values: len(values) == 2 and values[-1]["text"] == "Revised\nline two",
+                                  "existing Text hit edits without another layer")[-1]
+            assert revised["id"] == created["id"]
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 2, "existing input single undo")[-1] == created
+
+            begin_input((400, 250))
+            resize_editor(760, 540, "sleep", ".3")
+            type_text("Minimum", 1)
+            time.sleep(.3)
+            shot(editor, "text-input-minimum")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            minimum = save_layers(lambda values: len(values) == 3, "minimum input finished")[-1]
+            assert minimum["text"] == "Minimum"
+            resize_editor(1000, 700, "sleep", ".3")
+            begin_input((405, 260))
+            run("xdotool", "key", "ctrl+a", "BackSpace", "Escape", "sleep", ".3")
+            save_layers(lambda values: len(values) == 2, "blank existing text removes layer")
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 3, "blank deletion undo")[-1] == minimum
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 2, "blank deletion redo")
+            begin_input((300, 300))
+            type_text("Quit retained", 1)
+            close(root)
+            wait(lambda: app.poll() is not None, "composition drains on quit")
+            assert app.returncode == 0 and layers()[-1]["text"] == "Quit retained"
+            assert (artifact / "capture.png").read_bytes() == original
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["blank-new-no-layer", "preview-no-draft", "multiline-exact", "one-create-undo",
+                           "redo-exact", "existing-hit-same-id", "existing-one-undo", "minimum-input",
+                           "blank-existing-delete", "delete-undo-redo", "quit-latest-buffer", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native Text input: transient typing, multiline, existing hit, undo, minimum and quit")
+            return
+
         if args.text_defaults_only:
             resize_editor(1000, 1001)
             save_layers(lambda values: len(values) == 1, "baseline draft before Text defaults")
@@ -939,13 +1021,16 @@ def main():
             shot(editor, "text-defaults-staged")
             assert draft.read_bytes() == before, "defaults must not write a draft"
             fixture_click((208, 169))  # Document (200,80), at actual-size scale.
+            type_text("Native")
+            run("xdotool", "key", "Escape", "sleep", ".3")
             text = save_layers(lambda values: len(values) == 2, "styled Text placed")[-1]
             assert text["kind"] == "text" and text["fontFamily"] == "mono"
             assert text["fontSize"] == 37.5 and text["color"] == "#2367ab"
-            assert (text["x"], text["y"], text["width"], text["align"]) == (50, 80, 300, "center")
+            assert text["text"] == "Native" and text["align"] == "center" and text["y"] == 80
+            assert math.isclose(text["x"] + text["width"] / 2, 200, abs_tol=1e-6)
             assert text["background"] == "#111318" and text["autoWidth"]
             shot(editor, "text-defaults-created")
-            fixture_pixel("text-defaults-created", 158, 180, (17, 19, 24))
+            document_pixel("text-defaults-created", 200, 76, (17, 19, 24))
             click(editor, 35, 62)
             save_layers(lambda values: len(values) == 1, "styled creation single undo")
             click(editor, 98, 62)
@@ -963,6 +1048,8 @@ def main():
             shot(editor, "text-defaults-reopened")
             assert layers()[-1] == text
             fixture_click((408, 269))  # Fresh editor defaults, not saved Mono box/37.5.
+            type_text("Fresh")
+            run("xdotool", "key", "Escape", "sleep", ".3")
             reset = save_layers(lambda values: len(values) == 3, "fresh editor Text defaults")[-1]
             assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("sans", 24, "#ff3b5c")
             assert reset["align"] == "left" and reset["background"] is None
@@ -973,7 +1060,7 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["defaults-no-draft-write", "chosen-preset-size-color", "centered-eight-em-placement",
+                "checks": ["defaults-no-draft-write", "chosen-preset-size-color", "centered-typed-placement",
                            "plate-pixels", "single-undo-redo", "minimum-controls", "draft-style-reopen",
                            "new-editor-default-reset", "original-unchanged"],
             }, indent=2) + "\n")
@@ -984,13 +1071,15 @@ def main():
             resize_editor(1000, 1501)
             click(editor, 736, 62)  # Draw.
             inspector_click(34, 128)  # Text is the first tool.
-            fixture_click((200, 250))  # Place one empty, selected auto-width text layer.
+            fixture_click((200, 250))
+            type_text("Text")
+            run("xdotool", "key", "Escape", "sleep", ".3")
             save_layers(lambda values: len(values) == 2 and values[-1]["kind"] == "text",
-                        "empty text placed once")
+                        "text composed once")
             created = layers()[-1]
-            assert created["text"] == "" and created["fontFamily"] == "sans"
+            assert created["text"] == "Text" and created["fontFamily"] == "sans"
             assert created["align"] == "left" and created.get("autoWidth") is True
-            shot(editor, f"text-empty-{args.appearance}")
+            shot(editor, f"text-created-{args.appearance}")
             inspector_click(90, 357)
             shot(editor, f"text-style-menu-{args.appearance}")
             run("xdotool", "key", "Escape")
@@ -1074,7 +1163,7 @@ def main():
             click(editor, 35, 62)
             save_layers(lambda values: not values[-1].get("dropShadow", False), "undo glyph shadow")
             click(editor, 35, 62)
-            save_layers(lambda values: values[-1]["text"] == "" and values[-1]["fontFamily"] == "sans",
+            save_layers(lambda values: values[-1]["text"] == "Text" and values[-1]["fontFamily"] == "sans",
                         "text edit undo")
             click(editor, 98, 62)
             save_layers(lambda values: values[-1]["text"] == "Readable native text",
