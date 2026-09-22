@@ -731,7 +731,9 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "output-size-minimum")
             click(editor, 35, 106)  # Draw wraps at minimum width; no Output or scrolling.
-            run("xclip", "-selection", "clipboard", "/dev/null")
+            # xclip forks a selection owner; do not capture its inherited stdout pipe.
+            subprocess.run(["xclip", "-selection", "clipboard", "/dev/null"], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=10)
             export_click("copy")
             copied.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
             assert run("identify", "-format", "%wx%h", str(copied)) == b"640x360"
@@ -2307,6 +2309,8 @@ def main():
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         inspector_move(180, 400, "click", "--repeat", "20", "5")
         shot(editor, "export-history-warning-minimum")
+        inspector_move(100, window_size()[1] - 27, "sleep", "1")
+        shot(editor, "export-history-warning-detail-minimum")
         resize_editor(1000, 901)
         history.unlink()
         (output / "previous-history").rename(history)
