@@ -4330,7 +4330,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
         let accepted = snapshot(id: "shot",
             layers: [textLayer(id: "fresh", text: "accepted before disk failure")],
-            unsavedChanges: true)
+            unsaved: true)
         worker.terminationResult = .failure(EditorTerminationFailure(
             cause: AppBridgeError.backend("disk unavailable"),
             acceptedPresentation: EditorPresentation(snapshot: accepted,
