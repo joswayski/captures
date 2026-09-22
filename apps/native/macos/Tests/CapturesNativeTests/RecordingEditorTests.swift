@@ -268,17 +268,28 @@ final class RecordingEditorTests: XCTestCase {
         worker.deferPlayback = true
         let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
                                                    worker: worker, confirmDiscard: { true })
+        defer { controller.window.orderOut(nil) }
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
+        XCTAssertFalse(controller.window.isReleasedWhenClosed,
+                       "ARC retains the controller's window across close and reopen")
         try button("Play", in: controller.root).performClick(nil)
-        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        controller.window.performClose(nil)
         XCTAssertTrue(try XCTUnwrap(worker.observedPlaybackCancel).isCancelled)
         XCTAssertEqual(worker.closeCount, 0)
         worker.completePlayback(.success(.cancelled))
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
         XCTAssertEqual(worker.closeCount, 1,
                        "session close is queued only after playback Drop finishes")
         XCTAssertFalse(controller.window.isVisible,
                        "the completed close is not reentrant with playback teardown")
+
+        controller.present(artifact: recordingArtifact(id: "reopened-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        XCTAssertTrue(controller.window.isVisible)
+        XCTAssertEqual(worker.openCount, 2,
+                       "the retained controller and window reopen after actual close")
     }
 
     func testSilentPlaybackRenderedStates() throws {
