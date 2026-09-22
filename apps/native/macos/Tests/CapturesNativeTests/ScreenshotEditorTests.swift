@@ -4306,6 +4306,51 @@ final class ScreenshotEditorTests: XCTestCase {
                        "blank new composition never enters committed state")
     }
 
+    func testInlineTextTerminationAcceptsFinishedInputWhenDraftSaveFailsThenRetriesPersistence() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        var inputID = ""
+        worker.response = { request in
+            guard request["operation"] as? String == "begin_text_input" else { return nil }
+            inputID = request["input_id"] as! String
+            return self.snapshot(id: "shot", layers: [self.textLayer(id: "fresh", text: "")],
+                activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true])
+        }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+        let editor = try textView("Inline screenshot text", in: controller.root)
+        editor.string = "accepted before disk failure"
+        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+
+        let accepted = snapshot(id: "shot",
+            layers: [textLayer(id: "fresh", text: "accepted before disk failure")],
+            unsavedChanges: true)
+        worker.terminationResult = .failure(EditorTerminationFailure(
+            cause: AppBridgeError.backend("disk unavailable"),
+            acceptedPresentation: EditorPresentation(snapshot: accepted,
+                image: CGImage.fixture(width: Int(accepted.width), height: Int(accepted.height)))))
+        XCTAssertFalse(controller.prepareForTermination())
+        XCTAssertEqual(worker.terminationTextInputs.last!,
+                       EditorTerminationTextInput(inputID: inputID,
+                           text: "accepted before disk failure", commit: true))
+        XCTAssertTrue(editor.isHiddenOrHasHiddenAncestor,
+                      "the accepted Finish consumes the shared token despite later persistence failure")
+        XCTAssertNil(controller.state.snapshot?.activeTextInput)
+        XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.text,
+                       "accepted before disk failure")
+
+        worker.terminationResult = .success(())
+        XCTAssertTrue(controller.prepareForTermination())
+        XCTAssertNil(worker.terminationTextInputs.last!,
+                     "retry saves the accepted state without reusing the consumed input token")
+    }
+
     func testInlineTextRenderedNormalMinimumAndFailureStates() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
@@ -5123,6 +5168,59 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(restored).snapshot.layers.count, originalLayerCount)
         XCTAssertNil(restored?.snapshot.activeTextInput)
         XCTAssertFalse(restored?.snapshot.unsavedChanges ?? true)
+    }
+
+    func testRealBridgeTerminationRetainsAcceptedFinishAcrossDraftPersistenceFailure() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker(); defer { worker.close(); EditorWorker.flush() }
+        let opened = expectation(description: "open persistence failure fixture")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                    artifactID: fixture.id) { result in
+            if case .failure(let error) = result { XCTFail("Open failed: \(error)") }
+            opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        let inputID = "appkit-persistence-retry"
+        let began = expectation(description: "begin persistence retry input")
+        worker.request(["operation": "begin_text_input", "input_id": inputID,
+            "target": ["kind": "new", "create": ["point": ["x": 3, "y": 1],
+                "text": "", "fontSize": 32, "fontFamily": "sans", "color": "#111111"]]]) {
+            result in
+            if case .failure(let error) = result { XCTFail("Begin failed: \(error)") }
+            began.fulfill()
+        }
+        wait(for: [began], timeout: 5)
+
+        try Data("not a directory".utf8).write(to: fixture.drafts)
+        let first = worker.prepareForTermination(textInput: EditorTerminationTextInput(
+            inputID: inputID, text: "committed despite disk failure", commit: true))
+        guard case .failure(let error) = first,
+              let failure = error as? EditorTerminationFailure else {
+            return XCTFail("expected structured draft persistence failure")
+        }
+        let accepted = try XCTUnwrap(failure.acceptedPresentation)
+        XCTAssertNil(accepted.snapshot.activeTextInput,
+                     "Finish succeeded before draft persistence failed")
+        XCTAssertEqual(accepted.snapshot.layers.first?.textStyle?.text,
+                       "committed despite disk failure")
+        XCTAssertTrue(accepted.snapshot.unsavedChanges)
+
+        try FileManager.default.removeItem(at: fixture.drafts)
+        XCTAssertNoThrow(try worker.prepareForTermination(textInput: nil).get(),
+                         "retry persists the accepted commit without replaying its consumed token")
+        let reopenedWorker = EditorWorker(); defer { reopenedWorker.close(); EditorWorker.flush() }
+        let reopened = expectation(description: "reopen recovered draft")
+        var restored: EditorPresentation?
+        reopenedWorker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                            artifactID: fixture.id) { result in
+            restored = try? result.get(); reopened.fulfill()
+        }
+        wait(for: [reopened], timeout: 5)
+        XCTAssertEqual(restored?.snapshot.layers.first?.textStyle?.text,
+                       "committed despite disk failure")
+        XCTAssertTrue(restored?.snapshot.hasDraft ?? false)
     }
 
     func testRealBridgeWandEditsAsymmetricPixelAndUndoRedo() throws {

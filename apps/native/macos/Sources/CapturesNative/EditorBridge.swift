@@ -578,6 +578,13 @@ struct EditorTerminationTextInput: Equatable {
     let commit: Bool
 }
 
+struct EditorTerminationFailure: LocalizedError {
+    let cause: Error
+    let acceptedPresentation: EditorPresentation?
+
+    var errorDescription: String? { cause.localizedDescription }
+}
+
 /// Independently retained immutable Rust pixels. The CGImage provider retains
 /// this frame, so draws may safely finish after a later edit or session close.
 final class NativeEditorFrame {
@@ -909,8 +916,8 @@ final class EditorWorker: EditorWorking {
     func prepareForTermination(textInput: EditorTerminationTextInput? = nil) -> Result<Void, Error> {
         let storage = storage
         return Self.queue.sync {
-            Result {
-                guard let session = storage.session else { return }
+            guard let session = storage.session else { return .success(()) }
+            do {
                 if let textInput {
                     if textInput.commit {
                         storage.snapshot = try session.request([
@@ -935,6 +942,11 @@ final class EditorWorker: EditorWorking {
                     ])
                 }
                 storage.snapshot = nil; storage.session = nil
+                return .success(())
+            } catch {
+                let acceptedPresentation = storage.snapshot.flatMap { try? session.presentation($0) }
+                return .failure(EditorTerminationFailure(cause: error,
+                    acceptedPresentation: acceptedPresentation))
             }
         }
     }

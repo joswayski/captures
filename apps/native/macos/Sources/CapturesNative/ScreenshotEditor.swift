@@ -1106,7 +1106,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
             window.orderOut(nil); return true
         case .failure(let error):
-            _ = state.fail(generation: state.generation)
+            if let failure = error as? EditorTerminationFailure,
+               let presentation = failure.acceptedPresentation,
+               state.complete(presentation.snapshot, generation: state.generation) {
+                publish(presentation, resetCrop: false)
+                if presentation.snapshot.activeTextInput == nil {
+                    if terminationInput?.commit == true { invalidateOutput() }
+                    inlineTextInput = nil; hideInlineTextEditor()
+                }
+            } else {
+                _ = state.fail(generation: state.generation)
+            }
             showError("Couldn’t save screenshot draft before quitting: \(error.localizedDescription)")
             if inlineTextInput != nil { showInlineTextEditor() }
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
