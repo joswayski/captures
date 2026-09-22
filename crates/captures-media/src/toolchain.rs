@@ -1725,8 +1725,9 @@ mod tests {
     use super::{
         CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt,
         aac_centered_stereo_layout_filter, aac_output_layout_filter, audio_edit_is_identity,
-        audio_filter, escape_concat_path, export_attempts, fit_even, gif_export_filter, gif_filter,
-        recording_segment_audio_graph, seconds, validate_edit_spec, visual_edit_is_identity,
+        audio_filter, commit_temporary, escape_concat_path, export_attempts, fit_even,
+        gif_export_filter, gif_filter, recording_segment_audio_graph, seconds, validate_edit_spec,
+        visual_edit_is_identity,
     };
     use crate::{
         AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaMetadata,
@@ -1872,6 +1873,24 @@ mod tests {
             "a'\\''b.mp4"
         );
         assert!(gif_filter(15, 800, 256).contains("palettegen=max_colors=256"));
+    }
+
+    #[test]
+    fn publication_refuses_a_destination_created_after_encoding_and_cleans_up() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let temporary = directory.path().join(".captures-encoded.mp4");
+        let destination = directory.path().join("saved.mp4");
+        std::fs::write(&temporary, b"new export").expect("temporary export");
+        // Simulate another writer publishing after the caller's initial
+        // destination validation but before the encoded file is committed.
+        std::fs::write(&destination, b"other writer").expect("racing destination");
+
+        assert!(commit_temporary(&temporary, &destination).is_err());
+        assert_eq!(
+            std::fs::read(&destination).expect("destination remains"),
+            b"other writer"
+        );
+        assert!(!temporary.exists(), "failed encoded temporary is removed");
     }
 
     #[test]
