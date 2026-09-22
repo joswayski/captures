@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--appearance", choices=("light", "dark"), default="dark")
     parser.add_argument("--audio", action="store_true", help="Exercise separate system/microphone export controls")
+    parser.add_argument("--presets", action="store_true", help="Exercise output presets on a portrait source")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -136,6 +137,8 @@ def main():
         artifact = history / artifact_id
         artifact.mkdir(parents=True)
         source = output / "source.mp4"
+        source_width, source_height = (640, 1440) if args.presets else (320, 180)
+        source_size = f"{source_width}x{source_height}"
         audio_inputs = []
         audio_filters = ""
         audio_maps = []
@@ -150,9 +153,9 @@ def main():
             audio_filters = (";[3:a]asplit=2[system][s];[4:a]asplit=2[mic][m];"
                              "[s][m]amix=inputs=2:normalize=0[mixed]")
             audio_maps = ["-map", "[mixed]", "-map", "[system]", "-map", "[mic]", "-c:a", "aac", "-b:a", "256k"]
-        run("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=red:s=320x180:r=10:d=1",
-            "-f", "lavfi", "-i", "color=green:s=320x180:r=10:d=1",
-            "-f", "lavfi", "-i", "color=blue:s=320x180:r=10:d=1",
+        run("ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"color=red:s={source_size}:r=10:d=1",
+            "-f", "lavfi", "-i", f"color=green:s={source_size}:r=10:d=1",
+            "-f", "lavfi", "-i", f"color=blue:s={source_size}:r=10:d=1",
             *audio_inputs, "-filter_complex",
             "[0:v][1:v][2:v]concat=n=3:v=1:a=0,drawbox=x=15:y=10:w=45:h=25:color=white:t=fill[v]" + audio_filters,
             "-map", "[v]", *audio_maps, "-c:v", "mpeg4", "-q:v", "2", str(source))
@@ -160,7 +163,7 @@ def main():
         metadata = artifact / "metadata.json"
         metadata.write_text(json.dumps({
             "id": artifact_id, "kind": "video", "preview_url": "", "full_url": "",
-            "width": 320, "height": 180, "size_bytes": source.stat().st_size,
+            "width": source_width, "height": source_height, "size_bytes": source.stat().st_size,
             "created_at": datetime.now(timezone.utc).isoformat(), "mode": None,
             "saved_path": str(source), "mime_type": "video/mp4", "duration_ms": 3000,
             "target": {"type": "display", "display_id": "fixture"},
@@ -221,7 +224,7 @@ def main():
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "export published in History")
         info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(destination)))
         assert abs(float(info["format"]["duration"]) - 1.2) < .15, info
-        assert (info["streams"][0]["width"], info["streams"][0]["height"]) == (320, 180)
+        assert (info["streams"][0]["width"], info["streams"][0]["height"]) == (source_width, source_height)
         dominant(destination, 1, .2)
         dominant(destination, 2, 1.0)
         shot(editor, "saved")
@@ -246,7 +249,7 @@ def main():
         click(editor, 22, 683)  # Crop recording.
         field(editor, 51, 727, 10)
         field(editor, 114, 727, 6)
-        field(editor, 208, 727, 320)  # Valid width alone, invalid with X=10.
+        field(editor, 208, 727, source_width)  # Valid width alone, invalid with X=10.
         field(editor, 309, 727, 90)
         click(editor, 793, 1082)
         shot(editor, "invalid-crop")
@@ -417,6 +420,35 @@ def main():
             audio_checks = ["audio-save-gate", "independent-track-gains", "minimum-audio-controls",
                 "gif-no-audio", "gif-retains-mp4-audio", "microphone-mute", "system-mute",
                 "mono-output", "both-muted-no-stream", "audio-history-flags"]
+        preset_checks = []
+        if args.presets:
+            if not args.audio:
+                click(editor, 22, 683)  # Clear previous crop/custom size.
+                click(editor, 22, 727)
+                field(editor, 227, 598, 2300)
+                click(editor, 33, 1082)
+            for name, choice_y, expected in (("720", 852, (320, 720)), ("1080", 808, (480, 1080)), ("original", 764, (640, 1440))):
+                click(editor, 300, 727)
+                shot(editor, f"preset-{name}-menu")
+                click(editor, 280, choice_y)
+                path = exports / f"preset-{name}.mp4"
+                field(editor, 360, 1038, path)
+                click(editor, 899, 1082)
+                assert not path.exists(), "unapplied preset must gate save"
+                click(editor, 793, 1082)
+                shot(editor, f"preset-{name}-preview")
+                count = len(list(history.glob("*/metadata.json")))
+                click(editor, 899, 1082)
+                wait(lambda: len(list(history.glob("*/metadata.json"))) == count + 1, name)
+                info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)))
+                stream = next(s for s in info["streams"] if s["codec_type"] == "video")
+                assert (stream["width"], stream["height"]) == expected, (name, stream)
+                dominant(path, 1, .2)
+                dominant(path, 2, 1.0)
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "15", "--delay", "60", "5", "sleep", ".5")
+            shot(editor, "minimum-resolution-controls")
+            preset_checks = ["720p-preset", "1080p-preset", "original-preset", "preset-save-gate", "preset-export-pixels", "minimum-resolution-controls"]
         assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
         close(editor)
         wait(lambda: not windows("Recording editor"), "saved editor closes")
@@ -431,9 +463,9 @@ def main():
                 "worker-completion-with-minimized-root", "invalid-crop-retains-frame", "unapplied-save-gate",
                 "cropped-preview", "minimum-crop-controls", "crop-preserves-trim", "even-output-dimensions",
                 "mp4-crop-origin-and-resize", "gif-crop-origin-and-resize", "format-save-gate",
-                "mp4-encoder-dimensions", "gif-explicit-dimensions", "format-specific-pixels"] + audio_checks,
+                "mp4-encoder-dimensions", "gif-explicit-dimensions", "format-specific-pixels"] + audio_checks + preset_checks,
             "source_sha256": hashlib.sha256(original).hexdigest()}, indent=2) + "\n")
-        print(f"PASS recording editor: seeks, trim/crop/resize, MP4/GIF pixels, {len(audio_checks)} audio checks, History, immutable source")
+        print(f"PASS recording editor: seeks, trim/crop/resize, MP4/GIF pixels, {len(audio_checks)} audio / {len(preset_checks)} preset checks, History, immutable source")
     finally:
         for child in reversed(children):
             if child.poll() is None:

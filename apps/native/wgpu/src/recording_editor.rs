@@ -17,6 +17,7 @@ use captures_media::{
     AudioEdit, CancelToken, CropRect, EditSpec, ExportFormat, ExportProgress, ExportSpec,
     MediaMetadata, MediaToolchain, QualityPreset,
 };
+use captures_recording::MaxResolution;
 use eframe::egui;
 use image::RgbaImage;
 
@@ -72,6 +73,7 @@ struct View {
     end_ms: u64,
     crop: Option<CropRect>,
     output_size: Option<(u32, u32)>,
+    max_resolution: MaxResolution,
     audio: AudioEdit,
     position_ms: u64,
     destination: String,
@@ -97,13 +99,26 @@ impl View {
         }
     }
 
+    fn output_dimensions(&self, source_size: (u32, u32)) -> Option<(u32, u32)> {
+        self.output_size.or_else(|| match self.max_resolution {
+            MaxResolution::Original => None,
+            preset => {
+                let (width, height) = self
+                    .crop
+                    .map_or(source_size, |crop| (crop.width, crop.height));
+                Some(preset.constrain(width, height))
+            }
+        })
+    }
+
     fn staged_edit(&self, p: &Presented) -> EditSpec {
+        let output_size = self.output_dimensions((p.source.width, p.source.height));
         EditSpec {
             trim_start_ms: self.start_ms,
             trim_end_ms: (self.end_ms != p.source.duration_ms.unwrap_or(0)).then_some(self.end_ms),
             crop: self.crop,
-            output_width: self.output_size.map(|size| size.0),
-            output_height: self.output_size.map(|size| size.1),
+            output_width: output_size.map(|size| size.0),
+            output_height: output_size.map(|size| size.1),
             audio: self.audio.clone(),
         }
     }
@@ -159,7 +174,11 @@ impl View {
                             .trim_end_ms
                             .unwrap_or(p.source.duration_ms.unwrap_or(0));
                         self.crop = p.edit.crop;
-                        self.output_size = p.edit.output_width.zip(p.edit.output_height);
+                        // A preset's resolved pixels are not a custom size:
+                        // retain the preset so later crop changes recompute it.
+                        if self.presented.is_none() || self.output_size.is_some() {
+                            self.output_size = p.edit.output_width.zip(p.edit.output_height);
+                        }
                         self.audio = p.edit.audio.clone();
                         self.position_ms = p.position_ms;
                         self.gif = p.export.format == ExportFormat::Gif;
@@ -655,12 +674,36 @@ fn show(
                         });
                     }
                     let mut resize = view.output_size.is_some();
-                    if ui.checkbox(&mut resize, "Custom output size").changed() {
-                        view.output_size = resize.then_some(
-                            view.crop
-                                .map_or(source_size, |crop| (crop.width, crop.height)),
-                        );
-                    }
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut resize, "Custom output size").changed() {
+                            view.output_size = resize.then(|| {
+                                view.output_dimensions(source_size).unwrap_or_else(|| {
+                                    view.crop
+                                        .map_or(source_size, |crop| (crop.width, crop.height))
+                                })
+                            });
+                        }
+                        ui.add_enabled_ui(!resize, |ui| {
+                            ui.label("Preset");
+                            egui::ComboBox::from_id_salt("recording-resolution")
+                                .selected_text(match view.max_resolution {
+                                    MaxResolution::Original => "Original",
+                                    MaxResolution::P1080 => "1080p maximum",
+                                    MaxResolution::P720 => "720p maximum",
+                                })
+                                .show_ui(ui, |ui| {
+                                    for (preset, label) in [
+                                        (MaxResolution::Original, "Original"),
+                                        (MaxResolution::P1080, "1080p maximum"),
+                                        (MaxResolution::P720, "720p maximum"),
+                                    ] {
+                                        ui.selectable_value(&mut view.max_resolution, preset, label);
+                                    }
+                                })
+                                .response
+                                .on_hover_text("Scale down by height, keeping the crop aspect ratio. Never upscale.");
+                        });
+                    });
                     if let Some((width, height)) = &mut view.output_size {
                         ui.horizontal_wrapped(|ui| {
                             ui.label("Width");
@@ -855,6 +898,76 @@ mod tests {
         assert_eq!((edit.output_width, edit.output_height), (None, None));
         view.request_close();
         assert!(view.confirm_close && !view.closed);
+    }
+
+    #[test]
+    fn resolution_presets_use_crop_and_remain_presets_after_acceptance() {
+        let mut view = opened();
+        let p = view.presented.as_mut().unwrap();
+        p.source.width = 4001;
+        p.source.height = 2003;
+        let frame = p.frame.clone();
+        view.crop = Some(CropRect {
+            x: 20,
+            y: 30,
+            width: 1001,
+            height: 1501,
+        });
+        view.max_resolution = MaxResolution::P720;
+        let edit = view.staged_edit(view.presented.as_ref().unwrap());
+        assert_eq!(
+            (edit.output_width, edit.output_height),
+            (Some(480), Some(720))
+        );
+        assert!(view.unapplied());
+        let ctx = egui::Context::default();
+        view.receive(&ctx, Event::Presented(Err("preview failed".into())));
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+        assert_eq!(view.max_resolution, MaxResolution::P720);
+        view.receive(
+            &ctx,
+            Event::Presented(Ok(Presented {
+                source: view.presented.as_ref().unwrap().source.clone(),
+                edit,
+                export: view.export_spec(),
+                position_ms: 700,
+                frame: Arc::new(RgbaImage::new(480, 720)),
+            })),
+        );
+        assert_eq!(view.max_resolution, MaxResolution::P720);
+        assert!(
+            view.output_size.is_none(),
+            "acceptance must not turn a preset into a custom size"
+        );
+        assert!(!view.unapplied() && view.dirty());
+        view.crop.as_mut().unwrap().height = 501;
+        assert_eq!(view.output_dimensions((4001, 2003)), Some((1000, 500)));
+        assert!(
+            view.unapplied(),
+            "crop changes recalculate the preset without upscaling"
+        );
+        view.output_size = Some((81, 61));
+        assert_eq!(view.output_dimensions((4001, 2003)), Some((81, 61)));
+        view.output_size = None;
+        view.max_resolution = MaxResolution::Original;
+        assert_eq!(view.output_dimensions((4001, 2003)), None);
+    }
+
+    #[test]
+    fn resolution_caps_preserve_orientation_round_even_and_do_not_upscale() {
+        for (preset, source, expected) in [
+            (MaxResolution::P1080, (4001, 2003), (2156, 1080)),
+            (MaxResolution::P720, (4001, 2003), (1438, 720)),
+            (MaxResolution::P1080, (1001, 2003), (540, 1080)),
+            (MaxResolution::P720, (1283, 721), (1280, 720)),
+            (MaxResolution::P720, (1283, 719), (1282, 718)),
+        ] {
+            let view = View {
+                max_resolution: preset,
+                ..View::default()
+            };
+            assert_eq!(view.output_dimensions(source), Some(expected));
+        }
     }
 
     #[test]
