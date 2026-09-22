@@ -11,7 +11,7 @@ use std::{
 
 use captures_app::recording_editor::{
     RecordingEditorOpenRequest, RecordingEditorRequest, RecordingEditorSession,
-    RecordingSaveRequest, SavedRecording,
+    RecordingSaveRequest, RecordingTimelineThumbnails, SavedRecording,
 };
 use captures_app::recording_timeline::{TimelineTrimDrag, TimelineTrimEdge, timeline_ratio};
 use captures_media::{
@@ -49,6 +49,7 @@ enum Job {
     Apply(RecordingEditorRequest),
     Save(RecordingSaveRequest, CancelToken),
     Estimate(CancelToken),
+    Thumbnails(CancelToken),
     Shutdown,
 }
 
@@ -57,6 +58,7 @@ enum Event {
     Progress(ExportProgress),
     Saved(Result<SavedRecording, String>),
     Estimated(Result<ExportEstimate, String>),
+    Thumbnails(Result<RecordingTimelineThumbnails, String>),
     Destination(Option<PathBuf>),
 }
 
@@ -70,6 +72,9 @@ struct TrimGesture {
 struct View {
     presented: Option<Presented>,
     texture: Option<egui::TextureHandle>,
+    thumbnails: Option<egui::TextureHandle>,
+    loading_thumbnails: bool,
+    thumbnail_error: Option<String>,
     busy: bool,
     cancel: Option<CancelToken>,
     estimating: bool,
@@ -180,16 +185,36 @@ impl View {
         self.send(tx, Job::Estimate(cancel));
     }
 
+    fn request_thumbnails(&mut self, tx: &Sender<Job>) {
+        if self.busy
+            || self.picker
+            || self.confirm_close
+            || self.closed
+            || self.presented.is_none()
+            || self.thumbnails.is_some()
+        {
+            return;
+        }
+        let cancel = CancelToken::default();
+        self.cancel = Some(cancel.clone());
+        self.send(tx, Job::Thumbnails(cancel));
+    }
+
     fn send(&mut self, tx: &Sender<Job>, job: Job) {
         if self.busy || self.picker {
             return;
         }
         self.trim_gesture = None;
         let estimating = matches!(job, Job::Estimate(_));
+        let loading_thumbnails = matches!(job, Job::Thumbnails(_));
         match tx.send(job) {
             Ok(()) => {
                 self.busy = true;
                 self.estimating = estimating;
+                self.loading_thumbnails = loading_thumbnails;
+                if loading_thumbnails {
+                    self.thumbnail_error = None;
+                }
                 if estimating {
                     self.estimate = None;
                 }
@@ -296,6 +321,27 @@ impl View {
                         self.estimate = None;
                         self.error = Some(error);
                     }
+                }
+            }
+            Event::Thumbnails(result) => {
+                self.busy = false;
+                self.loading_thumbnails = false;
+                self.cancel = None;
+                self.error = None;
+                match result {
+                    Ok(thumbnails) => {
+                        let pixels = thumbnails.pixels();
+                        self.thumbnails = Some(ctx.load_texture(
+                            "recording-source-thumbnails",
+                            egui::ColorImage::from_rgba_unmultiplied(
+                                [pixels.width() as usize, pixels.height() as usize],
+                                pixels.as_raw(),
+                            ),
+                            egui::TextureOptions::LINEAR,
+                        ));
+                        self.thumbnail_error = None;
+                    }
+                    Err(error) => self.thumbnail_error = Some(error),
                 }
             }
             Event::Destination(path) => {
@@ -406,6 +452,12 @@ impl Editor {
                             .ok_or_else(|| "Recording editor is unavailable.".to_owned())
                             .and_then(|s| s.estimate_export(&cancel)),
                     ),
+                    Job::Thumbnails(cancel) => Event::Thumbnails(
+                        session
+                            .as_ref()
+                            .ok_or_else(|| "Recording editor is unavailable.".to_owned())
+                            .and_then(|s| s.timeline_thumbnails(&cancel)),
+                    ),
                 };
                 if out.send(event).is_err() {
                     break;
@@ -448,7 +500,12 @@ impl Editor {
 
     pub fn receive(&self, ctx: &egui::Context) {
         while let Ok(event) = self.rx.try_recv() {
-            self.view.lock().unwrap().receive(ctx, event);
+            let mut view = self.view.lock().unwrap();
+            let opening = view.presented.is_none();
+            view.receive(ctx, event);
+            if opening && view.presented.is_some() {
+                view.request_thumbnails(&self.tx);
+            }
             wake(ctx, self.viewport);
         }
     }
@@ -671,19 +728,60 @@ fn show_trim_timeline(
     let [start, end] = handles(view.start_ms, view.end_ms);
     ui.painter()
         .rect_filled(track, 0., tokens.color("surface-sunken"));
+    if let Some(texture) = &view.thumbnails {
+        // Center-crop the strip vertically to the compact track, preserving
+        // thumbnail aspect and the full horizontal source-time mapping.
+        let size = texture.size_vec2();
+        let uv_height = (track.height() * size.x / (track.width() * size.y)).min(1.);
+        ui.painter().image(
+            texture.id(),
+            track,
+            egui::Rect::from_min_max(
+                egui::pos2(0., (1. - uv_height) / 2.),
+                egui::pos2(1., (1. + uv_height) / 2.),
+            ),
+            egui::Color32::WHITE,
+        );
+        for excluded in [
+            egui::Rect::from_min_max(track.min, egui::pos2(start.right(), track.bottom())),
+            egui::Rect::from_min_max(egui::pos2(end.left(), track.top()), track.max),
+        ] {
+            ui.painter().rect_filled(
+                excluded,
+                0.,
+                tokens.color("surface-sunken").gamma_multiply(0.7),
+            );
+        }
+    }
     if start.right() <= end.left() {
         let selected = egui::Rect::from_min_max(
             egui::pos2(start.right(), track.top()),
             egui::pos2(end.left(), track.bottom()),
         );
-        ui.painter()
-            .rect_filled(selected, 0., tokens.color("surface-selected"));
+        if view.thumbnails.is_none() {
+            ui.painter()
+                .rect_filled(selected, 0., tokens.color("surface-selected"));
+        }
         ui.painter().rect_stroke(
             selected,
             0.,
             egui::Stroke::new(1., tokens.color("theme-accent")),
             egui::StrokeKind::Inside,
         );
+    }
+    if view.loading_thumbnails {
+        // This status remains readable while the enclosing editing controls
+        // are disabled for the serialized thumbnail operation.
+        ui.ctx()
+            .layer_painter(ui.layer_id())
+            .with_clip_rect(ui.clip_rect())
+            .text(
+                track.center(),
+                egui::Align2::CENTER_CENTER,
+                "Loading source thumbnails…",
+                egui::FontId::proportional(tokens.number("text-sm")),
+                tokens.color("text-muted"),
+            );
     }
     for (index, handle) in [start, end].into_iter().enumerate() {
         let response = &responses[index];
@@ -783,10 +881,21 @@ fn show(
         }
         if let Some(cancel) = &view.cancel
             && ui
-                .add_enabled(!cancel.is_cancelled(), egui::Button::new(if view.estimating { "Cancel estimate" } else { "Cancel export" }))
+                .add_enabled(!cancel.is_cancelled(), egui::Button::new(if view.loading_thumbnails { "Cancel thumbnails" } else if view.estimating { "Cancel estimate" } else { "Cancel export" }))
                 .clicked()
         {
             cancel.cancel();
+        }
+        if let Some(error) = view.thumbnail_error.clone() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Source thumbnails unavailable.");
+                if ui.add_enabled(!view.busy && !view.picker && !view.confirm_close,
+                                  egui::Button::new("Retry thumbnails"))
+                    .on_hover_text(error).clicked()
+                {
+                    view.request_thumbnails(tx);
+                }
+            });
         }
         ui.add_enabled_ui(!view.busy && !view.picker && !view.confirm_close, |ui| {
             ui.horizontal(|ui| {
@@ -1506,6 +1615,123 @@ mod tests {
     }
 
     #[test]
+    fn thumbnail_cancel_failure_retry_keeps_edits_preview_and_estimate() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let frame = view.presented.as_ref().unwrap().frame.clone();
+        view.estimate = Some(ExportEstimate {
+            size_bytes: 987,
+            exact: true,
+        });
+        let (tx, jobs) = mpsc::channel();
+        view.request_thumbnails(&tx);
+        let Job::Thumbnails(cancel) = jobs.recv().unwrap() else {
+            panic!("thumbnails queued")
+        };
+        assert!(view.busy && view.loading_thumbnails && !view.dirty());
+        view.request_thumbnails(&tx);
+        view.request_estimate(&tx);
+        assert!(
+            jobs.try_recv().is_err(),
+            "generation is serialized with other media work"
+        );
+        view.request_close();
+        assert!(!view.closed && !view.confirm_close);
+        view.cancel.as_ref().unwrap().cancel();
+        assert!(cancel.is_cancelled());
+        view.receive(&ctx, Event::Thumbnails(Err("cancelled".into())));
+        assert!(!view.busy && !view.loading_thumbnails && view.cancel.is_none());
+        assert!(
+            view.error.is_none(),
+            "the busy-close warning no longer applies"
+        );
+        assert_eq!(view.thumbnail_error.as_deref(), Some("cancelled"));
+        assert!(!view.dirty() && !view.history_changed);
+        assert_eq!(view.estimate.unwrap().size_bytes, 987);
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+
+        view.start_ms = 300;
+        view.request_thumbnails(&tx);
+        let Job::Thumbnails(retry) = jobs.recv().unwrap() else {
+            panic!("retry queued")
+        };
+        assert!(!retry.is_cancelled() && view.thumbnail_error.is_none());
+        view.receive(&ctx, Event::Thumbnails(Err("source missing".into())));
+        assert!(view.dirty() && view.unapplied());
+        assert_eq!(
+            (view.start_ms, view.end_ms, view.position_ms),
+            (300, 3100, 700)
+        );
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+        assert_eq!(view.thumbnail_error.as_deref(), Some("source missing"));
+        view.send(
+            &tx,
+            Job::Apply(RecordingEditorRequest::Seek { position_ms: 1000 }),
+        );
+        assert!(
+            matches!(jobs.try_recv(), Ok(Job::Apply(_))),
+            "thumbnail failure does not disable the worker"
+        );
+    }
+
+    #[test]
+    fn thumbnails_queue_only_on_first_presentation_and_never_reuse_another_editors_texture() {
+        let ctx = egui::Context::default();
+        let (tx, jobs) = mpsc::channel();
+        let (events, rx) = mpsc::channel();
+        let editor = Editor {
+            viewport: egui::ViewportId::ROOT,
+            view: Arc::new(Mutex::new(View {
+                busy: true,
+                ..View::default()
+            })),
+            tx,
+            events,
+            rx,
+            worker: None,
+        };
+        editor
+            .events
+            .send(Event::Presented(Ok(opened().presented.take().unwrap())))
+            .unwrap();
+        editor.receive(&ctx);
+        assert!(matches!(jobs.try_recv(), Ok(Job::Thumbnails(_))));
+        assert!(editor.flush(&ctx).is_err(), "quit waits for generation");
+        editor
+            .events
+            .send(Event::Thumbnails(Err("cancelled".into())))
+            .unwrap();
+        editor.receive(&ctx);
+        assert!(editor.flush(&ctx).is_ok());
+        // Uploads are covered by the real X11 test. Retention across published
+        // edits/seek must not enqueue another decode or replace this texture.
+        let texture = ctx.load_texture(
+            "test-source-strip",
+            egui::ColorImage::filled([12, 2], egui::Color32::RED),
+            egui::TextureOptions::LINEAR,
+        );
+        let id = texture.id();
+        editor.view.lock().unwrap().thumbnails = Some(texture);
+        editor
+            .events
+            .send(Event::Presented(Ok(opened().presented.take().unwrap())))
+            .unwrap();
+        editor.receive(&ctx);
+        assert!(jobs.try_recv().is_err());
+        let mut view = editor.view.lock().unwrap();
+        assert_eq!(view.thumbnails.as_ref().unwrap().id(), id);
+        view.request_thumbnails(&editor.tx);
+        assert!(
+            jobs.try_recv().is_err(),
+            "successful strips are retained for this source"
+        );
+        assert!(
+            View::default().thumbnails.is_none(),
+            "new editor/source starts without stale pixels"
+        );
+    }
+
+    #[test]
     fn cancelled_estimate_preserves_frame_and_can_be_retried() {
         let mut view = opened();
         let frame = view.presented.as_ref().unwrap().frame.clone();
@@ -1541,6 +1767,12 @@ mod tests {
                 size_bytes: 123456789012,
                 exact: true,
             });
+            view.thumbnail_error = Some("source missing".into());
+            view.start_ms = 1550;
+            view.end_ms = 1551;
+            let accepted = &mut view.presented.as_mut().unwrap().edit;
+            accepted.trim_start_ms = 1550;
+            accepted.trim_end_ms = Some(1551);
             let (tx, _) = mpsc::channel();
             let (events, _) = mpsc::channel();
             for pass in 0..2 {
@@ -1564,6 +1796,7 @@ mod tests {
                     "Estimate size",
                     "Apply edits",
                     "Save new copy",
+                    "Retry thumbnails",
                 ] {
                     let rect = output
                         .shapes
@@ -1582,6 +1815,22 @@ mod tests {
                             && rect.bottom() <= 580.,
                         "{name}: {label} outside window: {rect:?}"
                     );
+                    if label == "Retry thumbnails" {
+                        let trim = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) if text.galley.job.text == "Trim" => {
+                                    Some(text.galley.rect.translate(text.pos.to_vec2()))
+                                }
+                                _ => None,
+                            })
+                            .unwrap();
+                        assert!(
+                            rect.top() > trim.bottom() + tokens.number("h-md"),
+                            "retry must never overlay either grip, even for a 1 ms middle selection"
+                        );
+                    }
                     for other in &rects {
                         assert!(
                             !rect.intersects(*other),

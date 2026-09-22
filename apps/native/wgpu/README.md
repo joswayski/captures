@@ -55,8 +55,10 @@ poster and metadata. **Edit recording** opens a decoded-frame editor with staged
 graphical/numeric trim, numeric crop/output size, audio settings and MP4/GIF
 save-new-copy. Trim grips share the shipping pointer geometry and support focused
 arrow/Page Up/Page Down keys. Dragging changes staged values, not decoded frames;
-Apply publishes the preview before seeking, estimating or saving. Playback and
-thumbnail timelines remain unimplemented. See the
+Apply publishes the preview before seeking, estimating or saving. The trim track
+retains full-source thumbnails across edits and seek. Generation has independent
+cancel/retry and does not change accepted preview or History state. Playback
+remains unimplemented. See the
 [recording-editor status](../../../docs/native-rewrite.md#recording-editor-first-wgpu-host-not-playback-parity)
 for accepted-frame, export and platform limitations.
 After finalization, a fixed-glass Recording ready notice offers Save file using

@@ -451,10 +451,18 @@ gesture without rolling back staged values. Handles accept focused arrow keys
 (1 ms under 60 seconds, otherwise 10 ms) and Page Up/Down (1 second). They never
 decode or publish media during drag: numeric values and the range update together,
 while the accepted frame remains unchanged until the existing Apply/Seek actions.
-Unapplied trim continues to gate seek, estimation and save. No thumbnails or
-playback are implied. Raw-input tests exercise multi-pass delivery, keyboard focus,
+Unapplied trim continues to gate seek, estimation and save. The wgpu track now
+displays the shared 12-frame full-source thumbnail strip, center-cropped vertically
+to the compact row. Excluded ranges are dimmed and grips retain the same hit regions.
+Generation runs once on the serialized worker after open, with independent cancel
+and retry; failure leaves editing available. Edits/seek retain the source strip and
+never regenerate it or change the accepted preview. Close/quit waits for generation.
+AppKit integration is a separate slice; playback remains unimplemented.
+Raw-input tests exercise multi-pass delivery, keyboard focus,
 thresholds, cancellation and busy gates; private-X11 tests cover staged values,
-exported duration/colors and immutable source. Physical input remains unverified.
+thumbnail loading/cancel/failure/retry and temporal pixels, exported duration/colors
+and immutable source. Windows presentation and physical macOS/Windows/X11/Wayland
+input/accessibility remain unverified; no parity gate closes.
 Crop uses source-pixel coordinates. Numeric crop dimensions start
 aspect-locked, follow the current crop ratio and fit the remaining source bounds;
 unlocking permits independent dimensions, and relocking uses the adjusted ratio.
