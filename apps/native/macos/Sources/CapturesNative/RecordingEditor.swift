@@ -267,7 +267,6 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         var value = presentation!.snapshot.export
         value["format"] = format.indexOfSelectedItem == 1 ? "gif" : "mp4"
         value["quality"] = quality.titleOfSelectedItem?.lowercased() ?? "preserve"
-        value["max_size_bytes"] = NSNull()
         return value
     }
 

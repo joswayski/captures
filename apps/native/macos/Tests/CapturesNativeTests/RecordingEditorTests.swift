@@ -29,7 +29,10 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual((edit["trim_start_ms"] as? NSNumber)?.uint64Value, 250)
         XCTAssertEqual((edit["trim_end_ms"] as? NSNumber)?.uint64Value, 1250)
         XCTAssertNotNil(edit["audio"], "the host preserves shared edit fields it does not own")
-        XCTAssertEqual((request["export"] as? [String: Any])?["format"] as? String, "gif")
+        let export = try XCTUnwrap(request["export"] as? [String: Any])
+        XCTAssertEqual(export["format"] as? String, "gif")
+        XCTAssertEqual((export["max_size_bytes"] as? NSNumber)?.uint64Value, 4_000_000,
+                       "the host preserves accepted export fields it does not own")
         XCTAssertEqual(start.stringValue, "250"); XCTAssertEqual(end.stringValue, "1250")
         XCTAssertEqual(format.titleOfSelectedItem, "GIF")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("preview unavailable") })
@@ -215,7 +218,7 @@ final class RecordingEditorTests: XCTestCase {
                           "mono_output": false, "source_has_system_audio": false,
                           "source_has_microphone_audio": false]],
             "preview_export": ["format": "mp4", "quality": "preserve",
-                "max_size_bytes": NSNull(), "frames_per_second": NSNull(),
+                "max_size_bytes": 4_000_000, "frames_per_second": NSNull(),
                 "gif_max_colors": NSNull()],
             "position_ms": position, "revision": revision,
         ]))
@@ -289,7 +292,7 @@ final class RecordingEditorTests: XCTestCase {
         descendants(in: view).compactMap { ($0 as? NSTextField)?.stringValue }
     }
     private func render(_ view: NSView, name: String) throws {
-        guard let directory = ProcessInfo.processInfo.environment["CAPTURES_NATIVE_PIXEL_DIR"] else { return }
+        guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { return }
         view.displayIfNeeded()
         let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: rep)
