@@ -5193,6 +5193,7 @@ final class ScreenshotEditorTests: XCTestCase {
         }
         wait(for: [began], timeout: 5)
 
+        try? FileManager.default.removeItem(at: fixture.drafts)
         try Data("not a directory".utf8).write(to: fixture.drafts)
         let first = worker.prepareForTermination(textInput: EditorTerminationTextInput(
             inputID: inputID, text: "committed despite disk failure", commit: true))
