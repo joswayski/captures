@@ -237,11 +237,13 @@ AppKit and Windows can exclude native capture UI. X11 temporarily hides the HUD 
 guide from the screenshot, but cannot keep the selector out of the ongoing recording.
 The Windows/Linux candidate's **Edit recording** opens a decoded frame preview
 with source-relative scrubbing, numeric trim/crop controls, custom output dimensions
-and MP4/GIF **Save new copy**. Apply edits updates the preview before saving;
-invalid edits leave the last accepted frame intact. Custom dimensions are independent
-(no aspect lock) and the shared media engine rounds sizes to even pixels.
+and MP4/GIF **Save new copy**. Apply edits accepts the format, quality and edits
+together before saving; failed updates leave the last accepted frame intact.
+The preview identifies its accepted format/quality, and saving uses those settings.
+Custom dimensions are independent (no aspect lock); the shared media engine rounds
+sizes to even pixels.
 Re-encoded Windows/Linux MP4 fits within 3840 × 2160 (2160 × 3840 for portrait);
-the frame preview does not yet reflect that encoder limit for oversized edits.
+its preview reflects that cap, while GIF previews retain their requested dimensions.
 Exports report progress, support cancellation, never replace an existing file, and
 add a distinct History item. A History failure retains the saved path for recovery.
 Recording edits are not drafts: save or explicitly discard them before closing or

@@ -25,6 +25,7 @@ use crate::tokens::Tokens;
 struct Presented {
     source: MediaMetadata,
     edit: EditSpec,
+    export: ExportSpec,
     position_ms: u64,
     frame: Arc<RgbaImage>,
 }
@@ -35,6 +36,7 @@ impl Presented {
         Self {
             source: snapshot.source.clone(),
             edit: snapshot.edit.clone(),
+            export: snapshot.preview_export.clone(),
             position_ms: snapshot.position_ms,
             frame: session.frame(),
         }
@@ -65,6 +67,7 @@ struct View {
     confirm_close: bool,
     history_changed: bool,
     saved_edit: EditSpec,
+    saved_export: Option<ExportSpec>,
     start_ms: u64,
     end_ms: u64,
     crop: Option<CropRect>,
@@ -79,6 +82,20 @@ struct View {
 }
 
 impl View {
+    fn export_spec(&self) -> ExportSpec {
+        ExportSpec {
+            format: if self.gif {
+                ExportFormat::Gif
+            } else {
+                ExportFormat::Mp4
+            },
+            quality: self.quality,
+            max_size_bytes: None,
+            frames_per_second: None,
+            gif_max_colors: None,
+        }
+    }
+
     fn staged_edit(&self, p: &Presented) -> EditSpec {
         EditSpec {
             trim_start_ms: self.start_ms,
@@ -93,15 +110,14 @@ impl View {
     fn unapplied(&self) -> bool {
         self.presented
             .as_ref()
-            .is_some_and(|p| self.staged_edit(p) != p.edit)
+            .is_some_and(|p| self.staged_edit(p) != p.edit || self.export_spec() != p.export)
     }
 
     fn dirty(&self) -> bool {
         self.unapplied()
-            || self
-                .presented
-                .as_ref()
-                .is_some_and(|p| p.edit != self.saved_edit)
+            || self.presented.as_ref().is_some_and(|p| {
+                p.edit != self.saved_edit || Some(&p.export) != self.saved_export.as_ref()
+            })
     }
 
     fn send(&mut self, tx: &Sender<Job>, job: Job) {
@@ -144,9 +160,12 @@ impl View {
                         self.crop = p.edit.crop;
                         self.output_size = p.edit.output_width.zip(p.edit.output_height);
                         self.position_ms = p.position_ms;
+                        self.gif = p.export.format == ExportFormat::Gif;
+                        self.quality = p.export.quality;
                         // The initial edit includes trusted audio flags.
                         if self.presented.is_none() {
                             self.saved_edit = p.edit.clone();
+                            self.saved_export = Some(p.export.clone());
                         }
                         self.presented = Some(p);
                     }
@@ -178,6 +197,7 @@ impl View {
                         };
                         if let Some(p) = &self.presented {
                             self.saved_edit = p.edit.clone();
+                            self.saved_export = Some(p.export.clone());
                         }
                         self.status = Some(format!("Saved new copy: {}", path.display()));
                         self.error = warning;
@@ -492,17 +512,7 @@ fn show(
                             Job::Save(
                                 RecordingSaveRequest {
                                     destination: view.destination.clone().into(),
-                                    export: ExportSpec {
-                                        format: if view.gif {
-                                            ExportFormat::Gif
-                                        } else {
-                                            ExportFormat::Mp4
-                                        },
-                                        quality: view.quality,
-                                        max_size_bytes: None,
-                                        frames_per_second: None,
-                                        gif_max_colors: None,
-                                    },
+                                    export: view.presented.as_ref().unwrap().export.clone(),
                                 },
                                 cancel,
                             ),
@@ -514,7 +524,11 @@ fn show(
                         .clicked()
                     {
                         let edit = view.staged_edit(view.presented.as_ref().unwrap());
-                        view.send(tx, Job::Apply(RecordingEditorRequest::UpdateEdit { edit }));
+                        let export = view.export_spec();
+                        view.send(
+                            tx,
+                            Job::Apply(RecordingEditorRequest::UpdatePreview { edit, export }),
+                        );
                     }
                 });
             });
@@ -555,11 +569,13 @@ fn show(
             let accepted_position = p.position_ms;
             let source_size = (p.source.width, p.source.height);
             ui.label(format!(
-                "Source frame: {:.3}s / {:.3}s · {} × {} · Preview: {} × {}",
+                "Source frame: {:.3}s / {:.3}s · {} × {} · {:?} {:?} preview: {} × {}",
                 accepted_position as f64 / 1000.,
                 duration as f64 / 1000.,
                 p.source.width,
                 p.source.height,
+                p.export.format,
+                p.export.quality,
                 p.frame.width(),
                 p.frame.height()
             ));
@@ -650,9 +666,7 @@ fn show(
                             ui.weak("Aspect ratio is not locked");
                         });
                     }
-                    ui.weak(
-                        "Even-pixel sizes. MP4 may scale down to encoder limits after preview.",
-                    );
+                    ui.weak("Apply previews even-pixel sizes for the selected format and quality.");
                 });
                 ui.horizontal(|ui| {
                     ui.strong("Save quality");
@@ -698,6 +712,7 @@ mod tests {
                     size_bytes: 40,
                 },
                 edit: EditSpec::default(),
+                export: view.export_spec(),
                 position_ms: 700,
                 frame: Arc::new(RgbaImage::new(4, 2)),
             })),
@@ -763,6 +778,7 @@ mod tests {
             Event::Presented(Ok(Presented {
                 source: view.presented.as_ref().unwrap().source.clone(),
                 edit,
+                export: view.export_spec(),
                 position_ms: 700,
                 frame: Arc::new(RgbaImage::new(8, 6)),
             })),
@@ -780,6 +796,62 @@ mod tests {
         let edit = view.staged_edit(view.presented.as_ref().unwrap());
         assert_eq!(edit.crop, Some(crop));
         assert_eq!((edit.output_width, edit.output_height), (None, None));
+        view.request_close();
+        assert!(view.confirm_close && !view.closed);
+    }
+
+    #[test]
+    fn format_and_quality_changes_require_preview_acceptance_and_a_successful_save() {
+        let mut view = opened();
+        assert!(!view.dirty());
+        view.gif = true;
+        view.quality = QualityPreset::High;
+        assert!(view.unapplied() && view.dirty());
+        let frame = view.presented.as_ref().unwrap().frame.clone();
+        let ctx = egui::Context::default();
+        view.receive(&ctx, Event::Presented(Err("preview failed".into())));
+        let p = view.presented.as_ref().unwrap();
+        assert!(Arc::ptr_eq(&frame, &p.frame));
+        assert_eq!(p.export.format, ExportFormat::Mp4);
+        assert_eq!(p.export.quality, QualityPreset::Preserve);
+        assert!(view.gif && view.quality == QualityPreset::High && view.unapplied());
+        let export = ExportSpec {
+            format: ExportFormat::Gif,
+            quality: QualityPreset::High,
+            max_size_bytes: None,
+            frames_per_second: None,
+            gif_max_colors: None,
+        };
+        view.receive(
+            &ctx,
+            Event::Presented(Ok(Presented {
+                source: p.source.clone(),
+                edit: p.edit.clone(),
+                position_ms: p.position_ms,
+                frame,
+                export: export.clone(),
+            })),
+        );
+        assert!(
+            !view.unapplied() && view.dirty(),
+            "format-only accepted work is unsaved"
+        );
+        view.receive(&ctx, Event::Saved(Err("destination exists".into())));
+        assert!(view.dirty());
+        view.receive(
+            &ctx,
+            Event::Saved(Ok(SavedRecording::SavedWithoutHistory {
+                path: "saved.gif".into(),
+                warning: "History unavailable".into(),
+            })),
+        );
+        assert_eq!(view.saved_export, Some(export));
+        assert!(!view.dirty());
+        view.quality = QualityPreset::Standard;
+        assert!(
+            view.unapplied(),
+            "quality-only changes also need preview acceptance"
+        );
         view.request_close();
         assert!(view.confirm_close && !view.closed);
     }

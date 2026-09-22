@@ -427,16 +427,21 @@ History's **Edit recording** resolves the selected artifact through the shared
 decoded frame, source-relative scrubbing, numeric trim/crop, custom output size and
 a fixed save bar. Crop uses source-pixel coordinates; custom width/height are
 independent (no aspect lock or resolution presets yet). Apply edits stages these
-values together and previews the even-pixel crop/resize. Shared GIF encoding now
-honors both explicit dimensions, including square-pixel aspect and proportional
+values together with format/quality and previews the accepted export configuration.
+Shared GIF encoding honors both explicit dimensions, including square-pixel aspect and proportional
 size-budget retries, instead of silently ignoring output height. Re-encoded MP4 on
-Windows/Linux still fits within 3840 × 2160 (portrait: 2160 × 3840); the current
-frame preview does not reflect that cap for oversized edits. Format-aware preview
-and large-output acceptance remain open.
+Windows/Linux fits within 3840 × 2160 (portrait: 2160 × 3840); format-aware preview
+now reflects that cap without applying it to Preserve copy/remux or GIF paths.
+The accepted format/quality and frame dimensions appear beside the preview.
+Unapplied format/quality gates save and seek alongside geometric edits; failed
+updates retain all accepted state and preserve staged values for correction.
+Save uses the accepted configuration, and format/quality-only changes require
+save or explicit discard. Size-budget previews are rejected rather than promising
+the dimensions of a later encoding retry; this host does not expose size budgets.
 The preview/timeline/save hierarchy follows the shipping recording editor, but
 the UI is not a visual match and has no playback or thumbnail timeline yet.
 One worker serializes media operations; failed seek/edit preserves the accepted
-frame, and unapplied trim/crop/size values gate scrubbing/export. Failed edits keep
+frame, and unapplied values gate scrubbing/export. Failed edits keep
 the staged values available for correction. MP4/GIF Save new copy uses
 shared encoding, reports progress and accepts independent cancellation. Existing
 files and the original History artifact are never replaced. Post-publication
