@@ -2531,26 +2531,79 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn playback_cancel_interrupts_wait_after_stdout_closes() {
-        let (_directory, mut playback, cancel) = scripted_playback("exec 1>&-; exec sleep 30");
-        let cancellation = cancel.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            cancellation.cancel();
-        });
-        let started = std::time::Instant::now();
-        assert!(matches!(
-            playback.next_frame(),
-            Err(super::MediaToolError::Cancelled)
-        ));
-        assert!(started.elapsed() < std::time::Duration::from_millis(500));
-        assert!(matches!(
-            playback.next_frame(),
-            Err(super::MediaToolError::Cancelled)
-        ));
-        assert!(playback.child.is_none());
-        assert!(playback.reader.is_none());
-        assert!(playback.stderr_reader.is_none());
+    fn playback_cancel_interrupts_open_and_closed_stdout_stalls() {
+        for script in ["exec sleep 30", "exec 1>&-; exec sleep 30"] {
+            let (_directory, mut playback, cancel) = scripted_playback(script);
+            let cancellation = cancel.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                cancellation.cancel();
+            });
+            let started = std::time::Instant::now();
+            assert!(matches!(
+                playback.next_frame(),
+                Err(super::MediaToolError::Cancelled)
+            ));
+            assert!(started.elapsed() < std::time::Duration::from_millis(500));
+            assert!(matches!(
+                playback.next_frame(),
+                Err(super::MediaToolError::Cancelled)
+            ));
+            assert!(playback.child.is_none());
+            assert!(playback.reader.is_none());
+            assert!(playback.stderr_reader.is_none());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn playback_pre_cancel_refuses_to_spawn() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("ffmpeg-test");
+        let marker = directory.path().join("spawned");
+        std::fs::write(
+            &executable,
+            format!("#!/bin/sh\ntouch '{}'\nexec sleep 30\n", marker.display()),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+        let probe = ProbeResult {
+            metadata: MediaMetadata {
+                kind: MediaKind::Video,
+                mime_type: "video/mp4".into(),
+                width: 2,
+                height: 2,
+                duration_ms: Some(100),
+                size_bytes: 1,
+            },
+            has_audio: false,
+            audio_stream_count: 0,
+        };
+        let cancel = CancelToken::default();
+        cancel.cancel();
+        let result = MediaToolchain::new(executable, "unused".into()).playback(
+            &directory.path().join("source.mp4"),
+            &probe,
+            &EditSpec {
+                trim_end_ms: Some(100),
+                ..EditSpec::default()
+            },
+            &ExportSpec {
+                format: ExportFormat::Mp4,
+                quality: QualityPreset::Preserve,
+                max_size_bytes: None,
+                frames_per_second: None,
+                gif_max_colors: None,
+            },
+            0,
+            &cancel,
+        );
+        assert!(matches!(result, Err(super::MediaToolError::Cancelled)));
+        assert!(!marker.exists());
     }
 
     #[test]
