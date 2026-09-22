@@ -30,6 +30,7 @@ def main():
     parser.add_argument("--audio", action="store_true", help="Exercise separate system/microphone export controls")
     parser.add_argument("--presets", action="store_true", help="Exercise output presets on a portrait source")
     parser.add_argument("--crop-aspect", action="store_true", help="Exercise locked/unlocked numeric crop dimensions")
+    parser.add_argument("--estimate", action="store_true", help="Exercise exact size estimates and missing-source retry")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -192,6 +193,32 @@ def main():
         shot(editor, "original")
         dominant(output / "original.png", 0)
         run("xdotool", "windowminimize", root, "sleep", ".5")
+        estimate_expectations = {}
+        if args.estimate:
+            click(editor, 681, 882)
+            shot(editor, "estimate-original")
+            estimate_expectations["estimate-original.png"] = f"{len(original)} bytes (exact)"
+            assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
+            missing = output / "temporarily-moved.mp4"
+            source.rename(missing)
+            try:
+                click(editor, 681, 882)
+                shot(editor, "estimate-missing-source")
+            finally:
+                missing.rename(source)
+            click(editor, 681, 882)
+            shot(editor, "estimate-retried")
+            estimate_expectations["estimate-retried.png"] = f"{len(original)} bytes (exact)"
+            if args.audio:
+                run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+                field(editor, 201, 866, 50)
+                click(editor, 793, 1082)
+                click(editor, 681, 1082)
+                shot(editor, "estimate-audio-approximate")
+                estimate_expectations["estimate-audio-approximate.png"] = f"≈ {len(original)} bytes"
+                field(editor, 201, 866, 100)
+                click(editor, 793, 1082)
+                run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
         if args.crop_aspect:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
             click(editor, 22, 683)
@@ -232,6 +259,7 @@ def main():
             wait(lambda: app.poll() is not None, "quit")
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "estimate_label_expectations_for_visual_inspection": estimate_expectations,
                 "checks": ["locked-width", "locked-height", "unlocked-width", "relocked-current-ratio",
                     "unapplied-save-gate", "export-dimensions", "history-publication", "minimum-controls",
                     "immutable-source", "saved-close-and-quit"]}, indent=2) + "\n")
@@ -256,6 +284,10 @@ def main():
         click(editor, 793, 882)
         shot(editor, "trimmed")
         dominant(output / "trimmed.png", 1)
+        if args.estimate:
+            click(editor, 681, 882)
+            shot(editor, "estimate-trimmed")
+            assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
         close(root)
         assert app.poll() is None and windows("Recording editor"), "dirty editor blocks quit"
         shot(editor, "quit-guard")
@@ -275,16 +307,26 @@ def main():
         dominant(destination, 2, 1.0)
         shot(editor, "saved")
         saved_bytes = destination.read_bytes()
+        if args.estimate:
+            estimate_expectations["estimate-trimmed.png"] = f"{len(saved_bytes)} bytes (exact)"
         click(editor, 899, 882)
         shot(editor, "collision")
         assert destination.read_bytes() == saved_bytes and len(list(history.glob("*/metadata.json"))) == 2
         click(editor, 87, 882)
+        if args.estimate:
+            click(editor, 681, 882)  # Unapplied GIF must not reuse the MP4 estimate.
+            shot(editor, "estimate-staged-format")
         click(editor, 899, 882)  # Format changes cannot save unaccepted preview settings.
         assert not destination.with_suffix(".gif").exists()
         click(editor, 793, 882)
+        if args.estimate:
+            click(editor, 681, 882)
+            shot(editor, "estimate-gif")
         click(editor, 899, 882)
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 3, "GIF published in History")
         gif = destination.with_suffix(".gif")
+        if args.estimate:
+            estimate_expectations["estimate-gif.png"] = f"{gif.stat().st_size} bytes (exact)"
         dominant(gif, 1, .2)
         dominant(gif, 2, 1.0)
         shot(editor, "gif-saved")
@@ -503,6 +545,7 @@ def main():
         wait(lambda: app.poll() is not None, "quit")
         assert app.returncode == 0
         (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+            "estimate_label_expectations_for_visual_inspection": estimate_expectations,
             "checks": ["history-open", "decoded-frame", "source-relative-seek", "trim-preview",
                 "failed-trim-retains-frame", "minimum-error", "dirty-quit-guard", "close-confirmation",
                 "save-new", "duration", "dimensions", "export-green", "export-blue", "collision",

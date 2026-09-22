@@ -456,6 +456,14 @@ updates retain all accepted state and preserve staged values for correction.
 Save uses the accepted configuration, and format/quality-only changes require
 save or explicit discard. Size-budget previews are rejected rather than promising
 the dimensions of a later encoding retry; this host does not expose size budgets.
+**Estimate size** explicitly runs the shared Tauri estimator on the accepted
+edit/export configuration through the same serialized worker. Copied bytes and
+fully encoded short ranges report exact byte counts; longer sampled ranges and
+audio-only Preserve changes are marked approximate. Staged edits hide the previous
+result and gate estimation until Apply. A successful changed preview invalidates
+the result; a seek retains it. Estimation has independent cancellation and error/retry,
+creates no History entry, and never marks unsaved edits as saved. No estimate promises
+a byte budget. Close/quit waits for accepted work, as with export.
 The preview/timeline/save hierarchy follows the shipping recording editor, but
 the UI is not a visual match and has no playback or thumbnail timeline yet.
 One worker serializes media operations; failed seek/edit preserves the accepted

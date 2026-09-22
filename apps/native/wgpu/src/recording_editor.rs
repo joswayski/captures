@@ -14,8 +14,8 @@ use captures_app::recording_editor::{
     RecordingSaveRequest, SavedRecording,
 };
 use captures_media::{
-    AudioEdit, CancelToken, CropRect, EditSpec, ExportFormat, ExportProgress, ExportSpec,
-    MediaMetadata, MediaToolchain, QualityPreset,
+    AudioEdit, CancelToken, CropRect, EditSpec, ExportEstimate, ExportFormat, ExportProgress,
+    ExportSpec, MediaMetadata, MediaToolchain, QualityPreset,
 };
 use captures_recording::MaxResolution;
 use eframe::egui;
@@ -47,6 +47,7 @@ impl Presented {
 enum Job {
     Apply(RecordingEditorRequest),
     Save(RecordingSaveRequest, CancelToken),
+    Estimate(CancelToken),
     Shutdown,
 }
 
@@ -54,6 +55,7 @@ enum Event {
     Presented(Result<Presented, String>),
     Progress(ExportProgress),
     Saved(Result<SavedRecording, String>),
+    Estimated(Result<ExportEstimate, String>),
     Destination(Option<PathBuf>),
 }
 
@@ -63,6 +65,8 @@ struct View {
     texture: Option<egui::TextureHandle>,
     busy: bool,
     cancel: Option<CancelToken>,
+    estimating: bool,
+    estimate: Option<ExportEstimate>,
     picker: bool,
     closed: bool,
     confirm_close: bool,
@@ -137,13 +141,49 @@ impl View {
             })
     }
 
+    fn estimate_label(&self) -> String {
+        if self.estimating {
+            "Estimating size…".into()
+        } else if self.unapplied() {
+            "Apply edits to estimate size".into()
+        } else if let Some(estimate) = &self.estimate {
+            format!(
+                "{}{} bytes{}",
+                if estimate.exact { "" } else { "≈ " },
+                estimate.size_bytes,
+                if estimate.exact { " (exact)" } else { "" }
+            )
+        } else {
+            "Size not estimated".into()
+        }
+    }
+
+    fn request_estimate(&mut self, tx: &Sender<Job>) {
+        if self.busy
+            || self.picker
+            || self.confirm_close
+            || self.presented.is_none()
+            || self.unapplied()
+        {
+            return;
+        }
+        let cancel = CancelToken::default();
+        self.cancel = Some(cancel.clone());
+        self.send(tx, Job::Estimate(cancel));
+    }
+
     fn send(&mut self, tx: &Sender<Job>, job: Job) {
         if self.busy || self.picker {
             return;
         }
+        let estimating = matches!(job, Job::Estimate(_));
         match tx.send(job) {
             Ok(()) => {
                 self.busy = true;
+                self.estimating = estimating;
+                if estimating {
+                    self.estimate = None;
+                }
                 self.error = None;
                 self.status = None;
             }
@@ -160,6 +200,13 @@ impl View {
                 self.busy = false;
                 match result {
                     Ok(p) => {
+                        if self
+                            .presented
+                            .as_ref()
+                            .is_none_or(|old| old.edit != p.edit || old.export != p.export)
+                        {
+                            self.estimate = None;
+                        }
                         let frame = egui::ColorImage::from_rgba_unmultiplied(
                             [p.frame.width() as usize, p.frame.height() as usize],
                             p.frame.as_raw(),
@@ -227,6 +274,21 @@ impl View {
                     Err(error) => self.error = Some(error),
                 }
             }
+            Event::Estimated(result) => {
+                self.busy = false;
+                self.estimating = false;
+                self.cancel = None;
+                match result {
+                    Ok(estimate) => {
+                        self.estimate = Some(estimate);
+                        self.error = None;
+                    }
+                    Err(error) => {
+                        self.estimate = None;
+                        self.error = Some(error);
+                    }
+                }
+            }
             Event::Destination(path) => {
                 self.picker = false;
                 if let Some(path) = path {
@@ -238,9 +300,8 @@ impl View {
 
     fn request_close(&mut self) {
         if self.busy || self.picker {
-            self.error = Some(
-                "Wait for the current operation, or cancel the export, before closing.".into(),
-            );
+            self.error =
+                Some("Wait for the current operation, or cancel it, before closing.".into());
         } else if self.dirty() {
             self.confirm_close = true;
         } else {
@@ -351,6 +412,12 @@ impl Editor {
                                     wake(&wake_ctx, viewport);
                                 })
                             }),
+                    ),
+                    Job::Estimate(cancel) => Event::Estimated(
+                        session
+                            .as_ref()
+                            .ok_or_else(|| "Recording editor is unavailable.".to_owned())
+                            .and_then(|s| s.estimate_export(&cancel)),
                     ),
                 };
                 if out.send(event).is_err() {
@@ -500,7 +567,7 @@ fn show(
         }
         if let Some(cancel) = &view.cancel
             && ui
-                .add_enabled(!cancel.is_cancelled(), egui::Button::new("Cancel export"))
+                .add_enabled(!cancel.is_cancelled(), egui::Button::new(if view.estimating { "Cancel estimate" } else { "Cancel export" }))
                 .clicked()
         {
             cancel.cancel();
@@ -541,13 +608,15 @@ fn show(
                         .to_string_lossy()
                         .into_owned();
                 }
-                ui.label("Original is never replaced");
+                ui.label(view.estimate_label())
+                    .on_hover_text("File size for the accepted settings. Longer recordings use encoded samples and are approximate. Estimating creates no History entry or saved file.");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add_enabled(
                             view.presented.is_some() && !view.unapplied(),
                             egui::Button::new("Save new copy"),
                         )
+                        .on_hover_text("Creates a separate copy. The original and existing files are never replaced.")
                         .clicked()
                     {
                         let cancel = CancelToken::default();
@@ -574,6 +643,9 @@ fn show(
                             tx,
                             Job::Apply(RecordingEditorRequest::UpdatePreview { edit, export }),
                         );
+                    }
+                    if ui.add_enabled(view.presented.is_some() && !view.unapplied(), egui::Button::new("Estimate size")).clicked() {
+                        view.request_estimate(tx);
                     }
                 });
             });
@@ -864,6 +936,179 @@ mod tests {
             })),
         );
         view
+    }
+
+    #[test]
+    fn estimates_follow_accepted_settings_not_seek_or_staged_values() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let frame = view.presented.as_ref().unwrap().frame.clone();
+        view.receive(
+            &ctx,
+            Event::Estimated(Ok(ExportEstimate {
+                size_bytes: 12345,
+                exact: true,
+            })),
+        );
+        assert_eq!(view.estimate_label(), "12345 bytes (exact)");
+        assert!(!view.dirty() && !view.history_changed);
+        let p = view.presented.as_ref().unwrap();
+        view.receive(
+            &ctx,
+            Event::Presented(Ok(Presented {
+                source: p.source.clone(),
+                edit: p.edit.clone(),
+                export: p.export.clone(),
+                position_ms: 1200,
+                frame: frame.clone(),
+            })),
+        );
+        assert_eq!(
+            view.estimate_label(),
+            "12345 bytes (exact)",
+            "seek cannot change file size"
+        );
+        let (tx, jobs) = mpsc::channel();
+        view.gif = true;
+        assert_eq!(view.estimate_label(), "Apply edits to estimate size");
+        view.request_estimate(&tx);
+        assert!(jobs.try_recv().is_err() && !view.busy);
+        view.receive(&ctx, Event::Presented(Err("bad format preview".into())));
+        assert_eq!(view.estimate_label(), "Apply edits to estimate size");
+        view.gif = false;
+        assert_eq!(
+            view.estimate_label(),
+            "12345 bytes (exact)",
+            "reverting staged edits restores the matching result"
+        );
+        view.gif = true;
+        let p = view.presented.as_ref().unwrap();
+        view.receive(
+            &ctx,
+            Event::Presented(Ok(Presented {
+                source: p.source.clone(),
+                edit: p.edit.clone(),
+                export: view.export_spec(),
+                position_ms: 1200,
+                frame: frame.clone(),
+            })),
+        );
+        assert!(
+            view.estimate.is_none(),
+            "accepting different settings invalidates the old result"
+        );
+        view.request_estimate(&tx);
+        assert!(matches!(jobs.try_recv(), Ok(Job::Estimate(_))));
+        view.request_estimate(&tx);
+        assert!(
+            jobs.try_recv().is_err(),
+            "only one worker operation is accepted"
+        );
+        view.request_close();
+        assert!(!view.closed && !view.confirm_close);
+        view.receive(
+            &ctx,
+            Event::Estimated(Ok(ExportEstimate {
+                size_bytes: 67890,
+                exact: false,
+            })),
+        );
+        assert_eq!(view.estimate_label(), "≈ 67890 bytes");
+        assert!(!view.busy && !view.estimating && view.cancel.is_none() && view.error.is_none());
+        assert!(
+            view.dirty() && !view.history_changed,
+            "estimating does not save edits"
+        );
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+    }
+
+    #[test]
+    fn cancelled_estimate_preserves_frame_and_can_be_retried() {
+        let mut view = opened();
+        let frame = view.presented.as_ref().unwrap().frame.clone();
+        let (tx, jobs) = mpsc::channel();
+        view.request_estimate(&tx);
+        let Job::Estimate(cancel) = jobs.recv().unwrap() else {
+            panic!("estimate queued")
+        };
+        view.cancel.as_ref().unwrap().cancel();
+        assert!(cancel.is_cancelled() && view.busy && view.estimating);
+        view.receive(
+            &egui::Context::default(),
+            Event::Estimated(Err("cancelled".into())),
+        );
+        assert!(!view.busy && !view.estimating && view.cancel.is_none() && view.estimate.is_none());
+        assert_eq!(view.error.as_deref(), Some("cancelled"));
+        assert!(!view.dirty() && !view.history_changed);
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+        view.request_estimate(&tx);
+        let Job::Estimate(retry) = jobs.recv().unwrap() else {
+            panic!("retry queued")
+        };
+        assert!(!retry.is_cancelled() && view.error.is_none());
+    }
+
+    #[test]
+    fn estimate_and_save_controls_fit_the_minimum_window() {
+        for (name, tokens) in crate::tokens::load() {
+            let ctx = egui::Context::default();
+            tokens.apply(&ctx, name.contains("light"));
+            let mut view = opened();
+            view.estimate = Some(ExportEstimate {
+                size_bytes: 123456789012,
+                exact: true,
+            });
+            let (tx, _) = mpsc::channel();
+            let (events, _) = mpsc::channel();
+            for pass in 0..2 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760., 580.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| show(ui, &tokens, &mut view, &tx, &events, egui::ViewportId::ROOT),
+                );
+                output.textures_delta.clear();
+                if pass == 0 {
+                    continue;
+                }
+                let mut rects = Vec::new();
+                for label in [
+                    "123456789012 bytes (exact)",
+                    "Estimate size",
+                    "Apply edits",
+                    "Save new copy",
+                ] {
+                    let rect = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == label => {
+                                Some(text.galley.rect.translate(text.pos.to_vec2()))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("missing {label} in {name}"));
+                    assert!(
+                        rect.left() >= 0.
+                            && rect.right() <= 760.
+                            && rect.top() >= 0.
+                            && rect.bottom() <= 580.,
+                        "{name}: {label} outside window: {rect:?}"
+                    );
+                    for other in &rects {
+                        assert!(
+                            !rect.intersects(*other),
+                            "{name}: overlapping estimate/save labels"
+                        );
+                    }
+                    rects.push(rect);
+                }
+            }
+        }
     }
 
     #[test]
@@ -1213,66 +1458,74 @@ mod tests {
     #[test]
     fn error_and_cancel_render_in_every_theme_and_cancel_keeps_work_pending() {
         for (name, tokens) in crate::tokens::load() {
-            let ctx = egui::Context::default();
-            tokens.apply(&ctx, name.contains("light"));
-            let mut view = opened();
-            view.error = Some("Export cannot replace an existing recording.".into());
-            view.busy = true;
-            let cancel = CancelToken::default();
-            view.cancel = Some(cancel.clone());
-            let (tx, jobs) = mpsc::channel();
-            let (events, _) = mpsc::channel();
-            let frame = |view: &mut View, input| {
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(760., 580.),
-                        )),
-                        events: input,
-                        ..Default::default()
-                    },
-                    |ui| show(ui, &tokens, view, &tx, &events, egui::ViewportId::ROOT),
-                );
-                output.textures_delta.clear();
-                output
-            };
-            frame(&mut view, vec![]);
-            let output = frame(&mut view, vec![]);
-            let button = output
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.job.text == "Cancel export" => {
-                        Some(text.pos + text.galley.rect.center().to_vec2())
-                    }
-                    _ => None,
-                })
-                .expect("cancel action is visible even with an error at minimum size");
-            assert!(button.y < 580.);
-            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+            for estimating in [false, true] {
+                let ctx = egui::Context::default();
+                tokens.apply(&ctx, name.contains("light"));
+                let mut view = opened();
+                view.error = Some("Export cannot replace an existing recording.".into());
+                view.busy = true;
+                view.estimating = estimating;
+                let cancel_label = if estimating {
+                    "Cancel estimate"
+                } else {
+                    "Cancel export"
+                };
+                let cancel = CancelToken::default();
+                view.cancel = Some(cancel.clone());
+                let (tx, jobs) = mpsc::channel();
+                let (events, _) = mpsc::channel();
+                let frame = |view: &mut View, input| {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(760., 580.),
+                            )),
+                            events: input,
+                            ..Default::default()
+                        },
+                        |ui| show(ui, &tokens, view, &tx, &events, egui::ViewportId::ROOT),
+                    );
+                    output.textures_delta.clear();
+                    output
+                };
+                frame(&mut view, vec![]);
+                let output = frame(&mut view, vec![]);
+                let button = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == cancel_label => {
+                            Some(text.pos + text.galley.rect.center().to_vec2())
+                        }
+                        _ => None,
+                    })
+                    .expect("cancel action is visible even with an error at minimum size");
+                assert!(button.y < 580.);
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
                 egui::Shape::Text(text) if text.galley.job.text == view.error.as_ref().unwrap().as_str())));
-            frame(&mut view, vec![egui::Event::PointerMoved(button)]);
-            for pressed in [true, false] {
-                frame(
-                    &mut view,
-                    vec![egui::Event::PointerButton {
-                        pos: button,
-                        pressed,
-                        button: egui::PointerButton::Primary,
-                        modifiers: egui::Modifiers::NONE,
-                    }],
+                frame(&mut view, vec![egui::Event::PointerMoved(button)]);
+                for pressed in [true, false] {
+                    frame(
+                        &mut view,
+                        vec![egui::Event::PointerButton {
+                            pos: button,
+                            pressed,
+                            button: egui::PointerButton::Primary,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                    );
+                }
+                assert!(cancel.is_cancelled());
+                assert!(
+                    view.busy,
+                    "cancel waits for the worker's publication outcome"
+                );
+                assert!(
+                    jobs.try_recv().is_err(),
+                    "cancel does not queue behind the export"
                 );
             }
-            assert!(cancel.is_cancelled());
-            assert!(
-                view.busy,
-                "cancel waits for the worker's publication outcome"
-            );
-            assert!(
-                jobs.try_recv().is_err(),
-                "cancel does not queue behind the export"
-            );
         }
     }
 }
