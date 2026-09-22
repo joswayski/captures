@@ -1,21 +1,21 @@
 use std::{
     fs,
-    io::{Read, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{
-        Arc,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use captures_video::H264Mp4Writer;
 use serde::Deserialize;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-use std::io;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use thiserror::Error;
 
 use crate::{
@@ -35,6 +35,181 @@ impl CancelToken {
 
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
+    }
+}
+
+const PLAYBACK_MAX_WIDTH: u32 = 1_280;
+const PLAYBACK_MAX_HEIGHT: u32 = 720;
+const PLAYBACK_MAX_FRAMES_PER_SECOND: u16 = 30;
+const PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// One decoded silent-playback frame with a source-relative timestamp.
+pub struct MediaPlaybackFrame {
+    pub position_ms: u64,
+    pixels: Vec<u8>,
+}
+
+impl MediaPlaybackFrame {
+    #[must_use]
+    pub fn into_pixels(self) -> Vec<u8> {
+        self.pixels
+    }
+}
+
+struct BufferedPlaybackFrame {
+    frame: MediaPlaybackFrame,
+    present_at: Instant,
+}
+
+enum PlaybackReaderEnd {
+    Eof,
+    Error(String),
+}
+
+#[derive(Default)]
+struct PlaybackReaderState {
+    frame: Option<BufferedPlaybackFrame>,
+    end: Option<PlaybackReaderEnd>,
+}
+
+#[derive(Default)]
+struct PlaybackShared {
+    state: Mutex<PlaybackReaderState>,
+    changed: Condvar,
+    stop: AtomicBool,
+}
+
+/// One persistent FFmpeg raw-RGBA decoder. Frames are paced against a shared
+/// monotonic clock and only the latest pending frame is retained.
+pub struct MediaPlayback {
+    width: u32,
+    height: u32,
+    frames_per_second: u16,
+    start_position_ms: u64,
+    cancel: CancelToken,
+    shared: Arc<PlaybackShared>,
+    child: Option<Child>,
+    reader: Option<thread::JoinHandle<()>>,
+    stderr_reader: Option<thread::JoinHandle<io::Result<Vec<u8>>>>,
+    closed: bool,
+}
+
+impl MediaPlayback {
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    #[must_use]
+    pub const fn frames_per_second(&self) -> u16 {
+        self.frames_per_second
+    }
+
+    #[must_use]
+    pub const fn start_position_ms(&self) -> u64 {
+        self.start_position_ms
+    }
+
+    /// Return the next clock-paced frame, or `None` after the exclusive trim
+    /// end. A lagging consumer skips stale pending frames instead of building a
+    /// queue.
+    pub fn next_frame(&mut self) -> Result<Option<MediaPlaybackFrame>, MediaToolError> {
+        loop {
+            if self.cancel.is_cancelled() {
+                let _ = self.finish(true);
+                return Err(MediaToolError::Cancelled);
+            }
+
+            let mut state = self.shared.state.lock().map_err(|_| {
+                MediaToolError::Process("playback frame buffer was poisoned".to_owned())
+            })?;
+            if let Some(frame) = state.frame.as_ref() {
+                let now = Instant::now();
+                if now >= frame.present_at {
+                    let frame = state.frame.take().expect("checked pending playback frame");
+                    self.shared.changed.notify_all();
+                    return Ok(Some(frame.frame));
+                }
+                let wait = frame
+                    .present_at
+                    .saturating_duration_since(now)
+                    .min(PLAYBACK_POLL_INTERVAL);
+                drop(self.shared.changed.wait_timeout(state, wait).map_err(|_| {
+                    MediaToolError::Process("playback frame buffer was poisoned".to_owned())
+                })?);
+                continue;
+            }
+
+            if let Some(end) = state.end.take() {
+                drop(state);
+                return match end {
+                    PlaybackReaderEnd::Eof => self.finish(false).map(|()| None),
+                    PlaybackReaderEnd::Error(error) => {
+                        let _ = self.finish(true);
+                        Err(MediaToolError::Process(error))
+                    }
+                };
+            }
+
+            drop(
+                self.shared
+                    .changed
+                    .wait_timeout(state, PLAYBACK_POLL_INTERVAL)
+                    .map_err(|_| {
+                        MediaToolError::Process("playback frame buffer was poisoned".to_owned())
+                    })?,
+            );
+        }
+    }
+
+    fn finish(&mut self, kill: bool) -> Result<(), MediaToolError> {
+        if self.closed {
+            return Ok(());
+        }
+        self.closed = true;
+        self.shared.stop.store(true, Ordering::Release);
+        self.shared.changed.notify_all();
+
+        let status = if let Some(mut child) = self.child.take() {
+            if kill {
+                let _ = child.kill();
+            }
+            Some(child.wait()?)
+        } else {
+            None
+        };
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+        let stderr = self.stderr_reader.take().map_or_else(
+            || Ok(Vec::new()),
+            |reader| {
+                reader
+                    .join()
+                    .map_err(|_| {
+                        MediaToolError::Process("media tool error reader panicked".to_owned())
+                    })?
+                    .map_err(MediaToolError::Io)
+            },
+        )?;
+        if kill {
+            return Ok(());
+        }
+        if let Some(status) = status {
+            complete_child(status, &stderr)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for MediaPlayback {
+    fn drop(&mut self) {
+        let _ = self.finish(true);
     }
 }
 
@@ -564,6 +739,123 @@ impl MediaToolchain {
             .args(["-frames:v", "1", "-vf", &filter])
             .arg(destination);
         run_command(&mut command, cancel, "FFmpeg")
+    }
+
+    /// Start one persistent, silent raw-RGBA decoder for the first export
+    /// attempt represented by `spec`.
+    pub fn playback(
+        &self,
+        input: &Path,
+        probe: &ProbeResult,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        position_ms: u64,
+        cancel: &CancelToken,
+    ) -> Result<MediaPlayback, MediaToolError> {
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled);
+        }
+        validate_edit_spec(probe, edit)?;
+        let attempts = export_attempts(probe, edit, spec)?;
+        let attempt = attempts.first().ok_or(MediaToolError::IncompleteMetadata)?;
+        let mut filter = preview_video_filter(probe, edit, spec, attempt)?;
+        let (planned_width, planned_height) = preview_dimensions(probe, edit, spec, attempt);
+        let (width, height) = fit_playback_dimensions(planned_width, planned_height);
+        if (width, height) != (planned_width, planned_height) {
+            filter.push_str(&format!(",scale={width}:{height}:flags=lanczos"));
+        }
+        let frames_per_second = attempt
+            .frames_per_second
+            .clamp(1, PLAYBACK_MAX_FRAMES_PER_SECOND);
+        filter.push_str(&format!(",fps={frames_per_second}"));
+
+        let duration_ms = probe
+            .metadata
+            .duration_ms
+            .ok_or(MediaToolError::IncompleteMetadata)?;
+        let end_position_ms = edit.trim_end_ms.unwrap_or(duration_ms);
+        let start_position_ms =
+            if position_ms < edit.trim_start_ms || position_ms >= end_position_ms {
+                edit.trim_start_ms
+            } else {
+                position_ms
+            };
+        let playback_duration_ms = end_position_ms.saturating_sub(start_position_ms);
+        let frame_size = usize::try_from(width)
+            .ok()
+            .and_then(|width| {
+                usize::try_from(height)
+                    .ok()
+                    .and_then(|height| width.checked_mul(height))
+            })
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or(MediaToolError::IncompleteMetadata)?;
+
+        let mut command = Command::new(&self.ffmpeg);
+        command.args(["-hide_banner", "-loglevel", "error"]);
+        if start_position_ms > 0 {
+            command.args(["-ss", &seconds(start_position_ms)]);
+        }
+        command
+            .arg("-i")
+            .arg(input)
+            .args(["-t", &seconds(playback_duration_ms), "-map", "0:v:0"])
+            .args(["-vf", &filter, "-an", "-pix_fmt", "rgba"])
+            .args(["-f", "rawvideo", "pipe:1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x0800_0000);
+        let mut child = command
+            .spawn()
+            .map_err(|error| map_spawn_error(error, "FFmpeg"))?;
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(MediaToolError::Process(
+                "failed to read decoded playback frames".to_owned(),
+            ));
+        };
+        let Some(mut stderr) = child.stderr.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(MediaToolError::Process(
+                "failed to capture media tool errors".to_owned(),
+            ));
+        };
+        let stderr_reader = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let shared = Arc::new(PlaybackShared::default());
+        let reader_shared = shared.clone();
+        let reader_cancel = cancel.clone();
+        let clock = Instant::now();
+        let reader = thread::spawn(move || {
+            read_playback_frames(
+                stdout,
+                frame_size,
+                frames_per_second,
+                start_position_ms,
+                end_position_ms,
+                clock,
+                &reader_cancel,
+                &reader_shared,
+            );
+        });
+        Ok(MediaPlayback {
+            width,
+            height,
+            frames_per_second,
+            start_position_ms,
+            cancel: cancel.clone(),
+            shared,
+            child: Some(child),
+            reader: Some(reader),
+            stderr_reader: Some(stderr_reader),
+            closed: false,
+        })
     }
 
     /// Estimate one export with the same encode plan as [`Self::export`].
@@ -1308,6 +1600,47 @@ fn preview_video_filter(
     }
 }
 
+fn preview_dimensions(
+    probe: &ProbeResult,
+    edit: &EditSpec,
+    spec: &ExportSpec,
+    attempt: &VideoAttempt,
+) -> (u32, u32) {
+    match spec.format {
+        ExportFormat::Gif if edit.output_width.is_none() => {
+            let source_width = edit.crop.map_or(probe.metadata.width, |crop| crop.width);
+            let source_height = edit.crop.map_or(probe.metadata.height, |crop| crop.height);
+            let width = attempt.width.min(source_width);
+            let scaled_height =
+                f64::from(source_height) * f64::from(width) / f64::from(source_width);
+            (width, nearest_even(scaled_height))
+        }
+        ExportFormat::Gif => (attempt.width, attempt.height),
+        ExportFormat::Mp4 if mp4_preserves_video_stream(probe, edit, spec) => {
+            (probe.metadata.width, probe.metadata.height)
+        }
+        ExportFormat::Mp4 => mp4_attempt_dimensions(attempt),
+        ExportFormat::WebM => (attempt.width, attempt.height),
+    }
+}
+
+fn nearest_even(value: f64) -> u32 {
+    ((value / 2.0).round().max(1.0) as u32).saturating_mul(2)
+}
+
+fn fit_playback_dimensions(width: u32, height: u32) -> (u32, u32) {
+    let scale = (f64::from(PLAYBACK_MAX_WIDTH) / f64::from(width))
+        .min(f64::from(PLAYBACK_MAX_HEIGHT) / f64::from(height))
+        .min(1.0);
+    if scale >= 1.0 {
+        return (width, height);
+    }
+    (
+        nearest_even(f64::from(width) * scale),
+        nearest_even(f64::from(height) * scale),
+    )
+}
+
 fn spatial_video_filter(edit: &EditSpec, scale: &str) -> String {
     let mut filters = Vec::new();
     if let Some(crop) = edit.crop {
@@ -1713,7 +2046,6 @@ fn run_command(
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn read_complete_frame(reader: &mut impl Read, frame: &mut [u8]) -> io::Result<bool> {
     let mut filled = 0;
     while filled < frame.len() {
@@ -1729,6 +2061,91 @@ fn read_complete_frame(reader: &mut impl Read, frame: &mut [u8]) -> io::Result<b
         }
     }
     Ok(true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_playback_frames(
+    mut stdout: impl Read,
+    frame_size: usize,
+    frames_per_second: u16,
+    start_position_ms: u64,
+    end_position_ms: u64,
+    clock: Instant,
+    cancel: &CancelToken,
+    shared: &PlaybackShared,
+) {
+    let mut frame_index = 0_u64;
+    loop {
+        if cancel.is_cancelled() || shared.stop.load(Ordering::Acquire) {
+            return;
+        }
+        let mut pixels = vec![0_u8; frame_size];
+        match read_complete_frame(&mut stdout, &mut pixels) {
+            Ok(true) => {}
+            Ok(false) => {
+                set_playback_end(shared, PlaybackReaderEnd::Eof);
+                return;
+            }
+            Err(error) => {
+                set_playback_end(
+                    shared,
+                    PlaybackReaderEnd::Error(format!(
+                        "failed to read a complete decoded playback frame: {error}"
+                    )),
+                );
+                return;
+            }
+        }
+        let elapsed_ms = frame_index.saturating_mul(1_000) / u64::from(frames_per_second);
+        let position_ms = start_position_ms.saturating_add(elapsed_ms);
+        if position_ms >= end_position_ms {
+            set_playback_end(shared, PlaybackReaderEnd::Eof);
+            return;
+        }
+        let present_at = clock
+            .checked_add(Duration::from_millis(elapsed_ms))
+            .unwrap_or(clock);
+        let mut pending = Some(BufferedPlaybackFrame {
+            frame: MediaPlaybackFrame {
+                position_ms,
+                pixels,
+            },
+            present_at,
+        });
+        let Ok(mut state) = shared.state.lock() else {
+            return;
+        };
+        while state.frame.is_some() {
+            if cancel.is_cancelled() || shared.stop.load(Ordering::Acquire) {
+                return;
+            }
+            if Instant::now() >= present_at {
+                state.frame = pending.take();
+                shared.changed.notify_all();
+                break;
+            }
+            let wait = present_at
+                .saturating_duration_since(Instant::now())
+                .min(PLAYBACK_POLL_INTERVAL);
+            let Ok((next, _)) = shared.changed.wait_timeout(state, wait) else {
+                return;
+            };
+            state = next;
+        }
+        if let Some(frame) = pending.take() {
+            state.frame = Some(frame);
+            shared.changed.notify_all();
+        }
+        drop(state);
+        frame_index = frame_index.saturating_add(1);
+    }
+}
+
+fn set_playback_end(shared: &PlaybackShared, end: PlaybackReaderEnd) {
+    if let Ok(mut state) = shared.state.lock() {
+        state.end = Some(end);
+        shared.changed.notify_all();
+    }
 }
 
 fn complete_child(status: ExitStatus, stderr: &[u8]) -> Result<(), MediaToolError> {

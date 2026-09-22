@@ -2,7 +2,7 @@
 
 use super::region::{RegionPixels, response, text};
 use captures_app::recording_editor::{
-    RecordingEditorOpenRequest, RecordingEditorRequest, RecordingEditorSession,
+    RecordingEditorOpenRequest, RecordingEditorRequest, RecordingEditorSession, RecordingPlayback,
     RecordingSaveRequest, RecordingTimelineThumbnails,
 };
 use captures_media::{CancelToken, ExportProgress, MediaToolchain};
@@ -29,6 +29,7 @@ struct OpenRequest {
 pub type RecordingEditorProgress = Option<unsafe extern "C" fn(*mut c_void, *const c_char)>;
 
 pub struct RecordingEditorThumbnails(RecordingTimelineThumbnails);
+pub struct RecordingEditorPlayback(RecordingPlayback);
 
 /// Open and probe one real History recording on its serialized worker.
 ///
@@ -145,6 +146,103 @@ pub unsafe extern "C" fn captures_recording_editor_frame_free_v1(frame: *mut Arc
     if !frame.is_null() {
         // SAFETY: caller transfers unique box ownership.
         drop(unsafe { Box::from_raw(frame) });
+    }
+}
+
+/// Open persistent silent playback of the accepted edit and preview export.
+///
+/// # Safety
+/// Session is live and serialized for this call. Cancel may be atomically
+/// cancelled elsewhere and is cloned by the returned stream. Non-null output
+/// is aligned writable pointer storage. Free output JSON and playback exactly
+/// once; playback may outlive session and cancel owners.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_playback_open_v1(
+    session: *const RecordingEditorSession,
+    position_ms: u64,
+    cancel: *const CancelToken,
+    output: *mut *mut c_char,
+) -> *mut RecordingEditorPlayback {
+    if output.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains live session/cancel handles for this call.
+        let session = unsafe { session.as_ref() }.ok_or("recording editor handle is null")?;
+        let cancel = unsafe { cancel.as_ref() }.ok_or("recording export cancel handle is null")?;
+        session.playback(position_ms, cancel)
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    let (handle, value) = match result {
+        Ok(playback) => {
+            let value = json!({
+                "ok": true,
+                "result": {
+                    "start_position_ms": playback.start_position_ms(),
+                    "width": playback.width(),
+                    "height": playback.height(),
+                    "frames_per_second": playback.frames_per_second(),
+                },
+            });
+            (
+                Box::into_raw(Box::new(RecordingEditorPlayback(playback))),
+                value,
+            )
+        }
+        Err(error) => (ptr::null_mut(), json!({"ok":false,"error":error})),
+    };
+    // SAFETY: caller supplies aligned writable output storage.
+    unsafe { output.write(response(value)) };
+    handle
+}
+
+/// Return one clock-paced frame, clean EOF, or an owned error response.
+///
+/// # Safety
+/// Playback is live, exclusive, and serialized for this call. Non-null output
+/// is aligned writable pointer storage. Null output refuses work without
+/// advancing playback. Free response JSON and any returned frame exactly once;
+/// the frame may outlive playback and session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_playback_next_v1(
+    playback: *mut RecordingEditorPlayback,
+    output: *mut *mut c_char,
+) -> *mut Arc<RgbaImage> {
+    if output.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains exclusive playback ownership for this call.
+        let playback = unsafe { playback.as_mut() }.ok_or("recording playback handle is null")?;
+        playback.0.next_frame()
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    let (handle, value) = match result {
+        Ok(Some(frame)) => {
+            let position_ms = frame.position_ms;
+            (
+                Box::into_raw(Box::new(frame.pixels())),
+                json!({"ok":true,"result":{"eof":false,"position_ms":position_ms}}),
+            )
+        }
+        Ok(None) => (ptr::null_mut(), json!({"ok":true,"result":{"eof":true}})),
+        Err(error) => (ptr::null_mut(), json!({"ok":false,"error":error})),
+    };
+    // SAFETY: caller supplies aligned writable output storage.
+    unsafe { output.write(response(value)) };
+    handle
+}
+
+/// # Safety
+/// Null or a live exclusive playback owner. Drop stops, kills if necessary,
+/// reaps, and joins the decoder without cancelling the caller's token.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_playback_free_v1(
+    playback: *mut RecordingEditorPlayback,
+) {
+    if !playback.is_null() {
+        // SAFETY: caller transfers unique box ownership.
+        drop(unsafe { Box::from_raw(playback) });
     }
 }
 
@@ -411,6 +509,53 @@ mod tests {
             }
             .is_null()
         );
+        let mut playback_response = ptr::null_mut();
+        // SAFETY: output is writable; null session is an explicit owned error.
+        let playback = unsafe {
+            captures_recording_editor_playback_open_v1(
+                ptr::null(),
+                0,
+                ptr::null(),
+                &mut playback_response,
+            )
+        };
+        assert!(playback.is_null());
+        // SAFETY: failed open returned one owned response.
+        let playback_response = unsafe { json(playback_response) };
+        assert_eq!(playback_response["ok"], false);
+        assert_eq!(
+            playback_response["error"],
+            "recording editor handle is null"
+        );
+        // SAFETY: null output refuses work and null playback returns an owned error.
+        assert!(
+            unsafe {
+                captures_recording_editor_playback_open_v1(
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    ptr::null_mut(),
+                )
+            }
+            .is_null()
+        );
+        let mut playback_next_response = ptr::null_mut();
+        assert!(
+            unsafe {
+                captures_recording_editor_playback_next_v1(
+                    ptr::null_mut(),
+                    &mut playback_next_response,
+                )
+            }
+            .is_null()
+        );
+        // SAFETY: null playback returned one owned response.
+        let playback_next_response = unsafe { json(playback_next_response) };
+        assert_eq!(playback_next_response["ok"], false);
+        assert_eq!(
+            playback_next_response["error"],
+            "recording playback handle is null"
+        );
 
         let sentinel = RegionPixels {
             data: ptr::dangling(),
@@ -439,6 +584,7 @@ mod tests {
         // SAFETY: every explicit free accepts null as a no-op.
         unsafe {
             captures_recording_editor_frame_free_v1(ptr::null_mut());
+            captures_recording_editor_playback_free_v1(ptr::null_mut());
             captures_recording_editor_thumbnails_free_v1(ptr::null_mut());
             captures_recording_editor_cancel_free_v1(ptr::null_mut());
             captures_recording_editor_free_v1(ptr::null_mut());
@@ -569,11 +715,50 @@ mod tests {
         let response = unsafe { json(response) };
         assert_eq!(response["result"]["frame_count"], 12);
         assert_eq!(response["result"]["sprite_width"], 1_920);
-        // SAFETY: generation is complete, so session and cancel owners may be released.
+
+        let mut playback_response = ptr::null_mut();
+        // SAFETY: handles/output stay live through playback open.
+        let playback = unsafe {
+            captures_recording_editor_playback_open_v1(session, 0, cancel, &mut playback_response)
+        };
+        assert!(!playback.is_null());
+        // SAFETY: open returned one owned response.
+        let playback_response = unsafe { json(playback_response) };
+        assert_eq!(playback_response["result"]["start_position_ms"], 0);
+        assert_eq!(playback_response["result"]["width"], 32);
+        assert_eq!(playback_response["result"]["height"], 24);
+        // SAFETY: null output refuses work without advancing the live playback.
+        assert!(
+            unsafe { captures_recording_editor_playback_next_v1(playback, ptr::null_mut()) }
+                .is_null()
+        );
+        let mut next_response = ptr::null_mut();
+        // SAFETY: playback/output remain live for the exclusive next call.
+        let playback_frame =
+            unsafe { captures_recording_editor_playback_next_v1(playback, &mut next_response) };
+        assert!(!playback_frame.is_null());
+        // SAFETY: next returned one owned response.
+        let next_response = unsafe { json(next_response) };
+        assert_eq!(next_response["result"]["eof"], false);
+        assert_eq!(next_response["result"]["position_ms"], 0);
+
+        // SAFETY: playback/generation are complete, so owners may be released.
         unsafe {
+            captures_recording_editor_playback_free_v1(playback);
             captures_recording_editor_free_v1(session);
             captures_recording_editor_cancel_free_v1(cancel);
         }
+
+        let mut playback_pixels = MaybeUninit::<RegionPixels>::uninit();
+        // SAFETY: retained frame remains live after playback/session/cancel free.
+        assert!(unsafe {
+            captures_recording_editor_frame_pixels_v1(playback_frame, playback_pixels.as_mut_ptr())
+        });
+        // SAFETY: successful access initialized the descriptor.
+        let playback_pixels = unsafe { playback_pixels.assume_init() };
+        assert_eq!((playback_pixels.width, playback_pixels.height), (32, 24));
+        // SAFETY: retained frame is released once after the final borrow.
+        unsafe { captures_recording_editor_frame_free_v1(playback_frame) };
 
         let mut pixels = MaybeUninit::<RegionPixels>::uninit();
         // SAFETY: the independent thumbnail owner remains live.

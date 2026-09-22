@@ -454,8 +454,8 @@ bool captures_recording_timeline_trim_update_v1(CapturesRecordingTimelineTrimDra
  * preview_export identifies the first export attempt represented by the retained
  * frame. WebM and size-budget previews are unavailable. Accepted requests atomically
  * replace snapshot/frame; failures retain the last good snapshot, frame and revision.
- * Free every JSON response with captures_settings_free_v1. No playback, audio
- * output, persistent draft, replacement, account, or release behavior exists. */
+ * Free every JSON response with captures_settings_free_v1. No audio playback,
+ * persistent draft, replacement, account, or release behavior exists. */
 typedef struct CapturesRecordingEditorSession CapturesRecordingEditorSession;
 typedef struct CapturesRecordingEditorFrame CapturesRecordingEditorFrame;
 typedef struct CapturesRecordingEditorCancel CapturesRecordingEditorCancel;
@@ -471,6 +471,28 @@ CapturesRecordingEditorFrame *captures_recording_editor_frame_v1(
 bool captures_recording_editor_frame_pixels_v1(const CapturesRecordingEditorFrame *frame,
     CapturesRegionPixels *output);
 void captures_recording_editor_frame_free_v1(CapturesRecordingEditorFrame *frame);
+
+/* Persistent silent playback of accepted edit + preview_export. position_ms is
+ * source-relative and normalizes outside accepted [trim_start,trim_end) to trim
+ * start. Success returns a stream plus owned {ok:true,result:{start_position_ms,
+ * width,height,frames_per_second}}. Output is aspect-preserving RGBA8 bounded to
+ * 1280x720 and at most 30fps. Each next call blocks for shared monotonic pacing:
+ * a frame returns its retained CapturesRecordingEditorFrame plus owned
+ * {ok:true,result:{eof:false,position_ms}}; exclusive trim end returns NULL plus
+ * {ok:true,result:{eof:true}}; failures return NULL plus {ok:false,error}.
+ * output_json must be non-NULL; NULL refuses work and next does not advance.
+ * Stream/frame may outlive session and cancel owners. Caller cancellation
+ * interrupts pacing/reads; normal EOF/free never marks that token cancelled.
+ * Free stream to stop/kill/reap/join its one FFmpeg process. Frames use the
+ * existing pixel/free functions and may outlive the stream. NULL free allowed. */
+typedef struct CapturesRecordingEditorPlayback CapturesRecordingEditorPlayback;
+CapturesRecordingEditorPlayback *captures_recording_editor_playback_open_v1(
+    const CapturesRecordingEditorSession *session, uint64_t position_ms,
+    const CapturesRecordingEditorCancel *cancel, char **output_json);
+CapturesRecordingEditorFrame *captures_recording_editor_playback_next_v1(
+    CapturesRecordingEditorPlayback *playback, char **output_json);
+void captures_recording_editor_playback_free_v1(
+    CapturesRecordingEditorPlayback *playback);
 
 /* Blocking full-source thumbnail generation on the serialized session worker.
  * It uses the shipping 12-frame 160x90 sampling/filter and ignores accepted
