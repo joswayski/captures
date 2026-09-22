@@ -775,7 +775,7 @@ protocol EditorWorking: AnyObject {
     func importImage(_ image: EditorDecodedImage, selectedID: String?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void)
     func close()
-    func prepareForTermination(textInput: EditorTerminationTextInput? = nil) -> Result<Void, Error>
+    func prepareForTermination(textInput: EditorTerminationTextInput?) -> Result<Void, Error>
 }
 
 /// The opaque mutable session never leaves this queue. Frame ownership is split
