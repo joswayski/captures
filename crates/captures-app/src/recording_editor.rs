@@ -293,7 +293,7 @@ impl RecordingEditorSession {
             &self.edit,
             self.has_system_audio,
             self.has_microphone_audio,
-            probe.has_audio,
+            &probe,
         );
         let entry = HistoryEntry {
             id: id.clone(),
@@ -346,15 +346,15 @@ fn output_audio(
     edit: &EditSpec,
     source_system: bool,
     source_microphone: bool,
-    output_has_audio: bool,
+    output: &ProbeResult,
 ) -> (bool, bool) {
-    if kind == ArtifactKind::Gif || !output_has_audio {
+    if kind == ArtifactKind::Gif || !output.has_audio {
         return (false, false);
     }
-    match (
-        source_system && !edit.audio.mute_system_audio,
-        source_microphone && !edit.audio.mute_microphone,
-    ) {
+    let system = source_system && !edit.audio.mute_system_audio;
+    let microphone = source_microphone && !edit.audio.mute_microphone;
+    match (system, microphone) {
+        (true, true) if output.audio_stream_count >= 2 => (true, true),
         (false, true) => (false, true),
         (true, _) => (true, false),
         (false, false) => (false, false),
