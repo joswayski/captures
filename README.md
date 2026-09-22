@@ -243,6 +243,8 @@ The preview identifies its accepted format/quality, and saving uses those settin
 Available system and microphone tracks have independent volume/mute controls plus
 mono output. These settings apply to MP4 exports; the frame preview is silent.
 GIF disables audio controls without discarding the MP4 settings.
+Original, 1080p maximum and 720p maximum output presets preserve the current crop's
+aspect ratio and never upscale. Custom dimensions override the preset.
 Custom dimensions are independent (no aspect lock); the shared media engine rounds
 sizes to even pixels.
 Re-encoded Windows/Linux MP4 fits within 3840 × 2160 (2160 × 3840 for portrait);
@@ -250,7 +252,7 @@ its preview reflects that cap, while GIF previews retain their requested dimensi
 Exports report progress, support cancellation, never replace an existing file, and
 add a distinct History item. A History failure retains the saved path for recovery.
 Recording edits are not drafts: save or explicitly discard them before closing or
-quitting. Playback, graphical trim/crop handles, resolution presets and AppKit
+quitting. Playback, graphical trim/crop handles and AppKit
 recording editing remain unconnected; this is not Tauri editor parity.
 History displays recording posters and metadata; **Save file**
 copies the original media to the output folder without re-encoding, and
