@@ -51,7 +51,14 @@ New Capture shortcut restores it; Hide is disabled if no tray restore path exist
 tray-host loss restores the HUD and workspace. Microphone mute/unmute rotates the active segment without
 changing the selected device or global preference, while paused changes remain
 paused; mic-less sessions explain why the control is unavailable. Successful output is listed in native History with its
-poster and metadata. The native recording editor is not connected yet.
+poster and metadata. **Edit recording** opens a decoded-frame editor with staged
+graphical/numeric trim, numeric crop/output size, audio settings and MP4/GIF
+save-new-copy. Trim grips share the shipping pointer geometry and support focused
+arrow/Page Up/Page Down keys. Dragging changes staged values, not decoded frames;
+Apply publishes the preview before seeking, estimating or saving. Playback and
+thumbnail timelines remain unimplemented. See the
+[recording-editor status](../../../docs/native-rewrite.md#recording-editor-first-wgpu-host-not-playback-parity)
+for accepted-frame, export and platform limitations.
 After finalization, a fixed-glass Recording ready notice offers Save file using
 the current output folder, followed by Show in Folder for the saved copy. It does
 not activate the root; hidden-root actions and expiry work through one-shot
@@ -239,7 +246,7 @@ quits so the process cannot be stranded. Opening the output folder also requires
 | HUD | Running/paused/muted/busy/no-microphone fixture matching the bounded live controls; fixed glass palette even in light mode; live Hide/temporary notice/restore | Screenshot during recording |
 | Preview | Cold/reused texture, fade/settle, reset mid-animation, explicit Reduce motion, optional transparent native window | **Not the shipping dust effect**: no isolated-chip blur, dust trajectories, source treatment or pile/drag/hit-region parity |
 | Editor | 2048×1152 synthetic image, clipped canvas, pan/zoom/rotate, separate outline/text layers, editable text field | Real document, layer editing/undo/export; outlines/text do not rotate with the image |
-| Capture Controls | Unified Screenshot/Record and Region/Window/Full screen controls over one prepared session; recording options, frozen/live previews, aspect/display pickers, keyboard confirm/cancel and draggable toolbar | Fixture uses synthetic pixels; recording editor/export remains unconnected |
+| Capture Controls | Unified Screenshot/Record and Region/Window/Full screen controls over one prepared session; recording options, frozen/live previews, aspect/display pickers, keyboard confirm/cancel and draggable toolbar | Fixture uses synthetic pixels; real recording editing/export is a separate History action |
 | Region | Deterministic blank/draw/move/corner-resize/aspect/Shift/cancel selector fixture using the live component | Fixture uses synthetic pixels and does not request screen permission |
 | Window | Deterministic blank/frontmost-overlap/window/shell/display/cancel fixture using the live component and shared hit testing | Fixture uses synthetic pixels and does not request screen permission |
 | Idle | Hidden native window; no scheduled application work except optional quit deadline | Process/GPU teardown after last window; production tray lifecycle |

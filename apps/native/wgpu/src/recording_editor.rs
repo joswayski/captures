@@ -13,6 +13,7 @@ use captures_app::recording_editor::{
     RecordingEditorOpenRequest, RecordingEditorRequest, RecordingEditorSession,
     RecordingSaveRequest, SavedRecording,
 };
+use captures_app::recording_timeline::{TimelineTrimDrag, TimelineTrimEdge, timeline_ratio};
 use captures_media::{
     AudioEdit, CancelToken, CropRect, EditSpec, ExportEstimate, ExportFormat, ExportProgress,
     ExportSpec, MediaMetadata, MediaToolchain, QualityPreset,
@@ -59,6 +60,12 @@ enum Event {
     Destination(Option<PathBuf>),
 }
 
+struct TrimGesture {
+    edge: TimelineTrimEdge,
+    drag: TimelineTrimDrag,
+    track: egui::Rect,
+}
+
 #[derive(Default)]
 struct View {
     presented: Option<Presented>,
@@ -75,6 +82,7 @@ struct View {
     saved_export: Option<ExportSpec>,
     start_ms: u64,
     end_ms: u64,
+    trim_gesture: Option<TrimGesture>,
     crop: Option<CropRect>,
     crop_aspect_unlocked: bool,
     output_size: Option<(u32, u32)>,
@@ -176,6 +184,7 @@ impl View {
         if self.busy || self.picker {
             return;
         }
+        self.trim_gesture = None;
         let estimating = matches!(job, Job::Estimate(_));
         match tx.send(job) {
             Ok(()) => {
@@ -299,6 +308,7 @@ impl View {
     }
 
     fn request_close(&mut self) {
+        self.trim_gesture = None;
         if self.busy || self.picker {
             self.error =
                 Some("Wait for the current operation, or cancel it, before closing.".into());
@@ -529,6 +539,235 @@ impl Drop for Editor {
     }
 }
 
+fn show_trim_timeline(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    duration: u64,
+    rect: egui::Rect,
+) {
+    let grip_width = tokens.number("s-6");
+    let track = rect.shrink2(egui::vec2(grip_width, 0.));
+    if track.width() <= 0. || duration == 0 {
+        view.trim_gesture = None;
+        return;
+    }
+    let handles = |start: u64, end: u64| {
+        let start = track.left()
+            + timeline_ratio(start as f64, duration as f64).unwrap_or(0.) as f32 * track.width();
+        let end = track.left()
+            + timeline_ratio(end as f64, duration as f64).unwrap_or(1.) as f32 * track.width();
+        // Grips sit outside the selected interval, so even a 1 ms selection
+        // leaves distinct start/end hit regions. Both remain inside the row.
+        [
+            egui::Rect::from_min_max(
+                egui::pos2(start - grip_width, rect.top()),
+                egui::pos2(start, rect.bottom()),
+            ),
+            egui::Rect::from_min_max(
+                egui::pos2(end, rect.top()),
+                egui::pos2(end + grip_width, rect.bottom()),
+            ),
+        ]
+    };
+    let enabled = ui.is_enabled()
+        && !view.busy
+        && !view.picker
+        && !view.confirm_close
+        && view.start_ms < view.end_ms
+        && view.end_ms <= duration
+        && ui.input(|input| input.focused)
+        && !egui::Popup::is_any_open(ui.ctx());
+    let handle_rects = handles(view.start_ms, view.end_ms);
+    let responses = ["Trim start", "Trim end"].map(|label| {
+        let index = usize::from(label == "Trim end");
+        ui.interact(handle_rects[index], ui.scope_id().with(label),
+                    if enabled { egui::Sense::click_and_drag() } else { egui::Sense::hover() })
+            .on_hover_text(format!("{label}: {} ms. Drag or use arrow keys/Page Up/Page Down. Apply edits to update the preview.",
+                                   if index == 0 { view.start_ms } else { view.end_ms }))
+    });
+    if !enabled
+        || view
+            .trim_gesture
+            .as_ref()
+            .is_some_and(|gesture| gesture.track != track)
+    {
+        // Match shipping pointer cancellation: keep the last staged values.
+        view.trim_gesture = None;
+    }
+    if enabled && ui.ctx().current_pass_index() == 0 {
+        for event in ui.input(|input| input.events.clone()) {
+            match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    ..
+                } => {
+                    view.trim_gesture = None;
+                    if !ui.clip_rect().contains(pos) {
+                        continue;
+                    }
+                    if let Some(index) = handles(view.start_ms, view.end_ms)
+                        .iter()
+                        .position(|rect| rect.contains(pos))
+                    {
+                        let edge = if index == 0 {
+                            TimelineTrimEdge::Start
+                        } else {
+                            TimelineTrimEdge::End
+                        };
+                        if let Some(drag) = TimelineTrimDrag::begin(
+                            edge,
+                            f64::from(pos.x),
+                            view.start_ms as f64,
+                            view.end_ms as f64,
+                            duration as f64,
+                        ) {
+                            responses[index].request_focus();
+                            view.trim_gesture = Some(TrimGesture { edge, drag, track });
+                        }
+                    }
+                }
+                egui::Event::PointerMoved(pos) => {
+                    if let Some(gesture) = &mut view.trim_gesture
+                        && let Some(update) = gesture.drag.update(
+                            f64::from(pos.x),
+                            f64::from(track.left()),
+                            f64::from(track.width()),
+                        )
+                    {
+                        gesture.drag = update.drag;
+                        let value = update.time_ms.round() as u64;
+                        match gesture.edge {
+                            TimelineTrimEdge::Start => view.start_ms = value,
+                            TimelineTrimEdge::End => view.end_ms = value,
+                        }
+                    }
+                }
+                egui::Event::PointerButton {
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    ..
+                }
+                | egui::Event::PointerGone => view.trim_gesture = None,
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    pressed: true,
+                    ..
+                } => {
+                    view.trim_gesture = None;
+                }
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if modifiers == egui::Modifiers::NONE => {
+                    let step = if duration < 60_000 { 1. } else { 10. };
+                    let delta = match key {
+                        egui::Key::ArrowLeft | egui::Key::ArrowDown => -step,
+                        egui::Key::ArrowRight | egui::Key::ArrowUp => step,
+                        egui::Key::PageDown => -1000.,
+                        egui::Key::PageUp => 1000.,
+                        _ => continue,
+                    };
+                    if let Some(index) = responses.iter().position(|response| response.has_focus())
+                    {
+                        ui.input_mut(|input| input.consume_key(modifiers, key));
+                        view.trim_gesture = None;
+                        if index == 0 {
+                            view.start_ms = (view.start_ms as f64 + delta)
+                                .clamp(0., (view.end_ms - 1) as f64)
+                                as u64;
+                        } else {
+                            view.end_ms = (view.end_ms as f64 + delta)
+                                .clamp((view.start_ms + 1) as f64, duration as f64)
+                                as u64;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let [start, end] = handles(view.start_ms, view.end_ms);
+    ui.painter()
+        .rect_filled(track, 0., tokens.color("surface-sunken"));
+    if start.right() <= end.left() {
+        let selected = egui::Rect::from_min_max(
+            egui::pos2(start.right(), track.top()),
+            egui::pos2(end.left(), track.bottom()),
+        );
+        ui.painter()
+            .rect_filled(selected, 0., tokens.color("surface-selected"));
+        ui.painter().rect_stroke(
+            selected,
+            0.,
+            egui::Stroke::new(1., tokens.color("theme-accent")),
+            egui::StrokeKind::Inside,
+        );
+    }
+    for (index, handle) in [start, end].into_iter().enumerate() {
+        let response = &responses[index];
+        if enabled && response.has_focus() {
+            // Arrow keys adjust this slider instead of moving egui focus to a
+            // neighboring widget before the following key event arrives.
+            ui.memory_mut(|memory| {
+                memory.set_focus_lock_filter(
+                    response.id,
+                    egui::EventFilter {
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        ..Default::default()
+                    },
+                )
+            });
+        }
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Slider,
+                enabled,
+                format!(
+                    "Trim {}: {} ms",
+                    if index == 0 { "start" } else { "end" },
+                    if index == 0 {
+                        view.start_ms
+                    } else {
+                        view.end_ms
+                    }
+                ),
+            )
+        });
+        ui.painter()
+            .rect_filled(handle, tokens.number("r-sm"), tokens.color("control"));
+        ui.painter().rect_stroke(
+            handle,
+            tokens.number("r-sm"),
+            egui::Stroke::new(
+                1.,
+                tokens.color(if enabled && (response.hovered() || response.has_focus()) {
+                    "theme-accent"
+                } else {
+                    "control-border"
+                }),
+            ),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter().vline(
+            handle.center().x,
+            handle.y_range().shrink(tokens.number("s-2")),
+            egui::Stroke::new(
+                1.,
+                tokens.color(if enabled { "text" } else { "text-muted" }),
+            ),
+        );
+        if enabled && response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+    }
+}
+
 fn show(
     ui: &mut egui::Ui,
     tokens: &Tokens,
@@ -729,7 +968,13 @@ fn show(
                     });
                 });
                 ui.group(|ui| {
-                    ui.strong("Trim");
+                    ui.set_min_width(ui.available_width());
+                    let heading = ui.strong("Trim");
+                    let timeline = egui::Rect::from_min_max(
+                        egui::pos2(heading.rect.right() + tokens.number("s-5"), heading.rect.top()),
+                        egui::pos2(ui.max_rect().right(), heading.rect.bottom()),
+                    ).expand2(egui::vec2(0., tokens.number("s-2")));
+                    show_trim_timeline(ui, tokens, view, duration, timeline);
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Start (ms)");
                         ui.add(egui::DragValue::new(&mut view.start_ms).range(0..=duration));
@@ -936,6 +1181,258 @@ mod tests {
             })),
         );
         view
+    }
+
+    fn timeline_frame(
+        ctx: &egui::Context,
+        tokens: &Tokens,
+        view: &mut View,
+        events: Vec<egui::Event>,
+        rect: egui::Rect,
+        focused: bool,
+    ) {
+        let duration = view.presented.as_ref().unwrap().source.duration_ms.unwrap();
+        let mut passes = 0;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800., 200.),
+                )),
+                events,
+                focused,
+                ..Default::default()
+            },
+            |ui| {
+                passes += 1;
+                show_trim_timeline(ui, tokens, view, duration, rect);
+                if ctx.current_pass_index() == 0 {
+                    ctx.request_discard("trim input must run once");
+                }
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(passes, 2);
+    }
+
+    fn trim_pointer(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn trim_key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn trim_pointer_stages_once_preserves_grab_offset_and_never_changes_accepted_frame() {
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let ctx = egui::Context::default();
+        let grip = tokens.number("s-6");
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(40., 40.), egui::vec2(400. + 2. * grip, 24.));
+        let down = egui::pos2(40. + grip / 2., 52.);
+        let mut view = opened();
+        let accepted = view.presented.as_ref().unwrap().frame.clone();
+        let frame =
+            |view: &mut View, events| timeline_frame(&ctx, &tokens, view, events, rect, true);
+        frame(&mut view, vec![]);
+        frame(
+            &mut view,
+            vec![
+                trim_pointer(down, true),
+                egui::Event::PointerMoved(down + egui::vec2(2.99, 0.)),
+            ],
+        );
+        assert_eq!(
+            view.start_ms, 0,
+            "a click or subthreshold move must not jump the trim"
+        );
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(down + egui::vec2(3., 0.))],
+        );
+        assert_eq!(view.start_ms, 23, "3px / 400px × 3100ms rounds to 23ms");
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(down + egui::vec2(40., 0.))],
+        );
+        assert_eq!(
+            view.start_ms, 310,
+            "delta is measured from the original grab, not the moved grip"
+        );
+        assert!(
+            view.trim_gesture.is_some(),
+            "a second layout pass cannot replay pointer down"
+        );
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(egui::pos2(4000., 52.))],
+        );
+        assert_eq!(
+            view.start_ms, 310,
+            "wild coordinates retain the last accepted sample"
+        );
+        let release = down + egui::vec2(100., 0.);
+        frame(
+            &mut view,
+            vec![
+                egui::Event::PointerMoved(release),
+                trim_pointer(release, false),
+                egui::Event::PointerMoved(down + egui::vec2(200., 0.)),
+            ],
+        );
+        assert_eq!((view.start_ms, view.end_ms), (775, 3100));
+        assert!(view.trim_gesture.is_none() && view.unapplied() && view.dirty());
+        assert_eq!(view.position_ms, 700);
+        assert_eq!(view.presented.as_ref().unwrap().edit, EditSpec::default());
+        assert!(Arc::ptr_eq(
+            &accepted,
+            &view.presented.as_ref().unwrap().frame
+        ));
+        assert!(!view.busy && !view.history_changed);
+        assert_eq!(view.estimate_label(), "Apply edits to estimate size");
+    }
+
+    #[test]
+    fn trim_cancellation_and_busy_gates_keep_staged_values_without_resuming_a_drag() {
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let grip = tokens.number("s-6");
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(40., 40.), egui::vec2(400. + 2. * grip, 24.));
+        for reason in [
+            "escape",
+            "pointer gone",
+            "focus",
+            "resize",
+            "busy",
+            "picker",
+            "close",
+        ] {
+            let ctx = egui::Context::default();
+            let mut view = opened();
+            let down = egui::pos2(rect.right() - grip / 2., 52.);
+            timeline_frame(&ctx, &tokens, &mut view, vec![], rect, true);
+            timeline_frame(
+                &ctx,
+                &tokens,
+                &mut view,
+                vec![
+                    trim_pointer(down, true),
+                    egui::Event::PointerMoved(down - egui::vec2(40., 0.)),
+                ],
+                rect,
+                true,
+            );
+            assert_eq!(view.end_ms, 2790, "{reason}: end drag must be established");
+            let events = match reason {
+                "escape" => vec![trim_key(egui::Key::Escape)],
+                "pointer gone" => vec![egui::Event::PointerGone],
+                "busy" => {
+                    view.busy = true;
+                    vec![]
+                }
+                "picker" => {
+                    view.picker = true;
+                    vec![]
+                }
+                "close" => {
+                    view.request_close();
+                    vec![]
+                }
+                _ => vec![],
+            };
+            let resized = if reason == "resize" {
+                rect.translate(egui::vec2(3., 0.))
+            } else {
+                rect
+            };
+            timeline_frame(&ctx, &tokens, &mut view, events, resized, reason != "focus");
+            assert!(view.trim_gesture.is_none(), "{reason}");
+            view.busy = false;
+            view.picker = false;
+            view.confirm_close = false;
+            timeline_frame(
+                &ctx,
+                &tokens,
+                &mut view,
+                vec![egui::Event::PointerMoved(down - egui::vec2(80., 0.))],
+                resized,
+                true,
+            );
+            assert_eq!(
+                (view.start_ms, view.end_ms),
+                (0, 2790),
+                "{reason}: no rollback or resurrection"
+            );
+        }
+    }
+
+    #[test]
+    fn trim_keyboard_is_focus_scoped_and_preserves_one_millisecond_span() {
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let grip = tokens.number("s-6");
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(40., 40.), egui::vec2(400. + 2. * grip, 24.));
+        for duration in [59_999, 60_000] {
+            let ctx = egui::Context::default();
+            let mut view = opened();
+            view.end_ms = duration;
+            view.presented.as_mut().unwrap().source.duration_ms = Some(duration);
+            let frame =
+                |view: &mut View, events| timeline_frame(&ctx, &tokens, view, events, rect, true);
+            frame(&mut view, vec![]);
+            frame(&mut view, vec![trim_key(egui::Key::PageDown)]);
+            assert_eq!(view.end_ms, duration, "unfocused keys must not change trim");
+            let down = egui::pos2(rect.right() - grip / 2., 52.);
+            frame(
+                &mut view,
+                vec![trim_pointer(down, true), trim_pointer(down, false)],
+            );
+            frame(
+                &mut view,
+                vec![
+                    trim_key(egui::Key::ArrowLeft),
+                    trim_key(egui::Key::ArrowLeft),
+                ],
+            );
+            assert_eq!(
+                view.end_ms,
+                duration - if duration < 60_000 { 2 } else { 20 }
+            );
+            frame(&mut view, vec![trim_key(egui::Key::PageDown)]);
+            assert_eq!(
+                view.end_ms,
+                duration - if duration < 60_000 { 1002 } else { 1020 }
+            );
+            view.start_ms = view.end_ms - 3;
+            frame(&mut view, vec![trim_key(egui::Key::PageDown)]);
+            assert_eq!(view.end_ms, view.start_ms + 1);
+            let down = egui::pos2(
+                rect.left() + grip + 400. * view.start_ms as f32 / duration as f32 - grip / 2.,
+                52.,
+            );
+            frame(
+                &mut view,
+                vec![trim_pointer(down, true), trim_pointer(down, false)],
+            );
+            frame(&mut view, vec![trim_key(egui::Key::PageUp)]);
+            assert_eq!(
+                view.start_ms,
+                view.end_ms - 1,
+                "adjacent grips keep distinct focus/hit regions"
+            );
+        }
     }
 
     #[test]

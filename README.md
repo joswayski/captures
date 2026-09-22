@@ -236,10 +236,12 @@ successful screenshots use the normal native History, preview and auto-copy path
 AppKit and Windows can exclude native capture UI. X11 temporarily hides the HUD and
 guide from the screenshot, but cannot keep the selector out of the ongoing recording.
 The Windows/Linux candidate's **Edit recording** opens a decoded frame preview
-with source-relative scrubbing, numeric trim/crop controls, custom output dimensions
+with source-relative scrubbing, draggable trim handles, numeric trim/crop controls, custom output dimensions
 and MP4/GIF **Save new copy**. Crop dimensions start aspect-locked; unlock to change
 width and height independently. Apply edits accepts the format, quality and edits
 together before saving; failed updates leave the last accepted frame intact.
+Trim handles stage changes without decoding on each pointer move; Apply updates
+the preview. Focused handles also accept arrow keys and Page Up/Page Down.
 The preview identifies its accepted format/quality, and saving uses those settings.
 **Estimate size** checks those accepted settings without publishing an export.
 Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
@@ -259,7 +261,7 @@ Recording edits are not drafts: save or explicitly discard them before closing o
 quitting. AppKit connects a separate History editor with decoded source-relative
 frames, numeric trim, accepted MP4/GIF settings, size estimation and cancellable
 **Save new copy**. It does not yet expose the Windows/Linux crop, resize, audio or
-resolution controls. Playback and graphical trim/crop handles remain absent; this
+resolution controls or trim handles. Playback and graphical crop handles remain absent; this
 is not Tauri editor parity.
 History displays recording posters and metadata; **Save file**
 copies the original media to the output folder without re-encoding, and

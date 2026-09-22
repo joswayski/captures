@@ -89,6 +89,12 @@ jobs:
         run: |
           /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --crop-aspect --appearance light --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-crop-light
           /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --crop-aspect --presets --appearance dark --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-crop-dark
+      - name: Exercise recording trim handles and exports on private X11
+        if: runner.os == 'Linux'
+        run: |
+          for appearance in dark light; do
+            /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --timeline --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-timeline-$appearance"
+          done
       - name: Exercise recording-ready save, retry and expiry with a hidden root
         if: runner.os == 'Linux'
         run: |

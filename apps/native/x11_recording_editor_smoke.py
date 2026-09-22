@@ -31,6 +31,7 @@ def main():
     parser.add_argument("--presets", action="store_true", help="Exercise output presets on a portrait source")
     parser.add_argument("--crop-aspect", action="store_true", help="Exercise locked/unlocked numeric crop dimensions")
     parser.add_argument("--estimate", action="store_true", help="Exercise exact size estimates and missing-source retry")
+    parser.add_argument("--timeline", action="store_true", help="Exercise graphical trim staging, keyboard input and export")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -194,6 +195,81 @@ def main():
         dominant(output / "original.png", 0)
         run("xdotool", "windowminimize", root, "sleep", ".5")
         estimate_expectations = {}
+        if args.timeline:
+            def read_time(x):
+                click(editor, x, 598)
+                run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+                return int(run("xclip", "-selection", "clipboard", "-o").strip())
+
+            def drag(x, delta, cancel=False):
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), "563",
+                    "mousedown", "1", "sleep", ".15", "mousemove_relative", "--sync", "--",
+                    str(delta), "0", "sleep", ".2")
+                if cancel:
+                    run("xdotool", "key", "Escape", "mousemove_relative", "--sync", "--", "100", "0")
+                run("xdotool", "mouseup", "1", "sleep", ".2")
+
+            # Grab inside each grip, rather than at the interval boundary.
+            # Time is measured from that original pointer, not absolute x.
+            drag(55, 2)
+            assert read_time(98) == 0, "subthreshold drag cannot jump trim start"
+            drag(55, 300)
+            start = read_time(98)
+            assert 1000 <= start <= 1100, ("start drag", start)
+            drag(938, -200)
+            end = read_time(211)
+            assert 2250 <= end <= 2400, ("end drag", end)
+            drag(355, 15, cancel=True)
+            cancelled_start = read_time(98)
+            assert 45 <= cancelled_start - start <= 60, (start, cancelled_start)
+            # A click focuses a handle without changing its value. Keyboard
+            # adjustment must happen once, even across egui layout passes.
+            click(editor, 370, 563)
+            run("xdotool", "key", "Right", "sleep", ".2")
+            start = read_time(98)
+            assert start == cancelled_start + 1, ("focused keyboard step", start, cancelled_start)
+            shot(editor, "timeline-staged")
+            dominant(output / "timeline-staged.png", 0)
+            destination = exports / "timeline.mp4"
+            field(editor, 360, 838, destination)
+            click(editor, 899, 882)
+            assert not destination.exists() and len(list(history.glob("*/metadata.json"))) == 1
+            click(editor, 793, 882)
+            field(editor, 136, 520, 1500)
+            click(editor, 222, 520)
+            shot(editor, "timeline-applied")
+            dominant(output / "timeline-applied.png", 1)
+            click(editor, 899, 882)
+            wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "timeline export published")
+            info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-of", "json", str(destination)))
+            expected_seconds = (end - start) / 1000
+            assert 1.1 < expected_seconds < 1.4
+            assert abs(float(info["format"]["duration"]) - expected_seconds) < .15, info
+            dominant(destination, 1, .1)
+            dominant(destination, 2, 1.0)
+            click(editor, 87, 882)
+            click(editor, 793, 882)
+            click(editor, 899, 882)
+            gif = destination.with_suffix(".gif")
+            wait(lambda: len(list(history.glob("*/metadata.json"))) == 3, "timeline GIF published")
+            dominant(gif, 1, .1)
+            dominant(gif, 2, 1.0)
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            shot(editor, "timeline-minimum-saved")
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            close(editor)
+            wait(lambda: not windows("Recording editor"), "saved timeline editor closes")
+            close(root)
+            wait(lambda: app.poll() is not None, "timeline quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "trim_start_ms": start, "trim_end_ms": end,
+                "checks": ["subthreshold-click", "start-drag", "end-drag", "escape-retains-last-stage",
+                    "focused-keyboard-step", "accepted-frame-retained", "unapplied-save-gate",
+                    "source-relative-seek", "mp4-duration", "mp4-green-blue", "gif-green-blue",
+                    "history-publication", "minimum-controls", "immutable-source", "saved-close-quit"]}, indent=2) + "\n")
+            print("PASS recording timeline: pointer/keyboard staging, cancellation, save gate, MP4/GIF pixels, immutable source")
+            return
         if args.estimate:
             click(editor, 681, 882)
             shot(editor, "estimate-original")
