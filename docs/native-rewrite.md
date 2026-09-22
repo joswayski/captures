@@ -518,9 +518,15 @@ frame preview remains explicitly silent. AppKit also stages source-relative nume
 crop and Original/1080p/720p or independent custom output dimensions through the
 same atomic Apply flow. Aspect-locked crop dimensions and resolution presets use the
 shared allocation-free geometry; the lock remains UI-only, and Original omits explicit
-output dimensions. Windows/X11 already implement the same controls through wgpu;
+output dimensions. AppKit's trim row also shows the shared fixed 12-frame full-source
+thumbnail strip. Generation runs once after open on the serialized worker, is retained
+separately from accepted edited frames, and has independent loading, cancel, failure
+and retry states; failure leaves the rest of editing available, while accepted work
+keeps the existing close/quit gate. Seeking and applying edits do not regenerate the
+strip or turn thumbnail clicks into a new seek gesture. Windows/X11 already implement
+the same edit controls through wgpu;
 private X11/software-GL exercises provide implementation evidence only. Windows and
-Wayland presentation, physical macOS input, accessibility, playback, thumbnails,
+Wayland presentation, physical macOS input, accessibility, playback,
 physical audio output, graphical crop handles, draft restoration and original
 replacement remain open. No recording-editor or cross-platform parity gate closes.
 
