@@ -1055,8 +1055,10 @@ Both hosts now place the scrolling inspector on the right of the canvas. The wgp
 placement is exercised with real X11 input in all editor test modes and normal/
 minimum-size light/dark fixtures; Windows and Wayland use the same implementation
 but their physical presentation remains unverified. AppKit's existing right-side
-inspector is unchanged. The tool rail, toolbar/export-bar organization and wgpu
-Fit canvas centering still differ from Tauri.
+inspector is unchanged. Both hosts center the Fit canvas, retaining the 2–100%
+range and no-upscale cap. wgpu centers the actual document/output texture after
+crop, resize and reopen; pointer mapping and zoom anchoring use that same rectangle.
+The tool rail and toolbar/export-bar organization still differ from Tauri.
 Remaining viewport controls and other drawing tools are not connected.
 Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.
