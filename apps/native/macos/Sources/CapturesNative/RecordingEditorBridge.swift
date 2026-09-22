@@ -55,6 +55,50 @@ enum RecordingEditorSaveResult: Equatable {
     case savedWithoutHistory(path: String, warning: String)
 }
 
+enum NativeRecordingTimelineEdge: UInt8 {
+    case start = 0
+    case end = 1
+}
+
+struct NativeRecordingTimelineDrag {
+    private var value: CapturesRecordingTimelineTrimDrag
+
+    static func begin(edge: NativeRecordingTimelineEdge, pointerX: Double,
+                      startMilliseconds: Double, endMilliseconds: Double,
+                      durationMilliseconds: Double) -> NativeRecordingTimelineDrag? {
+        var value = CapturesRecordingTimelineTrimDrag()
+        guard captures_recording_timeline_trim_begin_v1(edge.rawValue, pointerX,
+            startMilliseconds, endMilliseconds, durationMilliseconds, &value) else { return nil }
+        return NativeRecordingTimelineDrag(value: value)
+    }
+
+    mutating func update(pointerX: Double, trackLeft: Double,
+                         trackWidth: Double) -> Double? {
+        var output = CapturesRecordingTimelineTrimUpdate()
+        guard captures_recording_timeline_trim_update_v1(value, pointerX, trackLeft,
+                                                          trackWidth, &output) else { return nil }
+        value = output.drag
+        return output.time_ms
+    }
+}
+
+enum NativeRecordingTimeline {
+    static func ratio(milliseconds: Double, durationMilliseconds: Double) -> Double? {
+        var output = 0.0
+        guard captures_recording_timeline_ratio_v1(milliseconds, durationMilliseconds,
+                                                    &output) else { return nil }
+        return output
+    }
+
+    static func time(atX x: Double, trackLeft: Double, trackWidth: Double,
+                     durationMilliseconds: Double) -> Double? {
+        var output = 0.0
+        guard captures_recording_timeline_time_at_x_v1(x, trackLeft, trackWidth,
+                                                       durationMilliseconds, &output) else { return nil }
+        return output
+    }
+}
+
 final class NativeRecordingEditorFrame {
     private let handle: OpaquePointer
     init(handle: OpaquePointer) { self.handle = handle }

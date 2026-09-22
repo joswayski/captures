@@ -509,11 +509,14 @@ Platform status: shared Rust/C ABI is connected to both hosts. The first AppKit
 slice opens recordings from History in a separate native window with retained
 decoded frames, source-relative seek, numeric trim, MP4/GIF format and quality,
 size estimation, progress/cancel, collision-safe Save new copy and dirty close/quit
-guards. It intentionally leaves crop/resize/audio/resolution controls to later
+guards. AppKit's graphical trim handles use the shared allocation-free geometry and
+only stage the existing numeric values; pointer movement never seeks or decodes, and
+Apply/estimate/save gating is unchanged. It intentionally leaves
+crop/resize/audio/resolution controls to later
 AppKit slices. The wgpu controls implement those broader controls for Windows/Linux;
 private X11/software-GL exercises provide implementation evidence only. Windows and
 Wayland presentation, physical macOS input, accessibility, playback/audio output,
-AppKit trim handles, graphical crop, draft restoration and original replacement remain open. No
+graphical crop handles, draft restoration and original replacement remain open. No
 recording-editor or cross-platform parity gate closes.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
