@@ -347,9 +347,7 @@ impl Workbench {
         if let Some(live) = &self.live
             && let Err(error) = live.flush_editors(ctx)
         {
-            self.action_error = Some(format!(
-                "Quit cancelled: screenshot edits could not be saved: {error}"
-            ));
+            self.action_error = Some(format!("Quit cancelled: editor work remains open: {error}"));
             // The failing editor focuses its recoverable session. Do not raise
             // the root over that window and hide its save error.
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);

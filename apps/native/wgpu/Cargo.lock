@@ -724,6 +724,7 @@ dependencies = [
  "captures-capture",
  "captures-history",
  "captures-image",
+ "captures-media",
  "captures-session",
  "captures-settings",
  "chrono",
@@ -801,6 +802,7 @@ dependencies = [
  "captures-video",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
 ]
 

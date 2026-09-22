@@ -658,6 +658,7 @@ pub struct Live {
     display_id: Option<String>,
     artifacts: Vec<Artifact>,
     editors: HashMap<String, crate::editor::Editor>,
+    recording_editors: HashMap<String, crate::recording_editor::Editor>,
     history_filter: HistoryFilter,
     selection: Selection,
     texture: Option<egui::TextureHandle>,
@@ -865,6 +866,7 @@ impl Live {
             display_id: None,
             artifacts: vec![],
             editors: HashMap::new(),
+            recording_editors: HashMap::new(),
             history_filter: HistoryFilter::All,
             selection: Selection::default(),
             texture: None,
@@ -1170,6 +1172,9 @@ impl Live {
     }
 
     pub fn flush_editors(&self, ctx: &egui::Context) -> Result<(), String> {
+        for editor in self.recording_editors.values() {
+            editor.flush(ctx)?;
+        }
         for editor in self.editors.values() {
             editor.flush(ctx)?;
         }
@@ -1178,6 +1183,7 @@ impl Live {
 
     pub fn flush(&mut self) {
         self.editors.clear();
+        self.recording_editors.clear();
         self.recording_notice = None;
         self.recording_notice_target = None;
         // Cancel preparation/countdown before draining work. CaptureFlow::cancel
@@ -1344,6 +1350,11 @@ impl Live {
 
     pub fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let mut editor_history_changed = false;
+        for editor in self.recording_editors.values() {
+            editor.receive(ctx);
+            editor_history_changed |= editor.take_history_changed();
+        }
+        self.recording_editors.retain(|_, editor| !editor.closed());
         for (id, editor) in &self.editors {
             editor.receive(ctx);
             editor_history_changed |= editor.take_history_changed();
@@ -3094,6 +3105,9 @@ impl Live {
         for editor in self.editors.values() {
             editor.show(ctx, tokens);
         }
+        for editor in self.recording_editors.values() {
+            editor.show(ctx, tokens);
+        }
         self.capture_viewports(ctx, tokens);
         while let Ok(action) = self.notice_rx.try_recv() {
             use crate::recording_saved_notice::Action;
@@ -4297,11 +4311,17 @@ impl Live {
                 {
                     self.error = Some(format!("Could not reveal export: {error}"));
                 }
-                if ui.add_enabled(selected_is_screenshot && self.pending == 0,
-                    egui::Button::new("Edit screenshot")).clicked()
+                if ui.add_enabled(selected.is_some() && self.pending == 0,
+                    egui::Button::new(if selected_is_screenshot { "Edit screenshot" } else { "Edit recording" })).clicked()
                     && let Some(id) = selected.clone()
                 {
                     match settings() {
+                        Ok(settings) if !selected_is_screenshot => {
+                            let editor = self.recording_editors.entry(id.clone()).or_insert_with(|| {
+                                crate::recording_editor::Editor::open(ui.ctx(), self.root.clone(), id, settings.output_directory.into())
+                            });
+                            editor.focus(ui.ctx());
+                        }
                         Ok(settings) => {
                             let mode = selected_entry.as_ref().and_then(|entry| entry.mode).unwrap_or(captures_capture::CaptureMode::Region);
                             let clipboard = self.tx.clone();

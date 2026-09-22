@@ -235,8 +235,14 @@ the accepted take. Escape cancels only that selector or its screenshot countdown
 successful screenshots use the normal native History, preview and auto-copy paths.
 AppKit and Windows can exclude native capture UI. X11 temporarily hides the HUD and
 guide from the screenshot, but cannot keep the selector out of the ongoing recording.
-Recording playback/editing, transcoded export and GIF
-conversion remain unconnected. History displays recording posters and metadata; **Save file**
+The Windows/Linux candidate's **Edit recording** opens a decoded frame preview
+with source-relative scrubbing, numeric trim controls and MP4/GIF **Save new copy**.
+Exports report progress, support cancellation, never replace an existing file, and
+add a distinct History item. A History failure retains the saved path for recovery.
+Recording edits are not drafts: save or explicitly discard them before closing or
+quitting. Playback, graphical trim handles, crop/size/audio controls and AppKit
+recording editing remain unconnected; this is not Tauri editor parity.
+History displays recording posters and metadata; **Save file**
 copies the original media to the output folder without re-encoding, and
 **Show in Folder** reveals that saved copy. Both native
 hosts offer counted All, Screenshots, Video and GIF history filters; filtering
@@ -249,7 +255,7 @@ and canvas-resize operations, and supports Undo, Redo and confirmed draft discar
 Its Layers panel connects shared visibility, lock, opacity, movement, image rename,
 duplicate, delete and adjacent ordering commands while preserving locked barriers;
 the original History image and its exports remain unchanged until explicit replacement. Recording completion
-still presents its notice immediately because recording editing is unsupported. Real macOS and
+still presents its notice immediately; opening the recording editor is a separate History action. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.
 Native Preferences also includes an optional feedback form. Sending shares only
