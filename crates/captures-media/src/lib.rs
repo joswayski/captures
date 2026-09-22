@@ -5,9 +5,10 @@ mod range;
 mod toolchain;
 
 pub use export::{
-    AudioEdit, CropRect, EditSpec, ExportFormat, ExportProgress, ExportSpec, ExportStage,
-    GifExportAttempt, MediaKind, MediaMetadata, QualityPreset, SizeBudget, SizeBudgetError,
-    calculate_size_budget, estimate_sample_windows, extrapolate_sampled_size, gif_export_attempts,
+    AudioEdit, CropRect, EditSpec, ExportEstimate, ExportFormat, ExportProgress, ExportSpec,
+    ExportStage, GifExportAttempt, MediaKind, MediaMetadata, QualityPreset, SizeBudget,
+    SizeBudgetError, calculate_size_budget, estimate_sample_windows, extrapolate_sampled_size,
+    gif_export_attempts, sampled_export_spec,
 };
 pub use range::{ByteRange, ByteRangeError};
 pub use toolchain::{

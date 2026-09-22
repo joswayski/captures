@@ -12,8 +12,8 @@ use std::{
 
 use captures_history::{ArtifactKind, HistoryEntry};
 use captures_media::{
-    CancelToken, EditSpec, ExportFormat, ExportProgress, ExportSpec, MediaKind, MediaMetadata,
-    MediaToolchain, ProbeResult, QualityPreset, validate_edit_spec,
+    CancelToken, EditSpec, ExportEstimate, ExportFormat, ExportProgress, ExportSpec, MediaKind,
+    MediaMetadata, MediaToolchain, ProbeResult, QualityPreset, validate_edit_spec,
 };
 use image::{ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
@@ -172,6 +172,13 @@ impl RecordingEditorSession {
     #[must_use]
     pub fn frame(&self) -> Arc<RgbaImage> {
         self.frame.clone()
+    }
+
+    /// Estimate the accepted edit and preview export without changing session state.
+    pub fn estimate_export(&self, cancel: &CancelToken) -> Result<ExportEstimate, String> {
+        self.tools
+            .estimate_export_size(&self.source_path, &self.edit, &self.preview_export, cancel)
+            .map_err(|error| error.to_string())
     }
 
     pub fn execute(&mut self, request: RecordingEditorRequest) -> Result<(), String> {

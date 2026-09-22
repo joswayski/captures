@@ -427,6 +427,11 @@ typedef void (*CapturesRecordingEditorProgress)(void *context, const char *progr
 CapturesRecordingEditorCancel *captures_recording_editor_cancel_create_v1(void);
 void captures_recording_editor_cancel_v1(const CapturesRecordingEditorCancel *cancel);
 void captures_recording_editor_cancel_free_v1(CapturesRecordingEditorCancel *cancel);
+/* Blocking estimate of the accepted edit + preview_export. Returns owned
+ * {ok:true,result:{size_bytes,exact}} or {ok:false,error}. It does not mutate
+ * session/frame/revision, publish History, or invoke a progress callback. */
+char *captures_recording_editor_estimate_v1(const CapturesRecordingEditorSession *session,
+    const CapturesRecordingEditorCancel *cancel);
 char *captures_recording_editor_save_new_v1(const CapturesRecordingEditorSession *session,
     const char *request_json, const CapturesRecordingEditorCancel *cancel,
     CapturesRecordingEditorProgress progress, void *context);

@@ -364,6 +364,46 @@ fn preview_format_updates_serialize_and_roll_back_as_one_snapshot() {
 }
 
 #[test]
+fn estimating_accepted_preview_is_read_only() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let history = data.path().join("history");
+    let source = entry.recording_media_path(&history).unwrap();
+    let source_bytes = fs::read(&source).unwrap();
+    let mut session = open(&data, &entry, tools);
+    let gif = preview_spec(ExportFormat::Gif, QualityPreset::Preserve);
+    session
+        .execute(RecordingEditorRequest::UpdatePreview {
+            edit: EditSpec {
+                trim_start_ms: 500,
+                trim_end_ms: Some(2_500),
+                output_width: Some(16),
+                output_height: Some(12),
+                ..EditSpec::default()
+            },
+            export: gif,
+        })
+        .unwrap();
+    let snapshot = serde_json::to_value(session.snapshot()).unwrap();
+    let frame = session.frame();
+    let history_entries = fs::read_dir(&history).unwrap().count();
+
+    let estimate = session.estimate_export(&CancelToken::default()).unwrap();
+
+    assert!(estimate.exact);
+    assert!(estimate.size_bytes > 0);
+    assert_eq!(
+        serde_json::to_value(estimate).unwrap(),
+        serde_json::json!({"size_bytes": estimate.size_bytes, "exact": true})
+    );
+    assert_eq!(serde_json::to_value(session.snapshot()).unwrap(), snapshot);
+    assert!(Arc::ptr_eq(&frame, &session.frame()));
+    assert_eq!(fs::read_dir(&history).unwrap().count(), history_entries);
+    assert_eq!(fs::read(source).unwrap(), source_bytes);
+}
+
+#[test]
 fn real_exports_and_previews_share_format_specific_dimensions() {
     let Some(tools) = tools() else {
         return;

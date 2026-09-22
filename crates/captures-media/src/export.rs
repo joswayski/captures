@@ -103,6 +103,13 @@ pub struct ExportSpec {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExportEstimate {
+    pub size_bytes: u64,
+    /// True when the whole trimmed range was encoded or the source is copied.
+    pub exact: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExportStage {
     Preparing,
@@ -234,12 +241,25 @@ pub fn extrapolate_sampled_size(sampled_bytes: u64, sampled_ms: u64, total_ms: u
         .unwrap_or(u64::MAX)
 }
 
+/// Give a sampled window a proportional share of a whole-export size cap so
+/// bitrate selection matches the real save.
+#[must_use]
+pub fn sampled_export_spec(export: &ExportSpec, window_ms: u64, total_ms: u64) -> ExportSpec {
+    let mut sample = export.clone();
+    sample.max_size_bytes = export.max_size_bytes.map(|cap| {
+        u64::try_from(u128::from(cap) * u128::from(window_ms) / u128::from(total_ms.max(1)))
+            .unwrap_or(cap)
+            .max(1)
+    });
+    sample
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ESTIMATE_SAMPLE_WINDOW_MS, GifExportAttempt, QualityPreset, SizeBudgetError,
-        calculate_size_budget, estimate_sample_windows, extrapolate_sampled_size,
-        gif_export_attempts,
+        ESTIMATE_SAMPLE_WINDOW_MS, ExportFormat, ExportSpec, GifExportAttempt, QualityPreset,
+        SizeBudgetError, calculate_size_budget, estimate_sample_windows, extrapolate_sampled_size,
+        gif_export_attempts, sampled_export_spec,
     };
 
     #[test]
@@ -325,5 +345,28 @@ mod tests {
         );
         assert_eq!(extrapolate_sampled_size(1_000_000, 0, 60_000), 1_000_000);
         assert_eq!(extrapolate_sampled_size(u64::MAX, 1, 2), u64::MAX);
+    }
+
+    #[test]
+    fn sampled_size_budget_is_proportional_and_never_zero() {
+        let export = ExportSpec {
+            format: ExportFormat::Mp4,
+            quality: QualityPreset::High,
+            max_size_bytes: Some(12_000_000),
+            frames_per_second: Some(30),
+            gif_max_colors: None,
+        };
+        assert_eq!(
+            sampled_export_spec(&export, 2_000, 60_000).max_size_bytes,
+            Some(400_000)
+        );
+        assert_eq!(
+            sampled_export_spec(&export, 1, u64::MAX).max_size_bytes,
+            Some(1)
+        );
+        assert_eq!(
+            sampled_export_spec(&export, 2_000, 60_000).quality,
+            export.quality
+        );
     }
 }
