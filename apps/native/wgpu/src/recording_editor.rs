@@ -1006,7 +1006,7 @@ fn show(
 ) {
     egui::Panel::bottom("recording-save").show(ui, |ui| {
         if let Some(error) = &view.error {
-            ui.colored_label(tokens.color("theme-signal"), error);
+            ui.colored_label(tokens.color("danger-text"), error);
         }
         if let Some(status) = &view.status {
             ui.label(status);
