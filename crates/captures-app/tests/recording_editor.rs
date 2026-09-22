@@ -137,9 +137,13 @@ fn assert_dominant(pixel: [u8; 4], channel: usize) {
 }
 
 fn export_spec() -> ExportSpec {
+    preview_spec(ExportFormat::Mp4, QualityPreset::Preserve)
+}
+
+fn preview_spec(format: ExportFormat, quality: QualityPreset) -> ExportSpec {
     ExportSpec {
-        format: ExportFormat::Mp4,
-        quality: QualityPreset::Preserve,
+        format,
+        quality,
         max_size_bytes: None,
         frames_per_second: None,
         gif_max_colors: None,
@@ -155,6 +159,7 @@ fn source_relative_scrubbing_and_edit_updates_are_atomic() {
     assert_dominant(pixel(&session), 0);
     assert!(session.snapshot().has_system_audio);
     assert!(!session.snapshot().has_microphone_audio);
+    assert_eq!(session.snapshot().preview_export, &export_spec());
 
     session
         .execute(RecordingEditorRequest::Seek { position_ms: 1_200 })
@@ -226,6 +231,298 @@ fn source_relative_scrubbing_and_edit_updates_are_atomic() {
     assert!(session.snapshot().edit.audio.source_has_system_audio);
     assert!(!session.snapshot().edit.audio.source_has_microphone_audio);
     assert_eq!(session.snapshot().revision, revision + 1);
+}
+
+#[test]
+fn preview_format_updates_serialize_and_roll_back_as_one_snapshot() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let mut session = open(&data, &entry, tools);
+    let edit = EditSpec {
+        output_width: Some(17),
+        output_height: Some(17),
+        ..EditSpec::default()
+    };
+    let gif = preview_spec(ExportFormat::Gif, QualityPreset::Preserve);
+    let request: RecordingEditorRequest = serde_json::from_value(serde_json::json!({
+        "operation": "update_preview",
+        "edit": edit,
+        "export": gif,
+    }))
+    .unwrap();
+    session.execute(request).unwrap();
+    assert_eq!(session.frame().dimensions(), (16, 16));
+    assert_eq!(session.snapshot().preview_export, &gif);
+    assert!(session.snapshot().edit.audio.source_has_system_audio);
+    assert!(!session.snapshot().edit.audio.source_has_microphone_audio);
+    let accepted = serde_json::to_value(session.snapshot()).unwrap();
+    assert_eq!(accepted["preview_export"]["format"], "gif");
+    let frame = session.frame();
+
+    for unsupported in [
+        preview_spec(ExportFormat::WebM, QualityPreset::Preserve),
+        ExportSpec {
+            max_size_bytes: Some(1_000_000),
+            ..export_spec()
+        },
+    ] {
+        assert!(
+            session
+                .execute(RecordingEditorRequest::UpdatePreview {
+                    edit: EditSpec {
+                        output_width: Some(20),
+                        output_height: Some(18),
+                        ..EditSpec::default()
+                    },
+                    export: unsupported,
+                })
+                .is_err()
+        );
+        assert_eq!(serde_json::to_value(session.snapshot()).unwrap(), accepted);
+        assert!(Arc::ptr_eq(&frame, &session.frame()));
+    }
+
+    session
+        .execute(RecordingEditorRequest::UpdateEdit {
+            edit: EditSpec {
+                output_width: Some(19),
+                output_height: Some(17),
+                ..EditSpec::default()
+            },
+        })
+        .unwrap();
+    assert_eq!(session.frame().dimensions(), (18, 16));
+    assert_eq!(session.snapshot().preview_export, &gif);
+    session
+        .execute(RecordingEditorRequest::Seek { position_ms: 1_200 })
+        .unwrap();
+    assert_eq!(session.snapshot().preview_export, &gif);
+
+    let before_failure = serde_json::to_value(session.snapshot()).unwrap();
+    let retained = session.frame();
+    let history = data.path().join("history");
+    fs::remove_file(entry.recording_media_path(&history).unwrap()).unwrap();
+    assert!(
+        session
+            .execute(RecordingEditorRequest::UpdatePreview {
+                edit: EditSpec::default(),
+                export: export_spec(),
+            })
+            .is_err()
+    );
+    assert_eq!(
+        serde_json::to_value(session.snapshot()).unwrap(),
+        before_failure
+    );
+    assert!(Arc::ptr_eq(&retained, &session.frame()));
+}
+
+#[test]
+fn real_exports_and_previews_share_format_specific_dimensions() {
+    let Some(tools) = tools() else {
+        return;
+    };
+    let data = tempfile::tempdir().unwrap();
+    let source = data.path().join("oversized-source.mp4");
+    let status = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:size=4000x2200:rate=1:duration=1",
+            "-c:v",
+            "mpeg4",
+            "-q:v",
+            "2",
+            "-an",
+        ])
+        .arg(&source)
+        .status()
+        .expect("FFmpeg starts");
+    assert!(status.success(), "oversized recording generated");
+    let mut entry = entry(&uuid::Uuid::new_v4().to_string(), &source);
+    entry.width = 4_000;
+    entry.height = 2_200;
+    entry.duration_ms = Some(1_000);
+    entry.has_system_audio = false;
+    entry.has_microphone_audio = false;
+    let history = data.path().join("history");
+    captures_history::save_recording(&history, &entry, b"poster", &source).unwrap();
+    let retained_source = entry.recording_media_path(&history).unwrap();
+    let source_bytes = fs::read(&retained_source).unwrap();
+    let mut session = open(&data, &entry, tools.clone());
+
+    // Preserve MP4 takes the copy/remux path, so its preview must not apply the
+    // software encoder's re-encode ceiling.
+    assert_eq!(session.frame().dimensions(), (4_000, 2_200));
+    let preserve_path = data.path().join("preserved.mp4");
+    session
+        .save_new(
+            RecordingSaveRequest {
+                destination: preserve_path.clone(),
+                export: export_spec(),
+            },
+            &CancelToken::default(),
+            |_| {},
+        )
+        .unwrap();
+    assert_eq!(fs::read(preserve_path).unwrap(), source_bytes);
+
+    let standard = preview_spec(ExportFormat::Mp4, QualityPreset::Standard);
+    let custom_size = EditSpec {
+        output_width: Some(4_001),
+        output_height: Some(601),
+        ..EditSpec::default()
+    };
+    session
+        .execute(RecordingEditorRequest::UpdatePreview {
+            edit: custom_size.clone(),
+            export: standard.clone(),
+        })
+        .unwrap();
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    let expected_mp4 = (3_840, 576);
+    #[cfg(target_os = "macos")]
+    let expected_mp4 = (4_000, 600);
+    assert_eq!(session.frame().dimensions(), expected_mp4);
+    let mp4_path = data.path().join("standard.mp4");
+    session
+        .save_new(
+            RecordingSaveRequest {
+                destination: mp4_path.clone(),
+                export: standard,
+            },
+            &CancelToken::default(),
+            |_| {},
+        )
+        .unwrap();
+    let mp4 = tools.probe(&mp4_path).unwrap().metadata;
+    assert_eq!((mp4.width, mp4.height), expected_mp4);
+
+    let gif = preview_spec(ExportFormat::Gif, QualityPreset::Preserve);
+    session
+        .execute(RecordingEditorRequest::UpdatePreview {
+            edit: custom_size,
+            export: gif.clone(),
+        })
+        .unwrap();
+    assert_eq!(session.frame().dimensions(), (4_000, 600));
+    assert_dominant(session.frame().get_pixel(2_000, 300).0, 0);
+    let gif_path = data.path().join("custom.gif");
+    session
+        .save_new(
+            RecordingSaveRequest {
+                destination: gif_path.clone(),
+                export: gif,
+            },
+            &CancelToken::default(),
+            |_| {},
+        )
+        .unwrap();
+    let gif = tools.probe(&gif_path).unwrap().metadata;
+    assert_eq!((gif.width, gif.height), (4_000, 600));
+
+    // Automatic GIF sizing remains width-capped with FFmpeg's aspect-aware -2
+    // height. Keep an odd asymmetric crop so this compares actual filter output,
+    // not dimensions inferred from the even attempt fields.
+    let automatic_gif_edit = EditSpec {
+        crop: Some(CropRect {
+            x: 10,
+            y: 10,
+            width: 91,
+            height: 160,
+        }),
+        ..EditSpec::default()
+    };
+    let automatic_gif = preview_spec(ExportFormat::Gif, QualityPreset::Preserve);
+    session
+        .execute(RecordingEditorRequest::UpdatePreview {
+            edit: automatic_gif_edit,
+            export: automatic_gif.clone(),
+        })
+        .unwrap();
+    let automatic_preview_dimensions = session.frame().dimensions();
+    assert_eq!(automatic_preview_dimensions.0, 90);
+    let automatic_gif_path = data.path().join("automatic.gif");
+    session
+        .save_new(
+            RecordingSaveRequest {
+                destination: automatic_gif_path.clone(),
+                export: automatic_gif,
+            },
+            &CancelToken::default(),
+            |_| {},
+        )
+        .unwrap();
+    let automatic_gif = tools.probe(&automatic_gif_path).unwrap().metadata;
+    assert_eq!(
+        (automatic_gif.width, automatic_gif.height),
+        automatic_preview_dimensions
+    );
+    assert_eq!(fs::read(retained_source).unwrap(), source_bytes);
+}
+
+#[test]
+fn unchanged_gif_requested_as_mp4_is_reencoded_not_copied() {
+    let Some(tools) = tools() else {
+        return;
+    };
+    let data = tempfile::tempdir().unwrap();
+    let source = data.path().join("source.gif");
+    let status = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:size=32x24:rate=2:duration=1",
+            "-loop",
+            "0",
+        ])
+        .arg(&source)
+        .status()
+        .expect("FFmpeg starts");
+    assert!(status.success(), "GIF recording generated");
+    let mut entry = entry(&uuid::Uuid::new_v4().to_string(), &source);
+    entry.kind = ArtifactKind::Gif;
+    entry.mime_type = Some("image/gif".into());
+    entry.duration_ms = Some(1_000);
+    entry.has_system_audio = false;
+    entry.has_microphone_audio = false;
+    let history = data.path().join("history");
+    captures_history::save_recording(&history, &entry, b"poster", &source).unwrap();
+    let retained_source = entry.recording_media_path(&history).unwrap();
+    let source_bytes = fs::read(&retained_source).unwrap();
+    let session = open(&data, &entry, tools.clone());
+    assert_eq!(session.snapshot().preview_export, &export_spec());
+    assert_eq!(session.frame().dimensions(), (32, 24));
+
+    let destination = data.path().join("converted.mp4");
+    session
+        .save_new(
+            RecordingSaveRequest {
+                destination: destination.clone(),
+                export: export_spec(),
+            },
+            &CancelToken::default(),
+            |_| {},
+        )
+        .unwrap();
+    let converted = fs::read(&destination).unwrap();
+    assert_ne!(converted, source_bytes);
+    assert!(!converted.starts_with(b"GIF8"));
+    let output = tools.probe(&destination).unwrap().metadata;
+    assert_eq!(output.kind, captures_media::MediaKind::Video);
+    assert_eq!((output.width, output.height), (32, 24));
+    assert_eq!(fs::read(retained_source).unwrap(), source_bytes);
 }
 
 #[test]

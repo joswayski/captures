@@ -38,6 +38,7 @@ pub struct RecordingEditorOpenRequest {
 pub enum RecordingEditorRequest {
     Snapshot,
     UpdateEdit { edit: EditSpec },
+    UpdatePreview { edit: EditSpec, export: ExportSpec },
     Seek { position_ms: u64 },
 }
 
@@ -53,6 +54,9 @@ pub struct RecordingEditorSnapshot<'a> {
     pub artifact_id: &'a str,
     pub source: &'a MediaMetadata,
     pub edit: &'a EditSpec,
+    /// Accepted export configuration represented by the retained preview frame.
+    /// Size-budget retries are not previewed; this always has no byte budget.
+    pub preview_export: &'a ExportSpec,
     /// Source-relative position, independent of trim start.
     pub position_ms: u64,
     /// Increments only after an accepted edit or seek publishes its frame.
@@ -84,6 +88,7 @@ pub struct RecordingEditorSession {
     tools: MediaToolchain,
     probe: ProbeResult,
     edit: EditSpec,
+    preview_export: ExportSpec,
     position_ms: u64,
     revision: u64,
     has_system_audio: bool,
@@ -121,8 +126,17 @@ impl RecordingEditorSession {
         let mut edit = EditSpec::default();
         set_source_audio(&mut edit, has_system_audio, has_microphone_audio);
         validate_session_edit(&probe, &edit)?;
+        let preview_export = default_preview_export();
         let scratch = tempfile::tempdir().map_err(|error| error.to_string())?;
-        let frame = extract_preview(&tools, &source_path, &probe, &edit, 0, scratch.path())?;
+        let frame = extract_preview(
+            &tools,
+            &source_path,
+            &probe,
+            &edit,
+            &preview_export,
+            0,
+            scratch.path(),
+        )?;
         Ok(Self {
             history_root: request.history_root,
             artifact_id: request.artifact_id,
@@ -131,6 +145,7 @@ impl RecordingEditorSession {
             tools,
             probe,
             edit,
+            preview_export,
             position_ms: 0,
             revision: 0,
             has_system_audio,
@@ -146,6 +161,7 @@ impl RecordingEditorSession {
             artifact_id: &self.artifact_id,
             source: &self.probe.metadata,
             edit: &self.edit,
+            preview_export: &self.preview_export,
             position_ms: self.position_ms,
             revision: self.revision,
             has_system_audio: self.has_system_audio,
@@ -169,10 +185,30 @@ impl RecordingEditorSession {
                     &self.source_path,
                     &self.probe,
                     &edit,
+                    &self.preview_export,
                     self.position_ms,
                     self.scratch.path(),
                 )?;
                 self.edit = edit;
+                self.frame = Arc::new(frame);
+                self.revision = self.revision.saturating_add(1);
+                Ok(())
+            }
+            RecordingEditorRequest::UpdatePreview { mut edit, export } => {
+                set_source_audio(&mut edit, self.has_system_audio, self.has_microphone_audio);
+                validate_session_edit(&self.probe, &edit)?;
+                validate_preview_export(&export)?;
+                let frame = extract_preview(
+                    &self.tools,
+                    &self.source_path,
+                    &self.probe,
+                    &edit,
+                    &export,
+                    self.position_ms,
+                    self.scratch.path(),
+                )?;
+                self.edit = edit;
+                self.preview_export = export;
                 self.frame = Arc::new(frame);
                 self.revision = self.revision.saturating_add(1);
                 Ok(())
@@ -184,6 +220,7 @@ impl RecordingEditorSession {
                     &self.source_path,
                     &self.probe,
                     &self.edit,
+                    &self.preview_export,
                     position_ms,
                     self.scratch.path(),
                 )?;
@@ -382,6 +419,29 @@ fn validate_session_edit(probe: &ProbeResult, edit: &EditSpec) -> Result<(), Str
     validate_dimensions(width, height)
 }
 
+fn default_preview_export() -> ExportSpec {
+    ExportSpec {
+        format: ExportFormat::Mp4,
+        quality: QualityPreset::Preserve,
+        max_size_bytes: None,
+        frames_per_second: None,
+        gif_max_colors: None,
+    }
+}
+
+fn validate_preview_export(export: &ExportSpec) -> Result<(), String> {
+    if export.format == ExportFormat::WebM {
+        return Err("WebM preview is unavailable because WebM export is not supported.".into());
+    }
+    if export.max_size_bytes.is_some() {
+        return Err(
+            "Size-budget previews are unavailable because the successful retry is not known before encoding."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 fn validate_position(probe: &ProbeResult, position_ms: u64) -> Result<(), String> {
     let duration = probe
         .metadata
@@ -398,23 +458,17 @@ fn extract_preview(
     source: &Path,
     probe: &ProbeResult,
     edit: &EditSpec,
+    export: &ExportSpec,
     position_ms: u64,
     scratch: &Path,
 ) -> Result<RgbaImage, String> {
     validate_position(probe, position_ms)?;
     let path = scratch.join(format!("frame-{}.png", uuid::Uuid::new_v4()));
-    let export = ExportSpec {
-        format: ExportFormat::Mp4,
-        quality: QualityPreset::Preserve,
-        max_size_bytes: None,
-        frames_per_second: None,
-        gif_max_colors: None,
-    };
     let result = tools
         .extract_edited_frame(
             source,
             edit,
-            &export,
+            export,
             position_ms,
             &path,
             &CancelToken::default(),
