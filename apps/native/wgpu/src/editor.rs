@@ -1783,6 +1783,8 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
     {
         return;
     }
+    // Sliders and closed selectors also own arrows, not just text editors.
+    let canvas_navigation = ctx.memory(|memory| memory.focused().is_none());
     let requests = ctx.input_mut(|input| {
         let mut requests = Vec::new();
         input.events.retain(|event| {
@@ -1793,6 +1795,14 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
                 ..
             } = event
                 && (matches!(key, egui::Key::Delete | egui::Key::Backspace)
+                    || (canvas_navigation
+                        && matches!(
+                            key,
+                            egui::Key::ArrowLeft
+                                | egui::Key::ArrowRight
+                                | egui::Key::ArrowUp
+                                | egui::Key::ArrowDown
+                        ))
                     || (matches!(key, egui::Key::Z | egui::Key::D)
                         && (modifiers.command || modifiers.ctrl)))
             {
@@ -1831,6 +1841,26 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
                     id: element.base().id.clone(),
                     edit: LayerEdit::Delete,
                 }),
+            egui::Key::ArrowLeft
+            | egui::Key::ArrowRight
+            | egui::Key::ArrowUp
+            | egui::Key::ArrowDown => {
+                layer
+                    .filter(|element| !element.base().locked)
+                    .map(|element| {
+                        let distance = if shift { 10. } else { 1. };
+                        let (delta_x, delta_y) = match key {
+                            egui::Key::ArrowLeft => (-distance, 0.),
+                            egui::Key::ArrowRight => (distance, 0.),
+                            egui::Key::ArrowUp => (0., -distance),
+                            _ => (0., distance),
+                        };
+                        Request::Layer {
+                            id: element.base().id.clone(),
+                            edit: LayerEdit::Translate { delta_x, delta_y },
+                        }
+                    })
+            }
             _ => None,
         };
         if let Some(request) = request {
@@ -4037,9 +4067,9 @@ mod tests {
                                 .request_focus();
                         });
                     } else {
-                        ui.push_id("layer-action", |ui| {
-                            ui.button("Layer action").request_focus();
-                        });
+                        if let Some(focused) = ctx.memory(|memory| memory.focused()) {
+                            ctx.memory_mut(|memory| memory.surrender_focus(focused));
+                        }
                     }
                     if ctx.current_pass_index() == 0 {
                         ctx.request_discard("layer shortcut multipass");
@@ -4051,13 +4081,14 @@ mod tests {
         frame(&mut view, vec![], true);
         frame(
             &mut view,
-            vec![key(egui::Key::D, true), key(egui::Key::Delete, false)],
+            vec![
+                key(egui::Key::D, true),
+                key(egui::Key::Delete, false),
+                key(egui::Key::ArrowLeft, false),
+            ],
             true,
         );
-        assert!(
-            rx.try_recv().is_err(),
-            "typing must not duplicate or delete a layer"
-        );
+        assert!(rx.try_recv().is_err(), "typing must not edit a layer");
         frame(&mut view, vec![], false);
         frame(
             &mut view,
@@ -4065,6 +4096,7 @@ mod tests {
                 key(egui::Key::D, false),
                 key(egui::Key::Delete, false),
                 key(egui::Key::Backspace, false),
+                key(egui::Key::ArrowUp, false),
             ],
             false,
         );
@@ -4148,10 +4180,48 @@ mod tests {
         };
         image.base.id = accepted_id.clone();
         image.base.locked = false;
-        image.base.visible = true;
+        image.base.visible = false;
         Arc::make_mut(&mut accepted.document).elements.push(copy);
         view.receive(&ctx, Ok(accepted));
         assert_eq!(view.selected_layer.as_deref(), Some(accepted_id.as_str()));
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.add(egui::Slider::new(&mut 50., 0.0..=100.0))
+                .request_focus();
+        });
+        output.textures_delta.clear();
+        frame(&mut view, vec![key(egui::Key::ArrowRight, false)], false);
+        assert!(
+            rx.try_recv().is_err(),
+            "a focused slider owns arrow navigation"
+        );
+        for (arrow, shift, expected) in [
+            (egui::Key::ArrowLeft, false, (-1., 0.)),
+            (egui::Key::ArrowRight, true, (10., 0.)),
+            (egui::Key::ArrowUp, true, (0., -10.)),
+            (egui::Key::ArrowDown, false, (0., 1.)),
+        ] {
+            let mut event = key(arrow, false);
+            if let egui::Event::Key { modifiers, .. } = &mut event {
+                modifiers.shift = shift;
+            }
+            view.shape_drag = Some((Point { x: 3., y: 7. }, Point { x: 20., y: 30. }));
+            frame(&mut view, vec![event.clone(), event], false);
+            let Job::Apply(Request::Layer {
+                id,
+                edit: LayerEdit::Translate { delta_x, delta_y },
+            }) = rx.try_recv().unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(id, accepted_id);
+            assert_eq!((delta_x, delta_y), expected);
+            assert!(
+                view.shape_drag.is_none() && rx.try_recv().is_err(),
+                "one job across repeat events and layout passes"
+            );
+            view.receive(&ctx, Err("move rejected".into()));
+            assert_eq!(view.selected_layer.as_deref(), Some(accepted_id.as_str()));
+        }
         frame(&mut view, vec![key(egui::Key::Backspace, false)], false);
         assert!(
             matches!(rx.try_recv(), Ok(Job::Apply(Request::Layer { id, edit: LayerEdit::Delete })) if id == accepted_id)
@@ -4160,7 +4230,11 @@ mod tests {
         view.select_layer_exact(None);
         frame(
             &mut view,
-            vec![key(egui::Key::D, true), key(egui::Key::Delete, false)],
+            vec![
+                key(egui::Key::D, true),
+                key(egui::Key::Delete, false),
+                key(egui::Key::ArrowDown, false),
+            ],
             false,
         );
         assert!(

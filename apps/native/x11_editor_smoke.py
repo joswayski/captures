@@ -448,9 +448,21 @@ def main():
                             endX=shape["endX"] + 24, endY=shape["endY"] + 24,
                             visible=True, locked=False)
             assert copied == expected, (copied, expected)
+            nudged = copied
+            for key, dx, dy in [("Left", -1, 0), ("shift+Up", 0, -10),
+                                ("shift+Right", 10, 0), ("Down", 0, 1)]:
+                expected = dict(nudged, x=nudged["x"] + dx, y=nudged["y"] + dy,
+                                endX=nudged["endX"] + dx, endY=nudged["endY"] + dy)
+                run("xdotool", "key", key, "sleep", ".3")
+                nudged = save_layers(lambda values: len(values) == 3 and values[-1] == expected,
+                                     f"keyboard nudge {key}")[-1]
+            for _ in range(4):
+                run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 3, "undo nudges exactly")[-1] == copied
+            inspector_click(100, 158)  # Restore the copy selection after Undo.
             click(editor, 396, 62)
             inspector_click(75, 428)
-            run("xdotool", "key", "ctrl+d", "Delete", "sleep", ".3")
+            run("xdotool", "key", "ctrl+d", "Delete", "Left", "shift+Up", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 3, "field protects layer shortcuts")[-1] == copied
             click(editor, 463, 62)
             run("xdotool", "key", "Delete", "sleep", ".3")
@@ -461,7 +473,7 @@ def main():
             run("xdotool", "key", "BackSpace", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "Backspace removes selected copy")[-1] == shape
             inspector_click(100, 202)  # Original image is locked.
-            run("xdotool", "key", "Delete", "sleep", ".3")
+            run("xdotool", "key", "Delete", "Right", "shift+Down", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "locked keyboard deletion")[-1] == shape
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
@@ -472,9 +484,10 @@ def main():
                 "checks": ["keyboard-undo", "keyboard-redo-exact-layer", "field-undo-focus", "field-redo-focus",
                            "confirmation-focus", "shortcut-restored-after-dialog", "original-unchanged",
                            "duplicate-offset-fresh-id", "field-layer-shortcuts", "delete-selected-copy",
-                           "backspace-selected-copy", "locked-delete-guard"],
+                           "backspace-selected-copy", "locked-delete-guard", "arrow-1px", "shift-arrow-10px",
+                           "nudge-undo-exact", "field-nudge-focus", "locked-nudge-guard"],
             }, indent=2) + "\n")
-            print("PASS native editor shortcuts: undo, redo, duplicate, delete, field/dialog focus and original unchanged")
+            print("PASS native editor shortcuts: undo, redo, duplicate, delete, nudge, field/dialog focus and original unchanged")
             return
 
         if args.overwrite_only:

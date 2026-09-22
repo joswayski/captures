@@ -2503,6 +2503,22 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 button = duplicateButton
             } else if event.keyCode == 51 || event.keyCode == 117 {
                 button = deleteButton
+            } else if (123...126).contains(event.keyCode) {
+                // Native tables and segmented selectors keep arrow navigation.
+                if responder is NSControl && !(responder is CaptureButton) { return false }
+                guard !state.busy, let layer = selectedLayer, !layer.locked else { return true }
+                let distance = event.modifierFlags.contains(.shift) ? 10.0 : 1.0
+                let delta: (Double, Double)
+                switch event.keyCode {
+                case 123: delta = (-distance, 0)
+                case 124: delta = (distance, 0)
+                case 125: delta = (0, distance)
+                default: delta = (0, -distance)
+                }
+                cancelDrawing(); cancelViewportPan()
+                layerCommand(layer, edit: ["action": "translate", "delta_x": delta.0,
+                                           "delta_y": delta.1], message: "Moving layer…")
+                return true
             } else { return false }
             if button?.isEnabled == true {
                 cancelDrawing(); cancelViewportPan()
