@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--estimate", action="store_true", help="Exercise exact size estimates and missing-source retry")
     parser.add_argument("--timeline", action="store_true", help="Exercise graphical trim staging, keyboard input and export")
     parser.add_argument("--thumbnails", action="store_true", help="Exercise source thumbnails, cancellation, failure/retry and trim")
+    parser.add_argument("--playback", action="store_true", help="Exercise silent motion, pause/resume, trim EOF, failure and close")
     args = parser.parse_args()
     if args.thumbnails:
         args.timeline = True
@@ -146,6 +147,7 @@ def main():
         source = output / "source.mp4"
         source_width, source_height = (640, 1440) if args.presets else (320, 180)
         source_size = f"{source_width}x{source_height}"
+        segment_seconds = 2 if args.playback else 1
         audio_inputs = []
         audio_filters = ""
         audio_maps = []
@@ -160,9 +162,9 @@ def main():
             audio_filters = (";[3:a]asplit=2[system][s];[4:a]asplit=2[mic][m];"
                              "[s][m]amix=inputs=2:normalize=0[mixed]")
             audio_maps = ["-map", "[mixed]", "-map", "[system]", "-map", "[mic]", "-c:a", "aac", "-b:a", "256k"]
-        run("ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"color=red:s={source_size}:r=10:d=1",
-            "-f", "lavfi", "-i", f"color=green:s={source_size}:r=10:d=1",
-            "-f", "lavfi", "-i", f"color=blue:s={source_size}:r=10:d=1",
+        run("ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"color=red:s={source_size}:r=10:d={segment_seconds}",
+            "-f", "lavfi", "-i", f"color=green:s={source_size}:r=10:d={segment_seconds}",
+            "-f", "lavfi", "-i", f"color=blue:s={source_size}:r=10:d={segment_seconds}",
             *audio_inputs, "-filter_complex",
             "[0:v][1:v][2:v]concat=n=3:v=1:a=0,drawbox=x=15:y=10:w=45:h=25:color=white:t=fill[v]" + audio_filters,
             "-map", "[v]", *audio_maps, "-c:v", "mpeg4", "-q:v", "2", str(source))
@@ -172,7 +174,7 @@ def main():
             "id": artifact_id, "kind": "video", "preview_url": "", "full_url": "",
             "width": source_width, "height": source_height, "size_bytes": source.stat().st_size,
             "created_at": datetime.now(timezone.utc).isoformat(), "mode": None,
-            "saved_path": str(source), "mime_type": "video/mp4", "duration_ms": 3000,
+            "saved_path": str(source), "mime_type": "video/mp4", "duration_ms": 3000 * segment_seconds,
             "target": {"type": "display", "display_id": "fixture"},
             "has_system_audio": args.audio, "has_microphone_audio": args.audio, "dropped_frames": 0,
         }))
@@ -242,6 +244,130 @@ def main():
         dominant(output / "original.png", 0)
         run("xdotool", "windowminimize", root, "sleep", ".5")
         estimate_expectations = {}
+        if args.playback:
+            def motion_click():
+                # Pause must work during an active decoder; never wait for idle.
+                # Do not wait for a motion event when already over this button.
+                run("xdotool", "mousemove", "--window", editor, "192", "57", "sleep", ".05",
+                    "mousedown", "1", "sleep", ".08", "mouseup", "1")
+
+            def playing():
+                return "Working…" in run("xdotool", "getwindowname", editor).decode()
+
+            def position():
+                click(editor, 136, 520)
+                run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".1")
+                return int(run("xclip", "-selection", "clipboard", "-o").strip())
+
+            field(editor, 98, 598, 1500)
+            field(editor, 211, 598, 4500)
+            motion_click()
+            time.sleep(.3)
+            assert not playing(), "unapplied trim gates Play"
+            click(editor, 793, 882)
+            shot(editor, "playback-accepted")
+            dominant(output / "playback-accepted.png", 0)
+            # Record real presentation rather than turning fixture PNGs into a video.
+            recording = spawn("playback-capture", ["ffmpeg", "-v", "error", "-f", "x11grab",
+                "-framerate", "15", "-video_size", "960x900", "-i", env["DISPLAY"] + "+80,60",
+                "-t", "18", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                str(output / "playback-motion.mp4")])
+            motion_click()
+            wait(playing, "Play owns decoder")
+            def green_motion():
+                # Decoder startup is not presentation time. Observe an actual
+                # temporal transition instead of assuming fixed startup latency.
+                path = output / "playback-running.png"
+                run("import", "-window", editor, str(path))
+                pixel = run("convert", str(path), "-crop", "1x1+480+220", "-depth", "8", "rgb:-")
+                return len(pixel) == 3 and pixel[1] > 90 and pixel[1] > max(pixel[0], pixel[2]) + 40
+            wait(green_motion, "real playback crosses from red to green")
+            dominant(output / "playback-running.png", 1)
+            motion_click()
+            idle(editor)
+            shot(editor, "playback-paused")
+            paused_at = position()
+            assert 2000 <= paused_at < 4000, paused_at
+            # Leave field focus before comparing frozen frame+playhead pixels.
+            click(editor, 700, 470)
+            shot(editor, "playback-paused-stable-a")
+            time.sleep(.8)
+            shot(editor, "playback-paused-stable-b")
+            a = run("convert", str(output / "playback-paused-stable-a.png"), "-crop", "940x410+8+85", "rgba:-")
+            b = run("convert", str(output / "playback-paused-stable-b.png"), "-crop", "940x410+8+85", "rgba:-")
+            assert a == b, "Pause has no late frame or advancing timestamp"
+            motion_click()
+            wait(playing, "resume decoder")
+            idle(editor)
+            shot(editor, "playback-ended")
+            ended_at = position()
+            assert 4400 <= ended_at < 4500, ended_at
+            dominant(output / "playback-ended.png", 2)
+            motion_click()
+            wait(playing, "EOF replay decoder")
+            time.sleep(.2)
+            # Losing focus must cancel without losing accepted edits.
+            run("xdotool", "windowmap", root, "windowactivate", "--sync", root)
+            idle(editor)
+            run("xdotool", "windowactivate", "--sync", editor)
+            replay_at = position()
+            assert 1500 <= replay_at < 3000, replay_at
+            assert recording.wait(timeout=20) == 0
+            missing = output / "temporarily-moved.mp4"
+            source.rename(missing)
+            try:
+                motion_click()
+                idle(editor)
+                shot(editor, "playback-error")
+                dominant(output / "playback-error.png", 0)
+                assert position() == 0, "failure restores accepted still and source position"
+            finally:
+                missing.rename(source)
+            motion_click()
+            wait(playing, "failure retry decoder")
+            time.sleep(.7)
+            motion_click()
+            idle(editor)
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            shot(editor, "playback-minimum-paused")
+            assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            motion_click()
+            wait(playing, "minimum Play")
+            # The title changes in the click's layout pass; capture after the
+            # first decoder frame redraw, not that transient old Play label.
+            time.sleep(.4)
+            run("import", "-window", editor, str(output / "playback-minimum-running.png"))
+            close(editor)
+            idle(editor)
+            shot(editor, "playback-close-confirmation")
+            assert windows("Recording editor"), "accepted unsaved edits still require discard"
+            # Keep editing, then save the accepted edit (not a playback range).
+            run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
+            click(editor, 60, 794)
+            destination = exports / "playback-trim.mp4"
+            field(editor, 360, 838, destination)
+            click(editor, 899, 882)
+            wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "save after playback")
+            info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-of", "json", str(destination)))
+            assert abs(float(info["format"]["duration"]) - 3) < .15, info
+            dominant(destination, 0, .1)
+            dominant(destination, 2, 2.7)
+            motion_click()
+            wait(playing, "saved replay")
+            close(editor)
+            wait(lambda: not windows("Recording editor"), "clean close waits for decoder")
+            close(root)
+            wait(lambda: app.poll() is not None, "playback quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True,
+                "appearance": args.appearance, "paused_at_ms": paused_at, "ended_at_ms": ended_at,
+                "replay_at_ms": replay_at, "checks": ["staged-play-gate", "temporal-motion",
+                    "pause-stable", "resume", "exclusive-trim-end", "replay", "focus-pause",
+                    "failure-restores-still", "retry", "minimum-layout", "dirty-close",
+                    "accepted-export-duration-colors", "source-immutable", "clean-close"]}, indent=2) + "\n")
+            print("PASS silent playback: real motion, pause/resume/EOF, failure/retry, close, accepted export and immutable source")
+            return
         if args.timeline:
             def read_time(x):
                 click(editor, x, 598)

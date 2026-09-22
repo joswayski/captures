@@ -57,8 +57,13 @@ save-new-copy. Trim grips share the shipping pointer geometry and support focuse
 arrow/Page Up/Page Down keys. Dragging changes staged values, not decoded frames;
 Apply publishes the preview before seeking, estimating or saving. The trim track
 retains full-source thumbnails across edits and seek. Generation has independent
-cancel/retry and does not change accepted preview or History state. Playback
-remains unimplemented. See the
+cancel/retry and does not change accepted preview or History state. **Play/Pause**
+provides silent playback of the accepted trim using one persistent shared decoder,
+at up to 30 fps and 1280 × 720. A single latest-frame slot prevents queued stale
+frames. Pause retains the last displayed frame; EOF makes the next Play restart
+the trim. Focus loss/minimize pauses, and close waits for teardown before checking
+unsaved edits. Seek/edit/save/estimate wait for playback to stop; playback never
+changes accepted edits or History. Audio playback and looping remain open. See the
 [recording-editor status](../../../docs/native-rewrite.md#recording-editor-first-wgpu-host-not-playback-parity)
 for accepted-frame, export and platform limitations.
 After finalization, a fixed-glass Recording ready notice offers Save file using

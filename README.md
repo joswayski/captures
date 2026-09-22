@@ -244,7 +244,11 @@ Trim handles stage changes without decoding on each pointer move; Apply updates
 the preview. Focused handles also accept arrow keys and Page Up/Page Down.
 The trim track shows retained full-source thumbnails, independent of the edited
 preview. Thumbnail generation can be canceled or retried without losing edits;
-it does not add playback or change the source recording.
+it does not change the source recording. **Play/Pause** offers silent motion within
+the accepted trim, with a preview capped at 30 fps and 1280 × 720. Pause retains
+the last displayed frame; reaching the trim end makes Play restart that range.
+Editing and export controls wait for playback to stop. Losing focus or minimizing
+pauses playback. Audio playback and looping are not implemented.
 The preview identifies its accepted format/quality, and saving uses those settings.
 **Estimate size** checks those accepted settings without publishing an export.
 Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
