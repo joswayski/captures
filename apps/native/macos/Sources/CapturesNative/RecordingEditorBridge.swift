@@ -8,6 +8,8 @@ struct NativeRecordingEditorSnapshot {
     let export: [String: Any]
     let positionMilliseconds: UInt64
     let revision: UInt64
+    let hasSystemAudio: Bool
+    let hasMicrophoneAudio: Bool
 
     var durationMilliseconds: UInt64 {
         (source["duration_ms"] as? NSNumber)?.uint64Value ?? 0
@@ -21,10 +23,14 @@ struct NativeRecordingEditorSnapshot {
               let edit = value["edit"] as? [String: Any],
               let export = value["preview_export"] as? [String: Any],
               let position = value["position_ms"] as? NSNumber,
-              let revision = value["revision"] as? NSNumber else { return nil }
+              let revision = value["revision"] as? NSNumber,
+              let hasSystemAudio = value["has_system_audio"] as? Bool,
+              let hasMicrophoneAudio = value["has_microphone_audio"] as? Bool else { return nil }
         self.artifactID = artifactID; self.source = source; self.edit = edit
         self.export = export; positionMilliseconds = position.uint64Value
         self.revision = revision.uint64Value
+        self.hasSystemAudio = hasSystemAudio
+        self.hasMicrophoneAudio = hasMicrophoneAudio
     }
 }
 

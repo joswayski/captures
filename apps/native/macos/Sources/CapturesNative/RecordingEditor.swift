@@ -251,6 +251,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let trimStart = NSTextField()
     private let trimEnd = NSTextField()
     private let trimTimeline: RecordingTrimTimeline
+    private let audioPanel = Surface()
+    private let systemVolume = NSTextField()
+    private let microphoneVolume = NSTextField()
+    private let systemMute = NSButton(checkboxWithTitle: "Mute", target: nil, action: nil)
+    private let microphoneMute = NSButton(checkboxWithTitle: "Mute", target: nil, action: nil)
+    private let monoOutput = NSButton(checkboxWithTitle: "Mono output", target: nil, action: nil)
+    private var systemAudioLabel: NSTextField!
+    private var microphoneAudioLabel: NSTextField!
+    private var audioNote: NSTextField!
     private let format = NSPopUpButton()
     private let quality = NSPopUpButton()
     private let destination = NSTextField()
@@ -395,6 +404,25 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         applyButton = button("Apply edits") { [weak self] in self?.applyEdits() }
         trimPanel.addSubview(applyButton)
 
+        audioPanel.wantsLayer = true
+        audioPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
+        audioPanel.layer?.cornerRadius = tokens.number("r-md")
+        root.addSubview(audioPanel)
+        audioPanel.addSubview(label("Audio", size: 14, weight: .semibold, parent: audioPanel))
+        audioNote = label("Frame preview is silent", muted: true, parent: audioPanel)
+        configureVolumeField(systemVolume, label: "System audio volume percent")
+        configureVolumeField(microphoneVolume, label: "Microphone volume percent")
+        systemAudioLabel = label("System", muted: true, parent: audioPanel)
+        microphoneAudioLabel = label("Microphone", muted: true, parent: audioPanel)
+        for control in [systemMute, microphoneMute, monoOutput] {
+            control.target = self; control.action = #selector(stageChanged)
+            audioPanel.addSubview(control)
+        }
+        systemMute.setAccessibilityLabel("Mute system audio")
+        microphoneMute.setAccessibilityLabel("Mute microphone")
+        monoOutput.setAccessibilityLabel("Mono audio output")
+        audioPanel.addSubview(systemVolume); audioPanel.addSubview(microphoneVolume)
+
         format.addItems(withTitles: ["MP4", "GIF"])
         format.target = self; format.action = #selector(formatChanged)
         format.setAccessibilityLabel("Recording export format")
@@ -434,19 +462,36 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         sourceLabel.frame = NSRect(x: 24, y: seekY, width: width * 0.38, height: 20)
         seekSlider.frame = NSRect(x: width * 0.38, y: seekY, width: width * 0.38, height: 20)
         seekLabel.frame = NSRect(x: width * 0.77, y: seekY, width: width * 0.2 - 24, height: 20)
-        trimPanel.frame = NSRect(x: 24, y: seekY + 30, width: width - 48, height: trimHeight)
+        let controlGap: CGFloat = 12
+        let controlsWidth = width - 48
+        let audioWidth = max(292, min(360, controlsWidth * 0.4))
+        trimPanel.frame = NSRect(x: 24, y: seekY + 30,
+                                 width: controlsWidth - audioWidth - controlGap, height: trimHeight)
+        audioPanel.frame = NSRect(x: trimPanel.frame.maxX + controlGap, y: seekY + 30,
+                                  width: audioWidth, height: trimHeight)
         let labels = trimPanel.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isEditable }
         labels.first { $0.stringValue == "Trim (milliseconds)" }?.frame = NSRect(x: 14, y: 12, width: 150, height: 20)
-        trimTimeline.frame = NSRect(x: 174, y: 8, width: trimPanel.bounds.width - 188, height: 28)
+        trimTimeline.frame = NSRect(x: 154, y: 8, width: trimPanel.bounds.width - 168, height: 28)
         labels.first { $0.stringValue == "Start" }?.frame = NSRect(x: 14, y: 82, width: 42, height: 18)
-        labels.first { $0.stringValue == "End" }?.frame = NSRect(x: 188, y: 82, width: 34, height: 18)
-        trimStart.frame = NSRect(x: 56, y: 76, width: 116, height: 28)
-        trimEnd.frame = NSRect(x: 224, y: 76, width: 116, height: 28)
-        applyButton.frame = NSRect(x: trimPanel.bounds.width - 126, y: 76, width: 112, height: 30)
+        labels.first { $0.stringValue == "End" }?.frame = NSRect(x: 138, y: 82, width: 34, height: 18)
+        trimStart.frame = NSRect(x: 52, y: 76, width: 78, height: 28)
+        trimEnd.frame = NSRect(x: 172, y: 76, width: 78, height: 28)
+        applyButton.frame = NSRect(x: trimPanel.bounds.width - 112, y: 76, width: 98, height: 30)
         let explanation = labels.first { $0.stringValue.hasPrefix("Apply before") }
             ?? label("Apply before seeking or saving. The original is immutable.", muted: true,
                      parent: trimPanel)
         explanation.frame = NSRect(x: 14, y: 46, width: trimPanel.bounds.width - 28, height: 20)
+
+        let audioLabels = audioPanel.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isEditable }
+        audioLabels.first { $0.stringValue == "Audio" }?.frame = NSRect(x: 14, y: 12, width: 54, height: 20)
+        audioNote.frame = NSRect(x: 68, y: 12, width: audioPanel.bounds.width - 194, height: 20)
+        systemAudioLabel.frame = NSRect(x: 14, y: 48, width: 78, height: 18)
+        microphoneAudioLabel.frame = NSRect(x: 14, y: 82, width: 78, height: 18)
+        systemVolume.frame = NSRect(x: 94, y: 42, width: 68, height: 28)
+        microphoneVolume.frame = NSRect(x: 94, y: 76, width: 68, height: 28)
+        systemMute.frame = NSRect(x: 170, y: 44, width: 72, height: 24)
+        microphoneMute.frame = NSRect(x: 170, y: 78, width: 72, height: 24)
+        monoOutput.frame = NSRect(x: audioPanel.bounds.width - 112, y: 8, width: 102, height: 24)
 
         let barY = height - saveHeight
         status.frame = NSRect(x: 24, y: barY + 8, width: width - 48, height: 36)
@@ -478,6 +523,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         trimEnd.stringValue = String(end)
         trimTimeline.setValues(start: start, end: end,
                                duration: value.snapshot.durationMilliseconds)
+        let audio = value.snapshot.edit["audio"] as? [String: Any] ?? [:]
+        systemVolume.stringValue = volumePercent(audio["system_volume"])
+        microphoneVolume.stringValue = volumePercent(audio["microphone_volume"])
+        systemMute.state = (audio["mute_system_audio"] as? Bool ?? false) ? .on : .off
+        microphoneMute.state = (audio["mute_microphone"] as? Bool ?? false) ? .on : .off
+        monoOutput.state = (audio["mono_output"] as? Bool ?? false) ? .on : .off
         select(format, value: value.snapshot.export["format"] as? String ?? "mp4")
         select(quality, value: value.snapshot.export["quality"] as? String ?? "preserve")
         if initialize {
@@ -497,6 +548,21 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         var edit = accepted
         edit["trim_start_ms"] = start
         edit["trim_end_ms"] = end == duration ? NSNull() : end
+        var audio = accepted["audio"] as? [String: Any] ?? [:]
+        if presentation?.snapshot.hasSystemAudio == true {
+            guard let volume = volume(systemVolume) else { return nil }
+            audio["system_volume"] = volume
+            audio["mute_system_audio"] = systemMute.state == .on
+        }
+        if presentation?.snapshot.hasMicrophoneAudio == true {
+            guard let volume = volume(microphoneVolume) else { return nil }
+            audio["microphone_volume"] = volume
+            audio["mute_microphone"] = microphoneMute.state == .on
+        }
+        audio["mono_output"] = monoOutput.state == .on
+        audio["source_has_system_audio"] = presentation?.snapshot.hasSystemAudio == true
+        audio["source_has_microphone_audio"] = presentation?.snapshot.hasMicrophoneAudio == true
+        edit["audio"] = audio
         return edit
     }
 
@@ -634,6 +700,23 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let available = presentation != nil && !busy && !pickerOpen
         let valid = stagedEdit != nil && stagedExport != nil
         [trimStart, trimEnd, format, quality, destination].forEach { $0.isEnabled = available }
+        let hasSystem = presentation?.snapshot.hasSystemAudio == true
+        let hasMicrophone = presentation?.snapshot.hasMicrophoneAudio == true
+        let hasAudio = hasSystem || hasMicrophone
+        let gif = format.indexOfSelectedItem == 1
+        systemAudioLabel.isHidden = !hasSystem; systemVolume.isHidden = !hasSystem
+        systemMute.isHidden = !hasSystem
+        microphoneAudioLabel.isHidden = !hasMicrophone; microphoneVolume.isHidden = !hasMicrophone
+        microphoneMute.isHidden = !hasMicrophone
+        monoOutput.isHidden = !hasAudio
+        audioNote.stringValue = !hasAudio ? "No audio tracks."
+            : gif ? "GIF silent · MP4 kept"
+            : "Frame preview silent"
+        systemVolume.isEnabled = available && !gif && systemMute.state != .on
+        microphoneVolume.isEnabled = available && !gif && microphoneMute.state != .on
+        systemMute.isEnabled = available && !gif
+        microphoneMute.isEnabled = available && !gif
+        monoOutput.isEnabled = available && !gif
         trimTimeline.setEditingEnabled(available && stagedEdit != nil)
         applyButton?.isEnabled = available && valid && stagedDiffers
         seekSlider.isEnabled = available && valid && !stagedDiffers
@@ -676,6 +759,27 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private func configureNumberField(_ field: NSTextField, label: String) {
         field.delegate = self; field.setAccessibilityLabel(label)
         field.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+    }
+
+    private func configureVolumeField(_ field: NSTextField, label: String) {
+        configureNumberField(field, label: label)
+        field.alignment = .right
+        field.placeholderString = "%"
+    }
+
+    private func volume(_ field: NSTextField) -> Double? {
+        let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "%"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let percent = Double(text), percent.isFinite,
+              (0...200).contains(percent) else { return nil }
+        return percent / 100
+    }
+
+    private func volumePercent(_ value: Any?) -> String {
+        let percent = ((value as? NSNumber)?.doubleValue ?? 1) * 100
+        let value = percent.rounded() == percent ? String(Int(percent)) : String(format: "%.1f", percent)
+        return "\(value)%"
     }
 
     @discardableResult private func label(_ text: String, size: CGFloat = 12,
