@@ -547,18 +547,7 @@ impl MediaToolchain {
         validate_edit_spec(&probe, edit)?;
         let attempts = export_attempts(&probe, edit, spec)?;
         let attempt = attempts.first().ok_or(MediaToolError::IncompleteMetadata)?;
-        let mut filters = Vec::new();
-        if let Some(crop) = edit.crop {
-            filters.push(format!(
-                "crop={}:{}:{}:{}",
-                crop.width, crop.height, crop.x, crop.y
-            ));
-        }
-        filters.push(format!(
-            "scale={}:{}:flags=lanczos",
-            attempt.width, attempt.height
-        ));
-        let filter = filters.join(",");
+        let filter = preview_video_filter(&probe, edit, spec, attempt)?;
         let mut command = Command::new(&self.ffmpeg);
         command
             .args([
@@ -592,13 +581,7 @@ impl MediaToolchain {
         let probe = self.probe(input)?;
         validate_edit_spec(&probe, edit)?;
         let attempts = export_attempts(&probe, edit, spec)?;
-        if spec.format == ExportFormat::Mp4
-            && spec.quality == QualityPreset::Preserve
-            && visual_edit_is_identity(&probe, edit)
-            && spec
-                .max_size_bytes
-                .is_none_or(|maximum| probe.metadata.size_bytes <= maximum)
-        {
+        if mp4_preserves_video_stream(&probe, edit, spec) {
             if cancel.is_cancelled() {
                 on_progress(progress(ExportStage::Cancelled, 0, 0, None));
                 return Err(MediaToolError::Cancelled);
@@ -734,12 +717,8 @@ impl MediaToolchain {
                 &seconds(trim_end_ms.saturating_sub(edit.trim_start_ms)),
             ]);
         }
-        let video_filter = video_filter(
-            edit,
-            attempt.width,
-            attempt.height,
-            attempt.frames_per_second,
-        );
+        let (width, height) = mp4_attempt_dimensions(attempt);
+        let video_filter = video_filter(edit, width, height, attempt.frames_per_second);
         if !video_filter.is_empty() {
             command.args(["-vf", &video_filter]);
         }
@@ -826,7 +805,7 @@ impl MediaToolchain {
         if cancel.is_cancelled() {
             return Err(MediaToolError::Cancelled);
         }
-        let (width, height) = fit_openh264_dimensions(attempt.width, attempt.height);
+        let (width, height) = mp4_attempt_dimensions(attempt);
         let mut writer = H264Mp4Writer::create(
             output,
             width,
@@ -1206,6 +1185,53 @@ fn video_attempt(
     }
 }
 
+fn mp4_preserves_video_stream(probe: &ProbeResult, edit: &EditSpec, spec: &ExportSpec) -> bool {
+    probe.metadata.kind == MediaKind::Video
+        && spec.format == ExportFormat::Mp4
+        && spec.quality == QualityPreset::Preserve
+        && visual_edit_is_identity(probe, edit)
+        && spec
+            .max_size_bytes
+            .is_none_or(|maximum| probe.metadata.size_bytes <= maximum)
+}
+
+fn preview_video_filter(
+    probe: &ProbeResult,
+    edit: &EditSpec,
+    spec: &ExportSpec,
+    attempt: &VideoAttempt,
+) -> Result<String, MediaToolError> {
+    match spec.format {
+        ExportFormat::WebM => Err(MediaToolError::Process(
+            "WebM export is not available in the bundled media tools".to_owned(),
+        )),
+        ExportFormat::Gif => Ok(spatial_video_filter(edit, &gif_scale_filter(edit, attempt))),
+        ExportFormat::Mp4 => {
+            let (width, height) = if mp4_preserves_video_stream(probe, edit, spec) {
+                (probe.metadata.width, probe.metadata.height)
+            } else {
+                mp4_attempt_dimensions(attempt)
+            };
+            Ok(spatial_video_filter(
+                edit,
+                &format!("{width}:{height}:flags=lanczos"),
+            ))
+        }
+    }
+}
+
+fn spatial_video_filter(edit: &EditSpec, scale: &str) -> String {
+    let mut filters = Vec::new();
+    if let Some(crop) = edit.crop {
+        filters.push(format!(
+            "crop={}:{}:{}:{}",
+            crop.width, crop.height, crop.x, crop.y
+        ));
+    }
+    filters.push(format!("scale={scale}"));
+    filters.join(",")
+}
+
 /// Validate one edit against already-probed source metadata. Callers that retain
 /// a trusted probe can use this without duplicating trim/crop/output rules.
 pub fn validate_edit_spec(probe: &ProbeResult, edit: &EditSpec) -> Result<(), MediaToolError> {
@@ -1253,13 +1279,7 @@ pub fn export_preserves_source_bytes(
     edit: &EditSpec,
     spec: &ExportSpec,
 ) -> bool {
-    spec.format == ExportFormat::Mp4
-        && spec.quality == QualityPreset::Preserve
-        && spec
-            .max_size_bytes
-            .is_none_or(|maximum| probe.metadata.size_bytes <= maximum)
-        && visual_edit_is_identity(probe, edit)
-        && audio_edit_is_identity(edit)
+    mp4_preserves_video_stream(probe, edit, spec) && audio_edit_is_identity(edit)
 }
 
 /// True when the edit leaves the video stream untouched (no trim, crop, or
@@ -1307,6 +1327,16 @@ fn fit_openh264_dimensions(width: u32, height: u32) -> (u32, u32) {
         ((f64::from(width) * scale).floor() as u32 & !1).max(2),
         ((f64::from(height) * scale).floor() as u32 & !1).max(2),
     )
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn mp4_attempt_dimensions(attempt: &VideoAttempt) -> (u32, u32) {
+    fit_openh264_dimensions(attempt.width, attempt.height)
+}
+
+#[cfg(target_os = "macos")]
+const fn mp4_attempt_dimensions(attempt: &VideoAttempt) -> (u32, u32) {
+    (attempt.width, attempt.height)
 }
 
 /// Windows/Linux capture masters use 12% bits-per-pixel (`recording_bitrate`
@@ -1523,18 +1553,22 @@ fn gif_export_filter(edit: &EditSpec, attempt: &VideoAttempt) -> String {
     let crop = edit.crop.map_or_else(String::new, |crop| {
         format!("crop={}:{}:{}:{},", crop.width, crop.height, crop.x, crop.y)
     });
-    let scale = if edit.output_width.zip(edit.output_height).is_some() {
+    let scale = gif_scale_filter(edit, attempt);
+    format!(
+        "{crop}fps={},scale={scale},split[s0][s1];[s0]palettegen=max_colors={}:stats_mode=diff[p];[s1][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle",
+        attempt.frames_per_second, attempt.gif_colors
+    )
+}
+
+fn gif_scale_filter(edit: &EditSpec, attempt: &VideoAttempt) -> String {
+    if edit.output_width.zip(edit.output_height).is_some() {
         format!(
             "{}:{}:flags=lanczos,setsar=1",
             attempt.width, attempt.height
         )
     } else {
         format!("'min({},iw)':-2:flags=lanczos", attempt.width)
-    };
-    format!(
-        "{crop}fps={},scale={scale},split[s0][s1];[s0]palettegen=max_colors={}:stats_mode=diff[p];[s1][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle",
-        attempt.frames_per_second, attempt.gif_colors
-    )
+    }
 }
 
 fn gif_filter(frames_per_second: u16, max_width: u32, max_colors: u16) -> String {
@@ -1736,8 +1770,9 @@ mod tests {
     use super::{
         CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt,
         aac_centered_stereo_layout_filter, aac_output_layout_filter, audio_edit_is_identity,
-        audio_filter, commit_temporary, escape_concat_path, export_attempts, fit_even,
-        gif_export_filter, gif_filter, recording_segment_audio_graph, seconds, validate_edit_spec,
+        audio_filter, commit_temporary, escape_concat_path, export_attempts,
+        export_preserves_source_bytes, fit_even, gif_export_filter, gif_filter,
+        preview_video_filter, recording_segment_audio_graph, seconds, validate_edit_spec,
         visual_edit_is_identity,
     };
     use crate::{
@@ -2089,6 +2124,88 @@ mod tests {
     }
 
     #[test]
+    fn preview_filter_uses_the_first_real_format_plan() {
+        let mut oversized = probe();
+        oversized.metadata.width = 4_000;
+        oversized.metadata.height = 2_200;
+        let preserve = ExportSpec {
+            format: ExportFormat::Mp4,
+            quality: QualityPreset::Preserve,
+            max_size_bytes: None,
+            frames_per_second: None,
+            gif_max_colors: None,
+        };
+        let identity_attempts =
+            export_attempts(&oversized, &EditSpec::default(), &preserve).unwrap();
+        let identity = preview_video_filter(
+            &oversized,
+            &EditSpec::default(),
+            &preserve,
+            &identity_attempts[0],
+        )
+        .unwrap();
+        assert_eq!(identity, "scale=4000:2200:flags=lanczos");
+
+        let edit = EditSpec {
+            output_width: Some(4_001),
+            output_height: Some(601),
+            ..EditSpec::default()
+        };
+        let standard = ExportSpec {
+            quality: QualityPreset::Standard,
+            ..preserve.clone()
+        };
+        let mp4_attempts = export_attempts(&oversized, &edit, &standard).unwrap();
+        let mp4 = preview_video_filter(&oversized, &edit, &standard, &mp4_attempts[0]).unwrap();
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        assert_eq!(mp4, "scale=3840:576:flags=lanczos");
+        #[cfg(target_os = "macos")]
+        assert_eq!(mp4, "scale=4000:600:flags=lanczos");
+
+        let gif = ExportSpec {
+            format: ExportFormat::Gif,
+            ..preserve.clone()
+        };
+        let gif_attempts = export_attempts(&oversized, &edit, &gif).unwrap();
+        let gif_preview = preview_video_filter(&oversized, &edit, &gif, &gif_attempts[0]).unwrap();
+        assert_eq!(gif_preview, "scale=4000:600:flags=lanczos,setsar=1");
+        assert!(gif_export_filter(&edit, &gif_attempts[0]).contains(&gif_preview));
+
+        let automatic_gif_edit = EditSpec {
+            crop: Some(CropRect {
+                x: 4,
+                y: 6,
+                width: 160,
+                height: 91,
+            }),
+            ..EditSpec::default()
+        };
+        let automatic_attempts = export_attempts(&oversized, &automatic_gif_edit, &gif).unwrap();
+        let automatic_preview = preview_video_filter(
+            &oversized,
+            &automatic_gif_edit,
+            &gif,
+            &automatic_attempts[0],
+        )
+        .unwrap();
+        assert_eq!(
+            automatic_preview,
+            "crop=160:91:4:6,scale='min(160,iw)':-2:flags=lanczos"
+        );
+        assert!(
+            gif_export_filter(&automatic_gif_edit, &automatic_attempts[0])
+                .contains("scale='min(160,iw)':-2:flags=lanczos")
+        );
+
+        let webm = ExportSpec {
+            format: ExportFormat::WebM,
+            ..preserve
+        };
+        let webm_attempts = export_attempts(&oversized, &edit, &webm).unwrap();
+        assert!(preview_video_filter(&oversized, &edit, &webm, &webm_attempts[0]).is_err());
+    }
+
+    #[test]
     fn strict_size_floor_forces_audio_to_mono() {
         let edit = EditSpec {
             audio: AudioEdit {
@@ -2148,6 +2265,24 @@ mod tests {
         let untouched = EditSpec::default();
         assert!(visual_edit_is_identity(&probe(), &untouched));
         assert!(audio_edit_is_identity(&untouched));
+        let preserve = ExportSpec {
+            format: ExportFormat::Mp4,
+            quality: QualityPreset::Preserve,
+            max_size_bytes: None,
+            frames_per_second: None,
+            gif_max_colors: None,
+        };
+        assert!(export_preserves_source_bytes(
+            &probe(),
+            &untouched,
+            &preserve
+        ));
+        let mut gif_probe = probe();
+        gif_probe.metadata.kind = MediaKind::Gif;
+        gif_probe.metadata.mime_type = "image/gif".into();
+        assert!(!export_preserves_source_bytes(
+            &gif_probe, &untouched, &preserve
+        ));
 
         let audio_edit = EditSpec {
             audio: AudioEdit {

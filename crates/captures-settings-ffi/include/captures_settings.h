@@ -387,12 +387,15 @@ char *captures_editor_save_original_v1(const CapturesEditorSession *session,
 /* Shared recording editor prerequisite. Open on one serialized worker with
  * {history_root,artifact_id,ffmpeg,ffprobe}; the artifact must be a real History
  * recording. Success output is owned {ok:true,result:snapshot}; error output is
- * {ok:false,error}. Snapshot is {artifact_id,source,edit,position_ms,revision,
- * has_system_audio,has_microphone_audio}. Source audio flags are trusted shared
- * values and caller values in EditSpec are ignored. Requests are tagged snake_case:
- * {operation:"snapshot"}, {operation:"seek",position_ms}, and
- * {operation:"update_edit",edit}. Seek positions are source-relative. Accepted
- * requests atomically replace snapshot/frame; failures retain the last good pair.
+ * {ok:false,error}. Snapshot is {artifact_id,source,edit,preview_export,position_ms,
+ * revision,has_system_audio,has_microphone_audio}. Source audio flags are trusted
+ * shared values and caller values in EditSpec are ignored. Requests are tagged
+ * snake_case: {operation:"snapshot"}, {operation:"seek",position_ms},
+ * {operation:"update_edit",edit}, and
+ * {operation:"update_preview",edit,export}. Seek positions are source-relative.
+ * preview_export identifies the first export attempt represented by the retained
+ * frame. WebM and size-budget previews are unavailable. Accepted requests atomically
+ * replace snapshot/frame; failures retain the last good snapshot, frame and revision.
  * Free every JSON response with captures_settings_free_v1. No playback, audio
  * output, persistent draft, replacement, account, or release behavior exists. */
 typedef struct CapturesRecordingEditorSession CapturesRecordingEditorSession;
