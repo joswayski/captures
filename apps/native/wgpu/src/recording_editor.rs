@@ -1032,9 +1032,9 @@ fn show(
                 ),
             );
         }
-        if !view.playing && let Some(cancel) = &view.cancel
+        if let Some(cancel) = &view.cancel
             && ui
-                .add_enabled(!cancel.is_cancelled(), egui::Button::new(if view.loading_thumbnails { "Cancel thumbnails" } else if view.estimating { "Cancel estimate" } else { "Cancel export" }))
+                .add_enabled(!cancel.is_cancelled(), egui::Button::new(if view.playing { "Pause playback" } else if view.loading_thumbnails { "Cancel thumbnails" } else if view.estimating { "Cancel estimate" } else { "Cancel export" }))
                 .clicked()
         {
             cancel.cancel();
@@ -2236,6 +2236,73 @@ mod tests {
                     rects.push(rect);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn fixed_pause_is_clickable_while_worker_owns_the_minimum_window() {
+        for (name, tokens) in crate::tokens::load() {
+            let ctx = egui::Context::default();
+            tokens.apply(&ctx, name.contains("light"));
+            let mut view = opened();
+            let (tx, jobs) = mpsc::channel();
+            let (events, _) = mpsc::channel();
+            view.request_playback(&tx);
+            let Job::Play(_, cancel) = jobs.recv().unwrap() else {
+                panic!("play")
+            };
+            let mut pause = egui::Pos2::ZERO;
+            for pass in 0..3 {
+                let input = if pass == 2 {
+                    vec![
+                        egui::Event::PointerMoved(pause),
+                        trim_pointer(pause, true),
+                        trim_pointer(pause, false),
+                    ]
+                } else {
+                    Vec::new()
+                };
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760., 580.),
+                        )),
+                        events: input,
+                        ..Default::default()
+                    },
+                    |ui| show(ui, &tokens, &mut view, &tx, &events, egui::ViewportId::ROOT),
+                );
+                output.textures_delta.clear();
+                if pass == 1 {
+                    let rect = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == "Pause playback" => {
+                                Some(text.galley.rect.translate(text.pos.to_vec2()))
+                            }
+                            _ => None,
+                        })
+                        .expect("fixed footer pause");
+                    assert!(
+                        rect.left() >= 0.
+                            && rect.right() <= 760.
+                            && rect.top() > 400.
+                            && rect.bottom() < 580.,
+                        "{name}: {rect:?}"
+                    );
+                    pause = rect.center();
+                }
+            }
+            assert!(
+                cancel.is_cancelled() && view.busy && view.playing,
+                "Pause stays enabled but never releases a live worker"
+            );
+            assert!(
+                jobs.try_recv().is_err(),
+                "Pause cancels directly, not behind the active Play job"
+            );
         }
     }
 
