@@ -511,7 +511,7 @@ the result; a seek retains it. Estimation has independent cancellation and error
 creates no History entry, and never marks unsaved edits as saved. No estimate promises
 a byte budget. Close/quit waits for accepted work, as with export.
 The preview/timeline/save hierarchy follows the shipping recording editor, but
-the UI is not a visual match and has no playback or thumbnail timeline yet.
+the UI is not a visual match; audio playback and looping remain open.
 One worker serializes media operations; failed seek/edit preserves the accepted
 frame, and unapplied values gate scrubbing/export. Failed edits keep
 the staged values available for correction. MP4/GIF Save new copy uses
