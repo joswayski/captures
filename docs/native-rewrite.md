@@ -405,6 +405,18 @@ output invalidation; invalid/unavailable styles preserve pixels, redo and drafts
 The shipping Rounded-box default and inline composition remain different;
 these controls do not reproduce the Tauri layout.
 No host text parity gate is closed.
+The Windows/Linux candidate now connects a multiline on-canvas composing field
+to the shared transient text transaction. New placement and existing Text-tool hits
+retain a local typing buffer while one worker update fits/renders at a time.
+Done/Escape/outside-click/close finish one undoable edit; Cancel restores the prior
+document, selection and encoded output. Empty new text creates nothing; empty
+existing text removes that layer. Quit drains the latest buffer before draft saving,
+and failed updates retain it for retry/cancellation. Output actions cannot publish
+unfinished pixels. The bounded composing field is unrotated and uses the UI font,
+not exact document typography; shared pinned-font pixels remain authoritative.
+Private X11/software-GL exercises are implementation evidence, not Windows,
+Wayland, physical input, IME or accessibility acceptance. AppKit composition is a
+separate host slice. This does not close screenshot-editor or visual parity.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
 

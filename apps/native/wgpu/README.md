@@ -116,6 +116,17 @@ Shared Rust supplies shadow defaults/clamps; toggling shadow off preserves its
 stored custom settings. Hidden and locked annotations remain editable. Open shapes
 and paths omit fill/stroke toggles, while images and text have no annotation controls.
 Applying styles invalidates encoded previews without writing files or drafts.
+Text placement opens an on-canvas multiline composing field; clicking existing
+visible, unlocked text with the Text tool edits that layer. Typing previews shared
+Rust pixels without saving a draft or adding undo steps. Done, Escape, clicking
+outside, or closing finishes the latest text as one edit; Cancel restores the
+previous document and output. Blank new text creates nothing; blank existing text
+deletes that layer. Normal quit finishes the latest buffer before saving its draft.
+Failed renders retain input for retry or cancellation, and output actions are
+blocked until composition ends. This first composing field uses the UI font and
+is unrotated; the document's pinned-font styled pixels remain authoritative.
+It is not Tauri's WYSIWYG input layout. Physical input, IME, accessibility,
+Windows and Wayland presentation still require acceptance.
 Import image opens a single-file PNG/JPEG/WebP/TIFF picker without blocking draft
 saves or close. The worker bounds and decodes the file, honors EXIF orientation,
 then imports below the selected visible image using shared placement/expansion.
