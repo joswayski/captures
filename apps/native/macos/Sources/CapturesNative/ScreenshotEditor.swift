@@ -3201,7 +3201,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textFields.forEach { $0.isEnabled = textReady }
         textShadowFields.values.forEach { $0.isEnabled = textReady }
         let inlineReady = inlineTextInput != nil && inlineTextInput?.finishInFlight != true
-        inlineTextEditor.isEditable = inlineReady
+        // Freeze the native responder only during an accepted Finish and restore
+        // its normal state once that input has resolved.
+        inlineTextEditor.isEditable = inlineTextInput?.finishInFlight != true
         inlineTextDoneButton?.isEnabled = inlineReady
         inlineTextCancelButton?.isEnabled = inlineReady
         textApplyButton?.isEnabled = textReady || inlineReady
