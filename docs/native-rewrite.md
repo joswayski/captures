@@ -492,12 +492,16 @@ History failure reports the successfully saved path rather than inviting re-expo
 Close blocks accepted work; unsaved edits require explicit discard, and normal quit
 is refused until they are saved or closed. Recording drafts are not implemented.
 
-Platform status: shared Rust/C ABI is available to both hosts; the wgpu controls
-are implemented for Windows/Linux. Private X11/software-GL exercises provide
-implementation evidence only. Windows and Wayland presentation, physical input,
-accessibility and AppKit host integration remain open. Playback/audio output,
-graphical trim/crop handles, draft restoration and original replacement
-remain later slices. No recording-editor or cross-platform parity gate closes.
+Platform status: shared Rust/C ABI is connected to both hosts. The first AppKit
+slice opens recordings from History in a separate native window with retained
+decoded frames, source-relative seek, numeric trim, MP4/GIF format and quality,
+size estimation, progress/cancel, collision-safe Save new copy and dirty close/quit
+guards. It intentionally leaves crop/resize/audio/resolution controls to later
+AppKit slices. The wgpu controls implement those broader controls for Windows/Linux;
+private X11/software-GL exercises provide implementation evidence only. Windows and
+Wayland presentation, physical macOS input, accessibility, playback/audio output,
+graphical handles, draft restoration and original replacement remain open. No
+recording-editor or cross-platform parity gate closes.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow

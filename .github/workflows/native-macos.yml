@@ -34,6 +34,16 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: 1.94.0
+      - name: Provision FFmpeg verification tools
+        run: |
+          brew install ffmpeg
+          FFMPEG="$(command -v ffmpeg)"
+          FFPROBE="$(command -v ffprobe)"
+          test -x "$FFMPEG"
+          test -x "$FFPROBE"
+          "$FFMPEG" -version
+          "$FFPROBE" -version
+          printf 'CAPTURES_FFMPEG=%s\nCAPTURES_FFPROBE=%s\n' "$FFMPEG" "$FFPROBE" >> "$GITHUB_ENV"
       - run: bash apps/native/macos/build.sh
         env:
           CAPTURES_TEST_ARTIFACTS: ${{ runner.temp }}/native-pixels
