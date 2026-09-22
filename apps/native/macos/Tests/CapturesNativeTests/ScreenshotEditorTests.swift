@@ -3972,7 +3972,8 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(try segmented("Output preview image", in: controller.root).isEnabled,
                        "output controls stay blocked while composition is unresolved")
         XCTAssertEqual(try textView("Inline screenshot text", in: controller.root).string, "")
-        XCTAssertTrue(controller.window.firstResponder === try textView("Inline screenshot text", in: controller.root))
+        let inlineEditor = try textView("Inline screenshot text", in: controller.root)
+        XCTAssertTrue(controller.window.firstResponder === inlineEditor)
     }
 
     func testNewTextDefaultsUsePinnedPresetAndRetainInputAcrossFailureAndSnapshots() throws {
@@ -4991,11 +4992,13 @@ final class ScreenshotEditorTests: XCTestCase {
                                          "text": "must not win"]).get())
         let encoded = expectation(description: "active text blocks raw pixel encode")
         worker.encode(["format": "png"]) { value in
-            XCTAssertThrowsError(try value.get()); encoded.fulfill()
+            if case .success = value { XCTFail("active text unexpectedly encoded raw preview pixels") }
+            encoded.fulfill()
         }
         let saved = expectation(description: "active text blocks save new")
         worker.saveNew([:]) { value in
-            XCTAssertThrowsError(try value.get()); saved.fulfill()
+            if case .success = value { XCTFail("active text unexpectedly saved preview pixels") }
+            saved.fulfill()
         }
         wait(for: [encoded, saved], timeout: 5)
         let committed = try request(["operation": "finish_text_input", "input_id": inputID, "commit": true])
