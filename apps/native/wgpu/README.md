@@ -117,7 +117,8 @@ stored custom settings. Hidden and locked annotations remain editable. Open shap
 and paths omit fill/stroke toggles, while images and text have no annotation controls.
 Applying styles invalidates encoded previews without writing files or drafts.
 Text placement opens an on-canvas multiline composing field; clicking existing
-visible, unlocked text with the Text tool edits that layer. Typing previews shared
+visible, unlocked text with the Text tool or double-clicking it with Select edits
+that layer. Single clicks still select, and drags still move/resize. Typing previews shared
 Rust pixels without saving a draft or adding undo steps. Done, Escape, clicking
 outside, or closing finishes the latest text as one edit; Cancel restores the
 previous document and output. Blank new text creates nothing; blank existing text

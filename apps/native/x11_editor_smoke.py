@@ -1002,6 +1002,23 @@ def main():
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "existing input single undo")[-1] == created
 
+            # Finishing/undo returns to Select. Double-click edits the same layer
+            # without switching to the Text tool or committing a move/resize.
+            x, y = document_point((110, 78))
+            run("xdotool", "mousemove", "--window", editor, str(x), str(y), "sleep", ".2",
+                "click", "--repeat", "2", "--delay", "120", "1", "sleep", ".3")
+            run("xdotool", "key", "ctrl+a")
+            type_text("Double-clicked", 1)
+            shot(editor, "text-input-double-click")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            double_clicked = save_layers(
+                lambda values: len(values) == 2 and values[-1]["text"] == "Double-clicked",
+                "Select double-click edits existing text")[-1]
+            assert double_clicked["id"] == created["id"]
+            assert (double_clicked["x"], double_clicked["y"]) == (created["x"], created["y"])
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 2, "double-click edit single undo")[-1] == created
+
             begin_input((400, 250))
             resize_editor(760, 540, "sleep", ".3")
             type_text("Minimum", 1)
@@ -1031,6 +1048,7 @@ def main():
                 "checks": ["blank-new-no-layer", "cancel-restores-document", "error-no-draft",
                            "error-recovery-one-undo", "preview-no-draft", "multiline-exact", "one-create-undo",
                            "redo-exact", "existing-hit-same-id", "existing-one-undo", "minimum-input",
+                           "select-double-click-same-id-position", "double-click-one-undo",
                            "blank-existing-delete", "delete-undo-redo", "quit-latest-buffer", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native Text input: transient typing, multiline, existing hit, undo, minimum and quit")

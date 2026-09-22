@@ -2469,13 +2469,37 @@ fn show_layer_canvas(
             ui.scope_id().with("layer-canvas"),
             egui::Sense::click_and_drag(),
         )
-        .on_hover_text("Click to select. Drag the outline and release to move. Escape cancels.");
+        .on_hover_text("Click to select. Double-click text to edit. Drag the outline and release to move. Escape cancels.");
     let first_pass = ui.ctx().current_pass_index() == 0;
     let input_enabled = ui.input(|input| input.focused) && !egui::Popup::is_any_open(ui.ctx());
     if !input_enabled {
         view.cancel_layer_gesture();
     }
     if first_pass && input_enabled && !viewport_intercepted {
+        if !view.pending
+            && response.double_clicked_by(egui::PointerButton::Primary)
+            && let Some(position) = response.interact_pointer_pos()
+            && preview.contains(position)
+        {
+            let point = image_point(position, preview, bounds);
+            match document.hit_test(point, 8. / display_scale) {
+                Ok(Some(Element::Text(text))) => {
+                    view.begin_inline(
+                        tx,
+                        captures_app::editor_session::TextInputTarget::Existing {
+                            id: text.base.id.clone(),
+                        },
+                        point,
+                    );
+                    return;
+                }
+                Err(error) => {
+                    view.error = Some(error);
+                    return;
+                }
+                _ => {}
+            }
+        }
         if let Some(LayerGesture { kind, .. }) = &mut view.layer_gesture {
             let shift = ui.input(|input| input.modifiers.shift);
             match kind {
@@ -6286,6 +6310,88 @@ mod tests {
         assert!(view.annotation.is_none());
         view.select_layer(Some(id));
         assert!(view.annotation.is_some());
+    }
+
+    #[test]
+    fn select_double_click_begins_text_once_without_bypassing_layer_or_viewport_guards() {
+        for (visible, locked, intercepted) in [
+            (true, false, false),
+            (false, false, false),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            let ctx = egui::Context::default();
+            let mut value = presented_text("label", "Text");
+            value.pixels = Arc::new(RgbaImage::new(200, 100));
+            let document = Arc::make_mut(&mut value.document);
+            document.width = 200.;
+            document.height = 100.;
+            let Element::Text(text) = document.elements.last_mut().unwrap() else {
+                panic!("expected text fixture")
+            };
+            text.base.visible = visible;
+            text.base.locked = locked;
+            let mut view = View::default();
+            view.receive(&ctx, Ok(value));
+            view.section = Section::Layers;
+            view.select_layer_exact(None);
+            let (tx, rx) = mpsc::channel();
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
+            let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(200., 100.));
+            for (index, pressed) in [true, false, true, false].into_iter().enumerate() {
+                let position = egui::pos2(132., 116.);
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        time: Some(index as f64 * 0.05),
+                        screen_rect: Some(screen),
+                        focused: true,
+                        events: vec![
+                            egui::Event::PointerMoved(position),
+                            egui::Event::PointerButton {
+                                pos: position,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let tokens = crate::tokens::load().into_values().next().unwrap();
+                        show_layer_canvas(
+                            ui,
+                            &tokens,
+                            &mut view,
+                            &tx,
+                            screen,
+                            preview,
+                            intercepted,
+                        );
+                        if ctx.current_pass_index() == 0 {
+                            ctx.request_discard("multipass double-click");
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+                if index < 3 {
+                    assert!(rx.try_recv().is_err(), "single click only selects");
+                }
+            }
+            if visible && !locked && !intercepted {
+                assert!(
+                    matches!(rx.try_recv(), Ok(Job::Apply(Request::BeginTextInput {
+                    target: captures_app::editor_session::TextInputTarget::Existing { id }, ..
+                })) if id == "label")
+                );
+                assert!(view.inline.is_some() && view.layer_gesture.is_none());
+            } else {
+                assert!(view.inline.is_none());
+            }
+            assert!(
+                rx.try_recv().is_err(),
+                "one double-click owns one transaction"
+            );
+        }
     }
 
     #[test]
