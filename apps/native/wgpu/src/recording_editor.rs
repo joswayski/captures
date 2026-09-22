@@ -14,8 +14,8 @@ use captures_app::recording_editor::{
     RecordingSaveRequest, SavedRecording,
 };
 use captures_media::{
-    CancelToken, CropRect, EditSpec, ExportFormat, ExportProgress, ExportSpec, MediaMetadata,
-    MediaToolchain, QualityPreset,
+    AudioEdit, CancelToken, CropRect, EditSpec, ExportFormat, ExportProgress, ExportSpec,
+    MediaMetadata, MediaToolchain, QualityPreset,
 };
 use eframe::egui;
 use image::RgbaImage;
@@ -72,6 +72,7 @@ struct View {
     end_ms: u64,
     crop: Option<CropRect>,
     output_size: Option<(u32, u32)>,
+    audio: AudioEdit,
     position_ms: u64,
     destination: String,
     gif: bool,
@@ -103,7 +104,7 @@ impl View {
             crop: self.crop,
             output_width: self.output_size.map(|size| size.0),
             output_height: self.output_size.map(|size| size.1),
-            ..p.edit.clone()
+            audio: self.audio.clone(),
         }
     }
 
@@ -159,6 +160,7 @@ impl View {
                             .unwrap_or(p.source.duration_ms.unwrap_or(0));
                         self.crop = p.edit.crop;
                         self.output_size = p.edit.output_width.zip(p.edit.output_height);
+                        self.audio = p.edit.audio.clone();
                         self.position_ms = p.position_ms;
                         self.gif = p.export.format == ExportFormat::Gif;
                         self.quality = p.export.quality;
@@ -568,6 +570,8 @@ fn show(
             let duration = p.source.duration_ms.unwrap_or(0);
             let accepted_position = p.position_ms;
             let source_size = (p.source.width, p.source.height);
+            let system_audio = p.edit.audio.source_has_system_audio;
+            let microphone_audio = p.edit.audio.source_has_microphone_audio;
             ui.label(format!(
                 "Source frame: {:.3}s / {:.3}s · {} × {} · {:?} {:?} preview: {} × {}",
                 accepted_position as f64 / 1000.,
@@ -667,6 +671,59 @@ fn show(
                         });
                     }
                     ui.weak("Apply previews even-pixel sizes for the selected format and quality.");
+                });
+                ui.group(|ui| {
+                    ui.strong("Audio");
+                    if !system_audio && !microphone_audio {
+                        ui.weak("No audio tracks in this recording.");
+                        return;
+                    }
+                    ui.weak(if view.gif {
+                        "GIF has no audio. Settings are kept for MP4."
+                    } else {
+                        "Applied on export · frame preview is silent"
+                    });
+                    ui.add_enabled_ui(!view.gif, |ui| {
+                        for (available, label, volume, mute) in [
+                            (
+                                system_audio,
+                                "System",
+                                &mut view.audio.system_volume,
+                                &mut view.audio.mute_system_audio,
+                            ),
+                            (
+                                microphone_audio,
+                                "Microphone",
+                                &mut view.audio.microphone_volume,
+                                &mut view.audio.mute_microphone,
+                            ),
+                        ] {
+                            if available {
+                                ui.horizontal(|ui| {
+                                    ui.label(label);
+                                    ui.add_enabled(
+                                        !*mute,
+                                        egui::Slider::new(volume, 0.0..=2.0)
+                                            .step_by(0.01)
+                                            .custom_formatter(|value, _| {
+                                                format!("{:.0}%", value * 100.)
+                                            })
+                                            .custom_parser(|input| {
+                                                input
+                                                    .trim()
+                                                    .trim_end_matches('%')
+                                                    .trim()
+                                                    .parse::<f64>()
+                                                    .ok()
+                                                    .map(|value| value / 100.)
+                                            }),
+                                    );
+                                    ui.checkbox(mute, "Mute");
+                                });
+                            }
+                        }
+                        ui.checkbox(&mut view.audio.mono_output, "Mono output");
+                    });
                 });
                 ui.horizontal(|ui| {
                     ui.strong("Save quality");
@@ -796,6 +853,64 @@ mod tests {
         let edit = view.staged_edit(view.presented.as_ref().unwrap());
         assert_eq!(edit.crop, Some(crop));
         assert_eq!((edit.output_width, edit.output_height), (None, None));
+        view.request_close();
+        assert!(view.confirm_close && !view.closed);
+    }
+
+    #[test]
+    fn audio_changes_stage_with_geometry_and_survive_failed_apply_and_gif() {
+        let mut view = opened();
+        let p = view.presented.as_mut().unwrap();
+        p.edit.audio.source_has_system_audio = true;
+        p.edit.audio.source_has_microphone_audio = true;
+        view.audio = p.edit.audio.clone();
+        view.saved_edit = p.edit.clone();
+        let frame = p.frame.clone();
+        view.audio.system_volume = 0.25;
+        view.audio.microphone_volume = 1.75;
+        view.audio.mute_system_audio = true;
+        view.audio.mono_output = true;
+        view.start_ms = 300;
+        let edit = view.staged_edit(view.presented.as_ref().unwrap());
+        assert_eq!(edit.trim_start_ms, 300);
+        assert_eq!(
+            edit.audio,
+            AudioEdit {
+                system_volume: 0.25,
+                microphone_volume: 1.75,
+                mute_system_audio: true,
+                mute_microphone: false,
+                mono_output: true,
+                source_has_system_audio: true,
+                source_has_microphone_audio: true,
+            }
+        );
+        assert!(view.unapplied() && view.dirty());
+        let ctx = egui::Context::default();
+        view.receive(&ctx, Event::Presented(Err("decode failed".into())));
+        let p = view.presented.as_ref().unwrap();
+        assert!(Arc::ptr_eq(&frame, &p.frame));
+        assert_eq!(p.edit.audio.system_volume, 1.);
+        assert!(!p.edit.audio.mute_system_audio && !p.edit.audio.mono_output);
+        assert_eq!(view.audio, edit.audio);
+        view.gif = true;
+        view.receive(
+            &ctx,
+            Event::Presented(Ok(Presented {
+                source: p.source.clone(),
+                edit: edit.clone(),
+                export: view.export_spec(),
+                position_ms: 700,
+                frame,
+            })),
+        );
+        assert!(!view.unapplied() && view.dirty());
+        view.gif = false;
+        assert_eq!(
+            view.staged_edit(view.presented.as_ref().unwrap()).audio,
+            edit.audio
+        );
+        assert!(view.unapplied());
         view.request_close();
         assert!(view.confirm_close && !view.closed);
     }

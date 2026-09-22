@@ -21,7 +21,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; wgpu frame scrubbing, numeric trim/crop, custom output size and MP4/GIF save-new-copy | AppKit recording editor, playback, graphical timeline/crop, resolution presets, audio controls, audio meter/device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; wgpu frame scrubbing, numeric trim/crop, custom output size, track volume/mute/mono and MP4/GIF save-new-copy | AppKit recording editor, playback, graphical timeline/crop, resolution presets, audio meter/device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording playback/graphical timeline and remaining controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
@@ -433,6 +433,16 @@ size-budget retries, instead of silently ignoring output height. Re-encoded MP4 
 Windows/Linux fits within 3840 × 2160 (portrait: 2160 × 3840); format-aware preview
 now reflects that cap without applying it to Preserve copy/remux or GIF paths.
 The accepted format/quality and frame dimensions appear beside the preview.
+Available system/microphone tracks have 0–200% volume, independent mute and mono
+output controls. Availability comes from the accepted session's trusted audio
+identity, not caller-provided track flags. Audio stages with geometry/format and
+uses the same Apply/save/dirty guards; failed updates preserve staged controls
+and accepted output state. The frame preview stays silent. GIF disables audio
+controls while keeping settings for a later MP4 export. No-track recordings show
+an explicit explanation rather than editable controls. Private X11 smoke uses
+distinct stereo tones in a retained playback mix plus separate system/mic tracks,
+then measures decoded export frequencies/amplitudes, mono channel count, mute,
+GIF silence, restored MP4 settings and History audio identity.
 Unapplied format/quality gates save and seek alongside geometric edits; failed
 updates retain all accepted state and preserve staged values for correction.
 Save uses the accepted configuration, and format/quality-only changes require
@@ -453,7 +463,7 @@ Platform status: shared Rust/C ABI is available to both hosts; the wgpu controls
 are implemented for Windows/Linux. Private X11/software-GL exercises provide
 implementation evidence only. Windows and Wayland presentation, physical input,
 accessibility and AppKit host integration remain open. Playback/audio output,
-graphical trim/crop handles, resolution presets/audio controls, draft restoration and original replacement
+graphical trim/crop handles, resolution presets, draft restoration and original replacement
 remain later slices. No recording-editor or cross-platform parity gate closes.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
