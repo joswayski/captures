@@ -502,8 +502,8 @@ fn playback_uses_accepted_spatial_preview_trim_and_retains_session_state() {
             width: 21,
             height: 17,
         }),
-        output_width: Some(38),
-        output_height: Some(22),
+        output_width: Some(1_600),
+        output_height: Some(400),
         ..EditSpec::default()
     };
     session
@@ -517,13 +517,13 @@ fn playback_uses_accepted_spatial_preview_trim_and_retains_session_state() {
     let cancel = CancelToken::default();
     let mut playback = session.playback(2_999, &cancel).unwrap();
     assert_eq!(playback.start_position_ms(), 1_100);
-    assert_eq!((playback.width(), playback.height()), (38, 22));
+    assert_eq!((playback.width(), playback.height()), (1_280, 320));
     assert_eq!(playback.frames_per_second(), 15);
 
     let mut frames = Vec::new();
     while let Some(frame) = playback.next_frame().unwrap() {
         assert!(frame.position_ms >= 1_100 && frame.position_ms < 2_300);
-        assert_eq!(frame.pixels().dimensions(), (38, 22));
+        assert_eq!(frame.pixels().dimensions(), (1_280, 320));
         frames.push(frame);
     }
     assert!(!cancel.is_cancelled(), "natural EOF preserves caller token");

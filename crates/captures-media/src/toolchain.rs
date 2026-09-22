@@ -42,6 +42,7 @@ const PLAYBACK_MAX_WIDTH: u32 = 1_280;
 const PLAYBACK_MAX_HEIGHT: u32 = 720;
 const PLAYBACK_MAX_FRAMES_PER_SECOND: u16 = 30;
 const PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const PLAYBACK_MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
 
 /// One decoded silent-playback frame with a source-relative timestamp.
 pub struct MediaPlaybackFrame {
@@ -61,8 +62,16 @@ struct BufferedPlaybackFrame {
     present_at: Instant,
 }
 
+#[derive(Clone)]
 enum PlaybackReaderEnd {
     Eof,
+    Error(String),
+}
+
+#[derive(Clone)]
+enum PlaybackTerminal {
+    Eof,
+    Cancelled,
     Error(String),
 }
 
@@ -91,6 +100,7 @@ pub struct MediaPlayback {
     child: Option<Child>,
     reader: Option<thread::JoinHandle<()>>,
     stderr_reader: Option<thread::JoinHandle<io::Result<Vec<u8>>>>,
+    terminal: Option<PlaybackTerminal>,
     closed: bool,
 }
 
@@ -120,8 +130,12 @@ impl MediaPlayback {
     /// queue.
     pub fn next_frame(&mut self) -> Result<Option<MediaPlaybackFrame>, MediaToolError> {
         loop {
+            if let Some(terminal) = self.terminal.clone() {
+                return terminal_result(terminal);
+            }
             if self.cancel.is_cancelled() {
                 let _ = self.finish(true);
+                self.terminal = Some(PlaybackTerminal::Cancelled);
                 return Err(MediaToolError::Cancelled);
             }
 
@@ -145,12 +159,27 @@ impl MediaPlayback {
                 continue;
             }
 
-            if let Some(end) = state.end.take() {
+            if let Some(end) = state.end.clone() {
                 drop(state);
                 return match end {
-                    PlaybackReaderEnd::Eof => self.finish(false).map(|()| None),
+                    PlaybackReaderEnd::Eof => match self.finish(false) {
+                        Ok(()) => {
+                            self.terminal = Some(PlaybackTerminal::Eof);
+                            Ok(None)
+                        }
+                        Err(MediaToolError::Cancelled) => {
+                            self.terminal = Some(PlaybackTerminal::Cancelled);
+                            Err(MediaToolError::Cancelled)
+                        }
+                        Err(error) => {
+                            let error = error.to_string();
+                            self.terminal = Some(PlaybackTerminal::Error(error.clone()));
+                            Err(MediaToolError::Process(error))
+                        }
+                    },
                     PlaybackReaderEnd::Error(error) => {
                         let _ = self.finish(true);
+                        self.terminal = Some(PlaybackTerminal::Error(error.clone()));
                         Err(MediaToolError::Process(error))
                     }
                 };
@@ -171,45 +200,84 @@ impl MediaPlayback {
         if self.closed {
             return Ok(());
         }
-        self.closed = true;
         self.shared.stop.store(true, Ordering::Release);
         self.shared.changed.notify_all();
 
+        let mut result = Ok(());
         let status = if let Some(mut child) = self.child.take() {
             if kill {
                 let _ = child.kill();
             }
-            Some(child.wait()?)
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Some(status),
+                    Ok(None) if !kill && self.cancel.is_cancelled() => {
+                        let _ = child.kill();
+                        result = Err(MediaToolError::Cancelled);
+                    }
+                    Ok(None) => thread::sleep(PLAYBACK_POLL_INTERVAL),
+                    Err(error) => {
+                        result = Err(MediaToolError::Io(error));
+                        let _ = child.kill();
+                        break child.wait().ok();
+                    }
+                }
+            }
         } else {
             None
         };
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+        if let Some(reader) = self.reader.take()
+            && reader.join().is_err()
+            && result.is_ok()
+        {
+            result = Err(MediaToolError::Process(
+                "playback frame reader panicked".to_owned(),
+            ));
         }
-        let stderr = self.stderr_reader.take().map_or_else(
-            || Ok(Vec::new()),
-            |reader| {
-                reader
-                    .join()
-                    .map_err(|_| {
-                        MediaToolError::Process("media tool error reader panicked".to_owned())
-                    })?
-                    .map_err(MediaToolError::Io)
+        let stderr = match self.stderr_reader.take() {
+            None => Vec::new(),
+            Some(reader) => match reader.join() {
+                Ok(Ok(stderr)) => stderr,
+                Ok(Err(error)) => {
+                    if result.is_ok() {
+                        result = Err(MediaToolError::Io(error));
+                    }
+                    Vec::new()
+                }
+                Err(_) => {
+                    if result.is_ok() {
+                        result = Err(MediaToolError::Process(
+                            "media tool error reader panicked".to_owned(),
+                        ));
+                    }
+                    Vec::new()
+                }
             },
-        )?;
-        if kill {
-            return Ok(());
+        };
+        self.closed = true;
+        if !kill
+            && result.is_ok()
+            && let Some(status) = status
+        {
+            result = complete_child(status, &stderr);
         }
-        if let Some(status) = status {
-            complete_child(status, &stderr)?;
-        }
-        Ok(())
+        result
     }
 }
 
 impl Drop for MediaPlayback {
     fn drop(&mut self) {
         let _ = self.finish(true);
+    }
+}
+
+fn terminal_result(
+    terminal: PlaybackTerminal,
+) -> Result<Option<MediaPlaybackFrame>, MediaToolError> {
+    match terminal {
+        PlaybackTerminal::Eof => Ok(None),
+        PlaybackTerminal::Cancelled => Err(MediaToolError::Cancelled),
+        PlaybackTerminal::Error(error) => Err(MediaToolError::Process(error)),
     }
 }
 
@@ -825,13 +893,11 @@ impl MediaToolchain {
             ));
         };
         let stderr_reader = thread::spawn(move || {
-            let mut bytes = Vec::new();
-            stderr.read_to_end(&mut bytes).map(|_| bytes)
+            read_bounded_diagnostics(&mut stderr, PLAYBACK_MAX_DIAGNOSTIC_BYTES)
         });
         let shared = Arc::new(PlaybackShared::default());
         let reader_shared = shared.clone();
         let reader_cancel = cancel.clone();
-        let clock = Instant::now();
         let reader = thread::spawn(move || {
             read_playback_frames(
                 stdout,
@@ -839,7 +905,6 @@ impl MediaToolchain {
                 frames_per_second,
                 start_position_ms,
                 end_position_ms,
-                clock,
                 &reader_cancel,
                 &reader_shared,
             );
@@ -854,6 +919,7 @@ impl MediaToolchain {
             child: Some(child),
             reader: Some(reader),
             stderr_reader: Some(stderr_reader),
+            terminal: None,
             closed: false,
         })
     }
@@ -2070,11 +2136,11 @@ fn read_playback_frames(
     frames_per_second: u16,
     start_position_ms: u64,
     end_position_ms: u64,
-    clock: Instant,
     cancel: &CancelToken,
     shared: &PlaybackShared,
 ) {
     let mut frame_index = 0_u64;
+    let mut clock = None;
     loop {
         if cancel.is_cancelled() || shared.stop.load(Ordering::Acquire) {
             return;
@@ -2098,10 +2164,11 @@ fn read_playback_frames(
         }
         let elapsed_ms = frame_index.saturating_mul(1_000) / u64::from(frames_per_second);
         let position_ms = start_position_ms.saturating_add(elapsed_ms);
+        frame_index = frame_index.saturating_add(1);
         if position_ms >= end_position_ms {
-            set_playback_end(shared, PlaybackReaderEnd::Eof);
-            return;
+            continue;
         }
+        let clock = *clock.get_or_insert_with(Instant::now);
         let present_at = clock
             .checked_add(Duration::from_millis(elapsed_ms))
             .unwrap_or(clock);
@@ -2137,7 +2204,6 @@ fn read_playback_frames(
             shared.changed.notify_all();
         }
         drop(state);
-        frame_index = frame_index.saturating_add(1);
     }
 }
 
@@ -2145,6 +2211,21 @@ fn set_playback_end(shared: &PlaybackShared, end: PlaybackReaderEnd) {
     if let Ok(mut state) = shared.state.lock() {
         state.end = Some(end);
         shared.changed.notify_all();
+    }
+}
+
+fn read_bounded_diagnostics(reader: &mut impl Read, maximum: usize) -> io::Result<Vec<u8>> {
+    let mut retained = Vec::new();
+    let mut chunk = [0_u8; 8 * 1024];
+    loop {
+        let count = reader.read(&mut chunk)?;
+        if count == 0 {
+            return Ok(retained);
+        }
+        retained.extend_from_slice(&chunk[..count]);
+        if retained.len() > maximum {
+            retained.drain(..retained.len() - maximum);
+        }
     }
 }
 
@@ -2276,11 +2357,12 @@ mod tests {
         RecordingSegmentInput, openh264_bitrate,
     };
     use super::{
-        CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt,
+        CancelToken, MediaPlayback, MediaToolchain, RecordingAudioLayout, VideoAttempt,
         aac_centered_stereo_layout_filter, aac_output_layout_filter, audio_edit_is_identity,
         audio_filter, commit_temporary, escape_concat_path, export_attempts,
-        export_preserves_source_bytes, fit_even, gif_export_filter, gif_filter,
-        preview_video_filter, recording_segment_audio_graph, seconds, validate_edit_spec,
+        export_preserves_source_bytes, fit_even, fit_playback_dimensions, gif_export_filter,
+        gif_filter, preview_dimensions, preview_video_filter, read_bounded_diagnostics,
+        read_complete_frame, recording_segment_audio_graph, seconds, validate_edit_spec,
         visual_edit_is_identity,
     };
     use crate::{
@@ -2301,6 +2383,168 @@ mod tests {
             has_audio: true,
             audio_stream_count: 2,
         }
+    }
+
+    #[test]
+    fn playback_geometry_preserves_preview_rounding_and_bounds() {
+        let portrait = ProbeResult {
+            metadata: MediaMetadata {
+                width: 640,
+                height: 1_440,
+                ..probe().metadata
+            },
+            ..probe()
+        };
+        let gif = ExportSpec {
+            format: ExportFormat::Gif,
+            quality: QualityPreset::Preserve,
+            max_size_bytes: None,
+            frames_per_second: None,
+            gif_max_colors: None,
+        };
+        let attempts = export_attempts(&portrait, &EditSpec::default(), &gif).unwrap();
+        assert_eq!(
+            preview_dimensions(&portrait, &EditSpec::default(), &gif, &attempts[0]),
+            (640, 1_440)
+        );
+        assert_eq!(fit_playback_dimensions(640, 1_440), (320, 720));
+
+        let odd = ProbeResult {
+            metadata: MediaMetadata {
+                width: 160,
+                height: 91,
+                ..probe().metadata
+            },
+            ..probe()
+        };
+        let attempts = export_attempts(&odd, &EditSpec::default(), &gif).unwrap();
+        assert_eq!(
+            preview_dimensions(&odd, &EditSpec::default(), &gif, &attempts[0]),
+            (160, 92),
+            "automatic GIF playback keeps FFmpeg -2 rounding"
+        );
+        assert_eq!(fit_playback_dimensions(4_000, 600), (1_280, 192));
+    }
+
+    #[test]
+    fn playback_reads_complete_frames_and_bounds_diagnostics() {
+        let mut partial = &b"12345678"[..];
+        let mut frame = [0_u8; 16];
+        assert_eq!(
+            read_complete_frame(&mut partial, &mut frame)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::UnexpectedEof
+        );
+
+        let diagnostics = vec![b'x'; 80 * 1024];
+        let retained = read_bounded_diagnostics(&mut diagnostics.as_slice(), 64 * 1024).unwrap();
+        assert_eq!(retained.len(), 64 * 1024);
+    }
+
+    #[cfg(unix)]
+    fn scripted_playback(script: &str) -> (tempfile::TempDir, MediaPlayback, CancelToken) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("ffmpeg-test");
+        std::fs::write(&executable, format!("#!/bin/sh\n{script}\n")).unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+        let input = directory.path().join("source.mp4");
+        std::fs::write(&input, b"immutable").unwrap();
+        let probe = ProbeResult {
+            metadata: MediaMetadata {
+                kind: MediaKind::Video,
+                mime_type: "video/mp4".into(),
+                width: 2,
+                height: 2,
+                duration_ms: Some(100),
+                size_bytes: 9,
+            },
+            has_audio: false,
+            audio_stream_count: 0,
+        };
+        let edit = EditSpec {
+            trim_end_ms: Some(100),
+            ..EditSpec::default()
+        };
+        let spec = ExportSpec {
+            format: ExportFormat::Mp4,
+            quality: QualityPreset::Preserve,
+            max_size_bytes: None,
+            frames_per_second: Some(30),
+            gif_max_colors: None,
+        };
+        let cancel = CancelToken::default();
+        let playback = MediaToolchain::new(executable, "unused".into())
+            .playback(&input, &probe, &edit, &spec, 0, &cancel)
+            .unwrap();
+        (directory, playback, cancel)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn playback_terminal_results_repeat_and_clock_starts_with_first_frame() {
+        let (_directory, mut playback, cancel) = scripted_playback(
+            "sleep 0.2; printf '000000000000000000000000000000000000000000000000'",
+        );
+        let started = std::time::Instant::now();
+        let first = playback.next_frame().unwrap().unwrap();
+        assert!(started.elapsed() >= std::time::Duration::from_millis(150));
+        assert_eq!(
+            first.position_ms, 0,
+            "slow startup must not skip the first frame"
+        );
+        assert!(playback.next_frame().unwrap().is_some());
+        assert!(playback.next_frame().unwrap().is_some());
+        assert!(playback.next_frame().unwrap().is_none());
+        assert!(playback.next_frame().unwrap().is_none());
+        assert!(!cancel.is_cancelled());
+
+        let (_directory, mut playback, _cancel) = scripted_playback("printf '12345678'");
+        let first = match playback.next_frame() {
+            Ok(_) => panic!("partial frame must fail"),
+            Err(error) => error.to_string(),
+        };
+        let second = match playback.next_frame() {
+            Ok(_) => panic!("terminal error must repeat"),
+            Err(error) => error.to_string(),
+        };
+        assert_eq!(first, second, "terminal decoder errors are deterministic");
+        assert!(first.contains("partial raw video frame"));
+
+        let (_directory, mut playback, _cancel) = scripted_playback(
+            "i=0; while [ $i -lt 5000 ]; do echo 'discard-old-diagnostic-line' >&2; i=$((i+1)); done; echo 'retained-tail-marker' >&2; exit 7",
+        );
+        let error = match playback.next_frame() {
+            Ok(_) => panic!("nonzero decoder must fail"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("retained-tail-marker"));
+        assert!(error.len() <= super::PLAYBACK_MAX_DIAGNOSTIC_BYTES + 64);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn playback_cancel_interrupts_wait_after_stdout_closes() {
+        let (_directory, mut playback, cancel) = scripted_playback("exec 1>&-; exec sleep 30");
+        let cancellation = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            cancellation.cancel();
+        });
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            playback.next_frame(),
+            Err(super::MediaToolError::Cancelled)
+        ));
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+        assert!(matches!(
+            playback.next_frame(),
+            Err(super::MediaToolError::Cancelled)
+        ));
     }
 
     #[test]
