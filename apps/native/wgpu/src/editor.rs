@@ -3102,8 +3102,7 @@ fn show_export_actions(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
         .output_notice
         .as_deref()
         .unwrap_or("Export settings are in Output.");
-    ui.add(egui::Label::new(notice).truncate())
-        .on_hover_text(notice);
+    ui.add(egui::Label::new(notice).truncate());
 }
 
 fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
@@ -3913,6 +3912,28 @@ mod tests {
         click(&mut view, size, copy);
         click(&mut view, size, save);
         assert!(rx.try_recv().is_err(), "confirmation blocks both actions");
+
+        view.confirm_discard = false;
+        view.section = Section::Geometry;
+        let notice = "Saved copy to /exports/a-long-filename-for-the-edited-image.png. History was not updated: the destination is unavailable.";
+        view.output_notice = Some(notice.into());
+        let output = frame(&mut view, size, vec![]);
+        let pos = position(&output, notice);
+        // Let egui's hover delay elapse. The elided label already supplies a
+        // full-message tooltip; an extra on_hover_text would paint it twice.
+        frame(&mut view, size, vec![egui::Event::PointerMoved(pos)]);
+        for _ in 0..90 {
+            frame(&mut view, size, vec![]);
+        }
+        let output = frame(&mut view, size, vec![]);
+        let messages = output.shapes.iter().filter(|shape|
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == notice)
+        ).count();
+        assert_eq!(
+            messages, 2,
+            "one footer label and one complete hover tooltip"
+        );
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

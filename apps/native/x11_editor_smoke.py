@@ -738,6 +738,8 @@ def main():
             copied.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
             assert run("identify", "-format", "%wx%h", str(copied)) == b"640x360"
             shot(editor, "output-size-minimum-draw-copy")
+            inspector_move(100, window_size()[1] - 27, "sleep", "1")
+            shot(editor, "output-size-minimum-copy-detail")
             close(root)
             wait(lambda: app.poll() is not None, "output size suite quits")
             assert app.returncode == 0
