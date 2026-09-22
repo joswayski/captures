@@ -1,9 +1,11 @@
 #!/usr/bin/python3
-"""Real frame/trim/crop/resize/export input on a disposable private X11 desktop."""
+"""Real frame/geometry/audio/export input on a disposable private X11 desktop."""
 import argparse
+from array import array
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -25,6 +27,7 @@ def main():
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--appearance", choices=("light", "dark"), default="dark")
+    parser.add_argument("--audio", action="store_true", help="Exercise separate system/microphone export controls")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -63,7 +66,7 @@ def main():
 
     def shot(window, name):
         if window != "root":
-            wait(lambda: "Working…" not in run("xdotool", "getwindowname", window).decode(), "frame accepted before screenshot")
+            idle(window)
         time.sleep(.5)
         run("import", "-window", window, str(output / f"{name}.png"))
 
@@ -76,8 +79,24 @@ def main():
         shot("root", "timeout-desktop")
         raise AssertionError(message)
 
+    def idle(window):
+        # Apply starts on the UI thread; the old idle title can remain visible
+        # briefly after the injected click. A single title read can type into
+        # disabled controls, losing the next destination under software-GL load.
+        since = None
+
+        def settled():
+            nonlocal since
+            if "Working…" in run("xdotool", "getwindowname", window).decode():
+                since = None
+            elif since is None:
+                since = time.monotonic()
+            return since is not None and time.monotonic() - since >= .5
+
+        wait(settled, "worker presentation settled")
+
     def click(window, x, y):
-        wait(lambda: "Working…" not in run("xdotool", "getwindowname", window).decode(), "worker idle")
+        idle(window)
         run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
             "sleep", ".2", "mousemove", "--sync", "--window", window, str(x), str(y),
             "sleep", ".2", "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
@@ -117,11 +136,26 @@ def main():
         artifact = history / artifact_id
         artifact.mkdir(parents=True)
         source = output / "source.mp4"
+        audio_inputs = []
+        audio_filters = ""
+        audio_maps = []
+        if args.audio:
+            # Real recordings can retain a playback mix followed by separate
+            # system/mic tracks. Unequal stereo tones catch swapped tracks,
+            # accidental reuse of the mix, ignored gains and ignored mono.
+            audio_inputs = ["-f", "lavfi", "-i",
+                "aevalsrc=0.1*sin(2*PI*440*t)|0.05*sin(2*PI*440*t):s=48000:d=3",
+                "-f", "lavfi", "-i",
+                "aevalsrc=0.04*sin(2*PI*880*t)|0.12*sin(2*PI*880*t):s=48000:d=3"]
+            audio_filters = (";[3:a]asplit=2[system][s];[4:a]asplit=2[mic][m];"
+                             "[s][m]amix=inputs=2:normalize=0[mixed]")
+            audio_maps = ["-map", "[mixed]", "-map", "[system]", "-map", "[mic]", "-c:a", "aac", "-b:a", "256k"]
         run("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=red:s=320x180:r=10:d=1",
             "-f", "lavfi", "-i", "color=green:s=320x180:r=10:d=1",
             "-f", "lavfi", "-i", "color=blue:s=320x180:r=10:d=1",
-            "-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1:a=0,drawbox=x=15:y=10:w=45:h=25:color=white:t=fill[v]",
-            "-map", "[v]", "-c:v", "mpeg4", "-q:v", "2", str(source))
+            *audio_inputs, "-filter_complex",
+            "[0:v][1:v][2:v]concat=n=3:v=1:a=0,drawbox=x=15:y=10:w=45:h=25:color=white:t=fill[v]" + audio_filters,
+            "-map", "[v]", *audio_maps, "-c:v", "mpeg4", "-q:v", "2", str(source))
         run("ffmpeg", "-v", "error", "-i", str(source), "-frames:v", "1", str(artifact / "preview.png"))
         metadata = artifact / "metadata.json"
         metadata.write_text(json.dumps({
@@ -130,7 +164,7 @@ def main():
             "created_at": datetime.now(timezone.utc).isoformat(), "mode": None,
             "saved_path": str(source), "mime_type": "video/mp4", "duration_ms": 3000,
             "target": {"type": "display", "display_id": "fixture"},
-            "has_system_audio": False, "has_microphone_audio": False, "dropped_frames": 0,
+            "has_system_audio": args.audio, "has_microphone_audio": args.audio, "dropped_frames": 0,
         }))
         original, original_metadata = source.read_bytes(), metadata.read_bytes()
         exports = output / "exports"
@@ -142,7 +176,7 @@ def main():
             "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
             "auto_copy_to_clipboard": False, "show_mini_previews": False}))
         app = spawn("app", [str(binary), "--live", "--history-root", str(history),
-                    "--settings-file", str(settings), "--quit-after", "600"])
+                    "--settings-file", str(settings), "--quit-after", "900"])
         root = wait(lambda: windows("Captures"), "History")[0]
         time.sleep(1)
         shot(root, "history")
@@ -299,6 +333,90 @@ def main():
             assert min(white) > 210, (path, white)
             assert green[1] > 90 and green[1] > max(green[0], green[2]) + 40, (path, green)
         shot(editor, "format-saved")
+        audio_checks = []
+        if args.audio:
+            click(editor, 22, 683)  # Remove crop and resize to expose audio rows.
+            click(editor, 22, 727)
+            field(editor, 227, 598, 2300)
+            click(editor, 33, 1082)
+            field(editor, 201, 866, 25)
+            field(editor, 231, 910, 175)
+            shot(editor, "audio-staged")
+            pending = exports / "pending-audio.mp4"
+            field(editor, 360, 1038, pending)
+            click(editor, 899, 1082)
+            assert not pending.exists(), "unapplied audio must gate save"
+            click(editor, 793, 1082)
+            shot(editor, "audio-applied")
+
+            def audio_export(filename):
+                path = exports / filename
+                count = len(list(history.glob("*/metadata.json")))
+                field(editor, 360, 1038, path)
+                click(editor, 899, 1082)
+                wait(lambda: len(list(history.glob("*/metadata.json"))) == count + 1, filename)
+                info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)))
+                return path, [s for s in info["streams"] if s["codec_type"] == "audio"]
+
+            def assert_tones(path, channels, expected):
+                samples = array("f", run("ffmpeg", "-v", "error", "-ss", "0.3", "-i", str(path),
+                    "-map", "0:a:0", "-t", "0.2", "-ar", "48000", "-f", "f32le", "-"))
+                assert len(samples) == 9600 * channels, (path, len(samples))
+                for channel in range(channels):
+                    values = samples[channel::channels]
+                    for frequency, amplitude in zip((440, 880), expected[channel]):
+                        # Phase-independent sinusoid projection: integer periods
+                        # independently measure each generated tone, not total RMS.
+                        real = sum(v * math.cos(2 * math.pi * frequency * i / 48000) for i, v in enumerate(values))
+                        imaginary = sum(v * math.sin(2 * math.pi * frequency * i / 48000) for i, v in enumerate(values))
+                        measured = 2 * math.hypot(real, imaginary) / len(values)
+                        assert abs(measured - amplitude) < max(.001, amplitude * .12), (path, channel, frequency, measured, amplitude)
+
+            mixed, streams = audio_export("volume.mp4")
+            assert len(streams) == 1 and streams[0]["channels"] == 2, streams
+            # System stays stereo, microphone is centered by the shared mixer.
+            assert_tones(mixed, 2, ((.025, .14), (.0125, .14)))
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "15", "--delay", "60", "5", "sleep", ".5")
+            shot(editor, "minimum-audio-controls")
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "20", "--delay", "60", "4", "sleep", ".5")
+            click(editor, 87, 1082)
+            click(editor, 793, 1082)
+            shot(editor, "gif-audio-disabled")
+            click(editor, 244, 866)  # Disabled mute must not change the MP4 settings.
+            _, streams = audio_export("audio-free.gif")
+            assert not streams
+            click(editor, 33, 1082)
+            click(editor, 793, 1082)
+            restored, streams = audio_export("audio-restored.mp4")
+            assert len(streams) == 1 and streams[0]["channels"] == 2, streams
+            assert_tones(restored, 2, ((.025, .14), (.0125, .14)))
+            click(editor, 274, 910)  # Mute microphone, retain system gain/stereo.
+            click(editor, 793, 1082)
+            system_only, streams = audio_export("system-only.mp4")
+            assert len(streams) == 1 and streams[0]["channels"] == 2, streams
+            assert_tones(system_only, 2, ((.025, 0), (.0125, 0)))
+            click(editor, 244, 866)
+            click(editor, 274, 910)
+            click(editor, 22, 946)  # Microphone only, mono.
+            click(editor, 793, 1082)
+            microphone_only, streams = audio_export("microphone-only.mp4")
+            assert len(streams) == 1 and streams[0]["channels"] == 1, streams
+            assert_tones(microphone_only, 1, ((0, .14 * math.sqrt(2)),))
+            shot(editor, "microphone-mono")
+            click(editor, 274, 910)  # Both muted removes the audio stream.
+            click(editor, 793, 1082)
+            _, streams = audio_export("muted.mp4")
+            assert not streams
+            shot(editor, "audio-muted")
+            for path, flags in ((system_only, (True, False)), (microphone_only, (False, True))):
+                entry = next(json.loads(p.read_text()) for p in history.glob("*/metadata.json")
+                             if json.loads(p.read_text()).get("saved_path") == str(path))
+                assert (entry["has_system_audio"], entry["has_microphone_audio"]) == flags, entry
+            audio_checks = ["audio-save-gate", "independent-track-gains", "minimum-audio-controls",
+                "gif-no-audio", "gif-retains-mp4-audio", "microphone-mute", "system-mute",
+                "mono-output", "both-muted-no-stream", "audio-history-flags"]
         assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
         close(editor)
         wait(lambda: not windows("Recording editor"), "saved editor closes")
@@ -313,9 +431,9 @@ def main():
                 "worker-completion-with-minimized-root", "invalid-crop-retains-frame", "unapplied-save-gate",
                 "cropped-preview", "minimum-crop-controls", "crop-preserves-trim", "even-output-dimensions",
                 "mp4-crop-origin-and-resize", "gif-crop-origin-and-resize", "format-save-gate",
-                "mp4-encoder-dimensions", "gif-explicit-dimensions", "format-specific-pixels"],
+                "mp4-encoder-dimensions", "gif-explicit-dimensions", "format-specific-pixels"] + audio_checks,
             "source_sha256": hashlib.sha256(original).hexdigest()}, indent=2) + "\n")
-        print("PASS recording editor: seeks, trim/crop/resize, MP4/GIF pixels, History, immutable source")
+        print(f"PASS recording editor: seeks, trim/crop/resize, MP4/GIF pixels, {len(audio_checks)} audio checks, History, immutable source")
     finally:
         for child in reversed(children):
             if child.poll() is None:
