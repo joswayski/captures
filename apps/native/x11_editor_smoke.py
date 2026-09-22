@@ -241,6 +241,10 @@ def main():
     def inspector_click(x, y):
         click(editor, inspector_x(x), y)
 
+    def export_click(action):
+        # Pinned below the inspector: independent of section, scroll and output options.
+        inspector_click({"copy": 44, "save": 134}[action], window_size()[1] - 63)
+
     def inspector_move(x, y, *tail):
         run("xdotool", "mousemove", "--window", editor, str(inspector_x(x)), str(y), *tail)
 
@@ -499,7 +503,7 @@ def main():
             saved_draft = draft.read_bytes()
             click(editor, 550, 62)
             shot(editor, "overwrite-controls")
-            inspector_click(85, 809)
+            inspector_click(85, 765)
             shot(editor, "overwrite-confirmation")
             assert source_export.read_bytes() == original
             assert json.loads(metadata_path.read_text()) == original_metadata
@@ -507,10 +511,10 @@ def main():
             click(editor, 231, 190)  # Toolbar confirmation: cancel replacement.
             shot(editor, "overwrite-cancelled")
             assert source_export.read_bytes() == original
-            inspector_click(85, 809)
+            inspector_click(85, 765)
             run("xdotool", "key", "Escape", "sleep", ".3")
             assert source_export.read_bytes() == original
-            inspector_click(85, 809)
+            inspector_click(85, 765)
             click(editor, 75, 190)  # Toolbar confirmation: explicit Replace, not the copy-path field.
             wait(lambda: source_export.read_bytes() != original, "original file replaced")
             wait(lambda: (artifact / "capture.png").read_bytes() != original, "same History image replaced")
@@ -682,14 +686,15 @@ def main():
             exports = output / "exports"
             exports.mkdir()
 
-            def size_export(name, expected, custom=False):
+            def size_export(name, expected, custom=False, section_x=535):
                 inspector_click(65, 507 if custom else 463)
                 wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
                      "resized output preview")
                 shot(editor, f"output-size-{name}-preview")
                 path = exports / f"{name}.png"
                 field(759 if custom else 715, path)
-                inspector_click(65, 798 if custom else 754)
+                click(editor, section_x, 62)
+                export_click("save")
                 wait(path.exists, f"{name} saved")
                 assert run("identify", "-format", "%wx%h", str(path)).decode() == expected
                 entry_path = wait(lambda: next((p for p in history.glob("*/metadata.json")
@@ -698,22 +703,24 @@ def main():
                 assert f"{entry['width']}x{entry['height']}" == expected
                 assert run("identify", "-format", "%wx%h", str(entry_path.parent / "capture.png")).decode() == expected
                 assert not draft.exists() and (artifact / "capture.png").read_bytes() == original
+                shot(editor, f"output-size-{name}-saved")
+                click(editor, 535, 62)
 
             inspector_click(65, 159)
             shot(editor, "output-size-menu")
             inspector_click(45, 247)  # 75%.
-            size_export("75-percent", "480x270")
+            size_export("75-percent", "480x270", section_x=389)
             inspector_click(65, 159)
             inspector_click(45, 291)  # 50%.
-            size_export("50-percent", "320x180")
+            size_export("50-percent", "320x180", section_x=475)
             inspector_click(65, 159)
             inspector_click(45, 335)  # Custom starts from 640x360, locked.
             field(203, 96, x=40)
-            size_export("locked", "96x54", custom=True)
+            size_export("locked", "96x54", custom=True, section_x=735)
             inspector_click(170, 203)  # Unlock aspect.
             field(203, 31, x=112)
             size_export("unlocked", "96x31", custom=True)
-            inspector_click(170, 798)  # Copy ignores output dimensions.
+            export_click("copy")  # Copy ignores output dimensions.
             copied = output / "clipboard-original-size.png"
             copied.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
             assert run("identify", "-format", "%wx%h", str(copied)) == b"640x360"
@@ -723,6 +730,12 @@ def main():
             field(203, 96, x=40)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "output-size-minimum")
+            click(editor, 35, 106)  # Draw wraps at minimum width; no Output or scrolling.
+            run("xclip", "-selection", "clipboard", "/dev/null")
+            export_click("copy")
+            copied.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
+            assert run("identify", "-format", "%wx%h", str(copied)) == b"640x360"
+            shot(editor, "output-size-minimum-draw-copy")
             close(root)
             wait(lambda: app.poll() is not None, "output size suite quits")
             assert app.returncode == 0
@@ -730,7 +743,8 @@ def main():
                 "passed": True, "appearance": args.appearance,
                 "checks": ["75-percent-preview-save-history", "50-percent-preview-save-history",
                            "custom-aspect-lock", "custom-independent-height", "copy-full-resolution",
-                           "invalid-dimensions", "minimum-controls", "no-draft-or-original-write"],
+                           "invalid-dimensions", "minimum-controls", "no-draft-or-original-write",
+                           "save-from-all-sections", "copy-from-minimum-draw"],
             }, indent=2) + "\n")
             print("PASS native output sizing: percentages, custom lock/unlock, History, copy, no edits")
             return
@@ -753,7 +767,7 @@ def main():
             inspector_click(78, 803)
             run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
             assert run("xclip", "-selection", "clipboard", "-o").decode() == str(tiny)
-            inspector_click(65, 842)
+            export_click("save")
             wait(tiny.exists, "Tiny PNG saved")
             shot(editor, "output-preset-tiny")
             assert int(run("identify", "-format", "%k", str(artifact / "capture.png"))) > 256
@@ -771,7 +785,7 @@ def main():
             inspector_click(78, 803)
             run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
             assert run("xclip", "-selection", "clipboard", "-o").decode() == str(highest)
-            inspector_click(65, 842)
+            export_click("save")
             wait(highest.exists, "Highest PNG saved")
             shot(editor, "output-preset-highest")
             assert run("convert", str(highest), "-depth", "8", "rgba:-") == run(
@@ -1070,7 +1084,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
             click(editor, 535, 62)
             inspector_click(65, 463)
-            inspector_click(170, 754)
+            export_click("copy")
             shot(editor, "text-draft-output-copy")
             png = output / "clipboard-text.png"
             # Encoding and clipboard publication complete asynchronously. Wait
@@ -1151,7 +1165,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
             click(editor, 535, 62)
             inspector_click(65, 463)
-            inspector_click(170, 754)
+            export_click("copy")
             shot(editor, "brush-output-copied")
             png = output / "clipboard-brush.png"
             png.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
@@ -1214,7 +1228,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
             click(editor, 535, 62)
             inspector_click(65, 463)  # Preview PNG before copying the edited frame.
-            inspector_click(170, 754)
+            export_click("copy")
             wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
                  "wand clipboard copy")
             shot(editor, "wand-output-copied")
@@ -1259,7 +1273,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
             click(editor, 535, 62)
             inspector_click(65, 463)
-            inspector_click(170, 754)
+            export_click("copy")
             png = output / "clipboard-trim.png"
             png.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
             assert run("identify", "-format", "%wx%h", str(png)) == b"640x360"
@@ -1319,7 +1333,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
             click(editor, 535, 62)
             inspector_click(65, 463)  # Preview PNG, then copy the edited frame.
-            inspector_click(170, 754)
+            export_click("copy")
             wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
                  "transparent clipboard copy completes")
             shot(editor, "background-output-copied")
@@ -2243,7 +2257,7 @@ def main():
         inspector_click(149, 681)
         wait(lambda: len(chooser.calls) == 1, "folder dialog cancellation")
         shot(editor, "export-folder-pending")
-        inspector_click(65, 754)  # Save is disabled until the folder choice completes.
+        export_click("save")  # Save is disabled until the folder choice completes.
         assert not list(initial_directory.iterdir()) and not list(exported.parent.iterdir())
         GLib.idle_add(chooser.respond, True)
         time.sleep(.5)
@@ -2257,7 +2271,7 @@ def main():
         assert not list(initial_directory.iterdir()) and not list(exported.parent.iterdir())
         assert draft.read_bytes() == saved_draft and len(list(history.glob("*/metadata.json"))) == 1
         shot(editor, "export-folder-selected")
-        inspector_click(65, 754)
+        export_click("save")
         wait(exported.exists, "new edited copy published")
         metadata = wait(lambda: [path for path in history.glob("*/metadata.json")
                                if path.parent != artifact], "new export in History")
@@ -2275,7 +2289,7 @@ def main():
         inspector_move(180, 400, "click", "--repeat", "12", "5")
         shot(editor, "export-saved-scrolled")
         inspector_move(180, 400, "click", "--repeat", "20", "4")
-        inspector_click(65, 754)  # Same filename must fail rather than replace.
+        export_click("save")  # Same filename must fail rather than replace.
         shot(editor, "export-collision")
         assert exported.read_bytes() == exported_bytes
         assert len(list(history.glob("*/metadata.json"))) == 2
@@ -2285,7 +2299,7 @@ def main():
         history.write_text("blocks History creation")
         recovered = output / "exports" / "recovered.webp"
         field(742, recovered)  # The collision error adds 27px above the panel.
-        inspector_click(65, 754)  # Editing the destination clears the collision error.
+        export_click("save")  # Editing the destination clears the collision error.
         wait(recovered.exists, "file saved despite unavailable History")
         assert recovered.read_bytes() == exported_bytes
         inspector_move(180, 400, "click", "--repeat", "20", "5")
@@ -2300,7 +2314,7 @@ def main():
         assert (artifact / "capture.png").read_bytes() == original
 
         inspector_move(180, 400, "click", "--repeat", "20", "4")
-        inspector_click(170, 754)  # Copy the edited canvas, not the History source.
+        export_click("copy")  # Copy the edited canvas, not the History source.
         wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
              "edited clipboard copy completes")
         copied = run("xclip", "-selection", "clipboard", "-t", "image/png", "-o")

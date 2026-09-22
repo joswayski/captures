@@ -1071,6 +1071,17 @@ Below 1000 points wide, AppKit moves canvas dimensions to a second footer row;
 the inspector retains its width and scrolling access to every section's controls.
 Windows/X11/Wayland keep their existing responsive layout; physical resize/input
 acceptance remains open on all hosts.
+Copy image and Save new copy are pinned below the scrolling inspector on both
+hosts, including at 760×540. They remain available in Geometry, Layers and Draw;
+Output retains format/quality/size, destination, encoding preview and confirmed
+original replacement. Copy still uses full-resolution edited PNG pixels, while
+Save uses the selected export options without saving the draft or replacing a file.
+Both actions retain the serialized worker and accepted-work lifecycle. AppKit
+keeps its full status area above the actions; wgpu shows a compact status with the
+complete message on hover. Native fixtures exercise section/resize visibility,
+pending-work gates and unchanged canvas geometry; X11 export tests save from all
+four sections. Windows/Wayland presentation and physical AppKit acceptance remain
+open, rather than being inferred from shared code or rendered CI fixtures.
 The tool rail and toolbar/export-bar organization still differ from Tauri.
 Remaining viewport controls and other drawing tools are not connected.
 Recording editing remains open on both hosts; the
