@@ -4103,7 +4103,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.requests.count, requestCount,
                        "typing and Cancel cannot race an accepted Finish request")
         worker.completePending(with: snapshot(id: "shot", unsaved: true,
-            layers: [textLayer(id: "fresh", text: "Ω\n漢字🙂")], canUndo: true))
+            layers: [textLayer(id: "fresh", text: "Ω\n漢字🙂")]))
         XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.text, "Ω\n漢字🙂")
         XCTAssertEqual(controller.state.snapshot?.canUndo, true,
                        "the shared finish publishes the grouped text transaction")
@@ -4186,7 +4186,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(worker.terminationTextInputs.last!,
                      "termination drains the accepted Finish instead of reusing its now-stale token")
         worker.completePending(with: snapshot(id: "shot", unsaved: true,
-            layers: [textLayer(id: "fresh", text: "accepted before quit")], canUndo: true))
+            layers: [textLayer(id: "fresh", text: "accepted before quit")]))
         XCTAssertNil(controller.state.snapshot)
     }
 
