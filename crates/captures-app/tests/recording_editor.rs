@@ -404,6 +404,79 @@ fn estimating_accepted_preview_is_read_only() {
 }
 
 #[test]
+fn timeline_thumbnails_span_the_immutable_source_without_changing_session_state() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let history = data.path().join("history");
+    let source = entry.recording_media_path(&history).unwrap();
+    let source_bytes = fs::read(&source).unwrap();
+    let mut session = open(&data, &entry, tools);
+    session
+        .execute(RecordingEditorRequest::UpdatePreview {
+            edit: EditSpec {
+                trim_start_ms: 1_100,
+                trim_end_ms: Some(2_300),
+                crop: Some(CropRect {
+                    x: 4,
+                    y: 4,
+                    width: 20,
+                    height: 14,
+                }),
+                output_width: Some(18),
+                output_height: Some(12),
+                ..EditSpec::default()
+            },
+            export: preview_spec(ExportFormat::Gif, QualityPreset::Standard),
+        })
+        .unwrap();
+    session
+        .execute(RecordingEditorRequest::Seek { position_ms: 1_500 })
+        .unwrap();
+    let snapshot = serde_json::to_value(session.snapshot()).unwrap();
+    let frame = session.frame();
+    let history_entries = fs::read_dir(&history).unwrap().count();
+
+    let thumbnails = session
+        .timeline_thumbnails(&CancelToken::default())
+        .unwrap();
+
+    assert_eq!(
+        (
+            thumbnails.frame_count,
+            thumbnails.frame_width,
+            thumbnails.frame_height,
+            thumbnails.sprite_width,
+            thumbnails.sprite_height,
+        ),
+        (12, 160, 90, 1_920, 90)
+    );
+    assert_eq!(thumbnails.pixels().dimensions(), (1_920, 90));
+    assert_dominant(thumbnails.pixels().get_pixel(80, 45).0, 0);
+    assert_dominant(thumbnails.pixels().get_pixel(1_840, 45).0, 2);
+    assert_eq!(serde_json::to_value(session.snapshot()).unwrap(), snapshot);
+    assert!(Arc::ptr_eq(&frame, &session.frame()));
+    assert_eq!(fs::read_dir(&history).unwrap().count(), history_entries);
+    assert_eq!(fs::read(&source).unwrap(), source_bytes);
+
+    let cancelled = CancelToken::default();
+    cancelled.cancel();
+    assert!(session.timeline_thumbnails(&cancelled).is_err());
+    assert_eq!(serde_json::to_value(session.snapshot()).unwrap(), snapshot);
+    assert!(Arc::ptr_eq(&frame, &session.frame()));
+    assert_eq!(fs::read(&source).unwrap(), source_bytes);
+
+    fs::remove_file(source).unwrap();
+    assert!(
+        session
+            .timeline_thumbnails(&CancelToken::default())
+            .is_err()
+    );
+    assert_eq!(serde_json::to_value(session.snapshot()).unwrap(), snapshot);
+    assert!(Arc::ptr_eq(&frame, &session.frame()));
+}
+
+#[test]
 fn real_exports_and_previews_share_format_specific_dimensions() {
     let Some(tools) = tools() else {
         return;

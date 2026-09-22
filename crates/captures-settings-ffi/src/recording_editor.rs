@@ -3,7 +3,7 @@
 use super::region::{RegionPixels, response, text};
 use captures_app::recording_editor::{
     RecordingEditorOpenRequest, RecordingEditorRequest, RecordingEditorSession,
-    RecordingSaveRequest,
+    RecordingSaveRequest, RecordingTimelineThumbnails,
 };
 use captures_media::{CancelToken, ExportProgress, MediaToolchain};
 use image::RgbaImage;
@@ -27,6 +27,8 @@ struct OpenRequest {
 }
 
 pub type RecordingEditorProgress = Option<unsafe extern "C" fn(*mut c_void, *const c_char)>;
+
+pub struct RecordingEditorThumbnails(RecordingTimelineThumbnails);
 
 /// Open and probe one real History recording on its serialized worker.
 ///
@@ -143,6 +145,92 @@ pub unsafe extern "C" fn captures_recording_editor_frame_free_v1(frame: *mut Arc
     if !frame.is_null() {
         // SAFETY: caller transfers unique box ownership.
         drop(unsafe { Box::from_raw(frame) });
+    }
+}
+
+/// Generate and retain the immutable source timeline strip.
+///
+/// # Safety
+/// Session is live and serialized for this call. Cancel remains live until the
+/// call returns and may be atomically cancelled elsewhere. Non-null output is
+/// aligned writable pointer storage. Free output JSON and the returned owner
+/// exactly once; the owner and its pixels may outlive the session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_thumbnails_v1(
+    session: *const RecordingEditorSession,
+    cancel: *const CancelToken,
+    output: *mut *mut c_char,
+) -> *mut RecordingEditorThumbnails {
+    if output.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains live session/cancel handles for this call.
+        let session = unsafe { session.as_ref() }.ok_or("recording editor handle is null")?;
+        let cancel = unsafe { cancel.as_ref() }.ok_or("recording export cancel handle is null")?;
+        session.timeline_thumbnails(cancel)
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    let (handle, value) = match result {
+        Ok(thumbnails) => {
+            let value = json!({
+                "ok": true,
+                "result": {
+                    "frame_count": thumbnails.frame_count,
+                    "frame_width": thumbnails.frame_width,
+                    "frame_height": thumbnails.frame_height,
+                    "sprite_width": thumbnails.sprite_width,
+                    "sprite_height": thumbnails.sprite_height,
+                },
+            });
+            (
+                Box::into_raw(Box::new(RecordingEditorThumbnails(thumbnails))),
+                value,
+            )
+        }
+        Err(error) => (ptr::null_mut(), json!({"ok":false,"error":error})),
+    };
+    // SAFETY: caller supplies aligned writable output storage.
+    unsafe { output.write(response(value)) };
+    handle
+}
+
+/// Borrow top-down straight-alpha sRGB RGBA8 timeline pixels.
+///
+/// # Safety
+/// Owner remains live through every read. Output is aligned writable storage.
+/// False leaves output unchanged.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_thumbnails_pixels_v1(
+    thumbnails: *const RecordingEditorThumbnails,
+    output: *mut RegionPixels,
+) -> bool {
+    if thumbnails.is_null() || output.is_null() {
+        return false;
+    }
+    // SAFETY: caller retains immutable owner and writable output.
+    let image = unsafe { &*thumbnails }.0.pixels();
+    unsafe {
+        output.write(RegionPixels {
+            data: image.as_ptr(),
+            length: image.len(),
+            width: image.width(),
+            height: image.height(),
+            bytes_per_row: image.width() as usize * 4,
+        })
+    };
+    true
+}
+
+/// # Safety
+/// Null or a live thumbnail owner, released once after all pixel reads finish.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_thumbnails_free_v1(
+    thumbnails: *mut RecordingEditorThumbnails,
+) {
+    if !thumbnails.is_null() {
+        // SAFETY: caller transfers unique box ownership.
+        drop(unsafe { Box::from_raw(thumbnails) });
     }
 }
 
@@ -263,7 +351,9 @@ pub unsafe extern "C" fn captures_recording_editor_free_v1(session: *mut Recordi
 mod tests {
     use super::*;
     use crate::captures_settings_free_v1;
-    use std::{ffi::CStr, mem::MaybeUninit};
+    use captures_history::{ArtifactKind, HistoryEntry};
+    use captures_recording::RecordingTarget;
+    use std::{ffi::CStr, fs, mem::MaybeUninit, path::PathBuf, process::Command};
 
     unsafe fn json(ptr: *mut c_char) -> serde_json::Value {
         assert!(!ptr.is_null());
@@ -297,6 +387,31 @@ mod tests {
         assert_eq!(estimate["ok"], false);
         assert_eq!(estimate["error"], "recording editor handle is null");
 
+        let mut thumbnails_response = ptr::null_mut();
+        // SAFETY: output storage is writable; null handles are an explicit owned error.
+        let thumbnails = unsafe {
+            captures_recording_editor_thumbnails_v1(
+                ptr::null(),
+                ptr::null(),
+                &mut thumbnails_response,
+            )
+        };
+        assert!(thumbnails.is_null());
+        // SAFETY: successful response publication returns owned JSON.
+        let thumbnails_response = unsafe { json(thumbnails_response) };
+        assert_eq!(thumbnails_response["ok"], false);
+        assert_eq!(
+            thumbnails_response["error"],
+            "recording editor handle is null"
+        );
+        // SAFETY: null output refuses work and every thumbnail free accepts null.
+        assert!(
+            unsafe {
+                captures_recording_editor_thumbnails_v1(ptr::null(), ptr::null(), ptr::null_mut())
+            }
+            .is_null()
+        );
+
         let sentinel = RegionPixels {
             data: ptr::dangling(),
             length: 2,
@@ -312,9 +427,19 @@ mod tests {
         assert_eq!(output.width, sentinel.width);
         assert_eq!(output.height, sentinel.height);
         assert_eq!(output.bytes_per_row, sentinel.bytes_per_row);
+        // SAFETY: null thumbnail owner is rejected before touching writable output.
+        assert!(!unsafe {
+            captures_recording_editor_thumbnails_pixels_v1(ptr::null(), &mut output)
+        });
+        assert_eq!(output.data, sentinel.data);
+        assert_eq!(output.length, sentinel.length);
+        assert_eq!(output.width, sentinel.width);
+        assert_eq!(output.height, sentinel.height);
+        assert_eq!(output.bytes_per_row, sentinel.bytes_per_row);
         // SAFETY: every explicit free accepts null as a no-op.
         unsafe {
             captures_recording_editor_frame_free_v1(ptr::null_mut());
+            captures_recording_editor_thumbnails_free_v1(ptr::null_mut());
             captures_recording_editor_cancel_free_v1(ptr::null_mut());
             captures_recording_editor_free_v1(ptr::null_mut());
         }
@@ -341,5 +466,125 @@ mod tests {
             assert!((*cancel).is_cancelled());
             captures_recording_editor_cancel_free_v1(cancel);
         }
+    }
+
+    #[test]
+    fn retained_thumbnail_pixels_outlive_the_session() {
+        let ffmpeg = std::env::var_os("CAPTURES_TEST_FFMPEG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("ffmpeg"));
+        let ffprobe = std::env::var_os("CAPTURES_TEST_FFPROBE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("ffprobe"));
+        if MediaToolchain::new(ffmpeg.clone(), ffprobe.clone())
+            .verify()
+            .is_err()
+        {
+            return;
+        }
+        let data = tempfile::tempdir().unwrap();
+        let source = data.path().join("source.mp4");
+        let status = Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:size=32x24:rate=10:duration=1",
+                "-c:v",
+                "mpeg4",
+                "-an",
+            ])
+            .arg(&source)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let id = "00000000-0000-4000-8000-000000000001".to_owned();
+        let history_root = data.path().join("history");
+        let entry = HistoryEntry {
+            id: id.clone(),
+            kind: ArtifactKind::Video,
+            preview_url: String::new(),
+            full_url: String::new(),
+            width: 32,
+            height: 24,
+            size_bytes: fs::metadata(&source).unwrap().len(),
+            created_at: "2026-09-22T00:00:00Z".into(),
+            mode: None,
+            saved_path: Some(source.to_string_lossy().into_owned()),
+            mime_type: Some("video/mp4".into()),
+            duration_ms: Some(1_000),
+            target: Some(RecordingTarget::Display {
+                display_id: "test-display".into(),
+            }),
+            has_system_audio: false,
+            has_microphone_audio: false,
+            dropped_frames: 0,
+        };
+        captures_history::save_recording(&history_root, &entry, b"poster", &source).unwrap();
+        let open_request = CString::new(
+            serde_json::json!({
+                "history_root": history_root,
+                "artifact_id": id,
+                "ffmpeg": ffmpeg,
+                "ffprobe": ffprobe,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut open_response = ptr::null_mut();
+        // SAFETY: request/output remain live for the synchronous open call.
+        let session =
+            unsafe { captures_recording_editor_open_v1(open_request.as_ptr(), &mut open_response) };
+        assert!(!session.is_null());
+        // SAFETY: open returned one owned response.
+        assert_eq!(unsafe { json(open_response) }["ok"], true);
+        let mut missing_cancel_response = ptr::null_mut();
+        // SAFETY: session/output are live; null cancel is an explicit owned error.
+        let missing_cancel = unsafe {
+            captures_recording_editor_thumbnails_v1(
+                session,
+                ptr::null(),
+                &mut missing_cancel_response,
+            )
+        };
+        assert!(missing_cancel.is_null());
+        // SAFETY: failed generation returned one owned response.
+        let missing_cancel_response = unsafe { json(missing_cancel_response) };
+        assert_eq!(missing_cancel_response["ok"], false);
+        assert_eq!(
+            missing_cancel_response["error"],
+            "recording export cancel handle is null"
+        );
+        let cancel = captures_recording_editor_cancel_create_v1();
+        let mut response = ptr::null_mut();
+        // SAFETY: handles and output remain live for generation.
+        let thumbnails =
+            unsafe { captures_recording_editor_thumbnails_v1(session, cancel, &mut response) };
+        assert!(!thumbnails.is_null());
+        // SAFETY: generation returned one owned response.
+        let response = unsafe { json(response) };
+        assert_eq!(response["result"]["frame_count"], 12);
+        assert_eq!(response["result"]["sprite_width"], 1_920);
+        // SAFETY: generation is complete, so session and cancel owners may be released.
+        unsafe {
+            captures_recording_editor_free_v1(session);
+            captures_recording_editor_cancel_free_v1(cancel);
+        }
+
+        let mut pixels = MaybeUninit::<RegionPixels>::uninit();
+        // SAFETY: the independent thumbnail owner remains live.
+        assert!(unsafe {
+            captures_recording_editor_thumbnails_pixels_v1(thumbnails, pixels.as_mut_ptr())
+        });
+        // SAFETY: successful pixel access initialized the descriptor.
+        let pixels = unsafe { pixels.assume_init() };
+        assert_eq!((pixels.width, pixels.height), (1_920, 90));
+        assert_eq!(pixels.length, 1_920 * 90 * 4);
+        // SAFETY: owner is released once after the final pixel borrow.
+        unsafe { captures_recording_editor_thumbnails_free_v1(thumbnails) };
     }
 }

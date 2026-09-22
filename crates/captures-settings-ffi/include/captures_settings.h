@@ -458,6 +458,7 @@ bool captures_recording_timeline_trim_update_v1(CapturesRecordingTimelineTrimDra
  * output, persistent draft, replacement, account, or release behavior exists. */
 typedef struct CapturesRecordingEditorSession CapturesRecordingEditorSession;
 typedef struct CapturesRecordingEditorFrame CapturesRecordingEditorFrame;
+typedef struct CapturesRecordingEditorCancel CapturesRecordingEditorCancel;
 CapturesRecordingEditorSession *captures_recording_editor_open_v1(
     const char *request_json, char **output);
 char *captures_recording_editor_request_v1(CapturesRecordingEditorSession *session,
@@ -471,6 +472,24 @@ bool captures_recording_editor_frame_pixels_v1(const CapturesRecordingEditorFram
     CapturesRegionPixels *output);
 void captures_recording_editor_frame_free_v1(CapturesRecordingEditorFrame *frame);
 
+/* Blocking full-source thumbnail generation on the serialized session worker.
+ * It uses the shipping 12-frame 160x90 sampling/filter and ignores accepted
+ * trim/crop/audio/export/position. Success returns an independently retained
+ * owner and owned JSON {ok:true,result:{frame_count,frame_width,frame_height,
+ * sprite_width,sprite_height}}; failure returns NULL plus owned {ok:false,error}.
+ * output_json must be non-NULL and is always freed with captures_settings_free_v1.
+ * The existing independent cancel owner stays live until this call returns.
+ * Borrowed RGBA8 pixels may outlive session/edit changes while the thumbnail
+ * owner remains live. Pixel failure leaves output untouched; NULL free is allowed. */
+typedef struct CapturesRecordingEditorThumbnails CapturesRecordingEditorThumbnails;
+CapturesRecordingEditorThumbnails *captures_recording_editor_thumbnails_v1(
+    const CapturesRecordingEditorSession *session,
+    const CapturesRecordingEditorCancel *cancel, char **output_json);
+bool captures_recording_editor_thumbnails_pixels_v1(
+    const CapturesRecordingEditorThumbnails *thumbnails, CapturesRegionPixels *output);
+void captures_recording_editor_thumbnails_free_v1(
+    CapturesRecordingEditorThumbnails *thumbnails);
+
 /* Save new copy is blocking on the serialized worker. JSON is
  * {destination,export}, where export is captures-media ExportSpec. It never
  * overwrites a destination or source and returns saved {path,artifact},
@@ -480,7 +499,6 @@ void captures_recording_editor_frame_free_v1(CapturesRecordingEditorFrame *frame
  * Cancellation is an independent thread-safe owner: cancel from another thread,
  * but free only after save_new returns. NULL callback is allowed; NULL cancel is
  * an owned error. No call may concurrently access/free the session. */
-typedef struct CapturesRecordingEditorCancel CapturesRecordingEditorCancel;
 typedef void (*CapturesRecordingEditorProgress)(void *context, const char *progress_json);
 CapturesRecordingEditorCancel *captures_recording_editor_cancel_create_v1(void);
 void captures_recording_editor_cancel_v1(const CapturesRecordingEditorCancel *cancel);
