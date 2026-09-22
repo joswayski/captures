@@ -426,6 +426,19 @@ struct NativeTextPreset: Equatable {
     }
 }
 
+struct NativeActiveTextInput: Equatable {
+    let inputID: String
+    let layerID: String
+    let isNew: Bool
+
+    init?(_ value: [String: Any]) {
+        guard let inputID = value["input_id"] as? String, !inputID.isEmpty,
+              let layerID = value["layer_id"] as? String, !layerID.isEmpty,
+              let isNew = value["is_new"] as? Bool else { return nil }
+        self.inputID = inputID; self.layerID = layerID; self.isNew = isNew
+    }
+}
+
 struct NativeEditorSnapshot: Equatable {
     let artifactID: String
     let originalExportPath: String?
@@ -438,6 +451,7 @@ struct NativeEditorSnapshot: Equatable {
     let canPasteLayer: Bool
     let unsavedChanges: Bool
     let hasDraft: Bool
+    let activeTextInput: NativeActiveTextInput?
     let fontFamilies: [String: String]
     let textStylePresets: [NativeTextPreset]
     /// Shared documents store back-to-front. Native layer panels display front-to-back.
@@ -485,6 +499,15 @@ struct NativeEditorSnapshot: Equatable {
         } else {
             return nil
         }
+        let activeTextInput: NativeActiveTextInput?
+        if let value = value["active_text_input"] as? [String: Any] {
+            guard let parsed = NativeActiveTextInput(value) else { return nil }
+            activeTextInput = parsed
+        } else if value["active_text_input"] == nil || value["active_text_input"] is NSNull {
+            activeTextInput = nil
+        } else {
+            return nil
+        }
         self.artifactID = artifactID
         self.originalExportPath = originalExportPath
         self.initialTextSize = initialTextSize.doubleValue
@@ -493,6 +516,7 @@ struct NativeEditorSnapshot: Equatable {
         self.canUndo = canUndo; self.canRedo = canRedo
         self.canPasteLayer = canPasteLayer
         self.unsavedChanges = unsavedChanges; self.hasDraft = hasDraft
+        self.activeTextInput = activeTextInput
         let fontFamilies = value["font_families"] as? [String: String] ?? [:]
         self.fontFamilies = fontFamilies
         let presets = value["text_style_presets"] as? [[String: Any]] ?? []
@@ -546,6 +570,11 @@ struct EditorImportPresentation {
 enum EditorSavePresentation: Equatable {
     case saved(path: String)
     case savedWithoutHistory(path: String, warning: String)
+}
+
+struct EditorTerminationTextInput: Equatable {
+    let inputID: String
+    let text: String
 }
 
 /// Independently retained immutable Rust pixels. The CGImage provider retains
@@ -746,7 +775,7 @@ protocol EditorWorking: AnyObject {
     func importImage(_ image: EditorDecodedImage, selectedID: String?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void)
     func close()
-    func prepareForTermination() -> Result<Void, Error>
+    func prepareForTermination(textInput: EditorTerminationTextInput? = nil) -> Result<Void, Error>
 }
 
 /// The opaque mutable session never leaves this queue. Frame ownership is split
@@ -864,11 +893,23 @@ final class EditorWorker: EditorWorking {
 
     /// Called on AppKit's termination path. It waits behind every accepted edit,
     /// saves the newest state, and frees only after that save succeeds.
-    func prepareForTermination() -> Result<Void, Error> {
+    func prepareForTermination(textInput: EditorTerminationTextInput? = nil) -> Result<Void, Error> {
         let storage = storage
         return Self.queue.sync {
             Result {
                 guard let session = storage.session else { return }
+                if let textInput {
+                    storage.snapshot = try session.request([
+                        "operation": "update_text_input",
+                        "input_id": textInput.inputID,
+                        "text": textInput.text,
+                    ])
+                    storage.snapshot = try session.request([
+                        "operation": "finish_text_input",
+                        "input_id": textInput.inputID,
+                        "commit": true,
+                    ])
+                }
                 if storage.snapshot?.unsavedChanges == true {
                     storage.snapshot = try session.request([
                         "operation": "save_draft",

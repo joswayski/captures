@@ -518,6 +518,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var onMove: ((String, CGFloat, CGFloat, Double) -> Void)?
     var onRotate: ((String, Double) -> Void)?
     var onResize: ((String, String, CGPoint, Double, Bool) -> Void)?
+    var onDoubleClick: ((CGPoint, Double) -> Bool)?
     var onError: ((Error) -> Void)?
     private(set) var startPoint: CGPoint?
     private(set) var currentPoint: CGPoint?
@@ -668,7 +669,16 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         resizeDrag = nil; resizeHandle = nil; resizePreview = nil; lockResizeAspect = false
         moveDrag = nil; movePreview = nil
     }
-    override func mouseDown(with event: NSEvent) { if beginViewportPan(event) { cancelGesture(); return }; window?.makeFirstResponder(self); begin(at: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
+    override func mouseDown(with event: NSEvent) {
+        if beginViewportPan(event) { cancelGesture(); return }
+        let point = convert(event.locationInWindow, from: nil)
+        if event.clickCount >= 2, presentedImageRect.contains(point) {
+            let scale = presentedImageRect.width / canvasSize.width
+            if onDoubleClick?(canvasPoint(for: point), 8 / scale) == true { return }
+        }
+        window?.makeFirstResponder(self)
+        begin(at: point, snap: event.modifierFlags.contains(.shift))
+    }
     override func mouseDragged(with event: NSEvent) { if continueViewportPan(event) { return }; drag(to: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
     override func mouseUp(with event: NSEvent) { if isViewportPanning { _ = continueViewportPan(event); endViewportPan(); return }; end(at: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
     override func keyDown(with event: NSEvent) { if event.keyCode == 53 { cancelGesture(); cancelViewportPan() } else { super.keyDown(with: event) } }
@@ -729,6 +739,27 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     }
 }
 
+private final class EditorInlineTextView: NSTextView {
+    var onEscape: (() -> Void)?
+    var onBlur: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            onEscape?()
+        } else {
+            // Return, marked text, selection, clipboard and undo stay with the
+            // native field editor instead of becoming canvas shortcuts.
+            super.keyDown(with: event)
+        }
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { DispatchQueue.main.async { [weak self] in self?.onBlur?() } }
+        return resigned
+    }
+}
+
 private final class ScreenshotEditorWindow: NSWindow {
     var editorShortcut: ((NSEvent) -> Bool)?
 
@@ -758,7 +789,7 @@ final class EditorLayerTable: NSTableView {
 }
 
 final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewDataSource,
-                                        NSTableViewDelegate, NSTextFieldDelegate {
+                                        NSTableViewDelegate, NSTextFieldDelegate, NSTextViewDelegate {
     let window: NSWindow
     let root: Surface
     private(set) var state = ScreenshotEditorState()
@@ -801,6 +832,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     let drawOverlay = EditorDrawOverlay()
     let selectionOverlay = EditorSelectionOverlay()
     let cropOverlay = EditorCropOverlay()
+    private let inlineTextScroll = NSScrollView()
+    private let inlineTextEditor = EditorInlineTextView()
+    private var inlineTextDoneButton: CaptureButton!
+    private var inlineTextCancelButton: CaptureButton!
     private let layerName = NSTextField()
     private let layerOpacity = NSTextField()
     private let layerX = NSTextField()
@@ -866,6 +901,20 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var acceptedTextStyle: NativeTextStyle?
     private var textApplyPending = false
     private var hasStagedText: Bool { acceptedTextStyle.map { !textFieldsMatch($0) } ?? false }
+    private struct InlineTextInput {
+        var inputID: String
+        var layerID: String?
+        let isNew: Bool
+        let anchor: NSPoint
+        let fontSize: Double
+        var beginTarget: [String: Any]?
+        var acceptedText: String
+        var bufferedText: String
+        var requestInFlight = false
+        var finishRequested: Bool?
+    }
+    private var inlineTextInput: InlineTextInput?
+    private var closeAfterTextInput = false
     private var outputFormat: NSPopUpButton!
     private var outputQuality: NSPopUpButton!
     private var outputSizeMode: NSPopUpButton!
@@ -999,6 +1048,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             return
         }
         cancelPendingImport()
+        inlineTextInput = nil; inlineTextScroll.isHidden = true; closeAfterTextInput = false
         let generation = state.beginOpen(artifactID: artifact.id)
         lastSolidBackground = "#f7f7f5"
         self.historyRoot = historyRoot
@@ -1036,20 +1086,26 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func prepareForTermination() -> Bool {
-        guard !hasStagedText else {
+        guard inlineTextInput != nil || !hasStagedText else {
             showError("Apply or cancel pending text before quitting.")
             window.makeKeyAndOrderFront(nil)
             return false
         }
         cancelDrawing()
         cancelPendingImport()
-        let result = worker.prepareForTermination()
+        let terminationInput = inlineTextInput.map {
+            EditorTerminationTextInput(inputID: $0.inputID, text: inlineTextEditor.string)
+        }
+        let result = worker.prepareForTermination(textInput: terminationInput)
         switch result {
         case .success:
+            inlineTextInput = nil; inlineTextScroll.isHidden = true
             state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
             window.orderOut(nil); return true
         case .failure(let error):
+            _ = state.fail(generation: state.generation)
             showError("Couldn’t save screenshot draft before quitting: \(error.localizedDescription)")
+            if inlineTextInput != nil { showInlineTextEditor() }
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             return false
         }
@@ -1058,6 +1114,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         cancelCrop()
         cancelDrawing()
+        if inlineTextInput != nil {
+            closeAfterTextInput = true
+            finishInlineTextInput(commit: true)
+            return false
+        }
         guard !hasStagedText else {
             showError("Apply or cancel pending text before closing.")
             return false
@@ -1090,6 +1151,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelCrop()
         cancelDrawing()
         cancelViewportPan()
+        finishInlineTextInput(commit: true)
     }
 
     func windowDidResize(_ notification: Notification) {
@@ -1176,6 +1238,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             self?.resizeCanvasLayer(id, handle: handle, current: current,
                                     displayScale: scale, lockAspect: lockAspect)
         }
+        selectionOverlay.onDoubleClick = { [weak self] point, tolerance in
+            self?.beginExistingTextInput(at: point, tolerance: tolerance) ?? false
+        }
         selectionOverlay.onError = { [weak self] error in self?.showError("Layer interaction failed: \(error.localizedDescription)") }
         viewportInput.addSubview(selectionOverlay)
         cropOverlay.frame = viewportInput.bounds
@@ -1185,6 +1250,38 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cropOverlay.onChange = { [weak self] rect in self?.setCropFields(rect) }
         cropOverlay.onCancel = { [weak self] in self?.cancelCrop() }
         viewportInput.addSubview(cropOverlay)
+        inlineTextScroll.isHidden = true
+        inlineTextScroll.borderType = .lineBorder
+        inlineTextScroll.hasVerticalScroller = true
+        inlineTextScroll.drawsBackground = true
+        inlineTextScroll.backgroundColor = tokens.color("surface-raised")
+        inlineTextScroll.wantsLayer = true
+        inlineTextScroll.layer?.cornerRadius = tokens.number("r-sm")
+        inlineTextScroll.layer?.borderColor = tokens.color("focus-ring").cgColor
+        inlineTextScroll.layer?.borderWidth = 2
+        inlineTextEditor.isRichText = false
+        inlineTextEditor.isHorizontallyResizable = false
+        inlineTextEditor.isVerticallyResizable = true
+        inlineTextEditor.allowsUndo = true
+        inlineTextEditor.delegate = self
+        inlineTextEditor.textContainer?.widthTracksTextView = true
+        inlineTextEditor.textContainerInset = NSSize(width: tokens.number("s-2"),
+                                                      height: tokens.number("s-2"))
+        inlineTextEditor.setAccessibilityLabel("Inline screenshot text")
+        inlineTextEditor.onEscape = { [weak self] in self?.finishInlineTextInput(commit: true) }
+        inlineTextEditor.onBlur = { [weak self] in self?.finishInlineTextInput(commit: true) }
+        inlineTextScroll.documentView = inlineTextEditor
+        viewportInput.addSubview(inlineTextScroll)
+        inlineTextDoneButton = button("Done", frame: .zero, parent: viewportInput) { [weak self] in
+            self?.finishInlineTextInput(commit: true)
+        }
+        inlineTextDoneButton.primary = true
+        inlineTextDoneButton.setAccessibilityLabel("Finish inline screenshot text")
+        inlineTextCancelButton = button("Cancel", frame: .zero, parent: viewportInput) { [weak self] in
+            self?.finishInlineTextInput(commit: false)
+        }
+        inlineTextCancelButton.setAccessibilityLabel("Cancel inline screenshot text")
+        inlineTextDoneButton.isHidden = true; inlineTextCancelButton.isHidden = true
         for view in [viewportInput, drawOverlay, selectionOverlay, cropOverlay] { configureViewportGestures(view) }
         drawOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         selectionOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
@@ -1506,9 +1603,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             textShadowFields[row.0] = field
         }
         textApplyButton = button("Apply", frame: NSRect(x: 0, y: 724, width: 118, height: 30),
-                                 parent: content) { [weak self] in self?.applyTextEdits() }
+                                 parent: content) { [weak self] in
+            if self?.inlineTextInput != nil { self?.finishInlineTextInput(commit: true) }
+            else { self?.applyTextEdits() }
+        }
         textCancelButton = button("Cancel", frame: NSRect(x: 134, y: 724, width: 118, height: 30),
-                                  parent: content) { [weak self] in self?.publishTextFields() }
+                                  parent: content) { [weak self] in
+            if self?.inlineTextInput != nil { self?.finishInlineTextInput(commit: false) }
+            else { self?.publishTextFields() }
+        }
         textControls = [heading, textPreset, familyLabel, textFamily, contentLabel, textScroll, sizeLabel, textSize,
                         textTraits, textAlignment, colorLabel, textColor, textPlate, textPlateColor,
                         textShadow, textOutline, textShadowPanel, textApplyButton, textCancelButton]
@@ -1841,7 +1944,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 let shape: EditorDrawOverlay.Shape = key == "t" ? .text : key == "a" ? .arrow : .pen
                 selected = sectionControl?.selectedSegment == Section.draw && drawOverlay.shape == shape
             }
-            button.isEnabled = state.snapshot != nil && !state.busy && !importLoading && !awaitingReplaceConfirmation
+            button.isEnabled = state.snapshot != nil && !state.busy && inlineTextInput == nil
+                && !importLoading && !awaitingReplaceConfirmation
             button.selected = selected; button.primary = selected
             button.setAccessibilityValue(selected ? 1 : 0)
             button.menu?.items.forEach { $0.state = $0.tag == drawTool?.indexOfSelectedItem ? .on : .off }
@@ -2349,23 +2453,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard shape != .wand, let layers = state.snapshot?.layers else { return }
         let request: [String: Any]
         if shape == .text {
-            guard let size = number(createTextSize), (8...512).contains(size) else {
-                showError("Text size must be from 8 to 512."); return
-            }
-            guard !createTextColor.stringValue.isEmpty else {
-                showError("Enter a text color."); return
-            }
-            let families = state.snapshot?.fontFamilies ?? [:]
-            let family = families["sans"] != nil ? "sans" : families.keys.sorted().first ?? "sans"
-            var textRequest: [String: Any] = [
-                "operation": "create_text", "point": ["x": start.x, "y": start.y],
-                "text": "", "fontSize": size, "fontFamily": family,
-                "color": createTextColor.stringValue,
-            ]
-            if let preset = createTextPreset.selectedItem?.representedObject as? String {
-                textRequest["stylePreset"] = preset
-            }
-            request = textRequest
+            beginTextInput(at: start)
+            return
         } else if shape == .pen {
             request = ["operation": "create_freehand_path", "points": points.map { ["x": $0.x, "y": $0.y] }]
         } else {
@@ -2374,6 +2463,244 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                        "start": ["x": start.x, "y": start.y], "end": ["x": end.x, "y": end.y]]
         }
         command(request, message: "Drawing \(shape.rawValue)…", createdLayerExistingIDs: Set(layers.map(\.id)))
+    }
+
+    private func beginTextInput(at point: NSPoint) {
+        if beginExistingTextInput(at: point, tolerance: 0) { return }
+        guard let size = number(createTextSize), (8...512).contains(size) else {
+            showError("Text size must be from 8 to 512."); return
+        }
+        guard !createTextColor.stringValue.isEmpty else {
+            showError("Enter a text color."); return
+        }
+        let families = state.snapshot?.fontFamilies ?? [:]
+        let family = families["sans"] != nil ? "sans" : families.keys.sorted().first ?? "sans"
+        var create: [String: Any] = [
+            "point": ["x": point.x, "y": point.y], "text": "",
+            "fontSize": size, "fontFamily": family, "color": createTextColor.stringValue,
+        ]
+        if let preset = createTextPreset.selectedItem?.representedObject as? String {
+            create["stylePreset"] = preset
+        }
+        beginTextInput(target: ["kind": "new", "create": create], initialText: "",
+                       anchor: point, fontSize: size)
+    }
+
+    @discardableResult
+    private func beginExistingTextInput(at point: NSPoint, tolerance: Double) -> Bool {
+        guard inlineTextInput == nil, !state.busy,
+              let snapshot = state.snapshot else { return false }
+        do {
+            guard let id = try NativeEditorHitTesting.hit(documentJSON: snapshot.documentJSON,
+                                                           point: point, tolerance: tolerance),
+                  let layer = snapshot.layers.first(where: { $0.id == id }),
+                  layer.kind == .text, layer.visible, !layer.locked,
+                  let text = layer.textStyle?.text else { return false }
+            beginTextInput(target: ["kind": "existing", "id": id], initialText: text,
+                           anchor: NSPoint(x: layer.x, y: layer.y),
+                           fontSize: layer.textStyle?.fontSize ?? 32)
+            return true
+        } catch {
+            showError("Text interaction failed: \(error.localizedDescription)")
+            return true
+        }
+    }
+
+    private func beginTextInput(target: [String: Any], initialText: String,
+                                anchor: NSPoint, fontSize: Double) {
+        guard !hasStagedText else {
+            showError("Apply or cancel staged inspector changes before editing text inline.")
+            return
+        }
+        guard inlineTextInput == nil else { return }
+        inlineTextInput = InlineTextInput(inputID: UUID().uuidString.lowercased(), layerID: nil,
+            isNew: target["kind"] as? String == "new", anchor: anchor, fontSize: fontSize,
+            beginTarget: target, acceptedText: initialText, bufferedText: initialText)
+        inlineTextEditor.string = initialText
+        showInlineTextEditor()
+        sendBeginTextInput()
+    }
+
+    private func sendBeginTextInput() {
+        guard var input = inlineTextInput, !input.requestInFlight,
+              let target = input.beginTarget,
+              let generation = state.beginCommand() else { return }
+        input.inputID = UUID().uuidString.lowercased()
+        input.requestInFlight = true
+        inlineTextInput = input
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Starting inline text input…"
+        updateControls()
+        worker.request(["operation": "begin_text_input", "input_id": input.inputID, "target": target]) {
+            [weak self] result in
+            guard let self, var current = self.inlineTextInput,
+                  current.inputID == input.inputID else { return }
+            current.requestInFlight = false
+            switch result {
+            case .success(let presentation):
+                guard let active = presentation.snapshot.activeTextInput,
+                      active.inputID == input.inputID,
+                      self.state.complete(presentation.snapshot, generation: generation) else {
+                    _ = self.state.fail(generation: generation)
+                    current.finishRequested = nil
+                    self.inlineTextInput = current
+                    self.showError("Couldn’t start inline text input: invalid shared response. Retry or Cancel.")
+                    self.updateControls()
+                    return
+                }
+                let accepted = presentation.snapshot.layers
+                    .first(where: { $0.id == active.layerID })?.textStyle?.text ?? current.acceptedText
+                current.layerID = active.layerID
+                current.beginTarget = nil
+                current.acceptedText = accepted
+                self.inlineTextInput = current
+                self.selectedLayerID = active.layerID
+                self.publishTextInputPresentation(presentation)
+                self.showInlineTextEditor()
+                self.status.stringValue = "Editing text inline. Return inserts a line; Escape or click away finishes."
+                if current.bufferedText != current.acceptedText {
+                    self.sendBufferedTextUpdateIfNeeded()
+                } else if current.finishRequested != nil {
+                    self.sendFinishTextInput()
+                }
+            case .failure(let error):
+                guard self.state.fail(generation: generation) else { return }
+                if current.finishRequested == false {
+                    self.dismissPendingTextInput()
+                    return
+                }
+                current.finishRequested = nil
+                self.inlineTextInput = current
+                self.showError("Couldn’t start inline text input: \(error.localizedDescription). Retry or Cancel.")
+                self.showInlineTextEditor()
+            }
+            self.updateControls()
+        }
+    }
+
+    func textDidChange(_ notification: Notification) {
+        guard notification.object as? NSTextView === inlineTextEditor,
+              var input = inlineTextInput else { return }
+        input.bufferedText = inlineTextEditor.string
+        inlineTextInput = input
+        sendBufferedTextUpdateIfNeeded()
+    }
+
+    private func sendBufferedTextUpdateIfNeeded() {
+        guard var input = inlineTextInput, !input.requestInFlight,
+              input.layerID != nil, input.beginTarget == nil,
+              input.bufferedText != input.acceptedText,
+              let generation = state.beginCommand() else {
+            if let input = inlineTextInput, !input.requestInFlight,
+               input.bufferedText == input.acceptedText, input.finishRequested != nil {
+                sendFinishTextInput()
+            }
+            return
+        }
+        let sentText = input.bufferedText
+        input.requestInFlight = true
+        inlineTextInput = input
+        updateControls()
+        worker.request(["operation": "update_text_input", "input_id": input.inputID,
+                        "text": sentText]) { [weak self] result in
+            guard let self, var current = self.inlineTextInput,
+                  current.inputID == input.inputID else { return }
+            current.requestInFlight = false
+            switch result {
+            case .success(let presentation):
+                guard presentation.snapshot.activeTextInput?.inputID == input.inputID,
+                      self.state.complete(presentation.snapshot, generation: generation) else { return }
+                current.acceptedText = sentText
+                if let active = presentation.snapshot.activeTextInput { current.layerID = active.layerID }
+                self.inlineTextInput = current
+                self.publishTextInputPresentation(presentation)
+                if current.bufferedText != current.acceptedText {
+                    self.sendBufferedTextUpdateIfNeeded()
+                } else if current.finishRequested != nil {
+                    self.sendFinishTextInput()
+                }
+            case .failure(let error):
+                guard self.state.fail(generation: generation) else { return }
+                if current.finishRequested == true { current.finishRequested = nil }
+                self.inlineTextInput = current
+                self.showError("Inline text preview failed: \(error.localizedDescription). Retry or Cancel.")
+                if current.finishRequested == false { self.sendFinishTextInput() }
+                else { self.window.makeFirstResponder(self.inlineTextEditor) }
+            }
+            self.updateControls()
+        }
+    }
+
+    private func finishInlineTextInput(commit: Bool) {
+        guard var input = inlineTextInput else { return }
+        if input.finishRequested != nil {
+            guard !commit else { return }
+        }
+        input.finishRequested = commit
+        if !commit { input.bufferedText = input.acceptedText }
+        inlineTextInput = input
+        if input.requestInFlight { return }
+        if input.layerID == nil {
+            if commit { sendBeginTextInput() }
+            else { dismissPendingTextInput() }
+            return
+        }
+        if commit && input.bufferedText != input.acceptedText {
+            sendBufferedTextUpdateIfNeeded()
+        } else {
+            sendFinishTextInput()
+        }
+    }
+
+    private func sendFinishTextInput() {
+        guard var input = inlineTextInput, !input.requestInFlight,
+              input.layerID != nil,
+              let commit = input.finishRequested,
+              let generation = state.beginCommand() else { return }
+        input.requestInFlight = true
+        inlineTextInput = input
+        status.stringValue = commit ? "Finishing text…" : "Cancelling text…"
+        updateControls()
+        worker.request(["operation": "finish_text_input", "input_id": input.inputID,
+                        "commit": commit]) { [weak self] result in
+            guard let self, var current = self.inlineTextInput,
+                  current.inputID == input.inputID else { return }
+            current.requestInFlight = false
+            switch result {
+            case .success(let presentation):
+                guard presentation.snapshot.activeTextInput == nil,
+                      self.state.complete(presentation.snapshot, generation: generation) else { return }
+                self.inlineTextInput = nil
+                self.hideInlineTextEditor()
+                self.publishTextInputPresentation(presentation)
+                if commit { self.invalidateOutput() }
+                self.status.textColor = self.tokens.color("text-muted")
+                self.status.stringValue = commit
+                    ? (presentation.snapshot.unsavedChanges ? "Unsaved changes." : "Text finished.")
+                    : "Text input cancelled."
+                self.updateControls()
+                if self.closeAfterTextInput {
+                    self.closeAfterTextInput = false
+                    _ = self.windowShouldClose(self.window)
+                }
+            case .failure(let error):
+                guard self.state.fail(generation: generation) else { return }
+                current.finishRequested = nil
+                self.inlineTextInput = current
+                self.showError("Couldn’t finish inline text: \(error.localizedDescription). Retry or Cancel.")
+                self.showInlineTextEditor()
+                self.updateControls()
+            }
+        }
+    }
+
+    private func dismissPendingTextInput() {
+        inlineTextInput = nil
+        hideInlineTextEditor()
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Text input cancelled."
+        closeAfterTextInput = false
+        updateControls()
     }
 
     private func textFieldsMatch(_ style: NativeTextStyle) -> Bool {
@@ -2753,21 +3080,74 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
     private func updateViewportGeometry() {
         preview.frame = presentedImageRect
+        updateInlineTextFrame()
         publishZoomPreset()
         drawOverlay.needsDisplay = true; selectionOverlay.needsDisplay = true
         cropOverlay.needsDisplay = true
     }
 
+    private func publishTextInputPresentation(_ presentation: EditorPresentation) {
+        outputPreviewMode?.selectedSegment = 0
+        publish(presentation, resetCrop: false)
+    }
+
+    private func showInlineTextEditor() {
+        guard let input = inlineTextInput,
+              let layer = state.snapshot?.layers.first(where: { $0.id == input.layerID }),
+              let style = layer.textStyle else { return }
+        let scale = presentedImageRect.width / max(1, CGFloat(state.snapshot?.width ?? 1))
+        // Pinned font bytes live inside the shared Rust session and are not an
+        // AppKit bundle resource. The native responder intentionally uses the
+        // system editing face for caret/IME ownership; shared preview/final pixels
+        // remain authoritative for family, traits, shaping and glyph coverage.
+        inlineTextEditor.font = .systemFont(ofSize: min(96, max(13, CGFloat(style.fontSize) * scale)))
+        inlineTextEditor.textColor = tokens.color("text")
+        inlineTextEditor.alignment = style.align == "center" ? .center
+            : style.align == "right" ? .right : .left
+        inlineTextScroll.isHidden = false
+        updateInlineTextFrame()
+        window.makeFirstResponder(inlineTextEditor)
+        inlineTextEditor.setSelectedRange(NSRange(location: inlineTextEditor.string.utf16.count, length: 0))
+    }
+
+    private func updateInlineTextFrame() {
+        guard !inlineTextScroll.isHidden, let input = inlineTextInput,
+              let layer = state.snapshot?.layers.first(where: { $0.id == input.layerID }) else { return }
+        let image = presentedImageRect
+        guard image.width > 0, image.height > 0, let snapshot = state.snapshot else { return }
+        let scale = image.width / CGFloat(snapshot.width)
+        let bounds: NSRect
+        if let outline = layer.selectionOutline, !outline.isEmpty {
+            let xs = outline.map(\.x), ys = outline.map(\.y)
+            bounds = NSRect(x: xs.min()!, y: ys.min()!,
+                            width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+        } else {
+            let fontSize = CGFloat(layer.textStyle?.fontSize ?? 32)
+            bounds = NSRect(x: CGFloat(layer.x), y: CGFloat(layer.y),
+                            width: max(160, fontSize * 8), height: max(44, fontSize * 1.6))
+        }
+        let desiredWidth = min(image.width, max(140, bounds.width * scale + 12))
+        let desiredHeight = min(image.height, max(48, bounds.height * scale + 12))
+        let desiredX = image.minX + bounds.minX * scale - 6
+        let desiredY = image.minY + bounds.minY * scale - 6
+        inlineTextScroll.frame = NSRect(
+            x: min(max(image.minX, desiredX), image.maxX - desiredWidth),
+            y: min(max(image.minY, desiredY), image.maxY - desiredHeight),
+            width: desiredWidth, height: desiredHeight).intersection(viewportInput.bounds)
+    }
+
     private func updateDrawing() {
         updateToolRail()
-        let cropReady = sectionControl?.selectedSegment == Section.geometry && state.snapshot != nil && !state.busy
+        let inputResolved = inlineTextInput == nil
+        let cropReady = sectionControl?.selectedSegment == Section.geometry && state.snapshot != nil
+            && !state.busy && inputResolved
         cropOverlay.croppingEnabled = cropReady && cropPrevious != nil
         drawCropButton?.isEnabled = cropReady
         drawCropButton?.title = cropPrevious == nil ? "Draw crop" : "Cancel crop"
         cropAspect.isEnabled = cropReady && cropPrevious != nil
         let active = sectionControl?.selectedSegment == Section.draw
-            && state.snapshot != nil && !state.busy
-        drawTool?.isEnabled = state.snapshot != nil && !state.busy
+            && state.snapshot != nil && !state.busy && inputResolved
+        drawTool?.isEnabled = state.snapshot != nil && !state.busy && inputResolved
         wandTolerance.isEnabled = active; wandContiguous.isEnabled = active
         brushSize.isEnabled = active; brushSoftness.isEnabled = active
         createTextPreset.isEnabled = active && createTextPreset.numberOfItems > 1
@@ -2780,10 +3160,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                        textAlignment, textPlate, textPlateColor, textShadow, textOutline]
         textFields.forEach { $0.isEnabled = textReady }
         textShadowFields.values.forEach { $0.isEnabled = textReady }
-        textApplyButton?.isEnabled = textReady; textCancelButton?.isEnabled = textReady
+        let inlineReady = inlineTextInput != nil
+        textApplyButton?.isEnabled = textReady || inlineReady
+        textCancelButton?.isEnabled = textReady || inlineReady
         drawOverlay.drawingEnabled = active
         selectionOverlay.selectionEnabled = sectionControl?.selectedSegment == Section.layers
-            && state.snapshot != nil && !state.busy && !importLoading
+            && state.snapshot != nil && !state.busy && inputResolved && !importLoading
     }
 
     private func selectCanvasLayer(_ id: String?) {
@@ -3169,6 +3551,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                          preserveStagedTextOnFailure: Bool = false,
                          preserveOutputAndStatus: Bool = false,
                          selectToolOnSuccess: Bool = false) {
+        guard inlineTextInput == nil else {
+            showError("Finish or cancel inline text before another editor action.")
+            return
+        }
         guard let generation = state.beginCommand() else { return }
         if !preserveOutputAndStatus { invalidateOutput() }
         preferredLayerID = preferredSelection
@@ -3238,7 +3624,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelCrop()
         cancelDrawing()
         cancelPendingImport()
-        closeAfterCommand = false; selectedLayerID = nil; preferredLayerID = nil
+        closeAfterCommand = false; closeAfterTextInput = false
+        inlineTextInput = nil; inlineTextScroll.isHidden = true
+        selectedLayerID = nil; preferredLayerID = nil
         state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
         cancelViewportPan()
         viewport = NativeEditorViewport(); viewportCanvasSize = .zero
@@ -3246,7 +3634,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func updateControls() {
-        let ready = state.snapshot != nil && !state.busy
+        let ready = state.snapshot != nil && !state.busy && inlineTextInput == nil
         fields.forEach { $0.isEnabled = ready }
         applyCropButton?.isEnabled = ready; resizeButton?.isEnabled = ready
         trimButton?.isEnabled = ready
@@ -3396,6 +3784,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textEditor.textColor = tokens.color("text")
         textEditor.insertionPointColor = tokens.color("text")
         textEditor.font = .systemFont(ofSize: tokens.number("text-md"))
+        inlineTextScroll.backgroundColor = tokens.color("surface-raised")
+        inlineTextScroll.layer?.borderColor = tokens.color("focus-ring").cgColor
+        inlineTextEditor.backgroundColor = tokens.color("surface-raised")
+        inlineTextEditor.textColor = tokens.color("text")
+        inlineTextEditor.insertionPointColor = tokens.color("text")
         cropOverlay.tokens = tokens
         drawOverlay.fillColor = tokens.color("theme-accent").withAlphaComponent(0.22)
         drawOverlay.strokeColor = tokens.color("theme-accent")
