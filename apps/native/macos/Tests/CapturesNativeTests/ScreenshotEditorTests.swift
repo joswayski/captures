@@ -334,6 +334,104 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controls.allSatisfy { controller.root.bounds.contains($0.convert($0.bounds, to: controller.root)) })
     }
 
+    func testWindowResizeKeepsInspectorAndZoomControlsVisibleAndFitCentered() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let original = snapshot(id: "shot", width: 640, height: 360, unsaved: true, draft: true)
+            let worker = FakeEditorWorker(snapshot: original)
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            XCTAssertTrue(controller.window.styleMask.contains(.resizable))
+            XCTAssertEqual(controller.window.contentMinSize, NSSize(width: 1000, height: 700))
+            let input = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorViewportGestureView }
+                .first { $0.accessibilityLabel() == "Screenshot viewport" })
+            let section = try segmented("Editor section", in: controller.root)
+            let inspector = try XCTUnwrap(descendants(in: controller.root)
+                .first { $0.accessibilityLabel() == "Geometry controls" })
+            let undo = try button("Undo", in: controller.root)
+            controller.window.setContentSize(NSSize(width: 1200, height: 860))
+            controller.root.layoutSubtreeIfNeeded()
+            waitUntil { controller.presentedImageRect == NSRect(x: 82, y: 157, width: 640, height: 360) }
+            XCTAssertEqual(input.bounds.size, NSSize(width: 804, height: 674))
+            XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1200, height: 860))
+            XCTAssertEqual(section.frame.minX, 888)
+            XCTAssertEqual(inspector.frame, NSRect(x: 888, y: 66, width: 272, height: 550))
+            XCTAssertEqual(undo.frame.origin, NSPoint(x: 888, y: 630))
+            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 82, y: 157, width: 640, height: 360))
+            for control in descendants(in: controller.root) where
+                ["Canvas zoom", "Canvas zoom preset", "Edited canvas dimensions", "Screenshot editor status"]
+                    .contains(control.accessibilityLabel() ?? "") {
+                XCTAssertTrue(controller.root.bounds.contains(control.convert(control.bounds, to: controller.root)))
+            }
+            try render(controller.root, name: "screenshot-editor-resized-fit-\(appearance)")
+            controller.window.setContentSize(NSSize(width: 1000, height: 700))
+            controller.root.layoutSubtreeIfNeeded()
+            waitUntil { controller.presentedImageRect.width == 604 }
+            XCTAssertEqual(input.bounds.size, NSSize(width: 604, height: 514))
+            XCTAssertEqual(section.frame.minX, 688)
+            XCTAssertEqual(inspector.frame, NSRect(x: 688, y: 66, width: 272, height: 390))
+            XCTAssertEqual(undo.frame.origin, NSPoint(x: 688, y: 470))
+            XCTAssertEqual(controller.presentedImageRect.minX, 0, accuracy: 1e-7)
+            XCTAssertEqual(controller.presentedImageRect.minY, 87.125, accuracy: 1e-7)
+            XCTAssertEqual(controller.presentedImageRect.width, 604, accuracy: 1e-7)
+            XCTAssertEqual(controller.presentedImageRect.height, 339.75, accuracy: 1e-7)
+            try render(controller.root, name: "screenshot-editor-resized-minimum-\(appearance)")
+            XCTAssertEqual(controller.viewport, NativeEditorViewport())
+            XCTAssertEqual(controller.state.snapshot, original)
+            XCTAssertTrue(worker.requests.isEmpty)
+            XCTAssertTrue(worker.encodes.isEmpty)
+        }
+    }
+
+    func testWindowResizeCancelsGesturesWithoutResettingManualViewportOrDraft() throws {
+        _ = NSApplication.shared
+        let original = snapshot(id: "shot", unsaved: true, draft: true)
+        let worker = FakeEditorWorker(snapshot: original)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try button("Draw crop", in: controller.root).performClick(nil)
+        let image = controller.presentedImageRect
+        controller.cropOverlay.begin(at: NSPoint(x: image.minX + 60, y: image.minY + 70))
+        controller.cropOverlay.drag(to: NSPoint(x: image.minX + 240, y: image.minY + 180))
+        XCTAssertTrue(controller.cropOverlay.croppingEnabled)
+        controller.windowDidResize(Notification(name: NSWindow.didResizeNotification, object: controller.window))
+        XCTAssertTrue(controller.cropOverlay.croppingEnabled, "same-size notifications preserve the gesture")
+        controller.window.setContentSize(NSSize(width: 1100, height: 780))
+        waitUntil { !controller.cropOverlay.croppingEnabled }
+        XCTAssertEqual(try field("Crop X", in: controller.root).stringValue, "0")
+        XCTAssertEqual(try field("Crop width", in: controller.root).stringValue, "640")
+        try chooseZoomPreset("200%", in: controller.root)
+        let input = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorViewportGestureView }
+            .first { $0.accessibilityLabel() == "Screenshot viewport" })
+        input.onViewportPan?(NSPoint(x: 37, y: -21))
+        let viewport = controller.viewport
+        try showDraw(in: controller.root)
+        controller.drawOverlay.begin(at: NSPoint(x: 120, y: 140))
+        XCTAssertNotNil(controller.drawOverlay.startPoint)
+        controller.window.setContentSize(NSSize(width: 1200, height: 860))
+        waitUntil { controller.drawOverlay.startPoint == nil && input.bounds.width == 804
+            && controller.presentedImageRect.midX == 402 + CGFloat(viewport.panX) }
+        controller.drawOverlay.end(at: NSPoint(x: 260, y: 220))
+        XCTAssertEqual(controller.viewport, viewport)
+        XCTAssertEqual(controller.presentedImageRect.midX, 402 + CGFloat(viewport.panX), accuracy: 1e-7)
+        XCTAssertEqual(controller.presentedImageRect.midY, 337 + CGFloat(viewport.panY), accuracy: 1e-7)
+        let point = NSPoint(x: 160, y: 180)
+        let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
+            location: controller.drawOverlay.convert(point, to: nil), modifierFlags: [.command],
+            timestamp: 0, windowNumber: controller.window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1))
+        controller.drawOverlay.mouseDown(with: down)
+        XCTAssertTrue(controller.drawOverlay.isViewportPanning)
+        controller.window.setContentSize(NSSize(width: 1000, height: 700))
+        waitUntil { !controller.drawOverlay.isViewportPanning }
+        XCTAssertEqual(controller.viewport, viewport)
+        XCTAssertEqual(controller.state.snapshot, original)
+        XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertTrue(worker.encodes.isEmpty)
+    }
+
     func testZoomPresetsTrackCustomZoomAndFitWithoutDocumentWork() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {

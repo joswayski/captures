@@ -304,7 +304,8 @@ The Windows/Linux candidate opens screenshots from History in a native crop,
 canvas-size and draft editor with undo/redo. Both native hosts place their scrolling
 inspector to the right of the canvas and center the image in Fit mode without
 upscaling small captures. Their workbench layout still differs from the shipping
-Tauri editor. **Draw crop** selects directly on the
+Tauri editor. Both editor windows resize; the current macOS minimum is 1000×700,
+compared with 760×540 on Windows/Linux. **Draw crop** selects directly on the
 preview with free or preset aspect ratios and Shift ratio locking. Apply commits
 the selection; Cancel or Escape leaves the document unchanged. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
