@@ -4086,16 +4086,107 @@ final class ScreenshotEditorTests: XCTestCase {
         worker.completePending(with: snapshot(id: "shot", layers: [textLayer(id: "fresh", text: "Ω\n漢字🙂")],
             activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true]))
 
+        worker.deferRequests = true
         editor.keyDown(with: try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}"))
         let finish = try XCTUnwrap(worker.requests.last)
         XCTAssertEqual(finish["operation"] as? String, "finish_text_input")
         XCTAssertEqual(finish["input_id"] as? String, inputID)
         XCTAssertEqual(finish["commit"] as? Bool, true)
+        XCTAssertFalse(editor.isEditable)
+        XCTAssertFalse(try button("Done", in: controller.root).isEnabled)
+        XCTAssertFalse(try button("Cancel", in: controller.root).isEnabled)
+        let requestCount = worker.requests.count
+        editor.string = "typing after accepted Finish must not win"
+        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+        try button("Cancel", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.count, requestCount,
+                       "typing and Cancel cannot race an accepted Finish request")
+        worker.completePending(with: snapshot(id: "shot", unsaved: true,
+            layers: [textLayer(id: "fresh", text: "Ω\n漢字🙂")], canUndo: true))
         XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.text, "Ω\n漢字🙂")
         XCTAssertEqual(controller.state.snapshot?.canUndo, true,
                        "the shared finish publishes the grouped text transaction")
         XCTAssertFalse(try segmented("Output preview image", in: controller.root).isEnabled,
                        "only accepted commit invalidates encoded output")
+    }
+
+    func testInlineTextDelayedBeginPreservesSelectionAndMarkedEscapeStaysNative() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        worker.deferRequests = true
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+        let editor = try textView("Inline screenshot text", in: controller.root)
+        editor.string = "abcdef"
+        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+        editor.setSelectedRange(NSRange(location: 1, length: 3))
+        let inputID = try XCTUnwrap(worker.requests.last?["input_id"] as? String)
+        worker.completePending(with: snapshot(id: "shot", layers: [textLayer(id: "fresh", text: "")],
+            activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true]))
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 1, length: 3),
+                       "delayed Begin completion must not reset a live native selection")
+
+        worker.deferRequests = false
+        worker.completePending(with: snapshot(id: "shot", layers: [textLayer(id: "fresh", text: "abcdef")],
+            activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true]))
+        let finishesBeforeMarkedEscape = worker.requests.filter {
+            $0["operation"] as? String == "finish_text_input"
+        }.count
+        editor.setMarkedText("候補", selectedRange: NSRange(location: 2, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        editor.keyDown(with: try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}"))
+        XCTAssertEqual(worker.requests.filter { $0["operation"] as? String == "finish_text_input" }.count,
+                       finishesBeforeMarkedEscape,
+                       "Escape belongs to the native input context while marked text is active")
+        editor.unmarkText()
+        try button("Cancel", in: controller.root).performClick(nil)
+    }
+
+    func testInlineTextQuitDrainsAcceptedFinishWithoutSendingAStaleToken() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        var inputID = ""
+        worker.response = { request in
+            switch request["operation"] as? String {
+            case "begin_text_input":
+                inputID = request["input_id"] as! String
+                return self.snapshot(id: "shot", layers: [self.textLayer(id: "fresh", text: "")],
+                    activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true])
+            case "update_text_input":
+                return self.snapshot(id: "shot",
+                    layers: [self.textLayer(id: "fresh", text: request["text"] as! String)],
+                    activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true])
+            default: return nil
+            }
+        }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+        let editor = try textView("Inline screenshot text", in: controller.root)
+        editor.string = "accepted before quit"
+        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+        worker.deferRequests = true
+        try button("Done", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "finish_text_input")
+
+        XCTAssertTrue(controller.prepareForTermination())
+        XCTAssertNil(worker.terminationTextInputs.last!,
+                     "termination drains the accepted Finish instead of reusing its now-stale token")
+        worker.completePending(with: snapshot(id: "shot", unsaved: true,
+            layers: [textLayer(id: "fresh", text: "accepted before quit")], canUndo: true))
+        XCTAssertNil(controller.state.snapshot)
     }
 
     func testInlineTextBeginFailureRetainsLocalBufferAndOffersRetryOrCancel() throws {
@@ -4893,6 +4984,8 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(preview.snapshot.layers.first?.textStyle?.text, "Native Ωé\nПривет")
         XCTAssertFalse(preview.snapshot.unsavedChanges)
         XCTAssertFalse(preview.snapshot.canUndo)
+        XCTAssertThrowsError(try worker.prepareForTermination(textInput: nil).get(),
+                             "termination cannot drop an unresolved shared input")
         XCTAssertThrowsError(try result(["operation": "resize_canvas", "width": 10, "height": 10]).get())
         XCTAssertThrowsError(try result(["operation": "update_text_input", "input_id": "stale",
                                          "text": "must not win"]).get())

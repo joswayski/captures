@@ -922,6 +922,9 @@ final class EditorWorker: EditorWorking {
                         "commit": true,
                     ])
                 }
+                guard storage.snapshot?.activeTextInput == nil else {
+                    throw AppBridgeError.backend("Inline text did not finish before quitting.")
+                }
                 if storage.snapshot?.unsavedChanges == true {
                     storage.snapshot = try session.request([
                         "operation": "save_draft",

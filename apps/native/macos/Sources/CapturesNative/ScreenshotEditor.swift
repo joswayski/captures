@@ -744,7 +744,7 @@ private final class EditorInlineTextView: NSTextView {
     var onBlur: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 {
+        if event.keyCode == 53, !hasMarkedText() {
             onEscape?()
         } else {
             // Return, marked text, selection, clipboard and undo stay with the
@@ -912,6 +912,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         var bufferedText: String
         var requestInFlight = false
         var finishRequested: Bool?
+        var finishInFlight = false
     }
     private var inlineTextInput: InlineTextInput?
     private var closeAfterTextInput = false
@@ -1093,8 +1094,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         cancelDrawing()
         cancelPendingImport()
-        let terminationInput = inlineTextInput.map {
-            EditorTerminationTextInput(inputID: $0.inputID, text: inlineTextEditor.string)
+        let terminationInput = inlineTextInput.flatMap {
+            $0.finishInFlight ? nil
+                : EditorTerminationTextInput(inputID: $0.inputID, text: inlineTextEditor.string)
         }
         let result = worker.prepareForTermination(textInput: terminationInput)
         switch result {
@@ -2517,7 +2519,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             isNew: target["kind"] as? String == "new", anchor: anchor, fontSize: fontSize,
             beginTarget: target, acceptedText: initialText, bufferedText: initialText)
         inlineTextEditor.string = initialText
-        showInlineTextEditor()
+        showInlineTextEditor(selectAtEnd: true)
         sendBeginTextInput()
     }
 
@@ -2580,7 +2582,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     func textDidChange(_ notification: Notification) {
         guard notification.object as? NSTextView === inlineTextEditor,
-              var input = inlineTextInput else { return }
+              var input = inlineTextInput, !input.finishInFlight else { return }
         input.bufferedText = inlineTextEditor.string
         inlineTextInput = input
         sendBufferedTextUpdateIfNeeded()
@@ -2639,7 +2641,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func finishInlineTextInput(commit: Bool) {
-        guard var input = inlineTextInput else { return }
+        guard var input = inlineTextInput, !input.finishInFlight else { return }
         if input.finishRequested != nil {
             guard !commit else { return }
         }
@@ -2665,6 +2667,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
               let commit = input.finishRequested,
               let generation = state.beginCommand() else { return }
         input.requestInFlight = true
+        input.finishInFlight = true
         inlineTextInput = input
         status.stringValue = commit ? "Finishing text…" : "Cancelling text…"
         updateControls()
@@ -2673,6 +2676,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             guard let self, var current = self.inlineTextInput,
                   current.inputID == input.inputID else { return }
             current.requestInFlight = false
+            current.finishInFlight = false
             switch result {
             case .success(let presentation):
                 guard presentation.snapshot.activeTextInput == nil else {
@@ -3105,7 +3109,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publish(presentation, resetCrop: false)
     }
 
-    private func showInlineTextEditor() {
+    private func showInlineTextEditor(selectAtEnd: Bool = false) {
         guard let input = inlineTextInput else { return }
         let layer = input.layerID.flatMap { id in state.snapshot?.layers.first(where: { $0.id == id }) }
         let style = layer?.textStyle
@@ -3122,7 +3126,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineTextDoneButton.isHidden = false; inlineTextCancelButton.isHidden = false
         updateInlineTextFrame()
         window.makeFirstResponder(inlineTextEditor)
-        inlineTextEditor.setSelectedRange(NSRange(location: inlineTextEditor.string.utf16.count, length: 0))
+        if selectAtEnd {
+            inlineTextEditor.setSelectedRange(NSRange(location: inlineTextEditor.string.utf16.count, length: 0))
+        }
     }
 
     private func hideInlineTextEditor() {
@@ -3193,7 +3199,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                        textAlignment, textPlate, textPlateColor, textShadow, textOutline]
         textFields.forEach { $0.isEnabled = textReady }
         textShadowFields.values.forEach { $0.isEnabled = textReady }
-        let inlineReady = inlineTextInput != nil
+        let inlineReady = inlineTextInput != nil && inlineTextInput?.finishInFlight != true
+        inlineTextEditor.isEditable = inlineReady
+        inlineTextDoneButton?.isEnabled = inlineReady
+        inlineTextCancelButton?.isEnabled = inlineReady
         textApplyButton?.isEnabled = textReady || inlineReady
         textCancelButton?.isEnabled = textReady || inlineReady
         drawOverlay.drawingEnabled = active
