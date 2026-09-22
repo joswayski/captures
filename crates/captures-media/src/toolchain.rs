@@ -662,7 +662,10 @@ impl MediaToolchain {
                 .max_size_bytes
                 .is_none_or(|maximum| size_bytes <= maximum);
             if fits {
-                commit_temporary(&temporary, destination)?;
+                if let Err(error) = commit_temporary(&temporary, destination) {
+                    let _ = fs::remove_file(&temporary);
+                    return Err(error);
+                }
                 on_progress(progress(ExportStage::Complete, 1_000, attempt_number, None));
                 return Ok(ExportOutcome {
                     path: destination.to_path_buf(),
@@ -1200,7 +1203,9 @@ fn video_attempt(
     }
 }
 
-fn validate_edit_spec(probe: &ProbeResult, edit: &EditSpec) -> Result<(), MediaToolError> {
+/// Validate one edit against already-probed source metadata. Callers that retain
+/// a trusted probe can use this without duplicating trim/crop/output rules.
+pub fn validate_edit_spec(probe: &ProbeResult, edit: &EditSpec) -> Result<(), MediaToolError> {
     let duration_ms = probe
         .metadata
         .duration_ms
@@ -1617,7 +1622,11 @@ fn atomic_copy(source: &Path, destination: &Path) -> Result<(), MediaToolError> 
     fs::create_dir_all(parent)?;
     let temporary = temporary_output_path(destination, "copy");
     fs::copy(source, &temporary)?;
-    commit_temporary(&temporary, destination)
+    let result = commit_temporary(&temporary, destination);
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
 }
 
 fn commit_temporary(temporary: &Path, destination: &Path) -> Result<(), MediaToolError> {
