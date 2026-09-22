@@ -793,7 +793,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         for digits in 1...9 {
             let text = String(format: "%.*g", locale: Locale(identifier: "en_US_POSIX"),
                               digits, percent)
-            if let parsed = Double(text), Float(parsed / 100) == gain { return "\(text)%" }
+            if let parsed = Double(text), Float(parsed / 100) == gain,
+               let decimal = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")) {
+                return "\(NSDecimalNumber(decimal: decimal).stringValue)%"
+            }
         }
         return "\(percent)%"
     }

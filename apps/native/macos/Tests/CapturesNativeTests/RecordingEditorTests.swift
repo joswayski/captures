@@ -235,6 +235,22 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
     }
 
+    func testAudioPercentagePresentationUsesPlainExactValues() throws {
+        _ = NSApplication.shared
+        for percent in [0.0, 25, 80, 100, 120, 175, 200] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                hasSystemAudio: true, systemVolume: Double(Float(percent / 100))))
+            let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                       worker: worker, confirmDiscard: { false })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                               outputDirectory: "/Exports")
+            let expected = percent.rounded() == percent ? String(Int(percent)) : String(percent)
+            XCTAssertEqual(try field("System audio volume percent", in: controller.root).stringValue,
+                           "\(expected)%")
+        }
+    }
+
     func testAudioPercentagesRoundTripAtF32BoundaryWithoutRegating() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation(
