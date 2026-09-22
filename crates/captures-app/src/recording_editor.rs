@@ -13,7 +13,8 @@ use std::{
 use captures_history::{ArtifactKind, HistoryEntry};
 use captures_media::{
     CancelToken, EditSpec, ExportEstimate, ExportFormat, ExportProgress, ExportSpec, MediaKind,
-    MediaMetadata, MediaToolchain, ProbeResult, QualityPreset, validate_edit_spec,
+    MediaMetadata, MediaToolError, MediaToolchain, ProbeResult, QualityPreset, TimelineSpriteSpec,
+    validate_edit_spec,
 };
 use image::{ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,9 @@ use crate::{
 
 const MAX_METADATA_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_FRAME_BYTES: u64 = 128 * 1024 * 1024;
+const TIMELINE_FRAME_COUNT: u32 = 12;
+const TIMELINE_FRAME_WIDTH: u32 = 160;
+const TIMELINE_FRAME_HEIGHT: u32 = 90;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -63,6 +67,25 @@ pub struct RecordingEditorSnapshot<'a> {
     pub revision: u64,
     pub has_system_audio: bool,
     pub has_microphone_audio: bool,
+}
+
+/// A retained full-source thumbnail strip independent of accepted editor state.
+#[derive(Clone)]
+pub struct RecordingTimelineThumbnails {
+    pub frame_count: u32,
+    pub frame_width: u32,
+    pub frame_height: u32,
+    pub sprite_width: u32,
+    pub sprite_height: u32,
+    pixels: Arc<RgbaImage>,
+}
+
+impl RecordingTimelineThumbnails {
+    /// Top-down straight-alpha sRGB RGBA8 pixels for the complete sprite.
+    #[must_use]
+    pub fn pixels(&self) -> &RgbaImage {
+        &self.pixels
+    }
 }
 
 /// Save-new-copy either publishes a distinct History artifact or preserves the
@@ -179,6 +202,24 @@ impl RecordingEditorSession {
         self.tools
             .estimate_export_size(&self.source_path, &self.edit, &self.preview_export, cancel)
             .map_err(|error| error.to_string())
+    }
+
+    /// Generate the shipping full-source thumbnail strip without changing any
+    /// accepted edit, preview, frame, position, revision, or History state.
+    pub fn timeline_thumbnails(
+        &self,
+        cancel: &CancelToken,
+    ) -> Result<RecordingTimelineThumbnails, String> {
+        extract_timeline_thumbnails(
+            &self.tools,
+            &self.source_path,
+            self.probe
+                .metadata
+                .duration_ms
+                .ok_or("Recording duration is unavailable.")?,
+            self.scratch.path(),
+            cancel,
+        )
     }
 
     pub fn execute(&mut self, request: RecordingEditorRequest) -> Result<(), String> {
@@ -486,6 +527,52 @@ fn extract_preview(
     result
 }
 
+fn extract_timeline_thumbnails(
+    tools: &MediaToolchain,
+    source: &Path,
+    duration_ms: u64,
+    scratch: &Path,
+    cancel: &CancelToken,
+) -> Result<RecordingTimelineThumbnails, String> {
+    let path = scratch.join(format!("timeline-{}.png", uuid::Uuid::new_v4()));
+    let result = (|| {
+        tools
+            .create_timeline_sprite(
+                source,
+                &path,
+                TimelineSpriteSpec {
+                    duration_ms,
+                    frame_count: TIMELINE_FRAME_COUNT as u16,
+                    frame_width: TIMELINE_FRAME_WIDTH,
+                    frame_height: TIMELINE_FRAME_HEIGHT,
+                },
+                cancel,
+            )
+            .map_err(|error| error.to_string())?;
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled.to_string());
+        }
+        let pixels = decode_frame(&path)?;
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled.to_string());
+        }
+        let sprite_width = TIMELINE_FRAME_WIDTH * TIMELINE_FRAME_COUNT;
+        if pixels.dimensions() != (sprite_width, TIMELINE_FRAME_HEIGHT) {
+            return Err("Timeline thumbnail dimensions do not match the shared media plan.".into());
+        }
+        Ok(RecordingTimelineThumbnails {
+            frame_count: TIMELINE_FRAME_COUNT,
+            frame_width: TIMELINE_FRAME_WIDTH,
+            frame_height: TIMELINE_FRAME_HEIGHT,
+            sprite_width,
+            sprite_height: TIMELINE_FRAME_HEIGHT,
+            pixels: Arc::new(pixels),
+        })
+    })();
+    let _ = fs::remove_file(path);
+    result
+}
+
 fn decode_frame(path: &Path) -> Result<RgbaImage, String> {
     let bytes = read_bounded(path, MAX_FRAME_BYTES)?;
     let reader = || ImageReader::with_format(Cursor::new(&bytes), ImageFormat::Png);
@@ -533,4 +620,85 @@ fn validate_destination(destination: &Path, format: ExportFormat) -> Result<(), 
         .filter(|parent| !parent.as_os_str().is_empty())
         .ok_or("Choose a destination folder for the edited recording.")?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn real_tools() -> Option<(MediaToolchain, PathBuf)> {
+        let ffmpeg = std::env::var_os("CAPTURES_TEST_FFMPEG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("ffmpeg"));
+        let ffprobe = std::env::var_os("CAPTURES_TEST_FFPROBE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("ffprobe"));
+        let tools = MediaToolchain::new(ffmpeg.clone(), ffprobe);
+        match tools.verify() {
+            Ok(()) => Some((tools, ffmpeg)),
+            Err(error) => {
+                eprintln!("timeline scratch test skipped: {error}");
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn timeline_scratch_is_clean_after_success_failure_and_cancellation() {
+        let Some((tools, ffmpeg)) = real_tools() else {
+            return;
+        };
+        let data = tempfile::tempdir().unwrap();
+        let source = data.path().join("source.mp4");
+        let status = Command::new(ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:size=32x24:rate=10:duration=1",
+                "-c:v",
+                "mpeg4",
+                "-an",
+            ])
+            .arg(&source)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let scratch = tempfile::tempdir().unwrap();
+        let is_clean = || fs::read_dir(scratch.path()).unwrap().next().is_none();
+
+        extract_timeline_thumbnails(
+            &tools,
+            &source,
+            1_000,
+            scratch.path(),
+            &CancelToken::default(),
+        )
+        .unwrap();
+        assert!(is_clean());
+
+        let cancel = CancelToken::default();
+        cancel.cancel();
+        assert!(
+            extract_timeline_thumbnails(&tools, &source, 1_000, scratch.path(), &cancel).is_err()
+        );
+        assert!(is_clean());
+
+        assert!(
+            extract_timeline_thumbnails(
+                &tools,
+                &data.path().join("missing.mp4"),
+                1_000,
+                scratch.path(),
+                &CancelToken::default(),
+            )
+            .is_err()
+        );
+        assert!(is_clean());
+    }
 }
