@@ -2349,6 +2349,8 @@ struct FfprobeFormat {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::MediaPlayback;
     #[cfg(target_os = "macos")]
     use super::TimelineSpriteSpec;
     #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -2357,7 +2359,7 @@ mod tests {
         RecordingSegmentInput, openh264_bitrate,
     };
     use super::{
-        CancelToken, MediaPlayback, MediaToolchain, RecordingAudioLayout, VideoAttempt,
+        CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt,
         aac_centered_stereo_layout_filter, aac_output_layout_filter, audio_edit_is_identity,
         audio_filter, commit_temporary, escape_concat_path, export_attempts,
         export_preserves_source_bytes, fit_even, fit_playback_dimensions, gif_export_filter,
