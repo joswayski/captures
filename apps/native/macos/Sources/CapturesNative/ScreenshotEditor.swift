@@ -811,6 +811,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var outputHeightLabel: NSTextField!
     private var sectionControl: NSSegmentedControl!
     private var drawTool: NSPopUpButton!
+    private var lastBackgroundTool: EditorDrawOverlay.Shape = .wand
     private let wandTolerance = NSTextField()
     private let wandContiguous = NSButton(checkboxWithTitle: "Contiguous only", target: nil, action: nil)
     private var wandToleranceLabel: NSTextField!
@@ -1739,6 +1740,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     @objc private func changeDrawTool() {
         cancelDrawing()
         drawOverlay.shape = EditorDrawOverlay.Shape.allCases[drawTool.indexOfSelectedItem]
+        if drawOverlay.shape == .wand || drawOverlay.shape.isBackgroundBrush {
+            lastBackgroundTool = drawOverlay.shape
+        }
         publishDrawToolControls()
     }
 
@@ -2499,6 +2503,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             guard !(responder is NSTextView), !(responder is NSTextField),
                   !(responder is NSPopUpButton), !(responder is NSComboBox),
                   !(responder is NSSlider), !awaitingReplaceConfirmation else { return false }
+            if !command && !event.modifierFlags.contains(.option)
+                && activateToolShortcut(key.lowercased()) { return true }
             let button: CaptureButton?
             if command && key.lowercased() == "z" {
                 button = event.modifierFlags.contains(.shift) ? redoButton : undoButton
@@ -2527,6 +2533,45 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 cancelDrawing(); cancelViewportPan()
                 button?.performClick(nil)
             }
+        }
+        return true
+    }
+
+    private func activateToolShortcut(_ key: String) -> Bool {
+        let tool: (section: Int, shape: EditorDrawOverlay.Shape?)
+        switch key {
+        case "v": tool = (Section.layers, nil)
+        case "c": tool = (Section.geometry, nil)
+        case "t": tool = (Section.draw, .text)
+        case "r": tool = (Section.draw, .rectangle)
+        case "o": tool = (Section.draw, .ellipse)
+        case "l": tool = (Section.draw, .line)
+        case "d": tool = (Section.draw, .diamond)
+        case "s": tool = (Section.draw, .star)
+        case "a": tool = (Section.draw, .arrow)
+        case "p": tool = (Section.draw, .pen)
+        case "b": tool = (Section.draw, lastBackgroundTool)
+        default: return false
+        }
+        // Native controls retain letter navigation; these keys belong to the canvas.
+        guard !(window.firstResponder is NSControl) else { return false }
+        guard !state.busy, !importLoading else { return true }
+        if sectionControl.selectedSegment == tool.section {
+            if let shape = tool.shape, drawOverlay.shape == shape { return true }
+            if tool.section == Section.layers || (tool.section == Section.geometry && cropPrevious != nil) {
+                return true
+            }
+        }
+        cancelDrawing(); cancelViewportPan()
+        if sectionControl.selectedSegment != tool.section {
+            sectionControl.selectedSegment = tool.section
+            changeSection()
+        }
+        if let shape = tool.shape {
+            drawTool.selectItem(at: EditorDrawOverlay.Shape.allCases.firstIndex(of: shape)!)
+            changeDrawTool()
+        } else if tool.section == Section.geometry {
+            toggleCrop()
         }
         return true
     }

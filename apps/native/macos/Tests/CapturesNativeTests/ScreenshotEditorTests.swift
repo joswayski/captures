@@ -3,6 +3,98 @@ import XCTest
 @testable import CapturesNative
 
 final class ScreenshotEditorTests: XCTestCase {
+    func testToolKeysSelectExistingToolsPreserveRepeatsAndCancelUnfinishedGestures() throws {
+        _ = NSApplication.shared
+        let original = snapshot(id: "shot", unsaved: true, draft: true)
+        let worker = FakeEditorWorker(snapshot: original)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        controller.window.makeFirstResponder(nil)
+        let sections = try segmented("Editor section", in: controller.root)
+        for (key, shape) in [("T", EditorDrawOverlay.Shape.text), ("r", .rectangle),
+                             ("o", .ellipse), ("l", .line), ("d", .diamond), ("s", .star),
+                             ("a", .arrow), ("p", .pen), ("b", .wand)] {
+            controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 0, characters: key))
+            XCTAssertEqual(sections.selectedSegment, 2)
+            XCTAssertEqual(controller.drawOverlay.shape, shape)
+            XCTAssertTrue(controller.drawOverlay.drawingEnabled)
+        }
+        let tool = try popup("Drawing tool", in: controller.root)
+        for mode in ["Erase", "Restore"] {
+            tool.selectItem(withTitle: mode); _ = tool.sendAction(tool.action, to: tool.target)
+            controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 0, characters: "p"))
+            controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 0, characters: "b"))
+            XCTAssertEqual(tool.titleOfSelectedItem, mode, "B recalls the previous background-removal mode")
+        }
+        controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 0, characters: "r"))
+        let image = controller.presentedImageRect
+        controller.drawOverlay.begin(at: NSPoint(x: image.minX + 40, y: image.minY + 50))
+        let start = controller.drawOverlay.startPoint
+        XCTAssertNotNil(start)
+        controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 0, characters: "r"))
+        XCTAssertEqual(controller.drawOverlay.startPoint, start, "same tool does not cancel a gesture")
+        controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 0, characters: "c"))
+        XCTAssertNil(controller.drawOverlay.startPoint)
+        XCTAssertEqual(sections.selectedSegment, 0)
+        XCTAssertTrue(controller.cropOverlay.croppingEnabled)
+        let fields = try ["Crop X", "Crop Y", "Crop width", "Crop height"].map { try field($0, in: controller.root) }
+        let previous = fields.map(\.stringValue)
+        controller.cropOverlay.begin(at: NSPoint(x: image.minX + 40, y: image.minY + 50))
+        controller.cropOverlay.end(at: NSPoint(x: image.minX + 180, y: image.minY + 120))
+        let candidate = fields.map(\.stringValue)
+        XCTAssertNotEqual(candidate, previous)
+        controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 0, characters: "c"))
+        XCTAssertTrue(controller.cropOverlay.croppingEnabled)
+        XCTAssertEqual(fields.map(\.stringValue), candidate)
+        controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 0, characters: "v"))
+        XCTAssertEqual(sections.selectedSegment, 1)
+        XCTAssertFalse(controller.cropOverlay.croppingEnabled)
+        XCTAssertEqual(fields.map(\.stringValue), previous, "switching tools cancels, not applies, crop")
+        XCTAssertEqual(controller.state.snapshot, original)
+        XCTAssertTrue(worker.requests.isEmpty && worker.encodes.isEmpty && worker.saves.isEmpty)
+    }
+
+    func testToolKeysRespectFieldsControlsModifiersAndPendingWork() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!,
+            worker: worker, writeClipboard: { _ in true })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        let sections = try segmented("Editor section", in: controller.root)
+        let crop = try field("Crop X", in: controller.root)
+        XCTAssertTrue(controller.window.makeFirstResponder(crop))
+        let pen = try keyEvent(window: controller.window, keyCode: 35, characters: "p")
+        XCTAssertFalse(controller.window.performKeyEquivalent(with: pen))
+        XCTAssertEqual(sections.selectedSegment, 0)
+        try showDraw(in: controller.root)
+        let popup = try popup("Drawing tool", in: controller.root)
+        XCTAssertTrue(controller.window.makeFirstResponder(popup))
+        XCTAssertFalse(controller.window.performKeyEquivalent(with: pen))
+        XCTAssertEqual(controller.drawOverlay.shape, .rectangle)
+        XCTAssertTrue(controller.window.makeFirstResponder(sections))
+        XCTAssertFalse(controller.window.performKeyEquivalent(with: pen))
+        controller.window.makeFirstResponder(nil)
+        for flags in [NSEvent.ModifierFlags.command, .control, .option] {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                timestamp: 0, windowNumber: controller.window.windowNumber, context: nil,
+                characters: "p", charactersIgnoringModifiers: "p", isARepeat: false, keyCode: 35))
+            _ = controller.window.performKeyEquivalent(with: event)
+            XCTAssertEqual(controller.drawOverlay.shape, .rectangle)
+        }
+        worker.deferEncodes = true
+        try button("Copy image", in: controller.root).performClick(nil)
+        XCTAssertTrue(controller.state.busy)
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: pen))
+        XCTAssertEqual(controller.drawOverlay.shape, .rectangle)
+        worker.completePendingEncode()
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: pen))
+        XCTAssertEqual(controller.drawOverlay.shape, .pen)
+        XCTAssertTrue(worker.requests.isEmpty && worker.saves.isEmpty)
+        XCTAssertEqual(worker.encodes.count, 1)
+    }
+
     func testArrowNudgesKeepTypingLocksAndOneAcceptedCommand() throws {
         _ = NSApplication.shared
         let hidden = layer(id: "hidden", name: "Hidden", x: 8, y: 21,

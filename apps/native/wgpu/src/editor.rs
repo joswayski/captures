@@ -345,6 +345,7 @@ struct View {
     crop_drag: Option<CropDrag>,
     crop_aspect: usize,
     draw_shape: DrawShape,
+    last_background_tool: DrawShape,
     rotation_snap_degrees: f64,
     new_text_preset: Option<String>,
     new_text_size: f64,
@@ -405,6 +406,7 @@ impl Default for View {
             crop_drag: None,
             crop_aspect: 0,
             draw_shape: DrawShape::Rectangle,
+            last_background_tool: DrawShape::Wand,
             rotation_snap_degrees: DEFAULT_ROTATION_SNAP_DEGREES,
             new_text_preset: None,
             new_text_size: 24.,
@@ -1326,6 +1328,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let previous_section = view.section;
     handle_viewport_shortcuts(ui.ctx(), view);
     handle_document_shortcuts(ui.ctx(), view, tx);
+    handle_tool_shortcuts(ui.ctx(), view);
     if !ui.ctx().egui_wants_keyboard_input()
         && !egui::Popup::is_any_open(ui.ctx())
         && ui.input(|input| input.key_pressed(egui::Key::Escape))
@@ -1502,6 +1505,9 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Star, "Star");
                 });
                 if view.draw_shape != previous_tool { view.cancel_drawing(); }
+                if matches!(view.draw_shape, DrawShape::Wand | DrawShape::Erase | DrawShape::Restore) {
+                    view.last_background_tool = view.draw_shape;
+                }
                 if view.draw_shape == DrawShape::Wand {
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Tolerance");
@@ -1768,6 +1774,78 @@ fn handle_viewport_shortcuts(ctx: &egui::Context, view: &mut View) {
             egui::Key::Num0 => set_viewport_zoom(view, 100., None),
             egui::Key::Minus => change_viewport_zoom(view, 1. / 1.25, None),
             _ => change_viewport_zoom(view, 1.25, None),
+        }
+    }
+}
+
+fn handle_tool_shortcuts(ctx: &egui::Context, view: &mut View) {
+    if ctx.current_pass_index() != 0
+        || !ctx.input(|input| input.focused)
+        || ctx.input(|input| input.pointer.any_pressed())
+        || ctx.memory(|memory| memory.focused().is_some())
+        || egui::Popup::is_any_open(ctx)
+        || view.presented.is_none()
+        || view.pending
+        || view.closed
+        || view.close_requested
+        || view.confirm_discard
+        || view.confirm_replace.is_some()
+        || view.import_picker.is_some()
+        || view.folder_picker.is_some()
+    {
+        return;
+    }
+    let tools = ctx.input_mut(|input| {
+        let mut tools = Vec::new();
+        input.events.retain(|event| {
+            let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            else {
+                return true;
+            };
+            if modifiers.command || modifiers.ctrl || modifiers.mac_cmd || modifiers.alt {
+                return true;
+            }
+            let tool = match key {
+                egui::Key::V => (Section::Layers, None),
+                egui::Key::C => (Section::Geometry, None),
+                egui::Key::T => (Section::Draw, Some(DrawShape::Text)),
+                egui::Key::R => (Section::Draw, Some(DrawShape::Rectangle)),
+                egui::Key::O => (Section::Draw, Some(DrawShape::Ellipse)),
+                egui::Key::L => (Section::Draw, Some(DrawShape::Line)),
+                egui::Key::D => (Section::Draw, Some(DrawShape::Diamond)),
+                egui::Key::S => (Section::Draw, Some(DrawShape::Star)),
+                egui::Key::A => (Section::Draw, Some(DrawShape::Arrow)),
+                egui::Key::P => (Section::Draw, Some(DrawShape::Freehand)),
+                egui::Key::B => (Section::Draw, Some(view.last_background_tool)),
+                _ => return true,
+            };
+            tools.push(tool);
+            false
+        });
+        tools
+    });
+    for (section, shape) in tools {
+        let already_active = view.section == section
+            && match shape {
+                Some(shape) => view.draw_shape == shape,
+                None => section == Section::Layers || view.crop_previous.is_some(),
+            };
+        if already_active {
+            continue;
+        }
+        view.cancel_edit_gestures();
+        view.cancel_crop();
+        view.viewport_pan = None;
+        view.section = section;
+        if let Some(shape) = shape {
+            view.draw_shape = shape;
+        } else if section == Section::Geometry {
+            view.crop_previous = Some(view.crop);
         }
     }
 }
@@ -3795,6 +3873,126 @@ fn show_annotation(
 mod tests {
     use super::*;
     use std::{fs, time::Duration};
+
+    #[test]
+    fn tool_keys_preserve_document_repeats_focus_and_background_mode() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(true)));
+        let document = view.presented.as_ref().unwrap().document.clone();
+        let (tx, rx) = mpsc::channel();
+        let key = |key, modifiers| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers,
+        };
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000., 900.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    show(ui, &tokens, view, &tx);
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("multipass");
+                    }
+                },
+            );
+            assert!(output.platform_output.num_completed_passes >= 2);
+            output.textures_delta.clear();
+        };
+        for (code, shape) in [
+            (egui::Key::T, DrawShape::Text),
+            (egui::Key::R, DrawShape::Rectangle),
+            (egui::Key::O, DrawShape::Ellipse),
+            (egui::Key::L, DrawShape::Line),
+            (egui::Key::D, DrawShape::Diamond),
+            (egui::Key::S, DrawShape::Star),
+            (egui::Key::A, DrawShape::Arrow),
+            (egui::Key::P, DrawShape::Freehand),
+            (egui::Key::B, DrawShape::Wand),
+        ] {
+            frame(&mut view, vec![key(code, egui::Modifiers::SHIFT)]);
+            assert_eq!((view.section, view.draw_shape), (Section::Draw, shape));
+        }
+        for shape in [DrawShape::Erase, DrawShape::Restore] {
+            view.draw_shape = shape;
+            frame(&mut view, vec![]); // The Draw controls remember the chosen background mode.
+            frame(&mut view, vec![key(egui::Key::P, egui::Modifiers::NONE)]);
+            frame(&mut view, vec![key(egui::Key::B, egui::Modifiers::NONE)]);
+            assert_eq!(view.draw_shape, shape);
+        }
+        frame(&mut view, vec![key(egui::Key::R, egui::Modifiers::NONE)]);
+        let gesture = Some((Point { x: 13., y: 21. }, Point { x: 97., y: 53. }));
+        view.shape_drag = gesture;
+        frame(&mut view, vec![key(egui::Key::R, egui::Modifiers::NONE)]);
+        assert_eq!(view.shape_drag, gesture);
+        frame(&mut view, vec![key(egui::Key::C, egui::Modifiers::NONE)]);
+        assert!(view.shape_drag.is_none());
+        assert_eq!(view.section, Section::Geometry);
+        let previous = view.crop;
+        assert_eq!(view.crop_previous, Some(previous));
+        view.crop = [13., 21., 97., 53.];
+        frame(&mut view, vec![key(egui::Key::C, egui::Modifiers::NONE)]);
+        assert_eq!(
+            view.crop,
+            [13., 21., 97., 53.],
+            "repeat does not cancel the crop candidate"
+        );
+        frame(&mut view, vec![key(egui::Key::V, egui::Modifiers::NONE)]);
+        assert_eq!(view.section, Section::Layers);
+        assert_eq!(view.crop, previous);
+        assert!(view.crop_previous.is_none());
+        for modifiers in [
+            egui::Modifiers::CTRL,
+            egui::Modifiers::MAC_CMD,
+            egui::Modifiers::ALT,
+        ] {
+            frame(&mut view, vec![key(egui::Key::P, modifiers)]);
+            assert_eq!(view.section, Section::Layers);
+        }
+        for blocked in 0..5 {
+            view.pending = blocked == 0;
+            view.close_requested = blocked == 1;
+            view.confirm_discard = blocked == 2;
+            view.confirm_replace =
+                (blocked == 3).then(|| (PathBuf::from("original.png"), view.export_options));
+            view.closed = blocked == 4;
+            frame(&mut view, vec![key(egui::Key::P, egui::Modifiers::NONE)]);
+            assert_eq!(view.section, Section::Layers);
+        }
+        view.closed = false;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.text_edit_singleline(&mut String::new()).request_focus();
+        });
+        output.textures_delta.clear();
+        frame(&mut view, vec![key(egui::Key::P, egui::Modifiers::NONE)]);
+        assert_eq!(view.section, Section::Layers, "typing keeps its keys");
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.add(egui::Slider::new(&mut 50., 0.0..=100.0))
+                .request_focus();
+        });
+        output.textures_delta.clear();
+        frame(&mut view, vec![key(egui::Key::P, egui::Modifiers::NONE)]);
+        assert_eq!(
+            view.section,
+            Section::Layers,
+            "other focused controls keep their keys"
+        );
+        assert_eq!(view.presented.as_ref().unwrap().document, document);
+        assert!(
+            rx.try_recv().is_err(),
+            "tool selection never submits document, draft or export work"
+        );
+    }
 
     #[test]
     fn pinned_export_actions_fit_every_section_and_preserve_job_gates() {

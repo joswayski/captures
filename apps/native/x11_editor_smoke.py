@@ -82,7 +82,7 @@ def main():
     parser.add_argument("--zoom-only", action="store_true",
                         help="Exercise viewport gestures, toolbar and keyboard zoom without editing")
     parser.add_argument("--history-shortcuts-only", action="store_true",
-                        help="Exercise Undo/Redo, duplicate and delete keys without stealing text input")
+                        help="Exercise tool and document keys without stealing text input")
     parser.add_argument("--text-draft-only", action="store_true",
                         help="Restore explicit-font text, save/reopen and copy pixels (no Text input UI)")
     parser.add_argument("--text-only", action="store_true",
@@ -417,10 +417,33 @@ def main():
             return actual
 
         if args.history_shortcuts_only:
-            click(editor, 736, 62)
-            inspector_click(105, 133)
+            resize_editor(1000, 901, "sleep", ".3")  # Integer-pixel Fit origin for exact movement.
+            run("xdotool", "key", "s", "sleep", ".3")
+            drag((320, 250), (480, 370))
+            star = save_layers(lambda values: len(values) == 2, "S selects Star")[-1]
+            assert star["shape"] == "star", star
+            run("xdotool", "key", "v", "sleep", ".3")
+            drag((400, 310), (421, 327))
+            moved = save_layers(lambda values: len(values) == 2 and values[-1] != star,
+                                "V selects and moves, not draws")[-1]
+            assert moved == dict(star, x=star["x"] + 21, y=star["y"] + 17,
+                                 endX=star["endX"] + 21, endY=star["endY"] + 17), moved
+            before_crop = draft.read_bytes()
+            run("xdotool", "key", "c", "sleep", ".3")
+            drag((330, 270), (460, 350))
+            run("xdotool", "key", "c", "sleep", ".3")
+            shot(editor, "shortcut-crop-candidate")
+            run("xdotool", "key", "v", "sleep", ".3")
+            assert draft.read_bytes() == before_crop, "tool selection/cancellation must not save edits"
+            assert save_layers(lambda values: len(values) == 2, "crop cancellation")[-1] == moved
+            click(editor, 270, 62)
+            click(editor, 55, 128)
+            wait(lambda: not draft.exists(), "discard tool-key fixture")
+            click(editor, 300, 20)  # Leave control focus before selecting a canvas tool.
+            run("xdotool", "key", "r", "sleep", ".3")
             drag((320, 250), (480, 370))
             shape = save_layers(lambda values: len(values) == 2, "shortcut shape fixture")[-1]
+            assert shape["shape"] == "rectangle", shape
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             save_layers(lambda values: len(values) == 1, "keyboard undo")
             click(editor, 396, 62)
@@ -467,6 +490,8 @@ def main():
             click(editor, 396, 62)
             inspector_click(75, 428)
             run("xdotool", "key", "ctrl+d", "Delete", "Left", "shift+Up", "sleep", ".3")
+            run("xdotool", "key", "p", "c", "r", "sleep", ".3")
+            shot(editor, "shortcut-field-keeps-tool-letters")
             assert save_layers(lambda values: len(values) == 3, "field protects layer shortcuts")[-1] == copied
             click(editor, 463, 62)
             run("xdotool", "key", "Delete", "sleep", ".3")
@@ -489,9 +514,10 @@ def main():
                            "confirmation-focus", "shortcut-restored-after-dialog", "original-unchanged",
                            "duplicate-offset-fresh-id", "field-layer-shortcuts", "delete-selected-copy",
                            "backspace-selected-copy", "locked-delete-guard", "arrow-1px", "shift-arrow-10px",
-                           "nudge-undo-exact", "field-nudge-focus", "locked-nudge-guard"],
+                           "nudge-undo-exact", "field-nudge-focus", "locked-nudge-guard",
+                           "S-star", "V-select-move", "C-crop-cancel", "R-rectangle", "field-tool-letters"],
             }, indent=2) + "\n")
-            print("PASS native editor shortcuts: undo, redo, duplicate, delete, nudge, field/dialog focus and original unchanged")
+            print("PASS native editor shortcuts: tools, undo, redo, duplicate, delete, nudge, field/dialog focus and original unchanged")
             return
 
         if args.overwrite_only:
