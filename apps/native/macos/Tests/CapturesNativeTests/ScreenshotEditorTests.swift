@@ -4011,15 +4011,23 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(size.stringValue, "48,5"); XCTAssertEqual(color.stringValue, "#12abef")
 
         worker.failOperation = nil
+        var inputID = ""
         worker.response = { request in
-            guard request["operation"] as? String == "begin_text_input",
-                  let inputID = request["input_id"] as? String else { return nil }
-            return self.snapshot(id: "shot",
-                layers: [self.textLayer(id: "fresh-default-text", text: "")], fonts: fonts,
-                activeTextInput: ["input_id": inputID, "layer_id": "fresh-default-text", "is_new": true])
+            switch request["operation"] as? String {
+            case "begin_text_input":
+                inputID = request["input_id"] as! String
+                return self.snapshot(id: "shot",
+                    layers: [self.textLayer(id: "fresh-default-text", text: "")], fonts: fonts,
+                    activeTextInput: ["input_id": inputID, "layer_id": "fresh-default-text", "is_new": true])
+            case "finish_text_input":
+                return self.snapshot(id: "shot", unsaved: true,
+                    layers: [self.textLayer(id: "fresh-default-text", text: "")], fonts: fonts)
+            default: return nil
+            }
         }
         try button("Done", in: controller.root).performClick(nil)
-        create = try XCTUnwrap((worker.requests.last?["target"] as? [String: Any])?["create"] as? [String: Any])
+        let retriedBegin = worker.requests.last { $0["operation"] as? String == "begin_text_input" }
+        create = try XCTUnwrap((retriedBegin?["target"] as? [String: Any])?["create"] as? [String: Any])
         XCTAssertEqual(create["stylePreset"] as? String, "mono-box")
         XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "fresh-default-text")
         XCTAssertEqual(preset.titleOfSelectedItem, "Mono box", "accepted snapshots must retain creation defaults")
