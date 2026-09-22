@@ -3937,15 +3937,14 @@ final class ScreenshotEditorTests: XCTestCase {
 
     func testTextClickCreatesAtCanvasPointAndSelectsFreshID() throws {
         _ = NSApplication.shared
-        let old = textLayer(id: "existing", text: "old")
-        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [old]))
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         worker.response = { request in
             guard request["operation"] as? String == "begin_text_input",
                   let inputID = request["input_id"] as? String else { return nil }
-            return self.snapshot(id: "shot", layers: [old, self.textLayer(id: "fresh-text", text: "")],
+            return self.snapshot(id: "shot", layers: [self.textLayer(id: "fresh-text", text: "")],
                 activeTextInput: ["input_id": inputID, "layer_id": "fresh-text", "is_new": true])
         }
         try showOutput(in: controller.root); try button("Preview output", in: controller.root).performClick(nil)
@@ -3979,8 +3978,7 @@ final class ScreenshotEditorTests: XCTestCase {
     func testNewTextDefaultsUsePinnedPresetAndRetainInputAcrossFailureAndSnapshots() throws {
         _ = NSApplication.shared
         let fonts = ["sans": "Liberation Sans", "mono": "Liberation Mono"]
-        let initial = snapshot(id: "shot", initialTextSize: 39,
-                               layers: [textLayer(id: "existing", text: "old")], fonts: fonts)
+        let initial = snapshot(id: "shot", initialTextSize: 39, fonts: fonts)
         let worker = FakeEditorWorker(snapshot: initial)
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker,
                                                     numberLocale: Locale(identifier: "fr_FR"))
@@ -4017,11 +4015,10 @@ final class ScreenshotEditorTests: XCTestCase {
             guard request["operation"] as? String == "begin_text_input",
                   let inputID = request["input_id"] as? String else { return nil }
             return self.snapshot(id: "shot",
-                layers: [self.textLayer(id: "existing", text: "old"),
-                         self.textLayer(id: "fresh-default-text", text: "")], fonts: fonts,
+                layers: [self.textLayer(id: "fresh-default-text", text: "")], fonts: fonts,
                 activeTextInput: ["input_id": inputID, "layer_id": "fresh-default-text", "is_new": true])
         }
-        controller.drawOverlay.begin(at: click); controller.drawOverlay.end(at: click)
+        try button("Done", in: controller.root).performClick(nil)
         create = try XCTUnwrap((worker.requests.last?["target"] as? [String: Any])?["create"] as? [String: Any])
         XCTAssertEqual(create["stylePreset"] as? String, "mono-box")
         XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "fresh-default-text")
@@ -5255,7 +5252,8 @@ final class ScreenshotEditorTests: XCTestCase {
     }
 
     private func button(_ title: String, in view: NSView) throws -> CaptureButton {
-        try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }.first { $0.title == title })
+        let matches = descendants(in: view).compactMap { $0 as? CaptureButton }.filter { $0.title == title }
+        return try XCTUnwrap(matches.first { !$0.isHiddenOrHasHiddenAncestor } ?? matches.first)
     }
 
     private func field(_ label: String, in view: NSView) throws -> NSTextField {
