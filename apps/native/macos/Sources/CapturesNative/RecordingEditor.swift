@@ -129,7 +129,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     func controlTextDidChange(_ notification: Notification) { estimate = nil; updateControls() }
 
     private func buildUI() {
-        root.layer?.backgroundColor = tokens.color("surface-base").cgColor
+        root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
         _ = label("Edit recording", size: 22, weight: .semibold)
         let note = label("Decoded frame preview · playback is not included in this slice", muted: true)
         note.identifier = NSUserInterfaceItemIdentifier("recording-editor-note")

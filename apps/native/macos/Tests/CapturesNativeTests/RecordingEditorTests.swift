@@ -37,55 +37,43 @@ final class RecordingEditorTests: XCTestCase {
     }
 
     func testAcceptedSeekEstimateSaveWarningAndDirtyLifecycle() throws {
-        trace("accepted:start")
         _ = NSApplication.shared
-        trace("accepted:application")
         let worker = FakeRecordingEditorWorker(presentation: try presentation())
-        trace("accepted:fixture")
         var historyReloads = 0
         let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
             worker: worker, didSaveCopy: { historyReloads += 1 }, confirmDiscard: { false })
-        trace("accepted:controller")
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
-        trace("accepted:present")
         let start = try field("Trim start milliseconds", in: controller.root)
         start.stringValue = "100"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: start))
-        trace("accepted:staged")
         let accepted = try presentation(start: 100, end: nil, position: 0, revision: 1)
         worker.requestResult = .success(accepted)
         try button("Apply edits", in: controller.root).performClick(nil)
-        trace("accepted:applied")
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
         XCTAssertFalse(controller.prepareForTermination(), "accepted edits remain dirty until save")
-        trace("accepted:termination-blocked")
 
         let seek = try slider("Recording frame position", in: controller.root)
         seek.doubleValue = 700
         worker.requestResult = .success(try presentation(start: 100, end: nil, position: 700, revision: 2))
         _ = seek.sendAction(seek.action, to: seek.target)
-        trace("accepted:sought")
         XCTAssertEqual(worker.requests.last?["operation"] as? String, "seek")
         XCTAssertEqual((worker.requests.last?["position_ms"] as? NSNumber)?.uint64Value, 700)
 
         worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_500_000, exact: false))
         try button("Estimate size", in: controller.root).performClick(nil)
-        trace("accepted:estimated")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("≈") && $0.contains("MB") })
         worker.saveResult = .success(.savedWithoutHistory(path: "/Exports/edited.mp4",
                                                           warning: "History disk unavailable"))
         try button("Save new copy", in: controller.root).performClick(nil)
-        trace("accepted:saved")
         XCTAssertEqual(worker.saves.first?.destination, "/Exports/recording-edit-recordin.mp4")
         XCTAssertEqual(historyReloads, 0, "post-publication warning must not claim a History update")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("edited.mp4") })
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("History disk unavailable") })
         XCTAssertTrue(controller.prepareForTermination(), "the published path resolves dirty state")
         XCTAssertEqual(worker.closeCount, 1)
-        trace("accepted:done")
     }
 
     func testSameArtifactReentryPreservesEditsAndInFlightSave() throws {
@@ -281,9 +269,6 @@ final class RecordingEditorTests: XCTestCase {
 
     private func descendants(in view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { descendants(in: $0) }
-    }
-    private func trace(_ message: String) {
-        FileHandle.standardError.write(Data("RECORDING_EDITOR_TEST \(message)\n".utf8))
     }
     private func field(_ label: String, in view: NSView) throws -> NSTextField {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSTextField }
