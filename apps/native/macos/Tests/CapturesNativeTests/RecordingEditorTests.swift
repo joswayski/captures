@@ -4,6 +4,214 @@ import XCTest
 @testable import CapturesNative
 
 final class RecordingEditorTests: XCTestCase {
+    func testPlaybackMailboxCoalescesNaturalEOFAndRejectsCancelledPendingFrame() throws {
+        var cancelled = false
+        var positions: [UInt64] = []
+        var outcomes: [RecordingPlaybackCompletion] = []
+        let natural = expectation(description: "natural EOF drains latest frame first")
+        let delivery = RecordingPlaybackDelivery(shouldDiscardFrames: { cancelled },
+            frame: { positions.append($0.positionMilliseconds) }, completion: { result in
+                if case .success(let outcome) = result { outcomes.append(outcome) }
+                natural.fulfill()
+            })
+        delivery.offer(RecordingPlaybackImage(positionMilliseconds: 100,
+                                              image: try solidImage(red: 1, green: 2, blue: 3)))
+        delivery.offer(RecordingPlaybackImage(positionMilliseconds: 200,
+                                              image: try solidImage(red: 4, green: 5, blue: 6)))
+        delivery.finish(.success(.eof))
+        wait(for: [natural], timeout: 1)
+        XCTAssertEqual(positions, [200], "one-slot delivery replaces a stale pending frame")
+        XCTAssertEqual(outcomes, [.eof])
+
+        let paused = expectation(description: "cancel rejects pending frame")
+        let cancelledDelivery = RecordingPlaybackDelivery(shouldDiscardFrames: { cancelled },
+            frame: { positions.append($0.positionMilliseconds) }, completion: { _ in paused.fulfill() })
+        cancelledDelivery.offer(RecordingPlaybackImage(positionMilliseconds: 300,
+            image: try solidImage(red: 7, green: 8, blue: 9)))
+        cancelled = true
+        cancelledDelivery.finish(.failure(AppBridgeError.backend("operation cancelled")))
+        wait(for: [paused], timeout: 1)
+        XCTAssertEqual(positions, [200], "Pause never presents a frame pending at cancellation")
+    }
+
+    func testSilentPlaybackPauseResumeEOFAndAcceptedStateGates() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            start: 200, end: 1_800, position: 400))
+        worker.deferPlayback = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let play = try button("Play", in: controller.root)
+        let seek = try slider("Recording frame position", in: controller.root)
+        let save = try button("Save new copy", in: controller.root)
+        let estimate = try button("Estimate size", in: controller.root)
+        let trimStart = try field("Trim start milliseconds", in: controller.root)
+
+        play.performClick(nil)
+        XCTAssertEqual(worker.playbackStarts, [400])
+        XCTAssertEqual(play.title, "Pause")
+        XCTAssertFalse(seek.isEnabled); XCTAssertFalse(save.isEnabled)
+        XCTAssertFalse(estimate.isEnabled); XCTAssertFalse(trimStart.isEnabled)
+        XCTAssertFalse(controller.dirty)
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 650,
+                                                         image: try solidImage(red: 20, green: 210, blue: 30)))
+        XCTAssertEqual(seek.doubleValue, 650)
+        XCTAssertTrue(worker.requests.isEmpty); XCTAssertTrue(worker.saves.isEmpty)
+        XCTAssertFalse(controller.dirty, "motion frames never mutate accepted editor identity")
+
+        play.performClick(nil)
+        XCTAssertTrue(try XCTUnwrap(worker.observedPlaybackCancel).isCancelled)
+        XCTAssertEqual(play.title, "Pausing…")
+        XCTAssertFalse(play.isEnabled, "controls stay gated until decoder teardown finishes")
+        worker.completePlayback(.success(.cancelled))
+        XCTAssertEqual(play.title, "Play"); XCTAssertTrue(play.isEnabled)
+        XCTAssertEqual(seek.doubleValue, 650, "Pause retains the last transient playhead")
+
+        play.performClick(nil)
+        XCTAssertEqual(worker.playbackStarts, [400, 650], "Play resumes the last presented source time")
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 1_700,
+                                                         image: try solidImage(red: 30, green: 40, blue: 220)))
+        worker.completePlayback(.success(.eof))
+        XCTAssertEqual(seek.doubleValue, 1_700)
+        play.performClick(nil)
+        XCTAssertEqual(worker.playbackStarts, [400, 650, 200],
+                       "Play after EOF restarts at accepted trim start")
+    }
+
+    func testSilentPlaybackErrorRestoresAcceptedFrameAndAllowsRetry() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            start: 100, end: 1_500, position: 300))
+        worker.deferPlayback = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let play = try button("Play", in: controller.root)
+        let seek = try slider("Recording frame position", in: controller.root)
+        play.performClick(nil)
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 700,
+                                                         image: try solidImage(red: 1, green: 240, blue: 2)))
+        XCTAssertEqual(seek.doubleValue, 700)
+        worker.completePlayback(.failure(AppBridgeError.backend("decoder stopped")))
+        XCTAssertEqual(seek.doubleValue, 300)
+        XCTAssertEqual(play.title, "Play"); XCTAssertTrue(play.isEnabled)
+        XCTAssertFalse(controller.dirty)
+        XCTAssertTrue(labels(in: controller.root).contains {
+            $0.contains("accepted preview was restored")
+        })
+        play.performClick(nil)
+        XCTAssertEqual(worker.playbackStarts, [300, 300], "an error retries from accepted position")
+    }
+
+    func testPlaybackPauseCompletesBeforeSessionSwitchAndTerminationRetry() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 250))
+        worker.deferPlayback = true
+        var terminationRequests = 0
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, confirmDiscard: { false },
+            requestTermination: { terminationRequests += 1 })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        try button("Play", in: controller.root).performClick(nil)
+        controller.present(artifact: recordingArtifact(id: "next-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertTrue(try XCTUnwrap(worker.observedPlaybackCancel).isCancelled)
+        XCTAssertEqual(worker.openCount, 1, "new session waits for decoder teardown")
+        worker.completePlayback(.success(.cancelled))
+        XCTAssertEqual(worker.openCount, 2)
+
+        try button("Play", in: controller.root).performClick(nil)
+        XCTAssertFalse(controller.prepareForTermination())
+        XCTAssertEqual(terminationRequests, 0)
+        worker.completePlayback(.success(.cancelled))
+        XCTAssertEqual(terminationRequests, 1,
+                       "quit retries only after playback process teardown completes")
+    }
+
+    func testPlaybackFocusLossAndMiniaturizePauseWithoutPostStopFrames() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 100))
+        worker.deferPlayback = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let play = try button("Play", in: controller.root)
+        let seek = try slider("Recording frame position", in: controller.root)
+        play.performClick(nil)
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification,
+                                                   object: controller.window))
+        XCTAssertTrue(try XCTUnwrap(worker.observedPlaybackCancel).isCancelled)
+        worker.completePlayback(.success(.cancelled))
+        let stoppedPosition = seek.doubleValue
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 900,
+                                                         image: try solidImage(red: 2, green: 3, blue: 4)))
+        XCTAssertEqual(seek.doubleValue, stoppedPosition,
+                       "completed playback drops queued or stale frame delivery")
+
+        play.performClick(nil)
+        controller.windowDidMiniaturize(Notification(name: NSWindow.didMiniaturizeNotification,
+                                                     object: controller.window))
+        XCTAssertEqual(play.title, "Pausing…")
+    }
+
+    func testPlaybackCloseWaitsForDecoderTeardownBeforeClosingSession() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 100))
+        worker.deferPlayback = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { true })
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        try button("Play", in: controller.root).performClick(nil)
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        XCTAssertTrue(try XCTUnwrap(worker.observedPlaybackCancel).isCancelled)
+        XCTAssertEqual(worker.closeCount, 0)
+        worker.completePlayback(.success(.cancelled))
+        XCTAssertEqual(worker.closeCount, 1,
+                       "session close is queued only after playback Drop finishes")
+    }
+
+    func testSilentPlaybackRenderedStates() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                start: 200, end: 1_800, position: 400,
+                hasSystemAudio: true, hasMicrophoneAudio: true))
+            worker.deferPlayback = true
+            let controller = RecordingEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker,
+                confirmDiscard: { false })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                               outputDirectory: "/Exports")
+            let play = try button("Play", in: controller.root)
+            play.performClick(nil)
+            worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 700,
+                image: try solidImage(red: 20, green: 210, blue: 30)))
+            try render(controller.root, name: "recording-editor-playback-\(appearance)")
+
+            play.performClick(nil); worker.completePlayback(.success(.cancelled))
+            try render(controller.root, name: "recording-editor-playback-paused-\(appearance)")
+
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            play.performClick(nil)
+            worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 1_100,
+                image: try solidImage(red: 30, green: 40, blue: 220)))
+            try render(controller.root, name: "recording-editor-playback-minimum-\(appearance)")
+            worker.completePlayback(.failure(AppBridgeError.backend("decoder stopped")))
+            try render(controller.root, name: "recording-editor-playback-error-minimum-\(appearance)")
+        }
+    }
+
     func testSourceThumbnailsLoadOnceWithoutMutatingEditorState() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation())
@@ -390,6 +598,7 @@ final class RecordingEditorTests: XCTestCase {
         let outputMode = try popup("Recording output size", in: controller.root)
         let estimate = try button("Estimate size", in: controller.root)
         let save = try button("Save new copy", in: controller.root)
+        let play = try button("Play", in: controller.root)
 
         width.selectText(nil)
         let editor = try XCTUnwrap(controller.window.fieldEditor(false, for: width) as? NSTextView)
@@ -403,6 +612,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertFalse(seek.isEnabled)
         XCTAssertFalse(estimate.isEnabled)
         XCTAssertFalse(save.isEnabled)
+        XCTAssertFalse(play.isEnabled)
         XCTAssertFalse(controller.windowShouldClose(controller.window))
         XCTAssertFalse(controller.prepareForTermination())
 
@@ -417,6 +627,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual((crop["height"] as? NSNumber)?.uint32Value, 120)
         XCTAssertEqual(width.stringValue, "213"); XCTAssertEqual(height.stringValue, "120")
         XCTAssertFalse(apply.isEnabled)
+        XCTAssertTrue(play.isEnabled)
 
         width.selectText(nil)
         let invalidEditor = try XCTUnwrap(controller.window.fieldEditor(false, for: width)
@@ -441,6 +652,7 @@ final class RecordingEditorTests: XCTestCase {
                        "an unrelated output preset cannot discard ended invalid crop input")
         XCTAssertFalse(apply.isEnabled); XCTAssertFalse(seek.isEnabled)
         XCTAssertFalse(estimate.isEnabled); XCTAssertFalse(save.isEnabled)
+        XCTAssertFalse(play.isEnabled)
 
         width.selectText(nil)
         let validEditor = try XCTUnwrap(controller.window.fieldEditor(false, for: width)
@@ -1003,6 +1215,65 @@ final class RecordingEditorTests: XCTestCase {
                        "the retained pixel provider remains readable after session and owner release")
     }
 
+    func testRealBridgeSilentPlaybackMotionCancellationAndImmutableAcceptedState() throws {
+        let tools = try NativeMediaTools.locate()
+        let fixture = try makeRecordingFixture(tools: tools)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sourceBefore = try Data(contentsOf: fixture.source)
+        var retainedImage: CGImage?
+        do {
+            let opened = try NativeRecordingEditorSession.open(historyRoot: fixture.history.path,
+                                                                artifactID: fixture.id, tools: tools)
+            let session = opened.0
+            var edit = opened.1.snapshot.edit
+            edit["trim_start_ms"] = 200; edit["trim_end_ms"] = 800
+            edit["crop"] = ["x": 20, "y": 10, "width": 120, "height": 60]
+            edit["output_width"] = 80; edit["output_height"] = 40
+            var export = opened.1.snapshot.export
+            export["format"] = "gif"
+            let accepted = try session.request(["operation": "update_preview", "edit": edit,
+                                                "export": export])
+            let before = try session.request(["operation": "snapshot"]).snapshot
+            let cancel = try XCTUnwrap(NativeRecordingEditorCancel())
+            let playback = try session.playback(positionMilliseconds: 800, cancel: cancel)
+            XCTAssertEqual(playback.metadata.startPositionMilliseconds, 200,
+                           "trim end normalizes to accepted trim start")
+            XCTAssertEqual(playback.metadata.width, 80); XCTAssertEqual(playback.metadata.height, 40)
+            XCTAssertLessThanOrEqual(playback.metadata.framesPerSecond, 30)
+            let first = try XCTUnwrap(playback.nextFrame())
+            var later = try XCTUnwrap(playback.nextFrame())
+            while later.positionMilliseconds == first.positionMilliseconds {
+                later = try XCTUnwrap(playback.nextFrame())
+            }
+            XCTAssertNotEqual(try pixels(first.image), try pixels(later.image),
+                              "persistent playback presents temporal motion frames")
+            retainedImage = later.image
+            while try playback.nextFrame() != nil {}
+            XCTAssertNil(try playback.nextFrame(), "EOF remains deterministic")
+            XCTAssertFalse(cancel.isCancelled, "natural EOF does not cancel the caller token")
+
+            let after = try session.request(["operation": "snapshot"]).snapshot
+            XCTAssertEqual(after.revision, before.revision)
+            XCTAssertEqual(after.positionMilliseconds, before.positionMilliseconds)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: after.edit, options: [.sortedKeys]),
+                           try JSONSerialization.data(withJSONObject: before.edit, options: [.sortedKeys]))
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: after.export, options: [.sortedKeys]),
+                           try JSONSerialization.data(withJSONObject: before.export, options: [.sortedKeys]))
+            XCTAssertEqual(accepted.snapshot.revision, before.revision)
+
+            let cancelled = try XCTUnwrap(NativeRecordingEditorCancel())
+            let cancelledPlayback = try session.playback(positionMilliseconds: 200,
+                                                          cancel: cancelled)
+            cancelled.cancel()
+            XCTAssertThrowsError(try cancelledPlayback.nextFrame())
+        }
+        XCTAssertEqual(try XCTUnwrap(retainedImage).width, 80)
+        XCTAssertEqual(try pixels(try XCTUnwrap(retainedImage)).count, 80 * 40 * 4,
+                       "retained playback frame remains readable after stream/session release")
+        XCTAssertEqual(try Data(contentsOf: fixture.source), sourceBefore,
+                       "playback keeps the original recording byte-identical")
+    }
+
     func testRealBridgeCropOutputDimensionsContentAndImmutableOriginal() throws {
         let tools = try NativeMediaTools.locate()
         let fixture = try makeCropRecordingFixture(tools: tools)
@@ -1351,6 +1622,20 @@ final class RecordingEditorTests: XCTestCase {
                        intent: .defaultIntent))
     }
 
+    private func solidImage(red: UInt8, green: UInt8, blue: UInt8) throws -> CGImage {
+        let bytes = [red, green, blue, 255, red, green, blue, 255]
+        let provider = try XCTUnwrap(CGDataProvider(data: Data(bytes) as CFData))
+        return try XCTUnwrap(CGImage(width: 2, height: 1, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: 8, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false,
+            intent: .defaultIntent))
+    }
+
+    private func pixels(_ image: CGImage) throws -> Data {
+        try XCTUnwrap(image.dataProvider?.data) as Data
+    }
+
     private func descendants(in view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { descendants(in: $0) }
     }
@@ -1414,6 +1699,13 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var requests: [[String: Any]] = []
     var requestResult: Result<RecordingEditorPresentation, Error>?
     var estimateResult: Result<RecordingEditorEstimate, Error> = .failure(AppBridgeError.backend("estimate unavailable"))
+    var playbackMetadata = RecordingPlaybackMetadata(startPositionMilliseconds: 0,
+                                                      width: 2, height: 1,
+                                                      framesPerSecond: 10)
+    var playbackStarts: [UInt64] = []
+    var playbackFrames: [RecordingPlaybackImage] = []
+    var playbackResult: Result<RecordingPlaybackCompletion, Error> = .success(.eof)
+    var deferPlayback = false
     var thumbnailResult: Result<CGImage, Error> = .success(fakeTimelineImage())
     var thumbnailCalls = 0
     var deferThumbnails = false
@@ -1423,9 +1715,12 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var closeCount = 0
     weak var observedSaveCancel: NativeRecordingEditorCancel?
     weak var observedThumbnailCancel: NativeRecordingEditorCancel?
+    weak var observedPlaybackCancel: NativeRecordingEditorCancel?
     private var pendingOpen: ((Result<RecordingEditorPresentation, Error>) -> Void)?
     private var pendingSave: ((Result<RecordingEditorSaveResult, Error>) -> Void)?
     private var pendingThumbnails: ((Result<CGImage, Error>) -> Void)?
+    private var pendingPlaybackFrame: ((RecordingPlaybackImage) -> Void)?
+    private var pendingPlaybackCompletion: ((Result<RecordingPlaybackCompletion, Error>) -> Void)?
 
     init(presentation: RecordingEditorPresentation) { initial = presentation }
     func open(historyRoot: String, artifactID: String,
@@ -1444,6 +1739,24 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     func estimate(cancel: NativeRecordingEditorCancel,
                   completion: @escaping (Result<RecordingEditorEstimate, Error>) -> Void) {
         completion(estimateResult)
+    }
+    func playback(positionMilliseconds: UInt64, cancel: NativeRecordingEditorCancel,
+                  started: @escaping (RecordingPlaybackMetadata) -> Void,
+                  frame: @escaping (RecordingPlaybackImage) -> Void,
+                  completion: @escaping (Result<RecordingPlaybackCompletion, Error>) -> Void) {
+        playbackStarts.append(positionMilliseconds); observedPlaybackCancel = cancel
+        started(playbackMetadata)
+        if deferPlayback {
+            pendingPlaybackFrame = frame; pendingPlaybackCompletion = completion
+        } else {
+            playbackFrames.forEach(frame); completion(playbackResult)
+        }
+    }
+    func sendPlaybackFrame(_ value: RecordingPlaybackImage) { pendingPlaybackFrame?(value) }
+    func completePlayback(_ result: Result<RecordingPlaybackCompletion, Error>) {
+        let completion = pendingPlaybackCompletion
+        pendingPlaybackFrame = nil; pendingPlaybackCompletion = nil
+        completion?(result)
     }
     func thumbnails(cancel: NativeRecordingEditorCancel,
                     completion: @escaping (Result<CGImage, Error>) -> Void) {

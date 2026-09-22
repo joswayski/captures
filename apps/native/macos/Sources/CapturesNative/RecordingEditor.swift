@@ -105,6 +105,7 @@ final class RecordingTrimTimeline: NSView {
     private var dragEdge: NativeRecordingTimelineEdge?
     private(set) var editingEnabled = false
     private var thumbnailImage: NSImage?
+    private var playbackPositionMilliseconds: UInt64?
     private(set) var thumbnailStateDescription = "Source thumbnails not loaded"
     private lazy var startHandle = RecordingTrimHandle(edge: .start, timeline: self)
     private lazy var endHandle = RecordingTrimHandle(edge: .end, timeline: self)
@@ -135,6 +136,11 @@ final class RecordingTrimTimeline: NSView {
         editingEnabled = enabled
         startHandle.enabled = enabled; endHandle.enabled = enabled
         if !enabled { endDrag() }
+    }
+
+    func setPlaybackPosition(_ milliseconds: UInt64?) {
+        playbackPositionMilliseconds = milliseconds
+        needsDisplay = true
     }
 
     func showThumbnailLoading() {
@@ -290,8 +296,25 @@ final class RecordingTrimTimeline: NSView {
         selection.fill()
         tokens.color(editingEnabled ? "theme-accent" : "text-faint").setStroke()
         selection.lineWidth = 2; selection.stroke()
+        if let playbackPositionMilliseconds,
+           let ratio = NativeRecordingTimeline.ratio(
+               milliseconds: Double(playbackPositionMilliseconds),
+               durationMilliseconds: Double(durationMilliseconds)) {
+            let x = track.minX + track.width * CGFloat(ratio)
+            let playhead = NSBezierPath()
+            playhead.move(to: NSPoint(x: x, y: strip.minY))
+            playhead.line(to: NSPoint(x: x, y: strip.maxY))
+            tokens.color("info-text").setStroke()
+            playhead.lineWidth = 2; playhead.stroke()
+        }
         tokens.color("control-border").setStroke(); background.lineWidth = 1; background.stroke()
     }
+}
+
+private enum RecordingPlaybackState {
+    case idle
+    case playing
+    case pausing
 }
 
 final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
@@ -301,6 +324,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let reportError: (String) -> Void
     private let didSaveCopy: () -> Void
     private let confirmDiscard: () -> Bool
+    private let requestTermination: () -> Void
     private var tokens: Tokens
     private var generation = 0
     private var artifactID: String?
@@ -313,6 +337,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var thumbnailCancel: NativeRecordingEditorCancel?
     private var thumbnailRetryAvailable = false
     private var estimate: RecordingEditorEstimate?
+    private var playbackState = RecordingPlaybackState.idle
+    private var playbackCancel: NativeRecordingEditorCancel?
+    private var playbackPositionMilliseconds: UInt64?
+    private var playbackReachedEOF = false
+    private var playbackStopActions: [() -> Void] = []
+    private var closeAfterPlayback = false
+    private var terminateAfterPlayback = false
+    private var switchAfterPlayback: String?
 
     private let previewPanel = Surface()
     private let preview = NSImageView()
@@ -359,14 +391,17 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var cancelButton: CaptureButton!
     private var changeButton: CaptureButton!
     private var thumbnailRetryButton: CaptureButton!
+    private var playbackButton: CaptureButton!
 
     init(tokens: Tokens, worker: RecordingEditorWorking = RecordingEditorWorker(),
          reportError: @escaping (String) -> Void = { _ in },
          didSaveCopy: @escaping () -> Void = {},
-         confirmDiscard: (() -> Bool)? = nil) {
+         confirmDiscard: (() -> Bool)? = nil,
+         requestTermination: @escaping () -> Void = { NSApp.terminate(nil) }) {
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
         self.didSaveCopy = didSaveCopy
         self.confirmDiscard = confirmDiscard ?? RecordingEditorController.confirmDiscardAlert
+        self.requestTermination = requestTermination
         trimTimeline = RecordingTrimTimeline(tokens: tokens)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 760),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -391,6 +426,17 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             NSApp.activate(ignoringOtherApps: true)
             return
         }
+        if playbackState != .idle {
+            guard switchAfterPlayback == nil else { return }
+            switchAfterPlayback = artifact.id
+            pausePlayback { [weak self] in
+                guard let self else { return }
+                self.switchAfterPlayback = nil
+                self.present(artifact: artifact, historyRoot: historyRoot,
+                             outputDirectory: outputDirectory)
+            }
+            return
+        }
         if artifactID != nil, busy || pickerOpen || dirty {
             showError("Finish, cancel, save, or discard the current recording edits first.")
             window.makeKeyAndOrderFront(nil); return
@@ -399,6 +445,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let current = generation
         artifactID = artifact.id; presentation = nil; savedEdit = nil; savedExport = nil
         estimate = nil; activeCancel = nil; thumbnailCancel = nil; busy = true; pickerOpen = false
+        playbackPositionMilliseconds = nil; playbackReachedEOF = false
         stagedCrop = nil; cropAspectUnlocked = false
         resolutionPreset = .original; customOutput = false
         preview.image = nil
@@ -434,6 +481,18 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     func prepareForTermination() -> Bool {
+        if playbackState != .idle {
+            if !terminateAfterPlayback {
+                terminateAfterPlayback = true
+                pausePlayback { [weak self] in
+                    guard let self else { return }
+                    self.terminateAfterPlayback = false
+                    self.requestTermination()
+                }
+            }
+            showError("Pausing silent playback before quitting…")
+            window.makeKeyAndOrderFront(nil); return false
+        }
         if busy || pickerOpen {
             showError("Cancel or wait for the recording operation before quitting.")
             window.makeKeyAndOrderFront(nil); return false
@@ -446,6 +505,17 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if playbackState != .idle {
+            if !closeAfterPlayback {
+                closeAfterPlayback = true
+                pausePlayback { [weak self] in
+                    guard let self else { return }
+                    self.closeAfterPlayback = false
+                    self.window.performClose(nil)
+                }
+            }
+            return false
+        }
         if busy || pickerOpen {
             showError("Cancel or wait for the recording operation before closing.")
             return false
@@ -455,7 +525,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     func windowDidResize(_ notification: Notification) { layout() }
-    func windowDidResignKey(_ notification: Notification) { trimTimeline.endDrag() }
+    func windowDidResignKey(_ notification: Notification) {
+        trimTimeline.endDrag(); pausePlayback()
+    }
+    func windowDidMiniaturize(_ notification: Notification) { pausePlayback() }
     func controlTextDidChange(_ notification: Notification) {
         if let field = notification.object as? NSTextField,
            [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) {
@@ -472,7 +545,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private func buildUI() {
         root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
         _ = label("Edit recording", size: 22, weight: .semibold)
-        let note = label("Decoded frame preview · playback is not included in this slice", muted: true)
+        let note = label("Silent playback · accepted recording edits only", muted: true)
         note.identifier = NSUserInterfaceItemIdentifier("recording-editor-note")
         previewPanel.wantsLayer = true
         previewPanel.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
@@ -523,6 +596,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         root.addSubview(seekSlider)
         seekLabel.textColor = tokens.color("text-muted"); seekLabel.alignment = .right
         root.addSubview(seekLabel)
+        playbackButton = button("Play") { [weak self] in self?.togglePlayback() }
+        playbackButton.setAccessibilityLabel("Play silent recording preview")
         trimPanel.wantsLayer = true; trimPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         trimPanel.layer?.cornerRadius = tokens.number("r-md")
         root.addSubview(trimPanel)
@@ -548,7 +623,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         audioPanel.layer?.cornerRadius = tokens.number("r-md")
         root.addSubview(audioPanel)
         audioPanel.addSubview(label("Audio", size: 14, weight: .semibold, parent: audioPanel))
-        audioNote = label("Frame preview is silent", muted: true, parent: audioPanel)
+        audioNote = label("Playback is silent", muted: true, parent: audioPanel)
         configureVolumeField(systemVolume, label: "System audio volume percent")
         configureVolumeField(microphoneVolume, label: "Microphone volume percent")
         systemAudioLabel = label("System", muted: true, parent: audioPanel)
@@ -625,8 +700,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         outputHeight.frame = NSRect(x: 286, y: 98,
                                     width: max(42, geometryPanel.bounds.width - 300), height: 28)
         let seekY = previewPanel.frame.maxY + 10
-        sourceLabel.frame = NSRect(x: 24, y: seekY, width: width * 0.38, height: 20)
-        seekSlider.frame = NSRect(x: width * 0.38, y: seekY, width: width * 0.38, height: 20)
+        sourceLabel.frame = NSRect(x: 24, y: seekY, width: width * 0.27 - 24, height: 20)
+        playbackButton.frame = NSRect(x: width * 0.27, y: seekY - 4, width: 104, height: 28)
+        seekSlider.frame = NSRect(x: width * 0.39, y: seekY, width: width * 0.37, height: 20)
         seekLabel.frame = NSRect(x: width * 0.77, y: seekY, width: width * 0.2 - 24, height: 20)
         let controlGap: CGFloat = 12
         let controlsWidth = width - 48
@@ -681,6 +757,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private func publish(_ value: RecordingEditorPresentation, initialize: Bool = false) {
         let old = presentation?.snapshot
         presentation = value
+        playbackPositionMilliseconds = nil; playbackReachedEOF = false
+        trimTimeline.setPlaybackPosition(nil)
         preview.image = NSImage(cgImage: value.image,
                                 size: NSSize(width: CGFloat(value.image.width),
                                              height: CGFloat(value.image.height)))
@@ -794,6 +872,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         guard !busy, let edit = stagedEdit, let export = stagedExport else {
             showError("Enter valid trim, crop, audio, and output values."); return
         }
+        restoreAcceptedPresentation()
         request(["operation": "update_preview", "edit": edit, "export": export],
                 activity: "Applying edits and decoding preview…")
     }
@@ -804,6 +883,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             if stagedDiffers { showError("Apply staged recording changes before seeking.") }
             return
         }
+        restoreAcceptedPresentation()
         request(["operation": "seek", "position_ms": UInt64(seekSlider.doubleValue.rounded())],
                 activity: "Decoding source-relative frame…")
     }
@@ -823,6 +903,102 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }
             self.updateControls()
         }
+    }
+
+    private func togglePlayback() {
+        switch playbackState {
+        case .idle: startPlayback()
+        case .playing: pausePlayback()
+        case .pausing: break
+        }
+    }
+
+    private func startPlayback() {
+        guard !busy, !pickerOpen, playbackState == .idle,
+              pendingCropInputValid, stagedEdit != nil, stagedExport != nil,
+              !stagedDiffers, let snapshot = presentation?.snapshot,
+              let cancel = NativeRecordingEditorCancel() else { return }
+        window.makeFirstResponder(nil)
+        guard !stagedDiffers else { return }
+        let trimStart = (snapshot.edit["trim_start_ms"] as? NSNumber)?.uint64Value ?? 0
+        let position = playbackReachedEOF ? trimStart
+            : playbackPositionMilliseconds ?? snapshot.positionMilliseconds
+        let current = generation
+        playbackState = .playing; playbackCancel = cancel; playbackReachedEOF = false
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Starting silent playback…"
+        updateControls()
+        worker.playback(positionMilliseconds: position, cancel: cancel,
+            started: { [weak self] metadata in
+                guard let self, self.generation == current,
+                      self.playbackCancel === cancel else { return }
+                self.playbackPositionMilliseconds = metadata.startPositionMilliseconds
+                self.updatePlaybackPosition(metadata.startPositionMilliseconds)
+                self.status.stringValue = "Silent playback · \(metadata.width) × \(metadata.height) · \(metadata.framesPerSecond) fps"
+            }, frame: { [weak self] value in
+                guard let self, self.generation == current,
+                      self.playbackCancel === cancel,
+                      self.playbackState != .idle else { return }
+                self.playbackPositionMilliseconds = value.positionMilliseconds
+                self.preview.image = NSImage(cgImage: value.image,
+                    size: NSSize(width: CGFloat(value.image.width), height: CGFloat(value.image.height)))
+                self.updatePlaybackPosition(value.positionMilliseconds)
+            }, completion: { [weak self] result in
+                guard let self, self.generation == current,
+                      self.playbackCancel === cancel else { return }
+                self.playbackCancel = nil; self.playbackState = .idle
+                switch result {
+                case .success(.eof):
+                    self.playbackReachedEOF = true
+                    self.status.textColor = self.tokens.color("text-muted")
+                    self.status.stringValue = "Silent playback ended. Play restarts at the accepted trim start."
+                case .success(.cancelled):
+                    self.playbackReachedEOF = false
+                    self.status.textColor = self.tokens.color("text-muted")
+                    self.status.stringValue = "Silent playback paused."
+                case .failure(let error):
+                    self.restoreAcceptedPresentation()
+                    self.showError("Silent playback failed: \(error.localizedDescription). The accepted preview was restored.")
+                }
+                self.updateControls()
+                let actions = self.playbackStopActions
+                self.playbackStopActions.removeAll()
+                actions.forEach { $0() }
+            })
+    }
+
+    private func pausePlayback(after action: (() -> Void)? = nil) {
+        if let action { playbackStopActions.append(action) }
+        guard playbackState != .idle else {
+            let actions = playbackStopActions; playbackStopActions.removeAll()
+            actions.forEach { $0() }
+            return
+        }
+        guard playbackState == .playing else { return }
+        playbackState = .pausing
+        playbackCancel?.cancel()
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Pausing silent playback…"
+        updateControls()
+    }
+
+    private func updatePlaybackPosition(_ milliseconds: UInt64) {
+        guard let duration = presentation?.snapshot.durationMilliseconds else { return }
+        seekSlider.doubleValue = Double(milliseconds)
+        seekLabel.stringValue = "\(time(milliseconds)) / \(time(duration))"
+        trimTimeline.setPlaybackPosition(milliseconds)
+    }
+
+    private func restoreAcceptedPresentation() {
+        guard let presentation else { return }
+        playbackPositionMilliseconds = nil; playbackReachedEOF = false
+        trimTimeline.setPlaybackPosition(nil)
+        preview.image = NSImage(cgImage: presentation.image,
+                                size: NSSize(width: CGFloat(presentation.image.width),
+                                             height: CGFloat(presentation.image.height)))
+        sourceLabel.stringValue = "\(presentation.snapshot.width) × \(presentation.snapshot.height) source frame"
+        seekSlider.doubleValue = Double(presentation.snapshot.positionMilliseconds)
+        seekLabel.stringValue = "\(time(presentation.snapshot.positionMilliseconds)) / \(time(presentation.snapshot.durationMilliseconds))"
     }
 
     private func estimateSize() {
@@ -1122,7 +1298,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func updateControls() {
-        let available = presentation != nil && !busy && !pickerOpen
+        let available = presentation != nil && !busy && !pickerOpen && playbackState == .idle
         let valid = pendingCropInputValid && stagedEdit != nil && stagedExport != nil
         [trimStart, trimEnd, format, quality, destination].forEach { $0.isEnabled = available }
         cropEnabled.isEnabled = available
@@ -1144,7 +1320,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         monoOutput.isHidden = !hasAudio
         audioNote.stringValue = !hasAudio ? "No audio tracks."
             : gif ? "GIF · MP4 kept"
-            : "Silent preview"
+            : "Silent playback"
         systemVolume.isEnabled = available && !gif && systemMute.state != .on
         microphoneVolume.isEnabled = available && !gif && microphoneMute.state != .on
         systemMute.isEnabled = available && !gif
@@ -1153,6 +1329,20 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         trimTimeline.setEditingEnabled(available && stagedEdit != nil)
         thumbnailRetryButton?.isHidden = !thumbnailRetryAvailable
         thumbnailRetryButton?.isEnabled = available && thumbnailRetryAvailable
+        switch playbackState {
+        case .idle:
+            playbackButton?.title = "Play"
+            playbackButton?.setAccessibilityLabel("Play silent recording preview")
+            playbackButton?.isEnabled = available && valid && !stagedDiffers
+        case .playing:
+            playbackButton?.title = "Pause"
+            playbackButton?.setAccessibilityLabel("Pause silent recording preview")
+            playbackButton?.isEnabled = true
+        case .pausing:
+            playbackButton?.title = "Pausing…"
+            playbackButton?.setAccessibilityLabel("Pausing silent recording preview")
+            playbackButton?.isEnabled = false
+        }
         applyButton?.isEnabled = available && valid && stagedDiffers
         seekSlider.isEnabled = available && valid && !stagedDiffers
         changeButton?.isEnabled = available
@@ -1169,6 +1359,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private func closeSession() {
         generation += 1; artifactID = nil; presentation = nil; activeCancel = nil
         thumbnailCancel = nil; thumbnailRetryAvailable = false
+        playbackCancel = nil; playbackState = .idle
+        playbackPositionMilliseconds = nil; playbackReachedEOF = false
+        playbackStopActions.removeAll(); closeAfterPlayback = false
+        terminateAfterPlayback = false; switchAfterPlayback = nil
+        trimTimeline.setPlaybackPosition(nil)
         trimTimeline.clearThumbnails()
         worker.close()
     }

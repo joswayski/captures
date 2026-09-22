@@ -531,10 +531,16 @@ thumbnail strip. Generation runs once after open on the serialized worker, is re
 separately from accepted edited frames, and has independent loading, cancel, failure
 and retry states; failure leaves the rest of editing available, while accepted work
 keeps the existing close/quit gate. Seeking and applying edits do not regenerate the
-strip or turn thumbnail clicks into a new seek gesture. Windows/X11 already implement
+strip or turn thumbnail clicks into a new seek gesture. AppKit also provides silent,
+non-looping Play/Pause of the accepted trim and spatial edits. Persistent bounded
+FFmpeg playback delivers retained latest frames and a source-relative playhead without
+mutating the accepted frame/position, dirty state, History or source. Pause, focus loss,
+minimize, close, item switching and quit retain cancellation through decoder teardown;
+errors restore the accepted still preview. Audio playback is not implemented.
+Windows/X11 already implement
 the same edit controls through wgpu;
 private X11/software-GL exercises provide implementation evidence only. Windows and
-Wayland presentation, physical macOS input, accessibility, playback,
+Wayland presentation, physical macOS input, accessibility, playback audio and looping,
 physical audio output, graphical crop handles, draft restoration and original
 replacement remain open. No recording-editor or cross-platform parity gate closes.
 
