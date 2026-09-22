@@ -1855,11 +1855,11 @@ mod tests {
     use super::TimelineSpriteSpec;
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     use super::{
-        CAPTURE_MASTER_BITS_PER_PIXEL_PERCENT, RecordingAssemblyKind, RecordingSegmentInput,
-        openh264_bitrate,
+        CAPTURE_MASTER_BITS_PER_PIXEL_PERCENT, MediaToolError, RecordingAssemblyKind,
+        RecordingSegmentInput, openh264_bitrate,
     };
     use super::{
-        CancelToken, MediaToolError, MediaToolchain, RecordingAudioLayout, VideoAttempt,
+        CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt,
         aac_centered_stereo_layout_filter, aac_output_layout_filter, audio_edit_is_identity,
         audio_filter, commit_temporary, escape_concat_path, export_attempts,
         export_preserves_source_bytes, fit_even, gif_export_filter, gif_filter,
