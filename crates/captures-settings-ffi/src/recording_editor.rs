@@ -264,7 +264,7 @@ mod tests {
         assert_eq!(response["error"], "recording editor handle is null");
 
         let sentinel = RegionPixels {
-            data: 1_usize as *const u8,
+            data: ptr::dangling(),
             length: 2,
             width: 3,
             height: 4,
