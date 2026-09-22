@@ -66,6 +66,90 @@ enum NativeRecordingTimelineEdge: UInt8 {
     case end = 1
 }
 
+struct NativeRecordingCropRect: Equatable {
+    var x: UInt32
+    var y: UInt32
+    var width: UInt32
+    var height: UInt32
+
+    init?(value: Any?, sourceWidth: UInt32, sourceHeight: UInt32) {
+        guard let value = value as? [String: Any],
+              let x = Self.uint32(value["x"]), let y = Self.uint32(value["y"]),
+              let width = Self.uint32(value["width"]),
+              let height = Self.uint32(value["height"]),
+              width >= 2, height >= 2,
+              UInt64(x) + UInt64(width) <= UInt64(sourceWidth),
+              UInt64(y) + UInt64(height) <= UInt64(sourceHeight) else { return nil }
+        self.init(x: x, y: y, width: width, height: height)
+    }
+
+    init(x: UInt32, y: UInt32, width: UInt32, height: UInt32) {
+        self.x = x; self.y = y; self.width = width; self.height = height
+    }
+
+    var dictionary: [String: Any] {
+        ["x": x, "y": y, "width": width, "height": height]
+    }
+
+    private static func uint32(_ value: Any?) -> UInt32? {
+        guard let number = value as? NSNumber else { return nil }
+        let raw = number.uint64Value
+        return raw <= UInt64(UInt32.max) ? UInt32(raw) : nil
+    }
+}
+
+struct NativeRecordingDimensions: Equatable {
+    let width: UInt32
+    let height: UInt32
+}
+
+enum NativeRecordingCropAxis: UInt8 {
+    case width = 0
+    case height = 1
+}
+
+enum NativeRecordingResolutionPreset: UInt8, CaseIterable {
+    case original = 0
+    case p1080 = 1
+    case p720 = 2
+
+    var title: String {
+        switch self {
+        case .original: "Original"
+        case .p1080: "1080p maximum"
+        case .p720: "720p maximum"
+        }
+    }
+}
+
+enum NativeRecordingGeometry {
+    static func resizeLocked(_ crop: NativeRecordingCropRect,
+                             source: NativeRecordingDimensions,
+                             axis: NativeRecordingCropAxis,
+                             value: UInt32) -> NativeRecordingCropRect? {
+        var input = CapturesRecordingCropRect()
+        input.x = crop.x; input.y = crop.y
+        input.width = crop.width; input.height = crop.height
+        var dimensions = CapturesRecordingDimensions()
+        dimensions.width = source.width; dimensions.height = source.height
+        var output = CapturesRecordingCropRect()
+        guard captures_recording_crop_resize_locked_v1(input, dimensions, axis.rawValue,
+                                                        value, &output) else { return nil }
+        return NativeRecordingCropRect(x: output.x, y: output.y,
+                                       width: output.width, height: output.height)
+    }
+
+    static func constrain(_ input: NativeRecordingDimensions,
+                          preset: NativeRecordingResolutionPreset) -> NativeRecordingDimensions? {
+        var dimensions = CapturesRecordingDimensions()
+        dimensions.width = input.width; dimensions.height = input.height
+        var output = CapturesRecordingDimensions()
+        guard captures_recording_max_resolution_constrain_v1(preset.rawValue, dimensions,
+                                                              &output) else { return nil }
+        return NativeRecordingDimensions(width: output.width, height: output.height)
+    }
+}
+
 struct NativeRecordingTimelineDrag {
     private var value: CapturesRecordingTimelineTrimDrag
 
