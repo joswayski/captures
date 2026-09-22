@@ -3153,7 +3153,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard !inlineTextScroll.isHidden, let input = inlineTextInput else { return }
         let layer = input.layerID.flatMap { id in state.snapshot?.layers.first(where: { $0.id == id }) }
         let image = presentedImageRect
-        guard image.width > 0, image.height > 0, let snapshot = state.snapshot else { return }
+        let visible = viewportInput.bounds.standardized
+        guard image.width > 0, image.height > 0, visible.width > 0, visible.height > 0,
+              image.minX.isFinite, image.minY.isFinite, image.width.isFinite, image.height.isFinite,
+              visible.minX.isFinite, visible.minY.isFinite,
+              visible.width.isFinite, visible.height.isFinite,
+              let snapshot = state.snapshot else { return }
         let scale = image.width / CGFloat(snapshot.width)
         let bounds: NSRect
         if let outline = layer?.selectionOutline, !outline.isEmpty {
@@ -3167,20 +3172,27 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             bounds = NSRect(x: x, y: y,
                             width: max(160, fontSize * 8), height: max(44, fontSize * 1.6))
         }
-        let desiredWidth = min(image.width, max(220, bounds.width * scale + 12))
-        let desiredHeight = min(image.height, max(96, bounds.height * scale + 12))
+        // The native responder is intentionally not a WYSIWYG text layer. Keep
+        // its usable minimum and actions in the viewport even when a narrow
+        // image, zoom, or pan moves the authoritative shared preview offscreen.
+        // Intersecting with an offscreen image can produce CGRect.null, whose
+        // infinite origin must never be assigned to an AppKit view frame.
+        let desiredWidth = min(visible.width, max(220, bounds.width * scale + 12))
+        let desiredHeight = min(visible.height, max(96, bounds.height * scale + 12))
         let desiredX = image.minX + bounds.minX * scale - 6
         let desiredY = image.minY + bounds.minY * scale - 6
         let editorFrame = NSRect(
-            x: min(max(image.minX, desiredX), image.maxX - desiredWidth),
-            y: min(max(image.minY, desiredY), image.maxY - desiredHeight),
-            width: desiredWidth, height: desiredHeight).intersection(viewportInput.bounds)
+            x: min(max(visible.minX, desiredX), visible.maxX - desiredWidth),
+            y: min(max(visible.minY, desiredY), visible.maxY - desiredHeight),
+            width: desiredWidth, height: desiredHeight)
         inlineTextScroll.frame = editorFrame
         let buttonWidth: CGFloat = 68, buttonHeight: CGFloat = 28, gap: CGFloat = 6
         let buttonsWidth = buttonWidth * 2 + gap
-        let buttonsY = editorFrame.maxY + gap + buttonHeight <= image.maxY
-            ? editorFrame.maxY + gap : max(image.minY, editorFrame.minY - gap - buttonHeight)
-        let buttonsX = min(max(image.minX, editorFrame.maxX - buttonsWidth), image.maxX - buttonsWidth)
+        let candidateY = editorFrame.maxY + gap + buttonHeight <= visible.maxY
+            ? editorFrame.maxY + gap : editorFrame.minY - gap - buttonHeight
+        let buttonsY = min(max(visible.minY, candidateY), visible.maxY - buttonHeight)
+        let buttonsX = min(max(visible.minX, editorFrame.maxX - buttonsWidth),
+                           visible.maxX - buttonsWidth)
         inlineTextCancelButton.frame = NSRect(x: buttonsX, y: buttonsY,
                                               width: buttonWidth, height: buttonHeight)
         inlineTextDoneButton.frame = NSRect(x: buttonsX + buttonWidth + gap, y: buttonsY,

@@ -4388,6 +4388,74 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
+    func testInlineTextFramesStayFiniteAndRecoverableWhenPreviewMovesOffscreen() throws {
+        _ = NSApplication.shared
+        for (width, height) in [(640.0, 360.0), (1.0, 2_000.0)] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: width, height: height))
+            var inputID = ""
+            worker.response = { request in
+                guard request["operation"] as? String == "begin_text_input" else { return nil }
+                inputID = request["input_id"] as! String
+                return self.snapshot(id: "shot", width: width, height: height,
+                    layers: [self.textLayer(id: "fresh", text: "")],
+                    activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true])
+            }
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                        worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            try showDraw(in: controller.root)
+            let tool = try popup("Drawing tool", in: controller.root)
+            tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+            let point = NSPoint(x: controller.presentedImageRect.midX,
+                                y: controller.presentedImageRect.midY)
+            controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+            let editor = try textView("Inline screenshot text", in: controller.root)
+            let scroll = try XCTUnwrap(editor.enclosingScrollView)
+            let done = try button("Done", in: controller.root)
+            let cancel = try button("Cancel", in: controller.root)
+            let viewport = try XCTUnwrap(descendants(in: controller.root)
+                .compactMap { $0 as? EditorViewportGestureView }
+                .first { $0.accessibilityLabel() == "Screenshot viewport" })
+            func finite(_ rect: NSRect) -> Bool {
+                [rect.minX, rect.minY, rect.width, rect.height].allSatisfy(\.isFinite)
+            }
+
+            viewport.onViewportZoom?(8, NSPoint(x: viewport.bounds.midX, y: viewport.bounds.midY))
+            viewport.onViewportPan?(NSPoint(x: viewport.bounds.width * 20,
+                                            y: -viewport.bounds.height * 20))
+            XCTAssertFalse(controller.presentedImageRect.intersects(viewport.bounds),
+                           "the regression requires the shared preview to be wholly offscreen")
+            for view in [scroll, done, cancel] {
+                XCTAssertTrue(finite(view.frame))
+                XCTAssertFalse(view.frame.isNull)
+                XCTAssertTrue(viewport.bounds.contains(view.frame),
+                              "the native composing controls remain recoverable inside the viewport")
+            }
+            XCTAssertGreaterThanOrEqual(scroll.frame.width, 220)
+            XCTAssertGreaterThanOrEqual(scroll.frame.height, 96)
+            XCTAssertTrue(controller.window.firstResponder === editor)
+
+            editor.string = "retained while preview is offscreen"
+            worker.deferRequests = true
+            controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+            done.performClick(nil)
+            worker.completePending(with: snapshot(id: "shot", width: width, height: height,
+                layers: [textLayer(id: "fresh", text: editor.string)],
+                activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true]))
+            XCTAssertEqual(worker.requests.last?["operation"] as? String, "finish_text_input")
+            viewport.onViewportPan?(NSPoint(x: -viewport.bounds.width * 40,
+                                            y: viewport.bounds.height * 40))
+            for view in [scroll, done, cancel] {
+                XCTAssertTrue(finite(view.frame))
+                XCTAssertTrue(viewport.bounds.contains(view.frame),
+                              "accepted Finish retains finite UI until its callback resolves")
+            }
+            XCTAssertFalse(editor.isEditable)
+        }
+    }
+
     func testTextApplyCancelFailureAndUnsupportedFamilyRetention() throws {
         _ = NSApplication.shared
         var original = textLayer(id: "copy", text: "accepted", family: "draft-custom")
