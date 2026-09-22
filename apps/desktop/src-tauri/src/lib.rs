@@ -358,6 +358,7 @@ pub fn run() {
             feedback::get_feedback_context,
             feedback::submit_feedback,
             dismiss_recording_saved_notice,
+            dismiss_startup_notice,
             updates::get_update_status,
             updates::check_for_updates,
             updates::install_update,
@@ -5236,7 +5237,9 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } = event
                 {
-                    show_preferences(tray.app_handle());
+                    if !dismiss_visible_tray_notice(tray.app_handle()) {
+                        show_preferences(tray.app_handle());
+                    }
                 }
             });
     }
@@ -5279,6 +5282,22 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     .build(app)?;
 
     Ok(())
+}
+
+/// A tray click dismisses an open notification before performing its normal
+/// platform action. This makes the icon a reliable toggle while a notice is up.
+#[cfg(target_os = "windows")]
+fn dismiss_visible_tray_notice(app: &AppHandle) -> bool {
+    for label in ["update", "startup"] {
+        let Some(window) = app.get_webview_window(label) else {
+            continue;
+        };
+        if window.is_visible().unwrap_or(false) {
+            hide_window(app, label);
+            return true;
+        }
+    }
+    false
 }
 
 fn start_capture_from_tray(app: &AppHandle, mode: CaptureMode) {
@@ -5830,10 +5849,10 @@ fn create_startup_notice(
     .transparent(true)
     .theme(theme)
     .background_color(background)
+    .accept_first_mouse(true)
     .focused(false)
     .visible(false)
     .build()?;
-    set_click_through(&window, true)?;
     // Builder `.position` is not enough on macOS: a borderless NSWindow is
     // anchored at its bottom-left, and a hidden window can keep the default
     // origin (the bottom-left of the display). Size first, then position.
@@ -5846,7 +5865,6 @@ fn create_startup_notice(
     #[cfg(not(target_os = "macos"))]
     window.show()?;
 
-    set_click_through(&window, true)?;
     apply_tray_notice_position(&window, placement)?;
 
     let timer_app = app.clone();
@@ -5860,6 +5878,13 @@ fn create_startup_notice(
         });
     });
     Ok(())
+}
+
+/// Hides the post-update/startup notice from Rust because its webview is not
+/// granted the broad window-hide capability.
+#[tauri::command]
+fn dismiss_startup_notice(app: AppHandle) {
+    hide_window(&app, "startup");
 }
 
 pub(crate) fn apply_tray_notice_position(
