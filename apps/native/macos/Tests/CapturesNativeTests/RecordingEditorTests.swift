@@ -231,7 +231,8 @@ final class RecordingEditorTests: XCTestCase {
         width.stringValue = "300"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: width))
-        XCTAssertFalse(controller.dirty, "partial typing does not stage crop geometry")
+        XCTAssertTrue(controller.dirty, "pending text participates in lifecycle gates")
+        XCTAssertEqual(height.stringValue, "90", "typing alone does not change the coupled ratio")
         _ = width.sendAction(width.action, to: width.target)
         XCTAssertEqual(width.stringValue, "213")
         XCTAssertEqual(height.stringValue, "120",
@@ -246,6 +247,66 @@ final class RecordingEditorTests: XCTestCase {
         height.stringValue = "60"; _ = height.sendAction(height.action, to: height.target)
         XCTAssertEqual(width.stringValue, "56")
         XCTAssertEqual(height.stringValue, "60", "relock uses the adjusted 111:120 ratio")
+    }
+
+    func testPendingCropFieldEditorBuffersGateLifecycleAndApplyCommitsOnce() throws {
+        _ = NSApplication.shared
+        let initialCrop = NativeRecordingCropRect(x: 10, y: 60, width: 160, height: 90)
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(crop: initialCrop))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let width = try field("Recording crop width", in: controller.root)
+        let height = try field("Recording crop height", in: controller.root)
+        let apply = try button("Apply edits", in: controller.root)
+        let seek = try slider("Recording frame position", in: controller.root)
+
+        width.selectText(nil)
+        let editor = try XCTUnwrap(controller.window.fieldEditor(false, for: width) as? NSTextView)
+        XCTAssertTrue(controller.window.firstResponder === editor,
+                      "the real AppKit field editor, not the NSTextField, owns the pending buffer")
+        editor.insertText("300", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        XCTAssertEqual(width.stringValue, "300")
+        XCTAssertEqual(height.stringValue, "90", "ratio math remains deferred until commit")
+        XCTAssertTrue(controller.dirty)
+        XCTAssertTrue(apply.isEnabled, "valid pending text can be applied")
+        XCTAssertFalse(seek.isEnabled)
+        XCTAssertFalse(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        XCTAssertFalse(controller.prepareForTermination())
+
+        worker.requestResult = .success(try presentation(revision: 1,
+            crop: NativeRecordingCropRect(x: 10, y: 60, width: 213, height: 120)))
+        apply.performClick(nil)
+        XCTAssertEqual(worker.requests.count, 1,
+                       "Apply commits the active field editor and sends one atomic update")
+        let edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        let crop = try XCTUnwrap(edit["crop"] as? [String: Any])
+        XCTAssertEqual((crop["width"] as? NSNumber)?.uint32Value, 213)
+        XCTAssertEqual((crop["height"] as? NSNumber)?.uint32Value, 120)
+        XCTAssertEqual(width.stringValue, "213"); XCTAssertEqual(height.stringValue, "120")
+        XCTAssertFalse(apply.isEnabled)
+
+        width.selectText(nil)
+        let invalidEditor = try XCTUnwrap(controller.window.fieldEditor(false, for: width)
+            as? NSTextView)
+        invalidEditor.insertText("-", replacementRange: NSRange(
+            location: 0, length: invalidEditor.string.utf16.count))
+        XCTAssertTrue(controller.dirty)
+        XCTAssertFalse(apply.isEnabled, "partial input cannot publish stale crop geometry")
+        XCTAssertFalse(seek.isEnabled); XCTAssertFalse(try button("Estimate size", in: controller.root).isEnabled)
+        let requestCount = worker.requests.count
+        _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(worker.requests.count, requestCount)
+        XCTAssertEqual(width.stringValue, "-", "blocked seek cannot replace the pending buffer")
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        XCTAssertFalse(controller.prepareForTermination())
+        controller.window.makeFirstResponder(nil)
+        XCTAssertEqual(width.stringValue, "-", "invalid end editing remains available for correction")
+        XCTAssertTrue(controller.dirty)
     }
 
     func testCropPresetCustomOriginalAndFailureRetentionShareAtomicGates() throws {
@@ -678,6 +739,16 @@ final class RecordingEditorTests: XCTestCase {
                 $0.isHidden || controller.root.bounds.intersects($0.frame)
             })
             try render(controller.root, name: "recording-editor-minimum-\(appearance)")
+            outputMode.selectItem(withTitle: "Custom")
+            _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+            let outputWidth = try field("Recording output width", in: controller.root)
+            let outputHeight = try field("Recording output height", in: controller.root)
+            outputWidth.stringValue = "641"; outputHeight.stringValue = "359"
+            controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                         object: outputWidth))
+            try render(controller.root, name: "recording-editor-custom-output-minimum-\(appearance)")
+            outputMode.selectItem(withTitle: "Original")
+            _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
 
             worker.deferSave = true
             try button("Save new copy", in: controller.root).performClick(nil)

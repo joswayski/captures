@@ -381,7 +381,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     func controlTextDidChange(_ notification: Notification) {
         if let field = notification.object as? NSTextField,
            [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) {
-            return
+            estimate = nil; updateControls(); return
         }
         estimate = nil; syncTimelineFromFields(); updateControls()
     }
@@ -694,11 +694,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private var stagedDiffers: Bool {
         guard let snapshot = presentation?.snapshot else { return false }
-        return canonicalEdit(stagedEdit) != canonicalEdit(snapshot.edit)
+        return hasPendingCropInput
+            || canonicalEdit(stagedEdit) != canonicalEdit(snapshot.edit)
             || canonical(stagedExport) != canonical(snapshot.export)
     }
 
     private func applyEdits() {
+        guard commitPendingCropInput() else {
+            showError("Enter valid trim, crop, audio, and output values."); return
+        }
         window.makeFirstResponder(nil)
         guard !busy, let edit = stagedEdit, let export = stagedExport else {
             showError("Enter valid trim, crop, audio, and output values."); return
@@ -821,42 +825,64 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func commitCropField(_ field: NSTextField) {
-        guard var crop = stagedCrop, let snapshot = presentation?.snapshot,
-              let source = sourceDimensions(snapshot),
-              let value = parseUInt32(field.stringValue) else {
-            if let snapshot = presentation?.snapshot, let source = sourceDimensions(snapshot) {
-                refreshGeometryFields(source: source, preserveCustom: customOutput)
-            }
-            return
+        guard [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) else { return }
+        _ = commitPendingCropInput()
+        updateControls()
+    }
+
+    private var pendingCropFields: [NSTextField] {
+        guard let crop = stagedCrop else { return [] }
+        return [(cropX, crop.x), (cropY, crop.y), (cropWidth, crop.width),
+                (cropHeight, crop.height)].compactMap { field, value in
+            field.stringValue == String(value) ? nil : field
         }
-        if field === cropX {
-            guard UInt64(value) + UInt64(crop.width) <= UInt64(source.width) else {
-                refreshGeometryFields(source: source, preserveCustom: customOutput); return
+    }
+
+    private var hasPendingCropInput: Bool { !pendingCropFields.isEmpty }
+
+    private var pendingCropInputValid: Bool {
+        !hasPendingCropInput || pendingCropCandidate() != nil
+    }
+
+    private func pendingCropCandidate() -> NativeRecordingCropRect? {
+        guard var crop = stagedCrop, let snapshot = presentation?.snapshot,
+              let source = sourceDimensions(snapshot) else { return nil }
+        for field in pendingCropFields {
+            guard let value = parseUInt32(field.stringValue) else { return nil }
+            if field === cropX {
+                guard UInt64(value) + UInt64(crop.width) <= UInt64(source.width) else { return nil }
+                crop.x = value
+            } else if field === cropY {
+                guard UInt64(value) + UInt64(crop.height) <= UInt64(source.height) else { return nil }
+                crop.y = value
+            } else if field === cropWidth {
+                if cropAspectUnlocked {
+                    crop.width = min(max(2, value), source.width - crop.x)
+                } else if let resized = NativeRecordingGeometry.resizeLocked(
+                    crop, source: source, axis: .width, value: value) {
+                    crop = resized
+                } else { return nil }
+            } else if field === cropHeight {
+                if cropAspectUnlocked {
+                    crop.height = min(max(2, value), source.height - crop.y)
+                } else if let resized = NativeRecordingGeometry.resizeLocked(
+                    crop, source: source, axis: .height, value: value) {
+                    crop = resized
+                } else { return nil }
             }
-            crop.x = value
-        } else if field === cropY {
-            guard UInt64(value) + UInt64(crop.height) <= UInt64(source.height) else {
-                refreshGeometryFields(source: source, preserveCustom: customOutput); return
-            }
-            crop.y = value
-        } else if field === cropWidth {
-            if cropAspectUnlocked {
-                crop.width = min(max(2, value), source.width - crop.x)
-            } else if let resized = NativeRecordingGeometry.resizeLocked(
-                crop, source: source, axis: .width, value: value) {
-                crop = resized
-            }
-        } else if field === cropHeight {
-            if cropAspectUnlocked {
-                crop.height = min(max(2, value), source.height - crop.y)
-            } else if let resized = NativeRecordingGeometry.resizeLocked(
-                crop, source: source, axis: .height, value: value) {
-                crop = resized
-            }
+        }
+        return crop
+    }
+
+    @discardableResult private func commitPendingCropInput() -> Bool {
+        guard hasPendingCropInput else { return true }
+        guard let crop = pendingCropCandidate(), let snapshot = presentation?.snapshot,
+              let source = sourceDimensions(snapshot) else {
+            estimate = nil; return false
         }
         stagedCrop = crop; estimate = nil
         refreshGeometryFields(source: source, preserveCustom: customOutput)
-        updateControls()
+        return true
     }
 
     @objc private func outputModeChanged() {
@@ -960,7 +986,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func updateControls() {
         let available = presentation != nil && !busy && !pickerOpen
-        let valid = stagedEdit != nil && stagedExport != nil
+        let valid = pendingCropInputValid && stagedEdit != nil && stagedExport != nil
         [trimStart, trimEnd, format, quality, destination].forEach { $0.isEnabled = available }
         cropEnabled.isEnabled = available
         cropLock.isEnabled = available && stagedCrop != nil
