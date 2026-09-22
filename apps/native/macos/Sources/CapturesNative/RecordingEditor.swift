@@ -898,7 +898,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             customOutput = true
         } else if index >= 0, let preset = NativeRecordingResolutionPreset(rawValue: UInt8(index)) {
             customOutput = false; resolutionPreset = preset
-            refreshGeometryFields(source: source, preserveCustom: false)
+            refreshGeometryFields(source: source, preserveCustom: false,
+                                  preservePendingCrop: true)
         }
         estimate = nil; updateControls()
     }
@@ -962,11 +963,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func refreshGeometryFields(source: NativeRecordingDimensions,
-                                       preserveCustom: Bool) {
+                                       preserveCustom: Bool,
+                                       preservePendingCrop: Bool = false) {
+        let pendingCrop = preservePendingCrop
+            ? pendingCropFields.map { ($0, $0.stringValue) } : []
         let crop = stagedCrop ?? NativeRecordingCropRect(x: 0, y: 0,
             width: source.width, height: source.height)
         cropX.stringValue = String(crop.x); cropY.stringValue = String(crop.y)
         cropWidth.stringValue = String(crop.width); cropHeight.stringValue = String(crop.height)
+        pendingCrop.forEach { $0.0.stringValue = $0.1 }
         cropEnabled.state = stagedCrop == nil ? .off : .on
         cropLock.state = cropAspectUnlocked ? .off : .on
         if !customOutput || !preserveCustom {

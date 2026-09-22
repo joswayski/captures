@@ -262,6 +262,9 @@ final class RecordingEditorTests: XCTestCase {
         let height = try field("Recording crop height", in: controller.root)
         let apply = try button("Apply edits", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
+        let outputMode = try popup("Recording output size", in: controller.root)
+        let estimate = try button("Estimate size", in: controller.root)
+        let save = try button("Save new copy", in: controller.root)
 
         width.selectText(nil)
         let editor = try XCTUnwrap(controller.window.fieldEditor(false, for: width) as? NSTextView)
@@ -273,8 +276,8 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(controller.dirty)
         XCTAssertTrue(apply.isEnabled, "valid pending text can be applied")
         XCTAssertFalse(seek.isEnabled)
-        XCTAssertFalse(try button("Estimate size", in: controller.root).isEnabled)
-        XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
+        XCTAssertFalse(estimate.isEnabled)
+        XCTAssertFalse(save.isEnabled)
         XCTAssertFalse(controller.windowShouldClose(controller.window))
         XCTAssertFalse(controller.prepareForTermination())
 
@@ -297,7 +300,7 @@ final class RecordingEditorTests: XCTestCase {
             location: 0, length: invalidEditor.string.utf16.count))
         XCTAssertTrue(controller.dirty)
         XCTAssertFalse(apply.isEnabled, "partial input cannot publish stale crop geometry")
-        XCTAssertFalse(seek.isEnabled); XCTAssertFalse(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertFalse(seek.isEnabled); XCTAssertFalse(estimate.isEnabled)
         let requestCount = worker.requests.count
         _ = seek.sendAction(seek.action, to: seek.target)
         XCTAssertEqual(worker.requests.count, requestCount)
@@ -307,6 +310,26 @@ final class RecordingEditorTests: XCTestCase {
         controller.window.makeFirstResponder(nil)
         XCTAssertEqual(width.stringValue, "-", "invalid end editing remains available for correction")
         XCTAssertTrue(controller.dirty)
+        outputMode.selectItem(withTitle: "720p maximum")
+        _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+        XCTAssertEqual(width.stringValue, "-",
+                       "an unrelated output preset cannot discard ended invalid crop input")
+        XCTAssertFalse(apply.isEnabled); XCTAssertFalse(seek.isEnabled)
+        XCTAssertFalse(estimate.isEnabled); XCTAssertFalse(save.isEnabled)
+
+        width.selectText(nil)
+        let validEditor = try XCTUnwrap(controller.window.fieldEditor(false, for: width)
+            as? NSTextView)
+        validEditor.insertText("100", replacementRange: NSRange(
+            location: 0, length: validEditor.string.utf16.count))
+        outputMode.selectItem(withTitle: "1080p maximum")
+        _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+        XCTAssertTrue(controller.window.firstResponder === validEditor,
+                      "selecting a popup item does not guarantee field-editor resignation")
+        XCTAssertEqual(width.stringValue, "100",
+                       "a preset change retains valid active crop text until explicit commit")
+        XCTAssertTrue(apply.isEnabled); XCTAssertFalse(seek.isEnabled)
+        XCTAssertFalse(estimate.isEnabled); XCTAssertFalse(save.isEnabled)
     }
 
     func testCropPresetCustomOriginalAndFailureRetentionShareAtomicGates() throws {
