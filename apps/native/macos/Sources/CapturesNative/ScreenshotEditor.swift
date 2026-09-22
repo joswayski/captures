@@ -812,6 +812,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var sectionControl: NSSegmentedControl!
     private var drawTool: NSPopUpButton!
     private var lastBackgroundTool: EditorDrawOverlay.Shape = .wand
+    private var lastGroupedShape: EditorDrawOverlay.Shape = .rectangle
+    private var toolRailButtons: [(key: String, button: CaptureButton)] = []
     private let wandTolerance = NSTextField()
     private let wandContiguous = NSButton(checkboxWithTitle: "Contiguous only", target: nil, action: nil)
     private var wandToleranceLabel: NSTextField!
@@ -1083,7 +1085,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         // move dimensions to a second footer row instead of squeezing controls.
         let compact = root.bounds.width < 1000
         let footerY = root.bounds.height - (compact ? 86 : 50)
-        previewPanel.frame = NSRect(x: 24, y: 90, width: root.bounds.width - 360,
+        previewPanel.frame = NSRect(x: 24 + tokens.number("s-12"), y: 90,
+                                    width: root.bounds.width - 360 - tokens.number("s-12"),
                                     height: footerY - 100)
         for control in viewportButtons { control.frame.origin.y = footerY }
         zoomPreset.frame.origin.y = footerY
@@ -1109,7 +1112,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
               frame: NSRect(x: 24, y: 54, width: 640, height: 32), muted: true)
             .autoresizingMask = [.width]
 
-        let previewPanel = Surface(frame: NSRect(x: 24, y: 90, width: 640, height: 550))
+        buildToolRail()
+        let previewPanel = Surface(frame: NSRect(x: 24 + tokens.number("s-12"), y: 90,
+                                                width: 640 - tokens.number("s-12"), height: 550))
         previewPanel.wantsLayer = true
         previewPanel.layer?.masksToBounds = true
         previewPanel.layer?.cornerRadius = tokens.number("r-xl")
@@ -1743,7 +1748,91 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if drawOverlay.shape == .wand || drawOverlay.shape.isBackgroundBrush {
             lastBackgroundTool = drawOverlay.shape
         }
+        if isGroupedShape(drawOverlay.shape) { lastGroupedShape = drawOverlay.shape }
         publishDrawToolControls()
+        updateToolRail()
+    }
+
+    private func isGroupedShape(_ shape: EditorDrawOverlay.Shape) -> Bool {
+        [.rectangle, .ellipse, .line, .triangle, .diamond, .star].contains(shape)
+    }
+
+    private func buildToolRail() {
+        let side = tokens.number("h-lg") + tokens.number("s-1")
+        for (index, item) in [
+            ("v", "Select & move (V)", CaptureButtonIcon.editorSelect),
+            ("c", "Crop (C)", .editorCrop), ("t", "Text (T)", .editorText),
+            ("shapes", "Shapes", .editorShapes), ("a", "Arrow (A)", .editorArrow),
+            ("p", "Freehand (P)", .editorPen), ("b", "Background removal (B)", .editorBackground),
+        ].enumerated() {
+            let control = CaptureButton("", frame: NSRect(x: 24, y: 90 + CGFloat(index) * (side + tokens.number("s-2")),
+                width: side, height: side), tokens: tokens) { [weak self] in self?.chooseRailTool(item.0) }
+            control.icon = item.2
+            control.toolTip = item.1
+            control.setAccessibilityLabel(item.1)
+            if item.0 == "shapes" {
+                let menu = NSMenu(title: "Shapes")
+                menu.autoenablesItems = false
+                for (title, shape) in [("Rectangle (R)", EditorDrawOverlay.Shape.rectangle), ("Ellipse (O)", .ellipse),
+                                       ("Line (L)", .line), ("Triangle", .triangle), ("Diamond (D)", .diamond), ("Star (S)", .star)] {
+                    let option = NSMenuItem(title: title, action: #selector(chooseRailShape(_:)), keyEquivalent: "")
+                    option.target = self
+                    option.tag = EditorDrawOverlay.Shape.allCases.firstIndex(of: shape)!
+                    menu.addItem(option)
+                }
+                control.menu = menu
+            }
+            toolRailButtons.append((item.0, control))
+            root.addSubview(control)
+        }
+    }
+
+    private func chooseRailTool(_ key: String) {
+        guard state.snapshot != nil, !state.busy, !importLoading, window.attachedSheet == nil else { return }
+        if key == "shapes" {
+            activateTool(section: Section.draw, shape: lastGroupedShape)
+            if let button = toolRailButtons.first(where: { $0.key == key })?.button {
+                button.menu?.popUp(positioning: nil, at: NSPoint(x: button.bounds.maxX + tokens.number("s-4"), y: 0), in: button)
+            }
+        } else {
+            window.makeFirstResponder(nil)
+            _ = activateToolShortcut(key)
+        }
+        focusActiveCanvas()
+    }
+
+    @objc private func chooseRailShape(_ sender: NSMenuItem) {
+        guard state.snapshot != nil, !state.busy, !importLoading, window.attachedSheet == nil else { return }
+        activateTool(section: Section.draw, shape: EditorDrawOverlay.Shape.allCases[sender.tag])
+        focusActiveCanvas()
+    }
+
+    private func focusActiveCanvas() {
+        switch sectionControl.selectedSegment {
+        case Section.draw: window.makeFirstResponder(drawOverlay)
+        case Section.layers: window.makeFirstResponder(selectionOverlay)
+        default: window.makeFirstResponder(cropOverlay)
+        }
+    }
+
+    private func updateToolRail() {
+        for (key, button) in toolRailButtons {
+            let selected: Bool
+            switch key {
+            case "v": selected = sectionControl?.selectedSegment == Section.layers
+            case "c": selected = sectionControl?.selectedSegment == Section.geometry && cropPrevious != nil
+            case "shapes": selected = sectionControl?.selectedSegment == Section.draw && isGroupedShape(drawOverlay.shape)
+            case "b": selected = sectionControl?.selectedSegment == Section.draw && (drawOverlay.shape == .wand || drawOverlay.shape.isBackgroundBrush)
+            default:
+                let shape: EditorDrawOverlay.Shape = key == "t" ? .text : key == "a" ? .arrow : .pen
+                selected = sectionControl?.selectedSegment == Section.draw && drawOverlay.shape == shape
+            }
+            button.isEnabled = state.snapshot != nil && !state.busy && !importLoading && !awaitingReplaceConfirmation
+            button.selected = selected; button.primary = selected
+            button.setAccessibilityValue(selected ? 1 : 0)
+            button.menu?.items.forEach { $0.state = $0.tag == drawTool?.indexOfSelectedItem ? .on : .off }
+            button.needsDisplay = true
+        }
     }
 
     private func publishDrawToolControls() {
@@ -2556,24 +2645,28 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         // Native controls retain letter navigation; these keys belong to the canvas.
         guard !(window.firstResponder is NSControl) else { return false }
         guard !state.busy, !importLoading else { return true }
-        if sectionControl.selectedSegment == tool.section {
-            if let shape = tool.shape, drawOverlay.shape == shape { return true }
-            if tool.section == Section.layers || (tool.section == Section.geometry && cropPrevious != nil) {
-                return true
+        activateTool(section: tool.section, shape: tool.shape)
+        return true
+    }
+
+    private func activateTool(section: Int, shape: EditorDrawOverlay.Shape?) {
+        if sectionControl.selectedSegment == section {
+            if let shape, drawOverlay.shape == shape { return }
+            if section == Section.layers || (section == Section.geometry && cropPrevious != nil) {
+                return
             }
         }
         cancelDrawing(); cancelViewportPan()
-        if sectionControl.selectedSegment != tool.section {
-            sectionControl.selectedSegment = tool.section
+        if sectionControl.selectedSegment != section {
+            sectionControl.selectedSegment = section
             changeSection()
         }
-        if let shape = tool.shape {
+        if let shape {
             drawTool.selectItem(at: EditorDrawOverlay.Shape.allCases.firstIndex(of: shape)!)
             changeDrawTool()
-        } else if tool.section == Section.geometry {
+        } else if section == Section.geometry {
             toggleCrop()
         }
-        return true
     }
 
     @objc private func changeZoomPreset() {
@@ -2646,6 +2739,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func updateDrawing() {
+        updateToolRail()
         let cropReady = sectionControl?.selectedSegment == Section.geometry && state.snapshot != nil && !state.busy
         cropOverlay.croppingEnabled = cropReady && cropPrevious != nil
         drawCropButton?.isEnabled = cropReady

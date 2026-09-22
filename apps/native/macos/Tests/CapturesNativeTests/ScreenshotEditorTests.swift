@@ -3,6 +3,72 @@ import XCTest
 @testable import CapturesNative
 
 final class ScreenshotEditorTests: XCTestCase {
+    func testToolRailSelectionMenuFocusBusyGatesAndMinimumLayout() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+            let labels = ["Select & move (V)", "Crop (C)", "Text (T)", "Shapes", "Arrow (A)", "Freehand (P)", "Background removal (B)"]
+            let rail = try labels.map { label in
+                try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? CaptureButton }
+                    .first { $0.accessibilityLabel() == label })
+            }
+            XCTAssertEqual(rail.map { $0.frame.minY }, rail.map { $0.frame.minY }.sorted())
+            for button in rail {
+                XCTAssertTrue(controller.root.bounds.contains(button.frame))
+                XCTAssertFalse(button.isHidden)
+                XCTAssertTrue(button.isEnabled)
+                XCTAssertEqual(button.frame.size, NSSize(width: 38, height: 38))
+                XCTAssertEqual(button.toolTip, button.accessibilityLabel())
+            }
+            let sections = try segmented("Editor section", in: controller.root)
+            rail[2].performClick(nil)
+            XCTAssertEqual(sections.selectedSegment, 2)
+            XCTAssertEqual(controller.drawOverlay.shape, .text)
+            XCTAssertTrue(controller.window.firstResponder === controller.drawOverlay)
+            XCTAssertTrue(rail[2].selected)
+            rail[1].performClick(nil)
+            XCTAssertTrue(controller.cropOverlay.croppingEnabled)
+            XCTAssertTrue(rail[1].selected)
+            rail[0].performClick(nil)
+            XCTAssertFalse(controller.cropOverlay.croppingEnabled)
+            XCTAssertTrue(controller.selectionOverlay.selectionEnabled)
+            XCTAssertTrue(rail[0].selected)
+            XCTAssertEqual(rail.filter(\.selected).count, 1)
+            let menu = try XCTUnwrap(rail[3].menu)
+            XCTAssertEqual(menu.items.map(\.title), ["Rectangle (R)", "Ellipse (O)", "Line (L)", "Triangle", "Diamond (D)", "Star (S)"])
+            for (index, shape) in [EditorDrawOverlay.Shape.rectangle, .ellipse, .line, .triangle, .diamond, .star].enumerated() {
+                menu.performActionForItem(at: index)
+                XCTAssertEqual(controller.drawOverlay.shape, shape)
+                XCTAssertTrue(rail[3].selected)
+                XCTAssertEqual(menu.items[index].state, .on)
+            }
+            for (index, shape) in [(4, EditorDrawOverlay.Shape.arrow), (5, .pen), (6, .wand)] {
+                rail[index].performClick(nil)
+                XCTAssertEqual(controller.drawOverlay.shape, shape)
+                XCTAssertTrue(rail[index].selected)
+            }
+            try showOutput(in: controller.root)
+            XCTAssertEqual(rail.filter(\.selected).count, 0)
+            XCTAssertTrue(rail.allSatisfy { $0.isEnabled && !$0.isHidden })
+            rail[4].performClick(nil)
+            try render(controller.root, name: "screenshot-editor-tool-rail-minimum-\(appearance)")
+            worker.deferEncodes = true; worker.failEncode = true
+            try button("Copy image", in: controller.root).performClick(nil)
+            XCTAssertTrue(rail.allSatisfy { !$0.isEnabled })
+            rail[5].performClick(nil)
+            XCTAssertEqual(controller.drawOverlay.shape, .arrow)
+            worker.completePendingEncode()
+            XCTAssertTrue(rail.allSatisfy(\.isEnabled))
+            try render(controller.root, name: "screenshot-editor-tool-rail-error-\(appearance)")
+            XCTAssertTrue(worker.requests.isEmpty && worker.saves.isEmpty)
+        }
+    }
+
     func testToolKeysSelectExistingToolsPreserveRepeatsAndCancelUnfinishedGestures() throws {
         _ = NSApplication.shared
         let original = snapshot(id: "shot", unsaved: true, draft: true)

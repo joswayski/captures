@@ -157,6 +157,19 @@ background-mode recall, repeated tools, cancellation and focus/accepted-work
 gates; the X11 shortcut suite also creates Star/Rectangle with keys, moves the
 same layer with V and cancels a crop without publishing it. Physical keyboard,
 IME, accessibility and Windows/Wayland presentation acceptance remain open.
+The next layout slice adds a persistent left tool rail on both hosts in Tauri's
+order: Select, Crop, Text, grouped Shapes, Arrow, Pen and background removal.
+Its neutral icon buttons use the accent for the current tool and expose labels,
+tooltips and native button actions. Shapes uses an AppKit/egui menu (not Tauri's
+three-column flyout) for Rectangle, Ellipse, Line, Triangle, Diamond and Star;
+it remembers the last grouped tool. Rail actions reuse the shortcut activation
+path, including transient cancellation, and remain disabled during accepted work.
+The existing inspector controls remain available. The canvas gives up rail width
+but retains shared Fit/zoom/pan and pointer mapping; minimum windows remain
+760×540. Header, inspector and footer still differ from Tauri, so this is not
+visual parity. Automated host fixtures and private X11 cover selection/menu,
+minimum layout and busy gates; physical focus, accessibility and Windows/Wayland
+presentation acceptance remain open.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete
 custom rows are removed. Selecting a preset uses the existing shared viewport

@@ -124,6 +124,10 @@ enum DrawShape {
 }
 
 impl DrawShape {
+    fn is_grouped(self) -> bool {
+        self.closed_kind().is_some() || self == Self::Line
+    }
+
     fn closed_kind(self) -> Option<ClosedShapeKind> {
         match self {
             Self::Rectangle => Some(ClosedShapeKind::Rectangle),
@@ -346,6 +350,7 @@ struct View {
     crop_aspect: usize,
     draw_shape: DrawShape,
     last_background_tool: DrawShape,
+    last_grouped_shape: DrawShape,
     rotation_snap_degrees: f64,
     new_text_preset: Option<String>,
     new_text_size: f64,
@@ -407,6 +412,7 @@ impl Default for View {
             crop_aspect: 0,
             draw_shape: DrawShape::Rectangle,
             last_background_tool: DrawShape::Wand,
+            last_grouped_shape: DrawShape::Rectangle,
             rotation_snap_degrees: DEFAULT_ROTATION_SNAP_DEGREES,
             new_text_preset: None,
             new_text_size: 24.,
@@ -467,6 +473,29 @@ impl Default for View {
 }
 
 impl View {
+    fn activate_tool(&mut self, section: Section, shape: Option<DrawShape>) {
+        let active = self.section == section
+            && match shape {
+                Some(shape) => self.draw_shape == shape,
+                None => section == Section::Layers || self.crop_previous.is_some(),
+            };
+        if active {
+            return;
+        }
+        self.cancel_edit_gestures();
+        self.cancel_crop();
+        self.viewport_pan = None;
+        self.section = section;
+        if let Some(shape) = shape {
+            self.draw_shape = shape;
+            if shape.is_grouped() {
+                self.last_grouped_shape = shape;
+            }
+        } else if section == Section::Geometry {
+            self.crop_previous = Some(self.crop);
+        }
+    }
+
     fn cancel_crop(&mut self) {
         if let Some(previous) = self.crop_previous.take() {
             self.crop = previous;
@@ -1508,6 +1537,9 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 if matches!(view.draw_shape, DrawShape::Wand | DrawShape::Erase | DrawShape::Restore) {
                     view.last_background_tool = view.draw_shape;
                 }
+                if view.draw_shape.is_grouped() {
+                    view.last_grouped_shape = view.draw_shape;
+                }
                 if view.draw_shape == DrawShape::Wand {
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Tolerance");
@@ -1633,6 +1665,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         ui.small("Geometry, layers, filled shapes, drafts, new-copy export and clipboard output are connected. Other drawing tools and replacing files are still in development.");
         });
     });
+    show_tool_rail(ui, tokens, view);
     egui::CentralPanel::default().show(ui, |ui| {
         let texture = if view.show_output && view.section == Section::Output {
             view.output.as_ref().map(|(texture, _)| texture)
@@ -1690,6 +1723,211 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             });
         }
     });
+}
+
+fn show_tool_rail(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
+    let width = tokens.number("s-11") + tokens.number("s-4");
+    let side = tokens.number("h-lg") + tokens.number("s-1");
+    egui::Panel::left("editor-tool-rail")
+        .resizable(false)
+        .exact_size(width)
+        .show_separator_line(false)
+        .frame(
+            egui::Frame::side_top_panel(ui.style())
+                .fill(tokens.color("surface-raised"))
+                .stroke(egui::Stroke::new(1., tokens.color("border-subtle"))),
+        )
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = tokens.number("s-2");
+            ui.visuals_mut().widgets.inactive.weak_bg_fill = tokens.color("surface-raised");
+            let enabled = view.presented.is_some()
+                && !view.pending
+                && !view.closed
+                && !view.close_requested
+                && !view.confirm_discard
+                && view.confirm_replace.is_none()
+                && view.import_picker.is_none()
+                && view.folder_picker.is_none();
+            ui.add_enabled_ui(enabled, |ui| {
+                for (icon, label, section, shape) in [
+                    ("v", "Select & move (V)", Section::Layers, None),
+                    ("c", "Crop (C)", Section::Geometry, None),
+                    ("t", "Text (T)", Section::Draw, Some(DrawShape::Text)),
+                    (
+                        "shapes",
+                        "Shapes",
+                        Section::Draw,
+                        Some(view.last_grouped_shape),
+                    ),
+                    ("a", "Arrow (A)", Section::Draw, Some(DrawShape::Arrow)),
+                    (
+                        "p",
+                        "Freehand (P)",
+                        Section::Draw,
+                        Some(DrawShape::Freehand),
+                    ),
+                    (
+                        "b",
+                        "Background removal (B)",
+                        Section::Draw,
+                        Some(view.last_background_tool),
+                    ),
+                ] {
+                    let active = view.section == section
+                        && match icon {
+                            "c" => view.crop_previous.is_some(),
+                            "shapes" => view.draw_shape.is_grouped(),
+                            "b" => matches!(
+                                view.draw_shape,
+                                DrawShape::Wand | DrawShape::Erase | DrawShape::Restore
+                            ),
+                            _ => shape.is_none_or(|shape| view.draw_shape == shape),
+                        };
+                    let button = egui::Button::new("")
+                        .selected(active)
+                        .corner_radius(tokens.number("r-lg"))
+                        .stroke(egui::Stroke::NONE);
+                    let button = if active {
+                        button.fill(tokens.color("theme-accent"))
+                    } else {
+                        button
+                    };
+                    let response = ui
+                        .add_sized(egui::vec2(side, side), button)
+                        .on_hover_text(label);
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::Button,
+                            response.enabled(),
+                            active,
+                            label,
+                        )
+                    });
+                    let color = tokens.color(if !response.enabled() {
+                        "text-faint"
+                    } else if active {
+                        "theme-accent-ink"
+                    } else if response.hovered() {
+                        "text"
+                    } else {
+                        "text-muted"
+                    });
+                    paint_tool_icon(
+                        ui.painter(),
+                        response.rect,
+                        icon,
+                        color,
+                        tokens.number("s-6") + tokens.number("s-1"),
+                    );
+                    if response.clicked() {
+                        view.activate_tool(section, shape);
+                    }
+                    if icon == "shapes" {
+                        egui::Popup::menu(&response)
+                            .align(egui::RectAlign::RIGHT_START)
+                            .show(|ui| {
+                                for (label, shape) in [
+                                    ("Rectangle (R)", DrawShape::Rectangle),
+                                    ("Ellipse (O)", DrawShape::Ellipse),
+                                    ("Line (L)", DrawShape::Line),
+                                    ("Triangle", DrawShape::Triangle),
+                                    ("Diamond (D)", DrawShape::Diamond),
+                                    ("Star (S)", DrawShape::Star),
+                                ] {
+                                    if ui
+                                        .selectable_label(view.draw_shape == shape, label)
+                                        .clicked()
+                                    {
+                                        view.activate_tool(Section::Draw, Some(shape));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                    }
+                }
+            });
+        });
+}
+
+// The shipping EditorIcon silhouettes, expressed in native vector primitives.
+fn paint_tool_icon(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    icon: &str,
+    color: egui::Color32,
+    size: f32,
+) {
+    let origin = rect.center() - egui::vec2(size, size) / 2.;
+    let point = |x, y| origin + egui::vec2(x, y) * (size / 24.);
+    let stroke = egui::Stroke::new(1.75 * size / 24., color);
+    let line = |points: &[(f32, f32)]| {
+        painter.add(egui::Shape::line(
+            points.iter().map(|&(x, y)| point(x, y)).collect(),
+            stroke,
+        ));
+    };
+    match icon {
+        "v" => line(&[(5., 3.), (18., 12.), (11., 14.), (8., 21.), (5., 3.)]),
+        "c" => {
+            line(&[(7., 3.), (7., 17.), (9., 19.), (21., 19.)]);
+            line(&[(3., 7.), (17., 7.), (19., 9.), (19., 21.)]);
+        }
+        "t" => {
+            line(&[(5., 5.), (19., 5.)]);
+            line(&[(12., 5.), (12., 19.)]);
+            line(&[(8., 19.), (16., 19.)]);
+        }
+        "shapes" => {
+            painter.rect_stroke(
+                egui::Rect::from_min_max(point(3.5, 8.5), point(14.5, 19.5)),
+                1.,
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            painter.circle_stroke(point(15.25, 9.75), 5.25 * size / 24., stroke);
+        }
+        "a" => {
+            line(&[(4., 20.), (20., 4.)]);
+            line(&[(12., 4.), (20., 4.), (20., 12.)]);
+        }
+        "p" => {
+            for points in [
+                [
+                    point(4., 16.),
+                    point(8., 9.),
+                    point(10., 8.),
+                    point(12., 13.),
+                ],
+                [
+                    point(12., 13.),
+                    point(14., 18.),
+                    point(16., 17.),
+                    point(20., 9.),
+                ],
+            ] {
+                painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                    points,
+                    false,
+                    egui::Color32::TRANSPARENT,
+                    stroke,
+                ));
+            }
+            line(&[(4., 20.), (20., 20.)]);
+        }
+        "b" => {
+            line(&[
+                (14.8, 20.5),
+                (6., 11.4),
+                (14.9, 2.3),
+                (21.7, 9.1),
+                (11., 19.8),
+                (8.2, 17.),
+            ]);
+            line(&[(8.6, 11.8), (12.2, 15.4)]);
+            line(&[(4., 21.), (12., 21.)]);
+        }
+        _ => unreachable!("editor rail icon"),
+    }
 }
 
 fn fitted_image_rect(available: egui::Rect, image: egui::Vec2) -> egui::Rect {
@@ -1830,23 +2068,7 @@ fn handle_tool_shortcuts(ctx: &egui::Context, view: &mut View) {
         tools
     });
     for (section, shape) in tools {
-        let already_active = view.section == section
-            && match shape {
-                Some(shape) => view.draw_shape == shape,
-                None => section == Section::Layers || view.crop_previous.is_some(),
-            };
-        if already_active {
-            continue;
-        }
-        view.cancel_edit_gestures();
-        view.cancel_crop();
-        view.viewport_pan = None;
-        view.section = section;
-        if let Some(shape) = shape {
-            view.draw_shape = shape;
-        } else if section == Section::Geometry {
-            view.crop_previous = Some(view.crop);
-        }
+        view.activate_tool(section, shape);
     }
 }
 
@@ -3873,6 +4095,117 @@ fn show_annotation(
 mod tests {
     use super::*;
     use std::{fs, time::Duration};
+
+    #[test]
+    fn rail_selects_tools_and_shape_menu_without_editing_or_leaking_busy_clicks() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(true)));
+        let original = view.presented.as_ref().unwrap().document.clone();
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(760., 540.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    show_tool_rail(ui, &tokens, view);
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        assert_eq!(ui.available_rect_before_wrap().left(), 64.);
+                    });
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("multipass");
+                    }
+                },
+            );
+            assert!(output.platform_output.num_completed_passes >= 2);
+            output.textures_delta.clear();
+            output
+        };
+        let click = |view: &mut View, pos| {
+            frame(view, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    view,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+        };
+        frame(&mut view, vec![]);
+        let rail = |row: usize| egui::pos2(28., 22. + row as f32 * 42.);
+        click(&mut view, rail(2));
+        assert_eq!(
+            (view.section, view.draw_shape),
+            (Section::Draw, DrawShape::Text)
+        );
+        click(&mut view, rail(1));
+        assert!(view.crop_previous.is_some());
+        view.crop = [13., 21., 97., 53.];
+        click(&mut view, rail(1));
+        assert_eq!(view.crop, [13., 21., 97., 53.]);
+        click(&mut view, rail(0));
+        assert_eq!(view.section, Section::Layers);
+        assert!(view.crop_previous.is_none());
+        click(&mut view, rail(3));
+        assert!(egui::Popup::is_any_open(&ctx));
+        let output = frame(&mut view, vec![]);
+        let star = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Star (S)" => {
+                    Some(text.pos + text.galley.rect.center().to_vec2())
+                }
+                _ => None,
+            })
+            .expect("open shape menu includes Star");
+        click(&mut view, star);
+        assert_eq!(view.draw_shape, DrawShape::Star);
+        assert!(!egui::Popup::is_any_open(&ctx));
+        for (row, shape) in [
+            (4, DrawShape::Arrow),
+            (5, DrawShape::Freehand),
+            (6, DrawShape::Wand),
+        ] {
+            click(&mut view, rail(row));
+            assert_eq!(view.draw_shape, shape);
+        }
+        click(&mut view, rail(3));
+        assert_eq!(
+            view.draw_shape,
+            DrawShape::Star,
+            "Shapes recalls the last grouped tool"
+        );
+        frame(
+            &mut view,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!egui::Popup::is_any_open(&ctx));
+        for blocked in 0..3 {
+            view.pending = blocked == 0;
+            view.confirm_discard = blocked == 1;
+            view.close_requested = blocked == 2;
+            click(&mut view, rail(4));
+            assert_eq!(view.draw_shape, DrawShape::Star);
+        }
+        assert_eq!(view.presented.as_ref().unwrap().document, original);
+    }
 
     #[test]
     fn tool_keys_preserve_document_repeats_focus_and_background_mode() {

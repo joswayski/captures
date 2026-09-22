@@ -203,7 +203,7 @@ def main():
     def fit_geometry(size=None, window=None):
         width, height = window or window_size()
         image_width, image_height = size or document_size()
-        available = (8., 133. if width == 760 else 89., width - 238., height - 8.)
+        available = (64., 133. if width == 760 else 89., width - 238., height - 8.)
         scale = min(1., max(.02, (available[2] - available[0]) / image_width),
                     max(.02, (available[3] - available[1]) / image_height))
         center = ((available[0] + available[2]) / 2, (available[1] + available[3]) / 2)
@@ -418,6 +418,25 @@ def main():
 
         if args.history_shortcuts_only:
             resize_editor(1000, 901, "sleep", ".3")  # Integer-pixel Fit origin for exact movement.
+            click(editor, 28, 227)  # Persistent Shapes rail button.
+            shot(editor, "tool-rail-shapes-menu")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            assert not draft.exists(), "opening/closing tool menus must not save edits"
+            click(editor, 28, 269)  # Arrow, independent of the inspector section.
+            drag((320, 250), (480, 370))
+            arrow = save_layers(lambda values: len(values) == 2, "rail Arrow creates one layer")[-1]
+            assert arrow["shape"] == "arrow", arrow
+            resize_editor(760, 540, "sleep", ".3")
+            click(editor, 28, 271)  # Shapes after the compact toolbar wraps.
+            shot(editor, "tool-rail-minimum-menu")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            click(editor, 28, 313)
+            shot(editor, "tool-rail-minimum-arrow")
+            resize_editor(1000, 901, "sleep", ".3")
+            click(editor, 270, 62)
+            click(editor, 55, 128)
+            wait(lambda: not draft.exists(), "discard rail fixture")
+            click(editor, 300, 20)
             run("xdotool", "key", "s", "sleep", ".3")
             drag((320, 250), (480, 370))
             star = save_layers(lambda values: len(values) == 2, "S selects Star")[-1]
@@ -515,7 +534,8 @@ def main():
                            "duplicate-offset-fresh-id", "field-layer-shortcuts", "delete-selected-copy",
                            "backspace-selected-copy", "locked-delete-guard", "arrow-1px", "shift-arrow-10px",
                            "nudge-undo-exact", "field-nudge-focus", "locked-nudge-guard",
-                           "S-star", "V-select-move", "C-crop-cancel", "R-rectangle", "field-tool-letters"],
+                           "S-star", "V-select-move", "C-crop-cancel", "R-rectangle", "field-tool-letters",
+                           "rail-arrow-create", "rail-menu-escape", "rail-minimum"],
             }, indent=2) + "\n")
             print("PASS native editor shortcuts: tools, undo, redo, duplicate, delete, nudge, field/dialog focus and original unchanged")
             return

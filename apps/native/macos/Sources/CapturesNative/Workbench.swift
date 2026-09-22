@@ -26,6 +26,14 @@ enum CaptureButtonIcon {
     case window
     case display
     case microphone(muted: Bool)
+    case editorSelect, editorCrop, editorText, editorShapes, editorArrow, editorPen, editorBackground
+
+    var isEditorTool: Bool {
+        switch self {
+        case .capture, .record, .window, .display, .microphone: return false
+        default: return true
+        }
+    }
 }
 
 // NSButton keeps keyboard activation, target/action and accessibility behavior;
@@ -39,7 +47,7 @@ final class CaptureButton: NSButton {
     var hudControl = false { didSet { updateTrackingAreas(); needsDisplay = true } }
     private var hoverTracking: NSTrackingArea?
     private var hovered = false
-    var icon: CaptureButtonIcon?
+    var icon: CaptureButtonIcon? { didSet { updateTrackingAreas(); needsDisplay = true } }
     var actionBlock: (() -> Void)?
     var enterActionBlock: (() -> Void)?
     var escapeActionBlock: (() -> Void)?
@@ -63,7 +71,7 @@ final class CaptureButton: NSButton {
         super.updateTrackingAreas()
         if let hoverTracking { removeTrackingArea(hoverTracking) }
         hoverTracking = nil
-        if hudControl {
+        if hudControl || icon?.isEditorTool == true {
             let tracking = NSTrackingArea(rect: .zero,
                 options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                 owner: self, userInfo: nil)
@@ -97,7 +105,8 @@ final class CaptureButton: NSButton {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let radius = tokens.number(hudControl ? "r-sm" : "r-md")
+        let editorTool = icon?.isEditorTool == true
+        let radius = tokens.number(editorTool ? "r-lg" : hudControl ? "r-sm" : "r-md")
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
             xRadius: radius, yRadius: radius)
         if hudControl {
@@ -110,6 +119,11 @@ final class CaptureButton: NSButton {
                 tokens.color(signal ? "theme-signal" : "theme-accent")
                     .withAlphaComponent(signal ? 0.4 : 0.3).setStroke()
                 path.lineWidth = 1; path.stroke()
+            }
+        } else if editorTool {
+            if isEnabled && (selected || hovered || cell?.isHighlighted == true) {
+                tokens.color(selected ? "theme-accent" : "surface-hover").setFill()
+                path.fill()
             }
         } else {
             let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
@@ -136,15 +150,18 @@ final class CaptureButton: NSButton {
                 : signal && !hovered && cell?.isHighlighted != true ? "theme-signal"
                 : selected ? "theme-accent"
                 : hovered || cell?.isHighlighted == true ? "glass-text" : "glass-text-muted")
+        } else if editorTool && isEnabled && !selected {
+            foreground = tokens.color(hovered ? "text" : "text-muted")
         }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font, .foregroundColor: foreground,
         ]
         let size = (title as NSString).size(withAttributes: attributes)
-        let iconWidth: CGFloat = icon == nil ? 0 : (title.isEmpty ? 14 : 20)
+        let iconSide: CGFloat = icon?.isEditorTool == true ? tokens.number("s-6") + tokens.number("s-1") : 14
+        let iconWidth: CGFloat = icon == nil ? 0 : (title.isEmpty ? iconSide : iconSide + 6)
         let startX = (bounds.width - size.width - iconWidth) / 2
-        if let icon { draw(icon, in: NSRect(x: startX, y: (bounds.height - 14) / 2,
-            width: 14, height: 14), color: foreground) }
+        if let icon { draw(icon, in: NSRect(x: startX, y: (bounds.height - iconSide) / 2,
+            width: iconSide, height: iconSide), color: foreground) }
         (title as NSString).draw(at: CGPoint(x: startX + iconWidth,
             y: (bounds.height - size.height) / 2), withAttributes: attributes)
         if window?.firstResponder === self {
@@ -157,6 +174,39 @@ final class CaptureButton: NSButton {
     private func draw(_ icon: CaptureButtonIcon, in rect: NSRect, color: NSColor) {
         color.setStroke(); color.setFill()
         switch icon {
+        case .editorSelect, .editorCrop, .editorText, .editorShapes, .editorArrow, .editorPen, .editorBackground:
+            // The shipping EditorIcon silhouettes, in their 24-unit coordinate space.
+            func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
+                NSPoint(x: rect.minX + x * rect.width / 24, y: rect.minY + y * rect.height / 24)
+            }
+            let path = NSBezierPath()
+            path.lineWidth = 1.75 * rect.width / 24
+            path.lineCapStyle = .round; path.lineJoinStyle = .round
+            func line(_ points: [(CGFloat, CGFloat)]) {
+                path.move(to: point(points[0].0, points[0].1))
+                points.dropFirst().forEach { path.line(to: point($0.0, $0.1)) }
+            }
+            switch icon {
+            case .editorSelect: line([(5, 3), (18, 12), (11, 14), (8, 21), (5, 3)])
+            case .editorCrop:
+                line([(7, 3), (7, 17), (9, 19), (21, 19)]); line([(3, 7), (17, 7), (19, 9), (19, 21)])
+            case .editorText:
+                line([(5, 5), (19, 5)]); line([(12, 5), (12, 19)]); line([(8, 19), (16, 19)])
+            case .editorShapes:
+                path.appendRoundedRect(NSRect(origin: point(3.5, 8.5), size: NSSize(width: rect.width * 11 / 24, height: rect.height * 11 / 24)), xRadius: 1, yRadius: 1)
+                path.appendOval(in: NSRect(origin: point(10, 4.5), size: NSSize(width: rect.width * 10.5 / 24, height: rect.height * 10.5 / 24)))
+            case .editorArrow: line([(4, 20), (20, 4)]); line([(12, 4), (20, 4), (20, 12)])
+            case .editorPen:
+                path.move(to: point(4, 16))
+                path.curve(to: point(12, 13), controlPoint1: point(8, 9), controlPoint2: point(10, 8))
+                path.curve(to: point(20, 9), controlPoint1: point(14, 18), controlPoint2: point(16, 17))
+                line([(4, 20), (20, 20)])
+            case .editorBackground:
+                line([(14.8, 20.5), (6, 11.4), (14.9, 2.3), (21.7, 9.1), (11, 19.8), (8.2, 17)])
+                line([(8.6, 11.8), (12.2, 15.4)]); line([(4, 21), (12, 21)])
+            default: break
+            }
+            path.stroke()
         case .record:
             NSBezierPath(ovalIn: rect.insetBy(dx: 3, dy: 3)).fill()
         case .capture:
