@@ -172,6 +172,37 @@ final class RecordingEditorTests: XCTestCase {
                        "the next Play resumes the accepted displayed source position")
     }
 
+    func testPlaybackControlsDoNotOverlapAtSupportedWidths() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 0))
+        let tokens = Tokens.variants["light-mustard"]!
+        let controller = RecordingEditorController(tokens: tokens,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let play = try button("Play", in: controller.root)
+        let seek = try slider("Recording frame position", in: controller.root)
+        let timestamp = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSTextField }
+            .first { !$0.isEditable && $0.stringValue.contains(" / ") })
+
+        XCTAssertEqual(seek.doubleValue, 0, "layout coverage keeps the playhead at source start")
+        for size in [NSSize(width: 760, height: 540), NSSize(width: 960, height: 760)] {
+            controller.window.setContentSize(size)
+            XCTAssertFalse(play.isHidden); XCTAssertFalse(seek.isHidden); XCTAssertFalse(timestamp.isHidden)
+            XCTAssertGreaterThan(seek.frame.width, 0)
+            XCTAssertTrue(controller.root.bounds.intersects(play.frame))
+            XCTAssertTrue(controller.root.bounds.intersects(seek.frame))
+            XCTAssertTrue(controller.root.bounds.intersects(timestamp.frame))
+            let gap = tokens.number("s-2")
+            XCTAssertLessThanOrEqual(play.frame.maxX + gap, seek.frame.minX,
+                                     "Play must not overlap the seek slider at width \(size.width)")
+            XCTAssertLessThanOrEqual(seek.frame.maxX + gap, timestamp.frame.minX,
+                                     "the seek slider must not overlap its timestamp at width \(size.width)")
+        }
+    }
+
     func testPlaybackPauseCompletesBeforeSessionSwitchAndTerminationRetry() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 250))

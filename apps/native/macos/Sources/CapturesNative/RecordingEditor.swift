@@ -702,8 +702,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let seekY = previewPanel.frame.maxY + 10
         sourceLabel.frame = NSRect(x: 24, y: seekY, width: width * 0.27 - 24, height: 20)
         playbackButton.frame = NSRect(x: width * 0.27, y: seekY - 4, width: 104, height: 28)
-        seekSlider.frame = NSRect(x: width * 0.39, y: seekY, width: width * 0.37, height: 20)
         seekLabel.frame = NSRect(x: width * 0.77, y: seekY, width: width * 0.2 - 24, height: 20)
+        let seekGap = tokens.number("s-2")
+        let seekX = playbackButton.frame.maxX + seekGap
+        seekSlider.frame = NSRect(x: seekX, y: seekY,
+                                  width: max(0, seekLabel.frame.minX - seekGap - seekX), height: 20)
         let controlGap: CGFloat = 12
         let controlsWidth = width - 48
         let audioWidth = max(304, min(360, controlsWidth * 0.4))
