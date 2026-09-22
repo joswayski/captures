@@ -263,9 +263,11 @@ frames, numeric trim and source-relative crop, Original/1080p/720p or independen
 custom output dimensions, accepted MP4/GIF settings, size estimation and cancellable
 **Save new copy**. Available system and microphone tracks have independent 0–200%
 volume and mute controls plus mono output; audio applies to MP4 while GIF disables
-the controls without losing their MP4 values. Its graphical trim handles stage the same numeric values
-without seeking; Apply remains explicit. Playback, thumbnails and graphical crop
-handles remain absent, so this is not Tauri editor parity. Windows/X11 implement the
+the controls without losing their MP4 values. Its graphical trim handles overlay an
+immutable 12-frame source-relative thumbnail strip and stage the same numeric values
+without seeking; loading can be canceled or retried without disabling editing, and
+Apply remains explicit. Playback and graphical crop handles remain absent, so this
+is not Tauri editor parity. Windows/X11 implement the
 same numeric crop and output-size workflow; physical macOS, Windows and Wayland
 acceptance remains open.
 History displays recording posters and metadata; **Save file**

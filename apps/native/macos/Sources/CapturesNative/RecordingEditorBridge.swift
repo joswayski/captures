@@ -217,13 +217,66 @@ final class NativeRecordingEditorFrame {
     }
 }
 
+final class NativeRecordingEditorThumbnails {
+    private let handle: OpaquePointer
+    let frameCount: UInt32
+    let frameWidth: UInt32
+    let frameHeight: UInt32
+    let spriteWidth: UInt32
+    let spriteHeight: UInt32
+
+    init?(handle: OpaquePointer, metadata: [String: Any]) {
+        guard let frameCount = (metadata["frame_count"] as? NSNumber)?.uint32Value,
+              let frameWidth = (metadata["frame_width"] as? NSNumber)?.uint32Value,
+              let frameHeight = (metadata["frame_height"] as? NSNumber)?.uint32Value,
+              let spriteWidth = (metadata["sprite_width"] as? NSNumber)?.uint32Value,
+              let spriteHeight = (metadata["sprite_height"] as? NSNumber)?.uint32Value,
+              frameCount > 0, frameWidth > 0, frameHeight > 0,
+              spriteWidth == frameCount * frameWidth, spriteHeight == frameHeight else { return nil }
+        self.handle = handle; self.frameCount = frameCount
+        self.frameWidth = frameWidth; self.frameHeight = frameHeight
+        self.spriteWidth = spriteWidth; self.spriteHeight = spriteHeight
+    }
+
+    deinit { captures_recording_editor_thumbnails_free_v1(handle) }
+
+    func image() throws -> CGImage {
+        var pixels = CapturesRegionPixels()
+        guard captures_recording_editor_thumbnails_pixels_v1(handle, &pixels),
+              let data = pixels.data,
+              pixels.width == spriteWidth, pixels.height == spriteHeight,
+              pixels.bytes_per_row == Int(spriteWidth) * 4,
+              pixels.length == pixels.bytes_per_row * Int(spriteHeight) else {
+            throw AppBridgeError.invalidResponse
+        }
+        let retained = Unmanaged.passRetained(self)
+        guard let provider = CGDataProvider(dataInfo: retained.toOpaque(), data: data,
+            size: pixels.length, releaseData: { info, _, _ in
+                if let info { Unmanaged<NativeRecordingEditorThumbnails>.fromOpaque(info).release() }
+            }) else {
+            retained.release(); throw AppBridgeError.invalidResponse
+        }
+        guard let image = CGImage(width: Int(spriteWidth), height: Int(spriteHeight),
+            bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: pixels.bytes_per_row,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        else { throw AppBridgeError.invalidResponse }
+        return image
+    }
+}
+
 final class NativeRecordingEditorCancel {
     fileprivate let handle: OpaquePointer
+    private(set) var isCancelled = false
     init?() {
         guard let handle = captures_recording_editor_cancel_create_v1() else { return nil }
         self.handle = handle
     }
-    func cancel() { captures_recording_editor_cancel_v1(handle) }
+    func cancel() {
+        isCancelled = true
+        captures_recording_editor_cancel_v1(handle)
+    }
     deinit { captures_recording_editor_cancel_free_v1(handle) }
 }
 
@@ -297,6 +350,28 @@ final class NativeRecordingEditorSession {
         return RecordingEditorEstimate(sizeBytes: bytes.uint64Value, exact: exact)
     }
 
+    func thumbnails(cancel: NativeRecordingEditorCancel) throws -> NativeRecordingEditorThumbnails {
+        var response: UnsafeMutablePointer<CChar>?
+        let handle = captures_recording_editor_thumbnails_v1(self.handle, cancel.handle, &response)
+        defer { captures_settings_free_v1(response) }
+        guard let response else {
+            captures_recording_editor_thumbnails_free_v1(handle)
+            throw AppBridgeError.invalidResponse
+        }
+        let metadata: [String: Any]
+        do { metadata = try AppBridge.decode(Data(bytes: response, count: strlen(response))) }
+        catch {
+            captures_recording_editor_thumbnails_free_v1(handle)
+            throw error
+        }
+        guard let handle,
+              let thumbnails = NativeRecordingEditorThumbnails(handle: handle, metadata: metadata) else {
+            captures_recording_editor_thumbnails_free_v1(handle)
+            throw AppBridgeError.invalidResponse
+        }
+        return thumbnails
+    }
+
     func save(destination: String, export: [String: Any], cancel: NativeRecordingEditorCancel,
               progress: @escaping (RecordingEditorProgress) -> Void) throws -> RecordingEditorSaveResult {
         let data = try JSONSerialization.data(withJSONObject: ["destination": destination,
@@ -339,6 +414,8 @@ protocol RecordingEditorWorking: AnyObject {
                  completion: @escaping (Result<RecordingEditorPresentation, Error>) -> Void)
     func estimate(cancel: NativeRecordingEditorCancel,
                   completion: @escaping (Result<RecordingEditorEstimate, Error>) -> Void)
+    func thumbnails(cancel: NativeRecordingEditorCancel,
+                    completion: @escaping (Result<CGImage, Error>) -> Void)
     func save(destination: String, export: [String: Any], cancel: NativeRecordingEditorCancel,
               progress: @escaping (RecordingEditorProgress) -> Void,
               completion: @escaping (Result<RecordingEditorSaveResult, Error>) -> Void)
@@ -388,6 +465,20 @@ final class RecordingEditorWorker: RecordingEditorWorking {
                     throw AppBridgeError.backend("The recording editor is closed.")
                 }
                 return try session.estimate(cancel: cancel)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func thumbnails(cancel: NativeRecordingEditorCancel,
+                    completion: @escaping (Result<CGImage, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result {
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The recording editor is closed.")
+                }
+                return try session.thumbnails(cancel: cancel).image()
             }
             DispatchQueue.main.async { completion(result) }
         }

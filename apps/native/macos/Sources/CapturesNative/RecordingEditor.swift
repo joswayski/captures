@@ -104,6 +104,8 @@ final class RecordingTrimTimeline: NSView {
     private var drag: NativeRecordingTimelineDrag?
     private var dragEdge: NativeRecordingTimelineEdge?
     private(set) var editingEnabled = false
+    private var thumbnailImage: NSImage?
+    private(set) var thumbnailStateDescription = "Source thumbnails not loaded"
     private lazy var startHandle = RecordingTrimHandle(edge: .start, timeline: self)
     private lazy var endHandle = RecordingTrimHandle(edge: .end, timeline: self)
 
@@ -119,7 +121,8 @@ final class RecordingTrimTimeline: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var isFlipped: Bool { true }
     private var trackRect: NSRect {
-        NSRect(x: 10, y: bounds.midY - 3, width: max(1, bounds.width - 20), height: 6)
+        NSRect(x: 10, y: thumbnailImage == nil ? max(0, bounds.height - 8) : bounds.midY - 3,
+               width: max(1, bounds.width - 20), height: 6)
     }
 
     func setValues(start: UInt64, end: UInt64, duration: UInt64) {
@@ -132,6 +135,42 @@ final class RecordingTrimTimeline: NSView {
         editingEnabled = enabled
         startHandle.enabled = enabled; endHandle.enabled = enabled
         if !enabled { endDrag() }
+    }
+
+    func showThumbnailLoading() {
+        thumbnailImage = nil
+        thumbnailStateDescription = "Loading source thumbnails…"
+        setAccessibilityValueDescription(thumbnailStateDescription)
+        needsDisplay = true
+    }
+
+    func showThumbnailCancelling() {
+        thumbnailStateDescription = "Cancelling source thumbnails…"
+        setAccessibilityValueDescription(thumbnailStateDescription)
+        needsDisplay = true
+    }
+
+    func showThumbnailFailure(cancelled: Bool) {
+        thumbnailImage = nil
+        thumbnailStateDescription = cancelled ? "Source thumbnails cancelled"
+            : "Source thumbnails unavailable"
+        setAccessibilityValueDescription(thumbnailStateDescription)
+        needsDisplay = true
+    }
+
+    func showThumbnails(_ image: CGImage) {
+        thumbnailImage = NSImage(cgImage: image,
+                                 size: NSSize(width: image.width, height: image.height))
+        thumbnailStateDescription = "12 source-relative timeline thumbnails"
+        setAccessibilityValueDescription(thumbnailStateDescription)
+        needsDisplay = true
+    }
+
+    func clearThumbnails() {
+        thumbnailImage = nil
+        thumbnailStateDescription = "Source thumbnails not loaded"
+        setAccessibilityValueDescription(thumbnailStateDescription)
+        needsDisplay = true
     }
 
     @discardableResult func beginDrag(edge: NativeRecordingTimelineEdge, at pointerX: CGFloat) -> Bool {
@@ -213,13 +252,45 @@ final class RecordingTrimTimeline: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let track = trackRect
-        let background = NSBezierPath(roundedRect: track, xRadius: 3, yRadius: 3)
-        tokens.color("control-border").setFill(); background.fill()
+        let strip = NSRect(x: track.minX, y: 2, width: track.width,
+                           height: max(1, bounds.height - 4))
+        let background = NSBezierPath(roundedRect: strip, xRadius: 4, yRadius: 4)
+        tokens.color("surface-sunken").setFill(); background.fill()
+        if let thumbnailImage {
+            NSGraphicsContext.saveGraphicsState()
+            background.addClip()
+            let frameCount = 12
+            let sourceWidth = thumbnailImage.size.width / CGFloat(frameCount)
+            let targetWidth = strip.width / CGFloat(frameCount)
+            for index in 0..<frameCount {
+                thumbnailImage.draw(
+                    in: NSRect(x: strip.minX + CGFloat(index) * targetWidth, y: strip.minY,
+                               width: targetWidth + 0.5, height: strip.height),
+                    from: NSRect(x: CGFloat(index) * sourceWidth, y: 0,
+                                 width: sourceWidth, height: thumbnailImage.size.height),
+                    operation: .copy, fraction: 1, respectFlipped: true,
+                    hints: [.interpolation: NSImageInterpolation.high])
+            }
+            NSGraphicsContext.restoreGraphicsState()
+        } else {
+            let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
+            (thumbnailStateDescription as NSString).draw(
+                in: NSRect(x: strip.minX + 4, y: strip.minY + 1,
+                           width: max(1, strip.width - 8), height: max(1, strip.height - 9)),
+                withAttributes: [.font: NSFont.systemFont(ofSize: 9, weight: .medium),
+                                 .foregroundColor: tokens.color("text-muted"),
+                                 .paragraphStyle: paragraph])
+        }
         let selected = NSRect(x: startHandle.frame.midX, y: track.minY,
                               width: max(0, endHandle.frame.midX - startHandle.frame.midX),
                               height: track.height)
         let selection = NSBezierPath(roundedRect: selected, xRadius: 3, yRadius: 3)
-        tokens.color(editingEnabled ? "theme-accent" : "text-faint").setFill(); selection.fill()
+        tokens.color(editingEnabled ? "theme-accent" : "text-faint")
+            .withAlphaComponent(thumbnailImage == nil ? 1 : 0.38).setFill()
+        selection.fill()
+        tokens.color(editingEnabled ? "theme-accent" : "text-faint").setStroke()
+        selection.lineWidth = 2; selection.stroke()
+        tokens.color("control-border").setStroke(); background.lineWidth = 1; background.stroke()
     }
 }
 
@@ -239,6 +310,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var busy = false
     private var pickerOpen = false
     private var activeCancel: NativeRecordingEditorCancel?
+    private var thumbnailCancel: NativeRecordingEditorCancel?
+    private var thumbnailRetryAvailable = false
     private var estimate: RecordingEditorEstimate?
 
     private let previewPanel = Surface()
@@ -285,6 +358,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var saveButton: CaptureButton!
     private var cancelButton: CaptureButton!
     private var changeButton: CaptureButton!
+    private var thumbnailRetryButton: CaptureButton!
 
     init(tokens: Tokens, worker: RecordingEditorWorking = RecordingEditorWorker(),
          reportError: @escaping (String) -> Void = { _ in },
@@ -324,10 +398,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         generation += 1
         let current = generation
         artifactID = artifact.id; presentation = nil; savedEdit = nil; savedExport = nil
-        estimate = nil; activeCancel = nil; busy = true; pickerOpen = false
+        estimate = nil; activeCancel = nil; thumbnailCancel = nil; busy = true; pickerOpen = false
         stagedCrop = nil; cropAspectUnlocked = false
         resolutionPreset = .original; customOutput = false
         preview.image = nil
+        trimTimeline.clearThumbnails()
         destination.stringValue = URL(fileURLWithPath: outputDirectory)
             .appendingPathComponent("recording-edit-\(artifact.id.prefix(8)).mp4").path
         sourceLabel.stringValue = "Opening recording…"
@@ -338,12 +413,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         NSApp.activate(ignoringOtherApps: true)
         worker.open(historyRoot: historyRoot, artifactID: artifact.id) { [weak self] result in
             guard let self, self.generation == current, self.artifactID == artifact.id else { return }
-            self.busy = false
             switch result {
             case .success(let value):
+                self.busy = false
                 self.publish(value, initialize: true)
                 self.status.stringValue = "Original remains unchanged. Save creates a new copy."
-            case .failure(let error): self.showError("Couldn’t open recording: \(error.localizedDescription)")
+                self.generateThumbnails()
+            case .failure(let error):
+                self.busy = false
+                self.showError("Couldn’t open recording: \(error.localizedDescription)")
             }
             self.updateControls(); self.layout()
         }
@@ -457,6 +535,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             self.estimate = nil; self.updateControls()
         }
         trimPanel.addSubview(trimTimeline)
+        thumbnailRetryButton = button("Retry") { [weak self] in self?.generateThumbnails() }
+        thumbnailRetryButton.setAccessibilityLabel("Retry recording thumbnails")
+        trimPanel.addSubview(thumbnailRetryButton)
         trimPanel.addSubview(label("Start", muted: true)); trimPanel.addSubview(trimStart)
         trimPanel.addSubview(label("End", muted: true)); trimPanel.addSubview(trimEnd)
         applyButton = button("Apply edits") { [weak self] in self?.applyEdits() }
@@ -493,7 +574,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         estimateButton = button("Estimate size") { [weak self] in self?.estimateSize() }
         saveButton = button("Save new copy") { [weak self] in self?.saveNewCopy() }
         saveButton.primary = true
-        cancelButton = button("Cancel operation") { [weak self] in self?.activeCancel?.cancel() }
+        cancelButton = button("Cancel operation") { [weak self] in self?.cancelActiveOperation() }
         cancelButton.signal = true
         status.textColor = tokens.color("text-muted"); status.maximumNumberOfLines = 2
         status.setAccessibilityLabel("Recording editor status")
@@ -557,6 +638,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let labels = trimPanel.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isEditable }
         labels.first { $0.stringValue == "Trim (milliseconds)" }?.frame = NSRect(x: 14, y: 12, width: 150, height: 20)
         trimTimeline.frame = NSRect(x: 154, y: 8, width: trimPanel.bounds.width - 168, height: 28)
+        thumbnailRetryButton.frame = NSRect(x: trimPanel.bounds.width - 88, y: 40,
+                                            width: 74, height: 28)
         labels.first { $0.stringValue == "Start" }?.frame = NSRect(x: 14, y: 82, width: 42, height: 18)
         labels.first { $0.stringValue == "End" }?.frame = NSRect(x: 138, y: 82, width: 34, height: 18)
         trimStart.frame = NSRect(x: 52, y: 76, width: 78, height: 28)
@@ -565,7 +648,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let explanation = labels.first { $0.stringValue.hasPrefix("Apply before") }
             ?? label("Apply before seeking or saving. The original is immutable.", muted: true,
                      parent: trimPanel)
-        explanation.frame = NSRect(x: 14, y: 46, width: trimPanel.bounds.width - 28, height: 20)
+        explanation.stringValue = thumbnailRetryAvailable
+            ? "Apply before seeking or saving."
+            : "Apply before seeking or saving. The original is immutable."
+        explanation.frame = NSRect(x: 14, y: 46,
+            width: trimPanel.bounds.width - (thumbnailRetryAvailable ? 116 : 28), height: 20)
 
         let audioLabels = audioPanel.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isEditable }
         audioLabels.first { $0.stringValue == "Audio" }?.frame = NSRect(x: 14, y: 12, width: 54, height: 20)
@@ -751,6 +838,51 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             case .failure(let error): self.showError("Size estimate failed: \(error.localizedDescription)")
             }
             self.updateControls()
+        }
+    }
+
+    private func generateThumbnails() {
+        guard !busy, !pickerOpen, presentation != nil,
+              let cancel = NativeRecordingEditorCancel() else { return }
+        let current = generation
+        busy = true; activeCancel = cancel; thumbnailCancel = cancel
+        thumbnailRetryAvailable = false
+        trimTimeline.showThumbnailLoading()
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Generating immutable source timeline thumbnails…"
+        updateControls(); layout()
+        worker.thumbnails(cancel: cancel) { [weak self] result in
+            guard let self, self.generation == current,
+                  self.thumbnailCancel === cancel else { return }
+            self.busy = false; self.activeCancel = nil; self.thumbnailCancel = nil
+            switch result {
+            case .success(let image):
+                self.trimTimeline.showThumbnails(image)
+                self.thumbnailRetryAvailable = false
+                self.status.textColor = self.tokens.color("text-muted")
+                self.status.stringValue = "Source thumbnails ready. The original remains unchanged."
+            case .failure(let error):
+                let cancelled = cancel.isCancelled
+                self.trimTimeline.showThumbnailFailure(cancelled: cancelled)
+                self.thumbnailRetryAvailable = true
+                if cancelled {
+                    self.status.textColor = self.tokens.color("text-muted")
+                    self.status.stringValue = "Source thumbnails cancelled. Editing remains available."
+                } else {
+                    self.showError("Source thumbnails unavailable: \(error.localizedDescription). Editing remains available.")
+                }
+            }
+            self.updateControls(); self.layout()
+        }
+    }
+
+    private func cancelActiveOperation() {
+        guard let activeCancel else { return }
+        activeCancel.cancel()
+        if thumbnailCancel === activeCancel {
+            trimTimeline.showThumbnailCancelling()
+            status.textColor = tokens.color("text-muted")
+            status.stringValue = "Cancelling source thumbnail generation…"
         }
     }
 
@@ -1019,6 +1151,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         microphoneMute.isEnabled = available && !gif
         monoOutput.isEnabled = available && !gif
         trimTimeline.setEditingEnabled(available && stagedEdit != nil)
+        thumbnailRetryButton?.isHidden = !thumbnailRetryAvailable
+        thumbnailRetryButton?.isEnabled = available && thumbnailRetryAvailable
         applyButton?.isEnabled = available && valid && stagedDiffers
         seekSlider.isEnabled = available && valid && !stagedDiffers
         changeButton?.isEnabled = available
@@ -1034,6 +1168,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func closeSession() {
         generation += 1; artifactID = nil; presentation = nil; activeCancel = nil
+        thumbnailCancel = nil; thumbnailRetryAvailable = false
+        trimTimeline.clearThumbnails()
         worker.close()
     }
 

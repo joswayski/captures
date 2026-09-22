@@ -4,6 +4,84 @@ import XCTest
 @testable import CapturesNative
 
 final class RecordingEditorTests: XCTestCase {
+    func testSourceThumbnailsLoadOnceWithoutMutatingEditorState() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingTrimTimeline }.first)
+        XCTAssertEqual(worker.thumbnailCalls, 1)
+        XCTAssertEqual(timeline.thumbnailStateDescription,
+                       "12 source-relative timeline thumbnails")
+        XCTAssertFalse(controller.dirty)
+        XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertTrue(worker.saves.isEmpty)
+
+        let seek = try slider("Recording frame position", in: controller.root)
+        seek.doubleValue = 500; _ = seek.sendAction(seek.action, to: seek.target)
+        let start = try field("Trim start milliseconds", in: controller.root)
+        start.stringValue = "100"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: start))
+        worker.requestResult = .success(try presentation(start: 100, position: 500, revision: 2))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.thumbnailCalls, 1,
+                       "seek and accepted edits never regenerate immutable source thumbnails")
+    }
+
+    func testThumbnailFailureCancelRetryAndNewSessionClearPriorStrip() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        worker.thumbnailResult = .failure(AppBridgeError.backend("sprite unavailable"))
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                   worker: worker, confirmDiscard: { true })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingTrimTimeline }.first)
+        let retry = try button("Retry", in: controller.root)
+        XCTAssertEqual(timeline.thumbnailStateDescription, "Source thumbnails unavailable")
+        XCTAssertFalse(retry.isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled,
+                      "thumbnail failure leaves the rest of editing available")
+        XCTAssertFalse(controller.dirty)
+
+        worker.deferThumbnails = true
+        retry.performClick(nil)
+        XCTAssertEqual(timeline.thumbnailStateDescription, "Loading source thumbnails…")
+        XCTAssertFalse(controller.windowShouldClose(controller.window),
+                       "accepted thumbnail generation uses the existing busy close gate")
+        let cancel = try button("Cancel operation", in: controller.root)
+        cancel.performClick(nil)
+        XCTAssertTrue(try XCTUnwrap(worker.observedThumbnailCancel).isCancelled)
+        XCTAssertEqual(timeline.thumbnailStateDescription, "Cancelling source thumbnails…")
+        worker.completeThumbnails(.failure(AppBridgeError.backend("operation cancelled")))
+        XCTAssertEqual(timeline.thumbnailStateDescription, "Source thumbnails cancelled")
+        XCTAssertFalse(retry.isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
+
+        worker.deferThumbnails = false
+        worker.thumbnailResult = .success(fakeTimelineImage())
+        retry.performClick(nil)
+        XCTAssertEqual(worker.thumbnailCalls, 3)
+        XCTAssertEqual(timeline.thumbnailStateDescription,
+                       "12 source-relative timeline thumbnails")
+        worker.deferThumbnails = true
+        controller.present(artifact: recordingArtifact(id: "another-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(worker.thumbnailCalls, 4)
+        XCTAssertEqual(timeline.thumbnailStateDescription, "Loading source thumbnails…",
+                       "a new item clears the prior recording's retained strip")
+        worker.completeThumbnails(.success(fakeTimelineImage()))
+        XCTAssertEqual(timeline.thumbnailStateDescription,
+                       "12 source-relative timeline thumbnails")
+    }
+
     func testCropAndResolutionGeometryBridgeUsesSharedBoundsAndPresets() throws {
         let source = NativeRecordingDimensions(width: 320, height: 180)
         let crop = NativeRecordingCropRect(x: 10, y: 60, width: 160, height: 90)
@@ -135,6 +213,53 @@ final class RecordingEditorTests: XCTestCase {
                        "window deactivation drops capture without reverting the last stage")
         try dispatchMouse(.leftMouseUp, to: endHandle, in: controller, deltaX: -60)
         XCTAssertTrue(worker.requests.isEmpty, "real pointer dispatch never seeks or decodes")
+    }
+
+    func testTimelineFailureRetryDoesNotCoverRealHandleDispatchAtEitherSize() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(start: 200, end: 1_800))
+        worker.thumbnailResult = .failure(AppBridgeError.backend("sprite unavailable"))
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingTrimTimeline }.first)
+        let startHandle = try XCTUnwrap(descendants(in: timeline)
+            .compactMap { $0 as? RecordingTrimHandle }.first { $0.edge == .start })
+        let endHandle = try XCTUnwrap(descendants(in: timeline)
+            .compactMap { $0 as? RecordingTrimHandle }.first { $0.edge == .end })
+        let start = try field("Trim start milliseconds", in: controller.root)
+        let end = try field("Trim end milliseconds", in: controller.root)
+        let explanation = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSTextField }
+            .first { !$0.isEditable && $0.stringValue.hasPrefix("Apply before") })
+
+        for size in [NSSize(width: 960, height: 760), NSSize(width: 760, height: 540)] {
+            controller.window.setContentSize(size)
+            XCTAssertLessThanOrEqual(explanation.intrinsicContentSize.width, explanation.frame.width,
+                                     "Retry must not clip the adjacent edit-gating explanation")
+            start.stringValue = "200"; end.stringValue = "1800"
+            controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                         object: start))
+            XCTAssertTrue(try windowHit(startHandle, in: controller) === startHandle)
+            XCTAssertTrue(try windowHit(endHandle, in: controller) === endHandle,
+                          "Retry stays outside the end-handle hit region")
+            try dispatchMouse(.leftMouseDown, to: startHandle, in: controller)
+            try dispatchMouse(.leftMouseDragged, to: startHandle, in: controller, deltaX: 8)
+            try dispatchMouse(.leftMouseUp, to: startHandle, in: controller, deltaX: 8)
+            XCTAssertNotEqual(start.stringValue, "200")
+
+            start.stringValue = "200"; end.stringValue = "1800"
+            controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                         object: start))
+            try dispatchMouse(.leftMouseDown, to: endHandle, in: controller)
+            try dispatchMouse(.leftMouseDragged, to: endHandle, in: controller, deltaX: -8)
+            try dispatchMouse(.leftMouseUp, to: endHandle, in: controller, deltaX: -8)
+            XCTAssertNotEqual(end.stringValue, "1800")
+        }
+        XCTAssertTrue(worker.requests.isEmpty, "thumbnail error trim dispatch only stages values")
     }
 
     func testTimelineKeyboardStepsBoundsAndNumericSynchronization() throws {
@@ -785,6 +910,31 @@ final class RecordingEditorTests: XCTestCase {
             XCTAssertTrue(systemVolume.isEnabled)
             XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Export cancelled") })
             try render(controller.root, name: "recording-editor-error-\(appearance)")
+
+            let loadingWorker = FakeRecordingEditorWorker(presentation: try presentation(
+                hasSystemAudio: true, hasMicrophoneAudio: true))
+            loadingWorker.deferThumbnails = true
+            let loadingController = RecordingEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: loadingWorker,
+                confirmDiscard: { false })
+            defer { loadingController.window.orderOut(nil) }
+            loadingController.present(artifact: recordingArtifact(), historyRoot: "/History",
+                                      outputDirectory: "/Exports")
+            try render(loadingController.root,
+                       name: "recording-editor-thumbnails-loading-\(appearance)")
+
+            let failedWorker = FakeRecordingEditorWorker(presentation: try presentation(
+                hasSystemAudio: true, hasMicrophoneAudio: true))
+            failedWorker.thumbnailResult = .failure(AppBridgeError.backend("sprite unavailable"))
+            let failedController = RecordingEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: failedWorker,
+                confirmDiscard: { false })
+            defer { failedController.window.orderOut(nil) }
+            failedController.present(artifact: recordingArtifact(), historyRoot: "/History",
+                                     outputDirectory: "/Exports")
+            failedController.window.setContentSize(NSSize(width: 760, height: 540))
+            try render(failedController.root,
+                       name: "recording-editor-thumbnails-error-minimum-\(appearance)")
         }
     }
 
@@ -822,6 +972,35 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: gifPath))
         XCTAssertEqual(try Data(contentsOf: fixture.source), sourceBefore,
                        "every edit/export keeps the original byte-identical")
+    }
+
+    func testRealBridgeThumbnailOwnerOutlivesSessionWithoutSnapshotMutation() throws {
+        let tools = try NativeMediaTools.locate()
+        let fixture = try makeRecordingFixture(tools: tools)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var retainedImage: CGImage?
+        do {
+            let opened = try NativeRecordingEditorSession.open(historyRoot: fixture.history.path,
+                                                                artifactID: fixture.id, tools: tools)
+            let session = opened.0
+            let before = try session.request(["operation": "snapshot"]).snapshot
+            let owner = try session.thumbnails(cancel: try XCTUnwrap(NativeRecordingEditorCancel()))
+            XCTAssertEqual(owner.frameCount, 12)
+            XCTAssertEqual(owner.frameWidth, 160); XCTAssertEqual(owner.frameHeight, 90)
+            XCTAssertEqual(owner.spriteWidth, 1_920); XCTAssertEqual(owner.spriteHeight, 90)
+            retainedImage = try owner.image()
+            let after = try session.request(["operation": "snapshot"]).snapshot
+            XCTAssertEqual(after.revision, before.revision)
+            XCTAssertEqual(after.positionMilliseconds, before.positionMilliseconds)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: after.edit, options: [.sortedKeys]),
+                           try JSONSerialization.data(withJSONObject: before.edit, options: [.sortedKeys]))
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: after.export, options: [.sortedKeys]),
+                           try JSONSerialization.data(withJSONObject: before.export, options: [.sortedKeys]))
+        }
+        let image = try XCTUnwrap(retainedImage)
+        XCTAssertEqual(image.width, 1_920); XCTAssertEqual(image.height, 90)
+        XCTAssertEqual(CFDataGetLength(try XCTUnwrap(image.dataProvider?.data)), 1_920 * 90 * 4,
+                       "the retained pixel provider remains readable after session and owner release")
     }
 
     func testRealBridgeCropOutputDimensionsContentAndImmutableOriginal() throws {
@@ -1235,13 +1414,18 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var requests: [[String: Any]] = []
     var requestResult: Result<RecordingEditorPresentation, Error>?
     var estimateResult: Result<RecordingEditorEstimate, Error> = .failure(AppBridgeError.backend("estimate unavailable"))
+    var thumbnailResult: Result<CGImage, Error> = .success(fakeTimelineImage())
+    var thumbnailCalls = 0
+    var deferThumbnails = false
     var saveResult: Result<RecordingEditorSaveResult, Error> = .failure(AppBridgeError.backend("save unavailable"))
     var saves: [(destination: String, export: [String: Any])] = []
     var deferSave = false
     var closeCount = 0
     weak var observedSaveCancel: NativeRecordingEditorCancel?
+    weak var observedThumbnailCancel: NativeRecordingEditorCancel?
     private var pendingOpen: ((Result<RecordingEditorPresentation, Error>) -> Void)?
     private var pendingSave: ((Result<RecordingEditorSaveResult, Error>) -> Void)?
+    private var pendingThumbnails: ((Result<CGImage, Error>) -> Void)?
 
     init(presentation: RecordingEditorPresentation) { initial = presentation }
     func open(historyRoot: String, artifactID: String,
@@ -1261,6 +1445,15 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
                   completion: @escaping (Result<RecordingEditorEstimate, Error>) -> Void) {
         completion(estimateResult)
     }
+    func thumbnails(cancel: NativeRecordingEditorCancel,
+                    completion: @escaping (Result<CGImage, Error>) -> Void) {
+        thumbnailCalls += 1; observedThumbnailCancel = cancel
+        if deferThumbnails { pendingThumbnails = completion }
+        else { completion(thumbnailResult) }
+    }
+    func completeThumbnails(_ result: Result<CGImage, Error>) {
+        let completion = pendingThumbnails; pendingThumbnails = nil; completion?(result)
+    }
     func save(destination: String, export: [String: Any], cancel: NativeRecordingEditorCancel,
               progress: @escaping (RecordingEditorProgress) -> Void,
               completion: @escaping (Result<RecordingEditorSaveResult, Error>) -> Void) {
@@ -1273,4 +1466,24 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
         let completion = pendingSave; pendingSave = nil; completion?(result)
     }
     func close() { closeCount += 1 }
+}
+
+private func fakeTimelineImage() -> CGImage {
+    let width = 1_920, height = 90
+    var bytes = [UInt8](repeating: 255, count: width * height * 4)
+    for y in 0..<height {
+        for x in 0..<width {
+            let frame = x / 160
+            let offset = (y * width + x) * 4
+            bytes[offset] = UInt8(28 + frame * 17)
+            bytes[offset + 1] = UInt8(190 - frame * 9)
+            bytes[offset + 2] = UInt8(52 + frame * 11)
+        }
+    }
+    let provider = CGDataProvider(data: Data(bytes) as CFData)!
+    return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                   bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                   bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                   provider: provider, decode: nil, shouldInterpolate: false,
+                   intent: .defaultIntent)!
 }
