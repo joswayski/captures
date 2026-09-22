@@ -561,15 +561,25 @@ def main():
             assert save_layers(lambda values: len(values) == 3, "reopen has no layer clipboard")[-1] == pasted_twice
             click(editor, 463, 62)
             before_menu = draft.read_bytes()
-            inspector_move(100, 202, "click", "3", "sleep", ".3")
+            inspector_move(100, 202, "sleep", ".2", "mousedown", "3",
+                           "sleep", ".15", "mouseup", "3", "sleep", ".3")
             shot(editor, "layer-context-menu")
             run("xdotool", "key", "Escape", "sleep", ".3")
             assert draft.read_bytes() == before_menu, "opening/cancelling a row menu must not edit"
-            resize_editor(760, 540)
-            inspector_move(100, 202, "click", "3", "sleep", ".3")
+            resize_editor(760, 540, "sleep", ".3")
+            inspector_move(100, 202, "sleep", ".2", "mousedown", "3",
+                           "sleep", ".15", "mouseup", "3", "sleep", ".3")
             shot(editor, "layer-context-menu-minimum")
-            run("xdotool", "key", "Escape", "sleep", ".3")
+            # Copy the first row through the actual popup. A missed opening must
+            # fail this flow, not silently produce a menu-free review capture.
+            inspector_click(130, 217)
             assert draft.read_bytes() == before_menu
+            run("xdotool", "key", "ctrl+v", "sleep", ".3")
+            menu_paste = save_layers(lambda values: len(values) == 4, "context-menu copy then paste")[-1]
+            assert menu_paste == dict(pasted_twice, id=menu_paste["id"],
+                                      x=pasted_twice["x"] + 24, y=pasted_twice["y"] + 24,
+                                      endX=pasted_twice["endX"] + 24, endY=pasted_twice["endY"] + 24)
+            assert menu_paste["id"] not in {shape["id"], pasted["id"], pasted_twice["id"]}
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "shortcut suite quits")
@@ -586,7 +596,8 @@ def main():
                            "layer-copy-snapshot-after-delete", "layer-paste-empty-OS-clipboard",
                            "layer-paste-once-with-OS-text", "layer-paste-cumulative-offset",
                            "layer-paste-undo-redo", "layer-clipboard-session-local",
-                           "layer-context-menu-cancel", "layer-context-menu-minimum"],
+                           "layer-context-menu-cancel", "layer-context-menu-minimum",
+                           "layer-context-menu-copy-paste"],
             }, indent=2) + "\n")
             print("PASS native editor shortcuts: tools, undo, redo, duplicate, delete, nudge, field/dialog focus and original unchanged")
             return
