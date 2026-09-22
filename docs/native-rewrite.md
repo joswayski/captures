@@ -1,6 +1,6 @@
 # Browser-free desktop migration
 
-Status: **native capture/recording workflows implemented; screenshot editor slices underway;
+Status: **native capture/recording workflows implemented; screenshot and recording editor slices underway;
 cross-platform acceptance and renderer selection still open**.
 This rewrite covers macOS, Windows, and Linux, feature by feature rather than one
 complete OS at a time. AppKit and the experimental Rust/wgpu host both connect
@@ -21,9 +21,9 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; wgpu frame scrubbing, numeric trim and MP4/GIF save-new-copy | AppKit recording editor, playback, graphical timeline, crop/size/audio controls, audio meter/device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording playback/timeline/editing/export |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording playback/graphical timeline and remaining controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -420,6 +420,28 @@ separate host slice. This does not close screenshot-editor or visual parity.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
 
+### Recording editor: first wgpu host, not playback parity
+
+History's **Edit recording** resolves the selected artifact through the shared
+`RecordingEditorSession`, probes retained media and opens a separate window with a
+decoded frame, source-relative scrubbing, numeric trim and a fixed save bar.
+The preview/timeline/save hierarchy follows the shipping recording editor, but
+the UI is not a visual match and has no playback or thumbnail timeline yet.
+One worker serializes media operations; failed seek/edit preserves the accepted
+frame, and unapplied trim values gate scrubbing/export. MP4/GIF Save new copy uses
+shared encoding, reports progress and accepts independent cancellation. Existing
+files and the original History artifact are never replaced. Post-publication
+History failure reports the successfully saved path rather than inviting re-export.
+Close blocks accepted work; unsaved trims require explicit discard, and normal quit
+is refused until they are saved or closed. Recording drafts are not implemented.
+
+Platform status: shared Rust/C ABI is available to both hosts; the wgpu controls
+are implemented for Windows/Linux. Private X11/software-GL exercises provide
+implementation evidence only. Windows and Wayland presentation, physical input,
+accessibility and AppKit host integration remain open. Playback/audio output,
+graphical trim/crop/size/audio controls, draft restoration and original replacement
+remain later slices. No recording-editor or cross-platform parity gate closes.
+
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow
 integration, physical cross-platform acceptance, and renderer/distribution/cutover.
@@ -739,7 +761,7 @@ nonactivating top-right notice in both native hosts. Save file reuses the shared
 original-recording export operation; saved state offers Show in Folder. Pending
 saves pause the 15.2-second expiry; failure keeps retry available. Dismiss, expiry
 and new capture only remove presentation, and stale callbacks cannot revive it.
-Native has no recording editor yet, so the trigger is finalization, not the
+The recording editor is a separate History action, so the trigger remains finalization, not the
 shipping editor-close event. Private-X11 input tests exercise export byte equality,
 failure/retry, missing exports, intercepted OS-reveal arguments, hidden-root expiry,
 dismissal and capture cleanup; AppKit provides state and render fixtures. Physical

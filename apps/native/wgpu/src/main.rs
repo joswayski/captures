@@ -8,6 +8,7 @@ mod mini_preview;
 mod options;
 mod preferences;
 mod recording;
+mod recording_editor;
 mod recording_hud;
 mod recording_region;
 mod recording_saved_notice;

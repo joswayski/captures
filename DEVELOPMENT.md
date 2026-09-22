@@ -168,11 +168,22 @@ and `python3-xlib`, then run:
   --output /tmp/native-x11-recording
 ```
 
-Pass `--hide-controls-only` for focused running/paused Hide checks through a real
+For the frame-based recording editor, run the following with both `dark` and
+`light`. It creates a known-color recording in disposable History, opens the real
+editor and checks source-relative seeks and decoded trim/export content:
+
+```sh
+/usr/bin/python3 apps/native/x11_recording_editor_smoke.py \
+  --appearance dark \
+  --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
+  --output /tmp/native-x11-recording-editor-dark
+```
+
+Pass `--hide-controls-only` to `x11_recording_smoke.py` for focused running/paused Hide checks through a real
 Xfce SNI tray, configured New Capture shortcut restoration, tray-host-loss recovery,
 finalized media decode and recovery cleanup.
 
-Pass `--ready-notice-only --appearance dark` (and repeat with `light`) to exercise
+Pass `--ready-notice-only --appearance dark` to that recording smoke (and repeat with `light`) to exercise
 real recording finalization followed by notice save failure/retry, byte-identical
 export, missing-file reveal, expiry with a hidden root, dismissal and cleanup
 before another capture. The test intercepts only the `xdg-open` launcher to check
