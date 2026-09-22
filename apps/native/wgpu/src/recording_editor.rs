@@ -1139,6 +1139,7 @@ fn show(
                     let pausing = view.cancel.as_ref().is_some_and(CancelToken::is_cancelled);
                     if ui.add_enabled(!pausing, egui::Button::new(if pausing { "Pausing…" } else { "Pause" }).small()).clicked() {
                         view.pause_playback();
+                        ui.ctx().request_repaint();
                     }
                 } else if ui.add_enabled(!view.busy && !view.picker && !view.confirm_close
                     && view.presented.is_some() && !view.unapplied(), egui::Button::new("Play").small())
@@ -1146,6 +1147,7 @@ fn show(
                     .clicked()
                 {
                     view.request_playback(tx);
+                    ui.ctx().request_repaint();
                 }
             });
             let width = ui.available_width();
