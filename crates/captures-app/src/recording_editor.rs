@@ -13,8 +13,8 @@ use std::{
 use captures_history::{ArtifactKind, HistoryEntry};
 use captures_media::{
     CancelToken, EditSpec, ExportEstimate, ExportFormat, ExportProgress, ExportSpec, MediaKind,
-    MediaMetadata, MediaToolError, MediaToolchain, ProbeResult, QualityPreset, TimelineSpriteSpec,
-    validate_edit_spec,
+    MediaMetadata, MediaPlayback, MediaToolError, MediaToolchain, ProbeResult, QualityPreset,
+    TimelineSpriteSpec, validate_edit_spec,
 };
 use image::{ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
@@ -85,6 +85,60 @@ impl RecordingTimelineThumbnails {
     #[must_use]
     pub fn pixels(&self) -> &RgbaImage {
         &self.pixels
+    }
+}
+
+/// A retained playback frame independent of the editor session and stream.
+pub struct RecordingPlaybackFrame {
+    pub position_ms: u64,
+    pixels: Arc<RgbaImage>,
+}
+
+impl RecordingPlaybackFrame {
+    /// Retain the top-down straight-alpha sRGB RGBA8 pixels.
+    #[must_use]
+    pub fn pixels(&self) -> Arc<RgbaImage> {
+        self.pixels.clone()
+    }
+}
+
+/// Silent, clock-paced playback of the accepted edit and preview export.
+pub struct RecordingPlayback {
+    inner: MediaPlayback,
+}
+
+impl RecordingPlayback {
+    #[must_use]
+    pub fn width(&self) -> u32 {
+        self.inner.width()
+    }
+
+    #[must_use]
+    pub fn height(&self) -> u32 {
+        self.inner.height()
+    }
+
+    #[must_use]
+    pub fn frames_per_second(&self) -> u16 {
+        self.inner.frames_per_second()
+    }
+
+    #[must_use]
+    pub fn start_position_ms(&self) -> u64 {
+        self.inner.start_position_ms()
+    }
+
+    pub fn next_frame(&mut self) -> Result<Option<RecordingPlaybackFrame>, String> {
+        let Some(frame) = self.inner.next_frame().map_err(|error| error.to_string())? else {
+            return Ok(None);
+        };
+        let position_ms = frame.position_ms;
+        let pixels = RgbaImage::from_raw(self.width(), self.height(), frame.into_pixels())
+            .ok_or("Decoded playback pixels do not match the planned dimensions.")?;
+        Ok(Some(RecordingPlaybackFrame {
+            position_ms,
+            pixels: Arc::new(pixels),
+        }))
     }
 }
 
@@ -201,6 +255,28 @@ impl RecordingEditorSession {
     pub fn estimate_export(&self, cancel: &CancelToken) -> Result<ExportEstimate, String> {
         self.tools
             .estimate_export_size(&self.source_path, &self.edit, &self.preview_export, cancel)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Start silent playback from a source-relative position using the accepted
+    /// edit and preview-export configuration without changing session state.
+    pub fn playback(
+        &self,
+        position_ms: u64,
+        cancel: &CancelToken,
+    ) -> Result<RecordingPlayback, String> {
+        validate_session_edit(&self.probe, &self.edit)?;
+        validate_preview_export(&self.preview_export)?;
+        self.tools
+            .playback(
+                &self.source_path,
+                &self.probe,
+                &self.edit,
+                &self.preview_export,
+                position_ms,
+                cancel,
+            )
+            .map(|inner| RecordingPlayback { inner })
             .map_err(|error| error.to_string())
     }
 

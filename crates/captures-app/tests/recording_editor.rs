@@ -1,4 +1,11 @@
-use std::{fs, path::Path, process::Command, sync::Arc};
+use std::{
+    fs,
+    path::Path,
+    process::Command,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use captures_app::recording_editor::{
     RecordingEditorOpenRequest, RecordingEditorRequest, RecordingEditorSession,
@@ -474,6 +481,90 @@ fn timeline_thumbnails_span_the_immutable_source_without_changing_session_state(
     );
     assert_eq!(serde_json::to_value(session.snapshot()).unwrap(), snapshot);
     assert!(Arc::ptr_eq(&frame, &session.frame()));
+}
+
+#[test]
+fn playback_uses_accepted_spatial_preview_trim_and_retains_session_state() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let source = entry
+        .recording_media_path(&data.path().join("history"))
+        .unwrap();
+    let source_before = fs::read(&source).unwrap();
+    let mut session = open(&data, &entry, tools);
+    let edit = EditSpec {
+        trim_start_ms: 1_100,
+        trim_end_ms: Some(2_300),
+        crop: Some(CropRect {
+            x: 3,
+            y: 2,
+            width: 21,
+            height: 17,
+        }),
+        output_width: Some(1_600),
+        output_height: Some(400),
+        ..EditSpec::default()
+    };
+    session
+        .execute(RecordingEditorRequest::UpdatePreview {
+            edit,
+            export: preview_spec(ExportFormat::Gif, QualityPreset::Standard),
+        })
+        .unwrap();
+    let snapshot_before = serde_json::to_value(session.snapshot()).unwrap();
+    let accepted_frame = session.frame();
+    let cancel = CancelToken::default();
+    let mut playback = session.playback(2_999, &cancel).unwrap();
+    assert_eq!(playback.start_position_ms(), 1_100);
+    assert_eq!((playback.width(), playback.height()), (1_280, 320));
+    assert_eq!(playback.frames_per_second(), 15);
+
+    let mut frames = Vec::new();
+    while let Some(frame) = playback.next_frame().unwrap() {
+        assert!(frame.position_ms >= 1_100 && frame.position_ms < 2_300);
+        assert_eq!(frame.pixels().dimensions(), (1_280, 320));
+        frames.push(frame);
+    }
+    assert!(!cancel.is_cancelled(), "natural EOF preserves caller token");
+    assert!(
+        frames.len() >= 12,
+        "persistent decoder returned temporal frames"
+    );
+    assert_dominant(frames.first().unwrap().pixels().get_pixel(8, 8).0, 1);
+    assert_dominant(frames.last().unwrap().pixels().get_pixel(8, 8).0, 2);
+    drop(playback);
+
+    assert_eq!(
+        serde_json::to_value(session.snapshot()).unwrap(),
+        snapshot_before
+    );
+    assert!(Arc::ptr_eq(&session.frame(), &accepted_frame));
+    assert_eq!(fs::read(source).unwrap(), source_before);
+
+    let slow = ExportSpec {
+        frames_per_second: Some(2),
+        ..preview_spec(ExportFormat::Gif, QualityPreset::Standard)
+    };
+    let edit = session.snapshot().edit.clone();
+    session
+        .execute(RecordingEditorRequest::UpdatePreview { edit, export: slow })
+        .unwrap();
+    let cancel = CancelToken::default();
+    let mut playback = session.playback(1_100, &cancel).unwrap();
+    assert!(playback.next_frame().unwrap().is_some());
+    let cancellation = cancel.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        cancellation.cancel();
+    });
+    let started = Instant::now();
+    let error = match playback.next_frame() {
+        Ok(_) => panic!("cancelled playback must fail"),
+        Err(error) => error,
+    };
+    assert!(error.contains("cancelled"));
+    assert!(started.elapsed() < Duration::from_millis(500));
 }
 
 #[test]

@@ -12,7 +12,8 @@ pub use export::{
 };
 pub use range::{ByteRange, ByteRangeError};
 pub use toolchain::{
-    CancelToken, ExportOutcome, MediaToolError, MediaToolchain, ProbeResult, RecordingAssemblyKind,
-    RecordingAssemblyOutcome, RecordingAudioLayout, RecordingSegmentInput, TimelineSpriteSpec,
-    export_preserves_source_bytes, validate_edit_spec, visual_edit_is_identity,
+    CancelToken, ExportOutcome, MediaPlayback, MediaPlaybackFrame, MediaToolError, MediaToolchain,
+    ProbeResult, RecordingAssemblyKind, RecordingAssemblyOutcome, RecordingAudioLayout,
+    RecordingSegmentInput, TimelineSpriteSpec, export_preserves_source_bytes, validate_edit_spec,
+    visual_edit_is_identity,
 };
