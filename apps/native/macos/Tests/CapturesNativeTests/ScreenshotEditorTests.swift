@@ -1193,7 +1193,7 @@ final class ScreenshotEditorTests: XCTestCase {
             section.selectedSegment = 0; _ = section.sendAction(section.action, to: section.target)
             let trim = try button("Trim edges", in: controller.root)
             let scroll = try XCTUnwrap(trim.enclosingScrollView)
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: 356))
+            trim.scrollToVisible(trim.bounds)
             scroll.reflectScrolledClipView(scroll.contentView)
             XCTAssertTrue(scroll.documentVisibleRect.contains(trim.frame))
             try render(controller.root, name: "screenshot-editor-trim-minimum-\(appearance)")
