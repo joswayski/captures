@@ -495,10 +495,21 @@ export function StartupNotice() {
   }, []);
 
   const keys = shortcutDisplayTokens(shortcut);
+  const close = () => {
+    void invoke("dismiss_startup_notice");
+  };
 
   return (
     <TrayNoticeShell className="startup-notice">
       <div className="startup-notice-card" role="status">
+        <button
+          className="startup-notice-dismiss"
+          type="button"
+          aria-label="Close"
+          onClick={close}
+        >
+          <CloseIcon />
+        </button>
         <strong>Captures is ready to use</strong>
         <p>
           Open New Capture with {keys.map((key, index) => (

@@ -196,6 +196,8 @@ describe("RecordingHud", () => {
 
     expect(screen.getByText("Captures is ready to use")).toBeInTheDocument();
     expect(screen.getByText("Open New Capture with")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(invoke).toHaveBeenCalledWith("dismiss_startup_notice");
     expect(await screen.findByText("Ctrl")).toBeInTheDocument();
     expect(screen.getByText("Shift")).toBeInTheDocument();
     expect(screen.getByText("Space")).toBeInTheDocument();

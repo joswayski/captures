@@ -2663,6 +2663,7 @@ html[data-preview-harness-view="recording-saved"] #root {
 }
 
 .startup-notice-card {
+  position: relative;
   display: grid;
   margin: 0;
   padding: var(--s-2) var(--s-6) var(--s-3);
@@ -2675,6 +2676,43 @@ html[data-preview-harness-view="recording-saved"] #root {
   letter-spacing: var(--tracking-tight);
   line-height: var(--leading-tight);
   text-align: center;
+}
+
+.startup-notice-dismiss {
+  position: absolute;
+  top: 50%;
+  right: var(--s-3);
+  display: grid;
+  width: var(--h-sm);
+  height: var(--h-sm);
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-pill);
+  color: var(--glass-text-subtle);
+  background: transparent;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.startup-notice-dismiss:hover {
+  color: var(--glass-text);
+  background: var(--glass-hover);
+}
+
+.startup-notice-dismiss:focus-visible {
+  outline: none;
+  color: var(--glass-text);
+  box-shadow: var(--focus-ring);
+}
+
+.startup-notice-dismiss svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
 }
 
 .startup-notice-card strong {
