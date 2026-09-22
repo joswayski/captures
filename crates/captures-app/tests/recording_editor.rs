@@ -65,6 +65,51 @@ fn create_recording(path: &Path) {
     assert!(status.success(), "asymmetric recording generated");
 }
 
+fn create_independent_audio_recording(path: &Path) {
+    let status = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:size=32x24:rate=10:duration=3",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=330:sample_rate=48000:duration=3,aformat=channel_layouts=stereo",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=3,aformat=channel_layouts=stereo",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=880:sample_rate=48000:duration=3,aformat=channel_layouts=stereo",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-map",
+            "2:a:0",
+            "-map",
+            "3:a:0",
+            "-c:v",
+            "mpeg4",
+            "-q:v",
+            "2",
+            "-c:a",
+            "aac",
+            "-shortest",
+        ])
+        .arg(path)
+        .status()
+        .expect("FFmpeg starts");
+    assert!(status.success(), "independent-track recording generated");
+}
+
 fn entry(id: &str, source: &Path) -> HistoryEntry {
     HistoryEntry {
         id: id.into(),
@@ -522,6 +567,119 @@ fn unchanged_gif_requested_as_mp4_is_reencoded_not_copied() {
     let output = tools.probe(&destination).unwrap().metadata;
     assert_eq!(output.kind, captures_media::MediaKind::Video);
     assert_eq!((output.width, output.height), (32, 24));
+    assert_eq!(fs::read(retained_source).unwrap(), source_bytes);
+}
+
+#[test]
+fn preserved_independent_audio_tracks_reopen_without_inventing_reencoded_tracks() {
+    let Some(tools) = tools() else {
+        return;
+    };
+    let data = tempfile::tempdir().unwrap();
+    let source = data.path().join("independent-audio.mp4");
+    create_independent_audio_recording(&source);
+    let entry = entry(&uuid::Uuid::new_v4().to_string(), &source);
+    let history = data.path().join("history");
+    captures_history::save_recording(&history, &entry, b"poster", &source).unwrap();
+    let retained_source = entry.recording_media_path(&history).unwrap();
+    let source_bytes = fs::read(&retained_source).unwrap();
+    let mut session = open(&data, &entry, tools.clone());
+    assert!(session.snapshot().has_system_audio);
+    assert!(session.snapshot().has_microphone_audio);
+
+    let preserved_path = data.path().join("preserved.mp4");
+    let preserved = session
+        .save_new(
+            RecordingSaveRequest {
+                destination: preserved_path.clone(),
+                export: export_spec(),
+            },
+            &CancelToken::default(),
+            |_| {},
+        )
+        .unwrap();
+    let SavedRecording::Saved {
+        artifact: preserved,
+        ..
+    } = preserved
+    else {
+        panic!("preserved copy should publish History")
+    };
+    assert_eq!(fs::read(&preserved_path).unwrap(), source_bytes);
+    assert_eq!(tools.probe(&preserved_path).unwrap().audio_stream_count, 3);
+    assert!(preserved.entry.has_system_audio);
+    assert!(preserved.entry.has_microphone_audio);
+    let reopened = open(&data, &preserved.entry, tools.clone());
+    assert!(reopened.snapshot().has_system_audio);
+    assert!(reopened.snapshot().has_microphone_audio);
+    assert!(reopened.snapshot().edit.audio.source_has_system_audio);
+    assert!(reopened.snapshot().edit.audio.source_has_microphone_audio);
+
+    let trimmed = EditSpec {
+        trim_start_ms: 100,
+        trim_end_ms: Some(2_900),
+        ..EditSpec::default()
+    };
+    session
+        .execute(RecordingEditorRequest::UpdateEdit {
+            edit: trimmed.clone(),
+        })
+        .unwrap();
+    let mixed_path = data.path().join("mixed.mp4");
+    let mixed = session
+        .save_new(
+            RecordingSaveRequest {
+                destination: mixed_path.clone(),
+                export: export_spec(),
+            },
+            &CancelToken::default(),
+            |_| {},
+        )
+        .unwrap();
+    let SavedRecording::Saved {
+        artifact: mixed, ..
+    } = mixed
+    else {
+        panic!("mixed re-encode should publish History")
+    };
+    assert_eq!(tools.probe(&mixed_path).unwrap().audio_stream_count, 1);
+    assert!(mixed.entry.has_system_audio);
+    assert!(!mixed.entry.has_microphone_audio);
+    let reopened = open(&data, &mixed.entry, tools.clone());
+    assert!(reopened.snapshot().has_system_audio);
+    assert!(!reopened.snapshot().has_microphone_audio);
+
+    let mut microphone_only = trimmed;
+    microphone_only.audio.mute_system_audio = true;
+    session
+        .execute(RecordingEditorRequest::UpdateEdit {
+            edit: microphone_only,
+        })
+        .unwrap();
+    let microphone_path = data.path().join("microphone.mp4");
+    let microphone = session
+        .save_new(
+            RecordingSaveRequest {
+                destination: microphone_path.clone(),
+                export: export_spec(),
+            },
+            &CancelToken::default(),
+            |_| {},
+        )
+        .unwrap();
+    let SavedRecording::Saved {
+        artifact: microphone,
+        ..
+    } = microphone
+    else {
+        panic!("microphone-only re-encode should publish History")
+    };
+    assert_eq!(tools.probe(&microphone_path).unwrap().audio_stream_count, 1);
+    assert!(!microphone.entry.has_system_audio);
+    assert!(microphone.entry.has_microphone_audio);
+    let reopened = open(&data, &microphone.entry, tools);
+    assert!(!reopened.snapshot().has_system_audio);
+    assert!(reopened.snapshot().has_microphone_audio);
     assert_eq!(fs::read(retained_source).unwrap(), source_bytes);
 }
 
