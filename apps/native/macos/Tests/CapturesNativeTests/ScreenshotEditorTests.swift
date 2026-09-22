@@ -404,8 +404,8 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(input.bounds.size, NSSize(width: 804, height: 414))
             XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1200, height: 600))
             XCTAssertEqual(section.frame.minX, 888)
-            XCTAssertEqual(inspector.frame, NSRect(x: 888, y: 66, width: 272, height: 290))
-            XCTAssertEqual(undo.frame.origin, NSPoint(x: 888, y: 370))
+            XCTAssertEqual(inspector.frame, NSRect(x: 888, y: 66, width: 272, height: 246))
+            XCTAssertEqual(undo.frame.origin, NSPoint(x: 888, y: 326))
             XCTAssertEqual(controller.presentedImageRect, NSRect(x: 82, y: 27, width: 640, height: 360))
             for control in descendants(in: controller.root) where
                 ["Canvas zoom", "Canvas zoom preset", "Edited canvas dimensions", "Screenshot editor status"]
@@ -418,8 +418,8 @@ final class ScreenshotEditorTests: XCTestCase {
             waitUntil { controller.presentedImageRect.width == 364 }
             XCTAssertEqual(input.bounds.size, NSSize(width: 364, height: 318))
             XCTAssertEqual(section.frame.minX, 448)
-            XCTAssertEqual(inspector.frame, NSRect(x: 448, y: 66, width: 272, height: 230))
-            XCTAssertEqual(undo.frame.origin, NSPoint(x: 448, y: 310))
+            XCTAssertEqual(inspector.frame, NSRect(x: 448, y: 66, width: 272, height: 186))
+            XCTAssertEqual(undo.frame.origin, NSPoint(x: 448, y: 266))
             XCTAssertEqual(controller.presentedImageRect.minX, 0, accuracy: 1e-7)
             XCTAssertEqual(controller.presentedImageRect.minY, 56.625, accuracy: 1e-7)
             XCTAssertEqual(controller.presentedImageRect.width, 364, accuracy: 1e-7)
@@ -429,6 +429,51 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(controller.state.snapshot, original)
             XCTAssertTrue(worker.requests.isEmpty)
             XCTAssertTrue(worker.encodes.isEmpty)
+        }
+    }
+
+    func testExportActionsStayVisibleAcrossSectionsAndDisableTogetherDuringWork() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
+            worker.deferEncodes = true
+            var copies = 0
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                worker: worker, writeClipboard: { _ in copies += 1; return true })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History",
+                               outputDirectory: "/native/Exports")
+            let copy = try button("Copy image", in: controller.root)
+            let save = try button("Save new copy", in: controller.root)
+            let sections = try segmented("Editor section", in: controller.root)
+            for size in [NSSize(width: 1200, height: 600), NSSize(width: 760, height: 540)] {
+                controller.window.setContentSize(size)
+                controller.root.layoutSubtreeIfNeeded()
+                XCTAssertEqual(copy.frame, NSRect(x: size.width - 312, y: size.height - 70, width: 100, height: 34))
+                XCTAssertEqual(save.frame, NSRect(x: size.width - 192, y: size.height - 70, width: 152, height: 34))
+                for index in 0..<4 {
+                    sections.selectedSegment = index
+                    _ = sections.sendAction(sections.action, to: sections.target)
+                    for action in [copy, save] {
+                        XCTAssertTrue(action.superview === controller.root)
+                        XCTAssertNil(action.enclosingScrollView)
+                        XCTAssertFalse(action.isHiddenOrHasHiddenAncestor)
+                        XCTAssertTrue(action.isEnabled)
+                        XCTAssertTrue(controller.root.bounds.contains(action.frame))
+                    }
+                }
+            }
+            try showDraw(in: controller.root)
+            copy.performClick(nil)
+            XCTAssertTrue(controller.state.busy)
+            XCTAssertFalse(copy.isEnabled); XCTAssertFalse(save.isEnabled)
+            save.performClick(nil)
+            XCTAssertTrue(worker.saves.isEmpty)
+            try render(controller.root, name: "screenshot-editor-pinned-export-pending-\(appearance)")
+            worker.completePendingEncode()
+            XCTAssertEqual(copies, 1)
+            XCTAssertTrue(copy.isEnabled); XCTAssertTrue(save.isEnabled)
+            XCTAssertTrue(worker.requests.isEmpty)
         }
     }
 
@@ -518,7 +563,7 @@ final class ScreenshotEditorTests: XCTestCase {
             let controls: [NSView] = [try button("Trim edges", in: controller.root),
                 try button("Add image…", in: controller.root),
                 try popup("Drawing tool", in: controller.root),
-                try button("Save new copy", in: controller.root)]
+                try button("Change…", in: controller.root)]
             for (index, control) in controls.enumerated() {
                 sections.selectedSegment = index
                 _ = sections.sendAction(sections.action, to: sections.target)
@@ -1148,7 +1193,7 @@ final class ScreenshotEditorTests: XCTestCase {
             section.selectedSegment = 0; _ = section.sendAction(section.action, to: section.target)
             let trim = try button("Trim edges", in: controller.root)
             let scroll = try XCTUnwrap(trim.enclosingScrollView)
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: 356))
+            trim.scrollToVisible(trim.bounds)
             scroll.reflectScrolledClipView(scroll.contentView)
             XCTAssertTrue(scroll.documentVisibleRect.contains(trim.frame))
             try render(controller.root, name: "screenshot-editor-trim-minimum-\(appearance)")
@@ -1362,7 +1407,7 @@ final class ScreenshotEditorTests: XCTestCase {
         try button("Apply crop", in: controller.root).performClick(nil)
         waitUntil { controller.state.snapshot?.width == 4 && !controller.state.busy }
         let edited = controller.state.snapshot
-        try showOutput(in: controller.root)
+        // Copy is available while editing geometry, without switching to Output.
         try button("Copy image", in: controller.root).performClick(nil)
         waitUntil { !controller.state.busy && pasteboard.data(forType: .png) != nil }
         let png = try XCTUnwrap(pasteboard.data(forType: .png))
@@ -1448,6 +1493,7 @@ final class ScreenshotEditorTests: XCTestCase {
         format.selectItem(withTitle: "JPEG")
         _ = format.sendAction(format.action, to: format.target)
         (try field("Output filename", in: controller.root)).stringValue = "asymmetric-edited.jpeg"
+        try showDraw(in: controller.root)
         try button("Save new copy", in: controller.root).performClick(nil)
 
         let request = try XCTUnwrap(worker.saves.last)
@@ -4434,11 +4480,12 @@ final class ScreenshotEditorTests: XCTestCase {
         scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height)))
         scroll.reflectScrolledClipView(scroll.contentView)
         view.layoutSubtreeIfNeeded()
-        let controls: [NSView] = [filename, try button("Save new copy", in: view)]
-        for control in controls {
-            XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)),
-                          "Export filename and save action must be reachable after output sizing controls")
-        }
+        XCTAssertTrue(scroll.contentView.bounds.contains(filename.convert(filename.bounds, to: scroll.contentView)),
+                      "Export filename remains reachable after output sizing controls")
+        let save = try button("Save new copy", in: view)
+        XCTAssertTrue(save.superview === view)
+        XCTAssertTrue(view.bounds.contains(save.frame))
+        XCTAssertFalse(save.isHiddenOrHasHiddenAncestor)
     }
 
     private func scrollImageImportVisible(in view: NSView) throws {

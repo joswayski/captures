@@ -1207,7 +1207,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         sectionControl.setAccessibilityLabel("Editor section")
         root.addSubview(sectionControl)
 
-        geometryPanel.frame = NSRect(x: 688, y: 66, width: 272, height: 390)
+        geometryPanel.frame = NSRect(x: 688, y: 66, width: 272, height: 346)
         layersPanel.frame = geometryPanel.frame; layersPanel.isHidden = true
         drawPanel.frame = geometryPanel.frame; drawPanel.isHidden = true
         outputPanel.frame = geometryPanel.frame; outputPanel.isHidden = true
@@ -1307,23 +1307,33 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         buildDrawPanel()
         buildOutputPanel()
 
-        undoButton = button("Undo", frame: NSRect(x: 688, y: 470, width: 128, height: 34)) {
+        undoButton = button("Undo", frame: NSRect(x: 688, y: 426, width: 128, height: 34)) {
             [weak self] in self?.command(["operation": "undo"], message: "Undoing…")
         }
-        redoButton = button("Redo", frame: NSRect(x: 832, y: 470, width: 128, height: 34)) {
+        redoButton = button("Redo", frame: NSRect(x: 832, y: 426, width: 128, height: 34)) {
             [weak self] in self?.command(["operation": "redo"], message: "Redoing…")
         }
-        saveButton = button("Save draft", frame: NSRect(x: 688, y: 524, width: 128, height: 34)) {
+        saveButton = button("Save draft", frame: NSRect(x: 688, y: 480, width: 128, height: 34)) {
             [weak self] in self?.saveDraft()
         }
-        saveButton.primary = true
-        discardButton = button("Discard edits…", frame: NSRect(x: 824, y: 524, width: 136, height: 34)) {
+        discardButton = button("Discard edits…", frame: NSRect(x: 824, y: 480, width: 136, height: 34)) {
             [weak self] in self?.confirmDiscard()
         }
-        status.frame = NSRect(x: 688, y: 568, width: 272, height: 96)
+        status.frame = NSRect(x: 688, y: 524, width: 272, height: 96)
         status.maximumNumberOfLines = 5; status.setAccessibilityLabel("Screenshot editor status")
         root.addSubview(status)
-        let bottomControls: [NSView] = [undoButton, redoButton, saveButton, discardButton, status]
+        copyImageButton = button("Copy image", frame: NSRect(x: 688, y: 630, width: 100, height: 34)) {
+            [weak self] in self?.copyEditedImage()
+        }
+        copyImageButton.setAccessibilityLabel("Copy edited screenshot")
+        copyImageButton.toolTip = "Copy full-resolution edited pixels as PNG. Export options are ignored; no file or draft is saved."
+        saveNewCopyButton = button("Save new copy", frame: NSRect(x: 808, y: 630, width: 152, height: 34)) {
+            [weak self] in self?.saveNewCopy()
+        }
+        saveNewCopyButton.primary = true
+        saveNewCopyButton.toolTip = "Save a new file without replacing existing files. Configure format, filename and location in Output."
+        let bottomControls: [NSView] = [undoButton, redoButton, saveButton, discardButton, status,
+                                       copyImageButton, saveNewCopyButton]
         for control in bottomControls {
             control.autoresizingMask = [.minXMargin, .minYMargin]
         }
@@ -1569,10 +1579,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         previewOutputButton = button("Preview output", frame: NSRect(x: 0, y: 402, width: 140, height: 34),
                                      parent: outputContent) { [weak self] in self?.previewOutput() }
         previewOutputButton.primary = true
-        copyImageButton = button("Copy image", frame: NSRect(x: 152, y: 402, width: 100, height: 34),
-                                 parent: outputContent) { [weak self] in self?.copyEditedImage() }
-        copyImageButton.setAccessibilityLabel("Copy edited screenshot")
-        copyImageButton.toolTip = "Copy full-resolution edited pixels as PNG. Export options are ignored; no file or draft is saved."
         outputPreviewMode = NSSegmentedControl(labels: ["Edited canvas", "Encoded output"],
                                                trackingMode: .selectOne, target: self,
                                                action: #selector(changeOutputPreview))
@@ -1604,14 +1610,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                              parent: outputContent) {
             [weak self] in self?.chooseOutputDirectory()
         }
-        saveNewCopyButton = button("Save new copy", frame: NSRect(x: 0, y: 744, width: 252, height: 34),
-                                   parent: outputContent) { [weak self] in self?.saveNewCopy() }
-        saveNewCopyButton.primary = true
-        replaceOriginalHelp.frame = NSRect(x: 0, y: 790, width: 252, height: 42)
+        replaceOriginalHelp.frame = NSRect(x: 0, y: 746, width: 252, height: 42)
         replaceOriginalHelp.maximumNumberOfLines = 2
         replaceOriginalHelp.setAccessibilityLabel("Replace original availability")
         outputContent.addSubview(replaceOriginalHelp)
-        replaceOriginalButton = button("Replace original…", frame: NSRect(x: 0, y: 840, width: 252, height: 34),
+        replaceOriginalButton = button("Replace original…", frame: NSRect(x: 0, y: 796, width: 252, height: 34),
                                        parent: outputContent) { [weak self] in self?.confirmReplace() }
         updateOutputOptionControls()
     }
@@ -3012,7 +3015,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         changeOutputDirectoryButton?.isEnabled = ready
         saveNewCopyButton?.isEnabled = ready && !outputDirectory.isEmpty
         let originalPath = state.snapshot?.originalExportPath
-        outputContent.frame.size.height = originalPath == nil ? 778 : 888
+        outputContent.frame.size.height = originalPath == nil ? 744 : 844
         replaceOriginalButton?.isHidden = originalPath == nil
         replaceOriginalHelp.isHidden = originalPath == nil
         let matchesOriginalFormat = originalPath.map { path in

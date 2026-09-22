@@ -305,7 +305,9 @@ canvas-size and draft editor with undo/redo. Both native hosts place their scrol
 inspector to the right of the canvas and center the image in Fit mode without
 upscaling small captures. Their workbench layout still differs from the shipping
 Tauri editor. Both editor windows resize down to 760×540, with scrollable inspector
-controls and a wrapping viewport footer on macOS. **Draw crop** selects directly on the
+controls and a wrapping viewport footer on macOS. Copy image and Save new copy
+stay available below the inspector in every section; format, size, destination and
+confirmed original replacement remain in Output. **Draw crop** selects directly on the
 preview with free or preset aspect ratios and Shift ratio locking. Apply commits
 the selection; Cancel or Escape leaves the document unchanged. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.

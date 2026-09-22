@@ -1471,6 +1471,9 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         view.cancel_layer_gesture();
     }
     egui::Panel::right("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
+        egui::Panel::bottom("editor-export-actions")
+            .resizable(false).exact_size(tokens.number("s-12") + tokens.number("s-6"))
+            .show(ui, |ui| show_export_actions(ui, view, tx));
         egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
         ui.add_enabled_ui(!view.pending && view.presented.is_some() && view.confirm_replace.is_none(), |ui| {
             if view.section == Section::Output {
@@ -3071,6 +3074,37 @@ fn show_crop(
     painter.galley(origin, label, tokens.color("glass-text"));
 }
 
+fn show_export_actions(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
+    let ready = view.presented.is_some()
+        && !view.pending
+        && !view.closed
+        && !view.close_requested
+        && !view.confirm_discard
+        && view.confirm_replace.is_none();
+    ui.add_enabled_ui(ready, |ui| {
+        ui.horizontal(|ui| {
+            let copy = ui.button("Copy")
+                .on_hover_text("Copy full-resolution edited pixels as PNG. Export settings are ignored; no file or draft is saved.");
+            copy.widget_info(|| egui::WidgetInfo::labeled(
+                egui::WidgetType::Button, copy.enabled(), "Copy edited screenshot"));
+            if copy.clicked() { view.copy(tx); }
+            let valid_size = view.presented.as_ref().is_some_and(|p| {
+                let (width, height) = p.pixels.dimensions();
+                view.export_options.size.dimensions(width, height).is_ok()
+            });
+            if ui.add_enabled(!view.pending && view.folder_picker.is_none() && valid_size,
+                egui::Button::new("Save new copy"))
+                .on_hover_text(format!("Save to {}. Existing files are never replaced. Configure in Output.", view.destination))
+                .clicked() { view.save_new(tx); }
+        });
+    });
+    let notice = view
+        .output_notice
+        .as_deref()
+        .unwrap_or("Export settings are in Output.");
+    ui.add(egui::Label::new(notice).truncate());
+}
+
 fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     ui.heading("Output preview");
     let previous = view.export_options;
@@ -3274,20 +3308,6 @@ fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
         view.output_notice = None;
         view.error = None;
     }
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(
-                view.folder_picker.is_none() && output_dimensions.is_ok(),
-                egui::Button::new("Save new copy"),
-            )
-            .clicked()
-        {
-            view.save_new(tx);
-        }
-        if ui.button("Copy pixels").clicked() {
-            view.copy(tx);
-        }
-    });
     ui.small("A new copy never replaces a file. Saving does not save or discard your draft.");
     ui.small("Copy uses the lossless edited canvas, regardless of export quality.");
     if let Some(path) = view
@@ -3318,9 +3338,6 @@ fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
             view.begin_replace();
         }
         ui.small("Replaces this screenshot’s saved file and History image. Use its original file format.");
-    }
-    if let Some(notice) = &view.output_notice {
-        ui.label(notice);
     }
 }
 
@@ -3778,6 +3795,146 @@ fn show_annotation(
 mod tests {
     use super::*;
     use std::{fs, time::Duration};
+
+    #[test]
+    fn pinned_export_actions_fit_every_section_and_preserve_job_gates() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(true)));
+        view.destination = "/exports/edited.png".into();
+        view.export_options.size = ExportSize::Custom {
+            width: 13,
+            height: 7,
+        };
+        view.custom_export_size = [13, 7];
+        let (tx, rx) = mpsc::channel();
+        let frame = |view: &mut View, size, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ui| show(ui, &tokens, view, &tx),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let position = |output: &egui::FullOutput, label| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing action {label}"))
+        };
+        let click = |view: &mut View, size, pos| {
+            frame(view, size, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    view,
+                    size,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        pressed,
+                        button: egui::PointerButton::Primary,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+        };
+        for size in [egui::vec2(1000., 900.), egui::vec2(760., 540.)] {
+            for section in [
+                Section::Geometry,
+                Section::Layers,
+                Section::Draw,
+                Section::Output,
+            ] {
+                view.section = section;
+                frame(&mut view, size, vec![]);
+                let output = frame(&mut view, size, vec![]);
+                let copy = position(&output, "Copy");
+                let save = position(&output, "Save new copy");
+                for pos in [copy, save] {
+                    assert!(pos.x > size.x - 230. && pos.x < size.x);
+                    assert!(pos.y > size.y - 80. && pos.y < size.y);
+                }
+                click(&mut view, size, save);
+                let Job::SaveNew {
+                    destination,
+                    options,
+                } = rx.try_recv().unwrap()
+                else {
+                    panic!()
+                };
+                assert_eq!(destination, PathBuf::from("/exports/edited.png"));
+                assert_eq!(
+                    options.size,
+                    ExportSize::Custom {
+                        width: 13,
+                        height: 7
+                    }
+                );
+                click(&mut view, size, copy);
+                assert!(
+                    rx.try_recv().is_err(),
+                    "copy cannot queue behind an accepted save"
+                );
+                view.pending = false;
+                click(&mut view, size, copy);
+                assert!(matches!(rx.try_recv(), Ok(Job::Copy)));
+                view.pending = false;
+            }
+        }
+        let size = egui::vec2(760., 540.);
+        let output = frame(&mut view, size, vec![]);
+        let save = position(&output, "Save new copy");
+        let copy = position(&output, "Copy");
+        view.export_options.size = ExportSize::Custom {
+            width: 0,
+            height: 7,
+        };
+        view.custom_export_size = [0, 7];
+        click(&mut view, size, save);
+        assert!(rx.try_recv().is_err(), "invalid dimensions disable save");
+        click(&mut view, size, copy);
+        assert!(
+            matches!(rx.try_recv(), Ok(Job::Copy)),
+            "copy ignores invalid export dimensions"
+        );
+        view.pending = false;
+        view.confirm_discard = true;
+        click(&mut view, size, copy);
+        click(&mut view, size, save);
+        assert!(rx.try_recv().is_err(), "confirmation blocks both actions");
+
+        view.confirm_discard = false;
+        view.section = Section::Geometry;
+        let notice = "Saved copy to /exports/a-long-filename-for-the-edited-image.png. History was not updated: the destination is unavailable.";
+        view.output_notice = Some(notice.into());
+        let output = frame(&mut view, size, vec![]);
+        let pos = position(&output, notice);
+        // Let egui's hover delay elapse. The elided label already supplies a
+        // full-message tooltip; an extra on_hover_text would paint it twice.
+        frame(&mut view, size, vec![egui::Event::PointerMoved(pos)]);
+        for _ in 0..90 {
+            frame(&mut view, size, vec![]);
+        }
+        let output = frame(&mut view, size, vec![]);
+        let messages = output.shapes.iter().filter(|shape|
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == notice)
+        ).count();
+        assert_eq!(
+            messages, 2,
+            "one footer label and one complete hover tooltip"
+        );
+        assert!(rx.try_recv().is_err());
+    }
 
     #[test]
     fn output_presets_set_exact_quality_clear_png_override_and_invalidate_preview() {
