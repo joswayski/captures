@@ -648,6 +648,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let explanation = labels.first { $0.stringValue.hasPrefix("Apply before") }
             ?? label("Apply before seeking or saving. The original is immutable.", muted: true,
                      parent: trimPanel)
+        explanation.stringValue = thumbnailRetryAvailable
+            ? "Apply before seeking or saving."
+            : "Apply before seeking or saving. The original is immutable."
         explanation.frame = NSRect(x: 14, y: 46,
             width: trimPanel.bounds.width - (thumbnailRetryAvailable ? 116 : 28), height: 20)
 

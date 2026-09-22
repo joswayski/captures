@@ -232,9 +232,14 @@ final class RecordingEditorTests: XCTestCase {
             .compactMap { $0 as? RecordingTrimHandle }.first { $0.edge == .end })
         let start = try field("Trim start milliseconds", in: controller.root)
         let end = try field("Trim end milliseconds", in: controller.root)
+        let explanation = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSTextField }
+            .first { !$0.isEditable && $0.stringValue.hasPrefix("Apply before") })
 
         for size in [NSSize(width: 960, height: 760), NSSize(width: 760, height: 540)] {
             controller.window.setContentSize(size)
+            XCTAssertLessThanOrEqual(explanation.intrinsicContentSize.width, explanation.frame.width,
+                                     "Retry must not clip the adjacent edit-gating explanation")
             start.stringValue = "200"; end.stringValue = "1800"
             controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                          object: start))
