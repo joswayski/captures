@@ -575,6 +575,7 @@ enum EditorSavePresentation: Equatable {
 struct EditorTerminationTextInput: Equatable {
     let inputID: String
     let text: String
+    let commit: Bool
 }
 
 /// Independently retained immutable Rust pixels. The CGImage provider retains
@@ -911,15 +912,17 @@ final class EditorWorker: EditorWorking {
             Result {
                 guard let session = storage.session else { return }
                 if let textInput {
-                    storage.snapshot = try session.request([
-                        "operation": "update_text_input",
-                        "input_id": textInput.inputID,
-                        "text": textInput.text,
-                    ])
+                    if textInput.commit {
+                        storage.snapshot = try session.request([
+                            "operation": "update_text_input",
+                            "input_id": textInput.inputID,
+                            "text": textInput.text,
+                        ])
+                    }
                     storage.snapshot = try session.request([
                         "operation": "finish_text_input",
                         "input_id": textInput.inputID,
-                        "commit": true,
+                        "commit": textInput.commit,
                     ])
                 }
                 guard storage.snapshot?.activeTextInput == nil else {

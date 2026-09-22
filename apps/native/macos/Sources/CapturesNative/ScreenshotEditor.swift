@@ -1096,7 +1096,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelPendingImport()
         let terminationInput = inlineTextInput.flatMap {
             $0.finishInFlight ? nil
-                : EditorTerminationTextInput(inputID: $0.inputID, text: inlineTextEditor.string)
+                : EditorTerminationTextInput(inputID: $0.inputID, text: inlineTextEditor.string,
+                                             commit: $0.finishRequested ?? true)
         }
         let result = worker.prepareForTermination(textInput: terminationInput)
         switch result {

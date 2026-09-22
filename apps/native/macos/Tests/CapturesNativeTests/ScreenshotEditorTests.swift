@@ -4190,6 +4190,40 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(controller.state.snapshot)
     }
 
+    func testInlineTextQuitPreservesCancelRequestedDuringUpdate() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        var inputID = ""
+        worker.response = { request in
+            guard request["operation"] as? String == "begin_text_input" else { return nil }
+            inputID = request["input_id"] as! String
+            return self.snapshot(id: "shot", layers: [self.textLayer(id: "fresh", text: "")],
+                activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true])
+        }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+        let editor = try textView("Inline screenshot text", in: controller.root)
+        worker.deferRequests = true
+        editor.string = "preview that must be cancelled"
+        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+        try button("Cancel", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "update_text_input")
+
+        XCTAssertTrue(controller.prepareForTermination())
+        XCTAssertEqual(worker.terminationTextInputs.last!, EditorTerminationTextInput(
+            inputID: inputID, text: "preview that must be cancelled", commit: false))
+        worker.completePending(with: snapshot(id: "shot",
+            layers: [textLayer(id: "fresh", text: "preview that must be cancelled")],
+            activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true]))
+        XCTAssertNil(controller.state.snapshot)
+    }
+
     func testInlineTextBeginFailureRetainsLocalBufferAndOffersRetryOrCancel() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
@@ -4254,7 +4288,7 @@ final class ScreenshotEditorTests: XCTestCase {
         worker.terminationResult = .failure(AppBridgeError.backend("disk unavailable"))
         XCTAssertFalse(controller.prepareForTermination())
         XCTAssertEqual(worker.terminationTextInputs.last!,
-                       EditorTerminationTextInput(inputID: inputID, text: "latest\n🙂"))
+                       EditorTerminationTextInput(inputID: inputID, text: "latest\n🙂", commit: true))
         XCTAssertFalse(editor.isHiddenOrHasHiddenAncestor)
         XCTAssertTrue(controller.window.firstResponder === editor)
 
@@ -5036,6 +5070,52 @@ final class ScreenshotEditorTests: XCTestCase {
         let blankNew = try request(["operation": "finish_text_input", "input_id": blankNewID, "commit": true])
         XCTAssertEqual(blankNew.snapshot.layers.count, originalLayerCount + 1,
                        "blank new composition is discarded")
+    }
+
+    func testRealBridgeTerminationDrainsUpdateThenCancelsWithoutPersistingPreview() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker(); defer { worker.close(); EditorWorker.flush() }
+        let opened = expectation(description: "open cancel-on-quit fixture")
+        var original: EditorPresentation?
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+            result in original = try? result.get(); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        let originalLayerCount = try XCTUnwrap(original).snapshot.layers.count
+        let inputID = "appkit-cancel-on-quit"
+        let began = expectation(description: "begin cancel-on-quit input")
+        worker.request(["operation": "begin_text_input", "input_id": inputID,
+            "target": ["kind": "new", "create": ["point": ["x": 80, "y": 70],
+                "text": "", "fontSize": 32, "fontFamily": "sans", "color": "#111111"]]]) {
+            result in
+            if case .failure(let error) = result { XCTFail("Begin failed: \(error)") }
+            began.fulfill()
+        }
+        wait(for: [began], timeout: 5)
+
+        let updated = expectation(description: "queued preview completes before cancellation")
+        worker.request(["operation": "update_text_input", "input_id": inputID,
+                        "text": "preview that must not persist"]) { result in
+            if case .failure(let error) = result { XCTFail("Update failed: \(error)") }
+            updated.fulfill()
+        }
+        XCTAssertNoThrow(try worker.prepareForTermination(textInput: EditorTerminationTextInput(
+            inputID: inputID, text: "preview that must not persist", commit: false)).get())
+        wait(for: [updated], timeout: 5)
+
+        let reopenedWorker = EditorWorker(); defer { reopenedWorker.close(); EditorWorker.flush() }
+        let reopened = expectation(description: "reopen after cancel-on-quit")
+        var restored: EditorPresentation?
+        reopenedWorker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                            artifactID: fixture.id) { result in
+            restored = try? result.get(); reopened.fulfill()
+        }
+        wait(for: [reopened], timeout: 5)
+        XCTAssertEqual(try XCTUnwrap(restored).snapshot.layers.count, originalLayerCount)
+        XCTAssertNil(restored?.snapshot.activeTextInput)
+        XCTAssertFalse(restored?.snapshot.unsavedChanges ?? true)
     }
 
     func testRealBridgeWandEditsAsymmetricPixelAndUndoRedo() throws {
