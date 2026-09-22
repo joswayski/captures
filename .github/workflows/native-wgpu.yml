@@ -95,6 +95,12 @@ jobs:
           for appearance in dark light; do
             /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --thumbnails --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-timeline-$appearance"
           done
+      - name: Exercise silent recording playback and teardown on private X11
+        if: runner.os == 'Linux'
+        run: |
+          for appearance in dark light; do
+            /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --playback --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-playback-$appearance"
+          done
       - name: Exercise recording-ready save, retry and expiry with a hidden root
         if: runner.os == 'Linux'
         run: |
@@ -151,6 +157,8 @@ jobs:
             native-x11-recording-crop-light
             native-x11-recording-timeline-dark
             native-x11-recording-timeline-light
+            native-x11-recording-playback-dark
+            native-x11-recording-playback-light
             native-x11-notice-dark
             native-x11-notice-light
             native-x11-history

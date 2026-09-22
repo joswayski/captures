@@ -457,7 +457,15 @@ to the compact row. Excluded ranges are dimmed and grips retain the same hit reg
 Generation runs once on the serialized worker after open, with independent cancel
 and retry; failure leaves editing available. Edits/seek retain the source strip and
 never regenerate it or change the accepted preview. Close/quit waits for generation.
-AppKit integration is a separate slice; playback remains unimplemented.
+The wgpu host also offers silent Play/Pause through a persistent shared FFmpeg
+decoder capped at 30 fps and 1280 × 720. Motion frames retain the accepted spatial
+edits but stay separate from session state, dirty identity, estimates and History.
+A single latest-frame slot bounds pending UI work; no timer remains after stop.
+Pause retains the last presented source position, EOF replays from accepted trim
+start, and failures restore the accepted still. Focus loss/minimize requests Pause;
+close cancels and waits for teardown before the normal unsaved-edit confirmation.
+Seek/edit/save/estimate remain gated while decoding. AppKit playback is a separate
+slice; audio playback, looping and physical playback acceptance remain open.
 Raw-input tests exercise multi-pass delivery, keyboard focus,
 thresholds, cancellation and busy gates; private-X11 tests cover staged values,
 thumbnail loading/cancel/failure/retry and temporal pixels, exported duration/colors
