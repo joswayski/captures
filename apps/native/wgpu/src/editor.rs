@@ -2476,8 +2476,11 @@ fn show_layer_canvas(
         view.cancel_layer_gesture();
     }
     if first_pass && input_enabled && !viewport_intercepted {
+        // A recent toolbar click can make egui classify the second canvas
+        // click as a triple-click. Both gestures enter the same text editor.
         if !view.pending
-            && response.double_clicked_by(egui::PointerButton::Primary)
+            && (response.double_clicked_by(egui::PointerButton::Primary)
+                || response.triple_clicked_by(egui::PointerButton::Primary))
             && let Some(position) = response.interact_pointer_pos()
             && preview.contains(position)
         {
@@ -6314,11 +6317,15 @@ mod tests {
 
     #[test]
     fn select_double_click_begins_text_once_without_bypassing_layer_or_viewport_guards() {
-        for (visible, locked, intercepted) in [
-            (true, false, false),
-            (false, false, false),
-            (true, true, false),
-            (true, false, true),
+        for (visible, locked, intercepted, prior_click) in [
+            (true, false, false, false),
+            (false, false, false, false),
+            (true, true, false, false),
+            (true, false, true, false),
+            (true, false, false, true),
+            (false, false, false, true),
+            (true, true, false, true),
+            (true, false, true, true),
         ] {
             let ctx = egui::Context::default();
             let mut value = presented_text("label", "Text");
@@ -6338,8 +6345,17 @@ mod tests {
             let (tx, rx) = mpsc::channel();
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
             let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(200., 100.));
-            for (index, pressed) in [true, false, true, false].into_iter().enumerate() {
-                let position = egui::pos2(132., 116.);
+            let mut clicks = Vec::new();
+            if prior_click {
+                // egui counts only the most recent pair's distance when
+                // classifying a triple-click. A recent click elsewhere can
+                // therefore turn the second canvas click into a triple.
+                clicks.extend([true, false].map(|pressed| (egui::pos2(10., 10.), pressed)));
+            }
+            clicks.extend(
+                [true, false, true, false].map(|pressed| (egui::pos2(132., 116.), pressed)),
+            );
+            for (index, &(position, pressed)) in clicks.iter().enumerate() {
                 let mut output = ctx.run_ui(
                     egui::RawInput {
                         time: Some(index as f64 * 0.05),
@@ -6373,7 +6389,7 @@ mod tests {
                     },
                 );
                 output.textures_delta.clear();
-                if index < 3 {
+                if index + 1 < clicks.len() {
                     assert!(rx.try_recv().is_err(), "single click only selects");
                 }
             }
