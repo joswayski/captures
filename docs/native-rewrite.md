@@ -511,11 +511,13 @@ decoded frames, source-relative seek, numeric trim, MP4/GIF format and quality,
 size estimation, progress/cancel, collision-safe Save new copy and dirty close/quit
 guards. AppKit's graphical trim handles use the shared allocation-free geometry and
 only stage the existing numeric values; pointer movement never seeks or decodes, and
-Apply/estimate/save gating is unchanged. It intentionally leaves
-crop/resize/audio/resolution controls to later
-AppKit slices. The wgpu controls implement those broader controls for Windows/Linux;
+Apply/estimate/save gating is unchanged. AppKit now also stages independent volume
+and mute for trusted system/microphone tracks plus mono output in that same atomic
+Apply flow. GIF disables audio controls while retaining MP4 values, and the decoded
+frame preview remains explicitly silent. It intentionally leaves crop/resize and
+resolution controls to later AppKit slices. The wgpu controls implement those broader controls for Windows/Linux;
 private X11/software-GL exercises provide implementation evidence only. Windows and
-Wayland presentation, physical macOS input, accessibility, playback/audio output,
+Wayland presentation, physical macOS input, accessibility, playback and physical audio output,
 graphical crop handles, draft restoration and original replacement remain open. No
 recording-editor or cross-platform parity gate closes.
 

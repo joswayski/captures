@@ -555,7 +555,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     private func recordingCard(_ y: CGFloat) -> CGFloat {
-        let card = card("recording", title: "Recording", description: "Defaults for new screen recordings. The native capture engine is not connected yet.", y: y, height: 626)
+        let card = card("recording", title: "Recording", description: "Defaults for new screen recordings in native development builds.", y: y, height: 626)
         recordingMenu("Recording format", detail: "MP4, GIF or WebM", key: "video_format", values: ["mp4", "gif", "webm"], y: 88, parent: card)
         recordingMenu("Frames per second", detail: "Default recording frame rate", key: "video_fps", values: [60, 30, 15], y: 146, parent: card)
         recordingMenu("Maximum resolution", detail: "Original, 1080p or 720p", key: "video_max_resolution", values: ["original", "p1080", "p720"], y: 204, parent: card)

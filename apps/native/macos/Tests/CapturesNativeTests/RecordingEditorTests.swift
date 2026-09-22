@@ -192,6 +192,189 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertFalse(controller.prepareForTermination(), "staged recording edits have no draft")
     }
 
+    func testAudioStagesAsymmetricTracksAndApplyPublishesTrustedIdentity() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            hasSystemAudio: true, hasMicrophoneAudio: true,
+            systemVolume: 0.8, microphoneVolume: 1.2))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let system = try field("System audio volume percent", in: controller.root)
+        let microphone = try field("Microphone volume percent", in: controller.root)
+        XCTAssertEqual(system.stringValue, "80%")
+        XCTAssertEqual(microphone.stringValue, "120%")
+        system.stringValue = "25"; microphone.stringValue = "175"
+        let muteMicrophone = try checkbox("Mute microphone", in: controller.root)
+        let monoOutput = try checkbox("Mono audio output", in: controller.root)
+        muteMicrophone.state = .on; monoOutput.state = .on
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: system))
+        XCTAssertFalse(try slider("Recording frame position", in: controller.root).isEnabled)
+        XCTAssertFalse(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
+        XCTAssertTrue(controller.dirty, "audio-only staging participates in dirty lifecycle")
+
+        worker.requestResult = .success(try presentation(revision: 1,
+            hasSystemAudio: true, hasMicrophoneAudio: true,
+            systemVolume: 0.25, microphoneVolume: 1.75,
+            muteMicrophone: true, monoOutput: true))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        let request = try XCTUnwrap(worker.requests.last)
+        let edit = try XCTUnwrap(request["edit"] as? [String: Any])
+        let audio = try XCTUnwrap(edit["audio"] as? [String: Any])
+        XCTAssertEqual((audio["system_volume"] as? NSNumber)?.doubleValue, 0.25)
+        XCTAssertEqual((audio["microphone_volume"] as? NSNumber)?.doubleValue, 1.75)
+        XCTAssertEqual(audio["mute_system_audio"] as? Bool, false)
+        XCTAssertEqual(audio["mute_microphone"] as? Bool, true)
+        XCTAssertEqual(audio["mono_output"] as? Bool, true)
+        XCTAssertEqual(audio["source_has_system_audio"] as? Bool, true)
+        XCTAssertEqual(audio["source_has_microphone_audio"] as? Bool, true)
+        XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
+    }
+
+    func testAudioPercentagePresentationUsesPlainExactValues() throws {
+        _ = NSApplication.shared
+        for percent in [0.0, 25, 80, 100, 120, 175, 200] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                hasSystemAudio: true, systemVolume: Double(Float(percent / 100))))
+            let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                       worker: worker, confirmDiscard: { false })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                               outputDirectory: "/Exports")
+            let expected = percent.rounded() == percent ? String(Int(percent)) : String(percent)
+            XCTAssertEqual(try field("System audio volume percent", in: controller.root).stringValue,
+                           "\(expected)%")
+        }
+    }
+
+    func testAudioPercentagesRoundTripAtF32BoundaryWithoutRegating() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            hasSystemAudio: true, hasMicrophoneAudio: true))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let system = try field("System audio volume percent", in: controller.root)
+        let microphone = try field("Microphone volume percent", in: controller.root)
+        system.stringValue = "12.34%"; microphone.stringValue = "33.3%"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: system))
+        worker.requestResult = .success(try presentation(revision: 1,
+            hasSystemAudio: true, hasMicrophoneAudio: true,
+            systemVolume: Double(Float(0.1234)), microphoneVolume: Double(Float(0.333))))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertEqual(system.stringValue, "12.34%")
+        XCTAssertEqual(microphone.stringValue, "33.3%")
+        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
+
+        let seek = try slider("Recording frame position", in: controller.root)
+        worker.requestResult = .success(try presentation(position: 500, revision: 2,
+            hasSystemAudio: true, hasMicrophoneAudio: true,
+            systemVolume: Double(Float(0.1234)), microphoneVolume: Double(Float(0.333))))
+        seek.doubleValue = 500; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(system.stringValue, "12.34%")
+        XCTAssertEqual(microphone.stringValue, "33.3%")
+        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
+
+        microphone.stringValue = "29%"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: microphone))
+        worker.requestResult = .success(try presentation(position: 500, revision: 3,
+            hasSystemAudio: true, hasMicrophoneAudio: true,
+            systemVolume: Double(Float(0.1234)), microphoneVolume: Double(Float(0.29))))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertEqual(system.stringValue, "12.34%")
+        XCTAssertEqual(microphone.stringValue, "29%")
+        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Estimate size", in: controller.root).isEnabled)
+
+        let start = try field("Trim start milliseconds", in: controller.root)
+        start.stringValue = "100"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: start))
+        let format = try popup("Recording export format", in: controller.root)
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        let muteSystem = try checkbox("Mute system audio", in: controller.root)
+        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+        muteSystem.state = .on; _ = muteSystem.sendAction(muteSystem.action, to: muteSystem.target)
+        worker.requestResult = .success(try presentation(start: 100, position: 500, revision: 4,
+            hasSystemAudio: true, hasMicrophoneAudio: true,
+            systemVolume: Double(Float(0.1234)), microphoneVolume: Double(Float(0.29)),
+            muteSystem: true))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        let request = try XCTUnwrap(worker.requests.last)
+        let edit = try XCTUnwrap(request["edit"] as? [String: Any])
+        let audio = try XCTUnwrap(edit["audio"] as? [String: Any])
+        XCTAssertEqual((audio["system_volume"] as? NSNumber)?.floatValue, Float(0.1234))
+        XCTAssertEqual((audio["microphone_volume"] as? NSNumber)?.floatValue, Float(0.29))
+        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
+    }
+
+    func testAudioFailureGifRetentionAndUnavailableTracks() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            hasSystemAudio: true, hasMicrophoneAudio: true))
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let system = try field("System audio volume percent", in: controller.root)
+        let microphone = try field("Microphone volume percent", in: controller.root)
+        let preview = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSImageView }.first)
+        let acceptedFrame = preview.image
+        system.stringValue = "30"; microphone.stringValue = "160"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: system))
+        worker.requestResult = .failure(AppBridgeError.backend("audio preview unavailable"))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertEqual(system.stringValue, "30"); XCTAssertEqual(microphone.stringValue, "160")
+        XCTAssertTrue(preview.image === acceptedFrame, "failed Apply retains the accepted frame")
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("audio preview unavailable") })
+        XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
+
+        let format = try popup("Recording export format", in: controller.root)
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertFalse(system.isEnabled); XCTAssertFalse(microphone.isEnabled)
+        XCTAssertFalse(try checkbox("Mute system audio", in: controller.root).isEnabled)
+        XCTAssertFalse(try checkbox("Mono audio output", in: controller.root).isEnabled)
+        XCTAssertEqual(system.stringValue, "30"); XCTAssertEqual(microphone.stringValue, "160")
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("MP4 kept") })
+        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertTrue(system.isEnabled); XCTAssertTrue(microphone.isEnabled)
+        XCTAssertEqual(system.stringValue, "30"); XCTAssertEqual(microphone.stringValue, "160")
+
+        let silentWorker = FakeRecordingEditorWorker(presentation: try presentation())
+        let silent = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                               worker: silentWorker, confirmDiscard: { false })
+        defer { silent.window.orderOut(nil) }
+        silent.present(artifact: recordingArtifact(), historyRoot: "/History",
+                       outputDirectory: "/Exports")
+        XCTAssertTrue(labels(in: silent.root).contains { $0 == "No audio tracks." })
+        XCTAssertTrue(try field("System audio volume percent", in: silent.root).isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(try field("Microphone volume percent", in: silent.root).isHiddenOrHasHiddenAncestor)
+
+        let systemOnlyWorker = FakeRecordingEditorWorker(presentation: try presentation(hasSystemAudio: true))
+        let systemOnly = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: systemOnlyWorker, confirmDiscard: { false })
+        defer { systemOnly.window.orderOut(nil) }
+        systemOnly.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        XCTAssertFalse(try field("System audio volume percent", in: systemOnly.root).isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(try field("Microphone volume percent", in: systemOnly.root).isHiddenOrHasHiddenAncestor)
+    }
+
     func testAcceptedSeekEstimateSaveWarningAndDirtyLifecycle() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation())
@@ -296,13 +479,23 @@ final class RecordingEditorTests: XCTestCase {
     func testBusyCloseQuitCancellationAndRenderedStates() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
-            let worker = FakeRecordingEditorWorker(presentation: try presentation())
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                hasSystemAudio: true, hasMicrophoneAudio: true))
             let controller = RecordingEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
                                                        worker: worker, confirmDiscard: { false })
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                                outputDirectory: "/Exports")
             try render(controller.root, name: "recording-editor-normal-\(appearance)")
+            let systemVolume = try field("System audio volume percent", in: controller.root)
+            let microphoneVolume = try field("Microphone volume percent", in: controller.root)
+            systemVolume.stringValue = "25%"; microphoneVolume.stringValue = "175%"
+            controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                         object: systemVolume))
+            try render(controller.root, name: "recording-editor-audio-staged-\(appearance)")
+            systemVolume.stringValue = "100"; microphoneVolume.stringValue = "100"
+            controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                         object: systemVolume))
             let timeline = try XCTUnwrap(descendants(in: controller.root)
                 .compactMap { $0 as? RecordingTrimTimeline }.first)
             timeline.nudge(edge: .start, direction: 1, page: true)
@@ -311,6 +504,10 @@ final class RecordingEditorTests: XCTestCase {
             XCTAssertTrue(controller.window.makeFirstResponder(startHandle))
             try render(controller.root, name: "recording-editor-trim-staged-\(appearance)")
             timeline.nudge(edge: .start, direction: -1, page: true)
+            let format = try popup("Recording export format", in: controller.root)
+            format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+            try render(controller.root, name: "recording-editor-gif-audio-disabled-\(appearance)")
+            format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             XCTAssertTrue(controller.root.subviews.allSatisfy {
                 $0.isHidden || controller.root.bounds.intersects($0.frame)
@@ -319,11 +516,14 @@ final class RecordingEditorTests: XCTestCase {
 
             worker.deferSave = true
             try button("Save new copy", in: controller.root).performClick(nil)
+            XCTAssertFalse(systemVolume.isEnabled)
+            XCTAssertFalse(try checkbox("Mute system audio", in: controller.root).isEnabled)
             XCTAssertFalse(controller.windowShouldClose(controller.window))
             XCTAssertFalse(controller.prepareForTermination())
             let cancel = try button("Cancel operation", in: controller.root)
             XCTAssertFalse(cancel.isHiddenOrHasHiddenAncestor); cancel.performClick(nil)
             worker.completeSave(.failure(AppBridgeError.backend("Export cancelled")))
+            XCTAssertTrue(systemVolume.isEnabled)
             XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Export cancelled") })
             try render(controller.root, name: "recording-editor-error-\(appearance)")
         }
@@ -365,8 +565,81 @@ final class RecordingEditorTests: XCTestCase {
                        "every edit/export keeps the original byte-identical")
     }
 
+    func testRealBridgeIndependentAudioGainMuteMonoHistoryAndImmutableOriginal() throws {
+        let tools = try NativeMediaTools.locate()
+        let fixture = try makeIndependentAudioFixture(tools: tools)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sourceBefore = try Data(contentsOf: fixture.source)
+        let opened = try NativeRecordingEditorSession.open(historyRoot: fixture.history.path,
+                                                            artifactID: fixture.id, tools: tools)
+        let session = opened.0
+        XCTAssertTrue(opened.1.snapshot.hasSystemAudio)
+        XCTAssertTrue(opened.1.snapshot.hasMicrophoneAudio)
+        var export = opened.1.snapshot.export
+        export["quality"] = "standard"; export["max_size_bytes"] = NSNull()
+
+        var gainEdit = opened.1.snapshot.edit
+        gainEdit["trim_start_ms"] = 100; gainEdit["trim_end_ms"] = 1_900
+        var gainAudio = try XCTUnwrap(gainEdit["audio"] as? [String: Any])
+        gainAudio["system_volume"] = Float(0.1234); gainAudio["microphone_volume"] = Float(0.333)
+        gainEdit["audio"] = gainAudio
+        let gain = try session.request(["operation": "update_preview", "edit": gainEdit,
+                                        "export": export])
+        XCTAssertTrue(gain.snapshot.hasSystemAudio); XCTAssertTrue(gain.snapshot.hasMicrophoneAudio)
+        let acceptedGain = try XCTUnwrap(gain.snapshot.edit["audio"] as? [String: Any])
+        XCTAssertEqual((acceptedGain["system_volume"] as? NSNumber)?.floatValue, Float(0.1234))
+        XCTAssertEqual((acceptedGain["microphone_volume"] as? NSNumber)?.floatValue, Float(0.333))
+        let gainPath = fixture.root.appendingPathComponent("gain.mp4")
+        _ = try session.save(destination: gainPath.path, export: export,
+                             cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+        XCTAssertEqual(try audioChannelCount(gainPath, tools: tools), 2)
+        try assertTones(gainPath, tools: tools, channels: 2,
+                        expected: [[0.01234, 0.02664], [0.00617, 0.02664]])
+
+        var systemEdit = gain.snapshot.edit
+        var systemAudio = try XCTUnwrap(systemEdit["audio"] as? [String: Any])
+        systemAudio["system_volume"] = Float(0.29)
+        systemAudio["mute_microphone"] = true; systemEdit["audio"] = systemAudio
+        let system = try session.request(["operation": "update_preview", "edit": systemEdit,
+                                          "export": export])
+        let acceptedSystem = try XCTUnwrap(system.snapshot.edit["audio"] as? [String: Any])
+        XCTAssertEqual((acceptedSystem["system_volume"] as? NSNumber)?.floatValue, Float(0.29))
+        let systemPath = fixture.root.appendingPathComponent("system-only.mp4")
+        _ = try session.save(destination: systemPath.path, export: export,
+                             cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+        XCTAssertEqual(try audioChannelCount(systemPath, tools: tools), 2)
+        try assertTones(systemPath, tools: tools, channels: 2,
+                        expected: [[0.029, 0], [0.0145, 0]])
+
+        var microphoneEdit = system.snapshot.edit
+        var microphoneAudio = try XCTUnwrap(microphoneEdit["audio"] as? [String: Any])
+        microphoneAudio["mute_system_audio"] = true
+        microphoneAudio["mute_microphone"] = false
+        microphoneAudio["mono_output"] = true
+        microphoneEdit["audio"] = microphoneAudio
+        _ = try session.request(["operation": "update_preview", "edit": microphoneEdit,
+                                 "export": export])
+        let microphonePath = fixture.root.appendingPathComponent("microphone-mono.mp4")
+        _ = try session.save(destination: microphonePath.path, export: export,
+                             cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+        XCTAssertEqual(try audioChannelCount(microphonePath, tools: tools), 1)
+        try assertTones(microphonePath, tools: tools, channels: 1,
+                        expected: [[0, 0.02664 * sqrt(2.0)]])
+
+        XCTAssertEqual(try historyAudioIdentity(for: systemPath.path, history: fixture.history),
+                       AudioIdentity(system: true, microphone: false))
+        XCTAssertEqual(try historyAudioIdentity(for: microphonePath.path, history: fixture.history),
+                       AudioIdentity(system: false, microphone: true))
+        XCTAssertEqual(try Data(contentsOf: fixture.source), sourceBefore,
+                       "audio exports keep the original byte-identical")
+    }
+
     private func presentation(start: UInt64 = 0, end: UInt64? = nil,
-                              position: UInt64 = 0, revision: UInt64 = 0) throws
+                              position: UInt64 = 0, revision: UInt64 = 0,
+                              hasSystemAudio: Bool = false, hasMicrophoneAudio: Bool = false,
+                              systemVolume: Double = 1, microphoneVolume: Double = 1,
+                              muteSystem: Bool = false, muteMicrophone: Bool = false,
+                              monoOutput: Bool = false) throws
         -> RecordingEditorPresentation {
         let endValue: Any = end.map { NSNumber(value: $0) } ?? NSNull()
         let snapshot = try XCTUnwrap(NativeRecordingEditorSnapshot([
@@ -374,14 +647,16 @@ final class RecordingEditorTests: XCTestCase {
                 "width": 320, "height": 180, "duration_ms": 2_000, "size_bytes": 1_024],
             "edit": ["trim_start_ms": start, "trim_end_ms": endValue,
                 "crop": NSNull(), "output_width": NSNull(), "output_height": NSNull(),
-                "audio": ["system_volume": 1.0, "microphone_volume": 1.0,
-                          "mute_system_audio": false, "mute_microphone": false,
-                          "mono_output": false, "source_has_system_audio": false,
-                          "source_has_microphone_audio": false]],
+                "audio": ["system_volume": systemVolume, "microphone_volume": microphoneVolume,
+                          "mute_system_audio": muteSystem, "mute_microphone": muteMicrophone,
+                          "mono_output": monoOutput, "source_has_system_audio": hasSystemAudio,
+                          "source_has_microphone_audio": hasMicrophoneAudio]],
             "preview_export": ["format": "mp4", "quality": "preserve",
                 "max_size_bytes": 4_000_000, "frames_per_second": NSNull(),
                 "gif_max_colors": NSNull()],
             "position_ms": position, "revision": revision,
+            "has_system_audio": hasSystemAudio,
+            "has_microphone_audio": hasMicrophoneAudio,
         ]))
         return RecordingEditorPresentation(snapshot: snapshot, image: try fixtureImage())
     }
@@ -421,6 +696,100 @@ final class RecordingEditorTests: XCTestCase {
         return (root, history, source, id)
     }
 
+    private func makeIndependentAudioFixture(tools: NativeMediaTools) throws
+        -> (root: URL, history: URL, source: URL, id: String) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let history = root.appendingPathComponent("History")
+        let id = UUID().uuidString.lowercased()
+        let directory = history.appendingPathComponent(id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appendingPathComponent("media.mp4")
+        try run(tools.ffmpeg, ["-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=12:duration=2",
+            "-f", "lavfi", "-i", "aevalsrc=0.1*sin(2*PI*440*t)|0.05*sin(2*PI*440*t):s=48000:d=2",
+            "-f", "lavfi", "-i", "aevalsrc=0.04*sin(2*PI*880*t)|0.12*sin(2*PI*880*t):s=48000:d=2",
+            "-filter_complex", "[1:a]asplit=2[system][s];[2:a]asplit=2[mic][m];[s][m]amix=inputs=2:normalize=0[mixed]",
+            "-map", "0:v", "-map", "[mixed]", "-map", "[system]", "-map", "[mic]",
+            "-c:v", "mpeg4", "-q:v", "2", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "256k", "-y", source.path])
+        let sourceSize = (try FileManager.default.attributesOfItem(atPath: source.path)[.size]
+                          as? NSNumber)?.intValue ?? 0
+        let metadata: [String: Any] = ["id": id, "kind": "video",
+            "preview_url": "capture-history://\(id)/preview",
+            "full_url": "capture-history://\(id)/full", "width": 160, "height": 90,
+            "size_bytes": sourceSize, "created_at": "2026-09-22T00:00:00Z",
+            "mode": "display", "mime_type": "video/mp4", "duration_ms": 2_000,
+            "target": ["type": "display", "display_id": "fixture"],
+            "has_system_audio": true, "has_microphone_audio": true, "dropped_frames": 0]
+        try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys])
+            .write(to: directory.appendingPathComponent("metadata.json"))
+        return (root, history, source, id)
+    }
+
+    private struct AudioIdentity: Equatable {
+        let system: Bool
+        let microphone: Bool
+    }
+
+    private func historyAudioIdentity(for path: String, history: URL) throws -> AudioIdentity {
+        for directory in try FileManager.default.contentsOfDirectory(at: history,
+            includingPropertiesForKeys: nil) {
+            let metadata = directory.appendingPathComponent("metadata.json")
+            guard let data = try? Data(contentsOf: metadata),
+                  let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  value["saved_path"] as? String == path else { continue }
+            return AudioIdentity(system: value["has_system_audio"] as? Bool ?? false,
+                                 microphone: value["has_microphone_audio"] as? Bool ?? false)
+        }
+        throw AppBridgeError.invalidResponse
+    }
+
+    private func audioChannelCount(_ path: URL, tools: NativeMediaTools) throws -> Int {
+        let data = try run(tools.ffprobe, ["-v", "error", "-select_streams", "a:0",
+            "-show_entries", "stream=channels", "-of", "json", path.path])
+        let value = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let streams = try XCTUnwrap(value["streams"] as? [[String: Any]])
+        return try XCTUnwrap((streams.first?["channels"] as? NSNumber)?.intValue)
+    }
+
+    private func assertTones(_ path: URL, tools: NativeMediaTools, channels: Int,
+                             expected: [[Double]], file: StaticString = #filePath,
+                             line: UInt = #line) throws {
+        let data = try run(tools.ffmpeg, ["-v", "error", "-ss", "0.3", "-i", path.path,
+            "-map", "0:a:0", "-t", "0.2", "-ar", "48000", "-f", "f32le", "-"])
+        let samples = data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+        XCTAssertEqual(samples.count, 9_600 * channels, file: file, line: line)
+        guard samples.count == 9_600 * channels else { return }
+        for channel in 0..<channels {
+            for (index, frequency) in [440.0, 880.0].enumerated() {
+                var real = 0.0, imaginary = 0.0
+                for sample in 0..<9_600 {
+                    let value = Double(samples[sample * channels + channel])
+                    let phase = 2 * Double.pi * frequency * Double(sample) / 48_000
+                    real += value * cos(phase); imaginary += value * sin(phase)
+                }
+                let measured = 2 * hypot(real, imaginary) / 9_600
+                let target = expected[channel][index]
+                XCTAssertEqual(measured, target, accuracy: max(0.001, target * 0.15),
+                               "channel \(channel), \(Int(frequency)) Hz", file: file, line: line)
+            }
+        }
+    }
+
+    @discardableResult private func run(_ executable: String, _ arguments: [String]) throws -> Data {
+        let process = Process(); let output = Pipe(); let errors = Pipe()
+        process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments
+        process.standardOutput = output; process.standardError = errors
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        let error = errors.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw AppBridgeError.backend(String(decoding: error, as: UTF8.self))
+        }
+        return data
+    }
+
     private func fixtureImage() throws -> CGImage {
         let bytes = [UInt8](repeating: 80, count: 16 * 9 * 4)
         let provider = try XCTUnwrap(CGDataProvider(data: Data(bytes) as CFData))
@@ -444,6 +813,10 @@ final class RecordingEditorTests: XCTestCase {
     }
     private func slider(_ label: String, in view: NSView) throws -> NSSlider {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSSlider }
+            .first { $0.accessibilityLabel() == label })
+    }
+    private func checkbox(_ label: String, in view: NSView) throws -> NSButton {
+        try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSButton }
             .first { $0.accessibilityLabel() == label })
     }
     private func button(_ title: String, in view: NSView) throws -> CaptureButton {
