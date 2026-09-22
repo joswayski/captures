@@ -1689,9 +1689,9 @@ fn fitted_image_rect(available: egui::Rect, image: egui::Vec2) -> egui::Rect {
         .max(0.02)
         .min((available.height() / image.y).max(0.02))
         .min(1.);
-    // Match the previous Image widget's top-left alignment so Fit preserves
-    // established workbench coordinates and leaves spare space below/right.
-    egui::Rect::from_min_size(available.min, image * scale)
+    // Keep spare space balanced, matching Tauri and AppKit even when the
+    // minimum Fit scale makes a very large image extend beyond the viewport.
+    egui::Rect::from_center_size(available.center(), image * scale)
 }
 
 fn viewport_rect(viewport: Viewport, fit: egui::Rect, image: egui::Vec2) -> Option<egui::Rect> {
@@ -3930,17 +3930,43 @@ mod tests {
     }
 
     #[test]
-    fn fit_caps_small_images_and_uses_the_limiting_axis_with_tauri_floor() {
+    fn fit_centers_without_upscaling_and_preserves_the_tauri_floor() {
         let area = egui::Rect::from_min_size(egui::pos2(31., 47.), egui::vec2(400., 300.));
-        for (image, expected) in [
-            (egui::vec2(160., 90.), egui::vec2(160., 90.)),
-            (egui::vec2(400., 300.), egui::vec2(400., 300.)),
-            (egui::vec2(800., 200.), egui::vec2(400., 100.)),
-            (egui::vec2(200., 1200.), egui::vec2(50., 300.)),
-            (egui::vec2(40000., 20000.), egui::vec2(800., 400.)),
+        for (image, expected, origin) in [
+            (
+                egui::vec2(160., 90.),
+                egui::vec2(160., 90.),
+                egui::pos2(151., 152.),
+            ),
+            (
+                egui::vec2(400., 300.),
+                egui::vec2(400., 300.),
+                egui::pos2(31., 47.),
+            ),
+            (
+                egui::vec2(800., 200.),
+                egui::vec2(400., 100.),
+                egui::pos2(31., 147.),
+            ),
+            (
+                egui::vec2(200., 1200.),
+                egui::vec2(50., 300.),
+                egui::pos2(206., 47.),
+            ),
+            (
+                egui::vec2(40000., 20000.),
+                egui::vec2(800., 400.),
+                egui::pos2(-169., -3.),
+            ),
+            (
+                egui::vec2(161., 91.),
+                egui::vec2(161., 91.),
+                egui::pos2(150.5, 151.5),
+            ),
         ] {
             let fit = fitted_image_rect(area, image);
-            assert_eq!(fit.min, area.min);
+            assert_eq!(fit.min, origin);
+            assert_eq!(fit.center(), area.center());
             assert_eq!(fit.size(), expected);
             assert_eq!(viewport_rect(Viewport::default(), fit, image), Some(fit));
         }
@@ -4414,7 +4440,9 @@ mod tests {
                 height: 100.,
             },
         );
-        assert!((point.x - 120.).abs() < 1e-5 && (point.y - 60.).abs() < 1e-5);
+        // The centered 200×100 image starts at (200,130), so this pointer
+        // must stay over document (20,10), not the old top-left Fit's (120,60).
+        assert!((point.x - 20.).abs() < 1e-5 && (point.y - 10.).abs() < 1e-5);
         assert!(
             view.shape_drag.is_none(),
             "zoom cancels an uncommitted drawing"

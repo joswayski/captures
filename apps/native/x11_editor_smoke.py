@@ -113,6 +113,8 @@ def main():
         env[variable] = str(path)
     children, logs = [], []
     loop = None
+    editor = None
+    draft = None
 
     def spawn(name, command, announce=False):
         stdout = subprocess.PIPE if announce else (output / f"{name}.jsonl").open("w")
@@ -139,14 +141,27 @@ def main():
         assert result.returncode in (0, 1), result.stderr
         return result.stdout.split()
 
+    shot_layouts = {}
+
     def shot(window, name):
         time.sleep(.5)
         run("import", "-window", window, str(output / f"{name}.png"))
+        if editor is not None and str(window) == str(editor):
+            shot_layouts[name] = (window_size(), document_size())
 
     def pixel(name, x, y, expected, tolerance=0):
         actual = run("convert", str(output / f"{name}.png"), "-crop", f"1x1+{x}+{y}",
                      "-depth", "8", "rgb:-")
         assert len(actual) == 3 and all(abs(a - b) <= tolerance for a, b in zip(actual, expected)), (name, x, y, actual, expected)
+
+    def document_pixel(name, x, y, expected, tolerance=0):
+        window, size = shot_layouts[name]
+        left, top, scale = fit_geometry(size, window)
+        pixel(name, round(left + x * scale), round(top + y * scale), expected, tolerance)
+
+    def fixture_pixel(name, x, y, expected, tolerance=0):
+        # Historical right-inspector fixtures used a document origin of (8, 89).
+        document_pixel(name, x - 8, y - 89, expected, tolerance)
 
     def wait(predicate, description):
         deadline = time.monotonic() + 20
@@ -166,13 +181,59 @@ def main():
             "mousemove_relative", "--sync", "1", "0", "sleep", ".15", "mousedown", "1",
             "sleep", ".15", "mouseup", "1", "sleep", ".2")
 
-    # Editor coordinates use three explicit spaces: toolbar coordinates are window-local
-    # and unchanged; inspector coordinates are local to the fixed 230px right panel;
-    # canvas coordinates are window-local positions from the former left-inspector layout.
-    # Exported-image pixel coordinates never pass through these helpers.
-    def editor_width():
+    # Keep the four coordinate spaces explicit. Toolbar coordinates are window-local,
+    # inspector coordinates are local to the fixed 230px right panel, document points
+    # are authored in image pixels, and exported-image pixels never pass through these
+    # helpers. A few visual fixtures use the historical screenshot coordinates whose
+    # document origin was (8, 89); fixture_to_document names that conversion directly.
+    def window_size():
         geometry = run("xdotool", "getwindowgeometry", "--shell", editor).decode()
-        return int(re.search(r"^WIDTH=(\d+)$", geometry, re.MULTILINE).group(1))
+        return tuple(int(re.search(rf"^{axis}=(\d+)$", geometry, re.MULTILINE).group(1))
+                     for axis in ("WIDTH", "HEIGHT"))
+
+    def editor_width():
+        return window_size()[0]
+
+    def document_size():
+        if draft is not None and draft.exists():
+            document = json.loads(draft.read_text())["document"]
+            return document["width"], document["height"]
+        return 640, 360
+
+    def fit_geometry(size=None, window=None):
+        width, height = window or window_size()
+        image_width, image_height = size or document_size()
+        available = (8., 133. if width == 760 else 89., width - 238., height - 8.)
+        scale = min(1., max(.02, (available[2] - available[0]) / image_width),
+                    max(.02, (available[3] - available[1]) / image_height))
+        center = ((available[0] + available[2]) / 2, (available[1] + available[3]) / 2)
+        return (center[0] - image_width * scale / 2,
+                center[1] - image_height * scale / 2, scale)
+
+    def document_point(point, size=None):
+        left, top, scale = fit_geometry(size)
+        return round(left + point[0] * scale), round(top + point[1] * scale)
+
+    def fixture_point(point, size=None):
+        return document_point(fixture_to_document(point), size)
+
+    def fixture_click(point, size=None):
+        click(editor, *fixture_point(point, size))
+
+    def fixture_move(point, *tail, size=None, sync=False):
+        x, y = fixture_point(point, size)
+        command = ["xdotool", "mousemove"]
+        if sync:
+            command.append("--sync")
+        run(*command, "--window", editor, str(x), str(y), *tail)
+
+    def resize_editor(width, height, *tail):
+        # Full-size geometry fixtures use odd client heights so an even-height
+        # document's centered Fit origin lands on an integer device pixel.
+        run("xdotool", "windowsize", "--sync", editor, str(width), str(height), *map(str, tail))
+
+    def fixture_to_document(point):
+        return point[0] - 8, point[1] - 89
 
     def inspector_x(x):
         return editor_width() - 230 + x
@@ -184,7 +245,9 @@ def main():
         run("xdotool", "mousemove", "--window", editor, str(inspector_x(x)), str(y), *tail)
 
     def canvas_point(point):
-        return point[0] - 230, point[1]
+        # Existing authored gestures describe points in the fixture screenshot.
+        # Convert to document space first, then use the independently specified Fit.
+        return document_point(fixture_to_document((point[0] - 230, point[1])))
 
     def drag(start, end, shift=False):
         start, end = canvas_point(start), canvas_point(end)
@@ -475,7 +538,7 @@ def main():
             return
 
         if args.rotation_snap_only:
-            run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
+            resize_editor(1000, 1001)
             click(editor, 463, 62)
             inspector_click(79, 300)  # Unlock the original image for canvas rotation.
             save_layers(lambda values: not values[0]["locked"], "unlocked original")
@@ -486,9 +549,11 @@ def main():
             assert draft.read_bytes() == before, "snap preference must not edit or save a draft"
             # Full-canvas image uses the inset top grip at (558,117), pivot (558,269).
             # Vector (0,-152) to (100,-110) is 42.27°, giving 37°, not default 45°.
-            run("xdotool", "mousemove", "--sync", "--window", editor, "328", "117",
+            rotation_start = fixture_point((328, 117))
+            rotation_end = fixture_point((428, 159))
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, rotation_start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
-                "428", "159", "keydown", "Shift_L", "sleep", ".3")
+                *map(str, rotation_end), "keydown", "Shift_L", "sleep", ".3")
             shot(editor, "rotation-snap-transient")
             assert draft.read_bytes() == before
             run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "keyup", "Shift_L")
@@ -499,9 +564,9 @@ def main():
                         "custom 37-degree rotation")
             shot(editor, "rotation-snap-committed")
             # Independently rotate the original yellow rectangle's interior point (150,130).
-            yellow = (round(8 + 320 - 170 * math.cos(angle) + 50 * math.sin(angle)),
-                      round(89 + 180 - 170 * math.sin(angle) - 50 * math.cos(angle)))
-            pixel("rotation-snap-committed", *yellow, (229, 179, 68))
+            yellow_document = (320 - 170 * math.cos(angle) + 50 * math.sin(angle),
+                               180 - 170 * math.sin(angle) - 50 * math.cos(angle))
+            document_pixel("rotation-snap-committed", *yellow_document, (229, 179, 68))
             click(editor, 35, 62)
             save_layers(lambda values: values[0].get("rotation", 0) == 0, "custom rotation undo")
             click(editor, 98, 62)
@@ -513,11 +578,11 @@ def main():
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "custom rotation closes")
             editor = reopen()
-            run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
+            resize_editor(1000, 1001)
             click(editor, 463, 62)
             shot(editor, "rotation-snap-reopened-default")
             assert math.isclose(layers()[0]["rotation"], angle, abs_tol=1e-12)
-            pixel("rotation-snap-reopened-default", *yellow, (229, 179, 68))
+            document_pixel("rotation-snap-reopened-default", *yellow_document, (229, 179, 68))
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "rotation snap suite quits")
@@ -532,7 +597,7 @@ def main():
             return
 
         if args.polygon_only:
-            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            resize_editor(886, 701)
             save(640, 360, 0, 0)
             click(editor, 736, 62)
             shot(editor, "polygon-tools")
@@ -568,8 +633,8 @@ def main():
                 save_layers(lambda values: values[-1]["id"] == created["id"], f"{name} redo stable ID")
                 ids.append(created["id"])
             # A convex hull or fan triangulation would incorrectly fill this star notch.
-            pixel("polygon-star-transient", 508, 409, (46, 158, 113))
-            pixel("polygon-star-committed", 508, 409, (46, 158, 113))
+            fixture_pixel("polygon-star-transient", 508, 409, (46, 158, 113))
+            fixture_pixel("polygon-star-committed", 508, 409, (46, 158, 113))
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "polygon-minimum")
             inspector_move(180, 400, "click", "--repeat", "5", "5")
@@ -577,11 +642,11 @@ def main():
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "polygon draft closes")
             editor = reopen()
-            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            resize_editor(886, 701)
             shot(editor, "polygon-reopened")
             for center in [(348, 179), (548, 209), (738, 359)]:
                 pixel("polygon-reopened", *canvas_point(center), (255, 59, 92))
-            pixel("polygon-reopened", 508, 409, (46, 158, 113))
+            fixture_pixel("polygon-reopened", 508, 409, (46, 158, 113))
             assert [layer["id"] for layer in layers()[1:]] == ids
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
@@ -718,7 +783,7 @@ def main():
             return
 
         if args.text_defaults_only:
-            run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
+            resize_editor(1000, 1001)
             save_layers(lambda values: len(values) == 1, "baseline draft before Text defaults")
             before = draft.read_bytes()
             click(editor, 736, 62)
@@ -734,14 +799,14 @@ def main():
             field(452, "#2367ab", x=105)
             shot(editor, "text-defaults-staged")
             assert draft.read_bytes() == before, "defaults must not write a draft"
-            click(editor, 208, 169)  # Document (200,80), at actual-size scale.
+            fixture_click((208, 169))  # Document (200,80), at actual-size scale.
             text = save_layers(lambda values: len(values) == 2, "styled Text placed")[-1]
             assert text["kind"] == "text" and text["fontFamily"] == "mono"
             assert text["fontSize"] == 37.5 and text["color"] == "#2367ab"
             assert (text["x"], text["y"], text["width"], text["align"]) == (50, 80, 300, "center")
             assert text["background"] == "#111318" and text["autoWidth"]
             shot(editor, "text-defaults-created")
-            pixel("text-defaults-created", 158, 180, (17, 19, 24))
+            fixture_pixel("text-defaults-created", 158, 180, (17, 19, 24))
             click(editor, 35, 62)
             save_layers(lambda values: len(values) == 1, "styled creation single undo")
             click(editor, 98, 62)
@@ -753,12 +818,12 @@ def main():
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "styled Text editor closes")
             editor = reopen()
-            run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
+            resize_editor(1000, 1001)
             click(editor, 736, 62)
             inspector_click(34, 128)
             shot(editor, "text-defaults-reopened")
             assert layers()[-1] == text
-            click(editor, 408, 269)  # 640×360 capture starts at 24; not saved Mono box/37.5.
+            fixture_click((408, 269))  # Fresh editor defaults, not saved Mono box/37.5.
             reset = save_layers(lambda values: len(values) == 3, "fresh editor Text defaults")[-1]
             assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("sans", 24, "#ff3b5c")
             assert reset["align"] == "left" and reset["background"] is None
@@ -777,10 +842,10 @@ def main():
             return
 
         if args.text_only:
-            run("xdotool", "windowsize", "--sync", editor, "1000", "1500")
+            resize_editor(1000, 1501)
             click(editor, 736, 62)  # Draw.
             inspector_click(34, 128)  # Text is the first tool.
-            click(editor, 200, 250)  # Place one empty, selected auto-width text layer.
+            fixture_click((200, 250))  # Place one empty, selected auto-width text layer.
             save_layers(lambda values: len(values) == 2 and values[-1]["kind"] == "text",
                         "empty text placed once")
             created = layers()[-1]
@@ -820,7 +885,11 @@ def main():
                              "offsetX": 17.5, "offsetY": -8}
             assert layers()[-1]["dropShadowStyle"] == custom_shadow
             shot(editor, "text-glyph-shadow")
-            def text_pixels(name, crop="640x360+8+89"):
+            def text_pixels(name, crop=None):
+                if crop is None:
+                    window, size = shot_layouts[name]
+                    left, top, scale = fit_geometry(size, window)
+                    crop = f"{round(size[0] * scale)}x{round(size[1] * scale)}+{round(left)}+{round(top)}"
                 return run("convert", str(output / f"{name}.png"), "-crop", crop,
                            "-depth", "8", "rgba:-")
             assert text_pixels("text-shadow-staged") == text_pixels("text-without-shadow")
@@ -957,9 +1026,9 @@ def main():
             assert (draft.parent / "fonts/regular.font").read_bytes() == font_bytes
             assert json.loads(draft.read_text())["fonts"] == {
                 "families": {"sans": "Captures Shaping Test"}, "assets": ["regular"]}
-            run("xdotool", "windowsize", "--sync", editor, "886", "700")
-            click(editor, 470, 62)  # Layers; image origin (8,89), scale 1.
-            click(editor, 370, 230)  # Select the text plate, including non-ink pixels.
+            resize_editor(886, 701)
+            click(editor, 470, 62)  # Layers.
+            fixture_click((370, 230))  # Select the text plate, including non-ink pixels.
             drag((600, 230), (625, 247))
             save_layers(lambda values: (values[1]["x"], values[1]["y"]) == (275, 57), "text moved")
             shot(editor, "text-moved")
@@ -1016,19 +1085,21 @@ def main():
             return
 
         if args.brush_only:
-            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            resize_editor(886, 701)
             save(640, 360, 0, 0)
             source = layers()[0]["src"]
             click(editor, 736, 62)
             inspector_click(170, 221)  # Restore before the first edit reports a recoverable error.
-            click(editor, 108, 189)
+            fixture_click((108, 189))
             shot(editor, "brush-restore-error")
             save_layers(lambda values: values[0]["src"] == source, "restore without original is atomic")
             inspector_click(101, 221)  # Erase; keep shipping diameter/softness defaults.
             shot(editor, "brush-controls")
             before = draft.read_bytes()
-            run("xdotool", "mousemove", "--window", editor, "108", "189", "mousedown", "1",
-                "sleep", ".2", "mousemove", "--sync", "--window", editor, "208", "229", "sleep", ".3")
+            brush_start = fixture_point((108, 189))
+            brush_end = fixture_point((208, 229))
+            run("xdotool", "mousemove", "--window", editor, *map(str, brush_start), "mousedown", "1",
+                "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, brush_end), "sleep", ".3")
             shot(editor, "brush-active")
             assert draft.read_bytes() == before, "brush preview must not persist pixels"
             run("xdotool", "key", "Escape", "mouseup", "1", "sleep", ".3")
@@ -1059,7 +1130,7 @@ def main():
             wait(lambda: not windows("Screenshot editor"), "brush draft closes")
             editor = reopen()
             asset_pixel(layers()[0], 150, 120, (0, 0, 0, 0))
-            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            resize_editor(886, 701)
             click(editor, 736, 62)
             inspector_click(101, 221)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
@@ -1087,14 +1158,14 @@ def main():
             return
 
         if args.wand_only:
-            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            resize_editor(886, 701)
             save(640, 360, 0, 0)
             source = layers()[0]["src"]
             click(editor, 736, 62)
             inspector_click(36, 221)
             shot(editor, "wand-controls")
-            # Fitted image origin (8,89), scale 1. Original capture stays locked.
-            click(editor, 108, 189)
+            # Pick authored document point (100,100). Original capture stays locked.
+            fixture_click((108, 189))
             edited = save_layers(lambda values: values[0]["src"] != source, "wand edit")[0]
             assert edited["locked"] and edited["originalSrc"] == source
 
@@ -1102,7 +1173,7 @@ def main():
             asset_pixel(edited, 310, 60, (229, 179, 68, 255))
             asset_pixel(edited, 2, 1, (40, 110, 166, 255))
             shot(editor, "wand-contiguous")
-            click(editor, 108, 189)  # Transparent seed fails; must not create a new asset.
+            fixture_click((108, 189))  # Transparent seed fails; must not create a new asset.
             shot(editor, "wand-no-match")
             save_layers(lambda values: values[0]["src"] == edited["src"], "no-match preserves pixels")
             click(editor, 35, 62)
@@ -1112,7 +1183,7 @@ def main():
             click(editor, 35, 62)
             save_layers(lambda values: values[0]["src"] == source, "undo before global removal")
             inspector_click(128, 308)  # Disable Contiguous below the four tool rows.
-            click(editor, 108, 189)
+            fixture_click((108, 189))
             global_edit = save_layers(lambda values: values[0]["src"] != source, "global wand")[0]
             asset_pixel(global_edit, 100, 100, (0, 0, 0, 0))
             asset_pixel(global_edit, 310, 60, (0, 0, 0, 0))
@@ -1122,7 +1193,7 @@ def main():
             wait(lambda: not windows("Screenshot editor"), "wand draft closes")
             editor = reopen()
             asset_pixel(layers()[0], 310, 60, (0, 0, 0, 0))
-            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            resize_editor(886, 701)
             click(editor, 736, 62)
             inspector_click(36, 221)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
@@ -1193,7 +1264,7 @@ def main():
             return
 
         if args.background_only:
-            run("xdotool", "windowsize", "--sync", editor, "1000", "800")
+            resize_editor(1000, 801)
             field(428, 720)
             field(472, 420)
             inspector_click(58, 516)
@@ -1209,13 +1280,13 @@ def main():
 
             save_until(lambda: background_is("#214365"), "solid canvas background")
             shot(editor, "background-solid")
-            pixel("background-solid", 700, 500, (33, 67, 101))
-            pixel("background-solid", 40, 120, (40, 110, 166))
+            fixture_pixel("background-solid", 700, 500, (33, 67, 101))
+            fixture_pixel("background-solid", 40, 120, (40, 110, 166))
             field(633, "invalid", x=95)
             inspector_click(75, 670)
             shot(editor, "background-error")
             assert background_is("#214365")
-            pixel("background-error", 700, 500, (33, 67, 101))
+            fixture_pixel("background-error", 700, 500, (33, 67, 101))
             # The error row adds 27px below the toolbar until the next command.
             inspector_click(20, 595 + 27)
             inspector_click(75, 670 + 27)
@@ -1261,29 +1332,38 @@ def main():
         # Viewport state is host-only. Exercise anchored wheel zoom and an
         # ordered middle-button pan before the coordinate-sensitive fixtures.
         shot(editor, f"viewport-before-{args.appearance}")
-        pixel(f"viewport-before-{args.appearance}", 80, 200, (40, 110, 166))
-        run("xdotool", "mousemove", "--sync", "--window", editor, "290", "250",
+        document_pixel(f"viewport-before-{args.appearance}", 72, 111, (40, 110, 166))
+        zoom_anchor = document_point((450, 250))
+        # Probe just outside the green rectangle at x=400. Two wheel steps
+        # about x=450 must move its left edge across this initially blue point.
+        zoom_probe = document_point((397, 250))
+        pixel(f"viewport-before-{args.appearance}", *zoom_probe, (40, 110, 166))
+        run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, zoom_anchor),
             "keydown", "ctrl", "click", "4", "click", "4", "keyup", "ctrl", "sleep", ".3")
         shot(editor, f"viewport-zoom-{args.appearance}")
-        pixel(f"viewport-zoom-{args.appearance}", 80, 200, (229, 179, 68))
+        pixel(f"viewport-zoom-{args.appearance}", *zoom_anchor, (46, 158, 113))
+        pixel(f"viewport-zoom-{args.appearance}", *zoom_probe, (46, 158, 113))
         assert not draft.exists(), "zoom must not create a draft"
-        run("xdotool", "mousemove", "--sync", "--window", editor, "290", "250",
-            "mousedown", "2", "mousemove", "--sync", "--window", editor, "355", "290",
+        pan_target = (zoom_anchor[0] + 65, zoom_anchor[1] + 40)
+        run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, zoom_anchor),
+            "mousedown", "2", "mousemove", "--sync", "--window", editor, *map(str, pan_target),
             "sleep", ".3")
         shot(editor, f"viewport-pan-active-{args.appearance}")
         assert not draft.exists(), "active pan must not enqueue an edit"
         run("xdotool", "mouseup", "2", "sleep", ".3")
         shot(editor, f"viewport-pan-settled-{args.appearance}")
-        pixel(f"viewport-pan-settled-{args.appearance}", 80, 200, (40, 110, 166))
-        pixel(f"viewport-pan-settled-{args.appearance}", 260, 200, (229, 179, 68))
+        pixel(f"viewport-pan-settled-{args.appearance}", *pan_target, (46, 158, 113))
+        pixel(f"viewport-pan-settled-{args.appearance}", *zoom_probe, (40, 110, 166))
+        pixel(f"viewport-pan-settled-{args.appearance}", zoom_probe[0] + 65,
+              zoom_probe[1] + 40, (46, 158, 113))
         assert not draft.exists(), "settled pan must not enqueue an edit"
         # Recenter keeps zoom; Fit restores the historical fixture geometry.
         click(editor, 840, 25)
         shot(editor, f"viewport-recenter-{args.appearance}")
         click(editor, 590, 18)
         shot(editor, f"viewport-fit-{args.appearance}")
-        pixel(f"viewport-fit-{args.appearance}", 110, 200, (229, 179, 68))
-        pixel(f"viewport-fit-{args.appearance}", 80, 200, (40, 110, 166))
+        document_pixel(f"viewport-fit-{args.appearance}", 102, 111, (229, 179, 68))
+        document_pixel(f"viewport-fit-{args.appearance}", 72, 111, (40, 110, 166))
         click(editor, 668, 18)
         shot(editor, "viewport-presets-menu")
         click(editor, 660, 145)  # 100% preset, without a custom row.
@@ -1309,12 +1389,12 @@ def main():
         click(editor, 668, 18)
         click(editor, 660, 101)  # 50% preset.
         shot(editor, "viewport-preset-50")
-        # 640×360 at 50% is 320×180, centered at (328, 330).
-        pixel("viewport-preset-50", 170, 260, (40, 110, 166))
-        pixel("viewport-preset-50", 225, 290, (229, 179, 68))
-        pixel("viewport-preset-50", 167, 260,
+        # 640×360 at 50% is 320×180, centered in the 640×603 viewport.
+        pixel("viewport-preset-50", 170, 310, (40, 110, 166))
+        pixel("viewport-preset-50", 225, 340, (229, 179, 68))
+        pixel("viewport-preset-50", 163, 310,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
-        pixel("viewport-preset-50", 488, 260,
+        pixel("viewport-preset-50", 488, 310,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
         click(editor, 668, 18)
         click(editor, 660, 189)  # 200% preset.
@@ -1348,10 +1428,14 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "1180", "900", "sleep", ".3")
             shot(editor, "viewport-fit-no-upscale")
             surface = (245, 245, 247) if args.appearance == "light" else (16, 16, 20)
-            pixel("viewport-fit-no-upscale", 647, 100, (40, 110, 166))
-            pixel("viewport-fit-no-upscale", 648, 100, surface)
-            pixel("viewport-fit-no-upscale", 20, 448, (40, 110, 166))
-            pixel("viewport-fit-no-upscale", 20, 449, surface)
+            # Client 1180×900 minus the inspector and central-panel margins
+            # leaves x=8..942, y=89..892. Its center is (475,490.5), so the
+            # 640×360 source spans x=155..795, y=310.5..670.5. Raster sample
+            # centers at the bottom edge are excluded by the top-left fill rule.
+            pixel("viewport-fit-no-upscale", 794, 400, (40, 110, 166))
+            pixel("viewport-fit-no-upscale", 795, 400, surface)
+            pixel("viewport-fit-no-upscale", 300, 669, (40, 110, 166))
+            pixel("viewport-fit-no-upscale", 300, 670, surface)
             assert not draft.exists(), "Fit resizing must not create a draft"
             run("xdotool", "windowsize", "--sync", editor, "760", "540",
                 "key", "ctrl+0", "ctrl+equal", "ctrl+equal", "sleep", ".3")
@@ -1362,10 +1446,12 @@ def main():
             click(editor, 465, 18)  # Fit resets the viewport-center anchor.
             click(editor, 311, 18)  # Left end of the logarithmic slider: 5%.
             shot(editor, "viewport-slider-minimum")
-            pixel("viewport-slider-minimum", 250, 321, (40, 110, 166))
-            pixel("viewport-slider-minimum", 248, 321, surface)
-            pixel("viewport-slider-minimum", 282, 321, surface)
-            pixel("viewport-slider-minimum", 250, 339, surface)
+            # Wrapped toolbar leaves x=8..522, y=133..532, center (265,332.5).
+            # The 5% source is 32×18, starting at (249,323.5).
+            pixel("viewport-slider-minimum", 250, 325, (40, 110, 166))
+            pixel("viewport-slider-minimum", 248, 325, surface)
+            pixel("viewport-slider-minimum", 281, 325, surface)
+            pixel("viewport-slider-minimum", 250, 341, surface)
             click(editor, 437, 18)  # Right end: 800%, preserving the same anchor.
             shot(editor, "viewport-slider-maximum")
             pixel("viewport-slider-maximum", 10, 150, (40, 110, 166))
@@ -1387,9 +1473,10 @@ def main():
             }, indent=2) + "\n")
             print("PASS native zoom: wheel, pan, toolbar, keyboard, presets, custom zoom, focused field, no draft")
             return
+        resize_editor(886, 701)
         click(editor, 736, 62)
         inspector_click(154, 177)  # Pen follows Arrow on the second tool row.
-        run("xdotool", "mousemove", "--window", editor, "88", "329", "mousedown", "1", "sleep", ".2")
+        fixture_move((88, 329), "mousedown", "1", "sleep", ".2")
         for point in [(378, 209), (438, 329), (518, 249)]:
             x, y = canvas_point(point)
             run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y), "sleep", ".2")
@@ -1397,10 +1484,10 @@ def main():
         assert not draft.exists()
         # First quadratic at t=1/2: (132.5,165) document pixels. The control
         # point (140,120) must remain unpainted, unlike an unsmoothed polyline.
-        pixel("freehand-transient", 141, 254, (255, 59, 92))
-        pixel("freehand-transient", 148, 209, (229, 179, 68))
-        pixel("freehand-transient", 86, 331, (255, 59, 92))  # round start cap
-        pixel("freehand-transient", 290, 247, (255, 59, 92))  # round end cap
+        fixture_pixel("freehand-transient", 141, 254, (255, 59, 92))
+        fixture_pixel("freehand-transient", 148, 209, (229, 179, 68))
+        fixture_pixel("freehand-transient", 86, 331, (255, 59, 92))  # round start cap
+        fixture_pixel("freehand-transient", 290, 247, (255, 59, 92))  # round end cap
         run("xdotool", "mouseup", "1", "sleep", ".3")
         curve = save_layers(lambda values: len(values) == 2, "freehand curve")[-1]
         assert curve["kind"] == "path" and curve["style"]["fill"] is None
@@ -1408,21 +1495,23 @@ def main():
         for point, expected in zip(curve["points"], [(80, 240), (140, 120), (200, 240), (280, 160)]):
             assert abs(point["x"] - expected[0]) < 1e-12 and abs(point["y"] - expected[1]) < 1e-12
         shot(editor, "freehand-curve")
-        pixel("freehand-curve", 141, 254, (255, 59, 92))
-        pixel("freehand-curve", 148, 209, (229, 179, 68))
-        pixel("freehand-curve", 86, 331, (255, 59, 92))
-        pixel("freehand-curve", 290, 247, (255, 59, 92))
+        fixture_pixel("freehand-curve", 141, 254, (255, 59, 92))
+        fixture_pixel("freehand-curve", 148, 209, (229, 179, 68))
+        fixture_pixel("freehand-curve", 86, 331, (255, 59, 92))
+        fixture_pixel("freehand-curve", 290, 247, (255, 59, 92))
         drag((700, 420), (701, 420))  # Under 1.5 screen pixels: keep only the press sample.
         dot = save_layers(lambda values: len(values) == 3, "freehand one-point dot")[-1]
         assert dot["kind"] == "path" and len(dot["points"]) == 1
         shot(editor, "freehand-dot")
-        pixel("freehand-dot", 470, 420, (255, 59, 92))
+        fixture_pixel("freehand-dot", 470, 420, (255, 59, 92))
         click(editor, 35, 62)
         save_layers(lambda values: len(values) == 2, "freehand dot undo")
         before_cancel = draft.read_bytes()
-        run("xdotool", "mousemove", "--window", editor, "170", "400", "mousedown", "1",
-            "sleep", ".2", "mousemove", "--sync", "--window", editor, "230", "410", "sleep", ".2",
-            "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
+        cancel_start = fixture_point((170, 400))
+        cancel_end = fixture_point((230, 410))
+        run("xdotool", "mousemove", "--window", editor, *map(str, cancel_start), "mousedown", "1",
+            "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, cancel_end),
+            "sleep", ".2", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
         assert draft.read_bytes() == before_cancel
         click(editor, 98, 62)
         assert save_layers(lambda values: len(values) == 3, "cancel preserves freehand redo")[-1]["id"] == dot["id"]
@@ -1435,16 +1524,16 @@ def main():
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "freehand editor closes")
         editor = reopen()
-        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        resize_editor(886, 701)
         shot(editor, "freehand-reopened")
-        pixel("freehand-reopened", 141, 254, (255, 59, 92))
+        fixture_pixel("freehand-reopened", 141, 254, (255, 59, 92))
         assert layers()[1]["id"] == curve["id"] and layers()[1]["points"] == curve["points"]
         assert (artifact / "capture.png").read_bytes() == original
         click(editor, 275, 62)
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "discard freehand edits")
 
-        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        resize_editor(886, 701)
         click(editor, 736, 62)
         shot(editor, "open-shape-tools")
         inspector_click(32, 177)  # Line starts the second tool row.
@@ -1453,20 +1542,22 @@ def main():
         assert horizontal["shape"] == "line" and horizontal["style"]["fill"] is None
         assert (horizontal["x"], horizontal["y"], horizontal["endX"], horizontal["endY"]) == (82, 221, 262, 221)
         shot(editor, "open-shape-horizontal")
-        pixel("open-shape-horizontal", 170, 310, (255, 59, 92))
-        pixel("open-shape-horizontal", 170, 300, (40, 110, 166))
+        fixture_pixel("open-shape-horizontal", 170, 310, (255, 59, 92))
+        fixture_pixel("open-shape-horizontal", 170, 300, (40, 110, 166))
         drag((540, 360), (540, 200))
         vertical = save_layers(lambda values: len(values) == 3, "reverse vertical line")[-1]
         assert (vertical["x"], vertical["y"], vertical["endX"], vertical["endY"]) == (302, 271, 302, 111)
-        click(editor, 470, 420)
+        fixture_click((470, 420))
         point_line = save_layers(lambda values: len(values) == 4, "zero-length line click")[-1]
         assert (point_line["x"], point_line["y"]) == (point_line["endX"], point_line["endY"])
         inspector_click(94, 176)  # Arrow follows Line.
         before_arrow = draft.read_bytes()
-        run("xdotool", "mousemove", "--window", editor, "520", "320", "mousedown", "1",
-            "sleep", ".2", "mousemove", "--sync", "--window", editor, "350", "190", "sleep", ".3")
+        arrow_start = fixture_point((520, 320))
+        arrow_end = fixture_point((350, 190))
+        run("xdotool", "mousemove", "--window", editor, *map(str, arrow_start), "mousedown", "1",
+            "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, arrow_end), "sleep", ".3")
         shot(editor, "open-shape-arrow-transient")
-        pixel("open-shape-arrow-transient", 435, 255, (255, 59, 92))
+        fixture_pixel("open-shape-arrow-transient", 435, 255, (255, 59, 92))
         assert draft.read_bytes() == before_arrow
         run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
         save_layers(lambda values: len(values) == 4, "arrow Escape cancellation")
@@ -1477,8 +1568,8 @@ def main():
         assert all(abs(actual - expected) < 1e-12 for actual, expected in zip(
             (arrow["x"], arrow["y"], arrow["endX"], arrow["endY"]), (512, 231, 342, 101)))
         shot(editor, "open-shape-arrow")
-        pixel("open-shape-arrow", 435, 255, (255, 59, 92))
-        pixel("open-shape-arrow", 310, 260, (255, 59, 92))
+        fixture_pixel("open-shape-arrow", 435, 255, (255, 59, 92))
+        fixture_pixel("open-shape-arrow", 310, 260, (255, 59, 92))
         drag((500, 400), (502, 400))  # Two screen/document pixels is below the 3px gesture threshold.
         save_layers(lambda values: len(values) == 5, "short arrow cancellation")
         click(editor, 35, 62)
@@ -1490,9 +1581,9 @@ def main():
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "open-shape editor closes")
         editor = reopen()
-        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        resize_editor(886, 701)
         shot(editor, "open-shape-reopened")
-        pixel("open-shape-reopened", 435, 255, (255, 59, 92))
+        fixture_pixel("open-shape-reopened", 435, 255, (255, 59, 92))
         assert layers()[-1]["id"] == arrow["id"]
         assert (artifact / "capture.png").read_bytes() == original
         click(editor, 275, 62)
@@ -1517,7 +1608,7 @@ def main():
         field(415, "#23b5a9")
         assert draft.read_bytes() == unchanged
         shot(editor, "annotation-unapplied")
-        pixel("annotation-unapplied", 170, 310, (255, 59, 92))
+        fixture_pixel("annotation-unapplied", 170, 310, (255, 59, 92))
         inspector_click(150, 503)  # Reset does not mutate the document.
         assert draft.read_bytes() == unchanged
         inspector_click(50, 503)  # A broken Reset would apply the staged cyan here.
@@ -1526,7 +1617,7 @@ def main():
         inspector_click(50, 503)
         save_layers(lambda values: values[-1]["style"]["fill"] == "#23b5a9", "annotation fill")
         shot(editor, "annotation-fill")
-        pixel("annotation-fill", 170, 310, (35, 181, 169))
+        fixture_pixel("annotation-fill", 170, 310, (35, 181, 169))
         click(editor, 35, 62)
         save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "one-step style undo")
         click(editor, 98, 62)
@@ -1540,8 +1631,8 @@ def main():
         inspector_click(50, 503)
         save_layers(lambda values: values[-1]["style"]["fill"] is None and values[-1]["style"]["strokeWidth"] == 12, "annotation outline")
         shot(editor, "annotation-outline")
-        pixel("annotation-outline", 170, 310, (40, 110, 166))
-        pixel("annotation-outline", 93, 310, (50, 105, 214))
+        fixture_pixel("annotation-outline", 170, 310, (40, 110, 166))
+        fixture_pixel("annotation-outline", 93, 310, (50, 105, 214))
         inspector_click(15, 415)  # Restore fill; enter a different color from the stroke.
         inspector_move(180, 400, "click", "--repeat", "20", "5")
         field(415, "#23b5a9")
@@ -1558,7 +1649,7 @@ def main():
         assert styled["id"] == annotation["id"] and styled["locked"]
         assert styled["style"]["dropShadowStyle"] == {"color": "#ff8800", "opacity": 80, "blur": 0, "offsetX": 25, "offsetY": -12}
         shot(editor, "annotation-shadow")
-        pixel("annotation-shadow", 279, 310, (212, 131, 33), tolerance=1)
+        fixture_pixel("annotation-shadow", 279, 310, (212, 131, 33), tolerance=1)
         inspector_click(28, 283)
         shot(editor, "annotation-color-picker")
         run("xdotool", "key", "Escape", "sleep", ".2")
@@ -1568,7 +1659,7 @@ def main():
         disabled = save_layers(lambda values: values[-1]["style"]["dropShadow"] is False, "shadow off")[-1]
         assert disabled["style"]["dropShadowStyle"] == styled["style"]["dropShadowStyle"]
         shot(editor, "annotation-shadow-off")
-        pixel("annotation-shadow-off", 279, 310, (40, 110, 166))
+        fixture_pixel("annotation-shadow-off", 279, 310, (40, 110, 166))
         inspector_click(15, 459)
         inspector_move(180, 400, "click", "--repeat", "25", "5")
         inspector_click(50, 503)
@@ -1579,15 +1670,15 @@ def main():
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "styled editor closes")
         editor = reopen()
-        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        resize_editor(886, 701)
         shot(editor, "annotation-reopened")
-        pixel("annotation-reopened", 279, 310, (212, 131, 33), tolerance=1)
+        fixture_pixel("annotation-reopened", 279, 310, (212, 131, 33), tolerance=1)
         assert layers()[-1]["style"] == styled["style"]
         assert (artifact / "capture.png").read_bytes() == original
         click(editor, 275, 62)
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "discard annotation edits")
-        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
+        resize_editor(1000, 701)
 
         # These synthetic hex colors are sRGB. Keep the fixture untagged rather
         # than ImageMagick's gamma/chromaticity-only PNG; profiles have unit coverage.
@@ -1629,8 +1720,8 @@ def main():
         assert not imported_layer["locked"] and imported_layer["visible"] and imported_layer["opacity"] == 100
         assert saved(640, 440, 0, 0)
         shot(editor, "imported-canvas")
-        pixel("imported-canvas", 293, 468, (60, 179, 113))
-        pixel("imported-canvas", 370, 514, (45, 100, 189))
+        fixture_pixel("imported-canvas", 293, 468, (60, 179, 113))
+        fixture_pixel("imported-canvas", 370, 514, (45, 100, 189))
         click(editor, 463, 62)
         inspector_move(180, 400, "click", "--repeat", "25", "4")
         shot(editor, "imported-selected-layer")
@@ -1642,7 +1733,7 @@ def main():
         shot(editor, "imported-minimum")
         inspector_move(180, 400, "click", "--repeat", "8", "5")
         shot(editor, "imported-minimum-scrolled")
-        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
+        resize_editor(1000, 701)
         inspector_move(180, 400, "click", "--repeat", "12", "4")
         assert imported_path.read_bytes() == imported_bytes
         imported_path.unlink()  # A saved import must no longer depend on its source file.
@@ -1655,9 +1746,11 @@ def main():
 
         inspector_click(100, 158)  # Redo retained the original's selection; pick the imported row.
         resize_before = draft.read_bytes()
-        run("xdotool", "mousemove", "--sync", "--window", editor, "387", "489",
+        resize_start = fixture_point((387, 489))
+        resize_end = fixture_point((423, 489))
+        run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, resize_start),
             "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
-            "423", "489", "sleep", ".3")
+            *map(str, resize_end), "sleep", ".3")
         shot(editor, "layer-resize-active-guides")
         assert draft.read_bytes() == resize_before, "resize preview must remain transient"
         run("xdotool", "mouseup", "1", "sleep", ".3")
@@ -1671,13 +1764,13 @@ def main():
         assert resized["id"] == imported_id
         shot(editor, "layer-resize-committed")
         # Independently scale the fixture's green center (25,19) from its left edge.
-        resized_green = (round(8 + 260 + 25 * resized_width / 120), 89 + 360 + 19)
-        pixel("layer-resize-committed", *resized_green, (60, 179, 113))
+        resized_green = (260 + 25 * resized_width / 120, 360 + 19)
+        document_pixel("layer-resize-committed", *resized_green, (60, 179, 113))
         click(editor, 35, 62)
         save_layers(lambda values: values[-1]["width"] == 120 and values[-1]["height"] == 80,
                     "undo imported image resize")
         shot(editor, "layer-resize-undone")
-        pixel("layer-resize-undone", 293, 468, (60, 179, 113))
+        fixture_pixel("layer-resize-undone", 293, 468, (60, 179, 113))
         click(editor, 98, 62)
         save_layers(lambda values: math.isclose(values[-1]["width"], resized_width, abs_tol=1e-5),
                     "redo imported image resize")
@@ -1688,24 +1781,26 @@ def main():
         reopened_resize = layers()[-1]
         assert reopened_resize["id"] == imported_id
         assert math.isclose(reopened_resize["width"], resized_width, abs_tol=1e-5)
-        pixel("layer-resize-reopened", *resized_green, (60, 179, 113))
+        document_pixel("layer-resize-reopened", *resized_green, (60, 179, 113))
         # Undo history is session-local. Restore through a fresh east-grip resize
         # at 1:1 scale, where the desired edge lands on an exact pointer pixel.
         click(editor, 463, 62)  # Reopened editors start in Geometry, not Layers.
         inspector_click(100, 158)
-        run("xdotool", "windowsize", "--sync", editor, "886", "700", "sleep", ".3")
+        resize_editor(886, 701, "sleep", ".3")
         drag((round(238 + 260 + resized_width), 489), (618, 489))
         save_layers(lambda values: values[-1]["width"] == 120 and values[-1]["height"] == 80,
                     "restore imported size after draft reopen")
-        run("xdotool", "windowsize", "--sync", editor, "1000", "700", "sleep", ".3")
+        resize_editor(1000, 701, "sleep", ".3")
 
         # At 1× the 120x80 image's grip is (558,425), around pivot (558,489).
         # Start five points above the grip, within its hit radius.
         # Exercise a free-angle transient first; Escape must leave draft/pixels intact.
         rotation_before = draft.read_bytes()
-        run("xdotool", "mousemove", "--sync", "--window", editor, "328", "420",
+        free_rotation_start = fixture_point((328, 420))
+        free_rotation_end = fixture_point((363, 400))
+        run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, free_rotation_start),
             "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
-            "363", "400", "sleep", ".3")
+            *map(str, free_rotation_end), "sleep", ".3")
         shot(editor, "layer-rotation-free-transient")
         run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
         assert draft.read_bytes() == rotation_before
@@ -1721,13 +1816,13 @@ def main():
         angle = math.pi / 6
         expected_x = 260 + 60 + (-35 * math.cos(angle) - -21 * math.sin(angle))
         expected_y = 360 + 40 + (-35 * math.sin(angle) + -21 * math.cos(angle))
-        expected_screen = (round(8 + expected_x), round(89 + expected_y))
-        assert expected_screen == (308, 453)
-        pixel("layer-rotation-shift-result", *expected_screen, (60, 179, 113))
+        expected_document = (expected_x, expected_y)
+        assert tuple(map(round, expected_document)) == (300, 364)
+        document_pixel("layer-rotation-shift-result", *expected_document, (60, 179, 113))
         click(editor, 35, 62)
         save_layers(lambda values: "rotation" not in values[-1], "undo imported image rotation")
         shot(editor, "layer-rotation-undone")
-        pixel("layer-rotation-undone", 293, 468, (60, 179, 113))
+        fixture_pixel("layer-rotation-undone", 293, 468, (60, 179, 113))
         click(editor, 98, 62)
         save_layers(lambda values: math.isclose(values[-1].get("rotation", 0), math.pi / 6,
                                                 abs_tol=1e-12),
@@ -1736,7 +1831,7 @@ def main():
         wait(lambda: not windows("Screenshot editor"), "imported draft closes")
         editor = reopen()
         shot(editor, "layer-rotation-reopened")
-        pixel("layer-rotation-reopened", *expected_screen, (60, 179, 113))
+        document_pixel("layer-rotation-reopened", *expected_document, (60, 179, 113))
         assert layers()[-1]["id"] == imported_id
         assert math.isclose(layers()[-1]["rotation"], math.pi / 6, abs_tol=1e-12)
         assert saved(640, 440, 0, 0)
@@ -1772,11 +1867,15 @@ def main():
 
         def assert_transformed_pixels(name, gold_left, gold_above):
             shot(editor, name)
-            pixels = run("convert", str(output / f"{name}.png"), "-crop", "754x610+8+89",
+            window, size = shot_layouts[name]
+            left, top, scale = fit_geometry(size, window)
+            crop_width, crop_height = round(size[0] * scale), round(size[1] * scale)
+            pixels = run("convert", str(output / f"{name}.png"), "-crop",
+                         f"{crop_width}x{crop_height}+{round(left)}+{round(top)}",
                          "-depth", "8", "rgb:-")
 
             def center(color):
-                points = [(i // 3 % 754, i // 3 // 754)
+                points = [(i // 3 % crop_width, i // 3 // crop_width)
                           for i in range(0, len(pixels), 3) if pixels[i:i + 3] == bytes(color)]
                 assert len(points) > 100, (name, color, "missing painted region")
                 xs, ys = zip(*points)
@@ -1832,23 +1931,26 @@ def main():
         inspector_click(34, 547)
         save_layers(lambda values: (values[-1]["x"], values[-1]["y"]) == (190, 70), "moved duplicate")
         shot(editor, "layers-moved")
-        pixel("layers-moved", 361, 277, (229, 179, 68))
+        fixture_pixel("layers-moved", 361, 277, (229, 179, 68))
         # Canvas picking is based on the rendered document, not the layer-list selection.
         # Escape cancels the translated outline without touching the saved draft.
         canvas_before = draft.read_bytes()
-        run("xdotool", "mousemove", "--window", editor, "361", "277", "mousedown", "1",
-            "sleep", ".2", "mousemove", "--sync", "--window", editor, "401", "307", "sleep", ".2")
+        move_start = fixture_point((361, 277))
+        move_preview = fixture_point((401, 307))
+        run("xdotool", "mousemove", "--window", editor, *map(str, move_start), "mousedown", "1",
+            "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, move_preview), "sleep", ".2")
         shot(editor, "layers-canvas-active-outline")
         run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
         assert draft.read_bytes() == canvas_before
-        click(editor, 30, 200)  # Empty point before the unlocked copy clears selection.
+        fixture_click((30, 200))  # Empty point before the unlocked copy clears selection.
         assert draft.read_bytes() == canvas_before
         # The raw horizontal delta lands just inside the canvas edge's magnetic
         # range. The shared move geometry snaps the duplicate's left edge to the
         # canvas/background layer edge while retaining the asymmetric raw Y move.
-        run("xdotool", "mousemove", "--sync", "--window", editor, "361", "277",
+        snap_target = fixture_point((177, 307))
+        run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, move_start),
             "sleep", ".2", "mousedown", "1", "sleep", ".2", "mousemove", "--sync",
-            "--window", editor, "177", "307", "sleep", ".3")
+            "--window", editor, *map(str, snap_target), "sleep", ".3")
         shot(editor, "layers-canvas-snapped-guides")
         assert draft.read_bytes() == canvas_before
         run("xdotool", "mouseup", "1", "sleep", ".2")
@@ -1860,8 +1962,8 @@ def main():
             "canvas drag moved duplicate")[-1]
         assert moved_canvas["id"] == copy_id
         shot(editor, "layers-canvas-moved-selection")
-        pixel("layers-canvas-moved-selection", 361, 277, (40, 110, 166))
-        pixel("layers-canvas-moved-selection", 137, 307, (229, 179, 68))
+        fixture_pixel("layers-canvas-moved-selection", 361, 277, (40, 110, 166))
+        fixture_pixel("layers-canvas-moved-selection", 137, 307, (229, 179, 68))
         click(editor, 35, 62)
         save_layers(lambda values: (values[-1]["x"], values[-1]["y"]) == (190, 70),
                     "undo snapped canvas move")
@@ -1878,7 +1980,7 @@ def main():
         assert all(math.isclose(reopened_move[axis], expected, abs_tol=1e-5)
                    for axis, expected in zip(("x", "y"), expected_position))
         shot(editor, "layers-snapped-move-reopened")
-        pixel("layers-snapped-move-reopened", 137, 307, (229, 179, 68))
+        fixture_pixel("layers-snapped-move-reopened", 137, 307, (229, 179, 68))
         # Reopen starts in Geometry and undo history is intentionally not persisted.
         # Switch to Layers and restore explicitly so downstream fixtures stay stable.
         click(editor, 463, 62)
@@ -1892,15 +1994,15 @@ def main():
         inspector_click(154, 415)
         save_layers(lambda values: values[-1]["opacity"] == 50, "half opacity")
         shot(editor, "layers-half-opacity")
-        pixel("layers-half-opacity", 361, 277, (134, 144, 117), tolerance=1)
+        fixture_pixel("layers-half-opacity", 361, 277, (134, 144, 117), tolerance=1)
         inspector_click(15, 300)  # Hide the copy; the original blue pixel is restored.
         save_layers(lambda values: not values[-1]["visible"], "hidden duplicate")
         shot(editor, "layers-hidden")
-        pixel("layers-hidden", 361, 277, (40, 110, 166))
+        fixture_pixel("layers-hidden", 361, 277, (40, 110, 166))
         click(editor, 35, 62)  # Undo must restore the rendered half-opacity layer.
         save_layers(lambda values: values[-1]["visible"], "undo visibility")
         shot(editor, "layers-undo-visible")
-        pixel("layers-undo-visible", 361, 277, (134, 144, 117), tolerance=1)
+        fixture_pixel("layers-undo-visible", 361, 277, (134, 144, 117), tolerance=1)
         inspector_click(79, 300)
         save_layers(lambda values: values[-1]["locked"], "lock duplicate")
         inspector_click(124, 591)  # Delete is disabled while locked.
@@ -1927,12 +2029,12 @@ def main():
         editor = reopen()
         click(editor, 463, 62)
         shot(editor, "layers-reopened")
-        pixel("layers-reopened", 361, 277, (134, 144, 117), tolerance=1)
+        fixture_pixel("layers-reopened", 361, 277, (134, 144, 117), tolerance=1)
         assert layers()[-1]["name"] == long_name
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         inspector_move(180, 400, "click", "--repeat", "8", "5")
         shot(editor, "layers-small-scrolled")
-        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
+        resize_editor(1000, 701)
         inspector_move(180, 400, "click", "--repeat", "12", "4")
         inspector_click(100, 202)  # Select and explicitly unlock the original.
         inspector_click(79, 300)
@@ -1949,8 +2051,8 @@ def main():
         wait(lambda: not draft.exists(), "discard layer edits")
         click(editor, 398, 62)  # Geometry has an independent scroll position.
 
-        # At this size the preview is 1:1: image origin (8,89), size 640x360.
-        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        # Odd height keeps the centered 1:1 document origin pixel-aligned.
+        resize_editor(886, 701)
 
         click(editor, 736, 62)  # Draw keeps the chosen shape active after each release.
         drag((658, 289), (538, 169))
@@ -1959,11 +2061,11 @@ def main():
         assert (rectangle["x"], rectangle["y"], rectangle["endX"], rectangle["endY"]) == (420, 200, 300, 80)
         assert rectangle["style"]["fill"] == "#ff3b5c" and not rectangle["style"]["strokeEnabled"]
         shot(editor, "shape-rectangle")
-        pixel("shape-rectangle", 370, 230, (255, 59, 92))
+        fixture_pixel("shape-rectangle", 370, 230, (255, 59, 92))
         click(editor, 35, 62)
         save_layers(lambda values: len(values) == 1, "single-step shape undo")
         shot(editor, "shape-undone")
-        pixel("shape-undone", 370, 230, (40, 110, 166))
+        fixture_pixel("shape-undone", 370, 230, (40, 110, 166))
         click(editor, 98, 62)
         save_layers(lambda values: len(values) == 2 and values[-1]["id"] == rectangle["id"], "shape redo keeps id")
         inspector_click(185, 133)  # Ellipse.
@@ -1972,11 +2074,13 @@ def main():
         assert ellipse["shape"] == "ellipse" and ellipse["id"] != rectangle["id"]
         assert (ellipse["x"], ellipse["y"], ellipse["endX"], ellipse["endY"]) == (370, 260, 540, 310)
         shot(editor, "shape-ellipse")
-        pixel("shape-ellipse", 463, 374, (255, 59, 92))
-        pixel("shape-ellipse", 380, 350, (40, 110, 166))
+        fixture_pixel("shape-ellipse", 463, 374, (255, 59, 92))
+        fixture_pixel("shape-ellipse", 380, 350, (40, 110, 166))
         before_draw = draft.read_bytes()
-        run("xdotool", "mousemove", "--sync", "--window", editor, "90", "300", "mousedown", "1",
-            "sleep", ".2", "mousemove", "--sync", "--window", editor, "190", "380", "sleep", ".3")
+        shape_start = fixture_point((90, 300))
+        shape_end = fixture_point((190, 380))
+        run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, shape_start), "mousedown", "1",
+            "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, shape_end), "sleep", ".3")
         shot(editor, "shape-transient")
         assert draft.read_bytes() == before_draw
         run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
@@ -1988,10 +2092,10 @@ def main():
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "saved shapes close")
         editor = reopen()
-        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        resize_editor(886, 701)
         shot(editor, "shape-reopened")
-        pixel("shape-reopened", 370, 230, (255, 59, 92))
-        pixel("shape-reopened", 463, 374, (255, 59, 92))
+        fixture_pixel("shape-reopened", 370, 230, (255, 59, 92))
+        fixture_pixel("shape-reopened", 463, 374, (255, 59, 92))
         assert layers()[-1]["id"] == ellipse["id"]
         click(editor, 736, 62)
         drag((298, 500), (358, 570))  # Fully outside the image grows the canvas.
@@ -2010,7 +2114,7 @@ def main():
         shot(editor, "crop-selection")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "crop-selection-minimum")
-        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        resize_editor(886, 701)
         assert not draft.exists(), "selection must not write a draft"
         assert (artifact / "capture.png").read_bytes() == original
         run("xdotool", "key", "Escape", "sleep", ".2")
@@ -2054,11 +2158,11 @@ def main():
         inspector_click(159, 335)
         drag((638, 359), (278, 119))
         inspector_click(50, 335)
-        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
+        resize_editor(1000, 701)
         save(360, 240, -40, -30)
         shot(editor, "editor-cropped")
-        pixel("editor-cropped", 308, 299, (40, 110, 166))
-        pixel("editor-cropped", 120, 200, (229, 179, 68))
+        fixture_pixel("editor-cropped", 308, 299, (40, 110, 166))
+        fixture_pixel("editor-cropped", 120, 200, (229, 179, 68))
         click(editor, 35, 62)  # Undo
         save(640, 360, 0, 0)
         click(editor, 98, 62)  # Redo
@@ -2068,39 +2172,39 @@ def main():
         inspector_click(58, 516)
         save(480, 300, -40, -30)
         shot(editor, "editor-resized")
-        pixel("editor-resized", 428, 289, (46, 158, 113))
+        fixture_pixel("editor-resized", 428, 289, (46, 158, 113))
 
         saved_draft = draft.read_bytes()
-        run("xdotool", "windowsize", "--sync", editor, "1000", "900")
+        resize_editor(1000, 901)
         click(editor, 535, 62)  # Output: encode the edited frame, not History PNG.
         inspector_click(65, 463)
         shot(editor, "output-png")
-        pixel("output-png", 120, 200, (229, 179, 68))
-        pixel("output-png", 428, 289, (46, 158, 113))
+        fixture_pixel("output-png", 120, 200, (229, 179, 68))
+        fixture_pixel("output-png", 428, 289, (46, 158, 113))
         inspector_click(20, 371)  # PNG Compress with an explicit palette.
         inspector_click(20, 503)
         field(547, 4)
         inspector_click(65, 595)
         shot(editor, "output-png-palette")
-        pixel("output-png-palette", 428, 289, (46, 158, 113))
+        fixture_pixel("output-png-palette", 428, 289, (46, 158, 113))
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         inspector_move(180, 400, "click", "--repeat", "8", "5")
         shot(editor, "output-palette-minimum-scrolled")
-        run("xdotool", "windowsize", "--sync", editor, "1000", "900")
+        resize_editor(1000, 901)
         inspector_move(180, 400, "click", "--repeat", "12", "4")
         inspector_click(85, 256)  # JPEG invalidates the PNG comparison.
         inspector_click(20, 371)  # Compress.
         inspector_click(65, 507)
         shot(editor, "output-jpeg")
-        pixel("output-jpeg", 428, 289, (46, 158, 113), tolerance=4)
+        fixture_pixel("output-jpeg", 428, 289, (46, 158, 113), tolerance=4)
         inspector_click(65, 579)  # Edited canvas comparison.
         shot(editor, "output-edited-canvas")
-        pixel("output-edited-canvas", 428, 289, (46, 158, 113))
+        fixture_pixel("output-edited-canvas", 428, 289, (46, 158, 113))
         inspector_click(65, 622)  # Encoded output comparison.
         inspector_click(150, 256)  # WebP, still Compress.
         inspector_click(65, 507)
         shot(editor, "output-webp")
-        pixel("output-webp", 428, 289, (46, 158, 113), tolerance=4)
+        fixture_pixel("output-webp", 428, 289, (46, 158, 113), tolerance=4)
         inspector_click(20, 415)  # Maximum file size enables the hard cap.
         field(459, 0)
         inspector_click(65, 507)
@@ -2108,11 +2212,11 @@ def main():
         assert app.poll() is None and windows("Screenshot editor")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "output-budget-error-minimum")
-        run("xdotool", "windowsize", "--sync", editor, "1000", "900")
+        resize_editor(1000, 901)
         inspector_click(20, 354)  # Preserve clears the failed budget (error adds 27px).
         inspector_click(65, 490)  # Retry clears error without persisting a draft.
         shot(editor, "output-retry")
-        pixel("output-retry", 428, 289, (46, 158, 113))
+        fixture_pixel("output-retry", 428, 289, (46, 158, 113))
         assert draft.read_bytes() == saved_draft, "preview must not write a draft"
         assert not (output / "exports").exists(), "preview must not publish files"
 
@@ -2176,7 +2280,7 @@ def main():
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         inspector_move(180, 400, "click", "--repeat", "20", "5")
         shot(editor, "export-history-warning-minimum")
-        run("xdotool", "windowsize", "--sync", editor, "1000", "900")
+        resize_editor(1000, 901)
         history.unlink()
         (output / "previous-history").rename(history)
         assert draft.read_bytes() == saved_draft
@@ -2203,7 +2307,7 @@ def main():
         assert run("xclip", "-selection", "clipboard", "-t", "image/png", "-o") == copied, "workspace retains clipboard after editor closes"
         editor = reopen()
         shot(editor, "editor-reopened")
-        pixel("editor-reopened", 428, 289, (46, 158, 113))
+        fixture_pixel("editor-reopened", 428, 289, (46, 158, 113))
         field(428, 510)
         inspector_click(58, 516)
         close(editor)
