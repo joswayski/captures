@@ -1880,6 +1880,8 @@ def main():
         assert len(layers()) == 1
         assert (artifact / "capture.png").read_bytes() == original
 
+        # Keep Image transform above the pinned footer while exercising its menu.
+        resize_editor(1000, 781)
         click(editor, 463, 62)  # Layers, preserving the Geometry panel's scroll position.
         shot(editor, "layers-original-locked")
         inspector_click(88, 632)
@@ -1919,6 +1921,7 @@ def main():
         assert_transformed_pixels("layers-rotate-right", False, True)
         close(editor)
         editor = reopen()
+        resize_editor(1000, 781)
         click(editor, 463, 62)
         assert_transformed_pixels("layers-transform-reopened", False, True)
         transform(2, "transpose", 360, 640)
