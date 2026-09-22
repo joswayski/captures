@@ -453,6 +453,24 @@ impl ElementBase {
     }
 }
 
+impl Element {
+    /// Prepare the stable layer snapshot used by both duplicate and the
+    /// session clipboard. Keep their normalization semantics identical.
+    pub(crate) fn copied_layer(&self, new_id: String, offset: f64) -> Result<Self, String> {
+        let mut copy = self.clone();
+        let base = copy.base_mut();
+        base.id = new_id;
+        base.locked = false;
+        base.visible = true;
+        if let Self::Image(image) = &mut copy {
+            image.source = "imported".into();
+            image.name.push_str(" copy");
+        }
+        copy.translate_layer(offset, offset)?;
+        Ok(copy)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageElement {
@@ -1848,16 +1866,7 @@ impl Document {
                 {
                     return Err("A duplicate layer needs a new nonempty identifier.".into());
                 }
-                let mut duplicate = self.elements[index].clone();
-                let base = duplicate.base_mut();
-                base.id = new_id;
-                base.locked = false;
-                base.visible = true;
-                if let Element::Image(image) = &mut duplicate {
-                    image.source = "imported".into();
-                    image.name.push_str(" copy");
-                }
-                duplicate.translate_layer(24., 24.)?;
+                let duplicate = self.elements[index].copied_layer(new_id, 24.)?;
                 self.elements.insert(index + 1, duplicate);
             }
             LayerEdit::Reorder {

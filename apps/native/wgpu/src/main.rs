@@ -1,4 +1,5 @@
 mod capture_controls;
+mod clipboard_input;
 mod countdown;
 mod editor;
 mod feedback;
@@ -38,6 +39,7 @@ fn emit(event: &str, detail: serde_json::Value) {
 
 struct InputApplication<'a> {
     inner: eframe::EframeWinitApplication<'a>,
+    paste_input: clipboard_input::PasteInput,
     shortcut_input: shortcut_input::Bridge,
     shortcuts: workbench::ShortcutOwner,
     root_window: Option<WindowId>,
@@ -89,7 +91,9 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
                 _ => {}
             }
         }
+        self.paste_input.begin_event(window_id, &event);
         self.inner.window_event(event_loop, window_id, event);
+        self.paste_input.end_event();
     }
 
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
@@ -176,6 +180,8 @@ fn main() -> eframe::Result {
     let event_loop = EventLoop::<eframe::UserEvent>::with_user_event().build()?;
     let shortcut_input = shortcut_input::Bridge::default();
     let workbench_input = shortcut_input.clone();
+    let paste_input = clipboard_input::PasteInput::default();
+    let workbench_paste_input = paste_input.clone();
     let shortcuts = workbench::ShortcutOwner::default();
     let workbench_shortcuts = shortcuts.clone();
     let inner = eframe::create_native(
@@ -187,12 +193,14 @@ fn main() -> eframe::Result {
                 options,
                 workbench_input,
                 workbench_shortcuts,
+                workbench_paste_input,
             )))
         }),
         &event_loop,
     );
     let mut application = InputApplication {
         inner,
+        paste_input,
         shortcut_input,
         shortcuts,
         root_window: None,

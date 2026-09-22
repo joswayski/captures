@@ -1079,6 +1079,24 @@ geometry, drawing gesture cancellation and mapping, failure/close/output/import
 behavior, real shape pixels/history/draft reopen, and rendered light/dark fixtures.
 Physical AppKit input, accessibility and IME acceptance remain unverified.
 
+Internal layer copy/paste is connected in both hosts through shared session
+commands. Cmd/Ctrl C retains an immutable selected-layer snapshot without
+changing the document, history, encoded preview or system clipboard. Cmd/Ctrl V
+creates a fresh visible/unlocked layer after the current selection (or at the
+front when no selection remains), offsets each successful paste by another 24px,
+and switches to Select only after acceptance. Source edits/deletion/undo do not
+replace the copied snapshot. Failed paste does not consume an offset; successful
+paste uses existing render-before-publish, undo/redo, asset and draft contracts.
+Clipboard state is per open editor and is cleared by successful discard or close,
+not persisted or shared across windows. Copy image remains separate.
+Focused text controls retain normal OS text copy/paste. The wgpu native-input
+adapter preserves paste key-down even with an empty/unavailable OS clipboard,
+without injecting text or changing clipboard contents. Unit and private-X11
+tests cover snapshot ownership, command/focus gates, empty/nonempty OS payloads,
+fresh selection, offsets, undo/redo and reopening; AppKit uses native CI tests.
+Windows/Wayland share the implementation but physical input/presentation remains
+unverified, as does physical AppKit acceptance. No platform parity gate closes.
+
 Across both hosts, physical input/accessibility/IME acceptance remains open.
 The current native screenshot editor is a functional workbench, not a visual match
 for the shipping Tauri editor. Functional controls and inspected fixtures do not

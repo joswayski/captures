@@ -435,6 +435,7 @@ struct NativeEditorSnapshot: Equatable {
     let background: String?
     let canUndo: Bool
     let canRedo: Bool
+    let canPasteLayer: Bool
     let unsavedChanges: Bool
     let hasDraft: Bool
     let fontFamilies: [String: String]
@@ -455,6 +456,13 @@ struct NativeEditorSnapshot: Equatable {
               let unsavedChanges = value["unsaved_changes"] as? Bool,
               let hasDraft = value["has_draft"] as? Bool,
               width.doubleValue > 0, height.doubleValue > 0 else { return nil }
+        let canPasteLayer: Bool
+        if let value = value["can_paste_layer"] {
+            guard let parsed = value as? Bool else { return nil }
+            canPasteLayer = parsed
+        } else {
+            canPasteLayer = false
+        }
         let elements = document["elements"] as? [[String: Any]] ?? []
         let annotations = value["annotation_controls"] as? [String: [String: Any]] ?? [:]
         let textShadows = value["text_shadow_styles"] as? [String: [String: Any]] ?? [:]
@@ -483,6 +491,7 @@ struct NativeEditorSnapshot: Equatable {
         self.width = width.doubleValue; self.height = height.doubleValue
         self.background = document["background"] as? String
         self.canUndo = canUndo; self.canRedo = canRedo
+        self.canPasteLayer = canPasteLayer
         self.unsavedChanges = unsavedChanges; self.hasDraft = hasDraft
         let fontFamilies = value["font_families"] as? [String: String] ?? [:]
         self.fontFamilies = fontFamilies

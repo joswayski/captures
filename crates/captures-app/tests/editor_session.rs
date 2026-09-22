@@ -51,6 +51,239 @@ fn image_transform(id: &str, transform: &str) -> Request {
 }
 
 #[test]
+fn layer_clipboard_is_a_stable_session_snapshot_with_transactional_offsets() {
+    let (data, artifact_id, _) = setup();
+    let mut editor = open(data.path(), &artifact_id).unwrap();
+    let source_id = editor.snapshot().document.elements[0].base().id.clone();
+    let Element::Image(source) = &editor.snapshot().document.elements[0] else {
+        panic!("capture must open as an image layer")
+    };
+    let (source_x, source_y, source_name, source_src) = (
+        source.base.x,
+        source.base.y,
+        source.name.clone(),
+        source.src.clone(),
+    );
+
+    editor
+        .execute(Request::CopyLayer {
+            id: source_id.clone(),
+        })
+        .unwrap();
+    assert!(editor.snapshot().can_paste_layer);
+    assert!(!editor.snapshot().can_undo);
+
+    // A stale copy is rejected without replacing the prior clipboard.
+    assert!(
+        editor
+            .execute(Request::CopyLayer {
+                id: "missing".into(),
+            })
+            .is_err()
+    );
+    editor
+        .execute(Request::Layer {
+            id: source_id.clone(),
+            edit: LayerEdit::Lock { locked: false },
+        })
+        .unwrap();
+    editor
+        .execute(Request::Layer {
+            id: source_id.clone(),
+            edit: LayerEdit::Translate {
+                delta_x: -3.,
+                delta_y: 5.,
+            },
+        })
+        .unwrap();
+    editor
+        .execute(Request::Layer {
+            id: source_id.clone(),
+            edit: LayerEdit::Delete,
+        })
+        .unwrap();
+
+    // Rejected IDs do not consume the first offset or disturb redo/history.
+    editor.execute(Request::Undo).unwrap();
+    assert!(editor.snapshot().can_redo);
+    let before = editor.snapshot().document.clone();
+    let pixels = editor.pixels();
+    assert!(
+        editor
+            .execute(Request::PasteLayer {
+                new_id: source_id.clone(),
+                after_id: None,
+            })
+            .is_err()
+    );
+    assert_eq!(editor.snapshot().document, &before);
+    assert!(editor.snapshot().can_redo);
+    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+
+    editor
+        .execute(Request::PasteLayer {
+            new_id: "copy-one".into(),
+            after_id: Some(source_id.clone()),
+        })
+        .unwrap();
+    editor
+        .execute(Request::PasteLayer {
+            new_id: "copy-two".into(),
+            after_id: Some("now-missing".into()),
+        })
+        .unwrap();
+    let document = editor.snapshot().document;
+    assert_eq!(
+        document
+            .elements
+            .iter()
+            .map(|element| element.base().id.as_str())
+            .collect::<Vec<_>>(),
+        [source_id.as_str(), "copy-one", "copy-two"]
+    );
+    for (id, offset) in [("copy-one", 24.), ("copy-two", 48.)] {
+        let Element::Image(copy) = document
+            .elements
+            .iter()
+            .find(|element| element.base().id == id)
+            .unwrap()
+        else {
+            panic!("copy must remain an image")
+        };
+        assert_eq!(
+            (copy.base.x, copy.base.y),
+            (source_x + offset, source_y + offset)
+        );
+        assert!(!copy.base.locked && copy.base.visible);
+        assert_eq!(copy.source, "imported");
+        assert_eq!(copy.name, format!("{source_name} copy"));
+        assert_eq!(copy.src, source_src);
+    }
+    editor.execute(Request::Undo).unwrap();
+    assert!(
+        editor
+            .snapshot()
+            .document
+            .elements
+            .iter()
+            .all(|element| element.base().id != "copy-two")
+    );
+
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 41 })
+        .unwrap();
+    let reopened = open(data.path(), &artifact_id).unwrap();
+    assert!(!reopened.snapshot().can_paste_layer);
+    assert!(serde_json::to_value(reopened.snapshot()).unwrap()["can_paste_layer"] == false);
+
+    editor.execute(Request::DiscardDraft).unwrap();
+    assert!(!editor.snapshot().can_paste_layer);
+}
+
+#[test]
+fn paste_render_failure_preserves_clipboard_history_pixels_and_saved_draft() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let mut document = editor.snapshot().document.clone();
+    let Element::Image(image) = &mut document.elements[0] else {
+        panic!()
+    };
+    // A legacy hidden layer may carry paint unsupported by the renderer.
+    // Pasting makes it visible, which must reject before publishing history.
+    image.base.visible = false;
+    image.base.blend_mode = "future-blend".into();
+    let source = image.base.id.clone();
+    editor.execute(Request::Commit { document }).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 11.,
+            height: 5.,
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 71 })
+        .unwrap();
+    let pixels = editor.pixels();
+    let before = editor.snapshot().document.clone();
+    editor.execute(Request::CopyLayer { id: source }).unwrap();
+    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    assert!(editor.snapshot().can_redo && !editor.snapshot().unsaved_changes);
+    let error = editor
+        .execute(Request::PasteLayer {
+            new_id: "rejected".into(),
+            after_id: None,
+        })
+        .unwrap_err();
+    assert!(error.contains("unsupported blend mode"), "{error}");
+    assert!(editor.snapshot().can_paste_layer && editor.snapshot().can_redo);
+    assert!(!editor.snapshot().unsaved_changes);
+    assert_eq!(editor.snapshot().document, &before);
+    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    assert_eq!(open(data.path(), &id).unwrap().snapshot().document, &before);
+}
+
+#[test]
+fn layer_clipboards_are_isolated_between_open_sessions() {
+    let (data, artifact_id, _) = setup();
+    let mut first = open(data.path(), &artifact_id).unwrap();
+    let second = open(data.path(), &artifact_id).unwrap();
+    let id = first.snapshot().document.elements[0].base().id.clone();
+    first.execute(Request::CopyLayer { id }).unwrap();
+    assert!(first.snapshot().can_paste_layer);
+    assert!(!second.snapshot().can_paste_layer);
+}
+
+#[test]
+fn copied_image_survives_deletion_and_renders_owned_pixels_without_touching_capture() {
+    let (data, id, original) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 90.,
+            height: 70.,
+        })
+        .unwrap();
+    let source_id = editor.snapshot().document.elements[0].base().id.clone();
+    editor
+        .execute(Request::CopyLayer {
+            id: source_id.clone(),
+        })
+        .unwrap();
+    editor
+        .execute(Request::Layer {
+            id: source_id.clone(),
+            edit: LayerEdit::Lock { locked: false },
+        })
+        .unwrap();
+    editor
+        .execute(Request::Layer {
+            id: source_id,
+            edit: LayerEdit::Delete,
+        })
+        .unwrap();
+    editor
+        .execute(Request::PasteLayer {
+            new_id: "restored-copy".into(),
+            after_id: None,
+        })
+        .unwrap();
+    assert_eq!(editor.snapshot().document.elements.len(), 1);
+    assert_eq!(editor.pixels().get_pixel(24, 24), original.get_pixel(0, 0));
+    assert_eq!(editor.pixels().get_pixel(30, 26), original.get_pixel(6, 2));
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 51 })
+        .unwrap();
+    assert_eq!(open(data.path(), &id).unwrap().pixels(), editor.pixels());
+    assert_eq!(
+        image::open(data.path().join("history").join(&id).join("capture.png"))
+            .unwrap()
+            .to_rgba8(),
+        original
+    );
+}
+
+#[test]
 fn initial_text_size_uses_capture_short_axis_rounding_and_clamps_not_draft_canvas() {
     // Expected values independently taken from Tauri's capture-loading rule.
     for (width, height, expected) in [

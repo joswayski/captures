@@ -400,6 +400,11 @@ selection. Locked and hidden layers can still be duplicated, and typing fields
 keep their own deletion keys. Arrow keys nudge an unlocked selection by one image
 pixel, or ten with Shift, without snapping or expanding the canvas. Hidden layers
 can be nudged too. Focused fields and zoom controls retain their arrow keys.
+Cmd/Ctrl C copies the selected layer inside that editor; Cmd/Ctrl V pastes the
+snapshot, even after its source is changed or deleted. Repeated pastes offset by
+24 pixels and support undo/redo. This does not replace the system clipboard or
+import clipboard images; **Copy image** remains the separate pixel-copy action.
+Closing the editor or discarding its draft clears the internal layer clipboard.
 With canvas focus, V selects layers, C starts Crop, T selects Text, R Rectangle,
 O Ellipse, L Line, D Diamond, S Star, A Arrow, P Pen, and B the last-used
 Wand/Erase/Restore mode (initially Wand). Switching tools cancels unfinished

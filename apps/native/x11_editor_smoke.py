@@ -523,6 +523,42 @@ def main():
             inspector_click(100, 202)  # Original image is locked.
             run("xdotool", "key", "Delete", "Right", "shift+Down", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "locked keyboard deletion")[-1] == shape
+            # Layer snapshots must work even with an empty OS clipboard. Copy
+            # then move/delete the source, so paste cannot just duplicate it.
+            subprocess.run(["xclip", "-selection", "clipboard", "-i"], input=b"",
+                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           check=True, timeout=10)
+            inspector_click(100, 158)
+            run("xdotool", "key", "ctrl+c", "sleep", ".3")
+            assert run("xclip", "-selection", "clipboard", "-o") == b""
+            run("xdotool", "key", "Right", "sleep", ".3", "key", "Delete", "sleep", ".3")
+            save_layers(lambda values: len(values) == 1, "copied source deleted")
+            run("xdotool", "key", "ctrl+v", "sleep", ".3")
+            pasted = save_layers(lambda values: len(values) == 2, "paste without OS payload")[-1]
+            expected = dict(shape, id=pasted["id"], x=shape["x"] + 24, y=shape["y"] + 24,
+                            endX=shape["endX"] + 24, endY=shape["endY"] + 24,
+                            visible=True, locked=False)
+            assert pasted == expected and pasted["id"] != shape["id"], (pasted, expected)
+            subprocess.run(["xclip", "-selection", "clipboard", "-i"], input=b"unrelated OS text",
+                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           check=True, timeout=10)
+            run("xdotool", "key", "ctrl+v", "sleep", ".3")
+            pasted_twice = save_layers(lambda values: len(values) == 3, "one paste with OS payload")[-1]
+            expected = dict(shape, id=pasted_twice["id"], x=shape["x"] + 48, y=shape["y"] + 48,
+                            endX=shape["endX"] + 48, endY=shape["endY"] + 48,
+                            visible=True, locked=False)
+            assert pasted_twice == expected and pasted_twice["id"] != pasted["id"]
+            assert run("xclip", "-selection", "clipboard", "-o") == b"unrelated OS text"
+            shot(editor, "layer-clipboard-pasted")
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 2, "paste single undo")[-1] == pasted
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 3, "paste redo")[-1] == pasted_twice
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "copied editor closes")
+            editor = reopen()
+            run("xdotool", "key", "ctrl+v", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 3, "reopen has no layer clipboard")[-1] == pasted_twice
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "shortcut suite quits")
@@ -535,7 +571,10 @@ def main():
                            "backspace-selected-copy", "locked-delete-guard", "arrow-1px", "shift-arrow-10px",
                            "nudge-undo-exact", "field-nudge-focus", "locked-nudge-guard",
                            "S-star", "V-select-move", "C-crop-cancel", "R-rectangle", "field-tool-letters",
-                           "rail-arrow-create", "rail-menu-escape", "rail-minimum"],
+                           "rail-arrow-create", "rail-menu-escape", "rail-minimum",
+                           "layer-copy-snapshot-after-delete", "layer-paste-empty-OS-clipboard",
+                           "layer-paste-once-with-OS-text", "layer-paste-cumulative-offset",
+                           "layer-paste-undo-redo", "layer-clipboard-session-local"],
             }, indent=2) + "\n")
             print("PASS native editor shortcuts: tools, undo, redo, duplicate, delete, nudge, field/dialog focus and original unchanged")
             return

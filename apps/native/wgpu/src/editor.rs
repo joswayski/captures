@@ -69,9 +69,12 @@ struct Presented {
     output: Option<(RgbaImage, usize)>,
     saved: Option<SavedExport>,
     copied: bool,
+    copied_layer: bool,
+    pasted_layer: bool,
     created_layer: Option<String>,
     can_undo: bool,
     can_redo: bool,
+    can_paste_layer: bool,
     unsaved: bool,
     has_draft: bool,
 }
@@ -90,9 +93,12 @@ impl Presented {
             output: None,
             saved: None,
             copied: false,
+            copied_layer: false,
+            pasted_layer: false,
             created_layer: None,
             can_undo: snapshot.can_undo,
             can_redo: snapshot.can_redo,
+            can_paste_layer: snapshot.can_paste_layer,
             unsaved: snapshot.unsaved_changes,
             has_draft: snapshot.has_draft,
         }
@@ -635,6 +641,8 @@ impl View {
                 if presented.copied {
                     self.output_notice = Some("Copied edited pixels to the clipboard.".into());
                 }
+                let copied_layer = presented.copied_layer;
+                let pasted_layer = presented.pasted_layer;
                 let selected = self.pending_layer_selection.take().or_else(|| {
                     presented
                         .created_layer
@@ -642,13 +650,22 @@ impl View {
                         .or(self.selected_layer.clone())
                 });
                 self.presented = Some(presented);
-                self.select_layer(selected);
+                if !copied_layer {
+                    self.select_layer(selected);
+                }
                 self.text_apply_pending = false;
-                if self.draw_shape == DrawShape::Text && self.text.is_some() && !text_apply_pending
+                if pasted_layer {
+                    self.activate_tool(Section::Layers, None);
+                } else if !copied_layer
+                    && self.draw_shape == DrawShape::Text
+                    && self.text.is_some()
+                    && !text_apply_pending
                 {
                     self.section = Section::Layers;
                 }
-                self.reset_background_fields();
+                if !copied_layer {
+                    self.reset_background_fields();
+                }
                 self.error = None;
                 if self.close_after_save || (self.close_requested && !self.unsaved()) {
                     self.closed = true;
@@ -1140,8 +1157,12 @@ impl Editor {
                                     | Request::CreateFreehandPath { .. }
                                     | Request::CreateText { .. }
                             );
+                            let copied_layer = matches!(request, Request::CopyLayer { .. });
+                            let pasted_layer = matches!(request, Request::PasteLayer { .. });
                             session.execute(request)?;
                             let mut presented = Presented::from_session(session);
+                            presented.copied_layer = copied_layer;
+                            presented.pasted_layer = pasted_layer;
                             if creates_layer {
                                 presented.created_layer = presented
                                     .document
@@ -2091,6 +2112,19 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
     let requests = ctx.input_mut(|input| {
         let mut requests = Vec::new();
         input.events.retain(|event| {
+            // Winit supplies semantic clipboard events on native platforms.
+            // Their text payload belongs to the OS clipboard, not our layer copy.
+            match event {
+                egui::Event::Copy => {
+                    requests.push((egui::Key::C, false));
+                    return false;
+                }
+                egui::Event::Paste(_) => {
+                    requests.push((egui::Key::V, false));
+                    return false;
+                }
+                _ => {}
+            }
             if let egui::Event::Key {
                 key,
                 pressed: true,
@@ -2106,8 +2140,10 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
                                 | egui::Key::ArrowUp
                                 | egui::Key::ArrowDown
                         ))
-                    || (matches!(key, egui::Key::Z | egui::Key::D)
-                        && (modifiers.command || modifiers.ctrl)))
+                    || (matches!(
+                        key,
+                        egui::Key::Z | egui::Key::D | egui::Key::C | egui::Key::V
+                    ) && (modifiers.command || modifiers.ctrl)))
             {
                 requests.push((*key, modifiers.shift));
                 false
@@ -2132,6 +2168,13 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
         let request = match key {
             egui::Key::Z if shift && presented.can_redo => Some(Request::Redo),
             egui::Key::Z if !shift && presented.can_undo => Some(Request::Undo),
+            egui::Key::C => layer.map(|element| Request::CopyLayer {
+                id: element.base().id.clone(),
+            }),
+            egui::Key::V if presented.can_paste_layer => Some(Request::PasteLayer {
+                new_id: uuid::Uuid::new_v4().to_string(),
+                after_id: view.selected_layer.clone(),
+            }),
             egui::Key::D => layer.map(|element| Request::Layer {
                 id: element.base().id.clone(),
                 edit: LayerEdit::Duplicate {
@@ -2174,6 +2217,9 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
                 ..
             } = &request
             {
+                view.pending_layer_selection = Some(new_id.clone());
+            }
+            if let Request::PasteLayer { new_id, .. } = &request {
                 view.pending_layer_selection = Some(new_id.clone());
             }
             view.submit(tx, request);
@@ -4719,6 +4765,119 @@ mod tests {
     }
 
     #[test]
+    fn layer_clipboard_shortcuts_keep_output_focus_and_transactional_selection() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(false)));
+        view.section = Section::Draw;
+        view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
+        view.show_output = true;
+        view.background_color = "#123456".into();
+        let original_id = view.selected_layer.clone().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |_| {
+                    handle_document_shortcuts(&ctx, view, &tx);
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("clipboard multipass");
+                    }
+                },
+            );
+            output.textures_delta.clear();
+        };
+        frame(
+            &mut view,
+            vec![egui::Event::Paste("unrelated OS text".into())],
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "empty internal clipboard is not an image/text import"
+        );
+        frame(&mut view, vec![egui::Event::Copy, egui::Event::Copy]);
+        assert!(
+            matches!(rx.try_recv(), Ok(Job::Apply(Request::CopyLayer { id })) if id == original_id)
+        );
+        assert!(rx.try_recv().is_err() && view.output.is_some() && view.show_output);
+        let mut copied = presented(false);
+        copied.pixels = view.presented.as_ref().unwrap().pixels.clone();
+        copied.copied_layer = true;
+        copied.can_paste_layer = true;
+        view.receive(&ctx, Ok(copied));
+        assert_eq!(view.section, Section::Draw);
+        assert_eq!(view.selected_layer.as_ref(), Some(&original_id));
+        assert!(view.output.is_some() && view.show_output);
+        assert_eq!(
+            view.background_color, "#123456",
+            "copy preserves staged fields"
+        );
+        frame(
+            &mut view,
+            vec![
+                egui::Event::Paste(String::new()),
+                egui::Event::Key {
+                    key: egui::Key::V,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::CTRL,
+                },
+            ],
+        );
+        let Ok(Job::Apply(Request::PasteLayer { new_id, after_id })) = rx.try_recv() else {
+            panic!()
+        };
+        assert_eq!(after_id, Some(original_id.clone()));
+        assert_ne!(new_id, original_id);
+        assert!(
+            rx.try_recv().is_err(),
+            "semantic and native key-down paste enqueue once"
+        );
+        frame(&mut view, vec![egui::Event::Copy]);
+        assert!(
+            rx.try_recv().is_err(),
+            "busy copy cannot replace the snapshot"
+        );
+        view.receive(&ctx, Err("paste failed".into()));
+        assert_eq!(view.section, Section::Draw);
+        assert_eq!(view.selected_layer.as_ref(), Some(&original_id));
+        frame(&mut view, vec![egui::Event::Paste(String::new())]);
+        let Ok(Job::Apply(Request::PasteLayer { new_id, .. })) = rx.try_recv() else {
+            panic!()
+        };
+        let mut pasted = presented(true);
+        let mut layer = pasted.document.elements[0].clone();
+        let Element::Image(image) = &mut layer else {
+            panic!()
+        };
+        image.base.id = new_id.clone();
+        Arc::make_mut(&mut pasted.document).elements.push(layer);
+        pasted.pasted_layer = true;
+        pasted.can_paste_layer = true;
+        view.receive(&ctx, Ok(pasted));
+        assert_eq!(view.section, Section::Layers);
+        assert_eq!(view.selected_layer.as_ref(), Some(&new_id));
+        assert!(view.output.is_none() && !view.show_output);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.text_edit_singleline(&mut "field".to_owned())
+                .request_focus();
+        });
+        output.textures_delta.clear();
+        frame(
+            &mut view,
+            vec![egui::Event::Copy, egui::Event::Paste("text".into())],
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "focused text keeps its own clipboard"
+        );
+    }
+
+    #[test]
     fn layer_shortcuts_preserve_typing_locks_selection_and_one_in_flight_work() {
         let ctx = egui::Context::default();
         let mut view = View::default();
@@ -5317,9 +5476,12 @@ mod tests {
             output: None,
             saved: None,
             copied: false,
+            copied_layer: false,
+            pasted_layer: false,
             created_layer: None,
             can_undo: unsaved,
             can_redo: false,
+            can_paste_layer: false,
             unsaved,
             has_draft: !unsaved,
         }

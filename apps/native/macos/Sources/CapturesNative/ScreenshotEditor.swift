@@ -2599,6 +2599,21 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 button = event.modifierFlags.contains(.shift) ? redoButton : undoButton
             } else if command && key.lowercased() == "d" {
                 button = duplicateButton
+            } else if command && key.lowercased() == "c" {
+                guard !state.busy, let layer = selectedLayer else { return true }
+                cancelDrawing(); cancelViewportPan()
+                self.command(["operation": "copy_layer", "id": layer.id],
+                        message: "Copying layer…", preserveOutputAndStatus: true)
+                return true
+            } else if command && key.lowercased() == "v" {
+                guard !state.busy, state.snapshot?.canPasteLayer == true else { return true }
+                let newID = UUID().uuidString.lowercased()
+                var request: [String: Any] = ["operation": "paste_layer", "new_id": newID]
+                if let selectedLayerID { request["after_id"] = selectedLayerID }
+                cancelDrawing(); cancelViewportPan()
+                self.command(request, message: "Pasting layer…", preferredSelection: newID,
+                        selectToolOnSuccess: true)
+                return true
             } else if event.keyCode == 51 || event.keyCode == 117 {
                 button = deleteButton
             } else if (123...126).contains(event.keyCode) {
@@ -3063,11 +3078,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func command(_ object: [String: Any], message: String, resetCrop: Bool = false,
                          preferredSelection: String? = nil,
                          createdLayerExistingIDs: Set<String>? = nil,
-                         preserveStagedTextOnFailure: Bool = false) {
+                         preserveStagedTextOnFailure: Bool = false,
+                         preserveOutputAndStatus: Bool = false,
+                         selectToolOnSuccess: Bool = false) {
         guard let generation = state.beginCommand() else { return }
-        invalidateOutput()
+        if !preserveOutputAndStatus { invalidateOutput() }
         preferredLayerID = preferredSelection
-        status.stringValue = message; updateControls()
+        if !preserveOutputAndStatus { status.stringValue = message }
+        updateControls()
         worker.request(object) { [weak self] result in
             guard let self else { return }
             switch result {
@@ -3077,10 +3095,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     self.preferredLayerID = presentation.snapshot.layers
                         .first { !createdLayerExistingIDs.contains($0.id) }?.id
                 }
-                self.publish(presentation, resetCrop: resetCrop)
-                self.status.textColor = self.tokens.color("text-muted")
-                self.status.stringValue = presentation.snapshot.unsavedChanges
-                    ? "Unsaved changes." : presentation.snapshot.hasDraft ? "Draft saved." : "Original restored."
+                if preserveOutputAndStatus {
+                    self.preferredLayerID = nil
+                } else {
+                    self.publish(presentation, resetCrop: resetCrop)
+                    self.status.textColor = self.tokens.color("text-muted")
+                    self.status.stringValue = presentation.snapshot.unsavedChanges
+                        ? "Unsaved changes." : presentation.snapshot.hasDraft ? "Draft saved." : "Original restored."
+                }
+                if selectToolOnSuccess { self.activateTool(section: Section.layers, shape: nil) }
                 if self.closeAfterCommand { self.closeAfterCommand = false; self.closeNow(); return }
             case .failure(let error):
                 guard self.state.fail(generation: generation) else { return }

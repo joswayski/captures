@@ -86,6 +86,7 @@ pub struct Workbench {
     shortcuts_generation: u64,
     shortcut_error: Option<String>,
     shortcut_suspension_error: Option<String>,
+    paste_input: crate::clipboard_input::PasteInput,
     action_tx: Sender<Result<(), String>>,
     action_rx: Receiver<Result<(), String>>,
     action_error: Option<String>,
@@ -98,6 +99,7 @@ impl Workbench {
         options: Options,
         shortcut_input: shortcut_input::Bridge,
         shortcuts: ShortcutOwner,
+        paste_input: crate::clipboard_input::PasteInput,
     ) -> Self {
         if options.scene == Scene::Idle && cc.winit_window().and_then(|w| w.is_visible()).is_none()
         {
@@ -226,6 +228,7 @@ impl Workbench {
             shortcuts_generation: 0,
             shortcut_error: None,
             shortcut_suspension_error: None,
+            paste_input,
             action_tx,
             action_rx,
             action_error: None,
@@ -823,6 +826,10 @@ impl Workbench {
 }
 
 impl eframe::App for Workbench {
+    fn raw_input_hook(&mut self, _: &egui::Context, input: &mut egui::RawInput) {
+        self.paste_input.append(input);
+    }
+
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
         [0.; 4]
     }

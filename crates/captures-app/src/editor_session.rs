@@ -200,6 +200,13 @@ pub enum Request {
         id: String,
         edit: LayerEdit,
     },
+    CopyLayer {
+        id: String,
+    },
+    PasteLayer {
+        new_id: String,
+        after_id: Option<String>,
+    },
     /// Asset references must already belong to this session. New image import
     /// will have a separate byte/file boundary, never pixels in command JSON.
     Commit {
@@ -245,6 +252,7 @@ pub struct Snapshot<'a> {
     pub selection_outlines: BTreeMap<&'a str, [Point; 4]>,
     pub can_undo: bool,
     pub can_redo: bool,
+    pub can_paste_layer: bool,
     /// Changes since the last successful draft save (or open), not since capture.
     pub unsaved_changes: bool,
     pub has_draft: bool,
@@ -263,6 +271,8 @@ pub struct EditorSession {
     fonts: Option<SessionFonts>,
     pixels: Arc<RgbaImage>,
     has_draft: bool,
+    layer_clipboard: Option<Element>,
+    layer_paste_count: u32,
 }
 
 struct SessionFonts {
@@ -363,6 +373,8 @@ impl EditorSession {
             fonts,
             pixels,
             has_draft,
+            layer_clipboard: None,
+            layer_paste_count: 0,
         })
     }
 
@@ -442,6 +454,7 @@ impl EditorSession {
                 .collect(),
             can_undo: self.history.undo_len() > 0,
             can_redo: self.history.redo_len() > 0,
+            can_paste_layer: self.layer_clipboard.is_some(),
             unsaved_changes: self.history.current() != &self.persisted,
             has_draft: self.has_draft,
         }
@@ -724,6 +737,18 @@ impl EditorSession {
             Request::Snapshot => return Ok(()),
             Request::SaveDraft { updated_at_ms } => return self.save_draft(updated_at_ms),
             Request::DiscardDraft => return self.discard_draft(),
+            Request::CopyLayer { id } => {
+                let element = self
+                    .history
+                    .current()
+                    .elements
+                    .iter()
+                    .find(|element| element.base().id == id)
+                    .ok_or("The selected layer no longer exists.")?;
+                self.layer_clipboard = Some(element.clone());
+                self.layer_paste_count = 0;
+                return Ok(());
+            }
             Request::RemoveImageBackground {
                 point,
                 tolerance,
@@ -739,6 +764,7 @@ impl EditorSession {
             } => return self.paint_image_background(points, size, softness, mode),
             edit => edit,
         };
+        let is_paste = matches!(&request, Request::PasteLayer { .. });
         let mut next = self.history.clone();
         match request {
             Request::Snapshot
@@ -864,6 +890,35 @@ impl EditorSession {
                 document.edit_layer(&id, edit)?;
                 next.commit(document);
             }
+            Request::PasteLayer { new_id, after_id } => {
+                let clipboard = self
+                    .layer_clipboard
+                    .as_ref()
+                    .ok_or("No copied layer is available.")?;
+                let mut document = next.current().clone();
+                if new_id.is_empty()
+                    || document
+                        .elements
+                        .iter()
+                        .any(|element| element.base().id == new_id)
+                {
+                    return Err("A pasted layer needs a new nonempty identifier.".into());
+                }
+                let offset = 24. * f64::from(self.layer_paste_count + 1);
+                let pasted = clipboard.copied_layer(new_id, offset)?;
+                let insertion = after_id
+                    .as_deref()
+                    .and_then(|id| {
+                        document
+                            .elements
+                            .iter()
+                            .position(|element| element.base().id == id)
+                    })
+                    .map_or(document.elements.len(), |index| index + 1);
+                document.elements.insert(insertion, pasted);
+                next.commit(document);
+            }
+            Request::CopyLayer { .. } => unreachable!(),
             Request::Crop { rect } => {
                 if ![rect.x, rect.y, rect.width, rect.height]
                     .into_iter()
@@ -906,6 +961,9 @@ impl EditorSession {
         // unchanged. Hosts never receive a half-applied edit.
         self.history = next;
         self.pixels = Arc::new(pixels);
+        if is_paste {
+            self.layer_paste_count += 1;
+        }
         Ok(())
     }
 
@@ -963,6 +1021,8 @@ impl EditorSession {
         self.assets = assets;
         self.pixels = Arc::new(pixels);
         self.has_draft = false;
+        self.layer_clipboard = None;
+        self.layer_paste_count = 0;
         Ok(())
     }
 }
