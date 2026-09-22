@@ -2165,28 +2165,20 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
             .elements
             .iter()
             .find(|element| Some(&element.base().id) == view.selected_layer.as_ref());
+        let layer_action = match key {
+            egui::Key::C => Some(LayerAction::Copy),
+            egui::Key::V => Some(LayerAction::Paste),
+            egui::Key::D => Some(LayerAction::Duplicate),
+            egui::Key::Delete | egui::Key::Backspace => Some(LayerAction::Delete),
+            _ => None,
+        };
+        if let Some(action) = layer_action {
+            dispatch_layer_action(view, tx, action, view.selected_layer.clone());
+            continue;
+        }
         let request = match key {
             egui::Key::Z if shift && presented.can_redo => Some(Request::Redo),
             egui::Key::Z if !shift && presented.can_undo => Some(Request::Undo),
-            egui::Key::C => layer.map(|element| Request::CopyLayer {
-                id: element.base().id.clone(),
-            }),
-            egui::Key::V if presented.can_paste_layer => Some(Request::PasteLayer {
-                new_id: uuid::Uuid::new_v4().to_string(),
-                after_id: view.selected_layer.clone(),
-            }),
-            egui::Key::D => layer.map(|element| Request::Layer {
-                id: element.base().id.clone(),
-                edit: LayerEdit::Duplicate {
-                    new_id: uuid::Uuid::new_v4().to_string(),
-                },
-            }),
-            egui::Key::Delete | egui::Key::Backspace => layer
-                .filter(|element| !element.base().locked)
-                .map(|element| Request::Layer {
-                    id: element.base().id.clone(),
-                    edit: LayerEdit::Delete,
-                }),
             egui::Key::ArrowLeft
             | egui::Key::ArrowRight
             | egui::Key::ArrowUp
@@ -2212,16 +2204,6 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
         if let Some(request) = request {
             view.cancel_edit_gestures();
             view.viewport_pan = None;
-            if let Request::Layer {
-                edit: LayerEdit::Duplicate { new_id },
-                ..
-            } = &request
-            {
-                view.pending_layer_selection = Some(new_id.clone());
-            }
-            if let Request::PasteLayer { new_id, .. } = &request {
-                view.pending_layer_selection = Some(new_id.clone());
-            }
             view.submit(tx, request);
         }
     }
@@ -3696,6 +3678,111 @@ fn layer_label(element: &Element) -> &str {
     }
 }
 
+#[derive(Clone, Copy)]
+enum LayerAction {
+    Copy,
+    Paste,
+    Duplicate,
+    Delete,
+}
+
+fn layer_action_enabled(view: &View, action: LayerAction, target_id: Option<&str>) -> bool {
+    if view.pending
+        || view.closed
+        || view.close_requested
+        || view.confirm_discard
+        || view.confirm_replace.is_some()
+    {
+        return false;
+    }
+    let Some(presented) = &view.presented else {
+        return false;
+    };
+    if matches!(action, LayerAction::Paste) {
+        return presented.can_paste_layer
+            && target_id.is_none_or(|id| {
+                presented
+                    .document
+                    .elements
+                    .iter()
+                    .any(|element| element.base().id == id)
+            });
+    }
+    presented
+        .document
+        .elements
+        .iter()
+        .find(|element| Some(element.base().id.as_str()) == target_id)
+        .is_some_and(|element| !matches!(action, LayerAction::Delete) || !element.base().locked)
+}
+
+fn dispatch_layer_action(
+    view: &mut View,
+    tx: &Sender<Job>,
+    action: LayerAction,
+    target_id: Option<String>,
+) {
+    if !layer_action_enabled(view, action, target_id.as_deref()) {
+        return;
+    }
+    let request = match action {
+        LayerAction::Copy => Request::CopyLayer {
+            id: target_id.expect("enabled copy has a target"),
+        },
+        LayerAction::Paste => {
+            let new_id = uuid::Uuid::new_v4().to_string();
+            view.pending_layer_selection = Some(new_id.clone());
+            Request::PasteLayer {
+                new_id,
+                after_id: target_id,
+            }
+        }
+        LayerAction::Duplicate => {
+            let new_id = uuid::Uuid::new_v4().to_string();
+            view.pending_layer_selection = Some(new_id.clone());
+            Request::Layer {
+                id: target_id.expect("enabled duplicate has a target"),
+                edit: LayerEdit::Duplicate { new_id },
+            }
+        }
+        LayerAction::Delete => Request::Layer {
+            id: target_id.expect("enabled delete has a target"),
+            edit: LayerEdit::Delete,
+        },
+    };
+    view.cancel_edit_gestures();
+    view.viewport_pan = None;
+    view.submit(tx, request);
+}
+
+fn layer_context_menu(
+    ui: &mut egui::Ui,
+    view: &mut View,
+    tx: &Sender<Job>,
+    target_id: Option<String>,
+) {
+    for (label, action) in [
+        ("Copy layer", LayerAction::Copy),
+        ("Paste layer", LayerAction::Paste),
+        ("Duplicate", LayerAction::Duplicate),
+        ("Delete", LayerAction::Delete),
+    ] {
+        if target_id.is_none() && !matches!(action, LayerAction::Paste) {
+            continue;
+        }
+        if ui
+            .add_enabled(
+                layer_action_enabled(view, action, target_id.as_deref()),
+                egui::Button::new(label),
+            )
+            .clicked()
+        {
+            dispatch_layer_action(view, tx, action, target_id.clone());
+            ui.close();
+        }
+    }
+}
+
 fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
     let Some(presented) = &view.presented else {
         return;
@@ -3719,17 +3806,31 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
                     if base.visible { "" } else { " · hidden" }
                 );
                 let selected = view.selected_layer.as_deref() == Some(&base.id);
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 30.],
-                        egui::Button::selectable(selected, &label).truncate(),
-                    )
-                    .on_hover_text(&label)
-                    .clicked()
-                {
-                    view.select_layer(Some(base.id.clone()));
-                }
+                ui.push_id(&base.id, |ui| {
+                    let response = ui
+                        .add_sized(
+                            [ui.available_width(), 30.],
+                            egui::Button::selectable(selected, &label).truncate(),
+                        )
+                        .on_hover_text(&label);
+                    if response.clicked() {
+                        view.select_layer(Some(base.id.clone()));
+                    }
+                    response.context_menu(|ui| {
+                        layer_context_menu(ui, view, tx, Some(base.id.clone()));
+                    });
+                });
             }
+            let empty = ui.allocate_response(
+                // A scrolling content Ui has unbounded available height. Only
+                // fill unused space in this list's 112px viewport.
+                egui::vec2(
+                    ui.available_width(),
+                    (112. - ui.min_rect().height()).max(1.),
+                ),
+                egui::Sense::click(),
+            );
+            empty.context_menu(|ui| layer_context_menu(ui, view, tx, None));
         });
     let Some(index) = elements
         .iter()
@@ -3835,20 +3936,16 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
     });
     ui.horizontal(|ui| {
         if ui.button("Duplicate").clicked() {
-            let new_id = uuid::Uuid::new_v4().to_string();
-            view.submit_layer(
-                tx,
-                LayerEdit::Duplicate {
-                    new_id: new_id.clone(),
-                },
-            );
-            view.selected_layer = Some(new_id);
+            dispatch_layer_action(view, tx, LayerAction::Duplicate, Some(base.id.clone()));
         }
         if ui
-            .add_enabled(!base.locked, egui::Button::new("Delete"))
+            .add_enabled(
+                layer_action_enabled(view, LayerAction::Delete, Some(&base.id)),
+                egui::Button::new("Delete"),
+            )
             .clicked()
         {
-            view.submit_layer(tx, LayerEdit::Delete);
+            dispatch_layer_action(view, tx, LayerAction::Delete, Some(base.id.clone()));
         }
     });
     if matches!(element, Element::Image(_)) {
@@ -4141,6 +4238,177 @@ fn show_annotation(
 mod tests {
     use super::*;
     use std::{fs, time::Duration};
+
+    #[test]
+    fn context_menu_targets_row_not_selection_and_keeps_output_until_acceptance() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut initial = presented(false);
+        let target = initial.document.elements[0].base().id.clone();
+        let mut second = initial.document.elements[0].clone();
+        let Element::Image(image) = &mut second else {
+            panic!()
+        };
+        image.base.id = "other".into();
+        image.name = "Other".into();
+        Arc::make_mut(&mut initial.document).elements.push(second);
+        let document = initial.document.clone();
+        let pixels = initial.pixels.clone();
+        view.receive(&ctx, Ok(initial));
+        view.output = Some((view.texture.as_ref().unwrap().clone(), 101));
+        view.show_output = true;
+        let (tx, rx) = mpsc::channel();
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(500., 700.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        show_layers(ui, view, &tx);
+                    });
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("layer menu multipass");
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let click = |view: &mut View, pos, button| {
+            frame(view, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    view,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+        };
+        let position = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .rev() // Popup text is above same-named inspector buttons.
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing text: {label}"))
+        };
+        let output = frame(&mut view, vec![]);
+        let row = position(&output, "Original screenshot · locked");
+        click(&mut view, row, egui::PointerButton::Secondary);
+        assert!(egui::Popup::is_any_open(&ctx));
+        assert_eq!(view.selected_layer.as_deref(), Some("other"));
+        assert!(view.output.is_some() && view.show_output && rx.try_recv().is_err());
+        frame(
+            &mut view,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!egui::Popup::is_any_open(&ctx));
+        assert!(rx.try_recv().is_err());
+        click(&mut view, row, egui::PointerButton::Secondary);
+        let output = frame(&mut view, vec![]);
+        click(
+            &mut view,
+            position(&output, "Copy layer"),
+            egui::PointerButton::Primary,
+        );
+        assert!(matches!(rx.try_recv(), Ok(Job::Apply(Request::CopyLayer { id })) if id == target));
+        assert!(
+            rx.try_recv().is_err(),
+            "discarded egui passes must not enqueue twice"
+        );
+        let mut copied = presented(false);
+        copied.document = document;
+        copied.pixels = pixels;
+        copied.copied_layer = true;
+        copied.can_paste_layer = true;
+        view.receive(&ctx, Ok(copied));
+        assert_eq!(view.selected_layer.as_deref(), Some("other"));
+        assert!(view.output.is_some());
+        click(&mut view, row, egui::PointerButton::Secondary);
+        let output = frame(&mut view, vec![]);
+        click(
+            &mut view,
+            position(&output, "Duplicate"),
+            egui::PointerButton::Primary,
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(Job::Apply(Request::Layer { id, edit: LayerEdit::Duplicate { .. } })) if id == target)
+        );
+        assert_eq!(view.selected_layer.as_deref(), Some("other"));
+        assert!(view.pending_layer_selection.is_some());
+        view.receive(&ctx, Err("rejected".into()));
+        assert_eq!(view.selected_layer.as_deref(), Some("other"));
+        assert!(view.pending_layer_selection.is_none() && view.output.is_some());
+        assert!(!layer_action_enabled(
+            &view,
+            LayerAction::Delete,
+            Some(&target)
+        ));
+        assert!(!layer_action_enabled(
+            &view,
+            LayerAction::Paste,
+            Some("removed")
+        ));
+        assert!(layer_action_enabled(&view, LayerAction::Paste, None));
+        for blocked in 0..4 {
+            view.pending = blocked == 0;
+            view.confirm_discard = blocked == 1;
+            view.close_requested = blocked == 2;
+            view.closed = blocked == 3;
+            for action in [
+                LayerAction::Copy,
+                LayerAction::Paste,
+                LayerAction::Duplicate,
+                LayerAction::Delete,
+            ] {
+                dispatch_layer_action(&mut view, &tx, action, Some(target.clone()));
+            }
+            assert!(rx.try_recv().is_err());
+        }
+        view.closed = false;
+        let mut empty = presented(false);
+        Arc::make_mut(&mut empty.document).elements.clear();
+        empty.can_paste_layer = true;
+        view.receive(&ctx, Ok(empty));
+        frame(&mut view, vec![]);
+        click(
+            &mut view,
+            egui::pos2(40., 80.),
+            egui::PointerButton::Secondary,
+        );
+        let output = frame(&mut view, vec![]);
+        click(
+            &mut view,
+            position(&output, "Paste layer"),
+            egui::PointerButton::Primary,
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Job::Apply(Request::PasteLayer { after_id: None, .. }))
+        ));
+        assert!(rx.try_recv().is_err());
+    }
 
     #[test]
     fn rail_selects_tools_and_shape_menu_without_editing_or_leaking_busy_clicks() {

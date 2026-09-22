@@ -559,6 +559,17 @@ def main():
             editor = reopen()
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 3, "reopen has no layer clipboard")[-1] == pasted_twice
+            click(editor, 463, 62)
+            before_menu = draft.read_bytes()
+            inspector_move(100, 202, "click", "3", "sleep", ".3")
+            shot(editor, "layer-context-menu")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            assert draft.read_bytes() == before_menu, "opening/cancelling a row menu must not edit"
+            resize_editor(760, 540)
+            inspector_move(100, 202, "click", "3", "sleep", ".3")
+            shot(editor, "layer-context-menu-minimum")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            assert draft.read_bytes() == before_menu
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "shortcut suite quits")
@@ -574,7 +585,8 @@ def main():
                            "rail-arrow-create", "rail-menu-escape", "rail-minimum",
                            "layer-copy-snapshot-after-delete", "layer-paste-empty-OS-clipboard",
                            "layer-paste-once-with-OS-text", "layer-paste-cumulative-offset",
-                           "layer-paste-undo-redo", "layer-clipboard-session-local"],
+                           "layer-paste-undo-redo", "layer-clipboard-session-local",
+                           "layer-context-menu-cancel", "layer-context-menu-minimum"],
             }, indent=2) + "\n")
             print("PASS native editor shortcuts: tools, undo, redo, duplicate, delete, nudge, field/dialog focus and original unchanged")
             return

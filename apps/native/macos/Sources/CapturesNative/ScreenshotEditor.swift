@@ -744,6 +744,19 @@ private final class ScreenshotEditorWindow: NSWindow {
     }
 }
 
+final class EditorLayerTable: NSTableView {
+    var contextMenu: ((Int) -> NSMenu?)?
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard let menu = menu(for: event) else { return }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        contextMenu?(row(at: convert(event.locationInWindow, from: nil)))
+    }
+}
+
 final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewDataSource,
                                         NSTableViewDelegate, NSTextFieldDelegate {
     let window: NSWindow
@@ -857,7 +870,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var outputQuality: NSPopUpButton!
     private var outputSizeMode: NSPopUpButton!
     private var outputPreviewMode: NSSegmentedControl!
-    private var layerTable: NSTableView!
+    private var layerTable: EditorLayerTable!
     private var visibilityButton: CaptureButton!
     private var lockButton: CaptureButton!
     private var renameButton: CaptureButton!
@@ -1635,11 +1648,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 272, height: 106))
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
-        layerTable = NSTableView(frame: scroll.bounds)
+        layerTable = EditorLayerTable(frame: scroll.bounds)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("editor-layer"))
         column.width = 252; layerTable.addTableColumn(column); layerTable.headerView = nil
         layerTable.rowHeight = 32; layerTable.dataSource = self; layerTable.delegate = self
         layerTable.allowsEmptySelection = true; layerTable.setAccessibilityLabel("Screenshot layers")
+        layerTable.contextMenu = { [weak self] row in self?.layerContextMenu(row: row) }
         scroll.documentView = layerTable; layerContent.addSubview(scroll)
 
         panelFieldLabel("Name", x: 0, y: 112, parent: layerContent)
@@ -2600,19 +2614,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             } else if command && key.lowercased() == "d" {
                 button = duplicateButton
             } else if command && key.lowercased() == "c" {
-                guard !state.busy, let layer = selectedLayer else { return true }
-                cancelDrawing(); cancelViewportPan()
-                self.command(["operation": "copy_layer", "id": layer.id],
-                        message: "Copying layer…", preserveOutputAndStatus: true)
+                copyLayer(id: selectedLayerID)
                 return true
             } else if command && key.lowercased() == "v" {
-                guard !state.busy, state.snapshot?.canPasteLayer == true else { return true }
-                let newID = UUID().uuidString.lowercased()
-                var request: [String: Any] = ["operation": "paste_layer", "new_id": newID]
-                if let selectedLayerID { request["after_id"] = selectedLayerID }
-                cancelDrawing(); cancelViewportPan()
-                self.command(request, message: "Pasting layer…", preferredSelection: newID,
-                        selectToolOnSuccess: true)
+                pasteLayer(after: selectedLayerID)
                 return true
             } else if event.keyCode == 51 || event.keyCode == 117 {
                 button = deleteButton
@@ -2959,16 +2964,99 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                      message: message)
     }
 
+    private var layerActionsReady: Bool {
+        state.snapshot != nil && !state.busy && !importLoading
+            && !awaitingReplaceConfirmation && window.attachedSheet == nil
+    }
+
     private func duplicateLayer() {
         guard let layer = selectedLayer else { return }
+        duplicateLayer(id: layer.id)
+    }
+
+    private func duplicateLayer(id: String) {
+        guard layerActionsReady,
+              let layer = state.snapshot?.layers.first(where: { $0.id == id }) else { return }
         let newID = UUID().uuidString.lowercased()
+        cancelDrawing(); cancelViewportPan()
         layerCommand(layer, edit: ["action": "duplicate", "new_id": newID],
                      message: "Duplicating layer…", preferredSelection: newID)
     }
 
     private func deleteLayer() {
         guard let layer = selectedLayer, !layer.locked else { return }
+        deleteLayer(id: layer.id)
+    }
+
+    private func deleteLayer(id: String) {
+        guard layerActionsReady,
+              let layer = state.snapshot?.layers.first(where: { $0.id == id }), !layer.locked else { return }
+        cancelDrawing(); cancelViewportPan()
         layerCommand(layer, edit: ["action": "delete"], message: "Deleting layer…")
+    }
+
+    private func copyLayer(id: String?) {
+        guard layerActionsReady, let id,
+              state.snapshot?.layers.contains(where: { $0.id == id }) == true else { return }
+        cancelDrawing(); cancelViewportPan()
+        command(["operation": "copy_layer", "id": id], message: "Copying layer…",
+                preserveOutputAndStatus: true)
+    }
+
+    private func pasteLayer(after id: String?) {
+        guard layerActionsReady,
+              let snapshot = state.snapshot, snapshot.canPasteLayer else { return }
+        guard id == nil || snapshot.layers.contains(where: { $0.id == id }) else { return }
+        let newID = UUID().uuidString.lowercased()
+        var request: [String: Any] = ["operation": "paste_layer", "new_id": newID]
+        if let id { request["after_id"] = id }
+        cancelDrawing(); cancelViewportPan()
+        command(request, message: "Pasting layer…", preferredSelection: newID,
+                selectToolOnSuccess: true)
+    }
+
+    func layerContextMenu(row: Int) -> NSMenu? {
+        guard !awaitingReplaceConfirmation, window.attachedSheet == nil,
+              let snapshot = state.snapshot else { return nil }
+        let targetID = snapshot.layers.indices.contains(row) ? snapshot.layers[row].id : nil
+        let target = targetID.flatMap { id in snapshot.layers.first { $0.id == id } }
+        let menu = NSMenu(title: "Layer actions")
+        menu.autoenablesItems = false
+        func add(_ title: String, _ action: Selector, enabled: Bool, id: String? = nil) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self; item.representedObject = id; item.isEnabled = enabled
+            menu.addItem(item)
+        }
+        let ready = layerActionsReady
+        if let target {
+            add("Copy layer", #selector(copyLayerFromMenu(_:)), enabled: ready, id: target.id)
+        }
+        add("Paste layer", #selector(pasteLayerFromMenu(_:)),
+            enabled: ready && snapshot.canPasteLayer, id: targetID)
+        if let target {
+            menu.addItem(.separator())
+            add("Duplicate", #selector(duplicateLayerFromMenu(_:)), enabled: ready, id: target.id)
+            add("Delete", #selector(deleteLayerFromMenu(_:)), enabled: ready && !target.locked, id: target.id)
+        }
+        return menu
+    }
+
+    @objc private func copyLayerFromMenu(_ sender: NSMenuItem) {
+        copyLayer(id: sender.representedObject as? String)
+    }
+
+    @objc private func pasteLayerFromMenu(_ sender: NSMenuItem) {
+        pasteLayer(after: sender.representedObject as? String)
+    }
+
+    @objc private func duplicateLayerFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        duplicateLayer(id: id)
+    }
+
+    @objc private func deleteLayerFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        deleteLayer(id: id)
     }
 
     private func reorderLayer(up: Bool) {

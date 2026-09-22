@@ -1096,6 +1096,16 @@ tests cover snapshot ownership, command/focus gates, empty/nonempty OS payloads,
 fresh selection, offsets, undo/redo and reopening; AppKit uses native CI tests.
 Windows/Wayland share the implementation but physical input/presentation remains
 unverified, as does physical AppKit acceptance. No platform parity gate closes.
+Both hosts expose these layer actions through a native right-click menu. The
+clicked stable layer ID, not the previous selection, owns Copy/Paste/Duplicate/
+Delete. Opening or cancelling a menu preserves selection and encoded output;
+stale IDs, busy work and confirmations reject dispatch. Locked layers remain
+copyable/duplicable but cannot be deleted. Empty list space offers Paste. The
+wgpu Duplicate button now waits for accepted fresh selection like its shortcut;
+a failed duplicate keeps the prior selection. AppKit tests exercise native menu
+targeting/dispatch; wgpu tests use secondary pointer/menu clicks, and private-X11
+captures cover normal/minimum light/dark presentation. Windows/Wayland and physical
+AppKit menu input/accessibility remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
 The current native screenshot editor is a functional workbench, not a visual match
