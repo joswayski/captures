@@ -124,8 +124,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func buildUI() {
         root.layer?.backgroundColor = tokens.color("surface-base").cgColor
-        let heading = label("Edit recording", size: 22, weight: .semibold)
-        heading.setAccessibilityRole(.heading)
+        _ = label("Edit recording", size: 22, weight: .semibold)
         let note = label("Decoded frame preview · playback is not included in this slice", muted: true)
         note.identifier = NSUserInterfaceItemIdentifier("recording-editor-note")
         previewPanel.wantsLayer = true
@@ -229,9 +228,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         seekSlider.maxValue = Double(max(1, value.snapshot.durationMilliseconds))
         seekSlider.doubleValue = Double(value.snapshot.positionMilliseconds)
         seekLabel.stringValue = "\(time(value.snapshot.positionMilliseconds)) / \(time(value.snapshot.durationMilliseconds))"
-        trimStart.stringValue = "\((value.snapshot.edit["trim_start_ms"] as? NSNumber)?.uint64Value ?? 0)"
-        trimEnd.stringValue = "\((value.snapshot.edit["trim_end_ms"] as? NSNumber)?.uint64Value
-            ?? value.snapshot.durationMilliseconds)"
+        let start = (value.snapshot.edit["trim_start_ms"] as? NSNumber)?.uint64Value ?? 0
+        let end = (value.snapshot.edit["trim_end_ms"] as? NSNumber)?.uint64Value
+            ?? value.snapshot.durationMilliseconds
+        trimStart.stringValue = String(start)
+        trimEnd.stringValue = String(end)
         select(format, value: value.snapshot.export["format"] as? String ?? "mp4")
         select(quality, value: value.snapshot.export["quality"] as? String ?? "preserve")
         if initialize {
