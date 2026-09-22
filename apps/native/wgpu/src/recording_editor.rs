@@ -226,6 +226,7 @@ impl View {
         } else {
             self.playback_position_ms.unwrap_or(p.position_ms)
         };
+        self.position_ms = self.playback_position_ms.unwrap_or(p.position_ms);
         let cancel = CancelToken::default();
         self.cancel = Some(cancel.clone());
         self.send(tx, Job::Play(position, cancel));
@@ -1799,6 +1800,10 @@ mod tests {
             panic!("play queued")
         };
         assert_eq!(position, 700);
+        assert_eq!(
+            view.position_ms, 700,
+            "the playhead labels the retained frame during startup"
+        );
         assert!(view.playing && view.busy && !view.dirty());
         view.request_playback(&tx);
         view.request_estimate(&tx);
