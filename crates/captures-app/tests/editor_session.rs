@@ -2790,6 +2790,345 @@ fn edit_text_request(id: &str, patch: serde_json::Value) -> Request {
     serde_json::from_value(json!({"operation":"edit_text", "id":id, "patch":patch})).unwrap()
 }
 
+fn begin_new_text_input(input_id: &str, text: &str, preset: Option<&str>) -> Request {
+    serde_json::from_value(json!({
+        "operation":"begin_text_input", "input_id":input_id,
+        "target":{"kind":"new", "create":{
+            "point":{"x":100,"y":20}, "text":text, "fontSize":80,
+            "fontFamily":"sans", "color":"#ff0000", "stylePreset":preset
+        }}
+    }))
+    .unwrap()
+}
+
+fn begin_existing_text_input(input_id: &str, id: &str) -> Request {
+    serde_json::from_value(json!({
+        "operation":"begin_text_input", "input_id":input_id,
+        "target":{"kind":"existing", "id":id}
+    }))
+    .unwrap()
+}
+
+fn update_text_input(input_id: &str, text: &str) -> Request {
+    serde_json::from_value(json!({
+        "operation":"update_text_input", "input_id":input_id, "text":text
+    }))
+    .unwrap()
+}
+
+fn finish_text_input(input_id: &str, commit: bool) -> Request {
+    serde_json::from_value(json!({
+        "operation":"finish_text_input", "input_id":input_id, "commit":commit
+    }))
+    .unwrap()
+}
+
+fn png_export_options() -> captures_app::editor_session::ExportOptions {
+    serde_json::from_value(json!({
+        "format":"png", "quality":"preserve", "quality_value":100, "png":{}
+    }))
+    .unwrap()
+}
+
+#[test]
+fn transient_new_text_previews_commit_as_one_history_step() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 240.,
+            height: 220.,
+        })
+        .unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 90 })
+        .unwrap();
+    let before = editor.snapshot().document.clone();
+    let can_undo = editor.snapshot().can_undo;
+
+    editor
+        .execute(begin_new_text_input("typing-1", "", None))
+        .unwrap();
+    let active = serde_json::to_value(editor.snapshot()).unwrap();
+    assert_eq!(active["active_text_input"]["input_id"], "typing-1");
+    assert_eq!(active["active_text_input"]["is_new"], true);
+    assert!(active["active_text_input"]["layer_id"].as_str().is_some());
+    assert_eq!(editor.snapshot().can_undo, can_undo);
+    assert!(!editor.snapshot().unsaved_changes);
+
+    editor
+        .execute(update_text_input("typing-1", "L\nL"))
+        .unwrap();
+    editor.execute(update_text_input("typing-1", "LL")).unwrap();
+    let preview = editor.snapshot().document.clone();
+    let preview_pixels = editor.pixels();
+    let Element::Text(preview_text) = preview.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!(preview_text.text, "LL");
+    editor.execute(finish_text_input("typing-1", true)).unwrap();
+    assert!(editor.snapshot().active_text_input.is_none());
+    assert_eq!(editor.snapshot().document, &preview);
+    assert_eq!(editor.pixels(), preview_pixels);
+    assert!(editor.snapshot().unsaved_changes);
+
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &before);
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &preview);
+}
+
+#[test]
+fn transient_cancel_preserves_existing_redo_document_pixels_and_draft() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 91 })
+        .unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 210.,
+            height: 180.,
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    let before = editor.snapshot().document.clone();
+    let before_pixels = editor.pixels();
+    let manifest = data.path().join("drafts").join(&id).join("manifest.json");
+    let saved = fs::read(&manifest).unwrap();
+    assert!(editor.snapshot().can_redo);
+
+    editor
+        .execute(begin_existing_text_input("editing", "label"))
+        .unwrap();
+    editor.execute(update_text_input("editing", "LL")).unwrap();
+    assert_ne!(editor.snapshot().document, &before);
+    assert!(editor.snapshot().can_redo);
+    assert!(!editor.snapshot().unsaved_changes);
+    editor.execute(finish_text_input("editing", false)).unwrap();
+
+    assert_eq!(editor.snapshot().document, &before);
+    assert!(Arc::ptr_eq(&before_pixels, &editor.pixels()));
+    assert!(editor.snapshot().can_redo);
+    assert!(!editor.snapshot().unsaved_changes);
+    assert_eq!(fs::read(manifest).unwrap(), saved);
+}
+
+#[test]
+fn transient_blank_and_unchanged_finishes_have_shipping_commit_semantics() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 92 })
+        .unwrap();
+    let with_label = editor.snapshot().document.clone();
+
+    editor
+        .execute(begin_existing_text_input("unchanged", "label"))
+        .unwrap();
+    editor
+        .execute(finish_text_input("unchanged", true))
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document.elements.len(), 1);
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &with_label);
+
+    editor
+        .execute(begin_new_text_input("blank-new", "\u{feff}\t", None))
+        .unwrap();
+    editor
+        .execute(finish_text_input("blank-new", true))
+        .unwrap();
+    assert_eq!(editor.snapshot().document, &with_label);
+
+    editor
+        .execute(begin_existing_text_input("blank-existing", "label"))
+        .unwrap();
+    editor
+        .execute(update_text_input("blank-existing", " \n\u{00a0}"))
+        .unwrap();
+    editor
+        .execute(finish_text_input("blank-existing", true))
+        .unwrap();
+    assert_eq!(editor.snapshot().document.elements.len(), 1);
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &with_label);
+}
+
+#[test]
+fn transient_updates_preserve_anchor_metadata_and_last_accepted_preview() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    let mut document = editor.snapshot().document.clone();
+    let Element::Text(label) = document.elements.last_mut().unwrap() else {
+        panic!()
+    };
+    label.align = "right".into();
+    label.auto_width = Some(true);
+    label.width = 110.;
+    label.extra.insert("future".into(), json!({"keep":23}));
+    editor.execute(Request::Commit { document }).unwrap();
+
+    editor
+        .execute(begin_existing_text_input("anchor", "label"))
+        .unwrap();
+    assert!(
+        editor
+            .execute(update_text_input("stale", "must not apply"))
+            .unwrap_err()
+            .contains("stale")
+    );
+    assert!(
+        editor
+            .execute(finish_text_input("stale", true))
+            .unwrap_err()
+            .contains("stale")
+    );
+    editor.execute(update_text_input("anchor", "fi")).unwrap();
+    let accepted = editor.snapshot().document.clone();
+    let accepted_pixels = editor.pixels();
+    let Element::Text(label) = accepted.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!(label.base.x + label.width, 130.);
+    assert_eq!(label.extra["future"], json!({"keep":23}));
+    assert_eq!(
+        editor.snapshot().selection_outlines["label"],
+        accepted
+            .elements
+            .last()
+            .unwrap()
+            .selection_outline()
+            .unwrap()
+    );
+    assert!(
+        editor
+            .execute(update_text_input("anchor", "☃"))
+            .unwrap_err()
+            .contains("glyph")
+    );
+    assert_eq!(editor.snapshot().document, &accepted);
+    assert!(Arc::ptr_eq(&accepted_pixels, &editor.pixels()));
+    assert_eq!(
+        editor.snapshot().active_text_input.unwrap().input_id,
+        "anchor"
+    );
+
+    editor.execute(finish_text_input("anchor", true)).unwrap();
+    editor
+        .execute(begin_new_text_input("centered", "L", Some("box")))
+        .unwrap();
+    editor.execute(update_text_input("centered", "fi")).unwrap();
+    let Element::Text(centered) = editor.snapshot().document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!(centered.align, "center");
+    assert_eq!(centered.base.x + centered.width / 2., 100.);
+}
+
+#[test]
+fn active_text_input_gates_persistence_exports_imports_and_other_commands() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 93 })
+        .unwrap();
+    let document = editor.snapshot().document.clone();
+    let pixels = editor.pixels();
+    editor
+        .execute(begin_existing_text_input("gate", "label"))
+        .unwrap();
+
+    for request in [
+        Request::Undo,
+        Request::Crop {
+            rect: Rect {
+                x: 0.,
+                y: 0.,
+                width: 3.,
+                height: 2.,
+            },
+        },
+        Request::SaveDraft { updated_at_ms: 94 },
+        Request::DiscardDraft,
+        begin_existing_text_input("nested", "label"),
+    ] {
+        let error = editor.execute(request).unwrap_err();
+        assert!(error.contains("Finish or cancel"), "{error}");
+    }
+    let error = editor
+        .import_image(ImportImage {
+            pixels: RgbaImage::new(1, 1),
+            name: "blocked".into(),
+            selected_id: None,
+            point: None,
+        })
+        .unwrap_err();
+    assert!(error.contains("Finish or cancel"));
+    assert!(
+        editor
+            .encode_export(png_export_options())
+            .unwrap_err()
+            .contains("Finish or cancel")
+    );
+    assert!(
+        editor
+            .save_original_export(Path::new("not-the-original.png"), png_export_options())
+            .unwrap_err()
+            .contains("Finish or cancel")
+    );
+    editor.execute(Request::Snapshot).unwrap();
+    assert_eq!(editor.snapshot().document, &document);
+    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    editor.execute(finish_text_input("gate", false)).unwrap();
+}
+
+#[test]
+fn text_input_begin_validates_token_and_canvas_editability() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    assert!(
+        editor
+            .execute(begin_existing_text_input("", "label"))
+            .unwrap_err()
+            .contains("nonempty")
+    );
+    for edit in [
+        LayerEdit::Lock { locked: true },
+        LayerEdit::Visibility { visible: false },
+    ] {
+        editor
+            .execute(Request::Layer {
+                id: "label".into(),
+                edit,
+            })
+            .unwrap();
+        assert!(
+            editor
+                .execute(begin_existing_text_input("blocked", "label"))
+                .unwrap_err()
+                .contains("visible, unlocked")
+        );
+        editor.execute(Request::Undo).unwrap();
+    }
+    // Inspector property edits retain their shipping hidden/locked behavior.
+    editor
+        .execute(Request::Layer {
+            id: "label".into(),
+            edit: LayerEdit::Lock { locked: true },
+        })
+        .unwrap();
+    editor
+        .execute(edit_text_request("label", json!({"text":"LL"})))
+        .unwrap();
+}
+
 #[test]
 fn text_shadow_projection_and_partial_patches_use_current_font_size() {
     let (data, id, _) = setup();
