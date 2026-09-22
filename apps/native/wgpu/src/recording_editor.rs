@@ -15,8 +15,8 @@ use captures_app::recording_editor::{
 };
 use captures_app::recording_timeline::{TimelineTrimDrag, TimelineTrimEdge, timeline_ratio};
 use captures_media::{
-    AudioEdit, CancelToken, CropRect, EditSpec, ExportEstimate, ExportFormat, ExportProgress,
-    ExportSpec, MediaMetadata, MediaToolchain, QualityPreset,
+    AudioEdit, CancelToken, CropRect, CropResizeAxis, EditSpec, ExportEstimate, ExportFormat,
+    ExportProgress, ExportSpec, MediaMetadata, MediaToolchain, QualityPreset,
 };
 use captures_recording::MaxResolution;
 use eframe::egui;
@@ -335,29 +335,6 @@ pub struct Editor {
     events: Sender<Event>,
     rx: Receiver<Event>,
     worker: Option<thread::JoinHandle<()>>,
-}
-
-// Match the shipping editor's numeric crop resize: preserve the current ratio,
-// round to source pixels, and fit the coupled dimensions at the current origin.
-fn resize_crop_dimension(crop: &mut CropRect, source: (u32, u32), horizontal: bool, value: u32) {
-    let ratio = crop.width as f64 / crop.height.max(1) as f64;
-    let max_width = source.0.saturating_sub(crop.x).max(2);
-    let max_height = source.1.saturating_sub(crop.y).max(2);
-    if horizontal {
-        crop.width = value.clamp(2, max_width);
-        crop.height = ((crop.width as f64 / ratio).round() as u32).max(2);
-        if crop.height > max_height {
-            crop.height = max_height;
-            crop.width = ((crop.height as f64 * ratio).round() as u32).max(2);
-        }
-    } else {
-        crop.height = value.clamp(2, max_height);
-        crop.width = ((crop.height as f64 * ratio).round() as u32).max(2);
-        if crop.width > max_width {
-            crop.width = max_width;
-            crop.height = ((crop.width as f64 / ratio).round() as u32).max(2);
-        }
-    }
 }
 
 fn wake(ctx: &egui::Context, viewport: egui::ViewportId) {
@@ -1026,7 +1003,16 @@ fn show(
                                 ui.label(label);
                                 if ui.add(egui::DragValue::new(&mut value).range(2..=maximum).update_while_editing(false)).changed() {
                                     if !view.crop_aspect_unlocked {
-                                        resize_crop_dimension(crop, source_size, horizontal, value);
+                                        *crop = crop.resize_aspect_locked(
+                                            source_size.0,
+                                            source_size.1,
+                                            if horizontal {
+                                                CropResizeAxis::Width
+                                            } else {
+                                                CropResizeAxis::Height
+                                            },
+                                            value,
+                                        );
                                     } else if horizontal {
                                         crop.width = value;
                                     } else {
@@ -1705,7 +1691,16 @@ mod tests {
                 width: initial.2,
                 height: initial.3,
             };
-            resize_crop_dimension(&mut crop, source, horizontal, value);
+            crop = crop.resize_aspect_locked(
+                source.0,
+                source.1,
+                if horizontal {
+                    CropResizeAxis::Width
+                } else {
+                    CropResizeAxis::Height
+                },
+                value,
+            );
             assert_eq!((crop.width, crop.height), expected);
             assert_eq!((crop.x, crop.y), (initial.0, initial.1));
         }

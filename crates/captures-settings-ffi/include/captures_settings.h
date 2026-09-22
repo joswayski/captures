@@ -384,6 +384,32 @@ char *captures_editor_save_new_v1(const CapturesEditorSession *session, const ch
 char *captures_editor_save_original_v1(const CapturesEditorSession *session,
     const char *request_json);
 
+/* Allocation-free recording crop/output-size geometry. Crop resize preserves
+ * the crop's current aspect ratio and fits at its existing origin; staged width
+ * or height may exceed the remaining source and is repaired. Axis 0 changes
+ * width and axis 1 changes height. Crop/source extents must leave at least 2px.
+ * Max-resolution presets 0/1/2 are Original/1080p/720p and call the shared
+ * recording model directly for positive source dimensions, including 1px;
+ * Original still normalizes dimensions to an even minimum of 2px.
+ * False means null/invalid input and leaves output untouched. Inputs/outputs are
+ * copied; these functions allocate nothing and access no session or media I/O. */
+#define CAPTURES_RECORDING_CROP_RESIZE_WIDTH 0
+#define CAPTURES_RECORDING_CROP_RESIZE_HEIGHT 1
+#define CAPTURES_RECORDING_MAX_RESOLUTION_ORIGINAL 0
+#define CAPTURES_RECORDING_MAX_RESOLUTION_1080P 1
+#define CAPTURES_RECORDING_MAX_RESOLUTION_720P 2
+typedef struct {
+    uint32_t x, y, width, height;
+} CapturesRecordingCropRect;
+typedef struct {
+    uint32_t width, height;
+} CapturesRecordingDimensions;
+bool captures_recording_crop_resize_locked_v1(CapturesRecordingCropRect crop,
+    CapturesRecordingDimensions source, uint8_t axis, uint32_t value,
+    CapturesRecordingCropRect *output);
+bool captures_recording_max_resolution_constrain_v1(uint8_t preset,
+    CapturesRecordingDimensions input, CapturesRecordingDimensions *output);
+
 /* Allocation-free recording trim-handle geometry in host logical points and
  * source-relative fractional milliseconds. Edge 0 is start; edge 1 is end.
  * begin validates a staged range of at least 1ms and captures immutable origin.
