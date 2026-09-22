@@ -1048,7 +1048,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             return
         }
         cancelPendingImport()
-        inlineTextInput = nil; inlineTextScroll.isHidden = true; closeAfterTextInput = false
+        inlineTextInput = nil; hideInlineTextEditor(); closeAfterTextInput = false
         let generation = state.beginOpen(artifactID: artifact.id)
         lastSolidBackground = "#f7f7f5"
         self.historyRoot = historyRoot
@@ -1099,7 +1099,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let result = worker.prepareForTermination(textInput: terminationInput)
         switch result {
         case .success:
-            inlineTextInput = nil; inlineTextScroll.isHidden = true
+            inlineTextInput = nil; hideInlineTextEditor()
             state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
             window.orderOut(nil); return true
         case .failure(let error):
@@ -2497,7 +2497,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                   layer.kind == .text, layer.visible, !layer.locked,
                   let text = layer.textStyle?.text else { return false }
             beginTextInput(target: ["kind": "existing", "id": id], initialText: text,
-                           anchor: NSPoint(x: layer.x, y: layer.y),
+                           anchor: NSPoint(x: CGFloat(layer.x), y: CGFloat(layer.y)),
                            fontSize: layer.textStyle?.fontSize ?? 32)
             return true
         } catch {
@@ -2608,8 +2608,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             current.requestInFlight = false
             switch result {
             case .success(let presentation):
-                guard presentation.snapshot.activeTextInput?.inputID == input.inputID,
-                      self.state.complete(presentation.snapshot, generation: generation) else { return }
+                guard presentation.snapshot.activeTextInput?.inputID == input.inputID else {
+                    guard self.state.fail(generation: generation) else { return }
+                    current.finishRequested = nil
+                    self.inlineTextInput = current
+                    self.showError("Inline text preview returned a stale token. Retry or Cancel.")
+                    self.showInlineTextEditor(); self.updateControls()
+                    return
+                }
+                guard self.state.complete(presentation.snapshot, generation: generation) else { return }
                 current.acceptedText = sentText
                 if let active = presentation.snapshot.activeTextInput { current.layerID = active.layerID }
                 self.inlineTextInput = current
@@ -2668,8 +2675,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             current.requestInFlight = false
             switch result {
             case .success(let presentation):
-                guard presentation.snapshot.activeTextInput == nil,
-                      self.state.complete(presentation.snapshot, generation: generation) else { return }
+                guard presentation.snapshot.activeTextInput == nil else {
+                    guard self.state.fail(generation: generation) else { return }
+                    current.finishRequested = nil
+                    self.inlineTextInput = current
+                    self.showError("Inline text finish returned an active token. Retry or Cancel.")
+                    self.showInlineTextEditor(); self.updateControls()
+                    return
+                }
+                guard self.state.complete(presentation.snapshot, generation: generation) else { return }
                 self.inlineTextInput = nil
                 self.hideInlineTextEditor()
                 self.publishTextInputPresentation(presentation)
@@ -3092,48 +3106,67 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func showInlineTextEditor() {
-        guard let input = inlineTextInput,
-              let layer = state.snapshot?.layers.first(where: { $0.id == input.layerID }),
-              let style = layer.textStyle else { return }
+        guard let input = inlineTextInput else { return }
+        let layer = input.layerID.flatMap { id in state.snapshot?.layers.first(where: { $0.id == id }) }
+        let style = layer?.textStyle
         let scale = presentedImageRect.width / max(1, CGFloat(state.snapshot?.width ?? 1))
         // Pinned font bytes live inside the shared Rust session and are not an
         // AppKit bundle resource. The native responder intentionally uses the
         // system editing face for caret/IME ownership; shared preview/final pixels
         // remain authoritative for family, traits, shaping and glyph coverage.
-        inlineTextEditor.font = .systemFont(ofSize: min(96, max(13, CGFloat(style.fontSize) * scale)))
+        inlineTextEditor.font = .systemFont(ofSize: min(96, max(13, CGFloat(style?.fontSize ?? input.fontSize) * scale)))
         inlineTextEditor.textColor = tokens.color("text")
-        inlineTextEditor.alignment = style.align == "center" ? .center
-            : style.align == "right" ? .right : .left
+        inlineTextEditor.alignment = style?.align == "center" ? .center
+            : style?.align == "right" ? .right : .left
         inlineTextScroll.isHidden = false
+        inlineTextDoneButton.isHidden = false; inlineTextCancelButton.isHidden = false
         updateInlineTextFrame()
         window.makeFirstResponder(inlineTextEditor)
         inlineTextEditor.setSelectedRange(NSRange(location: inlineTextEditor.string.utf16.count, length: 0))
     }
 
+    private func hideInlineTextEditor() {
+        inlineTextScroll.isHidden = true
+        inlineTextDoneButton.isHidden = true
+        inlineTextCancelButton.isHidden = true
+    }
+
     private func updateInlineTextFrame() {
-        guard !inlineTextScroll.isHidden, let input = inlineTextInput,
-              let layer = state.snapshot?.layers.first(where: { $0.id == input.layerID }) else { return }
+        guard !inlineTextScroll.isHidden, let input = inlineTextInput else { return }
+        let layer = input.layerID.flatMap { id in state.snapshot?.layers.first(where: { $0.id == id }) }
         let image = presentedImageRect
         guard image.width > 0, image.height > 0, let snapshot = state.snapshot else { return }
         let scale = image.width / CGFloat(snapshot.width)
         let bounds: NSRect
-        if let outline = layer.selectionOutline, !outline.isEmpty {
+        if let outline = layer?.selectionOutline, !outline.isEmpty {
             let xs = outline.map(\.x), ys = outline.map(\.y)
             bounds = NSRect(x: xs.min()!, y: ys.min()!,
                             width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
         } else {
-            let fontSize = CGFloat(layer.textStyle?.fontSize ?? 32)
-            bounds = NSRect(x: CGFloat(layer.x), y: CGFloat(layer.y),
+            let fontSize = CGFloat(layer?.textStyle?.fontSize ?? input.fontSize)
+            let x = layer.map { CGFloat($0.x) } ?? input.anchor.x
+            let y = layer.map { CGFloat($0.y) } ?? input.anchor.y
+            bounds = NSRect(x: x, y: y,
                             width: max(160, fontSize * 8), height: max(44, fontSize * 1.6))
         }
         let desiredWidth = min(image.width, max(140, bounds.width * scale + 12))
         let desiredHeight = min(image.height, max(48, bounds.height * scale + 12))
         let desiredX = image.minX + bounds.minX * scale - 6
         let desiredY = image.minY + bounds.minY * scale - 6
-        inlineTextScroll.frame = NSRect(
+        let editorFrame = NSRect(
             x: min(max(image.minX, desiredX), image.maxX - desiredWidth),
             y: min(max(image.minY, desiredY), image.maxY - desiredHeight),
             width: desiredWidth, height: desiredHeight).intersection(viewportInput.bounds)
+        inlineTextScroll.frame = editorFrame
+        let buttonWidth: CGFloat = 68, buttonHeight: CGFloat = 28, gap: CGFloat = 6
+        let buttonsWidth = buttonWidth * 2 + gap
+        let buttonsY = editorFrame.maxY + gap + buttonHeight <= image.maxY
+            ? editorFrame.maxY + gap : max(image.minY, editorFrame.minY - gap - buttonHeight)
+        let buttonsX = min(max(image.minX, editorFrame.maxX - buttonsWidth), image.maxX - buttonsWidth)
+        inlineTextCancelButton.frame = NSRect(x: buttonsX, y: buttonsY,
+                                              width: buttonWidth, height: buttonHeight)
+        inlineTextDoneButton.frame = NSRect(x: buttonsX + buttonWidth + gap, y: buttonsY,
+                                            width: buttonWidth, height: buttonHeight)
     }
 
     private func updateDrawing() {
@@ -3625,7 +3658,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelDrawing()
         cancelPendingImport()
         closeAfterCommand = false; closeAfterTextInput = false
-        inlineTextInput = nil; inlineTextScroll.isHidden = true
+        inlineTextInput = nil; hideInlineTextEditor()
         selectedLayerID = nil; preferredLayerID = nil
         state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
         cancelViewportPan()

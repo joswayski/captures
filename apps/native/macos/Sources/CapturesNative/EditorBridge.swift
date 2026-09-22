@@ -833,6 +833,9 @@ final class EditorWorker: EditorWorking {
                 guard let session = storage.session else {
                     throw AppBridgeError.backend("The screenshot editor is closed.")
                 }
+                guard storage.snapshot?.activeTextInput == nil else {
+                    throw AppBridgeError.backend("Finish or cancel inline text before copying or exporting.")
+                }
                 return try session.encode(options)
             }
             DispatchQueue.main.async { completion(result) }
@@ -846,6 +849,9 @@ final class EditorWorker: EditorWorking {
             let result = Result { () throws -> EditorSavePresentation in
                 guard let session = storage.session else {
                     throw AppBridgeError.backend("The screenshot editor is closed.")
+                }
+                guard storage.snapshot?.activeTextInput == nil else {
+                    throw AppBridgeError.backend("Finish or cancel inline text before saving a copy.")
                 }
                 return try session.saveNew(request)
             }
@@ -861,6 +867,9 @@ final class EditorWorker: EditorWorking {
                 guard let session = storage.session else {
                     throw AppBridgeError.backend("The screenshot editor is closed.")
                 }
+                guard storage.snapshot?.activeTextInput == nil else {
+                    throw AppBridgeError.backend("Finish or cancel inline text before replacing the original.")
+                }
                 return try session.saveOriginal(request)
             }
             DispatchQueue.main.async { completion(result) }
@@ -874,6 +883,9 @@ final class EditorWorker: EditorWorking {
             let result = Result { () throws -> EditorImportPresentation in
                 guard let session = storage.session else {
                     throw AppBridgeError.backend("The screenshot editor is closed.")
+                }
+                guard storage.snapshot?.activeTextInput == nil else {
+                    throw AppBridgeError.backend("Finish or cancel inline text before importing an image.")
                 }
                 let imported = try session.importImage(image, selectedID: selectedID)
                 storage.snapshot = imported.presentation.snapshot

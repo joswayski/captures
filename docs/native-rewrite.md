@@ -404,6 +404,22 @@ Placement is one render-before-publish transaction with fresh selection and norm
 output invalidation; invalid/unavailable styles preserve pixels, redo and drafts.
 The shipping Rounded-box default and inline composition remain different;
 these controls do not reproduce the Tauri layout.
+AppKit now starts an on-canvas native multiline responder when Text places a new
+layer or hits an existing visible, unlocked text layer; double-clicking such a
+layer from Select starts the same transaction. The responder retains local typing,
+selection, clipboard and marked-text ownership while shared preview rendering is in
+flight, coalescing replacements to the newest buffer. Return inserts a newline;
+Done, Escape or focus loss commits one undo step, while Cancel restores the complete
+pre-input document. Blank new input is discarded and blank existing input removes
+the layer. Save, copy, import and unrelated document actions remain blocked until
+the transaction resolves. Begin/update/finish failures keep retryable input, and
+close/quit flush the latest local buffer before draft handling. Shared pinned-font
+layout and pixels remain authoritative: the AppKit composing field intentionally
+uses the UI font and an axis-aligned clipped box, so exact family glyphs, text
+effects, blending and rotated composing-field geometry remain parity work. Existing
+inspector styling remains staged outside active composition. Automated macOS
+fixtures cover light/dark normal, 760×540 and failure states, but physical macOS
+IME, VoiceOver, keyboard layout and mixed-scale acceptance remain unverified.
 No host text parity gate is closed.
 The Windows/Linux candidate now connects a multiline on-canvas composing field
 to the shared transient text transaction. New placement and existing Text-tool hits

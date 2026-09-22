@@ -3445,6 +3445,24 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(NativeEditorSnapshot(value))
     }
 
+    func testSnapshotParsesAndValidatesActiveTextInputToken() throws {
+        var value: [String: Any] = [
+            "artifact_id": "shot", "document": ["width": 200, "height": 100,
+                "elements": [textLayer(id: "preview", text: "pending")]],
+            "initial_text_size": 24, "can_undo": false, "can_redo": false,
+            "unsaved_changes": false, "has_draft": false,
+            "active_text_input": ["input_id": "host-token", "layer_id": "preview", "is_new": true],
+        ]
+        let parsed = try XCTUnwrap(NativeEditorSnapshot(value))
+        XCTAssertEqual(parsed.activeTextInput,
+                       NativeActiveTextInput(["input_id": "host-token", "layer_id": "preview",
+                                              "is_new": true]))
+        value["active_text_input"] = ["input_id": "", "layer_id": "preview", "is_new": true]
+        XCTAssertNil(NativeEditorSnapshot(value))
+        value["active_text_input"] = "host-token"
+        XCTAssertNil(NativeEditorSnapshot(value))
+    }
+
     func testLayerCopyPasteShortcutsDispatchAndPreserveOrInvalidateOutput() throws {
         _ = NSApplication.shared
         let original = layer(id: "source", name: "Source", x: 10, y: 20,
@@ -3951,8 +3969,8 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(create["color"] as? String, "#ff3b5c")
         XCTAssertNil(create["stylePreset"], "drafts without named presets keep the plain family request")
         XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "fresh-text")
-        XCTAssertTrue(try segmented("Output preview image", in: controller.root).isEnabled,
-                      "opening composition preserves the prior encoded output")
+        XCTAssertFalse(try segmented("Output preview image", in: controller.root).isEnabled,
+                       "output controls stay blocked while composition is unresolved")
         XCTAssertEqual(try textView("Inline screenshot text", in: controller.root).string, "")
         XCTAssertTrue(controller.window.firstResponder === try textView("Inline screenshot text", in: controller.root))
     }
@@ -4078,6 +4096,37 @@ final class ScreenshotEditorTests: XCTestCase {
                        "the shared finish publishes the grouped text transaction")
         XCTAssertFalse(try segmented("Output preview image", in: controller.root).isEnabled,
                        "only accepted commit invalidates encoded output")
+    }
+
+    func testInlineTextBeginFailureRetainsLocalBufferAndOffersRetryOrCancel() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        worker.deferRequests = true
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+        let editor = try textView("Inline screenshot text", in: controller.root)
+        editor.string = "typed while Begin renders\nΩ🙂"
+        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+        XCTAssertEqual(worker.requests.count, 1)
+        XCTAssertTrue(editor.isEditable)
+
+        worker.completePendingFailure("font preview unavailable")
+        XCTAssertEqual(editor.string, "typed while Begin renders\nΩ🙂")
+        XCTAssertFalse(editor.isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Retry or Cancel") })
+        let done = try button("Done", in: controller.root)
+        let cancel = try button("Cancel", in: controller.root)
+        XCTAssertTrue(done.isEnabled && cancel.isEnabled)
+        cancel.performClick(nil)
+        XCTAssertTrue(editor.isHiddenOrHasHiddenAncestor)
+        XCTAssertEqual(worker.requests.count, 1, "cancelling a rejected Begin needs no stale shared token")
+        XCTAssertFalse(controller.state.snapshot?.unsavedChanges ?? true)
     }
 
     func testInlineTextCancelPreservesOutputAndTerminationFailureRetainsLatestBuffer() throws {
@@ -4807,6 +4856,92 @@ final class ScreenshotEditorTests: XCTestCase {
         wait(for: [reopened], timeout: 5)
     }
 
+    func testRealBridgeTextInputTransactionPreviewCancelBlankAndOneUndo() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker(); defer { worker.close(); EditorWorker.flush() }
+        let opened = expectation(description: "open text input fixture")
+        var original: EditorPresentation?
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+            result in original = try? result.get(); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        let originalLayerCount = try XCTUnwrap(original).snapshot.layers.count
+        func result(_ object: [String: Any]) -> Result<EditorPresentation, Error> {
+            let done = expectation(description: "text input request")
+            var response: Result<EditorPresentation, Error>!
+            worker.request(object) { response = $0; done.fulfill() }
+            wait(for: [done], timeout: 5)
+            return response
+        }
+        func request(_ object: [String: Any]) throws -> EditorPresentation { try result(object).get() }
+        _ = try request(["operation": "resize_canvas", "width": 640, "height": 360])
+        _ = try request(["operation": "undo"])
+        let inputID = "appkit-new"
+        let begun = try request(["operation": "begin_text_input", "input_id": inputID,
+            "target": ["kind": "new", "create": ["point": ["x": 180, "y": 120],
+                "text": "", "fontSize": 48, "fontFamily": "sans", "color": "#111111"]]])
+        XCTAssertEqual(begun.snapshot.activeTextInput?.inputID, inputID)
+        XCTAssertEqual(begun.snapshot.activeTextInput?.isNew, true)
+        XCTAssertFalse(begun.snapshot.unsavedChanges)
+        XCTAssertFalse(begun.snapshot.canUndo)
+        let layerID = try XCTUnwrap(begun.snapshot.activeTextInput?.layerID)
+
+        let preview = try request(["operation": "update_text_input", "input_id": inputID,
+                                   "text": "Native Ωé\nПривет"])
+        XCTAssertEqual(preview.snapshot.layers.first?.textStyle?.text, "Native Ωé\nПривет")
+        XCTAssertFalse(preview.snapshot.unsavedChanges)
+        XCTAssertFalse(preview.snapshot.canUndo)
+        XCTAssertThrowsError(try result(["operation": "resize_canvas", "width": 10, "height": 10]).get())
+        XCTAssertThrowsError(try result(["operation": "update_text_input", "input_id": "stale",
+                                         "text": "must not win"]).get())
+        let encoded = expectation(description: "active text blocks raw pixel encode")
+        worker.encode(["format": "png"]) { value in
+            XCTAssertThrowsError(try value.get()); encoded.fulfill()
+        }
+        let saved = expectation(description: "active text blocks save new")
+        worker.saveNew([:]) { value in
+            XCTAssertThrowsError(try value.get()); saved.fulfill()
+        }
+        wait(for: [encoded, saved], timeout: 5)
+        let committed = try request(["operation": "finish_text_input", "input_id": inputID, "commit": true])
+        XCTAssertNil(committed.snapshot.activeTextInput)
+        XCTAssertTrue(committed.snapshot.unsavedChanges)
+        XCTAssertTrue(committed.snapshot.canUndo)
+        XCTAssertEqual(committed.snapshot.layers.first?.id, layerID)
+
+        let undone = try request(["operation": "undo"])
+        XCTAssertEqual(undone.snapshot.layers.count, originalLayerCount,
+                       "Begin and every replacement commit as one document undo step")
+        let restored = try request(["operation": "redo"])
+        XCTAssertEqual(restored.snapshot.layers.first?.textStyle?.text, "Native Ωé\nПривет")
+        let existingID = "appkit-existing"
+        _ = try request(["operation": "begin_text_input", "input_id": existingID,
+                         "target": ["kind": "existing", "id": layerID]])
+        _ = try request(["operation": "update_text_input", "input_id": existingID, "text": "preview only"])
+        let cancelled = try request(["operation": "finish_text_input", "input_id": existingID, "commit": false])
+        XCTAssertEqual(cancelled.snapshot.layers.first?.textStyle?.text, "Native Ωé\nПривет")
+        XCTAssertEqual(cancelled.snapshot.canUndo, restored.snapshot.canUndo)
+
+        let blankID = "appkit-blank-existing"
+        _ = try request(["operation": "begin_text_input", "input_id": blankID,
+                         "target": ["kind": "existing", "id": layerID]])
+        _ = try request(["operation": "update_text_input", "input_id": blankID, "text": "\n  "])
+        let removed = try request(["operation": "finish_text_input", "input_id": blankID, "commit": true])
+        XCTAssertEqual(removed.snapshot.layers.count, originalLayerCount)
+        let restoredBlank = try request(["operation": "undo"])
+        XCTAssertEqual(restoredBlank.snapshot.layers.first?.textStyle?.text, "Native Ωé\nПривет")
+
+        let blankNewID = "appkit-blank-new"
+        _ = try request(["operation": "begin_text_input", "input_id": blankNewID,
+            "target": ["kind": "new", "create": ["point": ["x": 80, "y": 70],
+                "text": "", "fontSize": 32, "fontFamily": "sans", "color": "#111111"]]])
+        let blankNew = try request(["operation": "finish_text_input", "input_id": blankNewID, "commit": true])
+        XCTAssertEqual(blankNew.snapshot.layers.count, originalLayerCount + 1,
+                       "blank new composition is discarded")
+    }
+
     func testRealBridgeWandEditsAsymmetricPixelAndUndoRedo() throws {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
@@ -5203,6 +5338,12 @@ private final class FakeEditorWorker: EditorWorking {
         pendingCompletion = nil
         completion?(.success(EditorPresentation(snapshot: snapshot,
             image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)))))
+    }
+
+    func completePendingFailure(_ message: String = "fixture request failed") {
+        let completion = pendingCompletion
+        pendingCompletion = nil
+        completion?(.failure(AppBridgeError.backend(message)))
     }
 
     func encode(_ options: [String: Any],
