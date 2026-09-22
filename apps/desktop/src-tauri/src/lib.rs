@@ -5236,10 +5236,9 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     button_state: MouseButtonState::Up,
                     ..
                 } = event
+                    && !dismiss_visible_tray_notice(tray.app_handle())
                 {
-                    if !dismiss_visible_tray_notice(tray.app_handle()) {
-                        show_preferences(tray.app_handle());
-                    }
+                    show_preferences(tray.app_handle());
                 }
             });
     }
