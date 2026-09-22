@@ -4,6 +4,27 @@ import XCTest
 @testable import CapturesNative
 
 final class RecordingEditorTests: XCTestCase {
+    func testCropAndResolutionGeometryBridgeUsesSharedBoundsAndPresets() throws {
+        let source = NativeRecordingDimensions(width: 320, height: 180)
+        let crop = NativeRecordingCropRect(x: 10, y: 60, width: 160, height: 90)
+        XCTAssertEqual(NativeRecordingGeometry.resizeLocked(crop, source: source,
+            axis: .width, value: 300),
+            NativeRecordingCropRect(x: 10, y: 60, width: 213, height: 120))
+        XCTAssertEqual(NativeRecordingGeometry.resizeLocked(crop, source: source,
+            axis: .height, value: 0),
+            NativeRecordingCropRect(x: 10, y: 60, width: 4, height: 2))
+
+        XCTAssertEqual(NativeRecordingGeometry.constrain(
+            NativeRecordingDimensions(width: 4_001, height: 2_003), preset: .p1080),
+            NativeRecordingDimensions(width: 2_156, height: 1_080))
+        XCTAssertEqual(NativeRecordingGeometry.constrain(
+            NativeRecordingDimensions(width: 1_283, height: 721), preset: .p720),
+            NativeRecordingDimensions(width: 1_280, height: 720))
+        XCTAssertEqual(NativeRecordingGeometry.constrain(
+            NativeRecordingDimensions(width: 1_001, height: 501), preset: .original),
+            NativeRecordingDimensions(width: 1_000, height: 500))
+    }
+
     func testTimelineBridgeThresholdWildSampleRecoveryAndFractionalTime() throws {
         XCTAssertEqual(try XCTUnwrap(NativeRecordingTimeline.ratio(milliseconds: 4_375,
             durationMilliseconds: 8_750)), 0.5, accuracy: 0.000_001)
@@ -190,6 +211,216 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(format.titleOfSelectedItem, "GIF")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("preview unavailable") })
         XCTAssertFalse(controller.prepareForTermination(), "staged recording edits have no draft")
+    }
+
+    func testCropTypedCommitLockAndRelockUseCurrentRatioWithoutEarlyStaging() throws {
+        _ = NSApplication.shared
+        let initialCrop = NativeRecordingCropRect(x: 10, y: 60, width: 160, height: 90)
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(crop: initialCrop))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let width = try field("Recording crop width", in: controller.root)
+        let height = try field("Recording crop height", in: controller.root)
+        let lock = try checkbox("Lock recording crop aspect ratio", in: controller.root)
+        XCTAssertEqual(lock.state, .on)
+        XCTAssertFalse(controller.dirty, "the default lock is UI-only")
+
+        width.stringValue = "300"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: width))
+        XCTAssertTrue(controller.dirty, "pending text participates in lifecycle gates")
+        XCTAssertEqual(height.stringValue, "90", "typing alone does not change the coupled ratio")
+        _ = width.sendAction(width.action, to: width.target)
+        XCTAssertEqual(width.stringValue, "213")
+        XCTAssertEqual(height.stringValue, "120",
+                       "locked dimensions use the shared ratio and remaining origin bounds")
+        XCTAssertTrue(controller.dirty)
+
+        lock.state = .off; _ = lock.sendAction(lock.action, to: lock.target)
+        width.stringValue = "111"; _ = width.sendAction(width.action, to: width.target)
+        XCTAssertEqual(width.stringValue, "111"); XCTAssertEqual(height.stringValue, "120")
+        lock.state = .on; _ = lock.sendAction(lock.action, to: lock.target)
+        XCTAssertTrue(controller.dirty, "relocking does not itself publish or discard geometry")
+        height.stringValue = "60"; _ = height.sendAction(height.action, to: height.target)
+        XCTAssertEqual(width.stringValue, "56")
+        XCTAssertEqual(height.stringValue, "60", "relock uses the adjusted 111:120 ratio")
+    }
+
+    func testPendingCropFieldEditorBuffersGateLifecycleAndApplyCommitsOnce() throws {
+        _ = NSApplication.shared
+        let initialCrop = NativeRecordingCropRect(x: 10, y: 60, width: 160, height: 90)
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(crop: initialCrop))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let width = try field("Recording crop width", in: controller.root)
+        let height = try field("Recording crop height", in: controller.root)
+        let apply = try button("Apply edits", in: controller.root)
+        let seek = try slider("Recording frame position", in: controller.root)
+        let outputMode = try popup("Recording output size", in: controller.root)
+        let estimate = try button("Estimate size", in: controller.root)
+        let save = try button("Save new copy", in: controller.root)
+
+        width.selectText(nil)
+        let editor = try XCTUnwrap(controller.window.fieldEditor(false, for: width) as? NSTextView)
+        XCTAssertTrue(controller.window.firstResponder === editor,
+                      "the real AppKit field editor, not the NSTextField, owns the pending buffer")
+        editor.insertText("300", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        XCTAssertEqual(width.stringValue, "300")
+        XCTAssertEqual(height.stringValue, "90", "ratio math remains deferred until commit")
+        XCTAssertTrue(controller.dirty)
+        XCTAssertTrue(apply.isEnabled, "valid pending text can be applied")
+        XCTAssertFalse(seek.isEnabled)
+        XCTAssertFalse(estimate.isEnabled)
+        XCTAssertFalse(save.isEnabled)
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        XCTAssertFalse(controller.prepareForTermination())
+
+        worker.requestResult = .success(try presentation(revision: 1,
+            crop: NativeRecordingCropRect(x: 10, y: 60, width: 213, height: 120)))
+        apply.performClick(nil)
+        XCTAssertEqual(worker.requests.count, 1,
+                       "Apply commits the active field editor and sends one atomic update")
+        let edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        let crop = try XCTUnwrap(edit["crop"] as? [String: Any])
+        XCTAssertEqual((crop["width"] as? NSNumber)?.uint32Value, 213)
+        XCTAssertEqual((crop["height"] as? NSNumber)?.uint32Value, 120)
+        XCTAssertEqual(width.stringValue, "213"); XCTAssertEqual(height.stringValue, "120")
+        XCTAssertFalse(apply.isEnabled)
+
+        width.selectText(nil)
+        let invalidEditor = try XCTUnwrap(controller.window.fieldEditor(false, for: width)
+            as? NSTextView)
+        invalidEditor.insertText("-", replacementRange: NSRange(
+            location: 0, length: invalidEditor.string.utf16.count))
+        XCTAssertTrue(controller.dirty)
+        XCTAssertFalse(apply.isEnabled, "partial input cannot publish stale crop geometry")
+        XCTAssertFalse(seek.isEnabled); XCTAssertFalse(estimate.isEnabled)
+        let requestCount = worker.requests.count
+        _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(worker.requests.count, requestCount)
+        XCTAssertEqual(width.stringValue, "-", "blocked seek cannot replace the pending buffer")
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        XCTAssertFalse(controller.prepareForTermination())
+        controller.window.makeFirstResponder(nil)
+        XCTAssertEqual(width.stringValue, "-", "invalid end editing remains available for correction")
+        XCTAssertTrue(controller.dirty)
+        outputMode.selectItem(withTitle: "720p maximum")
+        _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+        XCTAssertEqual(width.stringValue, "-",
+                       "an unrelated output preset cannot discard ended invalid crop input")
+        XCTAssertFalse(apply.isEnabled); XCTAssertFalse(seek.isEnabled)
+        XCTAssertFalse(estimate.isEnabled); XCTAssertFalse(save.isEnabled)
+
+        width.selectText(nil)
+        let validEditor = try XCTUnwrap(controller.window.fieldEditor(false, for: width)
+            as? NSTextView)
+        validEditor.insertText("100", replacementRange: NSRange(
+            location: 0, length: validEditor.string.utf16.count))
+        outputMode.selectItem(withTitle: "1080p maximum")
+        _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+        XCTAssertTrue(controller.window.firstResponder === validEditor,
+                      "selecting a popup item does not guarantee field-editor resignation")
+        XCTAssertEqual(width.stringValue, "100",
+                       "a preset change retains valid active crop text until explicit commit")
+        XCTAssertTrue(apply.isEnabled); XCTAssertFalse(seek.isEnabled)
+        XCTAssertFalse(estimate.isEnabled); XCTAssertFalse(save.isEnabled)
+    }
+
+    func testCropPresetCustomOriginalAndFailureRetentionShareAtomicGates() throws {
+        _ = NSApplication.shared
+        let crop = NativeRecordingCropRect(x: 20, y: 30, width: 1_001, height: 1_501)
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            sourceWidth: 4_001, sourceHeight: 2_003, crop: crop))
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let mode = try popup("Recording output size", in: controller.root)
+        let outputWidth = try field("Recording output width", in: controller.root)
+        let outputHeight = try field("Recording output height", in: controller.root)
+        let cropHeight = try field("Recording crop height", in: controller.root)
+        let lock = try checkbox("Lock recording crop aspect ratio", in: controller.root)
+        let preview = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first)
+        let acceptedFrame = preview.image
+
+        mode.selectItem(withTitle: "720p maximum")
+        _ = mode.sendAction(mode.action, to: mode.target)
+        XCTAssertEqual(outputWidth.stringValue, "480")
+        XCTAssertEqual(outputHeight.stringValue, "720")
+        XCTAssertFalse(outputWidth.isEnabled); XCTAssertFalse(outputHeight.isEnabled)
+        XCTAssertFalse(try slider("Recording frame position", in: controller.root).isEnabled)
+        XCTAssertFalse(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
+
+        worker.requestResult = .failure(AppBridgeError.backend("crop preview unavailable"))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        let failed = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        let failedCrop = try XCTUnwrap(failed["crop"] as? [String: Any])
+        XCTAssertEqual((failedCrop["x"] as? NSNumber)?.uint32Value, 20)
+        XCTAssertEqual((failedCrop["y"] as? NSNumber)?.uint32Value, 30)
+        XCTAssertEqual((failed["output_width"] as? NSNumber)?.uint32Value, 480)
+        XCTAssertEqual((failed["output_height"] as? NSNumber)?.uint32Value, 720)
+        XCTAssertTrue(preview.image === acceptedFrame)
+        XCTAssertEqual(mode.titleOfSelectedItem, "720p maximum")
+
+        worker.requestResult = .success(try presentation(revision: 1,
+            sourceWidth: 4_001, sourceHeight: 2_003, crop: crop,
+            output: NativeRecordingDimensions(width: 480, height: 720)))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertEqual(mode.titleOfSelectedItem, "720p maximum",
+                       "acceptance retains the preset rather than inferring Custom")
+        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
+
+        let seek = try slider("Recording frame position", in: controller.root)
+        worker.requestResult = .success(try presentation(position: 500, revision: 2,
+            sourceWidth: 4_001, sourceHeight: 2_003, crop: crop,
+            output: NativeRecordingDimensions(width: 480, height: 720)))
+        seek.doubleValue = 500; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(mode.titleOfSelectedItem, "720p maximum",
+                       "source-relative seek retains the host preset")
+        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+
+        lock.state = .off; _ = lock.sendAction(lock.action, to: lock.target)
+        cropHeight.stringValue = "501"
+        _ = cropHeight.sendAction(cropHeight.action, to: cropHeight.target)
+        XCTAssertEqual(outputWidth.stringValue, "1000")
+        XCTAssertEqual(outputHeight.stringValue, "500",
+                       "the selected preset recomputes from the staged crop")
+
+        mode.selectItem(withTitle: "Custom"); _ = mode.sendAction(mode.action, to: mode.target)
+        XCTAssertTrue(outputWidth.isEnabled); XCTAssertTrue(outputHeight.isEnabled)
+        XCTAssertEqual(outputWidth.stringValue, "1000"); XCTAssertEqual(outputHeight.stringValue, "500")
+        outputWidth.stringValue = "81"; outputHeight.stringValue = "61"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: outputWidth))
+        worker.requestResult = .success(try presentation(position: 500, revision: 3,
+            sourceWidth: 4_001, sourceHeight: 2_003,
+            crop: NativeRecordingCropRect(x: 20, y: 30, width: 1_001, height: 501),
+            output: NativeRecordingDimensions(width: 81, height: 61)))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertEqual(mode.titleOfSelectedItem, "Custom")
+        XCTAssertEqual(outputWidth.stringValue, "81"); XCTAssertEqual(outputHeight.stringValue, "61")
+
+        mode.selectItem(withTitle: "Original"); _ = mode.sendAction(mode.action, to: mode.target)
+        worker.requestResult = .success(try presentation(position: 500, revision: 4,
+            sourceWidth: 4_001, sourceHeight: 2_003,
+            crop: NativeRecordingCropRect(x: 20, y: 30, width: 1_001, height: 501)))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        let original = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertTrue(original["output_width"] is NSNull)
+        XCTAssertTrue(original["output_height"] is NSNull,
+                      "Original omits explicit dimensions instead of publishing helper normalization")
     }
 
     func testAudioStagesAsymmetricTracksAndApplyPublishesTrustedIdentity() throws {
@@ -508,11 +739,39 @@ final class RecordingEditorTests: XCTestCase {
             format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
             try render(controller.root, name: "recording-editor-gif-audio-disabled-\(appearance)")
             format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+            let cropEnabled = try checkbox("Crop recording", in: controller.root)
+            cropEnabled.state = .on; _ = cropEnabled.sendAction(cropEnabled.action,
+                                                                 to: cropEnabled.target)
+            let cropWidth = try field("Recording crop width", in: controller.root)
+            let cropX = try field("Recording crop X", in: controller.root)
+            let cropY = try field("Recording crop Y", in: controller.root)
+            cropWidth.stringValue = "160"; _ = cropWidth.sendAction(cropWidth.action,
+                                                                    to: cropWidth.target)
+            cropX.stringValue = "20"; _ = cropX.sendAction(cropX.action, to: cropX.target)
+            cropY.stringValue = "20"; _ = cropY.sendAction(cropY.action, to: cropY.target)
+            let outputMode = try popup("Recording output size", in: controller.root)
+            outputMode.selectItem(withTitle: "720p maximum")
+            _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+            try render(controller.root, name: "recording-editor-crop-output-staged-\(appearance)")
+            cropEnabled.state = .off; _ = cropEnabled.sendAction(cropEnabled.action,
+                                                                  to: cropEnabled.target)
+            outputMode.selectItem(withTitle: "Original")
+            _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             XCTAssertTrue(controller.root.subviews.allSatisfy {
                 $0.isHidden || controller.root.bounds.intersects($0.frame)
             })
             try render(controller.root, name: "recording-editor-minimum-\(appearance)")
+            outputMode.selectItem(withTitle: "Custom")
+            _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+            let outputWidth = try field("Recording output width", in: controller.root)
+            let outputHeight = try field("Recording output height", in: controller.root)
+            outputWidth.stringValue = "641"; outputHeight.stringValue = "359"
+            controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                         object: outputWidth))
+            try render(controller.root, name: "recording-editor-custom-output-minimum-\(appearance)")
+            outputMode.selectItem(withTitle: "Original")
+            _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
 
             worker.deferSave = true
             try button("Save new copy", in: controller.root).performClick(nil)
@@ -563,6 +822,47 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: gifPath))
         XCTAssertEqual(try Data(contentsOf: fixture.source), sourceBefore,
                        "every edit/export keeps the original byte-identical")
+    }
+
+    func testRealBridgeCropOutputDimensionsContentAndImmutableOriginal() throws {
+        let tools = try NativeMediaTools.locate()
+        let fixture = try makeCropRecordingFixture(tools: tools)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sourceBefore = try Data(contentsOf: fixture.source)
+        let opened = try NativeRecordingEditorSession.open(historyRoot: fixture.history.path,
+                                                            artifactID: fixture.id, tools: tools)
+        let session = opened.0
+        var edit = opened.1.snapshot.edit
+        edit["crop"] = ["x": 60, "y": 24, "width": 80, "height": 48]
+        edit["output_width"] = 40; edit["output_height"] = 24
+        var export = opened.1.snapshot.export
+        export["quality"] = "standard"; export["max_size_bytes"] = NSNull()
+        let accepted = try session.request(["operation": "update_preview", "edit": edit,
+                                            "export": export])
+        let acceptedCrop = try XCTUnwrap(accepted.snapshot.edit["crop"] as? [String: Any])
+        XCTAssertEqual((acceptedCrop["x"] as? NSNumber)?.uint32Value, 60)
+        XCTAssertEqual((acceptedCrop["y"] as? NSNumber)?.uint32Value, 24)
+        XCTAssertEqual((accepted.snapshot.edit["output_width"] as? NSNumber)?.uint32Value, 40)
+        XCTAssertEqual((accepted.snapshot.edit["output_height"] as? NSNumber)?.uint32Value, 24)
+
+        let path = fixture.root.appendingPathComponent("cropped.mp4")
+        _ = try session.save(destination: path.path, export: export,
+                             cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+        XCTAssertEqual(try videoDimensions(path, tools: tools),
+                       NativeRecordingDimensions(width: 40, height: 24))
+        XCTAssertEqual(try historyDimensions(for: path.path, history: fixture.history),
+                       NativeRecordingDimensions(width: 40, height: 24))
+        let pixels = try decodedRGB(path, tools: tools, width: 40, height: 24)
+        let green = rgb(pixels, width: 40, x: 3, y: 3)
+        XCTAssertGreaterThan(green.1, green.0 + 30)
+        XCTAssertGreaterThan(green.1, green.2 + 30,
+                             "the nonzero crop origin keeps the green crop corner")
+        let blue = rgb(pixels, width: 40, x: 25, y: 14)
+        XCTAssertGreaterThan(blue.2, blue.0 + 30)
+        XCTAssertGreaterThan(blue.2, blue.1 + 30,
+                             "the scaled export retains the crop's blue interior marker")
+        XCTAssertEqual(try Data(contentsOf: fixture.source), sourceBefore,
+                       "crop and output-size export keeps the original byte-identical")
     }
 
     func testRealBridgeIndependentAudioGainMuteMonoHistoryAndImmutableOriginal() throws {
@@ -636,17 +936,24 @@ final class RecordingEditorTests: XCTestCase {
 
     private func presentation(start: UInt64 = 0, end: UInt64? = nil,
                               position: UInt64 = 0, revision: UInt64 = 0,
+                              sourceWidth: Int = 320, sourceHeight: Int = 180,
+                              crop: NativeRecordingCropRect? = nil,
+                              output: NativeRecordingDimensions? = nil,
                               hasSystemAudio: Bool = false, hasMicrophoneAudio: Bool = false,
                               systemVolume: Double = 1, microphoneVolume: Double = 1,
                               muteSystem: Bool = false, muteMicrophone: Bool = false,
                               monoOutput: Bool = false) throws
         -> RecordingEditorPresentation {
         let endValue: Any = end.map { NSNumber(value: $0) } ?? NSNull()
+        let cropValue: Any = crop == nil ? NSNull() : crop!.dictionary
+        let outputWidth: Any = output.map { NSNumber(value: $0.width) } ?? NSNull()
+        let outputHeight: Any = output.map { NSNumber(value: $0.height) } ?? NSNull()
         let snapshot = try XCTUnwrap(NativeRecordingEditorSnapshot([
             "artifact_id": "recording-id", "source": ["kind": "video", "mime_type": "video/mp4",
-                "width": 320, "height": 180, "duration_ms": 2_000, "size_bytes": 1_024],
+                "width": sourceWidth, "height": sourceHeight,
+                "duration_ms": 2_000, "size_bytes": 1_024],
             "edit": ["trim_start_ms": start, "trim_end_ms": endValue,
-                "crop": NSNull(), "output_width": NSNull(), "output_height": NSNull(),
+                "crop": cropValue, "output_width": outputWidth, "output_height": outputHeight,
                 "audio": ["system_volume": systemVolume, "microphone_volume": microphoneVolume,
                           "mute_system_audio": muteSystem, "mute_microphone": muteMicrophone,
                           "mono_output": monoOutput, "source_has_system_audio": hasSystemAudio,
@@ -726,6 +1033,30 @@ final class RecordingEditorTests: XCTestCase {
         return (root, history, source, id)
     }
 
+    private func makeCropRecordingFixture(tools: NativeMediaTools) throws
+        -> (root: URL, history: URL, source: URL, id: String) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let history = root.appendingPathComponent("History")
+        let id = UUID().uuidString.lowercased()
+        let directory = history.appendingPathComponent(id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appendingPathComponent("media.mp4")
+        try run(tools.ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+            "color=c=red:size=160x96:rate=12:duration=2,drawbox=x=60:y=24:w=80:h=48:color=green:t=fill,drawbox=x=100:y=42:w=20:h=20:color=blue:t=fill",
+            "-c:v", "mpeg4", "-q:v", "2", "-pix_fmt", "yuv420p", "-y", source.path])
+        let sourceSize = (try FileManager.default.attributesOfItem(atPath: source.path)[.size]
+                          as? NSNumber)?.intValue ?? 0
+        let metadata: [String: Any] = ["id": id, "kind": "video",
+            "preview_url": "capture-history://\(id)/preview",
+            "full_url": "capture-history://\(id)/full", "width": 160, "height": 96,
+            "size_bytes": sourceSize, "created_at": "2026-09-22T00:00:00Z",
+            "mode": "display", "mime_type": "video/mp4", "duration_ms": 2_000,
+            "target": ["type": "display", "display_id": "fixture"]]
+        try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys])
+            .write(to: directory.appendingPathComponent("metadata.json"))
+        return (root, history, source, id)
+    }
+
     private struct AudioIdentity: Equatable {
         let system: Bool
         let microphone: Bool
@@ -742,6 +1073,47 @@ final class RecordingEditorTests: XCTestCase {
                                  microphone: value["has_microphone_audio"] as? Bool ?? false)
         }
         throw AppBridgeError.invalidResponse
+    }
+
+    private func historyDimensions(for path: String, history: URL) throws
+        -> NativeRecordingDimensions {
+        for directory in try FileManager.default.contentsOfDirectory(at: history,
+            includingPropertiesForKeys: nil) {
+            let metadata = directory.appendingPathComponent("metadata.json")
+            guard let data = try? Data(contentsOf: metadata),
+                  let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  value["saved_path"] as? String == path,
+                  let width = (value["width"] as? NSNumber)?.uint32Value,
+                  let height = (value["height"] as? NSNumber)?.uint32Value else { continue }
+            return NativeRecordingDimensions(width: width, height: height)
+        }
+        throw AppBridgeError.invalidResponse
+    }
+
+    private func videoDimensions(_ path: URL, tools: NativeMediaTools) throws
+        -> NativeRecordingDimensions {
+        let data = try run(tools.ffprobe, ["-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height", "-of", "json", path.path])
+        let value = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let streams = try XCTUnwrap(value["streams"] as? [[String: Any]])
+        let stream = try XCTUnwrap(streams.first)
+        return NativeRecordingDimensions(
+            width: try XCTUnwrap((stream["width"] as? NSNumber)?.uint32Value),
+            height: try XCTUnwrap((stream["height"] as? NSNumber)?.uint32Value))
+    }
+
+    private func decodedRGB(_ path: URL, tools: NativeMediaTools, width: Int, height: Int) throws
+        -> [UInt8] {
+        let data = try run(tools.ffmpeg, ["-v", "error", "-i", path.path,
+            "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])
+        XCTAssertEqual(data.count, width * height * 3)
+        return Array(data)
+    }
+
+    private func rgb(_ pixels: [UInt8], width: Int, x: Int, y: Int)
+        -> (Int, Int, Int) {
+        let offset = (y * width + x) * 3
+        return (Int(pixels[offset]), Int(pixels[offset + 1]), Int(pixels[offset + 2]))
     }
 
     private func audioChannelCount(_ path: URL, tools: NativeMediaTools) throws -> Int {

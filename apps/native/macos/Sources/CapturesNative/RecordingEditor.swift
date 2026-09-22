@@ -243,6 +243,20 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private let previewPanel = Surface()
     private let preview = NSImageView()
+    private let geometryPanel = Surface()
+    private let cropEnabled = NSButton(checkboxWithTitle: "Crop recording", target: nil, action: nil)
+    private let cropLock = NSButton(checkboxWithTitle: "Lock aspect ratio", target: nil, action: nil)
+    private let cropX = NSTextField()
+    private let cropY = NSTextField()
+    private let cropWidth = NSTextField()
+    private let cropHeight = NSTextField()
+    private let outputMode = NSPopUpButton()
+    private let outputWidth = NSTextField()
+    private let outputHeight = NSTextField()
+    private var stagedCrop: NativeRecordingCropRect?
+    private var cropAspectUnlocked = false
+    private var resolutionPreset = NativeRecordingResolutionPreset.original
+    private var customOutput = false
     private let sourceLabel = NSTextField(labelWithString: "Opening recording…")
     private let seekSlider = NSSlider(value: 0, minValue: 0, maxValue: 1,
                                       target: nil, action: nil)
@@ -311,6 +325,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let current = generation
         artifactID = artifact.id; presentation = nil; savedEdit = nil; savedExport = nil
         estimate = nil; activeCancel = nil; busy = true; pickerOpen = false
+        stagedCrop = nil; cropAspectUnlocked = false
+        resolutionPreset = .original; customOutput = false
         preview.image = nil
         destination.stringValue = URL(fileURLWithPath: outputDirectory)
             .appendingPathComponent("recording-edit-\(artifact.id.prefix(8)).mp4").path
@@ -363,7 +379,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     func windowDidResize(_ notification: Notification) { layout() }
     func windowDidResignKey(_ notification: Notification) { trimTimeline.endDrag() }
     func controlTextDidChange(_ notification: Notification) {
+        if let field = notification.object as? NSTextField,
+           [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) {
+            estimate = nil; updateControls(); return
+        }
         estimate = nil; syncTimelineFromFields(); updateControls()
+    }
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField,
+              [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) else { return }
+        commitCropField(field)
     }
 
     private func buildUI() {
@@ -378,6 +403,39 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         preview.setAccessibilityLabel("Decoded recording frame")
         previewPanel.addSubview(preview)
         root.addSubview(previewPanel)
+
+        geometryPanel.wantsLayer = true
+        geometryPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
+        geometryPanel.layer?.cornerRadius = tokens.number("r-md")
+        root.addSubview(geometryPanel)
+        geometryPanel.addSubview(label("Crop & output", size: 14, weight: .semibold,
+                                       parent: geometryPanel))
+        cropEnabled.target = self; cropEnabled.action = #selector(cropEnabledChanged)
+        cropEnabled.setAccessibilityLabel("Crop recording")
+        cropLock.target = self; cropLock.action = #selector(cropLockChanged)
+        cropLock.setAccessibilityLabel("Lock recording crop aspect ratio")
+        geometryPanel.addSubview(cropEnabled); geometryPanel.addSubview(cropLock)
+        for (field, accessibilityLabel) in [
+            (cropX, "Recording crop X"), (cropY, "Recording crop Y"),
+            (cropWidth, "Recording crop width"), (cropHeight, "Recording crop height"),
+            (outputWidth, "Recording output width"), (outputHeight, "Recording output height"),
+        ] {
+            configureNumberField(field, label: accessibilityLabel)
+            field.alignment = .right
+            if [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) {
+                field.target = self; field.action = #selector(cropFieldCommitted(_:))
+            }
+            geometryPanel.addSubview(field)
+        }
+        for title in ["X", "Y", "W", "H", "Output", "×"] {
+            geometryPanel.addSubview(label(title, muted: true, parent: geometryPanel))
+        }
+        for preset in NativeRecordingResolutionPreset.allCases { outputMode.addItem(withTitle: preset.title) }
+        outputMode.addItem(withTitle: "Custom")
+        outputMode.target = self; outputMode.action = #selector(outputModeChanged)
+        outputMode.setAccessibilityLabel("Recording output size")
+        geometryPanel.addSubview(outputMode)
+
         sourceLabel.textColor = tokens.color("text-muted")
         sourceLabel.font = .systemFont(ofSize: 12)
         sourceLabel.setAccessibilityLabel("Recording source details")
@@ -456,8 +514,35 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let saveHeight: CGFloat = 150
         let trimHeight: CGFloat = 116
         let previewHeight = max(150, height - saveHeight - trimHeight - 116)
-        previewPanel.frame = NSRect(x: 24, y: 76, width: width - 48, height: previewHeight)
+        let availableWidth = width - 48
+        let geometryWidth = max(328, min(380, availableWidth * 0.42))
+        previewPanel.frame = NSRect(x: 24, y: 76,
+                                    width: availableWidth - geometryWidth - 12,
+                                    height: previewHeight)
         preview.frame = previewPanel.bounds.insetBy(dx: 12, dy: 12)
+        geometryPanel.frame = NSRect(x: previewPanel.frame.maxX + 12, y: 76,
+                                     width: geometryWidth, height: previewHeight)
+        let geometryLabels = geometryPanel.subviews.compactMap { $0 as? NSTextField }
+            .filter { !$0.isEditable }
+        geometryLabels.first { $0.stringValue == "Crop & output" }?.frame =
+            NSRect(x: 14, y: 12, width: 130, height: 20)
+        cropEnabled.frame = NSRect(x: 14, y: 36, width: 124, height: 24)
+        cropLock.frame = NSRect(x: 142, y: 36, width: 150, height: 24)
+        for (index, title) in ["X", "Y", "W", "H"].enumerated() {
+            let x = CGFloat(14 + index * 72)
+            geometryLabels.first { $0.stringValue == title }?.frame =
+                NSRect(x: x, y: 69, width: 14, height: 18)
+            [cropX, cropY, cropWidth, cropHeight][index].frame =
+                NSRect(x: x + 16, y: 63, width: 50, height: 28)
+        }
+        geometryLabels.first { $0.stringValue == "Output" }?.frame =
+            NSRect(x: 14, y: 105, width: 48, height: 18)
+        geometryLabels.first { $0.stringValue == "×" }?.frame =
+            NSRect(x: 275, y: 104, width: 12, height: 18)
+        outputMode.frame = NSRect(x: 62, y: 98, width: 146, height: 28)
+        outputWidth.frame = NSRect(x: 216, y: 98, width: 56, height: 28)
+        outputHeight.frame = NSRect(x: 286, y: 98,
+                                    width: max(42, geometryPanel.bounds.width - 300), height: 28)
         let seekY = previewPanel.frame.maxY + 10
         sourceLabel.frame = NSRect(x: 24, y: seekY, width: width * 0.38, height: 20)
         seekSlider.frame = NSRect(x: width * 0.38, y: seekY, width: width * 0.38, height: 20)
@@ -529,6 +614,28 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         systemMute.state = (audio["mute_system_audio"] as? Bool ?? false) ? .on : .off
         microphoneMute.state = (audio["mute_microphone"] as? Bool ?? false) ? .on : .off
         monoOutput.state = (audio["mono_output"] as? Bool ?? false) ? .on : .off
+        if let source = sourceDimensions(value.snapshot) {
+            stagedCrop = NativeRecordingCropRect(value: value.snapshot.edit["crop"],
+                                                  sourceWidth: source.width,
+                                                  sourceHeight: source.height)
+            cropEnabled.state = stagedCrop == nil ? .off : .on
+            cropLock.state = cropAspectUnlocked ? .off : .on
+            if initialize {
+                if let output = editOutputDimensions(value.snapshot.edit) {
+                    customOutput = true
+                    outputMode.selectItem(withTitle: "Custom")
+                    outputWidth.stringValue = String(output.width)
+                    outputHeight.stringValue = String(output.height)
+                } else {
+                    customOutput = false; resolutionPreset = .original
+                    outputMode.selectItem(withTitle: resolutionPreset.title)
+                }
+            } else if customOutput, let output = editOutputDimensions(value.snapshot.edit) {
+                outputWidth.stringValue = String(output.width)
+                outputHeight.stringValue = String(output.height)
+            }
+            refreshGeometryFields(source: source, preserveCustom: customOutput)
+        }
         select(format, value: value.snapshot.export["format"] as? String ?? "mp4")
         select(quality, value: value.snapshot.export["quality"] as? String ?? "preserve")
         if initialize {
@@ -544,10 +651,21 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         guard let accepted = presentation?.snapshot.edit,
               let start = UInt64(trimStart.stringValue), let end = UInt64(trimEnd.stringValue),
               let duration = presentation?.snapshot.durationMilliseconds,
+              let source = presentation?.snapshot,
+              let sourceSize = sourceDimensions(source),
+              let outputSize = stagedOutputDimensions(source: sourceSize),
               start < end, end <= duration else { return nil }
         var edit = accepted
         edit["trim_start_ms"] = start
         edit["trim_end_ms"] = end == duration ? NSNull() : end
+        edit["crop"] = stagedCrop == nil ? NSNull() : stagedCrop!.dictionary
+        if customOutput || resolutionPreset != .original {
+            edit["output_width"] = outputSize.width
+            edit["output_height"] = outputSize.height
+        } else {
+            edit["output_width"] = NSNull()
+            edit["output_height"] = NSNull()
+        }
         var audio = accepted["audio"] as? [String: Any] ?? [:]
         if presentation?.snapshot.hasSystemAudio == true {
             guard let volume = volume(systemVolume) else { return nil }
@@ -576,13 +694,18 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private var stagedDiffers: Bool {
         guard let snapshot = presentation?.snapshot else { return false }
-        return canonicalEdit(stagedEdit) != canonicalEdit(snapshot.edit)
+        return hasPendingCropInput
+            || canonicalEdit(stagedEdit) != canonicalEdit(snapshot.edit)
             || canonical(stagedExport) != canonical(snapshot.export)
     }
 
     private func applyEdits() {
+        guard commitPendingCropInput() else {
+            showError("Enter valid trim, crop, audio, and output values."); return
+        }
+        window.makeFirstResponder(nil)
         guard !busy, let edit = stagedEdit, let export = stagedExport else {
-            showError("Enter a valid trim range within the recording duration."); return
+            showError("Enter valid trim, crop, audio, and output values."); return
         }
         request(["operation": "update_preview", "edit": edit, "export": export],
                 activity: "Applying edits and decoding preview…")
@@ -591,7 +714,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     @objc private func seekChanged() {
         guard !busy, !stagedDiffers else {
             seekSlider.doubleValue = Double(presentation?.snapshot.positionMilliseconds ?? 0)
-            if stagedDiffers { showError("Apply staged trim and format changes before seeking.") }
+            if stagedDiffers { showError("Apply staged recording changes before seeking.") }
             return
         }
         request(["operation": "seek", "position_ms": UInt64(seekSlider.doubleValue.rounded())],
@@ -679,6 +802,108 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
     }
 
+    @objc private func cropEnabledChanged() {
+        guard let snapshot = presentation?.snapshot,
+              let source = sourceDimensions(snapshot) else { return }
+        if cropEnabled.state == .on {
+            stagedCrop = stagedCrop ?? NativeRecordingCropRect(x: 0, y: 0,
+                width: source.width, height: source.height)
+        } else {
+            stagedCrop = nil
+        }
+        estimate = nil; refreshGeometryFields(source: source, preserveCustom: customOutput)
+        updateControls()
+    }
+
+    @objc private func cropLockChanged() {
+        cropAspectUnlocked = cropLock.state != .on
+        updateControls()
+    }
+
+    @objc private func cropFieldCommitted(_ sender: NSTextField) {
+        commitCropField(sender)
+    }
+
+    private func commitCropField(_ field: NSTextField) {
+        guard [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) else { return }
+        _ = commitPendingCropInput()
+        updateControls()
+    }
+
+    private var pendingCropFields: [NSTextField] {
+        guard let crop = stagedCrop else { return [] }
+        return [(cropX, crop.x), (cropY, crop.y), (cropWidth, crop.width),
+                (cropHeight, crop.height)].compactMap { field, value in
+            field.stringValue == String(value) ? nil : field
+        }
+    }
+
+    private var hasPendingCropInput: Bool { !pendingCropFields.isEmpty }
+
+    private var pendingCropInputValid: Bool {
+        !hasPendingCropInput || pendingCropCandidate() != nil
+    }
+
+    private func pendingCropCandidate() -> NativeRecordingCropRect? {
+        guard var crop = stagedCrop, let snapshot = presentation?.snapshot,
+              let source = sourceDimensions(snapshot) else { return nil }
+        for field in pendingCropFields {
+            guard let value = parseUInt32(field.stringValue) else { return nil }
+            if field === cropX {
+                guard UInt64(value) + UInt64(crop.width) <= UInt64(source.width) else { return nil }
+                crop.x = value
+            } else if field === cropY {
+                guard UInt64(value) + UInt64(crop.height) <= UInt64(source.height) else { return nil }
+                crop.y = value
+            } else if field === cropWidth {
+                if cropAspectUnlocked {
+                    crop.width = min(max(2, value), source.width - crop.x)
+                } else if let resized = NativeRecordingGeometry.resizeLocked(
+                    crop, source: source, axis: .width, value: value) {
+                    crop = resized
+                } else { return nil }
+            } else if field === cropHeight {
+                if cropAspectUnlocked {
+                    crop.height = min(max(2, value), source.height - crop.y)
+                } else if let resized = NativeRecordingGeometry.resizeLocked(
+                    crop, source: source, axis: .height, value: value) {
+                    crop = resized
+                } else { return nil }
+            }
+        }
+        return crop
+    }
+
+    @discardableResult private func commitPendingCropInput() -> Bool {
+        guard hasPendingCropInput else { return true }
+        guard let crop = pendingCropCandidate(), let snapshot = presentation?.snapshot,
+              let source = sourceDimensions(snapshot) else {
+            estimate = nil; return false
+        }
+        stagedCrop = crop; estimate = nil
+        refreshGeometryFields(source: source, preserveCustom: customOutput)
+        return true
+    }
+
+    @objc private func outputModeChanged() {
+        guard let snapshot = presentation?.snapshot,
+              let source = sourceDimensions(snapshot) else { return }
+        let index = outputMode.indexOfSelectedItem
+        if index == NativeRecordingResolutionPreset.allCases.count {
+            if !customOutput {
+                let current = resolvedPresetDimensions(source: source)
+                outputWidth.stringValue = String(current.width)
+                outputHeight.stringValue = String(current.height)
+            }
+            customOutput = true
+        } else if index >= 0, let preset = NativeRecordingResolutionPreset(rawValue: UInt8(index)) {
+            customOutput = false; resolutionPreset = preset
+            refreshGeometryFields(source: source, preserveCustom: false,
+                                  preservePendingCrop: true)
+        }
+        estimate = nil; updateControls()
+    }
+
     @objc private func formatChanged() {
         let ext = format.indexOfSelectedItem == 1 ? "gif" : "mp4"
         if !destination.stringValue.isEmpty {
@@ -689,6 +914,74 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
     @objc private func stageChanged() { estimate = nil; updateControls() }
 
+    private func sourceDimensions(_ snapshot: NativeRecordingEditorSnapshot)
+        -> NativeRecordingDimensions? {
+        guard snapshot.width > 0, snapshot.height > 0,
+              snapshot.width <= Int(UInt32.max), snapshot.height <= Int(UInt32.max) else { return nil }
+        return NativeRecordingDimensions(width: UInt32(snapshot.width),
+                                         height: UInt32(snapshot.height))
+    }
+
+    private func editOutputDimensions(_ edit: [String: Any]) -> NativeRecordingDimensions? {
+        guard let width = parseUInt32(edit["output_width"]),
+              let height = parseUInt32(edit["output_height"]),
+              width >= 2, height >= 2 else { return nil }
+        return NativeRecordingDimensions(width: width, height: height)
+    }
+
+    private func parseUInt32(_ value: Any?) -> UInt32? {
+        if let text = value as? String {
+            guard let raw = UInt64(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  raw <= UInt64(UInt32.max) else { return nil }
+            return UInt32(raw)
+        }
+        guard let number = value as? NSNumber else { return nil }
+        let raw = number.uint64Value
+        return raw <= UInt64(UInt32.max) ? UInt32(raw) : nil
+    }
+
+    private func cropInputDimensions(source: NativeRecordingDimensions) -> NativeRecordingDimensions {
+        stagedCrop.map { NativeRecordingDimensions(width: $0.width, height: $0.height) } ?? source
+    }
+
+    private func resolvedPresetDimensions(source: NativeRecordingDimensions)
+        -> NativeRecordingDimensions {
+        let input = cropInputDimensions(source: source)
+        if resolutionPreset == .original { return input }
+        return NativeRecordingGeometry.constrain(input, preset: resolutionPreset) ?? input
+    }
+
+    private func stagedOutputDimensions(source: NativeRecordingDimensions)
+        -> NativeRecordingDimensions? {
+        if customOutput {
+            guard let width = parseUInt32(outputWidth.stringValue),
+                  let height = parseUInt32(outputHeight.stringValue),
+                  width >= 2, height >= 2 else { return nil }
+            return NativeRecordingDimensions(width: width, height: height)
+        }
+        return resolvedPresetDimensions(source: source)
+    }
+
+    private func refreshGeometryFields(source: NativeRecordingDimensions,
+                                       preserveCustom: Bool,
+                                       preservePendingCrop: Bool = false) {
+        let pendingCrop = preservePendingCrop
+            ? pendingCropFields.map { ($0, $0.stringValue) } : []
+        let crop = stagedCrop ?? NativeRecordingCropRect(x: 0, y: 0,
+            width: source.width, height: source.height)
+        cropX.stringValue = String(crop.x); cropY.stringValue = String(crop.y)
+        cropWidth.stringValue = String(crop.width); cropHeight.stringValue = String(crop.height)
+        pendingCrop.forEach { $0.0.stringValue = $0.1 }
+        cropEnabled.state = stagedCrop == nil ? .off : .on
+        cropLock.state = cropAspectUnlocked ? .off : .on
+        if !customOutput || !preserveCustom {
+            let output = resolvedPresetDimensions(source: source)
+            outputWidth.stringValue = String(output.width)
+            outputHeight.stringValue = String(output.height)
+        }
+        outputMode.selectItem(withTitle: customOutput ? "Custom" : resolutionPreset.title)
+    }
+
     private func syncTimelineFromFields() {
         guard let duration = presentation?.snapshot.durationMilliseconds,
               let start = UInt64(trimStart.stringValue), let end = UInt64(trimEnd.stringValue),
@@ -698,8 +991,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func updateControls() {
         let available = presentation != nil && !busy && !pickerOpen
-        let valid = stagedEdit != nil && stagedExport != nil
+        let valid = pendingCropInputValid && stagedEdit != nil && stagedExport != nil
         [trimStart, trimEnd, format, quality, destination].forEach { $0.isEnabled = available }
+        cropEnabled.isEnabled = available
+        cropLock.isEnabled = available && stagedCrop != nil
+        [cropX, cropY, cropWidth, cropHeight].forEach {
+            $0.isEnabled = available && stagedCrop != nil
+        }
+        outputMode.isEnabled = available
+        outputWidth.isEnabled = available && customOutput
+        outputHeight.isEnabled = available && customOutput
         let hasSystem = presentation?.snapshot.hasSystemAudio == true
         let hasMicrophone = presentation?.snapshot.hasMicrophoneAudio == true
         let hasAudio = hasSystem || hasMicrophone

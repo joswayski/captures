@@ -259,13 +259,15 @@ Exports report progress, support cancellation, never replace an existing file, a
 add a distinct History item. A History failure retains the saved path for recovery.
 Recording edits are not drafts: save or explicitly discard them before closing or
 quitting. AppKit connects a separate History editor with decoded source-relative
-frames, numeric trim, accepted MP4/GIF settings, size estimation and cancellable
+frames, numeric trim and source-relative crop, Original/1080p/720p or independent
+custom output dimensions, accepted MP4/GIF settings, size estimation and cancellable
 **Save new copy**. Available system and microphone tracks have independent 0–200%
 volume and mute controls plus mono output; audio applies to MP4 while GIF disables
 the controls without losing their MP4 values. Its graphical trim handles stage the same numeric values
-without seeking; Apply remains explicit. Playback and graphical crop handles remain
-absent, and AppKit does not yet expose crop, resize or resolution controls, so this
-is not Tauri editor parity.
+without seeking; Apply remains explicit. Playback, thumbnails and graphical crop
+handles remain absent, so this is not Tauri editor parity. Windows/X11 implement the
+same numeric crop and output-size workflow; physical macOS, Windows and Wayland
+acceptance remains open.
 History displays recording posters and metadata; **Save file**
 copies the original media to the output folder without re-encoding, and
 **Show in Folder** reveals that saved copy. Both native

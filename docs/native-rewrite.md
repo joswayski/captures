@@ -21,7 +21,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; wgpu frame scrubbing, graphical/numeric trim, numeric crop, preset/custom output size, track volume/mute/mono and MP4/GIF save-new-copy | Remaining AppKit recording controls, playback, thumbnail timeline/graphical crop, audio meter/device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, graphical/numeric trim, numeric crop, preset/custom output size, track volume/mute/mono and MP4/GIF save-new-copy | Playback, thumbnail timeline/graphical crop, audio meter/device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording playback/graphical timeline and remaining controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
@@ -514,12 +514,15 @@ only stage the existing numeric values; pointer movement never seeks or decodes,
 Apply/estimate/save gating is unchanged. AppKit now also stages independent volume
 and mute for trusted system/microphone tracks plus mono output in that same atomic
 Apply flow. GIF disables audio controls while retaining MP4 values, and the decoded
-frame preview remains explicitly silent. It intentionally leaves crop/resize and
-resolution controls to later AppKit slices. The wgpu controls implement those broader controls for Windows/Linux;
+frame preview remains explicitly silent. AppKit also stages source-relative numeric
+crop and Original/1080p/720p or independent custom output dimensions through the
+same atomic Apply flow. Aspect-locked crop dimensions and resolution presets use the
+shared allocation-free geometry; the lock remains UI-only, and Original omits explicit
+output dimensions. Windows/X11 already implement the same controls through wgpu;
 private X11/software-GL exercises provide implementation evidence only. Windows and
-Wayland presentation, physical macOS input, accessibility, playback and physical audio output,
-graphical crop handles, draft restoration and original replacement remain open. No
-recording-editor or cross-platform parity gate closes.
+Wayland presentation, physical macOS input, accessibility, playback, thumbnails,
+physical audio output, graphical crop handles, draft restoration and original
+replacement remain open. No recording-editor or cross-platform parity gate closes.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow
