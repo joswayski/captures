@@ -942,6 +942,36 @@ def main():
             run("xdotool", "key", "Escape", "sleep", ".3")
             save_layers(lambda values: len(values) == 1, "blank input creates no layer")
 
+            begin_input((80, 60))
+            type_text("Discard this", 1)
+            shot(editor, "text-input-cancel")
+            x, y = document_point((80, 60))
+            click(editor, x + 100, y + 110)  # Cancel in the composing panel.
+            save_layers(lambda values: len(values) == 1, "Cancel restores the original document")
+
+            before = draft.read_bytes()
+            begin_input((80, 60))
+            # One paste avoids flooding X11 with thousands of synthetic key events.
+            oversized = b"x" * 4097
+            subprocess.run(["xclip", "-selection", "clipboard", "-i"], input=oversized,
+                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           check=True, timeout=10)
+            run("xdotool", "key", "ctrl+v", "sleep", ".5")
+            subprocess.run(["xclip", "-selection", "clipboard", "-i"], input=b"sentinel",
+                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           check=True, timeout=10)
+            run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".3")
+            assert run("xclip", "-selection", "clipboard", "-o") == oversized
+            shot(editor, "text-input-error")
+            assert draft.read_bytes() == before, "failed previews must not save"
+            run("xdotool", "key", "ctrl+a")
+            type_text("Recovered", 1)
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            save_layers(lambda values: len(values) == 2 and values[-1]["text"] == "Recovered",
+                        "typing remains editable after preview error")
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 1, "recovered input is one undo step")
+
             before = draft.read_bytes()
             begin_input((80, 60))
             type_text("Alpha", 1)
@@ -998,7 +1028,8 @@ def main():
             assert (artifact / "capture.png").read_bytes() == original
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["blank-new-no-layer", "preview-no-draft", "multiline-exact", "one-create-undo",
+                "checks": ["blank-new-no-layer", "cancel-restores-document", "error-no-draft",
+                           "error-recovery-one-undo", "preview-no-draft", "multiline-exact", "one-create-undo",
                            "redo-exact", "existing-hit-same-id", "existing-one-undo", "minimum-input",
                            "blank-existing-delete", "delete-undo-redo", "quit-latest-buffer", "original-unchanged"],
             }, indent=2) + "\n")
@@ -1031,6 +1062,7 @@ def main():
             assert text["text"] == "Native" and text["align"] == "center" and text["y"] == 80
             assert math.isclose(text["x"] + text["width"] / 2, 200, abs_tol=1e-6)
             assert text["background"] == "#111318" and text["autoWidth"]
+            fixture_click((28, 109))  # Deselect: the rotation stem crosses the plate sample.
             shot(editor, "text-defaults-created")
             document_pixel("text-defaults-created", 200, 76, (17, 19, 24))
             click(editor, 35, 62)

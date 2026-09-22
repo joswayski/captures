@@ -57,7 +57,7 @@ enum Job {
         options: ExportOptions,
     },
     Flush {
-        input: Option<(String, String, bool)>,
+        input: Option<text_input::FlushInput>,
         reply: Sender<Result<(), String>>,
     },
     Shutdown,
@@ -1292,11 +1292,17 @@ impl Editor {
                         }),
                     Job::Flush { input, reply } => {
                         let result = session.as_mut().map_or(Ok(()), |session| {
-                            if let Some((input_id, text, finishing)) = input {
+                            if let Some(input) = input {
                                 if session.snapshot().active_text_input.is_some() {
-                                    session.execute(Request::UpdateTextInput { input_id: input_id.clone(), text })?;
-                                    session.execute(Request::FinishTextInput { input_id, commit: true })?;
-                                } else if !finishing {
+                                    if input.commit {
+                                        session.execute(Request::UpdateTextInput {
+                                            input_id: input.input_id.clone(), text: input.text,
+                                        })?;
+                                    }
+                                    session.execute(Request::FinishTextInput {
+                                        input_id: input.input_id, commit: input.commit,
+                                    })?;
+                                } else if input.commit && !input.finishing {
                                     return Err("Text input could not be finished. Retry or cancel before quitting.".into());
                                 }
                             }

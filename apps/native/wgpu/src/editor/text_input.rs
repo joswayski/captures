@@ -10,6 +10,13 @@ enum Phase {
     Finish,
 }
 
+pub(super) struct FlushInput {
+    pub input_id: String,
+    pub text: String,
+    pub commit: bool,
+    pub finishing: bool,
+}
+
 pub(super) struct InlineText {
     id: String,
     target: TextInputTarget,
@@ -21,6 +28,7 @@ pub(super) struct InlineText {
     finish: Option<bool>,
     blocked: bool,
     focus: bool,
+    ime_preedit: bool,
     first_frame: Option<u64>,
     close_after: bool,
     previous_selection: Option<String>,
@@ -79,6 +87,7 @@ impl View {
             finish: None,
             blocked: false,
             focus: true,
+            ime_preedit: false,
             first_frame: None,
             close_after: false,
             previous_selection: self.selected_layer.clone(),
@@ -223,13 +232,12 @@ impl View {
         true
     }
 
-    pub(super) fn inline_for_flush(&self) -> Option<(String, String, bool)> {
-        self.inline.as_ref().map(|input| {
-            (
-                input.id.clone(),
-                input.text.clone(),
-                input.phase == Some(Phase::Finish),
-            )
+    pub(super) fn inline_for_flush(&self) -> Option<FlushInput> {
+        self.inline.as_ref().map(|input| FlushInput {
+            input_id: input.id.clone(),
+            text: input.text.clone(),
+            commit: input.finish != Some(false),
+            finishing: input.phase == Some(Phase::Finish),
         })
     }
 }
@@ -266,6 +274,26 @@ pub(super) fn show(
     let frame = ui.ctx().cumulative_frame_nr();
     let first_frame = *input.first_frame.get_or_insert(frame) == frame;
     let blocked = input.blocked;
+    // A backend may deliver Escape alongside a preedit dismissal/commit. That
+    // key belongs to the IME, not the document's Finish action.
+    let mut ime_owned_escape = input.ime_preedit;
+    if ui.ctx().current_pass_index() == 0 {
+        ui.input(|i| {
+            for event in &i.events {
+                match event {
+                    egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                        input.ime_preedit = !text.is_empty();
+                        ime_owned_escape |= input.ime_preedit;
+                    }
+                    egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
+                        input.ime_preedit = false;
+                        ime_owned_escape = true;
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
     let mut finish = None;
     let response = egui::Area::new(ui.scope_id().with((&input.id, "canvas-text-frame")))
         .order(egui::Order::Foreground)
@@ -326,7 +354,9 @@ pub(super) fn show(
         .response;
     if ui.ctx().current_pass_index() == 0 && !finishing && !first_frame {
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-            finish = Some(true);
+            if !ime_owned_escape {
+                finish = Some(true);
+            }
         } else if !blocked && (!ui.input(|i| i.focused) || response.clicked_elsewhere()) {
             finish.get_or_insert(true);
         }
@@ -464,10 +494,10 @@ mod tests {
         view.submit(&tx, Request::Undo);
         view.submit(&tx, Request::SaveDraft { updated_at_ms: 7 });
         assert!(rx.try_recv().is_err());
-        let (token, text, finishing) = view.inline_for_flush().unwrap();
-        assert_eq!(token, view.inline.as_ref().unwrap().id);
-        assert_eq!(text, "latest for quit");
-        assert!(!finishing);
+        let input = view.inline_for_flush().unwrap();
+        assert_eq!(input.input_id, view.inline.as_ref().unwrap().id);
+        assert_eq!(input.text, "latest for quit");
+        assert!(input.commit && !input.finishing);
         view.request_close();
         assert!(!view.closed && !view.close_requested);
         view.drain_inline(&tx);
@@ -486,7 +516,7 @@ mod tests {
 
     #[test]
     fn quit_saves_the_latest_buffer_even_before_begin_or_update_is_presented() {
-        for update_in_flight in [false, true] {
+        for (update_in_flight, cancel) in [(false, false), (true, false), (true, true)] {
             let data = tempfile::tempdir().unwrap();
             let root = data.path().join("history");
             let artifact = captures_app::persist_screenshot(
@@ -533,7 +563,17 @@ mod tests {
                 view.drain_inline(&editor.tx);
             }
             editor.view.lock().unwrap().inline.as_mut().unwrap().text = "Latest\nαβ".into();
+            if cancel {
+                editor.view.lock().unwrap().finish_inline(false);
+            }
             editor.flush(&ctx).unwrap();
+            if cancel {
+                assert!(
+                    !data.path().join("editor-drafts").exists(),
+                    "quit must honor pending Cancel"
+                );
+                continue;
+            }
             let manifest: serde_json::Value = serde_json::from_slice(
                 &std::fs::read(
                     data.path()
@@ -585,8 +625,6 @@ mod tests {
         frame(&mut view, vec![egui::Event::Text("new\nαβ".into())]);
         assert_eq!(view.inline.as_ref().unwrap().text, "originalnew\nαβ");
         assert!(view.inline.as_ref().unwrap().finish.is_none());
-        // A fast select-all/delete/Escape sequence can arrive in one repaint.
-        // Finishing must include the deletion rather than the preceding preview.
         let key = |key, modifiers| egui::Event::Key {
             key,
             physical_key: None,
@@ -594,6 +632,31 @@ mod tests {
             repeat: false,
             modifiers,
         };
+        frame(
+            &mut view,
+            vec![
+                egui::Event::Ime(egui::ImeEvent::Preedit {
+                    text: "candidate".into(),
+                    active_range_chars: None,
+                }),
+                key(egui::Key::Escape, egui::Modifiers::NONE),
+            ],
+        );
+        assert!(
+            view.inline.as_ref().unwrap().finish.is_none(),
+            "IME owns Escape"
+        );
+        frame(
+            &mut view,
+            vec![
+                egui::Event::Ime(egui::ImeEvent::Commit("é".into())),
+                key(egui::Key::Escape, egui::Modifiers::NONE),
+            ],
+        );
+        assert!(view.inline.as_ref().unwrap().finish.is_none());
+        assert_eq!(view.inline.as_ref().unwrap().text, "originalnew\nαβé");
+        // A fast select-all/delete/Escape sequence can arrive in one repaint.
+        // Finishing must include the deletion rather than the preceding preview.
         frame(
             &mut view,
             vec![
