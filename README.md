@@ -405,6 +405,10 @@ O Ellipse, L Line, D Diamond, S Star, A Arrow, P Pen, and B the last-used
 Wand/Erase/Restore mode (initially Wand). Switching tools cancels unfinished
 gestures without applying them; selecting the same tool again preserves them.
 Focused native controls retain typing and letter navigation.
+Both hosts also keep a left tool rail visible beside the canvas: Select, Crop,
+Text, Shapes, Arrow, Pen and background removal. Shapes opens a native menu for
+Rectangle, Ellipse, Line, Triangle, Diamond and Star, recalling the last choice.
+The rail and shortcuts share the existing tools; pending work disables the rail.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
 Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit
 scale and preserves the viewport-center image point when dragged.
