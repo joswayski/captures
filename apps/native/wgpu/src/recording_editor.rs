@@ -50,7 +50,18 @@ enum Job {
     Save(RecordingSaveRequest, CancelToken),
     Estimate(CancelToken),
     Thumbnails(CancelToken),
+    Play(u64, CancelToken),
     Shutdown,
+}
+
+struct PlaybackFrame {
+    position_ms: u64,
+    pixels: Arc<RgbaImage>,
+}
+
+enum PlaybackEnd {
+    Paused,
+    Ended,
 }
 
 enum Event {
@@ -59,6 +70,7 @@ enum Event {
     Saved(Result<SavedRecording, String>),
     Estimated(Result<ExportEstimate, String>),
     Thumbnails(Result<RecordingTimelineThumbnails, String>),
+    PlaybackFinished(Result<PlaybackEnd, String>),
     Destination(Option<PathBuf>),
 }
 
@@ -75,6 +87,10 @@ struct View {
     thumbnails: Option<egui::TextureHandle>,
     loading_thumbnails: bool,
     thumbnail_error: Option<String>,
+    playing: bool,
+    playback_position_ms: Option<u64>,
+    playback_ended: bool,
+    close_after_playback: bool,
     busy: bool,
     cancel: Option<CancelToken>,
     estimating: bool,
@@ -200,6 +216,57 @@ impl View {
         self.send(tx, Job::Thumbnails(cancel));
     }
 
+    fn request_playback(&mut self, tx: &Sender<Job>) {
+        if self.busy || self.picker || self.confirm_close || self.closed || self.unapplied() {
+            return;
+        }
+        let Some(p) = &self.presented else { return };
+        let position = if self.playback_ended {
+            p.edit.trim_start_ms
+        } else {
+            self.playback_position_ms.unwrap_or(p.position_ms)
+        };
+        self.position_ms = self.playback_position_ms.unwrap_or(p.position_ms);
+        let cancel = CancelToken::default();
+        self.cancel = Some(cancel.clone());
+        self.send(tx, Job::Play(position, cancel));
+    }
+
+    fn pause_playback(&self) {
+        if self.playing
+            && let Some(cancel) = &self.cancel
+        {
+            cancel.cancel();
+        }
+    }
+
+    fn receive_playback_frame(&mut self, ctx: &egui::Context, frame: PlaybackFrame) {
+        // Pause freezes the last frame actually presented, not a pending worker
+        // frame that happened to race the click. There is only one active job.
+        if !self.playing || self.cancel.as_ref().is_none_or(CancelToken::is_cancelled) {
+            return;
+        }
+        self.playback_position_ms = Some(frame.position_ms);
+        self.position_ms = frame.position_ms;
+        self.set_frame(ctx, &frame.pixels);
+    }
+
+    fn set_frame(&mut self, ctx: &egui::Context, pixels: &RgbaImage) {
+        let image = egui::ColorImage::from_rgba_unmultiplied(
+            [pixels.width() as usize, pixels.height() as usize],
+            pixels.as_raw(),
+        );
+        if let Some(texture) = &mut self.texture {
+            texture.set(image, egui::TextureOptions::LINEAR);
+        } else {
+            self.texture = Some(ctx.load_texture(
+                "recording-editor-frame",
+                image,
+                egui::TextureOptions::LINEAR,
+            ));
+        }
+    }
+
     fn send(&mut self, tx: &Sender<Job>, job: Job) {
         if self.busy || self.picker {
             return;
@@ -207,11 +274,16 @@ impl View {
         self.trim_gesture = None;
         let estimating = matches!(job, Job::Estimate(_));
         let loading_thumbnails = matches!(job, Job::Thumbnails(_));
+        let playing = matches!(job, Job::Play(..));
         match tx.send(job) {
             Ok(()) => {
                 self.busy = true;
                 self.estimating = estimating;
                 self.loading_thumbnails = loading_thumbnails;
+                self.playing = playing;
+                if playing {
+                    self.playback_ended = false;
+                }
                 if loading_thumbnails {
                     self.thumbnail_error = None;
                 }
@@ -241,15 +313,9 @@ impl View {
                         {
                             self.estimate = None;
                         }
-                        let frame = egui::ColorImage::from_rgba_unmultiplied(
-                            [p.frame.width() as usize, p.frame.height() as usize],
-                            p.frame.as_raw(),
-                        );
-                        self.texture = Some(ctx.load_texture(
-                            "recording-editor-frame",
-                            frame,
-                            egui::TextureOptions::LINEAR,
-                        ));
+                        self.set_frame(ctx, &p.frame);
+                        self.playback_position_ms = None;
+                        self.playback_ended = false;
                         self.start_ms = p.edit.trim_start_ms;
                         self.end_ms = p
                             .edit
@@ -273,11 +339,15 @@ impl View {
                         self.presented = Some(p);
                     }
                     Err(error) => {
-                        // Failed commands retain the accepted frame. A failed seek
-                        // must not label that frame with the rejected position.
+                        // A failed command restores the accepted still, rather
+                        // than labelling transient playback pixels as accepted.
                         if let Some(p) = &self.presented {
                             self.position_ms = p.position_ms;
+                            let frame = p.frame.clone();
+                            self.set_frame(ctx, &frame);
                         }
+                        self.playback_position_ms = None;
+                        self.playback_ended = false;
                         self.error = Some(error);
                     }
                 }
@@ -344,6 +414,38 @@ impl View {
                     Err(error) => self.thumbnail_error = Some(error),
                 }
             }
+            Event::PlaybackFinished(result) => {
+                self.busy = false;
+                self.playing = false;
+                self.cancel = None;
+                match result {
+                    Ok(end) => {
+                        self.error = None;
+                        self.playback_ended = matches!(end, PlaybackEnd::Ended);
+                        self.status = Some(
+                            if self.playback_ended {
+                                "Silent playback ended. Play restarts the accepted trim."
+                            } else {
+                                "Silent playback paused."
+                            }
+                            .into(),
+                        );
+                    }
+                    Err(error) => {
+                        self.playback_position_ms = None;
+                        self.playback_ended = false;
+                        if let Some(p) = &self.presented {
+                            self.position_ms = p.position_ms;
+                            let frame = p.frame.clone();
+                            self.set_frame(ctx, &frame);
+                        }
+                        self.error = Some(format!("Playback failed: {error}"));
+                    }
+                }
+                if std::mem::take(&mut self.close_after_playback) {
+                    self.request_close();
+                }
+            }
             Event::Destination(path) => {
                 self.picker = false;
                 if let Some(path) = path {
@@ -355,7 +457,10 @@ impl View {
 
     fn request_close(&mut self) {
         self.trim_gesture = None;
-        if self.busy || self.picker {
+        if self.playing {
+            self.close_after_playback = true;
+            self.pause_playback();
+        } else if self.busy || self.picker {
             self.error =
                 Some("Wait for the current operation, or cancel it, before closing.".into());
         } else if self.dirty() {
@@ -377,6 +482,8 @@ impl View {
 pub struct Editor {
     viewport: egui::ViewportId,
     view: Arc<Mutex<View>>,
+    // One latest frame, not an unbounded event queue or one closure per frame.
+    playback_frame: Arc<Mutex<Option<PlaybackFrame>>>,
     tx: Sender<Job>,
     events: Sender<Event>,
     rx: Receiver<Event>,
@@ -405,6 +512,8 @@ impl Editor {
         let (events, rx) = mpsc::channel();
         let out = events.clone();
         let wake_ctx = ctx.clone();
+        let playback_frame = Arc::new(Mutex::new(None));
+        let latest_frame = playback_frame.clone();
         let worker = thread::spawn(move || {
             let mut session = match RecordingEditorSession::open(
                 RecordingEditorOpenRequest {
@@ -458,6 +567,37 @@ impl Editor {
                             .ok_or_else(|| "Recording editor is unavailable.".to_owned())
                             .and_then(|s| s.timeline_thumbnails(&cancel)),
                     ),
+                    Job::Play(position, cancel) => {
+                        let result = (|| {
+                            let session =
+                                session.as_ref().ok_or("Recording editor is unavailable.")?;
+                            let mut playback = session.playback(position, &cancel)?;
+                            while let Some(frame) = playback.next_frame()? {
+                                if cancel.is_cancelled() {
+                                    break;
+                                }
+                                let needs_wake = {
+                                    let mut latest = latest_frame.lock().unwrap();
+                                    let empty = latest.is_none();
+                                    *latest = Some(PlaybackFrame {
+                                        position_ms: frame.position_ms,
+                                        pixels: frame.pixels(),
+                                    });
+                                    empty
+                                };
+                                if needs_wake {
+                                    wake(&wake_ctx, viewport);
+                                }
+                            }
+                            Ok(PlaybackEnd::Ended)
+                        })();
+                        // Cancellation is expected on Pause/close/focus loss.
+                        Event::PlaybackFinished(if cancel.is_cancelled() {
+                            Ok(PlaybackEnd::Paused)
+                        } else {
+                            result
+                        })
+                    }
                 };
                 if out.send(event).is_err() {
                     break;
@@ -478,6 +618,7 @@ impl Editor {
                     .into_owned(),
                 ..View::default()
             })),
+            playback_frame,
             tx,
             events,
             rx,
@@ -501,6 +642,10 @@ impl Editor {
     pub fn receive(&self, ctx: &egui::Context) {
         while let Ok(event) = self.rx.try_recv() {
             let mut view = self.view.lock().unwrap();
+            // Drain the final frame before EOF; completion never overtakes it.
+            if let Some(frame) = self.playback_frame.lock().unwrap().take() {
+                view.receive_playback_frame(ctx, frame);
+            }
             let opening = view.presented.is_none();
             view.receive(ctx, event);
             if opening && view.presented.is_some() {
@@ -508,11 +653,16 @@ impl Editor {
             }
             wake(ctx, self.viewport);
         }
+        if let Some(frame) = self.playback_frame.lock().unwrap().take() {
+            self.view.lock().unwrap().receive_playback_frame(ctx, frame);
+            wake(ctx, self.viewport);
+        }
     }
 
     pub fn flush(&self, ctx: &egui::Context) -> Result<(), String> {
         self.receive(ctx);
         let mut view = self.view.lock().unwrap();
+        view.pause_playback();
         if !view.closed && (view.busy || view.picker || view.dirty()) {
             let error = "Recording edits are not saved as drafts. Save a new copy or close the recording editor before quitting.".to_owned();
             view.error = Some(error.clone());
@@ -541,6 +691,9 @@ impl Editor {
                 .with_min_inner_size([760., 580.]),
             move |ui, _| {
                 let mut view = state.lock().unwrap();
+                if ui.input(|i| !i.focused || i.viewport().minimized == Some(true)) {
+                    view.pause_playback();
+                }
                 if ui.input(|i| i.viewport().close_requested()) {
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -853,7 +1006,7 @@ fn show(
 ) {
     egui::Panel::bottom("recording-save").show(ui, |ui| {
         if let Some(error) = &view.error {
-            ui.colored_label(tokens.color("theme-signal"), error);
+            ui.colored_label(tokens.color("danger-text"), error);
         }
         if let Some(status) = &view.status {
             ui.label(status);
@@ -881,7 +1034,7 @@ fn show(
         }
         if let Some(cancel) = &view.cancel
             && ui
-                .add_enabled(!cancel.is_cancelled(), egui::Button::new(if view.loading_thumbnails { "Cancel thumbnails" } else if view.estimating { "Cancel estimate" } else { "Cancel export" }))
+                .add_enabled(!cancel.is_cancelled(), egui::Button::new(if view.playing { "Pause playback" } else if view.loading_thumbnails { "Cancel thumbnails" } else if view.estimating { "Cancel estimate" } else { "Cancel export" }))
                 .clicked()
         {
             cancel.cancel();
@@ -981,7 +1134,21 @@ fn show(
             ui.heading("Edit recording");
             ui.horizontal(|ui| {
                 ui.strong("Preview");
-                ui.weak("Frame preview · playback not implemented");
+                ui.weak("Silent playback");
+                if view.playing {
+                    let pausing = view.cancel.as_ref().is_some_and(CancelToken::is_cancelled);
+                    if ui.add_enabled(!pausing, egui::Button::new(if pausing { "Pausing…" } else { "Pause" }).small()).clicked() {
+                        view.pause_playback();
+                        ui.ctx().request_repaint();
+                    }
+                } else if ui.add_enabled(!view.busy && !view.picker && !view.confirm_close
+                    && view.presented.is_some() && !view.unapplied(), egui::Button::new("Play").small())
+                    .on_hover_text("Play accepted trim without audio. Apply staged edits first. Motion preview fits within 1280 × 720.")
+                    .clicked()
+                {
+                    view.request_playback(tx);
+                    ui.ctx().request_repaint();
+                }
             });
             let width = ui.available_width();
             let height = (ui.available_height() - 210.).clamp(140., 380.);
@@ -1008,20 +1175,20 @@ fn show(
                 return;
             };
             let duration = p.source.duration_ms.unwrap_or(0);
-            let accepted_position = p.position_ms;
+            let displayed_position = view.playback_position_ms.unwrap_or(p.position_ms);
             let source_size = (p.source.width, p.source.height);
             let system_audio = p.edit.audio.source_has_system_audio;
             let microphone_audio = p.edit.audio.source_has_microphone_audio;
             ui.label(format!(
                 "Source frame: {:.3}s / {:.3}s · {} × {} · {:?} {:?} preview: {} × {}",
-                accepted_position as f64 / 1000.,
+                displayed_position as f64 / 1000.,
                 duration as f64 / 1000.,
                 p.source.width,
                 p.source.height,
                 p.export.format,
                 p.export.quality,
-                p.frame.width(),
-                p.frame.height()
+                view.texture.as_ref().map_or(p.frame.width() as usize, |t| t.size()[0]),
+                view.texture.as_ref().map_or(p.frame.height() as usize, |t| t.size()[1])
             ));
             ui.add_enabled_ui(!view.busy && !view.picker && !view.confirm_close, |ui| {
                 ui.add_enabled_ui(!view.unapplied(), |ui| {
@@ -1043,7 +1210,7 @@ fn show(
                         let seek = ui.button("Seek").clicked()
                             || response.drag_stopped()
                             || (response.changed() && !response.dragged());
-                        if seek && view.position_ms != accepted_position {
+                        if seek && view.position_ms != displayed_position {
                             view.send(
                                 tx,
                                 Job::Apply(RecordingEditorRequest::Seek {
@@ -1615,6 +1782,235 @@ mod tests {
     }
 
     #[test]
+    fn playback_pause_resume_and_eof_preserve_accepted_state() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        view.start_ms = 123;
+        view.presented.as_mut().unwrap().edit.trim_start_ms = 123;
+        view.saved_edit = view.presented.as_ref().unwrap().edit.clone();
+        let accepted = view.presented.as_ref().unwrap().frame.clone();
+        let texture_id = view.texture.as_ref().unwrap().id();
+        view.estimate = Some(ExportEstimate {
+            size_bytes: 1234,
+            exact: true,
+        });
+        let (tx, jobs) = mpsc::channel();
+        // Uncommitted seek text is not the frame currently being displayed.
+        view.position_ms = 2200;
+        view.request_playback(&tx);
+        let Job::Play(position, cancel) = jobs.recv().unwrap() else {
+            panic!("play queued")
+        };
+        assert_eq!(position, 700);
+        assert_eq!(
+            view.position_ms, 700,
+            "the playhead labels the retained frame during startup"
+        );
+        assert!(view.playing && view.busy && !view.dirty());
+        view.request_playback(&tx);
+        view.request_estimate(&tx);
+        view.send(
+            &tx,
+            Job::Apply(RecordingEditorRequest::Seek { position_ms: 1800 }),
+        );
+        assert!(
+            jobs.try_recv().is_err(),
+            "playback owns the serialized worker"
+        );
+        view.receive_playback_frame(
+            &ctx,
+            PlaybackFrame {
+                position_ms: 1100,
+                pixels: Arc::new(RgbaImage::new(2, 1)),
+            },
+        );
+        assert_eq!(
+            view.texture.as_ref().unwrap().id(),
+            texture_id,
+            "reuse GPU allocation"
+        );
+        assert_eq!(view.position_ms, 1100);
+        view.pause_playback();
+        assert!(
+            cancel.is_cancelled() && view.busy,
+            "Pause waits for decoder teardown"
+        );
+        view.receive_playback_frame(
+            &ctx,
+            PlaybackFrame {
+                position_ms: 1200,
+                pixels: Arc::new(RgbaImage::new(2, 1)),
+            },
+        );
+        assert_eq!(
+            view.position_ms, 1100,
+            "late frame cannot move a paused playhead"
+        );
+        view.receive(&ctx, Event::PlaybackFinished(Ok(PlaybackEnd::Paused)));
+        assert!(!view.busy && !view.playing && view.cancel.is_none());
+        view.request_playback(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(1100, _)));
+        view.receive_playback_frame(
+            &ctx,
+            PlaybackFrame {
+                position_ms: 3066,
+                pixels: Arc::new(RgbaImage::new(2, 1)),
+            },
+        );
+        view.receive(&ctx, Event::PlaybackFinished(Ok(PlaybackEnd::Ended)));
+        view.request_playback(&tx);
+        assert!(
+            matches!(jobs.recv().unwrap(), Job::Play(123, _)),
+            "EOF replays accepted trim"
+        );
+        let p = view.presented.as_ref().unwrap();
+        assert_eq!(p.position_ms, 700);
+        assert!(Arc::ptr_eq(&accepted, &p.frame));
+        assert_eq!(view.estimate.unwrap().size_bytes, 1234);
+        assert!(!view.dirty() && !view.history_changed);
+    }
+
+    #[test]
+    fn seek_after_playback_replaces_transient_frame_and_resume_position() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let (tx, jobs) = mpsc::channel();
+        view.request_playback(&tx);
+        jobs.recv().unwrap();
+        view.receive_playback_frame(
+            &ctx,
+            PlaybackFrame {
+                position_ms: 1800,
+                pixels: Arc::new(RgbaImage::new(2, 1)),
+            },
+        );
+        view.pause_playback();
+        view.receive(&ctx, Event::PlaybackFinished(Ok(PlaybackEnd::Paused)));
+        view.send(
+            &tx,
+            Job::Apply(RecordingEditorRequest::Seek { position_ms: 950 }),
+        );
+        assert!(matches!(jobs.recv().unwrap(), Job::Apply(_)));
+        let mut presentation = opened().presented.unwrap();
+        presentation.position_ms = 950;
+        view.receive(&ctx, Event::Presented(Ok(presentation)));
+        assert_eq!(view.texture.as_ref().unwrap().size(), [4, 2]);
+        assert_eq!(view.position_ms, 950);
+        assert!(view.playback_position_ms.is_none() && !view.playback_ended);
+        view.request_playback(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(950, _)));
+        assert!(!view.dirty());
+    }
+
+    #[test]
+    fn playback_error_restores_still_and_close_retains_dirty_confirmation() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let (tx, jobs) = mpsc::channel();
+        view.start_ms = 123;
+        view.request_playback(&tx);
+        assert!(jobs.try_recv().is_err(), "unapplied fields block Play");
+        view.presented.as_mut().unwrap().edit.trim_start_ms = 123;
+        assert!(view.dirty() && !view.unapplied());
+        view.request_playback(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(700, _)));
+        view.receive_playback_frame(
+            &ctx,
+            PlaybackFrame {
+                position_ms: 1500,
+                pixels: Arc::new(RgbaImage::new(2, 1)),
+            },
+        );
+        view.receive(&ctx, Event::PlaybackFinished(Err("source removed".into())));
+        assert_eq!(view.position_ms, 700);
+        assert_eq!(view.texture.as_ref().unwrap().size(), [4, 2]);
+        assert!(view.playback_position_ms.is_none() && view.dirty());
+        assert!(view.error.as_ref().unwrap().contains("source removed"));
+        view.request_playback(&tx);
+        let Job::Play(_, cancel) = jobs.recv().unwrap() else {
+            panic!("retry queued")
+        };
+        assert!(!cancel.is_cancelled() && view.error.is_none());
+        view.request_close();
+        assert!(cancel.is_cancelled() && !view.closed && !view.confirm_close);
+        view.receive(&ctx, Event::PlaybackFinished(Ok(PlaybackEnd::Paused)));
+        assert!(
+            view.confirm_close && !view.closed,
+            "only ask discard after playback teardown"
+        );
+    }
+
+    #[test]
+    fn playback_mailbox_is_latest_only_and_drains_before_completion() {
+        let ctx = egui::Context::default();
+        let (tx, jobs) = mpsc::channel();
+        let (events, rx) = mpsc::channel();
+        let mut view = opened();
+        view.request_playback(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(_, _)));
+        let editor = Editor {
+            viewport: egui::ViewportId::ROOT,
+            view: Arc::new(Mutex::new(view)),
+            playback_frame: Arc::new(Mutex::new(None)),
+            tx,
+            events,
+            rx,
+            worker: None,
+        };
+        let old = Arc::new(RgbaImage::new(2, 1));
+        *editor.playback_frame.lock().unwrap() = Some(PlaybackFrame {
+            position_ms: 900,
+            pixels: old.clone(),
+        });
+        *editor.playback_frame.lock().unwrap() = Some(PlaybackFrame {
+            position_ms: 3066,
+            pixels: Arc::new(RgbaImage::new(2, 1)),
+        });
+        assert_eq!(
+            Arc::strong_count(&old),
+            1,
+            "replacing latest promptly releases superseded pixels"
+        );
+        editor
+            .events
+            .send(Event::PlaybackFinished(Ok(PlaybackEnd::Ended)))
+            .unwrap();
+        editor.receive(&ctx);
+        assert_eq!(editor.view.lock().unwrap().position_ms, 3066);
+        assert!(editor.playback_frame.lock().unwrap().is_none());
+        assert!(
+            editor.flush(&ctx).is_ok(),
+            "motion alone never blocks clean quit"
+        );
+        editor.view.lock().unwrap().request_playback(&editor.tx);
+        let Job::Play(_, cancel) = jobs.recv().unwrap() else {
+            panic!("replay")
+        };
+        assert!(editor.flush(&ctx).is_err());
+        assert!(
+            cancel.is_cancelled(),
+            "quit requests teardown without freeing a live worker"
+        );
+        editor
+            .events
+            .send(Event::PlaybackFinished(Ok(PlaybackEnd::Paused)))
+            .unwrap();
+        editor.receive(&ctx);
+        assert!(editor.flush(&ctx).is_ok());
+        editor.view.lock().unwrap().request_playback(&editor.tx);
+        editor.view.lock().unwrap().request_close();
+        editor
+            .events
+            .send(Event::PlaybackFinished(Ok(PlaybackEnd::Paused)))
+            .unwrap();
+        editor.receive(&ctx);
+        assert!(
+            editor.closed(),
+            "clean close finishes only after worker completion"
+        );
+    }
+
+    #[test]
     fn thumbnail_cancel_failure_retry_keeps_edits_preview_and_estimate() {
         let ctx = egui::Context::default();
         let mut view = opened();
@@ -1685,6 +2081,7 @@ mod tests {
                 busy: true,
                 ..View::default()
             })),
+            playback_frame: Arc::new(Mutex::new(None)),
             tx,
             events,
             rx,
@@ -1792,6 +2189,7 @@ mod tests {
                 }
                 let mut rects = Vec::new();
                 for label in [
+                    "Play",
                     "123456789012 bytes (exact)",
                     "Estimate size",
                     "Apply edits",
@@ -1840,6 +2238,73 @@ mod tests {
                     rects.push(rect);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn fixed_pause_is_clickable_while_worker_owns_the_minimum_window() {
+        for (name, tokens) in crate::tokens::load() {
+            let ctx = egui::Context::default();
+            tokens.apply(&ctx, name.contains("light"));
+            let mut view = opened();
+            let (tx, jobs) = mpsc::channel();
+            let (events, _) = mpsc::channel();
+            view.request_playback(&tx);
+            let Job::Play(_, cancel) = jobs.recv().unwrap() else {
+                panic!("play")
+            };
+            let mut pause = egui::Pos2::ZERO;
+            for pass in 0..3 {
+                let input = if pass == 2 {
+                    vec![
+                        egui::Event::PointerMoved(pause),
+                        trim_pointer(pause, true),
+                        trim_pointer(pause, false),
+                    ]
+                } else {
+                    Vec::new()
+                };
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760., 580.),
+                        )),
+                        events: input,
+                        ..Default::default()
+                    },
+                    |ui| show(ui, &tokens, &mut view, &tx, &events, egui::ViewportId::ROOT),
+                );
+                output.textures_delta.clear();
+                if pass == 1 {
+                    let rect = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == "Pause playback" => {
+                                Some(text.galley.rect.translate(text.pos.to_vec2()))
+                            }
+                            _ => None,
+                        })
+                        .expect("fixed footer pause");
+                    assert!(
+                        rect.left() >= 0.
+                            && rect.right() <= 760.
+                            && rect.top() > 400.
+                            && rect.bottom() < 580.,
+                        "{name}: {rect:?}"
+                    );
+                    pause = rect.center();
+                }
+            }
+            assert!(
+                cancel.is_cancelled() && view.busy && view.playing,
+                "Pause stays enabled but never releases a live worker"
+            );
+            assert!(
+                jobs.try_recv().is_err(),
+                "Pause cancels directly, not behind the active Play job"
+            );
         }
     }
 
