@@ -3433,6 +3433,112 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(snapshot(id: "old", layers: [element]).layers[0].selectionOutline)
     }
 
+    func testSnapshotPasteCapabilityDefaultsAndRejectsMalformedValue() throws {
+        XCTAssertFalse(snapshot(id: "legacy").canPasteLayer)
+        var value: [String: Any] = [
+            "artifact_id": "shot", "document": ["width": 200, "height": 100, "elements": []],
+            "initial_text_size": 24, "can_undo": false, "can_redo": false,
+            "unsaved_changes": false, "has_draft": false, "can_paste_layer": true,
+        ]
+        XCTAssertTrue(try XCTUnwrap(NativeEditorSnapshot(value)).canPasteLayer)
+        value["can_paste_layer"] = "true"
+        XCTAssertNil(NativeEditorSnapshot(value))
+    }
+
+    func testLayerCopyPasteShortcutsDispatchAndPreserveOrInvalidateOutput() throws {
+        _ = NSApplication.shared
+        let original = layer(id: "source", name: "Source", x: 10, y: 20,
+                             visible: true, locked: false, opacity: 100)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showLayers(in: controller.root)
+        let layers = try table("Screenshot layers", in: controller.root)
+        layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        controller.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification,
+                                                              object: layers))
+        try showOutput(in: controller.root); try button("Preview output", in: controller.root).performClick(nil)
+        let output = try segmented("Output preview image", in: controller.root)
+        XCTAssertEqual(output.selectedSegment, 1)
+
+        _ = controller.window.performKeyEquivalent(with: try keyEvent(
+            window: controller.window, keyCode: 9, characters: "v", modifiers: .command))
+        XCTAssertTrue(worker.requests.isEmpty, "paste is rejected until the shared snapshot enables it")
+
+        worker.response = { request in
+            guard request["operation"] as? String == "copy_layer" else { return nil }
+            return self.snapshot(id: "shot", layers: [original], canPaste: true)
+        }
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: try keyEvent(
+            window: controller.window, keyCode: 8, characters: "c", modifiers: .command)))
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "copy_layer")
+        XCTAssertEqual(worker.requests.last?["id"] as? String, "source")
+        XCTAssertTrue(controller.state.snapshot?.canPasteLayer == true)
+        XCTAssertEqual(output.selectedSegment, 1); XCTAssertTrue(output.isEnabled,
+            "copy changes capability only and keeps encoded pixels available")
+
+        try showDraw(in: controller.root)
+        worker.response = { request in
+            guard request["operation"] as? String == "paste_layer",
+                  let id = request["new_id"] as? String else { return nil }
+            let pasted = self.layer(id: id, name: "Source copy", x: 34, y: 44,
+                                    visible: true, locked: false, opacity: 100)
+            return self.snapshot(id: "shot", unsaved: true, layers: [original, pasted], canPaste: true)
+        }
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: try keyEvent(
+            window: controller.window, keyCode: 9, characters: "v", modifiers: .control)))
+        let paste = try XCTUnwrap(worker.requests.last)
+        XCTAssertEqual(paste["operation"] as? String, "paste_layer")
+        XCTAssertEqual(paste["after_id"] as? String, "source")
+        let newID = try XCTUnwrap(paste["new_id"] as? String)
+        XCTAssertNotEqual(newID, "source")
+        XCTAssertEqual(controller.state.snapshot?.layers.first?.id, newID)
+        XCTAssertEqual(try segmented("Editor section", in: controller.root).selectedSegment, 1,
+                       "accepted paste returns to Select & move")
+        XCTAssertFalse(output.isEnabled, "paste invalidates stale encoded output")
+    }
+
+    func testLayerShortcutsRespectFocusedControlPendingRejectedAndClosedStates() throws {
+        _ = NSApplication.shared
+        let source = layer(id: "source", name: "Source", x: 10, y: 20,
+                           visible: true, locked: false, opacity: 100)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [source], canPaste: true))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showLayers(in: controller.root)
+        let layers = try table("Screenshot layers", in: controller.root)
+        layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        controller.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification,
+                                                              object: layers))
+        let focused = try field("Layer name", in: controller.root)
+        controller.window.makeFirstResponder(focused)
+        XCTAssertFalse(controller.window.performKeyEquivalent(with: try keyEvent(
+            window: controller.window, keyCode: 8, characters: "c", modifiers: .command)))
+        XCTAssertTrue(worker.requests.isEmpty, "native controls retain their own copy and paste")
+        controller.window.makeFirstResponder(nil)
+
+        worker.deferRequests = true
+        _ = controller.window.performKeyEquivalent(with: try keyEvent(
+            window: controller.window, keyCode: 9, characters: "v", modifiers: .command))
+        _ = controller.window.performKeyEquivalent(with: try keyEvent(
+            window: controller.window, keyCode: 9, characters: "v", modifiers: .command))
+        XCTAssertEqual(worker.requests.count, 1, "one in-flight command rejects another shortcut")
+        worker.completePending(with: snapshot(id: "shot", layers: [source], canPaste: true))
+        worker.deferRequests = false; worker.failOperation = "paste_layer"
+        try showDraw(in: controller.root)
+        _ = controller.window.performKeyEquivalent(with: try keyEvent(
+            window: controller.window, keyCode: 9, characters: "v", modifiers: .command))
+        XCTAssertEqual(try segmented("Editor section", in: controller.root).selectedSegment, 2,
+                       "rejected paste does not transition tools")
+        controller.window.performClose(nil)
+        let count = worker.requests.count
+        _ = controller.window.performKeyEquivalent(with: try keyEvent(
+            window: controller.window, keyCode: 9, characters: "v", modifiers: .command))
+        XCTAssertEqual(worker.requests.count, count, "closed sessions reject shortcuts")
+    }
+
     func testCanvasSelectionControllerKeepsOutputUntilMoveAndPreservesSelectionOnFailure() throws {
         _ = NSApplication.shared
         func shape(_ id: String, x: Double, locked: Bool = false, visible: Bool = true) -> [String: Any] {
@@ -4544,7 +4650,8 @@ final class ScreenshotEditorTests: XCTestCase {
                           layers: [[String: Any]] = [],
                           annotations: [String: [String: Any]] = [:],
                           textShadows: [String: [String: Any]]? = nil,
-                          fonts: [String: String] = [:]) -> NativeEditorSnapshot {
+                          fonts: [String: String] = [:],
+                          canPaste: Bool = false) -> NativeEditorSnapshot {
         var value: [String: Any] = [
             "artifact_id": id, "document": ["width": width, "height": height,
                                                   "elements": layers],
@@ -4564,6 +4671,7 @@ final class ScreenshotEditorTests: XCTestCase {
                              "offsetX": 0.0, "offsetY": 2.0] as [String: Any])
             }),
             "can_undo": unsaved, "can_redo": canRedo,
+            "can_paste_layer": canPaste,
             "unsaved_changes": unsaved, "has_draft": draft,
         ]
         if let originalExportPath { value["original_export_path"] = originalExportPath }
@@ -4684,8 +4792,9 @@ final class ScreenshotEditorTests: XCTestCase {
             .first { $0.accessibilityLabel() == label })
     }
 
-    private func keyEvent(window: NSWindow, keyCode: UInt16, characters: String) throws -> NSEvent {
-        try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+    private func keyEvent(window: NSWindow, keyCode: UInt16, characters: String,
+                          modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
             timestamp: 0, windowNumber: window.windowNumber, context: nil,
             characters: characters, charactersIgnoringModifiers: characters,
             isARepeat: false, keyCode: keyCode))
