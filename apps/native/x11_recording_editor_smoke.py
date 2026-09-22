@@ -247,7 +247,8 @@ def main():
         if args.playback:
             def motion_click():
                 # Pause must work during an active decoder; never wait for idle.
-                run("xdotool", "mousemove", "--sync", "--window", editor, "192", "57",
+                # Do not wait for a motion event when already over this button.
+                run("xdotool", "mousemove", "--window", editor, "192", "57", "sleep", ".05",
                     "mousedown", "1", "sleep", ".08", "mouseup", "1")
 
             def playing():
@@ -269,7 +270,7 @@ def main():
             # Record real presentation rather than turning fixture PNGs into a video.
             recording = spawn("playback-capture", ["ffmpeg", "-v", "error", "-f", "x11grab",
                 "-framerate", "15", "-video_size", "960x900", "-i", env["DISPLAY"] + "+80,60",
-                "-t", "12", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                "-t", "18", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
                 str(output / "playback-motion.mp4")])
             motion_click()
             wait(playing, "Play owns decoder")
