@@ -274,8 +274,14 @@ def main():
                 str(output / "playback-motion.mp4")])
             motion_click()
             wait(playing, "Play owns decoder")
-            time.sleep(.9)
-            run("import", "-window", editor, str(output / "playback-running.png"))
+            def green_motion():
+                # Decoder startup is not presentation time. Observe an actual
+                # temporal transition instead of assuming fixed startup latency.
+                path = output / "playback-running.png"
+                run("import", "-window", editor, str(path))
+                pixel = run("convert", str(path), "-crop", "1x1+480+220", "-depth", "8", "rgb:-")
+                return len(pixel) == 3 and pixel[1] > 90 and pixel[1] > max(pixel[0], pixel[2]) + 40
+            wait(green_motion, "real playback crosses from red to green")
             dominant(output / "playback-running.png", 1)
             motion_click()
             idle(editor)
