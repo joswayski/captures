@@ -108,6 +108,70 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(worker.playbackStarts, [300, 300], "an error retries from accepted position")
     }
 
+    func testSeekPreservesRequestedTargetAtIdleAndAfterTransientPlayback() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 100))
+        worker.deferPlayback = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let seek = try slider("Recording frame position", in: controller.root)
+
+        worker.requestResult = .success(try presentation(position: 777, revision: 1))
+        seek.doubleValue = 777; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual((worker.requests.last?["position_ms"] as? NSNumber)?.uint64Value, 777,
+                       "ordinary seek keeps the newly requested asymmetric target")
+
+        let play = try button("Play", in: controller.root)
+        play.performClick(nil)
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 913,
+            image: try solidImage(red: 10, green: 20, blue: 30)))
+        play.performClick(nil); worker.completePlayback(.success(.cancelled))
+        XCTAssertEqual(seek.doubleValue, 913)
+        worker.requestResult = .success(try presentation(position: 1_237, revision: 2))
+        seek.doubleValue = 1_237; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual((worker.requests.last?["position_ms"] as? NSNumber)?.uint64Value, 1_237,
+                       "restoring the accepted still cannot replace a post-playback seek target")
+        XCTAssertEqual(seek.doubleValue, 1_237)
+    }
+
+    func testPauseBeforeDelayedPlaybackStartRetainsAcceptedDisplayedPosition() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            start: 200, end: 1_800, position: 1_937))
+        worker.deferPlayback = true
+        worker.deferPlaybackStarted = true
+        worker.playbackMetadata = RecordingPlaybackMetadata(startPositionMilliseconds: 200,
+                                                             width: 640, height: 360,
+                                                             framesPerSecond: 24)
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let play = try button("Play", in: controller.root)
+        let seek = try slider("Recording frame position", in: controller.root)
+
+        play.performClick(nil)
+        XCTAssertEqual(worker.playbackStarts, [1_937])
+        play.performClick(nil)
+        XCTAssertEqual(play.title, "Pausing…")
+        XCTAssertEqual(seek.doubleValue, 1_937)
+
+        worker.completePlaybackStarted()
+        XCTAssertEqual(play.title, "Pausing…", "late metadata cannot replace the Pausing state")
+        XCTAssertTrue(labels(in: controller.root).contains("Pausing silent playback…"))
+        XCTAssertEqual(seek.doubleValue, 1_937,
+                       "zero-frame Pause retains the accepted still that was actually displayed")
+        worker.completePlayback(.success(.cancelled))
+
+        play.performClick(nil)
+        XCTAssertEqual(worker.playbackStarts, [1_937, 1_937],
+                       "the next Play resumes the accepted displayed source position")
+    }
+
     func testPlaybackPauseCompletesBeforeSessionSwitchAndTerminationRetry() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 250))
@@ -1706,6 +1770,7 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var playbackFrames: [RecordingPlaybackImage] = []
     var playbackResult: Result<RecordingPlaybackCompletion, Error> = .success(.eof)
     var deferPlayback = false
+    var deferPlaybackStarted = false
     var thumbnailResult: Result<CGImage, Error> = .success(fakeTimelineImage())
     var thumbnailCalls = 0
     var deferThumbnails = false
@@ -1719,6 +1784,7 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     private var pendingOpen: ((Result<RecordingEditorPresentation, Error>) -> Void)?
     private var pendingSave: ((Result<RecordingEditorSaveResult, Error>) -> Void)?
     private var pendingThumbnails: ((Result<CGImage, Error>) -> Void)?
+    private var pendingPlaybackStarted: ((RecordingPlaybackMetadata) -> Void)?
     private var pendingPlaybackFrame: ((RecordingPlaybackImage) -> Void)?
     private var pendingPlaybackCompletion: ((Result<RecordingPlaybackCompletion, Error>) -> Void)?
 
@@ -1745,17 +1811,22 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
                   frame: @escaping (RecordingPlaybackImage) -> Void,
                   completion: @escaping (Result<RecordingPlaybackCompletion, Error>) -> Void) {
         playbackStarts.append(positionMilliseconds); observedPlaybackCancel = cancel
-        started(playbackMetadata)
+        if deferPlaybackStarted { pendingPlaybackStarted = started }
+        else { started(playbackMetadata) }
         if deferPlayback {
             pendingPlaybackFrame = frame; pendingPlaybackCompletion = completion
         } else {
             playbackFrames.forEach(frame); completion(playbackResult)
         }
     }
+    func completePlaybackStarted() {
+        let started = pendingPlaybackStarted; pendingPlaybackStarted = nil
+        started?(playbackMetadata)
+    }
     func sendPlaybackFrame(_ value: RecordingPlaybackImage) { pendingPlaybackFrame?(value) }
     func completePlayback(_ result: Result<RecordingPlaybackCompletion, Error>) {
         let completion = pendingPlaybackCompletion
-        pendingPlaybackFrame = nil; pendingPlaybackCompletion = nil
+        pendingPlaybackStarted = nil; pendingPlaybackFrame = nil; pendingPlaybackCompletion = nil
         completion?(result)
     }
     func thumbnails(cancel: NativeRecordingEditorCancel,

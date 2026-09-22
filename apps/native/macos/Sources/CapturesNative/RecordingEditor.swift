@@ -883,8 +883,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             if stagedDiffers { showError("Apply staged recording changes before seeking.") }
             return
         }
+        let position = UInt64(seekSlider.doubleValue.rounded())
         restoreAcceptedPresentation()
-        request(["operation": "seek", "position_ms": UInt64(seekSlider.doubleValue.rounded())],
+        request(["operation": "seek", "position_ms": position],
                 activity: "Decoding source-relative frame…")
     }
 
@@ -931,9 +932,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         worker.playback(positionMilliseconds: position, cancel: cancel,
             started: { [weak self] metadata in
                 guard let self, self.generation == current,
-                      self.playbackCancel === cancel else { return }
-                self.playbackPositionMilliseconds = metadata.startPositionMilliseconds
-                self.updatePlaybackPosition(metadata.startPositionMilliseconds)
+                      self.playbackCancel === cancel,
+                      self.playbackState == .playing,
+                      !cancel.isCancelled else { return }
                 self.status.stringValue = "Silent playback · \(metadata.width) × \(metadata.height) · \(metadata.framesPerSecond) fps"
             }, frame: { [weak self] value in
                 guard let self, self.generation == current,
