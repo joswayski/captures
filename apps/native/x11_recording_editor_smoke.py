@@ -328,6 +328,9 @@ def main():
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             motion_click()
             wait(playing, "minimum Play")
+            # The title changes in the click's layout pass; capture after the
+            # first decoder frame redraw, not that transient old Play label.
+            time.sleep(.4)
             run("import", "-window", editor, str(output / "playback-minimum-running.png"))
             close(editor)
             idle(editor)
