@@ -237,7 +237,8 @@ AppKit and Windows can exclude native capture UI. X11 temporarily hides the HUD 
 guide from the screenshot, but cannot keep the selector out of the ongoing recording.
 The Windows/Linux candidate's **Edit recording** opens a decoded frame preview
 with source-relative scrubbing, numeric trim/crop controls, custom output dimensions
-and MP4/GIF **Save new copy**. Apply edits accepts the format, quality and edits
+and MP4/GIF **Save new copy**. Crop dimensions start aspect-locked; unlock to change
+width and height independently. Apply edits accepts the format, quality and edits
 together before saving; failed updates leave the last accepted frame intact.
 The preview identifies its accepted format/quality, and saving uses those settings.
 Available system and microphone tracks have independent volume/mute controls plus
