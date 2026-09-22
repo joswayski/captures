@@ -1549,13 +1549,16 @@ fn single_audio_filter(index: usize, volume: f32, mono: bool) -> String {
     )
 }
 
+// Full-frame statistics keep scene colors represented in the global palette.
+// Diff statistics can spend the palette on compression noise in large frames
+// and omit a later scene color entirely.
 fn gif_export_filter(edit: &EditSpec, attempt: &VideoAttempt) -> String {
     let crop = edit.crop.map_or_else(String::new, |crop| {
         format!("crop={}:{}:{}:{},", crop.width, crop.height, crop.x, crop.y)
     });
     let scale = gif_scale_filter(edit, attempt);
     format!(
-        "{crop}fps={},scale={scale},split[s0][s1];[s0]palettegen=max_colors={}:stats_mode=diff[p];[s1][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle",
+        "{crop}fps={},scale={scale},split[s0][s1];[s0]palettegen=max_colors={}:stats_mode=full[p];[s1][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle",
         attempt.frames_per_second, attempt.gif_colors
     )
 }
@@ -1573,7 +1576,7 @@ fn gif_scale_filter(edit: &EditSpec, attempt: &VideoAttempt) -> String {
 
 fn gif_filter(frames_per_second: u16, max_width: u32, max_colors: u16) -> String {
     format!(
-        "fps={frames_per_second},scale='min({max_width},iw)':-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors={max_colors}:stats_mode=diff[p];[s1][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle"
+        "fps={frames_per_second},scale='min({max_width},iw)':-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors={max_colors}:stats_mode=full[p];[s1][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle"
     )
 }
 
@@ -1918,7 +1921,8 @@ mod tests {
             escape_concat_path(std::path::Path::new("a'b.mp4")),
             "a'\\''b.mp4"
         );
-        assert!(gif_filter(15, 800, 256).contains("palettegen=max_colors=256"));
+        let gif = gif_filter(15, 800, 256);
+        assert!(gif.contains("palettegen=max_colors=256:stats_mode=full"));
     }
 
     #[test]
@@ -2644,6 +2648,136 @@ mod tests {
             .status()
             .expect("bundled FFmpeg starts");
         assert!(status.success(), "test recording segment generated");
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn create_portrait_color_recording(ffmpeg: &std::path::Path, path: &std::path::Path) {
+        let filter = "[0:v]drawbox=x=15:y=10:w=45:h=25:color=white:t=fill[red];\
+                      [1:v]drawbox=x=15:y=10:w=45:h=25:color=white:t=fill[green];\
+                      [2:v]drawbox=x=15:y=10:w=45:h=25:color=white:t=fill[blue];\
+                      [red][green][blue]concat=n=3:v=1:a=0[video]";
+        let status = std::process::Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y"])
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "color=red:size=640x1440:rate=10:duration=1",
+            ])
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "color=green:size=640x1440:rate=10:duration=1",
+            ])
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "color=blue:size=640x1440:rate=10:duration=1",
+            ])
+            .args(["-filter_complex", filter, "-map", "[video]"])
+            .args(["-c:v", "mpeg4", "-q:v", "2", "-an"])
+            .arg(path)
+            .status()
+            .expect("bundled FFmpeg starts");
+        assert!(status.success(), "portrait color recording generated");
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn sample_rgb(ffmpeg: &std::path::Path, path: &std::path::Path, at_ms: u64) -> [u8; 3] {
+        let output = std::process::Command::new(ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                &seconds(at_ms),
+                "-i",
+            ])
+            .arg(path)
+            .args([
+                "-vf",
+                "crop=1:1:100:100,format=rgb24",
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-",
+            ])
+            .output()
+            .expect("sample frame decoded");
+        assert!(output.status.success(), "sample frame decoded");
+        output.stdout[..3].try_into().expect("one RGB pixel")
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn portrait_gif_palette_preserves_late_scene_colors() {
+        let Some((toolchain, ffmpeg)) = cross_platform_toolchain() else {
+            return;
+        };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.mp4");
+        let preview = directory.path().join("preview.png");
+        let destination = directory.path().join("trimmed.gif");
+        create_portrait_color_recording(&ffmpeg, &source);
+        let source_bytes = std::fs::read(&source).expect("source bytes");
+        let edit = EditSpec {
+            trim_start_ms: 1_100,
+            trim_end_ms: Some(2_300),
+            ..EditSpec::default()
+        };
+        let export = ExportSpec {
+            format: ExportFormat::Gif,
+            quality: QualityPreset::Preserve,
+            max_size_bytes: None,
+            frames_per_second: None,
+            gif_max_colors: None,
+        };
+
+        toolchain
+            .extract_edited_frame(
+                &source,
+                &edit,
+                &export,
+                2_100,
+                &preview,
+                &CancelToken::default(),
+            )
+            .expect("blue preview");
+        toolchain
+            .export(
+                &source,
+                &destination,
+                &edit,
+                &export,
+                &CancelToken::default(),
+                |_| {},
+            )
+            .expect("portrait GIF export");
+
+        for path in [&preview, &destination] {
+            let metadata = toolchain.probe(path).expect("output probe").metadata;
+            assert_eq!((metadata.width, metadata.height), (640, 1_440));
+        }
+        let green = sample_rgb(&ffmpeg, &destination, 200);
+        assert!(
+            green[1] > 100 && green[0] < 20 && green[2] < 20,
+            "early trimmed frame should remain green, got {green:?}"
+        );
+        let preview_blue = sample_rgb(&ffmpeg, &preview, 0);
+        let gif_blue = sample_rgb(&ffmpeg, &destination, 1_000);
+        for (name, blue) in [("preview", preview_blue), ("GIF", gif_blue)] {
+            assert!(
+                blue[2] > 220 && blue[0] < 20 && blue[1] < 20,
+                "late {name} frame should remain blue, got {blue:?}"
+            );
+        }
+        assert_eq!(
+            std::fs::read(source).expect("unchanged source bytes"),
+            source_bytes
+        );
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
