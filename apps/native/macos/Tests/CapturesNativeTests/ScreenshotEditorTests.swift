@@ -13,14 +13,18 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showLayers(in: controller.root)
         func arrow(_ code: UInt16, shift: Bool = false) throws -> NSEvent {
-            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            let characters = [123: "\u{f702}", 124: "\u{f703}", 125: "\u{f701}", 126: "\u{f700}"][Int(code)]!
+            return try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
                 modifierFlags: shift ? .shift : [], timestamp: 0,
                 windowNumber: controller.window.windowNumber, context: nil,
-                characters: "", charactersIgnoringModifiers: "", isARepeat: true, keyCode: code))
+                characters: characters, charactersIgnoringModifiers: characters, isARepeat: true, keyCode: code))
         }
         XCTAssertTrue(controller.window.makeFirstResponder(try field("Layer name", in: controller.root)))
         controller.window.sendEvent(try arrow(123))
         XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertTrue(controller.window.makeFirstResponder(try table("Screenshot layers", in: controller.root)))
+        controller.window.sendEvent(try arrow(126))
+        XCTAssertTrue(worker.requests.isEmpty, "table navigation must not move document content")
         XCTAssertTrue(controller.window.makeFirstResponder(try button("Duplicate", in: controller.root)))
         worker.deferRequests = true
         let cases: [(UInt16, Bool, Double, Double)] = [

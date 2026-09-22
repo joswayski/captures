@@ -2504,6 +2504,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             } else if event.keyCode == 51 || event.keyCode == 117 {
                 button = deleteButton
             } else if (123...126).contains(event.keyCode) {
+                // Native tables and segmented selectors keep arrow navigation.
+                if responder is NSControl && !(responder is CaptureButton) { return false }
                 guard !state.busy, let layer = selectedLayer, !layer.locked else { return true }
                 let distance = event.modifierFlags.contains(.shift) ? 10.0 : 1.0
                 let delta: (Double, Double)
