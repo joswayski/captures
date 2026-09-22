@@ -22,6 +22,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     # Recording's apple-metal bridge needs the macOS 26 SDK, like the desktop CI.
