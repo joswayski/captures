@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Real frame/trim/export input on a disposable private X11 desktop."""
+"""Real frame/trim/crop/resize/export input on a disposable private X11 desktop."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -62,6 +62,8 @@ def main():
         return found.stdout.split()
 
     def shot(window, name):
+        if window != "root":
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", window).decode(), "frame accepted before screenshot")
         time.sleep(.5)
         run("import", "-window", window, str(output / f"{name}.png"))
 
@@ -99,7 +101,7 @@ def main():
         assert all(pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel), (path, pixel)
 
     try:
-        env["DISPLAY"] = ":" + spawn("xvfb", ["Xvfb", "-displayfd", "1", "-screen", "0", "1280x1000x24", "-dpi", "96", "-nolisten", "tcp"], True)
+        env["DISPLAY"] = ":" + spawn("xvfb", ["Xvfb", "-displayfd", "1", "-screen", "0", "1280x1200x24", "-dpi", "96", "-nolisten", "tcp"], True)
         address = spawn("dbus", ["dbus-daemon", "--session", "--nofork", "--print-address=1"], True)
         env["DBUS_SESSION_BUS_ADDRESS"] = env["DBUS_SYSTEM_BUS_ADDRESS"] = address
         DBusGMainLoop(set_as_default=True)
@@ -160,7 +162,7 @@ def main():
         dominant(output / "seek-green.png", 1)
         field(editor, 211, 598, 1100)
         field(editor, 98, 598, 2600)
-        click(editor, 400, 598)
+        click(editor, 793, 882)  # Apply edits stays in the fixed save bar.
         shot(editor, "invalid-trim")
         dominant(output / "invalid-trim.png", 1)
         run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
@@ -168,7 +170,7 @@ def main():
         run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
         field(editor, 98, 598, 1100)
         field(editor, 227, 598, 2300)
-        click(editor, 400, 598)
+        click(editor, 793, 882)
         shot(editor, "trimmed")
         dominant(output / "trimmed.png", 1)
         close(root)
@@ -200,6 +202,62 @@ def main():
         dominant(gif, 1, .2)
         dominant(gif, 2, 1.0)
         shot(editor, "gif-saved")
+
+        # Asymmetric crop and independently sized output catch ignored origins,
+        # resize-only implementations, and accidental loss of the accepted trim.
+        run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+        click(editor, 22, 683)  # Crop recording.
+        field(editor, 51, 727, 10)
+        field(editor, 114, 727, 6)
+        field(editor, 208, 727, 320)  # Valid width alone, invalid with X=10.
+        field(editor, 309, 727, 90)
+        click(editor, 793, 1082)
+        shot(editor, "invalid-crop")
+        dominant(output / "invalid-crop.png", 1)
+        crop_destination = exports / "cropped.mp4"
+        click(editor, 33, 1082)  # MP4.
+        field(editor, 360, 1038, crop_destination)
+        click(editor, 899, 1082)  # Save remains gated while the crop is unapplied.
+        assert not crop_destination.exists() and len(list(history.glob("*/metadata.json"))) == 3
+        field(editor, 208, 727, 160)
+        click(editor, 22, 771)  # Custom output size.
+        field(editor, 78, 815, 81)
+        field(editor, 170, 815, 61)
+        shot(editor, "crop-staged")
+        click(editor, 793, 1082)
+        shot(editor, "cropped")
+        dominant(output / "cropped.png", 1)
+        # Frame is 80x60 after shared even rounding, fitted into the 380px-tall
+        # preview. Both samples lie inside the translated/scaled white box;
+        # omitting the crop or either origin makes at least one sample green.
+        for x, y in ((253, 110), (353, 180)):
+            pixel = run("convert", str(output / "cropped.png"), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-")
+            assert len(pixel) == 3 and min(pixel) > 210, (x, y, pixel)
+        run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+        run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "12", "--delay", "60", "5", "sleep", ".5")
+        shot(editor, "minimum-crop-controls")
+        run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+        run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "20", "--delay", "60", "4", "sleep", ".5")
+        click(editor, 899, 1082)
+        wait(lambda: len(list(history.glob("*/metadata.json"))) == 4, "cropped MP4 in History")
+        click(editor, 87, 1082)
+        click(editor, 899, 1082)
+        wait(lambda: len(list(history.glob("*/metadata.json"))) == 5, "cropped GIF in History")
+        for path in (crop_destination, crop_destination.with_suffix(".gif")):
+            info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)))
+            assert abs(float(info["format"]["duration"]) - 1.2) < .15, info
+            stream = info["streams"][0]
+            assert (stream["width"], stream["height"]) == (80, 60), info
+            assert stream.get("sample_aspect_ratio", "1:1") in ("1:1", "N/A"), info
+            frame = run("ffmpeg", "-v", "error", "-ss", "0.2", "-i", str(path),
+                        "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
+            assert len(frame) == 80 * 60 * 3, (path, len(frame))
+            for x, y in ((4, 4), (20, 15)):
+                pixel = frame[(y * 80 + x) * 3:(y * 80 + x) * 3 + 3]
+                assert min(pixel) > 210, (path, x, y, pixel)
+            pixel = frame[(30 * 80 + 40) * 3:(30 * 80 + 40) * 3 + 3]
+            assert pixel[1] > 90 and pixel[1] > max(pixel[0], pixel[2]) + 40, (path, pixel)
+        shot(editor, "crop-saved")
         run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
         shot(editor, "minimum-saved")
         assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
@@ -213,9 +271,11 @@ def main():
                 "failed-trim-retains-frame", "minimum-error", "dirty-quit-guard", "close-confirmation",
                 "save-new", "duration", "dimensions", "export-green", "export-blue", "collision",
                 "gif-green", "gif-blue", "minimum-saved", "immutable-source", "saved-close-and-quit",
-                "worker-completion-with-minimized-root"],
+                "worker-completion-with-minimized-root", "invalid-crop-retains-frame", "unapplied-save-gate",
+                "cropped-preview", "minimum-crop-controls", "crop-preserves-trim", "even-output-dimensions",
+                "mp4-crop-origin-and-resize", "gif-crop-origin-and-resize"],
             "source_sha256": hashlib.sha256(original).hexdigest()}, indent=2) + "\n")
-        print("PASS recording editor: decoded seeks, trim, MP4 duration/content, History, immutable source")
+        print("PASS recording editor: seeks, trim/crop/resize, MP4/GIF pixels, History, immutable source")
     finally:
         for child in reversed(children):
             if child.poll() is None:

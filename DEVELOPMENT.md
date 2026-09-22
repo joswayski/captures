@@ -170,7 +170,10 @@ and `python3-xlib`, then run:
 
 For the frame-based recording editor, run the following with both `dark` and
 `light`. It creates a known-color recording in disposable History, opens the real
-editor and checks source-relative seeks and decoded trim/export content:
+editor and checks source-relative seeks, rejected edits, trim, asymmetric crop and
+independent output sizing. Decoded MP4/GIF pixels verify crop origin and scaling,
+even output dimensions and unchanged source bytes. Review the minimum-size/error
+captures as well as the applied preview:
 
 ```sh
 /usr/bin/python3 apps/native/x11_recording_editor_smoke.py \

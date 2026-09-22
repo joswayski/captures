@@ -14,8 +14,8 @@ use captures_app::recording_editor::{
     RecordingSaveRequest, SavedRecording,
 };
 use captures_media::{
-    CancelToken, EditSpec, ExportFormat, ExportProgress, ExportSpec, MediaMetadata, MediaToolchain,
-    QualityPreset,
+    CancelToken, CropRect, EditSpec, ExportFormat, ExportProgress, ExportSpec, MediaMetadata,
+    MediaToolchain, QualityPreset,
 };
 use eframe::egui;
 use image::RgbaImage;
@@ -67,6 +67,8 @@ struct View {
     saved_edit: EditSpec,
     start_ms: u64,
     end_ms: u64,
+    crop: Option<CropRect>,
+    output_size: Option<(u32, u32)>,
     position_ms: u64,
     destination: String,
     gif: bool,
@@ -77,14 +79,21 @@ struct View {
 }
 
 impl View {
+    fn staged_edit(&self, p: &Presented) -> EditSpec {
+        EditSpec {
+            trim_start_ms: self.start_ms,
+            trim_end_ms: (self.end_ms != p.source.duration_ms.unwrap_or(0)).then_some(self.end_ms),
+            crop: self.crop,
+            output_width: self.output_size.map(|size| size.0),
+            output_height: self.output_size.map(|size| size.1),
+            ..p.edit.clone()
+        }
+    }
+
     fn unapplied(&self) -> bool {
-        self.presented.as_ref().is_some_and(|p| {
-            self.start_ms != p.edit.trim_start_ms
-                || self.end_ms
-                    != p.edit
-                        .trim_end_ms
-                        .unwrap_or(p.source.duration_ms.unwrap_or(0))
-        })
+        self.presented
+            .as_ref()
+            .is_some_and(|p| self.staged_edit(p) != p.edit)
     }
 
     fn dirty(&self) -> bool {
@@ -132,6 +141,8 @@ impl View {
                             .edit
                             .trim_end_ms
                             .unwrap_or(p.source.duration_ms.unwrap_or(0));
+                        self.crop = p.edit.crop;
+                        self.output_size = p.edit.output_width.zip(p.edit.output_height);
                         self.position_ms = p.position_ms;
                         // The initial edit includes trusted audio flags.
                         if self.presented.is_none() {
@@ -497,6 +508,14 @@ fn show(
                             ),
                         );
                     }
+                    if ui
+                        .add_enabled(view.unapplied(), egui::Button::new("Apply edits"))
+                        .on_hover_text("Update the preview before scrubbing or saving")
+                        .clicked()
+                    {
+                        let edit = view.staged_edit(view.presented.as_ref().unwrap());
+                        view.send(tx, Job::Apply(RecordingEditorRequest::UpdateEdit { edit }));
+                    }
                 });
             });
         });
@@ -534,13 +553,15 @@ fn show(
             };
             let duration = p.source.duration_ms.unwrap_or(0);
             let accepted_position = p.position_ms;
-            let accepted_edit = p.edit.clone();
+            let source_size = (p.source.width, p.source.height);
             ui.label(format!(
-                "Source frame: {:.3}s / {:.3}s · {} × {}",
+                "Source frame: {:.3}s / {:.3}s · {} × {} · Preview: {} × {}",
                 accepted_position as f64 / 1000.,
                 duration as f64 / 1000.,
                 p.source.width,
-                p.source.height
+                p.source.height,
+                p.frame.width(),
+                p.frame.height()
             ));
             ui.add_enabled_ui(!view.busy && !view.picker && !view.confirm_close, |ui| {
                 ui.add_enabled_ui(!view.unapplied(), |ui| {
@@ -583,27 +604,55 @@ fn show(
                             "{:.3}s selected",
                             view.end_ms.saturating_sub(view.start_ms) as f64 / 1000.
                         ));
-                        if ui
-                            .add_enabled(view.unapplied(), egui::Button::new("Apply trim"))
-                            .clicked()
-                        {
-                            view.send(
-                                tx,
-                                Job::Apply(RecordingEditorRequest::UpdateEdit {
-                                    edit: EditSpec {
-                                        trim_start_ms: view.start_ms,
-                                        trim_end_ms: (view.end_ms != duration)
-                                            .then_some(view.end_ms),
-                                        ..accepted_edit.clone()
-                                    },
-                                }),
-                            );
-                        }
                         if ui.button("Reset trim").clicked() {
                             view.start_ms = 0;
                             view.end_ms = duration;
                         }
                     });
+                });
+                ui.group(|ui| {
+                    ui.strong("Crop & size");
+                    let mut crop_enabled = view.crop.is_some();
+                    if ui.checkbox(&mut crop_enabled, "Crop recording").changed() {
+                        view.crop = crop_enabled.then_some(CropRect {
+                            x: 0,
+                            y: 0,
+                            width: source_size.0,
+                            height: source_size.1,
+                        });
+                    }
+                    if let Some(crop) = &mut view.crop {
+                        ui.horizontal_wrapped(|ui| {
+                            for (label, value, minimum, maximum) in [
+                                ("X", &mut crop.x, 0, source_size.0.saturating_sub(2)),
+                                ("Y", &mut crop.y, 0, source_size.1.saturating_sub(2)),
+                                ("Width", &mut crop.width, 2, source_size.0),
+                                ("Height", &mut crop.height, 2, source_size.1),
+                            ] {
+                                ui.label(label);
+                                ui.add(egui::DragValue::new(value).range(minimum..=maximum));
+                            }
+                        });
+                    }
+                    let mut resize = view.output_size.is_some();
+                    if ui.checkbox(&mut resize, "Custom output size").changed() {
+                        view.output_size = resize.then_some(
+                            view.crop
+                                .map_or(source_size, |crop| (crop.width, crop.height)),
+                        );
+                    }
+                    if let Some((width, height)) = &mut view.output_size {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Width");
+                            ui.add(egui::DragValue::new(width).range(2..=u32::MAX));
+                            ui.label("Height");
+                            ui.add(egui::DragValue::new(height).range(2..=u32::MAX));
+                            ui.weak("Aspect ratio is not locked");
+                        });
+                    }
+                    ui.weak(
+                        "Even-pixel sizes. MP4 may scale down to encoder limits after preview.",
+                    );
                 });
                 ui.horizontal(|ui| {
                     ui.strong("Save quality");
@@ -626,11 +675,6 @@ fn show(
                             }
                         });
                 });
-                if view.unapplied() {
-                    ui.weak(
-                        "Apply trim before scrubbing or saving. Closing discards unapplied values.",
-                    );
-                }
             });
         });
     });
@@ -676,6 +720,66 @@ mod tests {
         assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
         assert_eq!((view.start_ms, view.end_ms), (1800, 1100));
         assert!(view.dirty());
+        view.request_close();
+        assert!(view.confirm_close && !view.closed);
+    }
+
+    #[test]
+    fn crop_and_size_are_staged_atomically_and_failures_keep_the_accepted_preview() {
+        let mut view = opened();
+        let crop = CropRect {
+            x: 2,
+            y: 0,
+            width: 2,
+            height: 2,
+        };
+        view.crop = Some(crop);
+        view.output_size = Some((8, 6));
+        view.start_ms = 300;
+        view.end_ms = 2200;
+        let p = view.presented.as_ref().unwrap();
+        let frame = p.frame.clone();
+        let edit = view.staged_edit(p);
+        assert_eq!(
+            edit,
+            EditSpec {
+                trim_start_ms: 300,
+                trim_end_ms: Some(2200),
+                crop: Some(crop),
+                output_width: Some(8),
+                output_height: Some(6),
+                audio: p.edit.audio.clone(),
+            }
+        );
+        assert!(view.unapplied() && view.dirty());
+        let ctx = egui::Context::default();
+        view.receive(&ctx, Event::Presented(Err("decode failed".into())));
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+        assert_eq!(view.crop, Some(crop));
+        assert_eq!(view.output_size, Some((8, 6)));
+        assert!(view.unapplied());
+        view.receive(
+            &ctx,
+            Event::Presented(Ok(Presented {
+                source: view.presented.as_ref().unwrap().source.clone(),
+                edit,
+                position_ms: 700,
+                frame: Arc::new(RgbaImage::new(8, 6)),
+            })),
+        );
+        assert!(!view.unapplied() && view.dirty());
+        // Removing one transform must retain the accepted trim and other transform.
+        view.crop = None;
+        let edit = view.staged_edit(view.presented.as_ref().unwrap());
+        assert!(view.unapplied());
+        assert_eq!((edit.trim_start_ms, edit.trim_end_ms), (300, Some(2200)));
+        assert_eq!((edit.output_width, edit.output_height), (Some(8), Some(6)));
+        assert_eq!(edit.crop, None);
+        view.crop = Some(crop);
+        view.output_size = None;
+        let edit = view.staged_edit(view.presented.as_ref().unwrap());
+        assert_eq!(edit.crop, Some(crop));
+        assert_eq!((edit.output_width, edit.output_height), (None, None));
         view.request_close();
         assert!(view.confirm_close && !view.closed);
     }

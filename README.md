@@ -236,11 +236,16 @@ successful screenshots use the normal native History, preview and auto-copy path
 AppKit and Windows can exclude native capture UI. X11 temporarily hides the HUD and
 guide from the screenshot, but cannot keep the selector out of the ongoing recording.
 The Windows/Linux candidate's **Edit recording** opens a decoded frame preview
-with source-relative scrubbing, numeric trim controls and MP4/GIF **Save new copy**.
+with source-relative scrubbing, numeric trim/crop controls, custom output dimensions
+and MP4/GIF **Save new copy**. Apply edits updates the preview before saving;
+invalid edits leave the last accepted frame intact. Custom dimensions are independent
+(no aspect lock) and the shared media engine rounds sizes to even pixels.
+Re-encoded Windows/Linux MP4 fits within 3840 × 2160 (2160 × 3840 for portrait);
+the frame preview does not yet reflect that encoder limit for oversized edits.
 Exports report progress, support cancellation, never replace an existing file, and
 add a distinct History item. A History failure retains the saved path for recovery.
 Recording edits are not drafts: save or explicitly discard them before closing or
-quitting. Playback, graphical trim handles, crop/size/audio controls and AppKit
+quitting. Playback, graphical trim/crop handles, resolution presets, audio controls and AppKit
 recording editing remain unconnected; this is not Tauri editor parity.
 History displays recording posters and metadata; **Save file**
 copies the original media to the output folder without re-encoding, and
