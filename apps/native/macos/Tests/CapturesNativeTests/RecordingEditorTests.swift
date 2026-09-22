@@ -215,6 +215,48 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(worker.requests.isEmpty, "real pointer dispatch never seeks or decodes")
     }
 
+    func testTimelineFailureRetryDoesNotCoverRealHandleDispatchAtEitherSize() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(start: 200, end: 1_800))
+        worker.thumbnailResult = .failure(AppBridgeError.backend("sprite unavailable"))
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingTrimTimeline }.first)
+        let startHandle = try XCTUnwrap(descendants(in: timeline)
+            .compactMap { $0 as? RecordingTrimHandle }.first { $0.edge == .start })
+        let endHandle = try XCTUnwrap(descendants(in: timeline)
+            .compactMap { $0 as? RecordingTrimHandle }.first { $0.edge == .end })
+        let start = try field("Trim start milliseconds", in: controller.root)
+        let end = try field("Trim end milliseconds", in: controller.root)
+
+        for size in [NSSize(width: 960, height: 760), NSSize(width: 760, height: 540)] {
+            controller.window.setContentSize(size)
+            start.stringValue = "200"; end.stringValue = "1800"
+            controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                         object: start))
+            XCTAssertTrue(try windowHit(startHandle, in: controller) === startHandle)
+            XCTAssertTrue(try windowHit(endHandle, in: controller) === endHandle,
+                          "Retry stays outside the end-handle hit region")
+            try dispatchMouse(.leftMouseDown, to: startHandle, in: controller)
+            try dispatchMouse(.leftMouseDragged, to: startHandle, in: controller, deltaX: 8)
+            try dispatchMouse(.leftMouseUp, to: startHandle, in: controller, deltaX: 8)
+            XCTAssertNotEqual(start.stringValue, "200")
+
+            start.stringValue = "200"; end.stringValue = "1800"
+            controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                         object: start))
+            try dispatchMouse(.leftMouseDown, to: endHandle, in: controller)
+            try dispatchMouse(.leftMouseDragged, to: endHandle, in: controller, deltaX: -8)
+            try dispatchMouse(.leftMouseUp, to: endHandle, in: controller, deltaX: -8)
+            XCTAssertNotEqual(end.stringValue, "1800")
+        }
+        XCTAssertTrue(worker.requests.isEmpty, "thumbnail error trim dispatch only stages values")
+    }
+
     func testTimelineKeyboardStepsBoundsAndNumericSynchronization() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation())

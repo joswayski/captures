@@ -121,7 +121,8 @@ final class RecordingTrimTimeline: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var isFlipped: Bool { true }
     private var trackRect: NSRect {
-        NSRect(x: 10, y: bounds.midY - 3, width: max(1, bounds.width - 20), height: 6)
+        NSRect(x: 10, y: thumbnailImage == nil ? max(0, bounds.height - 8) : bounds.midY - 3,
+               width: max(1, bounds.width - 20), height: 6)
     }
 
     func setValues(start: UInt64, end: UInt64, duration: UInt64) {
@@ -273,8 +274,10 @@ final class RecordingTrimTimeline: NSView {
             NSGraphicsContext.restoreGraphicsState()
         } else {
             let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
-            (thumbnailStateDescription as NSString).draw(in: strip.insetBy(dx: 4, dy: 5),
-                withAttributes: [.font: NSFont.systemFont(ofSize: 10, weight: .medium),
+            (thumbnailStateDescription as NSString).draw(
+                in: NSRect(x: strip.minX + 4, y: strip.minY + 1,
+                           width: max(1, strip.width - 8), height: max(1, strip.height - 9)),
+                withAttributes: [.font: NSFont.systemFont(ofSize: 9, weight: .medium),
                                  .foregroundColor: tokens.color("text-muted"),
                                  .paragraphStyle: paragraph])
         }
@@ -635,7 +638,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let labels = trimPanel.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isEditable }
         labels.first { $0.stringValue == "Trim (milliseconds)" }?.frame = NSRect(x: 14, y: 12, width: 150, height: 20)
         trimTimeline.frame = NSRect(x: 154, y: 8, width: trimPanel.bounds.width - 168, height: 28)
-        thumbnailRetryButton.frame = NSRect(x: trimPanel.bounds.width - 88, y: 8,
+        thumbnailRetryButton.frame = NSRect(x: trimPanel.bounds.width - 88, y: 40,
                                             width: 74, height: 28)
         labels.first { $0.stringValue == "Start" }?.frame = NSRect(x: 14, y: 82, width: 42, height: 18)
         labels.first { $0.stringValue == "End" }?.frame = NSRect(x: 138, y: 82, width: 34, height: 18)
@@ -645,7 +648,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let explanation = labels.first { $0.stringValue.hasPrefix("Apply before") }
             ?? label("Apply before seeking or saving. The original is immutable.", muted: true,
                      parent: trimPanel)
-        explanation.frame = NSRect(x: 14, y: 46, width: trimPanel.bounds.width - 28, height: 20)
+        explanation.frame = NSRect(x: 14, y: 46,
+            width: trimPanel.bounds.width - (thumbnailRetryAvailable ? 116 : 28), height: 20)
 
         let audioLabels = audioPanel.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isEditable }
         audioLabels.first { $0.stringValue == "Audio" }?.frame = NSRect(x: 14, y: 12, width: 54, height: 20)
@@ -843,7 +847,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         trimTimeline.showThumbnailLoading()
         status.textColor = tokens.color("text-muted")
         status.stringValue = "Generating immutable source timeline thumbnails…"
-        updateControls()
+        updateControls(); layout()
         worker.thumbnails(cancel: cancel) { [weak self] result in
             guard let self, self.generation == current,
                   self.thumbnailCancel === cancel else { return }
@@ -865,7 +869,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                     self.showError("Source thumbnails unavailable: \(error.localizedDescription). Editing remains available.")
                 }
             }
-            self.updateControls()
+            self.updateControls(); self.layout()
         }
     }
 
