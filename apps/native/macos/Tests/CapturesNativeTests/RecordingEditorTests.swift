@@ -142,10 +142,11 @@ final class RecordingEditorTests: XCTestCase {
 
     private func presentation(start: UInt64 = 0, end: UInt64? = nil,
                               position: UInt64 = 0, revision: UInt64 = 0) -> RecordingEditorPresentation {
+        let endValue: Any = end.map { NSNumber(value: $0) } ?? NSNull()
         let snapshot = NativeRecordingEditorSnapshot([
             "artifact_id": "recording-id", "source": ["kind": "video", "mime_type": "video/mp4",
                 "width": 320, "height": 180, "duration_ms": 2_000, "size_bytes": 1_024],
-            "edit": ["trim_start_ms": start, "trim_end_ms": end ?? NSNull(),
+            "edit": ["trim_start_ms": start, "trim_end_ms": endValue,
                 "crop": NSNull(), "output_width": NSNull(), "output_height": NSNull(),
                 "audio": ["system_volume": 1.0, "microphone_volume": 1.0,
                           "mute_system_audio": false, "mute_microphone": false,
