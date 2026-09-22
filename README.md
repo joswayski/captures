@@ -256,8 +256,11 @@ its preview reflects that cap, while GIF previews retain their requested dimensi
 Exports report progress, support cancellation, never replace an existing file, and
 add a distinct History item. A History failure retains the saved path for recovery.
 Recording edits are not drafts: save or explicitly discard them before closing or
-quitting. Playback, graphical trim/crop handles and AppKit
-recording editing remain unconnected; this is not Tauri editor parity.
+quitting. AppKit connects a separate History editor with decoded source-relative
+frames, numeric trim, accepted MP4/GIF settings, size estimation and cancellable
+**Save new copy**. It does not yet expose the Windows/Linux crop, resize, audio or
+resolution controls. Playback and graphical trim/crop handles remain absent; this
+is not Tauri editor parity.
 History displays recording posters and metadata; **Save file**
 copies the original media to the output folder without re-encoding, and
 **Show in Folder** reveals that saved copy. Both native

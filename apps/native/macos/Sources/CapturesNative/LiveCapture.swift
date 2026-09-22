@@ -152,6 +152,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         return controller
     }()
     private var screenshotEditor: ScreenshotEditorController?
+    private var recordingEditor: RecordingEditorController?
     private(set) var recordingControlsHidden = false
     private var recordingPollTimer: Timer?
     private var recordingPollPending = false
@@ -1493,7 +1494,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         saveButton?.needsDisplay = true
         saveButton?.isEnabled = selected && !busy
         copyButton?.isEnabled = selectedScreenshot && selectedImage != nil && !busy
-        editButton?.isEnabled = selectedScreenshot && selectedImage != nil && !busy
+        editButton?.title = selectedScreenshot ? "Edit screenshot" : "Edit recording"
+        editButton?.setAccessibilityLabel(editButton?.title)
+        editButton?.needsDisplay = true
+        editButton?.isEnabled = selected && selectedImage != nil && !busy
         deleteButton?.isEnabled = selected && !busy
         revealButton?.isEnabled = selected && selectedIndex.flatMap { artifacts[$0].savedPath } != nil
         clearHistoryButton?.isEnabled = !artifacts.isEmpty && !busy
@@ -1540,7 +1544,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             switch result { case .success(let image):
                 self.selectedImage = image; self.preview.image = image
                 self.detail.stringValue = artifact.isRecording
-                    ? "\(artifact.width) × \(artifact.height) · \(artifact.kind == "gif" ? "GIF" : "H.264 MP4") · Editor unavailable"
+                    ? "\(artifact.width) × \(artifact.height) · \(artifact.kind == "gif" ? "GIF" : "H.264 MP4") · Editor available"
                     : "\(artifact.width) × \(artifact.height) · PNG · Editor available"
             case .failure(let error):
                 self.showError(artifact.isRecording
@@ -1564,13 +1568,25 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
     private func editScreenshot() {
         guard let index = selectedIndex, artifacts.indices.contains(index),
-              !artifacts[index].isRecording, !historyRoot.isEmpty else { return }
+              !historyRoot.isEmpty else { return }
         let artifact = artifacts[index]
         run({ [settingsPath] in try CapturePreferences.load(path: settingsPath).directory }) {
             [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let outputDirectory):
+                if artifact.isRecording {
+                    if self.recordingEditor == nil {
+                        self.recordingEditor = RecordingEditorController(
+                            tokens: self.tokens,
+                            reportError: { [weak self] message in self?.reportError(message) },
+                            didSaveCopy: { [weak self] in self?.loadHistory() })
+                    }
+                    self.recordingEditor?.present(artifact: artifact,
+                                                  historyRoot: self.historyRoot,
+                                                  outputDirectory: outputDirectory)
+                    return
+                }
                 if self.screenshotEditor == nil {
                     self.screenshotEditor = ScreenshotEditorController(
                         tokens: self.tokens,
@@ -1693,8 +1709,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     // One process-wide queue also drains operations from a closed workspace view.
     func prepareEditorForTermination() -> Bool {
-        screenshotEditor?.prepareForTermination() ?? true
+        guard screenshotEditor?.prepareForTermination() ?? true else { return false }
+        return recordingEditor?.prepareForTermination() ?? true
     }
 
-    static func flush() { queue.sync {}; EditorWorker.flush() }
+    static func flush() { queue.sync {}; EditorWorker.flush(); RecordingEditorWorker.flush() }
 }
