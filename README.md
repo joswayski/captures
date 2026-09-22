@@ -241,6 +241,9 @@ and MP4/GIF **Save new copy**. Crop dimensions start aspect-locked; unlock to ch
 width and height independently. Apply edits accepts the format, quality and edits
 together before saving; failed updates leave the last accepted frame intact.
 The preview identifies its accepted format/quality, and saving uses those settings.
+**Estimate size** checks those accepted settings without publishing an export.
+Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
+audio-only Preserve changes show approximate sizes. Estimation can be canceled.
 Available system and microphone tracks have independent volume/mute controls plus
 mono output. These settings apply to MP4 exports; the frame preview is silent.
 GIF disables audio controls without discarding the MP4 settings.
