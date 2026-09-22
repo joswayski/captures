@@ -172,6 +172,30 @@ pub unsafe extern "C" fn captures_recording_editor_cancel_free_v1(cancel: *mut C
     }
 }
 
+/// Blocking estimate for the session's accepted edit and preview export.
+///
+/// # Safety
+/// Session is live and serialized for this call. Cancel is live until return
+/// and may be atomically cancelled elsewhere. Free the returned response with
+/// captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_estimate_v1(
+    session: *const RecordingEditorSession,
+    cancel: *const CancelToken,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains live session/cancel handles for this call.
+        let session = unsafe { session.as_ref() }.ok_or("recording editor handle is null")?;
+        let cancel = unsafe { cancel.as_ref() }.ok_or("recording export cancel handle is null")?;
+        session.estimate_export(cancel)
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    response(match result {
+        Ok(estimate) => json!({"ok":true,"result":estimate}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
+}
+
 /// Blocking Save new copy. Progress JSON is borrowed only during each callback.
 ///
 /// # Safety
@@ -262,6 +286,16 @@ mod tests {
         };
         assert_eq!(response["ok"], false);
         assert_eq!(response["error"], "recording editor handle is null");
+
+        // SAFETY: null session/cancel handles are explicit owned JSON errors.
+        let estimate = unsafe {
+            json(captures_recording_editor_estimate_v1(
+                ptr::null(),
+                ptr::null(),
+            ))
+        };
+        assert_eq!(estimate["ok"], false);
+        assert_eq!(estimate["error"], "recording editor handle is null");
 
         let sentinel = RegionPixels {
             data: ptr::dangling(),

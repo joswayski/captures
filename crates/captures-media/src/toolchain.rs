@@ -19,9 +19,10 @@ use std::io;
 use thiserror::Error;
 
 use crate::{
-    EditSpec, ExportFormat, ExportProgress, ExportSpec, ExportStage, MediaKind, MediaMetadata,
-    QualityPreset, SizeBudgetError, calculate_size_budget,
+    EditSpec, ExportEstimate, ExportFormat, ExportProgress, ExportSpec, ExportStage, MediaKind,
+    MediaMetadata, QualityPreset, SizeBudgetError, calculate_size_budget, estimate_sample_windows,
     export::{MIN_AUDIO_BITRATE, MIN_VIDEO_BITRATE},
+    extrapolate_sampled_size, sampled_export_spec,
 };
 
 #[derive(Clone, Default)]
@@ -563,6 +564,93 @@ impl MediaToolchain {
             .args(["-frames:v", "1", "-vf", &filter])
             .arg(destination);
         run_command(&mut command, cancel, "FFmpeg")
+    }
+
+    /// Estimate one export with the same encode plan as [`Self::export`].
+    /// Short ranges are fully encoded; longer ranges encode two sample windows.
+    pub fn estimate_export_size(
+        &self,
+        input: &Path,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        cancel: &CancelToken,
+    ) -> Result<ExportEstimate, MediaToolError> {
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled);
+        }
+        let probe = self.probe(input)?;
+        validate_edit_spec(&probe, edit)?;
+        let extension = match spec.format {
+            ExportFormat::Mp4 => "mp4",
+            ExportFormat::Gif => "gif",
+            ExportFormat::WebM => {
+                return Err(MediaToolError::Process(
+                    "size estimates are not available for WebM".to_owned(),
+                ));
+            }
+        };
+        // Build the real attempt plan before any shortcut so invalid size
+        // budgets fail the same way as an export instead of returning a size.
+        drop(export_attempts(&probe, edit, spec)?);
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled);
+        }
+        if export_preserves_source_bytes(&probe, edit, spec) {
+            return Ok(ExportEstimate {
+                size_bytes: probe.metadata.size_bytes,
+                exact: true,
+            });
+        }
+        if spec.format == ExportFormat::Mp4
+            && spec.quality == QualityPreset::Preserve
+            && spec.max_size_bytes.is_none()
+            && visual_edit_is_identity(&probe, edit)
+        {
+            // Only audio is re-encoded. The copied video dominates the file,
+            // so shipping behavior uses source size as an approximate result.
+            return Ok(ExportEstimate {
+                size_bytes: probe.metadata.size_bytes,
+                exact: false,
+            });
+        }
+
+        let source_duration_ms = probe
+            .metadata
+            .duration_ms
+            .ok_or(MediaToolError::IncompleteMetadata)?;
+        let trim_end_ms = edit.trim_end_ms.unwrap_or(source_duration_ms);
+        let trimmed_ms = trim_end_ms - edit.trim_start_ms;
+        let windows = estimate_sample_windows(edit.trim_start_ms, trimmed_ms);
+        let exact = windows.len() == 1;
+        let scratch = tempfile::Builder::new()
+            .prefix("captures-export-estimate-")
+            .tempdir()?;
+        let mut sampled_bytes = 0_u64;
+        let mut sampled_ms = 0_u64;
+        for (index, (start_ms, window_ms)) in windows.into_iter().enumerate() {
+            if cancel.is_cancelled() {
+                return Err(MediaToolError::Cancelled);
+            }
+            let mut sample_edit = edit.clone();
+            sample_edit.trim_start_ms = start_ms;
+            sample_edit.trim_end_ms = Some(start_ms + window_ms);
+            let sample_spec = sampled_export_spec(spec, window_ms, trimmed_ms);
+            let destination = scratch.path().join(format!("sample-{index}.{extension}"));
+            let outcome = self.export(
+                input,
+                &destination,
+                &sample_edit,
+                &sample_spec,
+                cancel,
+                |_| {},
+            )?;
+            sampled_bytes = sampled_bytes.saturating_add(outcome.size_bytes);
+            sampled_ms = sampled_ms.saturating_add(window_ms);
+        }
+        Ok(ExportEstimate {
+            size_bytes: extrapolate_sampled_size(sampled_bytes, sampled_ms, trimmed_ms),
+            exact,
+        })
     }
 
     pub fn export<F>(
@@ -1771,7 +1859,7 @@ mod tests {
         openh264_bitrate,
     };
     use super::{
-        CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt,
+        CancelToken, MediaToolError, MediaToolchain, RecordingAudioLayout, VideoAttempt,
         aac_centered_stereo_layout_filter, aac_output_layout_filter, audio_edit_is_identity,
         audio_filter, commit_temporary, escape_concat_path, export_attempts,
         export_preserves_source_bytes, fit_even, gif_export_filter, gif_filter,
@@ -2593,7 +2681,8 @@ mod tests {
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
-    fn cross_platform_toolchain() -> Option<(MediaToolchain, std::path::PathBuf)> {
+    fn cross_platform_toolchain() -> Option<(MediaToolchain, std::path::PathBuf, std::path::PathBuf)>
+    {
         let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .canonicalize()
@@ -2621,7 +2710,11 @@ mod tests {
             eprintln!("cross-platform media sidecars are not prepared in this checkout");
             return None;
         }
-        Some((MediaToolchain::new(ffmpeg.clone(), ffprobe), ffmpeg))
+        Some((
+            MediaToolchain::new(ffmpeg.clone(), ffprobe.clone()),
+            ffmpeg,
+            ffprobe,
+        ))
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -2648,6 +2741,53 @@ mod tests {
             .status()
             .expect("bundled FFmpeg starts");
         assert!(status.success(), "test recording segment generated");
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn create_export_estimate_recording(ffmpeg: &std::path::Path, path: &std::path::Path) {
+        let status = std::process::Command::new(ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=640x360:rate=15:duration=8",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=8",
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-c:v",
+                "mpeg4",
+                "-q:v",
+                "3",
+                "-c:a",
+                "aac",
+                "-shortest",
+            ])
+            .arg(path)
+            .status()
+            .expect("FFmpeg starts");
+        assert!(status.success(), "export estimate recording generated");
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn export_estimate_scratch_entries() -> std::collections::BTreeSet<std::ffi::OsString> {
+        std::fs::read_dir(std::env::temp_dir())
+            .expect("temporary directory is readable")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| {
+                name.to_string_lossy()
+                    .starts_with("captures-export-estimate-")
+            })
+            .collect()
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -2713,8 +2853,177 @@ mod tests {
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[test]
+    fn export_size_estimates_preserve_shipping_exactness_and_clean_scratch() {
+        let Some((toolchain, ffmpeg, ffprobe)) = cross_platform_toolchain() else {
+            return;
+        };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.mp4");
+        create_export_estimate_recording(&ffmpeg, &source);
+        let source_bytes = std::fs::read(&source).expect("source bytes");
+        let source_size = source_bytes.len() as u64;
+        let mut identity = EditSpec::default();
+        identity.audio.source_has_system_audio = true;
+        let preserve_mp4 = ExportSpec {
+            format: ExportFormat::Mp4,
+            quality: QualityPreset::Preserve,
+            max_size_bytes: None,
+            frames_per_second: None,
+            gif_max_colors: None,
+        };
+
+        let estimate = toolchain
+            .estimate_export_size(&source, &identity, &preserve_mp4, &CancelToken::default())
+            .expect("identity estimate");
+        assert_eq!(estimate.size_bytes, source_size);
+        assert!(estimate.exact);
+
+        let cancelled = CancelToken::default();
+        cancelled.cancel();
+        assert!(matches!(
+            toolchain.estimate_export_size(&source, &identity, &preserve_mp4, &cancelled),
+            Err(MediaToolError::Cancelled)
+        ));
+
+        let mut audio_only = identity.clone();
+        audio_only.audio.system_volume = 0.5;
+        let estimate = toolchain
+            .estimate_export_size(&source, &audio_only, &preserve_mp4, &CancelToken::default())
+            .expect("audio-only estimate");
+        assert_eq!(estimate.size_bytes, source_size);
+        assert!(!estimate.exact);
+
+        let short_edit = EditSpec {
+            trim_start_ms: 1_000,
+            trim_end_ms: Some(4_500),
+            crop: Some(CropRect {
+                x: 10,
+                y: 10,
+                width: 600,
+                height: 330,
+            }),
+            output_width: Some(320),
+            output_height: Some(176),
+            audio: identity.audio.clone(),
+        };
+        for (name, spec) in [
+            (
+                "mp4",
+                ExportSpec {
+                    quality: QualityPreset::Standard,
+                    ..preserve_mp4.clone()
+                },
+            ),
+            (
+                "gif",
+                ExportSpec {
+                    format: ExportFormat::Gif,
+                    quality: QualityPreset::Preserve,
+                    max_size_bytes: None,
+                    frames_per_second: Some(10),
+                    gif_max_colors: Some(128),
+                },
+            ),
+        ] {
+            let estimate = toolchain
+                .estimate_export_size(&source, &short_edit, &spec, &CancelToken::default())
+                .unwrap_or_else(|error| panic!("{name} estimate failed: {error}"));
+            assert!(estimate.exact, "short {name} estimate must be exact");
+            let destination = directory.path().join(format!("short.{name}"));
+            let exported = toolchain
+                .export(
+                    &source,
+                    &destination,
+                    &short_edit,
+                    &spec,
+                    &CancelToken::default(),
+                    |_| {},
+                )
+                .unwrap_or_else(|error| panic!("{name} export failed: {error}"));
+            assert_eq!(estimate.size_bytes, exported.size_bytes, "{name} size");
+            assert_eq!(
+                estimate.size_bytes,
+                std::fs::metadata(destination).unwrap().len()
+            );
+        }
+
+        let long_edit = EditSpec {
+            trim_start_ms: 0,
+            trim_end_ms: Some(8_000),
+            crop: short_edit.crop,
+            output_width: short_edit.output_width,
+            output_height: short_edit.output_height,
+            audio: identity.audio.clone(),
+        };
+        let estimate = toolchain
+            .estimate_export_size(
+                &source,
+                &long_edit,
+                &ExportSpec {
+                    quality: QualityPreset::High,
+                    ..preserve_mp4.clone()
+                },
+                &CancelToken::default(),
+            )
+            .expect("sampled estimate");
+        assert!(estimate.size_bytes > 0);
+        assert!(!estimate.exact);
+
+        let invalid_edit = EditSpec {
+            trim_start_ms: 4_000,
+            trim_end_ms: Some(3_000),
+            ..identity.clone()
+        };
+        assert!(matches!(
+            toolchain.estimate_export_size(
+                &source,
+                &invalid_edit,
+                &preserve_mp4,
+                &CancelToken::default()
+            ),
+            Err(MediaToolError::InvalidEdit(_))
+        ));
+        assert!(
+            toolchain
+                .estimate_export_size(
+                    &source,
+                    &identity,
+                    &ExportSpec {
+                        format: ExportFormat::WebM,
+                        ..preserve_mp4.clone()
+                    },
+                    &CancelToken::default(),
+                )
+                .is_err()
+        );
+        assert!(matches!(
+            toolchain.estimate_export_size(
+                &source,
+                &identity,
+                &ExportSpec {
+                    max_size_bytes: Some(1),
+                    ..preserve_mp4.clone()
+                },
+                &CancelToken::default(),
+            ),
+            Err(MediaToolError::UnattainableTarget)
+        ));
+
+        let scratch_before = export_estimate_scratch_entries();
+        let broken = MediaToolchain::new(directory.path().join("missing-ffmpeg"), ffprobe);
+        assert!(
+            broken
+                .estimate_export_size(&source, &short_edit, &preserve_mp4, &CancelToken::default(),)
+                .is_err()
+        );
+        assert_eq!(export_estimate_scratch_entries(), scratch_before);
+        assert_eq!(std::fs::read(source).unwrap(), source_bytes);
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
     fn portrait_gif_palette_preserves_late_scene_colors() {
-        let Some((toolchain, ffmpeg)) = cross_platform_toolchain() else {
+        let Some((toolchain, ffmpeg, _)) = cross_platform_toolchain() else {
             return;
         };
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -2783,7 +3092,7 @@ mod tests {
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[test]
     fn cross_platform_media_pipeline_encodes_and_muxes_audio_tracks() {
-        let Some((toolchain, ffmpeg)) = cross_platform_toolchain() else {
+        let Some((toolchain, ffmpeg, _)) = cross_platform_toolchain() else {
             return;
         };
 
@@ -2977,7 +3286,7 @@ mod tests {
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[test]
     fn recording_assembly_produces_silent_video_and_multisegment_gif() {
-        let Some((toolchain, ffmpeg)) = cross_platform_toolchain() else {
+        let Some((toolchain, ffmpeg, _)) = cross_platform_toolchain() else {
             return;
         };
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -3033,7 +3342,7 @@ mod tests {
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[test]
     fn recording_assembly_cancellation_does_not_publish_gif() {
-        let Some((toolchain, ffmpeg)) = cross_platform_toolchain() else {
+        let Some((toolchain, ffmpeg, _)) = cross_platform_toolchain() else {
             return;
         };
         let directory = tempfile::tempdir().expect("temporary directory");
