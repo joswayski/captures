@@ -2502,6 +2502,9 @@ mod tests {
         assert!(playback.next_frame().unwrap().is_none());
         assert!(playback.next_frame().unwrap().is_none());
         assert!(!cancel.is_cancelled());
+        assert!(playback.child.is_none());
+        assert!(playback.reader.is_none());
+        assert!(playback.stderr_reader.is_none());
 
         let (_directory, mut playback, _cancel) = scripted_playback("printf '12345678'");
         let first = match playback.next_frame() {
@@ -2545,6 +2548,9 @@ mod tests {
             playback.next_frame(),
             Err(super::MediaToolError::Cancelled)
         ));
+        assert!(playback.child.is_none());
+        assert!(playback.reader.is_none());
+        assert!(playback.stderr_reader.is_none());
     }
 
     #[test]
