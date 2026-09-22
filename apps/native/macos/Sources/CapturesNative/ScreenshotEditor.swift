@@ -952,11 +952,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let bounds = NSRect(x: 0, y: 0, width: 1000, height: 700)
         root = Surface(frame: bounds)
         let editorWindow = ScreenshotEditorWindow(contentRect: bounds,
-            styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window = editorWindow
         super.init()
         editorWindow.editorShortcut = { [weak self] in self?.handleEditorShortcut($0) ?? false }
         window.isReleasedWhenClosed = false; window.title = "Edit screenshot"
+        window.contentMinSize = NSSize(width: 760, height: 540)
         window.delegate = self
         window.contentView = root
         build(); restyle(tokens); updateControls()
@@ -1075,21 +1076,48 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelViewportPan()
     }
 
+    func windowDidResize(_ notification: Notification) {
+        guard let previewPanel = viewportInput.superview else { return }
+        // Keep the inspector width stable. Below the initial window width,
+        // move dimensions to a second footer row instead of squeezing controls.
+        let compact = root.bounds.width < 1000
+        let footerY = root.bounds.height - (compact ? 86 : 50)
+        previewPanel.frame = NSRect(x: 24, y: 90, width: root.bounds.width - 360,
+                                    height: footerY - 100)
+        for control in viewportButtons { control.frame.origin.y = footerY }
+        zoomPreset.frame.origin.y = footerY
+        zoomSlider.frame = NSRect(x: 332, y: footerY,
+                                  width: min(100, previewPanel.frame.maxX - 332), height: 30)
+        dimensions.frame = compact
+            ? NSRect(x: 24, y: footerY + 40, width: previewPanel.frame.width, height: 20)
+            : NSRect(x: 440, y: footerY + 4, width: previewPanel.frame.maxX - 440, height: 20)
+        guard viewportBounds.size != viewportInput.bounds.size else { return }
+        // A gesture cannot retain its old screen-to-document mapping while
+        // the viewport changes. Resizing itself never submits a document edit.
+        cancelCrop()
+        cancelDrawing()
+        cancelViewportPan()
+        viewportBounds = viewportInput.bounds
+        updateViewportGeometry()
+    }
+
     private func build() {
         label("Screenshot editor", frame: NSRect(x: 24, y: 20, width: 400, height: 30),
               size: 21, weight: .semibold)
         label("Edit a recoverable draft. Only Replace original changes the source History image.",
-              frame: NSRect(x: 24, y: 54, width: 640, height: 22), muted: true)
+              frame: NSRect(x: 24, y: 54, width: 640, height: 32), muted: true)
+            .autoresizingMask = [.width]
 
         let previewPanel = Surface(frame: NSRect(x: 24, y: 90, width: 640, height: 550))
         previewPanel.wantsLayer = true
         previewPanel.layer?.masksToBounds = true
         previewPanel.layer?.cornerRadius = tokens.number("r-xl")
         previewPanel.layer?.borderWidth = 1
+        previewPanel.autoresizingMask = [.width, .height]
         root.addSubview(previewPanel)
         viewportBounds = previewPanel.bounds.insetBy(dx: 18, dy: 18)
         viewportInput.frame = viewportBounds
-        viewportInput.autoresizingMask = []
+        viewportInput.autoresizingMask = [.width, .height]
         viewportInput.wantsLayer = true
         viewportInput.layer?.masksToBounds = true
         viewportInput.setAccessibilityLabel("Screenshot viewport")
@@ -1174,6 +1202,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         sectionControl = NSSegmentedControl(labels: ["Geometry", "Layers", "Draw", "Output"], trackingMode: .selectOne,
                                             target: self, action: #selector(changeSection))
         sectionControl.frame = NSRect(x: 688, y: 24, width: 272, height: 28)
+        sectionControl.autoresizingMask = [.minXMargin]
         sectionControl.selectedSegment = 0
         sectionControl.setAccessibilityLabel("Editor section")
         root.addSubview(sectionControl)
@@ -1186,6 +1215,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         layersPanel.setAccessibilityLabel("Layer controls")
         drawPanel.setAccessibilityLabel("Drawing controls")
         outputPanel.setAccessibilityLabel("Output controls")
+        for panel in [geometryPanel, layersPanel, drawPanel, outputPanel] {
+            panel.autoresizingMask = [.minXMargin, .height]
+        }
         root.addSubview(geometryPanel); root.addSubview(layersPanel)
         root.addSubview(drawPanel); root.addSubview(outputPanel)
 
@@ -1291,6 +1323,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         status.frame = NSRect(x: 688, y: 568, width: 272, height: 96)
         status.maximumNumberOfLines = 5; status.setAccessibilityLabel("Screenshot editor status")
         root.addSubview(status)
+        let bottomControls: [NSView] = [undoButton, redoButton, saveButton, discardButton, status]
+        for control in bottomControls {
+            control.autoresizingMask = [.minXMargin, .minYMargin]
+        }
         fields = [cropX, cropY, cropWidth, cropHeight, canvasWidth, canvasHeight]
     }
 

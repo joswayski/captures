@@ -1054,10 +1054,17 @@ complete the editor layout/interaction/design parity gate.
 Both hosts now place the scrolling inspector on the right of the canvas. The wgpu
 placement is exercised with real X11 input in all editor test modes and normal/
 minimum-size light/dark fixtures; Windows and Wayland use the same implementation
-but their physical presentation remains unverified. AppKit's existing right-side
-inspector is unchanged. Both hosts center the Fit canvas, retaining the 2–100%
+but their physical presentation remains unverified. Both hosts center the Fit canvas, retaining the 2–100%
 range and no-upscale cap. wgpu centers the actual document/output texture after
 crop, resize and reopen; pointer mapping and zoom anchoring use that same rectangle.
+AppKit now allows window resizing down to 760×540, matching the wgpu minimum.
+The canvas and inspector grow, bottom controls remain anchored, and real size
+changes cancel crop/drawing/selection/pan gestures while preserving manual zoom,
+pan and the published draft. Same-size notifications do not cancel gestures.
+Below 1000 points wide, AppKit moves canvas dimensions to a second footer row;
+the inspector retains its width and scrolling access to every section's controls.
+Windows/X11/Wayland keep their existing responsive layout; physical resize/input
+acceptance remains open on all hosts.
 The tool rail and toolbar/export-bar organization still differ from Tauri.
 Remaining viewport controls and other drawing tools are not connected.
 Recording editing remains open on both hosts; the
