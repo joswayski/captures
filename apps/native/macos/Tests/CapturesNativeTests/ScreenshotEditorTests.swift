@@ -4419,6 +4419,90 @@ final class ScreenshotEditorTests: XCTestCase {
                        "press, last movement, and release are serialized")
     }
 
+    func testLayerContextMenuTargetsClickedStableLayerWithoutChangingSelection() throws {
+        _ = NSApplication.shared
+        let first = layer(id: "first", name: "First", x: 0, y: 0,
+                          visible: true, locked: false, opacity: 100)
+        let locked = layer(id: "locked", name: "Locked", x: 10, y: 10,
+                           visible: false, locked: true, opacity: 80)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [first, locked], canPaste: true))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        try button("Preview output", in: controller.root).performClick(nil)
+        let output = try segmented("Output preview image", in: controller.root)
+        try showLayers(in: controller.root)
+        let table = try table("Screenshot layers", in: controller.root)
+        // The native table reverses the document's back-to-front order.
+        table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        controller.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification))
+        XCTAssertEqual(table.selectedRow, 1)
+
+        let point = table.convert(NSPoint(x: 20, y: table.rect(ofRow: 0).midY), to: nil)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: point,
+            modifierFlags: [], timestamp: 0, windowNumber: controller.window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        let menu = try XCTUnwrap(table.menu(for: event))
+        XCTAssertEqual(table.selectedRow, 1, "opening and cancelling a menu must not retarget selection")
+        XCTAssertEqual(output.selectedSegment, 1)
+        XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertEqual(menu.items.filter { !$0.isSeparatorItem }.map(\.title),
+                       ["Copy layer", "Paste layer", "Duplicate", "Delete"])
+        XCTAssertTrue(menu.item(withTitle: "Copy layer")!.isEnabled, "hidden locked layers remain copyable")
+        XCTAssertTrue(menu.item(withTitle: "Paste layer")!.isEnabled)
+        XCTAssertTrue(menu.item(withTitle: "Duplicate")!.isEnabled)
+        XCTAssertFalse(menu.item(withTitle: "Delete")!.isEnabled)
+
+        menu.performActionForItem(at: 0)
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "copy_layer")
+        XCTAssertEqual(worker.requests.last?["id"] as? String, "locked")
+        XCTAssertEqual(table.selectedRow, 1)
+        XCTAssertEqual(output.selectedSegment, 1, "copy preserves encoded output")
+        let pasteIndex = try XCTUnwrap(menu.items.firstIndex { $0.title == "Paste layer" })
+        menu.performActionForItem(at: pasteIndex)
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "paste_layer")
+        XCTAssertEqual(worker.requests.last?["after_id"] as? String, "locked")
+        XCTAssertNotNil(UUID(uuidString: try XCTUnwrap(worker.requests.last?["new_id"] as? String)))
+
+        let blank = try XCTUnwrap(controller.layerContextMenu(row: -1))
+        XCTAssertEqual(blank.items.map(\.title), ["Paste layer"])
+        blank.performActionForItem(at: 0)
+        XCTAssertNil(worker.requests.last?["after_id"])
+    }
+
+    func testLayerContextMenuCapabilityBusyClosedAndStaleGuards() throws {
+        _ = NSApplication.shared
+        let target = layer(id: "target", name: "Target", x: 0, y: 0,
+                           visible: true, locked: false, opacity: 100)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [target], canPaste: false))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        let stale = try XCTUnwrap(controller.layerContextMenu(row: 0))
+        XCTAssertFalse(stale.item(withTitle: "Paste layer")!.isEnabled)
+
+        worker.deferRequests = true
+        stale.performActionForItem(at: try XCTUnwrap(stale.items.firstIndex { $0.title == "Duplicate" }))
+        XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["action"] as? String, "duplicate")
+        let busy = try XCTUnwrap(controller.layerContextMenu(row: 0))
+        XCTAssertTrue(busy.items.filter { !$0.isSeparatorItem }.allSatisfy { !$0.isEnabled })
+        let count = worker.requests.count
+        busy.performActionForItem(at: 0)
+        XCTAssertEqual(worker.requests.count, count)
+
+        worker.completePending(with: snapshot(id: "shot", layers: [], canPaste: true))
+        stale.performActionForItem(at: 0)
+        stale.performActionForItem(at: try XCTUnwrap(stale.items.firstIndex { $0.title == "Delete" }))
+        XCTAssertEqual(worker.requests.count, count, "stable menu IDs must reject removed targets")
+        XCTAssertEqual(controller.layerContextMenu(row: -1)?.items.map(\.title), ["Paste layer"])
+
+        XCTAssertTrue(controller.prepareForTermination())
+        XCTAssertNil(controller.layerContextMenu(row: -1), "closed editors expose no context actions")
+        stale.performActionForItem(at: try XCTUnwrap(stale.items.firstIndex { $0.title == "Paste layer" }))
+        XCTAssertEqual(worker.requests.count, count)
+    }
+
     func testOpenDrawingRenderedStates() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {

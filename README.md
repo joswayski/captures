@@ -405,6 +405,8 @@ snapshot, even after its source is changed or deleted. Repeated pastes offset by
 24 pixels and support undo/redo. This does not replace the system clipboard or
 import clipboard images; **Copy image** remains the separate pixel-copy action.
 Closing the editor or discarding its draft clears the internal layer clipboard.
+Right-click a layer for Copy layer, Paste layer, Duplicate and Delete. These actions
+target that row; empty list space offers Paste. Locked layers cannot be deleted.
 With canvas focus, V selects layers, C starts Crop, T selects Text, R Rectangle,
 O Ellipse, L Line, D Diamond, S Star, A Arrow, P Pen, and B the last-used
 Wand/Erase/Restore mode (initially Wand). Switching tools cancels unfinished
