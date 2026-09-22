@@ -3157,7 +3157,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                             width: max(160, fontSize * 8), height: max(44, fontSize * 1.6))
         }
         let desiredWidth = min(image.width, max(140, bounds.width * scale + 12))
-        let desiredHeight = min(image.height, max(48, bounds.height * scale + 12))
+        let desiredHeight = min(image.height, max(72, bounds.height * scale + 12))
         let desiredX = image.minX + bounds.minX * scale - 6
         let desiredY = image.minY + bounds.minY * scale - 6
         let editorFrame = NSRect(

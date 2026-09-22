@@ -4330,6 +4330,8 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-inline-text-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             XCTAssertTrue(controller.presentedImageRect.intersects(editor.enclosingScrollView!.frame))
+            XCTAssertGreaterThanOrEqual(editor.enclosingScrollView!.frame.height, 72,
+                                        "the minimum composing field retains multiline input")
             try render(controller.root, name: "screenshot-editor-inline-text-minimum-\(appearance)")
             worker.failOperation = "update_text_input"
             controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
