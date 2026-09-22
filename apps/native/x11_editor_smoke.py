@@ -982,6 +982,8 @@ def main():
             assert minimum["text"] == "Minimum"
             resize_editor(1000, 700, "sleep", ".3")
             begin_input((405, 260))
+            shot(editor, "text-input-before-delete")
+            # Keep this fast: Escape must not drop the preceding queued deletion.
             run("xdotool", "key", "ctrl+a", "BackSpace", "Escape", "sleep", ".3")
             save_layers(lambda values: len(values) == 2, "blank existing text removes layer")
             run("xdotool", "key", "ctrl+z", "sleep", ".3")

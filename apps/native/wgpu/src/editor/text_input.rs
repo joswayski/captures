@@ -261,13 +261,13 @@ pub(super) fn show(
             (available.bottom() - height).max(available.top()),
         ),
     );
-    let input_id = ui.id().with((&input.id, "canvas-text-input"));
+    let input_id = ui.scope_id().with((&input.id, "canvas-text-input"));
     let finishing = input.phase == Some(Phase::Finish);
     let frame = ui.ctx().cumulative_frame_nr();
     let first_frame = *input.first_frame.get_or_insert(frame) == frame;
     let blocked = input.blocked;
     let mut finish = None;
-    let response = egui::Area::new(ui.id().with((&input.id, "canvas-text-frame")))
+    let response = egui::Area::new(ui.scope_id().with((&input.id, "canvas-text-frame")))
         .order(egui::Order::Foreground)
         .fixed_pos(position)
         .constrain_to(available)
@@ -286,6 +286,14 @@ pub(super) fn show(
                                 !finishing,
                                 egui::TextEdit::multiline(&mut input.text)
                                     .id(input_id)
+                                    // Keep focus until earlier queued edits have run.
+                                    // The host handles Escape after the field below.
+                                    .event_filter(egui::EventFilter {
+                                        horizontal_arrows: true,
+                                        vertical_arrows: true,
+                                        escape: true,
+                                        ..Default::default()
+                                    })
                                     .desired_width(width)
                                     .desired_rows(3),
                             )
@@ -477,6 +485,75 @@ mod tests {
     }
 
     #[test]
+    fn quit_saves_the_latest_buffer_even_before_begin_or_update_is_presented() {
+        for update_in_flight in [false, true] {
+            let data = tempfile::tempdir().unwrap();
+            let root = data.path().join("history");
+            let artifact = captures_app::persist_screenshot(
+                &root,
+                &RgbaImage::new(320, 180),
+                CaptureMode::Region,
+            )
+            .unwrap();
+            let ctx = egui::Context::default();
+            let editor = Editor::open(
+                &ctx,
+                root,
+                artifact.entry.id.clone(),
+                data.path().join("exports"),
+                CaptureMode::Region,
+                |_| unreachable!("quit must not copy pixels"),
+            );
+            let receive = || {
+                let reply = editor
+                    .rx
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .unwrap();
+                editor.view.lock().unwrap().receive(&ctx, reply);
+            };
+            receive();
+            editor.view.lock().unwrap().begin_inline(
+                &editor.tx,
+                TextInputTarget::New {
+                    create: TextCreate {
+                        point: Point { x: 23., y: 31. },
+                        text: String::new(),
+                        font_size: 24.,
+                        font_family: "sans".into(),
+                        color: "#2367ab".into(),
+                        style_preset: None,
+                    },
+                },
+                Point { x: 23., y: 31. },
+            );
+            if update_in_flight {
+                receive();
+                let mut view = editor.view.lock().unwrap();
+                view.inline.as_mut().unwrap().text = "older queued preview".into();
+                view.drain_inline(&editor.tx);
+            }
+            editor.view.lock().unwrap().inline.as_mut().unwrap().text = "Latest\nαβ".into();
+            editor.flush(&ctx).unwrap();
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(
+                    data.path()
+                        .join("editor-drafts")
+                        .join(artifact.entry.id)
+                        .join("manifest.json"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let elements = manifest["document"]["elements"].as_array().unwrap();
+            assert_eq!(elements.len(), 2);
+            assert_eq!(elements[1]["text"], "Latest\nαβ");
+            assert_eq!(elements[1]["x"], 23.);
+            assert_eq!(elements[1]["y"], 31.);
+            assert!(!data.path().join("exports").exists());
+        }
+    }
+
+    #[test]
     fn native_input_accepts_multiline_text_while_begin_is_pending_across_layout_passes() {
         let (ctx, mut view, tx, rx) = setup();
         let tokens = crate::tokens::load()["light-mustard"].clone();
@@ -508,16 +585,24 @@ mod tests {
         frame(&mut view, vec![egui::Event::Text("new\nαβ".into())]);
         assert_eq!(view.inline.as_ref().unwrap().text, "originalnew\nαβ");
         assert!(view.inline.as_ref().unwrap().finish.is_none());
+        // A fast select-all/delete/Escape sequence can arrive in one repaint.
+        // Finishing must include the deletion rather than the preceding preview.
+        let key = |key, modifiers| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
         frame(
             &mut view,
-            vec![egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
+            vec![
+                key(egui::Key::A, egui::Modifiers::COMMAND),
+                key(egui::Key::Backspace, egui::Modifiers::NONE),
+                key(egui::Key::Escape, egui::Modifiers::NONE),
+            ],
         );
+        assert_eq!(view.inline.as_ref().unwrap().text, "");
         assert_eq!(view.inline.as_ref().unwrap().finish, Some(true));
         view.drain_inline(&tx);
         assert!(
