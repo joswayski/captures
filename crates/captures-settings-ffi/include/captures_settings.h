@@ -384,6 +384,50 @@ char *captures_editor_save_new_v1(const CapturesEditorSession *session, const ch
 char *captures_editor_save_original_v1(const CapturesEditorSession *session,
     const char *request_json);
 
+/* Shared recording editor prerequisite. Open on one serialized worker with
+ * {history_root,artifact_id,ffmpeg,ffprobe}; the artifact must be a real History
+ * recording. Success output is owned {ok:true,result:snapshot}; error output is
+ * {ok:false,error}. Snapshot is {artifact_id,source,edit,position_ms,revision,
+ * has_system_audio,has_microphone_audio}. Source audio flags are trusted shared
+ * values and caller values in EditSpec are ignored. Requests are tagged snake_case:
+ * {operation:"snapshot"}, {operation:"seek",position_ms}, and
+ * {operation:"update_edit",edit}. Seek positions are source-relative. Accepted
+ * requests atomically replace snapshot/frame; failures retain the last good pair.
+ * Free every JSON response with captures_settings_free_v1. No playback, audio
+ * output, persistent draft, replacement, account, or release behavior exists. */
+typedef struct CapturesRecordingEditorSession CapturesRecordingEditorSession;
+typedef struct CapturesRecordingEditorFrame CapturesRecordingEditorFrame;
+CapturesRecordingEditorSession *captures_recording_editor_open_v1(
+    const char *request_json, char **output);
+char *captures_recording_editor_request_v1(CapturesRecordingEditorSession *session,
+    const char *request_json);
+void captures_recording_editor_free_v1(CapturesRecordingEditorSession *session);
+/* Retained preview RGBA follows CapturesRegionPixels and may outlive edits/session.
+ * Borrow only while frame is live; never mutate/free data. NULL free is allowed. */
+CapturesRecordingEditorFrame *captures_recording_editor_frame_v1(
+    const CapturesRecordingEditorSession *session);
+bool captures_recording_editor_frame_pixels_v1(const CapturesRecordingEditorFrame *frame,
+    CapturesRegionPixels *output);
+void captures_recording_editor_frame_free_v1(CapturesRecordingEditorFrame *frame);
+
+/* Save new copy is blocking on the serialized worker. JSON is
+ * {destination,export}, where export is captures-media ExportSpec. It never
+ * overwrites a destination or source and returns saved {path,artifact},
+ * saved_without_history {path,warning} after post-publication History failure,
+ * or an error before publication. Progress receives borrowed NUL-terminated
+ * ExportProgress JSON only for the callback and must copy retained data.
+ * Cancellation is an independent thread-safe owner: cancel from another thread,
+ * but free only after save_new returns. NULL callback is allowed; NULL cancel is
+ * an owned error. No call may concurrently access/free the session. */
+typedef struct CapturesRecordingEditorCancel CapturesRecordingEditorCancel;
+typedef void (*CapturesRecordingEditorProgress)(void *context, const char *progress_json);
+CapturesRecordingEditorCancel *captures_recording_editor_cancel_create_v1(void);
+void captures_recording_editor_cancel_v1(const CapturesRecordingEditorCancel *cancel);
+void captures_recording_editor_cancel_free_v1(CapturesRecordingEditorCancel *cancel);
+char *captures_recording_editor_save_new_v1(const CapturesRecordingEditorSession *session,
+    const char *request_json, const CapturesRecordingEditorCancel *cancel,
+    CapturesRecordingEditorProgress progress, void *context);
+
 /* Allocation-free macOS window-radius fallback in points. Pass the current OS
  * major version from ProcessInfo. No OS access or session handle is required. */
 double captures_macos_window_corner_radius_v1(int64_t major_version);
