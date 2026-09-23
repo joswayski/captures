@@ -1063,6 +1063,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 guard let self, self.flowGeneration == generation else { return }
                 do {
                     let snapshot = try result.get()
+                    guard snapshot.state != "failed" else {
+                        self.preserveFailedRecording(session, warning: snapshot.warning)
+                        return
+                    }
                     do {
                         _ = try AppBridge.flow(["operation": "disarm_escape",
                             "generation": generation])
@@ -1471,6 +1475,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             guard let self, self.recordingSession === session else { return }
             do {
                 let snapshot = try result.get()
+                guard snapshot.state != "failed" else {
+                    self.preserveFailedRecording(session, warning: snapshot.warning)
+                    return
+                }
                 let flow = try AppBridge.flow(["operation": "poll", "generation": generation])
                 guard flow["current"] as? Bool == true else {
                     self.recordingLifecycle.end()
@@ -1629,7 +1637,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 if let hud = self.recordingHUD {
                     self.run({ try session.snapshot() }) { [weak self] snapshotResult in
                         guard let self, self.recordingSession === session else { return }
-                        if case .success(let snapshot) = snapshotResult, snapshot.state == "failed" {
+                        if case .success(let snapshot) = snapshotResult,
+                           ["failed", "discarded", "ready"].contains(snapshot.state) {
                             self.preserveFailedRecording(session, warning: error.localizedDescription)
                         } else {
                             hud.hud.isHidden = false

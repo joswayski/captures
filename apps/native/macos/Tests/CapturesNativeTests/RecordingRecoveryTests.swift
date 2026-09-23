@@ -99,7 +99,8 @@ final class RecordingRecoveryTests: XCTestCase {
                 window.display(); root.layoutSubtreeIfNeeded()
                 let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
                 root.cacheDisplay(in: root.bounds, to: bitmap)
-                let path = URL(fileURLWithPath: output).appendingPathComponent("recording-recovery-\(appearance).png")
+                let path = URL(fileURLWithPath: output)
+                    .appendingPathComponent("recording-recovery-\(appearance)-minimum.png")
                 try FileManager.default.createDirectory(at: path.deletingLastPathComponent(),
                                                         withIntermediateDirectories: true)
                 try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: path)
@@ -128,6 +129,42 @@ final class RecordingRecoveryTests: XCTestCase {
             try waitUntil { !tryRecoveryError(panel).contains("Recovery root is temporarily unavailable.") }
             XCTAssertEqual(buttons(try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView),
                                    title: "Recover").count, 1)
+        }
+    }
+
+    func testNormalLightDarkRecoveryRowsRender() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let frame = NSRect(x: 0, y: 0, width: 1280, height: 800)
+            let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let root = Surface(frame: frame); window.contentView = root
+            let tokens = try XCTUnwrap(Tokens.variants["\(appearance)-mustard"])
+            root.wantsLayer = true; root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
+            window.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+            let worker = RecoveryFixtureWorker(drafts: [try draft("recoverable", identity: "identity", kind: "gif")])
+            let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
+                historyRoot: folder.path, settingsPath: nil, transport: EmptyHistoryTransport(),
+                recoveryWorker: worker, showPreferences: {})
+            defer { withExtendedLifetime(controller) {} }
+            window.makeKeyAndOrderFront(nil)
+            let panel = try recoveryPanel(root)
+            try waitUntil { worker.listCount > 0 && !panel.isHidden }
+            XCTAssertTrue(root.bounds.contains(panel.frame))
+            if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
+                window.display(); root.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
+                root.cacheDisplay(in: root.bounds, to: bitmap)
+                let path = URL(fileURLWithPath: output)
+                    .appendingPathComponent("recording-recovery-\(appearance)-normal.png")
+                try FileManager.default.createDirectory(at: path.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: path)
+            }
         }
     }
 
@@ -180,7 +217,9 @@ final class RecordingRecoveryTests: XCTestCase {
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
         try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
         try waitUntil { NSApp.windows.contains { $0.title == "Recording editor" && $0.isVisible } }
-        XCTAssertTrue(controller.prepareEditorForTermination())
+        let editor = try XCTUnwrap(NSApp.windows.first { $0.title == "Recording editor" && $0.isVisible })
+        try waitUntil { editor.contentView.map { descendants($0).compactMap { $0 as? NSImageView }
+            .contains { $0.accessibilityLabel() == "Decoded recording frame" && $0.image != nil } } == true }
         NSApp.windows.filter { $0.title == "Recording editor" }.forEach { $0.orderOut(nil) }
     }
 
@@ -292,14 +331,26 @@ final class RecordingRecoveryTests: XCTestCase {
                                       "countdown_seconds": 0, "show_cursor": false]
         let display: [String: Any] = ["id": "fixture", "name": "Fixture", "x": 0, "y": 0,
                                       "width": 640, "height": 360, "scale_factor": 1.0, "is_primary": true]
-        var session: NativeRecordingSession? = try NativeRecordingSession.prepare(
-            recoveryRoot: recoveryRoot.path, options: options, display: display).0
+        let id: String
+        var session: NativeRecordingSession?
+        do {
+            let prepared = try NativeRecordingSession.prepare(
+                recoveryRoot: recoveryRoot.path, options: options, display: display)
+            id = prepared.1.id; session = prepared.0
+        }
         let worker = RecordingRecoveryWorker()
         var result: Result<[RecordingRecoveryDraft], Error>?
         worker.list(historyRoot: history.path) { result = $0 }
         try waitUntil { result != nil }
         XCTAssertThrowsError(try result!.get(), "a live handle owns the lease even while idle")
-        _ = try session?.discard()
+        // Force the terminal discard persistence step to fail. Successful
+        // discard intentionally releases the lease; a failed owner retains it.
+        let manifest = recoveryRoot.appendingPathComponent(id).appendingPathComponent("manifest.json")
+        try FileManager.default.removeItem(at: manifest)
+        try FileManager.default.createDirectory(at: manifest, withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: manifest.appendingPathComponent("marker"))
+        XCTAssertThrowsError(try session?.discard())
+        XCTAssertEqual(try session?.snapshot().state, "discarded")
         result = nil
         worker.list(historyRoot: history.path) { result = $0 }
         try waitUntil { result != nil }
@@ -308,12 +359,16 @@ final class RecordingRecoveryTests: XCTestCase {
         result = nil
         worker.list(historyRoot: history.path) { result = $0 }
         try waitUntil { result != nil }
-        XCTAssertEqual(try result!.get().count, 0)
+        XCTAssertEqual(try result!.get().first?.status, "unavailable")
     }
 
     private func tryRecoveryError(_ panel: Surface) -> String {
         panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView?.subviews
             .compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " ") ?? ""
+    }
+
+    private func descendants(_ view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap(descendants)
     }
 
     private func draft(_ status: String, identity: String?, kind: String?, reason: String? = nil) throws
