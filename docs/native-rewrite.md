@@ -580,7 +580,12 @@ audio-only Preserve changes are marked approximate. Staged edits hide the previo
 result and gate estimation until Apply. A successful changed preview invalidates
 the result; a seek retains it. Estimation has independent cancellation and error/retry,
 creates no History entry, and never marks unsaved edits as saved. No estimate promises
-a byte budget. Close/quit waits for accepted work, as with export.
+a byte budget. AppKit accepted estimates also show the shipping percentage difference
+from `source.size_bytes`, including JavaScript-compatible negative half-tie rounding.
+Zero/unknown, staged, pending, failed and Maximum results omit the delta. Light/dark
+normal and minimum AppKit fixtures cover exact and approximate labels; Windows/Linux
+support and physical acceptance remain open. Close/quit waits for accepted work, as
+with export.
 The preview/timeline/save hierarchy follows the shipping recording editor, but
 the UI is not a visual match; physical audio playback acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted

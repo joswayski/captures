@@ -2274,6 +2274,119 @@ final class RecordingEditorTests: XCTestCase {
                        "the GIF width cap follows crop and preset geometry")
     }
 
+    func testRecordingFileSizeDeltaMatchesShippingRoundingAndHiddenCases() {
+        XCTAssertEqual(formatRecordingFileSizeDelta(estimatedBytes: 400_000,
+                                                     originalBytes: 1_000_000), "−60%")
+        XCTAssertEqual(formatRecordingFileSizeDelta(estimatedBytes: 1_250_000,
+                                                     originalBytes: 1_000_000), "+25%")
+        XCTAssertEqual(formatRecordingFileSizeDelta(estimatedBytes: 7, originalBytes: 8),
+                       "−12%", "negative half ties round toward positive infinity like Math.round")
+        XCTAssertEqual(formatRecordingFileSizeDelta(estimatedBytes: 3, originalBytes: 8),
+                       "−62%")
+        XCTAssertNil(formatRecordingFileSizeDelta(estimatedBytes: nil, originalBytes: 1_000_000))
+        XCTAssertNil(formatRecordingFileSizeDelta(estimatedBytes: 1_004_000,
+                                                  originalBytes: 1_000_000))
+        XCTAssertNil(formatRecordingFileSizeDelta(estimatedBytes: 250_000, originalBytes: 0))
+    }
+
+    func testAcceptedEstimateDeltaLifecycleHidesPendingStagedErrorMaximumAndReset() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            sourceSizeBytes: 1_000_000))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let label = try field("Recording size estimate", in: controller.root)
+        let estimate = try button("Estimate size", in: controller.root)
+        let start = try field("Trim start milliseconds", in: controller.root)
+        let maximum = try checkbox("Maximum recording file size", in: controller.root)
+
+        worker.deferEstimate = true
+        estimate.performClick(nil)
+        XCTAssertFalse(label.stringValue.contains("%"), "pending estimate has no delta")
+        worker.completeEstimate(.success(RecordingEditorEstimate(sizeBytes: 400_000, exact: true)))
+        XCTAssertTrue(label.stringValue.hasSuffix(" · −60%"))
+
+        let seek = try slider("Recording frame position", in: controller.root)
+        worker.requestResult = .success(try presentation(position: 733, revision: 1,
+                                                          sourceSizeBytes: 1_000_000))
+        seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertTrue(label.stringValue.hasSuffix(" · −60%"),
+                      "seek retains an estimate for unchanged accepted settings")
+
+        start.stringValue = "100"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: start))
+        XCTAssertEqual(label.stringValue, "Apply edits to estimate size")
+        XCTAssertFalse(label.stringValue.contains("%"), "staged edits invalidate the delta")
+        start.stringValue = "0"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: start))
+        XCTAssertEqual(label.stringValue, "Size not estimated")
+
+        worker.deferEstimate = false
+        worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_250_000,
+                                                                 exact: false))
+        estimate.performClick(nil)
+        XCTAssertTrue(label.stringValue.hasPrefix("≈ "))
+        XCTAssertTrue(label.stringValue.hasSuffix(" · +25%"))
+
+        maximum.performClick(nil)
+        XCTAssertFalse(label.stringValue.contains("%"), "Maximum shows only its cap")
+        maximum.performClick(nil)
+        worker.estimateResult = .failure(AppBridgeError.backend("estimate failed"))
+        estimate.performClick(nil)
+        XCTAssertFalse(label.stringValue.contains("%"), "estimate errors publish no delta")
+
+        worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_004_000,
+                                                                 exact: true))
+        estimate.performClick(nil)
+        XCTAssertFalse(label.stringValue.contains("%"), "a delta rounded to zero stays hidden")
+        controller.present(artifact: recordingArtifact(id: "next-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(worker.openCount, 2)
+        XCTAssertEqual(label.stringValue, "Size not estimated")
+    }
+
+    func testEstimateDeltaRenderedExactApproximateNormalAndMinimum() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                sourceSizeBytes: 1_000_000))
+            let controller = RecordingEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker,
+                confirmDiscard: { false })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                               outputDirectory: "/Exports")
+            let label = try field("Recording size estimate", in: controller.root)
+            let estimate = try button("Estimate size", in: controller.root)
+
+            worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 400_000,
+                                                                     exact: true))
+            estimate.performClick(nil)
+            XCTAssertTrue(label.stringValue.hasSuffix(" · −60%"))
+            try render(controller.root,
+                       name: "recording-editor-estimate-delta-exact-\(appearance)")
+
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            XCTAssertGreaterThanOrEqual(label.frame.width, label.intrinsicContentSize.width)
+            try render(controller.root,
+                       name: "recording-editor-estimate-delta-exact-minimum-\(appearance)")
+
+            worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_250_000,
+                                                                     exact: false))
+            estimate.performClick(nil)
+            XCTAssertTrue(label.stringValue.hasPrefix("≈ "))
+            XCTAssertTrue(label.stringValue.hasSuffix(" · +25%"))
+            XCTAssertGreaterThanOrEqual(label.frame.width, label.intrinsicContentSize.width)
+            try render(controller.root,
+                       name: "recording-editor-estimate-delta-approximate-minimum-\(appearance)")
+        }
+    }
+
     func testGifPaletteFollowsRememberedQualityThroughMaximumFailureAndSave() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation())
@@ -3334,6 +3447,7 @@ final class RecordingEditorTests: XCTestCase {
     private func presentation(start: UInt64 = 0, end: UInt64? = nil,
                               position: UInt64 = 0, revision: UInt64 = 0,
                               sourceWidth: Int = 320, sourceHeight: Int = 180,
+                              sourceSizeBytes: UInt64 = 1_024,
                               previewWidth: Int = 16, previewHeight: Int = 9,
                               crop: NativeRecordingCropRect? = nil,
                               output: NativeRecordingDimensions? = nil,
@@ -3365,7 +3479,7 @@ final class RecordingEditorTests: XCTestCase {
         let snapshot = try XCTUnwrap(NativeRecordingEditorSnapshot([
             "artifact_id": "recording-id", "source": ["kind": "video", "mime_type": "video/mp4",
                 "width": sourceWidth, "height": sourceHeight,
-                "duration_ms": 2_000, "size_bytes": 1_024],
+                "duration_ms": 2_000, "size_bytes": sourceSizeBytes],
             "edit": ["trim_start_ms": start, "trim_end_ms": endValue,
                 "crop": cropValue, "output_width": outputWidth, "output_height": outputHeight,
                 "audio": ["system_volume": systemVolume, "microphone_volume": microphoneVolume,
@@ -3836,6 +3950,7 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var requests: [[String: Any]] = []
     var requestResult: Result<RecordingEditorPresentation, Error>?
     var estimateResult: Result<RecordingEditorEstimate, Error> = .failure(AppBridgeError.backend("estimate unavailable"))
+    var deferEstimate = false
     var playbackMetadata = RecordingPlaybackMetadata(startPositionMilliseconds: 0,
                                                       width: 2, height: 1,
                                                       framesPerSecond: 10,
@@ -3863,6 +3978,7 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     weak var observedPlaybackCancel: NativeRecordingEditorCancel?
     weak var observedPlaybackLoop: RecordingPlaybackLoopControl?
     private var pendingOpen: ((Result<RecordingEditorPresentation, Error>) -> Void)?
+    private var pendingEstimate: ((Result<RecordingEditorEstimate, Error>) -> Void)?
     private var pendingSave: ((Result<RecordingEditorSaveResult, Error>) -> Void)?
     private var pendingThumbnails: ((Result<CGImage, Error>) -> Void)?
     private var pendingSource: ((Result<RecordingSourceImage, Error>) -> Void)?
@@ -3888,7 +4004,11 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     }
     func estimate(cancel: NativeRecordingEditorCancel,
                   completion: @escaping (Result<RecordingEditorEstimate, Error>) -> Void) {
-        completion(estimateResult)
+        if deferEstimate { pendingEstimate = completion }
+        else { completion(estimateResult) }
+    }
+    func completeEstimate(_ result: Result<RecordingEditorEstimate, Error>) {
+        let completion = pendingEstimate; pendingEstimate = nil; completion?(result)
     }
     func playback(positionMilliseconds: UInt64, loopStartMilliseconds: UInt64,
                   soundEnabled: Bool,
