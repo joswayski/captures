@@ -623,6 +623,13 @@ undo, or cross-directory crash-atomicity are promised. Windows/Linux host UI
 integration and physical acceptance remain open.
 Close blocks accepted work; unsaved edits require explicit discard, and normal quit
 is refused until they are saved or closed. Recording drafts are not implemented.
+The shared Replace original operation requires a regular permanent MP4/GIF outside
+History with byte-identical private recovery. It stages edited media, publishes the
+permanent path atomically, then updates History; a History failure restores the
+permanent path from intact recovery or requires reopening an indeterminate session.
+The two directories are not crash/power-loss atomic: a process kill can leave new
+permanent media with old or hidden History. History-only and reference-only
+recordings are unsupported; Windows/Linux have not connected the host action yet.
 
 Platform status: shared Rust/C ABI is connected to both hosts. The first AppKit
 slice opens recordings from History in a separate native window with retained
