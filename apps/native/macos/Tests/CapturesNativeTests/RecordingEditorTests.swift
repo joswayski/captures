@@ -645,7 +645,8 @@ final class RecordingEditorTests: XCTestCase {
         overlay.nudge(.east, deltaX: 11, deltaY: 0)
         XCTAssertTrue(controller.dirty)
         XCTAssertEqual(try field("Recording crop width", in: controller.root).stringValue, "171")
-        XCTAssertEqual(try field("Recording output width", in: controller.root).stringValue, "170")
+        XCTAssertEqual(try field("Recording output width", in: controller.root).stringValue, "171",
+                       "Original reflects the staged crop without explicit output rounding")
         let outputMode = try popup("Recording output size", in: controller.root)
         outputMode.selectItem(withTitle: "Custom")
         _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
@@ -883,6 +884,7 @@ final class RecordingEditorTests: XCTestCase {
                        releasedWidth, "pointer release ends the crop gesture")
 
         let east = try XCTUnwrap(handles.first { $0.kind == .east })
+        XCTAssertTrue(controller.window.makeFirstResponder(east))
         let keyboardWidth = try XCTUnwrap(UInt32(try field("Recording crop width",
                                                           in: controller.root).stringValue))
         try dispatchCropKey(124, to: east, in: controller)
