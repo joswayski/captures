@@ -12,7 +12,7 @@ use captures_capture::{CaptureMode, DisplayDescriptor};
 use captures_media::{
     ByteRange, CancelToken, EditSpec, ExportEstimate, ExportFormat, ExportProgress, ExportSpec,
     MediaToolError, MediaToolchain, RecordingAssemblyKind, RecordingAudioLayout,
-    RecordingSegmentInput, TimelineSpriteSpec, sampled_export_spec,
+    RecordingSegmentInput, TimelineSpriteSpec,
 };
 use captures_recording::{
     DraftStore, RecordingCoordinator, RecordingDraftManifest, RecordingKind, RecordingOptions,
@@ -2204,13 +2204,6 @@ pub struct RecordingExportPreview {
     pub after_png: Vec<u8>,
 }
 
-/// Duration of the sample encoded for a before/after frame preview.
-const PREVIEW_SAMPLE_MS: u64 = 1_500;
-/// How far the sample starts ahead of the requested frame so the compared
-/// frame lands mid-stream with typical quality instead of on the opening
-/// keyframe.
-const PREVIEW_FRAME_LEAD_MS: u64 = 1_000;
-
 /// Estimate the saved file size for the current editor settings by encoding
 /// short samples of the trimmed range with the same pipeline used to save.
 #[tauri::command]
@@ -2311,55 +2304,19 @@ fn render_export_preview(
     cancel: &CancelToken,
 ) -> Result<RecordingExportPreview, MediaToolError> {
     let probe = toolchain.probe(input)?;
-    let source_duration_ms = probe
-        .metadata
-        .duration_ms
-        .ok_or(MediaToolError::IncompleteMetadata)?;
-    let trim_start_ms = edit.trim_start_ms.min(source_duration_ms.saturating_sub(1));
-    let trim_end_ms = edit
-        .trim_end_ms
-        .unwrap_or(source_duration_ms)
-        .min(source_duration_ms)
-        .max(trim_start_ms + 1);
-    let trimmed_ms = trim_end_ms - trim_start_ms;
-    let at = at_ms.clamp(trim_start_ms, trim_end_ms - 1);
-    let window_ms = PREVIEW_SAMPLE_MS.min(trimmed_ms);
-    let start_ms = at
-        .saturating_sub(PREVIEW_FRAME_LEAD_MS)
-        .min(trim_end_ms - window_ms)
-        .max(trim_start_ms);
-    let mut sample_edit = edit.clone();
-    sample_edit.trim_start_ms = start_ms;
-    sample_edit.trim_end_ms = Some(start_ms + window_ms);
-    let sample_export = sampled_export_spec(export, window_ms, trimmed_ms);
-    let extension = if export.format == ExportFormat::Gif {
-        "gif"
-    } else {
-        "mp4"
-    };
-    let scratch = std::env::temp_dir().join(format!("captures-preview-{}", Uuid::new_v4()));
-    fs::create_dir_all(&scratch)?;
-    let result = (|| {
-        let sample_path = scratch.join(format!("sample.{extension}"));
-        toolchain.export(
-            input,
-            &sample_path,
-            &sample_edit,
-            &sample_export,
-            cancel,
-            |_| {},
-        )?;
-        let after_path = scratch.join("after.png");
-        toolchain.extract_frame(&sample_path, at - start_ms, &after_path, cancel)?;
-        let before_path = scratch.join("before.png");
-        toolchain.extract_edited_frame(input, edit, export, at, &before_path, cancel)?;
-        Ok(RecordingExportPreview {
-            before_png: fs::read(&before_path)?,
-            after_png: fs::read(&after_path)?,
-        })
-    })();
-    let _ = fs::remove_dir_all(&scratch);
-    result
+    let comparison = toolchain.compare_encoded_frame(
+        input,
+        &probe,
+        edit,
+        export,
+        at_ms,
+        &std::env::temp_dir(),
+        cancel,
+    )?;
+    Ok(RecordingExportPreview {
+        before_png: comparison.before_png,
+        after_png: comparison.after_png,
+    })
 }
 
 #[tauri::command]

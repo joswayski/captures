@@ -511,6 +511,35 @@ CapturesRecordingEditorFrame *captures_recording_editor_source_frame_v1(
     const CapturesRecordingEditorSession *session,
     const CapturesRecordingEditorCancel *cancel, char **output_json);
 
+/* Blocking read-only encoded comparison at the accepted source-relative
+ * position. Positions outside [trim_start,trim_end) fail rather than clamp.
+ * It encodes a short sample with accepted preview_export, not save_export:
+ * Maximum mode therefore shows budget-free first-attempt fidelity, never a
+ * promise of final capped-save pixels. Success returns a retained owner and
+ * owned {ok:true,result:{basis:"accepted_preview_first_attempt",revision,
+ * position_ms,after_seek_position_ms,sample_start_ms,sample_duration_ms,
+ * attempts,export,width,height}}. position_ms is the selected source time;
+ * after_seek_position_ms reports an edge adjustment to the encoded seek, and
+ * actual decoded frames may fall on adjacent output cadence timestamps.
+ * Error returns NULL plus owned {ok:false,error}. Non-NULL output_json is
+ * required before work; free JSON with captures_settings_free_v1. The two
+ * frame accessors return independent retained owners using the existing
+ * frame_pixels_v1/frame_free_v1 contract; frames outlive comparison/session/
+ * cancel. Free the comparison once. Calls are serialized on the owning worker;
+ * hosts also guard item switches with their own generation alongside the
+ * session-scoped revision/position/export identity. No accepted state or
+ * History is changed. Native host UI is not yet wired to this prerequisite. */
+typedef struct CapturesRecordingEditorComparison CapturesRecordingEditorComparison;
+CapturesRecordingEditorComparison *captures_recording_editor_comparison_v1(
+    const CapturesRecordingEditorSession *session,
+    const CapturesRecordingEditorCancel *cancel, char **output_json);
+CapturesRecordingEditorFrame *captures_recording_editor_comparison_before_frame_v1(
+    const CapturesRecordingEditorComparison *comparison);
+CapturesRecordingEditorFrame *captures_recording_editor_comparison_after_frame_v1(
+    const CapturesRecordingEditorComparison *comparison);
+void captures_recording_editor_comparison_free_v1(
+    CapturesRecordingEditorComparison *comparison);
+
 /* Persistent silent playback of accepted edit + preview_export. position_ms is
  * source-relative and normalizes outside accepted [trim_start,trim_end) to trim
  * start. Success returns a stream plus owned {ok:true,result:{start_position_ms,
