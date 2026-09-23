@@ -617,6 +617,20 @@ char *captures_recording_editor_estimate_v2(const CapturesRecordingEditorSession
 char *captures_recording_editor_save_new_v1(const CapturesRecordingEditorSession *session,
     const char *request_json, const CapturesRecordingEditorCancel *cancel,
     CapturesRecordingEditorProgress progress, void *context);
+/* Blocking same-format replacement of an existing permanent MP4/GIF with an
+ * identical private History recovery copy. Requires exclusive session ownership
+ * on its worker; cancel is live until return and may be signaled elsewhere.
+ * Progress JSON is borrowed during the callback. Owned response must be freed
+ * with captures_settings_free_v1. Success:
+ * {ok:true,result:{replacement:{status:"replaced",path,artifact},snapshot:<v2>}}.
+ * Error: {ok:false,error,requires_reopen}. False means no permanent change
+ * (or completed compensation); true means close/reopen before any more media
+ * operations. No request/snapshot v1/v2 shape is changed. Old retained frames
+ * survive. This is not a cross-directory crash/power-loss atomic transaction:
+ * a process kill may leave permanent new while History recovery is old. */
+char *captures_recording_editor_replace_original_v1(CapturesRecordingEditorSession *session,
+    const CapturesRecordingEditorCancel *cancel,
+    CapturesRecordingEditorProgress progress, void *context);
 
 /* Allocation-free macOS window-radius fallback in points. Pass the current OS
  * major version from ProcessInfo. No OS access or session handle is required. */
