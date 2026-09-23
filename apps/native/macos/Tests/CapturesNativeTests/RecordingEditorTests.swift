@@ -465,15 +465,17 @@ final class RecordingEditorTests: XCTestCase {
         overlay.continueDrag(at: NSPoint(x: start.x + 23, y: start.y + 17))
         XCTAssertEqual(try field("Recording crop X", in: controller.root).stringValue, beforeX,
                        "scrolling ends an active crop gesture")
+        XCTAssertTrue(overlay.visibleRect.contains(start),
+                      "the root-dispatched drag starts inside the scrolled viewport")
 
         try dispatchCropOverlayMouse(.leftMouseDown, at: start, to: overlay, in: controller)
         try dispatchCropOverlayMouse(.leftMouseDragged, at: start, to: overlay,
-                                     in: controller, deltaX: 13, deltaY: 7)
+                                     in: controller, deltaX: 13, deltaY: -7)
         try dispatchCropOverlayMouse(.leftMouseUp, at: start, to: overlay,
-                                     in: controller, deltaX: 13, deltaY: 7)
+                                     in: controller, deltaX: 13, deltaY: -7)
         XCTAssertEqual(try field("Recording crop X", in: controller.root).stringValue, "153")
         XCTAssertEqual(try field("Recording crop Y", in: controller.root).stringValue, "97",
-                       "actual-size crop mapping is one source pixel per point after scrolling")
+                       "a negative window-space Y delta is positive in the flipped crop overlay")
         XCTAssertTrue(worker.requests.isEmpty)
 
         overlay.beginDrag(.move, at: NSPoint(x: overlay.displayedCropRect.midX,
@@ -2730,7 +2732,10 @@ final class RecordingEditorTests: XCTestCase {
         switch type {
         case .leftMouseDown:
             let content = try XCTUnwrap(controller.window.contentView)
-            try XCTUnwrap(content.hitTest(content.convert(point, from: nil))).mouseDown(with: event)
+            let contentSuperview = try XCTUnwrap(content.superview)
+            let target = try XCTUnwrap(content.hitTest(contentSuperview.convert(point, from: nil)))
+            XCTAssertTrue(target === overlay, "the root hit test reaches the crop interior")
+            target.mouseDown(with: event)
         case .leftMouseDragged: overlay.mouseDragged(with: event)
         case .leftMouseUp: overlay.mouseUp(with: event)
         default: XCTFail("Unsupported pointer event")
