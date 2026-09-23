@@ -3377,10 +3377,14 @@ final class RecordingEditorTests: XCTestCase {
     private func uniqueRGBColorCount(_ path: URL, tools: NativeMediaTools,
                                      width: Int, height: Int) throws -> Int {
         let data = try decodedRGB(path, tools: tools, width: width, height: height)
-        return stride(from: 0, to: data.count, by: 3).reduce(into: Set<UInt32>()) { colors, offset in
-            colors.insert(UInt32(data[offset]) << 16 | UInt32(data[offset + 1]) << 8
-                | UInt32(data[offset + 2]))
-        }.count
+        var colors = Set<UInt32>()
+        for offset in stride(from: 0, to: data.count, by: 3) {
+            let red = UInt32(data[offset]) << 16
+            let green = UInt32(data[offset + 1]) << 8
+            let blue = UInt32(data[offset + 2])
+            colors.insert(red | green | blue)
+        }
+        return colors.count
     }
 
     private func uniqueColorCount(_ image: CGImage) throws -> Int {
@@ -3391,8 +3395,10 @@ final class RecordingEditorTests: XCTestCase {
         for y in 0..<image.height {
             for x in 0..<image.width {
                 let offset = y * image.bytesPerRow + x * bytesPerPixel
-                colors.insert(UInt32(data[offset]) << 16 | UInt32(data[offset + 1]) << 8
-                    | UInt32(data[offset + 2]))
+                let first = UInt32(data[offset]) << 16
+                let second = UInt32(data[offset + 1]) << 8
+                let third = UInt32(data[offset + 2])
+                colors.insert(first | second | third)
             }
         }
         return colors.count
