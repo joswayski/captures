@@ -469,8 +469,8 @@ it can change while playing without changing accepted edits, estimates or Histor
 Enabled looping restarts at the accepted trim start only after a nonempty clean
 EOF and completed decoder teardown. Turning it off finishes the current lap;
 Pause, close and failure never restart. Each new editor defaults to one pass.
-AppKit has silent Play/Pause; its looping is a separate slice. Audio playback and physical playback
-acceptance remain open.
+AppKit implements its Loop control in the separate host slice described below.
+Audio playback and physical playback acceptance remain open.
 Raw-input tests exercise multi-pass delivery, keyboard focus,
 thresholds, cancellation and busy gates; private-X11 tests cover staged values,
 thumbnail loading/cancel/failure/retry and temporal pixels, exported duration/colors
@@ -544,20 +544,19 @@ thumbnail strip. Generation runs once after open on the serialized worker, is re
 separately from accepted edited frames, and has independent loading, cancel, failure
 and retry states; failure leaves the rest of editing available, while accepted work
 keeps the existing close/quit gate. Seeking and applying edits do not regenerate the
-strip or turn thumbnail clicks into a new seek gesture. AppKit also provides silent,
+strip or turn thumbnail clicks into a new seek gesture. AppKit also provides silent
 Play/Pause of the accepted trim and spatial edits. A transient Loop control can
 repeat nonempty completed trims without changing accepted edits, exports or dirty
 identity; each lap reopens the decoder, so playback does not claim to be gapless.
-Persistent bounded
-FFmpeg playback delivers retained latest frames and a source-relative playhead without
+Persistent bounded FFmpeg playback delivers retained latest frames and a source-relative playhead without
 mutating the accepted frame/position, dirty state, History or source. Pause, focus loss,
 minimize, close, item switching and quit retain cancellation through decoder teardown;
 errors restore the accepted still preview. Audio playback is not implemented.
 Windows/X11 already implement
 the same edit controls through wgpu;
 private X11/software-GL exercises provide implementation evidence only. Windows and
-Wayland presentation, physical macOS input, accessibility, playback audio and AppKit looping,
-physical audio output, graphical crop handles, draft restoration and original
+Wayland presentation, physical macOS input, accessibility, playback audio, physical
+audio output, graphical crop handles, draft restoration and original
 replacement remain open. No recording-editor or cross-platform parity gate closes.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
