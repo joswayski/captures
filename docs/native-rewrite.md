@@ -590,6 +590,18 @@ normal/minimum labels and minimum-window estimate error/retry without publishing
 estimate to History. AppKit CI covers exact/approximate light/dark normal/minimum
 labels and the same lifecycle. Physical macOS/Windows/Wayland acceptance remains
 open. Close/quit waits for accepted work, as with export.
+The Windows/Linux wgpu editor's explicit **Compare** action uses the shared encoded
+comparison operation on its serialized worker. It restores the accepted still/time
+from paused playback and presents a Before/Encoded split in Fit or 100% mode.
+Pointer dragging and the keyboard-accessible slider change only display clipping.
+The private per-editor channel, request generation, accepted revision, position and
+full preview export guard delivery. Cancellation rejects even a late successful
+reply. Staging, seek, playback, crop adjustment and close discard the comparison;
+failures permit retry without mutating accepted pixels, dirty state or History.
+Maximum uses the budget-free first attempt and visibly warns that final capped
+output can differ. Requested/fallback seek positions are not exact decoded PTS:
+cadence can select neighboring frames. AppKit integration and physical Windows/
+Wayland input, accessibility and mixed-DPI acceptance remain separate open work.
 The preview/timeline/save hierarchy follows the shipping recording editor, but
 the UI is not a visual match; physical audio playback acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted
