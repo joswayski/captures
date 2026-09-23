@@ -22,7 +22,14 @@ use captures_media::{
 use captures_recording::RecordingTarget;
 
 fn tools() -> Option<MediaToolchain> {
-    let tools = MediaToolchain::from_command_names();
+    let tools = MediaToolchain::new(
+        std::env::var_os("CAPTURES_TEST_FFMPEG")
+            .unwrap_or_else(|| "ffmpeg".into())
+            .into(),
+        std::env::var_os("CAPTURES_TEST_FFPROBE")
+            .unwrap_or_else(|| "ffprobe".into())
+            .into(),
+    );
     match tools.verify() {
         Ok(()) => Some(tools),
         Err(error) => {
@@ -33,7 +40,9 @@ fn tools() -> Option<MediaToolchain> {
 }
 
 fn create_recording(path: &Path) {
-    let status = Command::new("ffmpeg")
+    let status = Command::new(
+        std::env::var_os("CAPTURES_TEST_FFMPEG").unwrap_or_else(|| "ffmpeg".into()),
+    )
         .args([
             "-hide_banner",
             "-loglevel",
@@ -518,13 +527,19 @@ fn replace_original_cancellation_during_candidate_frame_kills_child_and_keeps_st
     let before_permanent = fs::read(&permanent).unwrap();
     let before_recovery = fs::read(&recovery).unwrap();
     let before_metadata = fs::read(&metadata).unwrap();
+    let enabled = data.path().join("enable-candidate-gate");
     let marker = data.path().join("candidate-started");
     let release = data.path().join("release-candidate");
     let wrapper = data.path().join("ffmpeg-wrapper");
+    let real_ffmpeg = std::env::var_os("CAPTURES_TEST_FFMPEG")
+        .unwrap_or_else(|| "ffmpeg".into())
+        .to_string_lossy()
+        .into_owned();
     fs::write(
         &wrapper,
         format!(
-            "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    *frame-*.png)\n      : > {marker:?}\n      while [ ! -e {release:?} ]; do :; done\n      ;;\n  esac\ndone\nexec ffmpeg \"$@\"\n",
+            "#!/bin/sh\nif [ -e {enabled:?} ]; then\n  for arg in \"$@\"; do\n    case \"$arg\" in\n      *frame-*.png)\n        : > {marker:?}\n        while [ ! -e {release:?} ]; do :; done\n        ;;\n    esac\n  done\nfi\nexec {real_ffmpeg:?} \"$@\"\n",
+            enabled = enabled.to_string_lossy().as_ref(),
             marker = marker.to_string_lossy().as_ref(),
             release = release.to_string_lossy().as_ref(),
         ),
@@ -536,10 +551,16 @@ fn replace_original_cancellation_during_candidate_frame_kills_child_and_keeps_st
     let mut session = open(
         &data,
         &entry,
-        MediaToolchain::new(wrapper, "ffprobe".into()),
+        MediaToolchain::new(
+            wrapper,
+            std::env::var_os("CAPTURES_TEST_FFPROBE")
+                .unwrap_or_else(|| "ffprobe".into())
+                .into(),
+        ),
     );
     let before_snapshot = serde_json::to_value(session.snapshot_v2()).unwrap();
     let before_frame = session.frame();
+    fs::write(&enabled, b"").unwrap();
     let cancel = CancelToken::default();
     let worker_cancel = cancel.clone();
     let (tx, rx) = mpsc::channel();
