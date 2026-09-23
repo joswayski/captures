@@ -716,6 +716,7 @@ pub struct Live {
     recording_toolchain_error: Option<String>,
     include_recording_controls: bool,
     recording_snapshot: Option<RecordingSessionSnapshot>,
+    recording_microphone_peak: f32,
     recording_segment_started: Option<Instant>,
     recording_snapshot_poll_pending: bool,
     recording_last_snapshot_poll: Instant,
@@ -932,6 +933,7 @@ impl Live {
             recording_toolchain_error: None,
             include_recording_controls: false,
             recording_snapshot: None,
+            recording_microphone_peak: 0.,
             recording_segment_started: None,
             recording_snapshot_poll_pending: false,
             recording_last_snapshot_poll: Instant::now(),
@@ -1637,6 +1639,7 @@ impl Live {
                     } else {
                         "Unmuting microphone…".into()
                     };
+                    request_hidden_root_paint(ctx);
                     self.recording_worker
                         .send(recording::Command::SetMicrophoneMuted {
                             generation,
@@ -1904,17 +1907,44 @@ impl Live {
                 } if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation) => {
                     self.controls.lock().unwrap().set_microphones(devices);
                 }
-                recording::Event::Snapshot { generation, result }
-                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation) =>
-                {
+                recording::Event::Snapshot {
+                    generation,
+                    microphone_peak,
+                    result,
+                } if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation) => {
                     self.recording_snapshot_poll_pending = false;
-                    match result {
+                    let hud_changed = match result {
                         Ok(snapshot) => {
+                            let changed = self.recording_microphone_peak != microphone_peak
+                                || self.recording_snapshot.as_ref().map(|old| &old.warning)
+                                    != Some(&snapshot.warning);
+                            self.recording_microphone_peak = microphone_peak;
                             self.recording_segment_started =
                                 snapshot_interpolation_origin(snapshot.state, Instant::now());
                             self.recording_snapshot = Some(snapshot);
+                            changed
                         }
-                        Err(error) => self.error = Some(error),
+                        Err(error) => {
+                            let changed = self.recording_microphone_peak != 0.;
+                            self.recording_microphone_peak = 0.;
+                            self.error = Some(error);
+                            changed
+                        }
+                    };
+                    if hud_changed
+                        && matches!(
+                            self.capture_phase,
+                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                        )
+                        && self.recording_controls_hidden != Some(generation)
+                        && self.recording_screenshot_flow.is_none()
+                    {
+                        // The hidden root must replace the deferred HUD callback;
+                        // repainting its child alone would retain the old sample.
+                        request_hidden_root_paint(ctx);
+                        ctx.request_repaint_of(egui::ViewportId::from_hash_of(
+                            "recording-controls",
+                        ));
                     }
                 }
                 recording::Event::Prepared { generation, result }
@@ -1985,6 +2015,7 @@ impl Live {
                             }
                             self.recording_has_started = true;
                             self.recording_snapshot = Some(snapshot);
+                            self.recording_microphone_peak = 0.;
                             self.recording_segment_started = Some(Instant::now());
                             self.recording_snapshot_poll_pending = false;
                             self.recording_last_snapshot_poll = Instant::now();
@@ -2021,9 +2052,11 @@ impl Live {
                     match result {
                         Ok(snapshot) => {
                             self.recording_snapshot = Some(snapshot);
+                            self.recording_microphone_peak = 0.;
                             self.recording_segment_started = None;
                             self.capture_phase = Some(CapturePhase::RecordingPaused);
                             self.status = "Recording paused".into();
+                            request_hidden_root_paint(ctx);
                         }
                         Err(error) => {
                             self.error = Some(error);
@@ -2056,6 +2089,8 @@ impl Live {
                                 "Recording in progress".into()
                             };
                             self.recording_snapshot = Some(snapshot);
+                            self.recording_microphone_peak = 0.;
+                            request_hidden_root_paint(ctx);
                         }
                         Err(failure) => {
                             self.error = Some(format!(
@@ -2094,6 +2129,7 @@ impl Live {
                         Ok(snapshot) => {
                             self.recording_has_started = false;
                             self.recording_snapshot = Some(snapshot);
+                            self.recording_microphone_peak = 0.;
                             self.recording_segment_started = None;
                             self.recording_snapshot_poll_pending = false;
                             self.capture_phase = Some(CapturePhase::RecordingCountdown);
@@ -2229,11 +2265,21 @@ impl Live {
                     }
                 }
             } else {
+                let live_microphone = self.capture_phase == Some(CapturePhase::Recording)
+                    && self.recording_controls_hidden != Some(flow.generation())
+                    && self.recording_screenshot_flow.is_none()
+                    && !self.recording_restart_confirmation
+                    && self.recording_snapshot.as_ref().is_some_and(|snapshot| {
+                        snapshot.options.audio.microphone_device_id.is_some()
+                            && !snapshot.options.audio.microphone_muted
+                    });
+                let snapshot_interval =
+                    Duration::from_millis(if live_microphone { 100 } else { 250 });
                 if matches!(
                     self.capture_phase,
                     Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
                 ) && !self.recording_snapshot_poll_pending
-                    && self.recording_last_snapshot_poll.elapsed() >= Duration::from_millis(250)
+                    && self.recording_last_snapshot_poll.elapsed() >= snapshot_interval
                 {
                     self.recording_snapshot_poll_pending = true;
                     self.recording_last_snapshot_poll = Instant::now();
@@ -2242,8 +2288,8 @@ impl Live {
                     });
                 }
                 // Only active captures poll; settled history/preferences stay event-driven.
-                // A running timer remains smooth, while paused recordings wake only for the
-                // next bounded warning snapshot or a worker response.
+                // Visible microphones sample at 10Hz with at most one request in flight;
+                // paused/hidden/muted recordings retain the existing warning cadence.
                 match self.capture_phase {
                     Some(CapturePhase::Recording) => {
                         ctx.request_repaint_after(Duration::from_millis(100));
@@ -3039,6 +3085,7 @@ impl Live {
         self.hidden_since = None;
         self.capture_in_flight = false;
         self.recording_snapshot = None;
+        self.recording_microphone_peak = 0.;
         self.recording_segment_started = None;
         self.recording_snapshot_poll_pending = false;
         self.recording_has_started = false;
@@ -3658,6 +3705,7 @@ impl Live {
             let tokens = t.clone();
             let include_controls = self.include_recording_controls;
             let warning = snapshot.warning.clone();
+            let microphone_peak = self.recording_microphone_peak;
             let position = target.position
                 + egui::vec2(
                     (target.size.x - 430.).max(0.) / 2.,
@@ -3701,6 +3749,7 @@ impl Live {
                             busy,
                             has_microphone: snapshot.options.audio.microphone_device_id.is_some(),
                             microphone_muted: snapshot.options.audio.microphone_muted,
+                            microphone_peak,
                             elapsed_ms,
                             notice,
                             warning: warning.is_some(),

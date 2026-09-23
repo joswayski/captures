@@ -934,8 +934,13 @@ The shared recording session also exposes a read-only live microphone peak throu
 `microphone_level` on the existing v1 recording request: `{microphone_peak}` is
 finite in 0–1, and zero for countdown, pause, stopped/failed/discarded, muted or
 mic-less sessions. The engine clears a disconnected microphone's meter while
-retaining its warning and captured media. This is a host integration boundary,
-not a shipped native meter or physical-device acceptance result.
+retaining its warning and captured media. The Windows/Linux HUD samples this on
+its recording worker at up to 10 Hz while visible and unmuted, with one request
+in flight. Its neutral fixed-glass meter clears during pause, mute and lifecycle
+work; hidden controls retain only the existing warning polling cadence. AppKit
+meter integration is separate. Private X11 virtual-audio tests check changing
+volume, silence, mute/unmute and pause alongside decoded media; Windows runtime,
+physical microphones, accessibility and Wayland acceptance remain open.
 
 The opt-in `--live` workspace now connects full-display PNG capture and local
 screenshot history on both native hosts through `captures-app`. It includes

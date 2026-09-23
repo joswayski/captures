@@ -79,6 +79,12 @@ jobs:
       - name: Record and decode real MP4 with native controls on private X11
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/x11_recording_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording
+      - name: Exercise live microphone levels and decoded mute intervals on private X11
+        if: runner.os == 'Linux'
+        run: |
+          for appearance in dark light; do
+            /usr/bin/python3 apps/native/x11_recording_smoke.py --restart-only --virtual-microphone --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-microphone-$appearance"
+          done
       - name: Capture regions while a native recording continues on private X11
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/x11_recording_smoke.py --screenshot-only --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-screenshot
@@ -211,6 +217,8 @@ jobs:
             native-x11-controls
             native-x11-target-shortcuts
             native-x11-recording
+            native-x11-microphone-dark
+            native-x11-microphone-light
             native-x11-recording-screenshot
             native-x11-recording-editor-dark
             native-x11-recording-editor-light
