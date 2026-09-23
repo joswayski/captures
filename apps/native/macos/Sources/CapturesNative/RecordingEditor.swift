@@ -1101,14 +1101,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
         let audioLabels = audioPanel.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isEditable }
         audioLabels.first { $0.stringValue == "Audio" }?.frame = NSRect(x: 14, y: 12, width: 54, height: 20)
-        audioNote.frame = NSRect(x: 68, y: 12, width: audioPanel.bounds.width - 194, height: 20)
+        audioNote.frame = NSRect(x: 68, y: 12, width: audioPanel.bounds.width - 187, height: 20)
         systemAudioLabel.frame = NSRect(x: 14, y: 48, width: 78, height: 18)
         microphoneAudioLabel.frame = NSRect(x: 14, y: 82, width: 78, height: 18)
         systemVolume.frame = NSRect(x: 94, y: 42, width: 68, height: 28)
         microphoneVolume.frame = NSRect(x: 94, y: 76, width: 68, height: 28)
         systemMute.frame = NSRect(x: 170, y: 44, width: 72, height: 24)
         microphoneMute.frame = NSRect(x: 170, y: 78, width: 72, height: 24)
-        monoOutput.frame = NSRect(x: audioPanel.bounds.width - 112, y: 8, width: 102, height: 24)
+        monoOutput.frame = NSRect(x: audioPanel.bounds.width - 111, y: 8, width: 101, height: 24)
 
         let barY = height - saveHeight
         status.frame = NSRect(x: 24, y: barY + 8, width: width - 48, height: 36)

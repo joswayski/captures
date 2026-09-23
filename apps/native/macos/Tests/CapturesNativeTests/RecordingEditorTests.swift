@@ -790,6 +790,8 @@ final class RecordingEditorTests: XCTestCase {
                 .first { $0.stringValue == "GIF silent · MP4 kept" })
             XCTAssertGreaterThanOrEqual(audioNote.frame.width, audioNote.intrinsicContentSize.width,
                                         "minimum GIF audio status is not clipped")
+            XCTAssertLessThanOrEqual(audioNote.frame.maxX + 8,
+                                     try checkbox("Mono audio output", in: controller.root).frame.minX)
             try render(controller.root,
                        name: "recording-editor-gif-24-fps-minimum-\(appearance)")
 
