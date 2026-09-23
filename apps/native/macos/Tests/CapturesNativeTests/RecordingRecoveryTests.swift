@@ -78,7 +78,8 @@ final class RecordingRecoveryTests: XCTestCase {
             let worker = RecoveryFixtureWorker(drafts: [
                 try draft("recoverable", identity: "identity", kind: "video"),
                 try draft("unavailable", identity: nil, kind: nil,
-                    reason: "The recording manifest is corrupt and cannot be recovered or discarded automatically."),
+                    reason: "The recording manifest is corrupt and cannot be recovered or discarded automatically. "
+                        + String(repeating: "Inspect the retained bundle manually. ", count: 5)),
             ])
             let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
                 historyRoot: folder.path, settingsPath: nil, transport: EmptyHistoryTransport(),
@@ -89,6 +90,11 @@ final class RecordingRecoveryTests: XCTestCase {
             try waitUntil { worker.listCount > 0 && !panel.isHidden }
             XCTAssertEqual(panel.frame, NSRect(x: 28, y: 194, width: 320, height: 152))
             XCTAssertTrue(root.bounds.contains(panel.frame))
+            let row = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView)
+            let reason = try XCTUnwrap(row.subviews.compactMap { $0 as? NSTextField }
+                .first { $0.stringValue.contains("The recording manifest is corrupt") })
+            XCTAssertGreaterThan(reason.frame.height, 49)
+            XCTAssertEqual(reason.toolTip, reason.stringValue)
             if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
                 window.display(); root.layoutSubtreeIfNeeded()
                 let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
@@ -218,6 +224,61 @@ final class RecordingRecoveryTests: XCTestCase {
         try waitUntil { controller.prepareEditorForTermination() }
         XCTAssertEqual(table.selectedRow, 1,
                        "recovery must not reselect its artifact after the user changes selection")
+    }
+
+    func testRealRecoveryBridgePublishesAndOpensSameHistoryRecording() throws {
+        guard let tools = try? NativeMediaTools.locate() else {
+            throw XCTSkip("ffmpeg and ffprobe are required")
+        }
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let history = base.appendingPathComponent("history")
+        let id = UUID().uuidString.lowercased()
+        let bundle = base.appendingPathComponent("recording-recovery").appendingPathComponent(id)
+        try FileManager.default.createDirectory(at: history, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let segment = bundle.appendingPathComponent("segment-000.mp4")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: tools.ffmpeg)
+        process.arguments = ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                             "color=c=red:size=64x48:rate=10:duration=1", "-c:v", "mpeg4", segment.path]
+        try process.run(); process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        let size = (try FileManager.default.attributesOfItem(atPath: segment.path)[.size] as? NSNumber)?.intValue ?? 0
+        let manifest: [String: Any] = ["schema_version": 1, "session_id": id,
+            "created_at_ms": 1_780_000_000_000 as UInt64, "updated_at_ms": 1_780_000_000_000 as UInt64,
+            "state": "failed", "options": ["kind": "video", "target": ["type": "display", "display_id": "fixture"],
+                "frames_per_second": 15, "max_resolution": "original", "countdown_seconds": 0,
+                "show_cursor": false],
+            "segments": [["index": 0, "relative_path": "segment-000.mp4", "started_at_ms": 0,
+                "duration_ms": 1_000, "width": 64, "height": 48, "size_bytes": size,
+                "dropped_frames": 0, "complete": true]]]
+        try JSONSerialization.data(withJSONObject: manifest)
+            .write(to: bundle.appendingPathComponent("manifest.json"))
+        let worker = RecordingRecoveryWorker()
+        var listed: Result<[RecordingRecoveryDraft], Error>?
+        worker.list(historyRoot: history.path) { listed = $0 }
+        try waitUntil { listed != nil }
+        let draft = try XCTUnwrap(try listed!.get().first)
+        XCTAssertEqual(draft.sessionID, id)
+        XCTAssertEqual(draft.status, "recoverable")
+        let cancel = try XCTUnwrap(NativeRecordingEditorCancel())
+        var result: Result<RecordingRecoveryResult, Error>?
+        var stages: [String] = []
+        worker.recover(historyRoot: history.path, draft: draft, cancel: cancel,
+                       progress: { stages.append($0) }, completion: { result = $0 })
+        try waitUntil { result != nil }
+        let recovered = try result!.get()
+        XCTAssertTrue(stages.contains("publishing"))
+        let artifacts = try XCTUnwrap(NativeRecordingInfo.request([
+            "operation": "history", "root": history.path])["recordings"] as? [[String: Any]])
+        XCTAssertTrue(artifacts.contains {
+            ($0["entry"] as? [String: Any])?["id"] as? String == recovered.artifactID
+        })
+        let (session, opened) = try NativeRecordingEditorSession.open(
+            historyRoot: history.path, artifactID: recovered.artifactID, tools: tools)
+        XCTAssertEqual(opened.snapshot.artifactID, recovered.artifactID)
+        XCTAssertNotNil(try session.request(["operation": "seek", "position_ms": 200]).image.dataProvider?.data)
     }
 
     private func tryRecoveryError(_ panel: Surface) -> String {
