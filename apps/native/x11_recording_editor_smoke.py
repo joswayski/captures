@@ -35,9 +35,12 @@ def main():
     parser.add_argument("--timeline", action="store_true", help="Exercise graphical trim staging, keyboard input and export")
     parser.add_argument("--thumbnails", action="store_true", help="Exercise source thumbnails, cancellation, failure/retry and trim")
     parser.add_argument("--playback", action="store_true", help="Exercise silent motion, pause/resume, trim EOF, failure and close")
+    parser.add_argument("--sound", action="store_true", help="Exercise opt-in playback through an isolated PulseAudio sink (not physical audio acceptance)")
     parser.add_argument("--graphical-crop", action="store_true", help="Exercise source-view crop handles, cache, staging and export")
     parser.add_argument("--preview-scale", action="store_true", help="Exercise display-only Fit/100% and bounded preview scrolling")
     args = parser.parse_args()
+    if args.sound:
+        args.audio = True
     if args.thumbnails:
         args.timeline = True
     binary = args.binary.resolve(strict=True)
@@ -142,6 +145,18 @@ def main():
         thread = threading.Thread(target=loop.run, daemon=True)
         thread.start()
         spawn("openbox", ["openbox", "--sm-disable"])
+        if args.sound:
+            socket = output / "pulse.sock"
+            env["PULSE_SERVER"] = "unix:" + str(socket)
+            audio_server = spawn("pulse", ["pulseaudio", "-n", "--daemonize=no", "--use-pid-file=no",
+                "--exit-idle-time=-1", "--log-target=stderr",
+                f"--load=module-native-protocol-unix socket={socket} auth-anonymous=1",
+                "--load=module-null-sink sink_name=captures_preview rate=48000 channels=2"])
+            wait(socket.exists, "isolated PulseAudio socket")
+            run("pactl", "set-default-sink", "captures_preview")
+            alsa = output / "alsa.conf"
+            alsa.write_text('</usr/share/alsa/alsa.conf>\npcm.!default { type pulse }\nctl.!default { type pulse }\n')
+            env["ALSA_CONFIG_PATH"] = str(alsa)
         history = output / "history"
         artifact_id = "032135f1-11e4-4a47-893d-2368c079a6ba"
         artifact = history / artifact_id
@@ -149,7 +164,7 @@ def main():
         source = output / "source.mp4"
         source_width, source_height = (1600, 900) if args.preview_scale else (640, 1440) if args.presets else (320, 180)
         source_size = f"{source_width}x{source_height}"
-        segment_seconds = 2 if args.playback else 1
+        segment_seconds = 2 if args.playback or args.sound else 1
         audio_inputs = []
         audio_filters = ""
         audio_maps = []
@@ -248,6 +263,113 @@ def main():
         dominant(output / "original.png", 0)
         run("xdotool", "windowminimize", root, "sleep", ".5")
         estimate_expectations = {}
+        if args.sound:
+            def motion_click():
+                run("xdotool", "mousemove", "--window", editor, "192", "57", "sleep", ".05",
+                    "mousedown", "1", "sleep", ".08", "mouseup", "1")
+
+            def playing():
+                return "Working…" in run("xdotool", "getwindowname", editor).decode()
+
+            def capture_playback(name):
+                pcm = output / f"{name}.f32"
+                monitor = spawn(name, ["ffmpeg", "-v", "error", "-f", "pulse", "-i",
+                    "captures_preview.monitor", "-t", "8", "-ar", "48000", "-ac", "2",
+                    "-f", "f32le", str(pcm)])
+                time.sleep(.5)
+                motion_click()
+                wait(playing, "playback started")
+                time.sleep(1)
+                inputs = run("pactl", "list", "short", "sink-inputs").splitlines()
+                assert len(inputs) == (0 if name == "sound-default-off" else 1), inputs
+                run("import", "-window", editor, str(output / f"{name}-running.png"))
+                idle(editor)
+                assert not run("pactl", "list", "short", "sink-inputs").strip(), "EOF releases audio output"
+                assert monitor.wait(timeout=15) == 0
+                return array("f", pcm.read_bytes())
+
+            silent = capture_playback("sound-default-off")
+            assert silent and max(abs(v) for v in silent) < .00001, "Sound defaults off"
+            click(editor, 322, 57)
+            audible = capture_playback("sound-on")
+            assert max(abs(v) for v in audible) > .05, "Sound reaches the default virtual sink"
+            # Independently measure both asymmetric source tones, rather than accepting noise.
+            measured = []
+            for frequency in (440, 880):
+                amplitudes = []
+                for offset in range(0, len(audible) - 19200, 19200):
+                    values = audible[offset:offset + 19200:2]
+                    real = sum(v * math.cos(2 * math.pi * frequency * i / 48000) for i, v in enumerate(values))
+                    imaginary = sum(v * math.sin(2 * math.pi * frequency * i / 48000) for i, v in enumerate(values))
+                    amplitudes.append(2 * math.hypot(real, imaginary) / len(values))
+                measured.append(max(amplitudes))
+            assert all(value > .02 for value in measured), measured
+            shot(editor, "sound-ended")
+            dominant(output / "sound-ended.png", 2)
+            assert max(abs(v) for v in audible[-48000:]) < .00001, "short audio drains to silence"
+
+            click(editor, 254, 57)  # Loop reopens audio only after decoder/output teardown.
+            motion_click()
+            wait(playing, "audible loop starts")
+            def output_stream():
+                streams = run("pactl", "list", "short", "sink-inputs").splitlines()
+                assert len(streams) <= 1, "loop never opens overlapping output streams"
+                return streams[0].split()[0] if streams else None
+            first_stream = wait(output_stream, "first lap opens audio output")
+            wait(lambda: (stream := output_stream()) and stream != first_stream,
+                 "loop closes and reopens the audio output for the next lap")
+            assert playing(), "audible loop retains worker ownership across EOF"
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            run("import", "-window", editor, str(output / "sound-minimum-running.png"))
+            motion_click()
+            idle(editor)
+            assert not run("pactl", "list", "short", "sink-inputs").strip(), "Pause releases audio output"
+            shot(editor, "sound-minimum-on-paused")
+            run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
+            click(editor, 254, 57)
+
+            # Default-device absence is visible failure, not an implicit silent fallback.
+            audio_server.terminate()
+            audio_server.wait(timeout=5)
+            motion_click()
+            idle(editor)
+            shot(editor, "sound-device-error")
+            dominant(output / "sound-device-error.png", 0)
+            click(editor, 322, 57)
+            motion_click()
+            wait(playing, "explicit Sound-off retry works without an audio server")
+            time.sleep(.7)
+            motion_click()
+            idle(editor)
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            shot(editor, "sound-minimum-paused")
+            run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
+            click(editor, 322, 57)  # Request Sound again, but GIF must not open a device.
+            click(editor, 87, 882)
+            click(editor, 793, 882)
+            idle(editor)  # Apply and Play share the Working title; finish Apply first.
+            motion_click()
+            wait(playing, "GIF with Sound selected stays playable without a device")
+            def gif_motion():
+                path = output / "sound-gif-silent.png"
+                run("import", "-window", editor, str(path))
+                pixel = run("convert", str(path), "-crop", "1x1+480+220", "-depth", "8", "rgb:-")
+                return len(pixel) == 3 and pixel[1] > max(pixel[0], pixel[2]) + 40
+            wait(gif_motion, "silent GIF actually advances from red to green without a device")
+            motion_click()
+            idle(editor)
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
+            close(editor)
+            shot(editor, "sound-close-confirmation")
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "virtual_sink_tone_amplitudes": measured,
+                "checks": ["default-silent", "opt-in-real-output", "both-source-tones", "short-audio-video-eof",
+                    "audible-loop-reopen", "one-output-stream", "pause-eof-release-output",
+                    "device-failure", "explicit-silent-retry", "minimum-layout", "gif-no-device",
+                    "immutable-source-history", "no-export"]}, indent=2) + "\n")
+            print("PASS Sound preview: default-off, virtual audio output, EOF, device error/retry and GIF without a device")
+            return
         if args.preview_scale:
             def marker_size(name):
                 pixels = run("convert", str(output / f"{name}.png"), "-crop", "960x380+0+85",
