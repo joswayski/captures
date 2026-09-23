@@ -672,11 +672,15 @@ impl View {
                     self.estimate = None;
                 }
                 self.error = None;
-                self.status = if comparing.is_some() {
-                    Some("Encoding accepted frame comparison…".into())
-                } else {
-                    loading_source.then(|| "Loading uncropped source frame…".into())
-                };
+                // Automatic source thumbnails must not erase the preceding
+                // replacement result while refreshing the rebased timeline.
+                if !loading_thumbnails {
+                    self.status = if comparing.is_some() {
+                        Some("Encoding accepted frame comparison…".into())
+                    } else {
+                        loading_source.then(|| "Loading uncropped source frame…".into())
+                    };
+                }
             }
             Err(_) => {
                 self.error = Some("Recording editor worker stopped.".into());
@@ -2618,6 +2622,17 @@ mod tests {
         );
         assert!(view.can_replace());
         let (tx, jobs) = mpsc::channel();
+        view.request_thumbnails(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Thumbnails(_)));
+        assert_eq!(
+            view.status.as_deref(),
+            Some("Replaced original: original.gif")
+        );
+        view.receive(&ctx, Event::Thumbnails(Err("cancelled".into())));
+        assert_eq!(
+            view.status.as_deref(),
+            Some("Replaced original: original.gif")
+        );
         view.request_playback(&tx);
         assert!(matches!(jobs.recv().unwrap(), Job::Play(0, false, _)));
         view.busy = false;
