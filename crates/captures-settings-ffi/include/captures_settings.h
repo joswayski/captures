@@ -610,6 +610,25 @@ typedef void (*CapturesRecordingEditorProgress)(void *context, const char *progr
 CapturesRecordingEditorCancel *captures_recording_editor_cancel_create_v1(void);
 void captures_recording_editor_cancel_v1(const CapturesRecordingEditorCancel *cancel);
 void captures_recording_editor_cancel_free_v1(CapturesRecordingEditorCancel *cancel);
+/* Blocking interrupted native recording recovery, scoped to the host's
+ * isolated history_root and its sibling recording-recovery directory. Calls
+ * belong on the serialized recording worker. A live native session's OS lock
+ * makes list/recover/discard fail rather than expose its active bundle.
+ * list request: {history_root,ffmpeg?,ffprobe?}; action requests add session_id
+ * and expected_identity from an available list row. Unavailable/corrupt rows
+ * have no identity and cannot be recovered or discarded. Responses are owned
+ * {ok:true,result:{drafts:[...]}} / {ok:true,result:{status,entry,path,warning}}
+ * / {ok:true,result:{status:"discarded"}} or {ok:false,error}. Free using
+ * captures_settings_free_v1. Reuse the thread-safe editor CancelToken owner;
+ * no editor session is involved. NULL cancel is an error. Progress callback
+ * receives borrowed {stage:"scanning"|"assembling"|"poster"|"publishing"}
+ * and may be NULL. Cancellation before publication retains draft media. */
+typedef void (*CapturesRecordingRecoveryProgress)(void *context, const char *progress_json);
+char *captures_recording_recovery_list_v1(const char *request_json);
+char *captures_recording_recovery_recover_v1(const char *request_json,
+    const CapturesRecordingEditorCancel *cancel,
+    CapturesRecordingRecoveryProgress progress, void *context);
+char *captures_recording_recovery_discard_v1(const char *request_json);
 /* Blocking estimate of the accepted edit + preview_export. Returns owned
  * {ok:true,result:{size_bytes,exact}} or {ok:false,error}. It does not mutate
  * session/frame/revision, publish History, or invoke a progress callback. */

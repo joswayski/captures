@@ -6,6 +6,8 @@
 
 mod session;
 pub use session::{FinalizedRecording, RecordingSession};
+mod recovery;
+pub use recovery::{RecordingRecovery, RecoveryDraft, RecoveryOutcome, RecoveryProgress};
 
 use std::path::Path;
 

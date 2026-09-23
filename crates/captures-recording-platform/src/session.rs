@@ -1,6 +1,7 @@
 //! Blocking recording lifecycle. Keep this owner on a worker, never the native
 //! event loop. The host owns selector/countdown presentation and start cancellation.
 use std::{
+    fs::File,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -25,6 +26,7 @@ pub struct FinalizedRecording {
 }
 
 pub struct RecordingSession {
+    recovery_lease: Option<File>,
     coordinator: RecordingCoordinator,
     store: DraftStore,
     manifest: RecordingDraftManifest,
@@ -42,6 +44,7 @@ impl RecordingSession {
         options: RecordingOptions,
         display: DisplayDescriptor,
     ) -> Result<Self, String> {
+        let recovery_lease = super::recovery::lease(&recovery_root)?;
         let now = now_ms();
         let mut coordinator = RecordingCoordinator::default();
         let initial = coordinator.begin(options.clone(), now).map_err(string)?;
@@ -53,6 +56,7 @@ impl RecordingSession {
         manifest.state = RecordingState::Countdown;
         let directory = store.create(&manifest).map_err(string)?;
         Ok(Self {
+            recovery_lease: Some(recovery_lease),
             coordinator,
             store,
             manifest,
@@ -376,6 +380,7 @@ impl RecordingSession {
                 .map(|error| format!("Recording saved; could not remove source bundle: {error}")),
             Ok(()) => None, // GIF source media remains available for editing.
         };
+        self.recovery_lease.take();
         Ok(FinalizedRecording {
             entry,
             path,
@@ -502,6 +507,7 @@ impl RecordingSession {
             .remove(&self.manifest.session_id)
             .map_err(string)?;
         self.started_at_ms = None;
+        self.recovery_lease.take();
         Ok(self.snapshot())
     }
 

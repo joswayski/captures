@@ -582,6 +582,79 @@ impl MediaToolchain {
             .arg(input)
             .output()
             .map_err(|error| map_spawn_error(error, "ffprobe"))?;
+        Self::parse_probe_output(input, &output)
+    }
+
+    /// Cancellable probe for interrupted recording recovery. The existing
+    /// `probe` contract remains unchanged for synchronous callers.
+    pub fn probe_with_cancel(
+        &self,
+        input: &Path,
+        cancel: &CancelToken,
+    ) -> Result<ProbeResult, MediaToolError> {
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled);
+        }
+        let mut child = Command::new(&self.ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-show_streams",
+                "-show_format",
+                "-of",
+                "json",
+            ])
+            .arg(input)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| map_spawn_error(error, "ffprobe"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or(MediaToolError::IncompleteMetadata)?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or(MediaToolError::IncompleteMetadata)?;
+        let out = thread::spawn(move || read_capped(stdout, 8 * 1024 * 1024));
+        let err = thread::spawn(move || read_capped(stderr, 64 * 1024));
+        let status = loop {
+            if cancel.is_cancelled() {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = out.join();
+                let _ = err.join();
+                return Err(MediaToolError::Cancelled);
+            }
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            thread::sleep(Duration::from_millis(50));
+        };
+        let stdout = out
+            .join()
+            .map_err(|_| MediaToolError::IncompleteMetadata)??;
+        let stderr = err
+            .join()
+            .map_err(|_| MediaToolError::IncompleteMetadata)??;
+        if stdout.len() > 8 * 1024 * 1024 || stderr.len() > 64 * 1024 {
+            return Err(MediaToolError::IncompleteMetadata);
+        }
+        Self::parse_probe_output(
+            input,
+            &std::process::Output {
+                status,
+                stdout,
+                stderr,
+            },
+        )
+    }
+
+    fn parse_probe_output(
+        input: &Path,
+        output: &std::process::Output,
+    ) -> Result<ProbeResult, MediaToolError> {
         if !output.status.success() {
             return Err(MediaToolError::Process(process_message(&output.stderr)));
         }
@@ -690,7 +763,7 @@ impl MediaToolchain {
             }
         }
         Ok(RecordingAssemblyOutcome {
-            probe: self.probe(destination)?,
+            probe: self.probe_with_cancel(destination, cancel)?,
             has_microphone_audio,
         })
     }
@@ -758,7 +831,7 @@ impl MediaToolchain {
             .any(|segment| segment.system_audio_path.is_some());
         let has_missing_system_audio = if audio.system_audio && !has_external_system_audio {
             segments.iter().try_fold(false, |missing, segment| {
-                self.probe(&segment.video_path)
+                self.probe_with_cancel(&segment.video_path, cancel)
                     .map(|probe| missing || !probe.has_audio)
             })?
         } else {
@@ -796,8 +869,10 @@ impl MediaToolchain {
         audio: RecordingAudioLayout,
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
-        let embedded_system_audio =
-            audio.system_audio && self.probe(&segment.video_path)?.has_audio;
+        let embedded_system_audio = audio.system_audio
+            && self
+                .probe_with_cancel(&segment.video_path, cancel)?
+                .has_audio;
         let mut command = Command::new(&self.ffmpeg);
         command.args(["-hide_banner", "-loglevel", "error", "-y", "-i"]);
         command.arg(&segment.video_path);
@@ -2557,6 +2632,20 @@ fn gif_filter(frames_per_second: u16, max_width: u32, max_colors: u16) -> String
     format!(
         "fps={frames_per_second},scale='min({max_width},iw)':-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors={max_colors}:stats_mode=full[p];[s1][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle"
     )
+}
+
+fn read_capped(mut reader: impl Read, max: usize) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let count = reader.read(&mut chunk)?;
+        if count == 0 {
+            break;
+        }
+        let keep = count.min(max.saturating_add(1).saturating_sub(bytes.len()));
+        bytes.extend_from_slice(&chunk[..keep]);
+    }
+    Ok(bytes)
 }
 
 fn run_command(

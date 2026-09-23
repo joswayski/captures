@@ -852,7 +852,11 @@ dependencies = [
  "captures-recording-macos",
  "captures-recording-xcap",
  "chrono",
+ "file-id",
  "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
  "uuid",
 ]
 
