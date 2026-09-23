@@ -241,9 +241,12 @@ and MP4/GIF **Save new copy**. Crop dimensions start aspect-locked; unlock to ch
 width and height independently. Apply edits accepts the format, quality and edits
 together before saving; failed updates leave the last accepted frame intact.
 The shared recording editor now also supports same-format replacement of an
-existing permanent MP4/GIF when History retains identical recovery media. Native
-recording-editor hosts do not yet expose **Replace original**; their visible save
-action remains **Save new copy**.
+existing permanent MP4/GIF when History retains identical recovery media.
+The Windows/Linux editor exposes **Replace original…** with exact-path confirmation;
+success resets the editor to the replaced recording. Cancellation stops preparation,
+but cannot interrupt publication once it starts. Missing or divergent recovery files
+are rejected. This update is not crash-atomic across the saved file and History.
+AppKit integration remains separate; **Save new copy** is still non-destructive.
 Trim handles stage changes without decoding on each pointer move; Apply updates
 the preview. Focused trim handles also accept arrow keys and Page Up/Page Down.
 **Adjust crop** shows an uncropped source frame with draggable edges/corners and
@@ -302,8 +305,8 @@ Custom dimensions are independent (no aspect lock); the shared media engine roun
 sizes to even pixels.
 Re-encoded Windows/Linux MP4 fits within 3840 × 2160 (2160 × 3840 for portrait);
 its preview reflects that cap, while GIF previews retain their requested dimensions.
-Exports report progress, support cancellation, never replace an existing file, and
-add a distinct History item. A History failure retains the saved path for recovery.
+**Save new copy** reports progress, supports cancellation, never replaces an existing
+file, and adds a distinct History item. A History failure retains the saved path.
 Recording edits are not drafts: save or explicitly discard them before closing or
 quitting. AppKit connects a separate History editor with decoded source-relative
 frames, numeric trim and source-relative crop, Original/1080p/720p or independent

@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--estimate", action="store_true", help="Exercise exact size estimates and missing-source retry")
     parser.add_argument("--estimate-delta", action="store_true", help="Render exact and sampled size deltas against an immutable source")
     parser.add_argument("--comparison", action="store_true", help="Exercise encoded before/after, hide, failure/retry and immutable identity")
+    parser.add_argument("--replace-original", action="store_true", help="Exercise confirmed replacement, cancellation and same-session rebase")
     parser.add_argument("--timeline", action="store_true", help="Exercise graphical trim staging, keyboard input and export")
     parser.add_argument("--thumbnails", action="store_true", help="Exercise source thumbnails, cancellation, failure/retry and trim")
     parser.add_argument("--playback", action="store_true", help="Exercise silent motion, pause/resume, trim EOF, failure and close")
@@ -212,6 +213,8 @@ def main():
             "target": {"type": "display", "display_id": "fixture"},
             "has_system_audio": args.audio, "has_microphone_audio": args.audio, "dropped_frames": 0,
         }))
+        if args.replace_original:
+            shutil.copyfile(source, artifact / "media.mp4")
         original, original_metadata = source.read_bytes(), metadata.read_bytes()
         exports = output / "exports"
         exports.mkdir()
@@ -221,16 +224,16 @@ def main():
             "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
             "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
             "auto_copy_to_clipboard": False, "show_mini_previews": False}))
-        if args.thumbnails or args.graphical_crop or args.maximum_size or args.comparison:
+        if args.thumbnails or args.graphical_crop or args.maximum_size or args.comparison or args.replace_original:
             # Delay only the requested frame/export command to exercise
             # cancellation without racing a tiny fixture. Pixels still use FFmpeg.
             tools = output / "tools"
             tools.mkdir()
-            operation = "comparison" if args.comparison else "export" if args.maximum_size else "thumbnails" if args.thumbnails else "source-frame"
+            operation = "comparison" if args.comparison else "export" if args.maximum_size or args.replace_original else "thumbnails" if args.thumbnails else "source-frame"
             started = output / f"{operation}-calls.txt"
             allowed = output / f"allow-{operation}"
-            predicate = "'captures-export-comparison-' in arg" if args.comparison else "'-attempt-' in arg" if args.maximum_size else "'tile=' in arg" if args.thumbnails else "'source-frame-' in arg"
-            if args.maximum_size or args.comparison:
+            predicate = "'.captures-replace-' in arg" if args.replace_original else "'captures-export-comparison-' in arg" if args.comparison else "'-attempt-' in arg" if args.maximum_size else "'tile=' in arg" if args.thumbnails else "'source-frame-' in arg"
+            if args.maximum_size or args.comparison or args.replace_original:
                 allowed.touch()
             ffmpeg = shutil.which("ffmpeg")
             assert ffmpeg
@@ -279,6 +282,96 @@ def main():
                 assert all(pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel), (x, pixel)
         wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(), "decode")
         shot(editor, "original")
+        if args.replace_original:
+            recovery = artifact / "media.mp4"
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            field(editor, 113, 598, 1100)
+            field(editor, 227, 598, 2300)
+            click(editor, 22, 683)
+            click(editor, 205, 683)
+            for x, value in ((51, 10), (114, 6), (208, 160), (309, 90)):
+                field(editor, x, 727, value)
+            click(editor, 22, 771)
+            field(editor, 78, 815, 81)
+            field(editor, 170, 815, 61)
+            click(editor, 793, 1082)
+            shot(editor, "replace-accepted")
+            click(editor, 782, 1038)
+            shot(editor, "replace-confirmation")
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            shot(editor, "replace-confirmation-minimum")
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            click(editor, 93, 980)
+            shot(editor, "replace-declined")
+            assert source.read_bytes() == original == recovery.read_bytes()
+            assert metadata.read_bytes() == original_metadata
+
+            # Gate a real export subprocess, then cancel after its start marker.
+            allowed.unlink()
+            calls = len(started.read_text().splitlines()) if started.exists() else 0
+            click(editor, 782, 1038)
+            click(editor, 267, 980)
+            wait(lambda: started.exists() and len(started.read_text().splitlines()) > calls, "replacement encoder started")
+            # The child marker can precede the UI's progress event. Let that
+            # row settle before targeting Cancel, without waiting for idle.
+            run("xdotool", "windowactivate", "--sync", editor, "windowfocus", "--sync", editor,
+                "sleep", "1", "mousemove", "--sync", "--window", editor, "90", "994", "sleep", ".5")
+            run("import", "-window", editor, str(output / "replace-running.png"))
+            run("xdotool", "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
+            shot(editor, "replace-cancelled")
+            assert source.read_bytes() == original == recovery.read_bytes()
+            assert metadata.read_bytes() == original_metadata
+            assert not list(output.glob(".captures-replace-*"))
+            allowed.touch()
+
+            click(editor, 782, 1038)
+            click(editor, 267, 980)
+            wait(lambda: source.read_bytes() != original, "original replaced")
+            shot(editor, "replace-rebased")
+            new_bytes = source.read_bytes()
+            assert recovery.read_bytes() == new_bytes
+            updated = json.loads(metadata.read_text())
+            before = json.loads(original_metadata)
+            for key in ("id", "created_at", "target", "dropped_frames", "saved_path"):
+                assert updated[key] == before[key], (key, updated)
+            assert (updated["width"], updated["height"]) == (80, 60)
+            assert abs(updated["duration_ms"] - 1200) <= 150
+            assert len(list(history.glob("*/metadata.json"))) == 1
+            # This same open editor must use the new duration/geometry for seek
+            # and save; stale original dimensions or a phantom dirty state fails.
+            field(editor, 136, 520, 1000)
+            click(editor, 222, 520)
+            shot(editor, "replace-seek")
+            dominant(output / "replace-seek.png", 2)
+            copy = exports / "after-replace.mp4"
+            field(editor, 350, 1038, copy)
+            click(editor, 899, 1082)
+            wait(copy.exists, "same-session save after replacement")
+            wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "same-session copy published in History")
+            info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(copy)))
+            assert (info["streams"][0]["width"], info["streams"][0]["height"]) == (80, 60)
+            assert abs(float(info["format"]["duration"]) - 1.2) < .15
+            frame = run("ffmpeg", "-v", "error", "-ss", "0.2", "-i", str(copy), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
+            assert len(frame) == 80 * 60 * 3
+            for x, y in ((4, 4), (20, 15)):
+                assert min(frame[(y * 80 + x) * 3:(y * 80 + x) * 3 + 3]) > 210
+            green = frame[(30 * 80 + 40) * 3:(30 * 80 + 40) * 3 + 3]
+            assert green[1] > max(green[0], green[2]) + 40
+            assert source.read_bytes() == new_bytes == recovery.read_bytes()
+            assert len(list(history.glob("*/metadata.json"))) == 2
+            assert not list(output.glob(".captures-replace-*"))
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            shot(editor, "replace-saved-minimum")
+            close(editor)
+            wait(lambda: not windows("Recording editor"), "rebased editor closes without dirty warning")
+            close(root)
+            wait(lambda: app.poll() is not None, "replacement quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "checks": ["exact-path-confirmation", "decline-preserves-source", "in-flight-cancel", "cancel-cleanup",
+                    "same-id-history", "permanent-recovery-bytes", "asymmetric-crop-resize-pixels", "same-session-seek-save", "clean-close"]}, indent=2) + "\n")
+            print("PASS replacement: confirmation, cancel, source/History rebase, real edited pixels and same-session save")
+            return
         if args.comparison:
             click(editor, 390, 57)
             shot(editor, "comparison-mp4")
