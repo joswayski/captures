@@ -40,13 +40,16 @@ def main():
                         help="exercise recording-ready save/retry/reveal, expiry and dismissal")
     parser.add_argument("--appearance", choices=("dark", "light"), default="dark")
     parser.add_argument("--virtual-microphone", action="store_true",
-                        help="use a disposable PulseAudio null-sink monitor to verify mute segments")
+                        help="use a disposable PulseAudio microphone to verify live meter and mute segments")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     env = os.environ.copy()
     env.pop("WAYLAND_DISPLAY", None)
+    if args.virtual_microphone:
+        for variable in ("PULSE_SERVER", "PULSE_COOKIE", "PULSE_RUNTIME_PATH"):
+            env.pop(variable, None)
     env.update(WGPU_BACKEND="gl", WINIT_X11_SCALE_FACTOR="1", XDG_SESSION_TYPE="x11")
     for variable, directory in (("XDG_CONFIG_HOME", "config"), ("XDG_CACHE_HOME", "cache"),
                                 ("XDG_DATA_HOME", "data"), ("XDG_RUNTIME_DIR", "runtime")):
@@ -85,6 +88,11 @@ def main():
 
     def shot(window, name):
         run("import", "-window", window, str(output / f"{name}.png"))
+
+    def meter_pixels(window):
+        # The fixed-size live HUD's meter track only; exclude adjacent buttons.
+        pixels = run("import", "-window", window, "-crop", "28x4+272+51", "-depth", "8", "rgb:-")
+        return sum(min(pixels[index:index + 3]) > 220 for index in range(0, len(pixels), 3))
 
     def wait(predicate, description):
         deadline = time.monotonic() + 20
@@ -254,7 +262,7 @@ def main():
             run("pactl", "set-default-source", "captures.monitor")
             tone = output / "microphone-tone.wav"
             run("ffmpeg", "-v", "error", "-f", "lavfi", "-i",
-                "sine=frequency=730:sample_rate=48000", "-t", "120", str(tone))
+                "sine=frequency=730:sample_rate=48000", "-af", "volume=4", "-t", "120", str(tone))
             spawn("microphone-tone", ["paplay", "--device=captures", str(tone)])
         time.sleep(1)
         if args.screenshot_only:
@@ -304,6 +312,22 @@ def main():
         run("xdotool", "key", "ctrl+alt+d")
         hud = running_hud()
         shot(hud, "hud-running")
+        if args.virtual_microphone:
+            run("xdotool", "mousemove", "0", "0")
+            wait(lambda: meter_pixels(hud) >= 20, "nonzero live microphone meter with root hidden")
+            high = meter_pixels(hud)
+            shot(hud, "meter-audible")
+            run("pactl", "set-source-volume", "captures.monitor", "75%")
+            wait(lambda: 0 < meter_pixels(hud) < high - 8, "smaller meter for quieter live audio")
+            low = meter_pixels(hud)
+            shot(hud, "meter-quieter")
+            run("pactl", "set-source-volume", "captures.monitor", "0%")
+            wait(lambda: meter_pixels(hud) == 0, "empty meter for silent unmuted microphone")
+            shot(hud, "meter-silent")
+            run("pactl", "set-source-volume", "captures.monitor", "100%")
+            wait(lambda: meter_pixels(hud) >= high - 4, "meter resumes without reopening recording")
+            shot(hud, "meter-restored")
+            print(f"PASS microphone meter live pixels: audible {high}, quieter {low}, silent 0, restored", flush=True)
         assert windows("Captures Recording Region") == [guide]
         shot("root", "recording-region-running")
         # The guide must really be click-through, not just omit UI handlers.
@@ -633,16 +657,20 @@ def main():
             wait(lambda: (value := manifest()) and value["state"] == "recording"
                  and value["options"]["audio"]["microphone_muted"]
                  and len(value["segments"]) == 2, "running microphone mute segment")
+            wait(lambda: meter_pixels(hud) == 0, "muted meter clears the previous sample")
             shot(hud, "hud-muted")
             click(hud, 318, 54)
             wait(lambda: (value := manifest()) and value["state"] == "recording"
                  and not value["options"]["audio"]["microphone_muted"]
                  and len(value["segments"]) == 3, "running microphone unmute segment")
+            wait(lambda: meter_pixels(hud) >= 20, "unmuted meter resumes live samples")
             shot(hud, "hud-unmuted")
         click(hud, 178, 54)
         wait(lambda: (value := manifest()) and value["state"] == "paused", "pause completed")
         time.sleep(.3)
         hud = wait(lambda: windows("Captures Recording Controls"), "paused HUD")[0]
+        if args.virtual_microphone:
+            wait(lambda: meter_pixels(hud) == 0, "paused meter clears the previous sample")
         shot(hud, "hud-paused")
 
         # Paused Restart replaces the accepted take and rearms Escape for its
@@ -732,6 +760,8 @@ def main():
                 "first_pixel": list(frames[:3]), "last_pixel": list(frames[-3:]),
                 "paused_restart": True, "running_restart": True,
                 "virtual_microphone_mute": args.virtual_microphone,
+                "microphone_meter_pixels": {"audible": high, "quieter": low, "silent": 0}
+                    if args.virtual_microphone else None,
                 "microphone_rms": microphone_rms,
                 "restart_countdown_escape_discarded": True,
                 "replacement_only_media": True, "source_cleanup": True,

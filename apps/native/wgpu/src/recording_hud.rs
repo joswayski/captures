@@ -21,7 +21,6 @@ enum Icon {
     Play,
     Restart,
     Screenshot,
-    Audio,
     Microphone,
     Discard,
     Hide,
@@ -32,6 +31,7 @@ pub struct View<'a> {
     pub busy: bool,
     pub has_microphone: bool,
     pub microphone_muted: bool,
+    pub microphone_peak: f32,
     pub elapsed_ms: u64,
     pub notice: &'a str,
     pub warning: bool,
@@ -161,12 +161,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                         {
                             action = Some(Action::Screenshot);
                         }
-                        unavailable(
-                            ui,
-                            Icon::Audio,
-                            "System audio",
-                            "Audio controls are set before recording",
-                        );
+                        microphone_meter(ui, tokens, &view);
                         let microphone_label = if view.microphone_muted {
                             "Unmute microphone"
                         } else {
@@ -229,6 +224,49 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             });
     });
     action
+}
+
+fn microphone_meter(ui: &mut egui::Ui, tokens: &Tokens, view: &View<'_>) {
+    // Clear immediately during lifecycle changes, before a queued sample can arrive.
+    let peak = if view.paused || view.busy || !view.has_microphone || view.microphone_muted {
+        0.
+    } else {
+        view.microphone_peak
+    };
+    let label = if !view.has_microphone {
+        "Microphone level unavailable: no microphone selected".into()
+    } else if view.microphone_muted {
+        "Microphone muted".into()
+    } else if view.paused {
+        "Microphone level: paused".into()
+    } else if view.busy {
+        "Microphone level: recording controls busy".into()
+    } else {
+        format!("Microphone level {}%", (peak * 100.).round())
+    };
+    let (slot, response) =
+        ui.allocate_exact_size(Vec2::splat(tokens.number("s-9")), egui::Sense::hover());
+    let track = Rect::from_center_size(
+        slot.center(),
+        Vec2::new(slot.width() - tokens.number("s-2"), tokens.number("s-2")),
+    );
+    ui.painter().rect_filled(
+        track,
+        tokens.number("r-pill") as u8,
+        tokens.color("glass-active"),
+    );
+    if peak > 0. {
+        let fill = Rect::from_min_size(track.min, Vec2::new(track.width() * peak, track.height()));
+        ui.painter().rect_filled(
+            fill,
+            tokens.number("r-pill") as u8,
+            tokens.color("glass-text"),
+        );
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, &label)
+    });
+    response.on_hover_text(label);
 }
 
 fn control(
@@ -357,12 +395,6 @@ fn paint_icon(ui: &egui::Ui, rect: Rect, icon: Icon, color: egui::Color32) {
             );
             painter.circle_stroke(center, 2.5, stroke);
         }
-        Icon::Audio => {
-            painter.line_segment(
-                [center + Vec2::new(-5., 0.), center + Vec2::new(5., 0.)],
-                stroke,
-            );
-        }
         Icon::Microphone => {
             painter.rect_stroke(
                 Rect::from_center_size(center + Vec2::new(0., -2.), Vec2::new(6., 10.)),
@@ -423,5 +455,50 @@ mod tests {
     fn duration_uses_unpadded_minutes_and_padded_seconds() {
         assert_eq!(format_duration(0), "0:00");
         assert_eq!(format_duration(94_000), "1:34");
+    }
+
+    #[test]
+    fn microphone_meter_paints_the_sample_and_clears_inactive_states() {
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        for (peak, paused, busy, has_microphone, muted, width) in [
+            (0.625, false, false, true, false, 17.5),
+            (1., false, false, true, false, 28.),
+            (0., false, false, true, false, 0.),
+            (0.625, true, false, true, false, 0.),
+            (0.625, false, true, true, false, 0.),
+            (0.625, false, false, false, false, 0.),
+            (0.625, false, false, true, true, 0.),
+        ] {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                microphone_meter(
+                    ui,
+                    &tokens,
+                    &View {
+                        paused,
+                        busy,
+                        has_microphone,
+                        microphone_muted: muted,
+                        microphone_peak: peak,
+                        elapsed_ms: 0,
+                        notice: "",
+                        warning: false,
+                        hide_available: false,
+                    },
+                );
+            });
+            output.textures_delta.clear();
+            let fills: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.fill == tokens.color("glass-text") => {
+                        Some(rect.rect.width())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(fills, if width == 0. { vec![] } else { vec![width] });
+        }
     }
 }
