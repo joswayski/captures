@@ -103,11 +103,11 @@ final class RecordingEditorTests: XCTestCase {
     func testGifReplacementPreservesNullDefaultsAndUncappedSourceWidth() throws {
         _ = NSApplication.shared
         let path = "/Exports/original.gif"
-        let initial = try presentation(revision: 1, sourceWidth: 1_200, sourceHeight: 600,
-            output: NativeRecordingDimensions(width: 800, height: 400),
+        let initial = try presentation(revision: 1, sourceWidth: 1_600, sourceHeight: 900,
+            output: NativeRecordingDimensions(width: 800, height: 450),
             exportFormat: "gif", framesPerSecond: 24, gifMaxColors: 64)
-        let rebased = try presentation(revision: 2, sourceWidth: 1_200, sourceHeight: 600,
-            previewWidth: 1_200, previewHeight: 600,
+        let rebased = try presentation(revision: 2, sourceWidth: 1_600, sourceHeight: 900,
+            previewWidth: 1_600, previewHeight: 900,
             exportFormat: "gif", gifDefaultsAbsent: true)
         let worker = FakeRecordingEditorWorker(presentation: initial)
         worker.replaceResult = .success(RecordingReplaceResult(path: path, presentation: rebased))
@@ -124,10 +124,53 @@ final class RecordingEditorTests: XCTestCase {
                        "15 FPS")
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
         XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
+        worker.requestResult = .success(rebased)
+        let seek = try slider("Recording frame position", in: controller.root)
+        seek.doubleValue = 400; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "seek")
+        try button("Save new copy", in: controller.root).performClick(nil)
+        let savedExport = try XCTUnwrap(worker.saves.last?.export)
+        XCTAssertTrue(savedExport["frames_per_second"] is NSNull)
+        XCTAssertTrue(savedExport["gif_max_colors"] is NSNull)
+        XCTAssertFalse(controller.dirty)
+
+        let outputMode = try popup("Recording output size", in: controller.root)
+        outputMode.selectItem(withTitle: "Custom")
+        _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+        let outputWidth = try field("Recording output width", in: controller.root)
+        let outputHeight = try field("Recording output height", in: controller.root)
+        outputWidth.stringValue = "1000"; outputHeight.stringValue = "300"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: outputWidth))
+        let apply = try button("Apply edits", in: controller.root)
+        worker.requestResult = .failure(AppBridgeError.backend("keep staged geometry"))
+        apply.performClick(nil)
+        var edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1_000)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 300,
+                       "Original must not impose a hidden 800px cap on custom size")
+
         let width = try popup("GIF maximum width", in: controller.root)
-        width.selectItem(withTitle: "800 px")
+        width.selectItem(withTitle: "320 px")
         _ = width.sendAction(width.action, to: width.target)
-        XCTAssertTrue(controller.dirty, "an explicit width choice may now stage a cap")
+        apply.performClick(nil)
+        edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 320)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 96)
+        width.selectItem(withTitle: "Original")
+        _ = width.sendAction(width.action, to: width.target)
+        apply.performClick(nil)
+        edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1_000)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 300)
+
+        outputMode.selectItem(withTitle: "720p maximum")
+        _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+        apply.performClick(nil)
+        edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1_280)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 720,
+                       "Original width leaves the explicit resolution preset intact")
     }
 
     func testRealReplaceOriginalRebasesSameSessionAndPreservesHistoryIdentity() throws {

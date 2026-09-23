@@ -1516,14 +1516,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         } else {
             normalizedGifBase = baseOutputSize
         }
+        let originalGifWidth = gifMaximumWidthControl.titleOfSelectedItem == "Original"
         let outputSize = gif
-            ? dimensionsAtMaximumWidth(normalizedGifBase, maximumWidth: gifMaximumWidth)
+            ? (originalGifWidth ? normalizedGifBase
+                : dimensionsAtMaximumWidth(normalizedGifBase, maximumWidth: gifMaximumWidth))
             : baseOutputSize
         var edit = accepted
         edit["trim_start_ms"] = start
         edit["trim_end_ms"] = end == duration ? NSNull() : end
         edit["crop"] = stagedCrop == nil ? NSNull() : stagedCrop!.dictionary
-        if (gif && gifMaximumWidthControl.titleOfSelectedItem != "Original")
+        if (gif && !originalGifWidth)
             || customOutput || resolutionPreset != .original {
             edit["output_width"] = outputSize.width
             edit["output_height"] = outputSize.height
