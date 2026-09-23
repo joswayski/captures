@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::sync::mpsc;
 use std::{
     fs,
     io::{Seek, SeekFrom, Write},
@@ -494,6 +496,90 @@ fn replace_original_cancellation_during_export_keeps_original_and_history() {
         metadata
     );
     assert_eq!(session.snapshot().revision, 0);
+    assert!(fs::read_dir(data.path()).unwrap().all(|item| {
+        !item
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".captures-replace-")
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn replace_original_cancellation_during_candidate_frame_kills_child_and_keeps_state() {
+    let Some((data, entry, _)) = setup(true) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let directory = data.path().join("history").join(&entry.id);
+    let recovery = directory.join("media.mp4");
+    let metadata = directory.join("metadata.json");
+    let before_permanent = fs::read(&permanent).unwrap();
+    let before_recovery = fs::read(&recovery).unwrap();
+    let before_metadata = fs::read(&metadata).unwrap();
+    let marker = data.path().join("candidate-started");
+    let release = data.path().join("release-candidate");
+    let wrapper = data.path().join("ffmpeg-wrapper");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    *frame-*.png)\n      : > {marker:?}\n      while [ ! -e {release:?} ]; do :; done\n      ;;\n  esac\ndone\nexec ffmpeg \"$@\"\n",
+            marker = marker.to_string_lossy().as_ref(),
+            release = release.to_string_lossy().as_ref(),
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let mut session = open(
+        &data,
+        &entry,
+        MediaToolchain::new(wrapper, "ffprobe".into()),
+    );
+    let before_snapshot = serde_json::to_value(session.snapshot_v2()).unwrap();
+    let before_frame = session.frame();
+    let cancel = CancelToken::default();
+    let worker_cancel = cancel.clone();
+    let (tx, rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let result = session.replace_original(&worker_cancel, |_| {});
+        tx.send(()).unwrap();
+        (session, result)
+    });
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !marker.exists() && Instant::now() < deadline {
+        if rx.try_recv().is_ok() {
+            let (_, result) = worker.join().unwrap();
+            panic!("replacement ended before candidate decode: {result:?}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    if !marker.exists() {
+        fs::write(&release, b"").unwrap();
+        worker.join().unwrap();
+        panic!("candidate-frame child did not start");
+    }
+    let started = Instant::now();
+    cancel.cancel();
+    let prompt = rx.recv_timeout(Duration::from_secs(2)).is_ok();
+    // Even a broken non-cancellable child must be released before joining it.
+    fs::write(&release, b"").unwrap();
+    let (session, result) = worker.join().unwrap();
+    assert!(prompt, "candidate-frame child did not stop promptly");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let error = result.unwrap_err();
+    assert!(!error.requires_reopen);
+    assert!(error.message.to_lowercase().contains("cancel"));
+    assert_eq!(fs::read(&permanent).unwrap(), before_permanent);
+    assert_eq!(fs::read(&recovery).unwrap(), before_recovery);
+    assert_eq!(fs::read(&metadata).unwrap(), before_metadata);
+    assert_eq!(
+        serde_json::to_value(session.snapshot_v2()).unwrap(),
+        before_snapshot
+    );
+    assert_eq!(session.frame().as_raw(), before_frame.as_raw());
     assert!(fs::read_dir(data.path()).unwrap().all(|item| {
         !item
             .unwrap()
