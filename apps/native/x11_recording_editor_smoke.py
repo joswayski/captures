@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--sound", action="store_true", help="Exercise opt-in playback through an isolated PulseAudio sink (not physical audio acceptance)")
     parser.add_argument("--graphical-crop", action="store_true", help="Exercise source-view crop handles, cache, staging and export")
     parser.add_argument("--preview-scale", action="store_true", help="Exercise display-only Fit/100% and bounded preview scrolling")
+    parser.add_argument("--gif-frame-rate", action="store_true", help="Exercise staged GIF cadence and real exported frame counts")
     args = parser.parse_args()
     if args.sound:
         args.audio = True
@@ -369,6 +370,76 @@ def main():
                     "device-failure", "explicit-silent-retry", "minimum-layout", "gif-no-device",
                     "immutable-source-history", "no-export"]}, indent=2) + "\n")
             print("PASS Sound preview: default-off, virtual audio output, EOF, device error/retry and GIF without a device")
+            return
+        if args.gif_frame_rate:
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            click(editor, 87, 1082)
+            shot(editor, "gif-frame-rate-default")
+            click(editor, 149, 873)
+            shot(editor, "gif-frame-rate-menu")
+            click(editor, 149, 571)  # 8 FPS.
+            eight = exports / "eight.gif"
+            field(editor, 360, 1038, eight)
+            click(editor, 899, 1082)
+            assert not eight.exists(), "staged format/FPS cannot save"
+            click(editor, 793, 1082)
+            click(editor, 899, 1082)
+            wait(eight.exists, "8 FPS GIF export")
+            shot(editor, "gif-frame-rate-eight")
+            click(editor, 149, 873)
+            click(editor, 149, 791)  # 24 FPS.
+            twenty_four = exports / "twenty-four.gif"
+            field(editor, 360, 1038, twenty_four)
+            missing = output / "temporarily-moved.mp4"
+            source.rename(missing)
+            try:
+                click(editor, 793, 1082)
+                shot(editor, "gif-frame-rate-failed-apply")
+                dominant(output / "gif-frame-rate-failed-apply.png", 0)
+                click(editor, 899, 1082)
+                assert not twenty_four.exists(), "failed FPS Apply cannot save staged settings"
+            finally:
+                missing.rename(source)
+            click(editor, 793, 1082)
+            click(editor, 899, 1082)
+            wait(twenty_four.exists, "24 FPS GIF export after retry")
+            shot(editor, "gif-frame-rate-twenty-four")
+            cadences = {}
+            for path, fps in ((eight, 8), (twenty_four, 24)):
+                stream = json.loads(run("ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+                    "-show_entries", "stream=nb_read_frames,duration,width,height", "-of", "json", str(path)))["streams"][0]
+                assert int(stream["nb_read_frames"]) == fps * 3, stream
+                assert abs(float(stream["duration"]) - 3) < .03, stream
+                assert (stream["width"], stream["height"]) == (320, 180), stream
+                dominant(path, 1, at=1.5)
+                dominant(path, 2, at=2.5)
+                cadences[str(fps)] = stream
+            click(editor, 33, 1082)
+            click(editor, 793, 1082)
+            shot(editor, "gif-frame-rate-mp4")
+            click(editor, 87, 1082)
+            shot(editor, "gif-frame-rate-restored")
+            click(editor, 793, 1082)
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            run("xdotool", "mousemove", "--window", editor, "450", "410",
+                "click", "--repeat", "25", "--delay", "40", "5", "sleep", ".5")
+            shot(editor, "gif-frame-rate-minimum")
+            click(editor, 149, 431)
+            shot(editor, "gif-frame-rate-minimum-menu")
+            run("xdotool", "key", "Escape")
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            assert len(list(history.glob("*/metadata.json"))) == 3
+            assert set(exports.iterdir()) == {eight, twenty_four}
+            close(editor)
+            wait(lambda: not windows("Recording editor"), "restored saved GIF cadence closes cleanly")
+            close(root)
+            wait(lambda: app.poll() is not None, "GIF frame-rate quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "cadences": cadences, "checks": ["staged-save-gate", "failed-apply-retry", "8-and-24-fps-frame-counts",
+                    "duration-dimensions-colors", "mp4-switch-restores-gif-cadence", "minimum-controls",
+                    "immutable-source-history", "distinct-saved-history", "clean-close"]}, indent=2) + "\n")
+            print("PASS GIF frame rate: 24/72 frames over 3s, Apply/retry/save, MP4 roundtrip and immutable source")
             return
         if args.preview_scale:
             def marker_size(name):
