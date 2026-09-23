@@ -275,9 +275,9 @@ An unattainable limit fails without publishing a copy. AppKit's limit control is
 Available system and microphone tracks have independent volume/mute controls plus
 mono output. Accepted settings apply to MP4 exports and Sound preview.
 GIF disables audio controls without discarding the MP4 settings.
-The Windows/Linux candidate offers 8, 10, 12, 15 (default), 20, 24 or 30 FPS for GIF
-exports. Apply accepts the frame rate with the other edits; switching to MP4 keeps
-the GIF choice without changing MP4 cadence. AppKit's frame-rate control is pending.
+Both native recording editors offer 8, 10, 12, 15 (default), 20, 24 or 30 FPS for
+GIF exports. Apply accepts the frame rate with the other edits; switching to MP4
+keeps the GIF choice without changing MP4 cadence.
 Original, 1080p maximum and 720p maximum output presets preserve the current crop's
 aspect ratio and never upscale. Custom dimensions override the preset.
 Custom dimensions are independent (no aspect lock); the shared media engine rounds

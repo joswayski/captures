@@ -761,6 +761,40 @@ final class RecordingEditorTests: XCTestCase {
         }
     }
 
+    func testGifFrameRateRenderedNormalMinimumAndControlSeparation() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                exportFormat: "gif", framesPerSecond: 24,
+                hasSystemAudio: true, hasMicrophoneAudio: true))
+            let controller = RecordingEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker,
+                confirmDiscard: { false })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                               outputDirectory: "/Exports")
+            let fps = try popup("GIF frame rate", in: controller.root)
+            let destination = try field("Recording destination", in: controller.root)
+            let change = try button("Change…", in: controller.root)
+            XCTAssertEqual(fps.titleOfSelectedItem, "24 FPS")
+            XCTAssertFalse(fps.isHiddenOrHasHiddenAncestor)
+            try render(controller.root, name: "recording-editor-gif-24-fps-\(appearance)")
+
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            XCTAssertLessThanOrEqual(destination.frame.maxX + 8, fps.frame.minX - 62,
+                                     "minimum destination leaves room for the GIF FPS label")
+            XCTAssertLessThanOrEqual(fps.frame.maxX + 8, change.frame.minX)
+            XCTAssertTrue(controller.root.bounds.intersects(fps.frame))
+            try render(controller.root,
+                       name: "recording-editor-gif-24-fps-minimum-\(appearance)")
+
+            fps.selectItem(withTitle: "8 FPS"); _ = fps.sendAction(fps.action, to: fps.target)
+            XCTAssertTrue(controller.dirty)
+            try render(controller.root,
+                       name: "recording-editor-gif-8-fps-staged-minimum-\(appearance)")
+        }
+    }
+
     func testPreviewScaleRenderedFitActualPausedAndSourceStates() throws {
         _ = NSApplication.shared
         let crop = NativeRecordingCropRect(x: 140, y: 90, width: 500, height: 300)
@@ -1899,6 +1933,89 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(try field("Microphone volume percent", in: systemOnly.root).isHiddenOrHasHiddenAncestor)
     }
 
+    func testGifFrameRateApplyFailureMp4RoundTripSaveSeekAndNewItemReset() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let format = try popup("Recording export format", in: controller.root)
+        let fps = try popup("GIF frame rate", in: controller.root)
+        let play = try button("Play", in: controller.root)
+        let estimate = try button("Estimate size", in: controller.root)
+        let save = try button("Save new copy", in: controller.root)
+        XCTAssertTrue(fps.isHiddenOrHasHiddenAncestor)
+
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertFalse(fps.isHiddenOrHasHiddenAncestor)
+        XCTAssertEqual(fps.itemTitles, ["8 FPS", "10 FPS", "12 FPS", "15 FPS",
+                                        "20 FPS", "24 FPS", "30 FPS"])
+        XCTAssertEqual(fps.titleOfSelectedItem, "15 FPS", "each item defaults GIF cadence to 15 FPS")
+        XCTAssertTrue(controller.dirty); XCTAssertFalse(play.isEnabled)
+        XCTAssertFalse(estimate.isEnabled); XCTAssertFalse(save.isEnabled)
+        XCTAssertTrue(worker.requests.isEmpty, "GIF cadence is staged without worker work")
+
+        fps.selectItem(withTitle: "8 FPS"); _ = fps.sendAction(fps.action, to: fps.target)
+        worker.requestResult = .success(try presentation(revision: 1, exportFormat: "gif",
+                                                         framesPerSecond: 8))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        let gifExport = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
+        XCTAssertEqual(gifExport["format"] as? String, "gif")
+        XCTAssertEqual((gifExport["frames_per_second"] as? NSNumber)?.uint16Value, 8)
+        XCTAssertEqual(fps.titleOfSelectedItem, "8 FPS")
+        XCTAssertTrue(controller.dirty); XCTAssertTrue(save.isEnabled)
+
+        worker.saveResult = .success(.saved(path: "/Exports/eight-fps.gif"))
+        save.performClick(nil)
+        XCTAssertEqual((worker.saves.last?.export["frames_per_second"] as? NSNumber)?.uint16Value, 8)
+        XCTAssertFalse(controller.dirty, "saving accepted cadence resolves dirty identity")
+        let acceptedImage = try XCTUnwrap(try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first).image)
+
+        fps.selectItem(withTitle: "24 FPS"); _ = fps.sendAction(fps.action, to: fps.target)
+        worker.requestResult = .failure(AppBridgeError.backend("GIF preview unavailable"))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertEqual(fps.titleOfSelectedItem, "24 FPS",
+                       "failed Apply retains the staged cadence correction")
+        XCTAssertTrue(try XCTUnwrap(try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first).image) === acceptedImage)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("GIF preview unavailable") })
+
+        fps.selectItem(withTitle: "8 FPS"); _ = fps.sendAction(fps.action, to: fps.target)
+        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+        worker.requestResult = .success(try presentation(revision: 2, exportFormat: "mp4"))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        let mp4Export = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
+        XCTAssertTrue(mp4Export["frames_per_second"] is NSNull,
+                      "GIF cadence never changes MP4 export cadence")
+        XCTAssertTrue(fps.isHiddenOrHasHiddenAncestor)
+
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertEqual(fps.titleOfSelectedItem, "8 FPS", "MP4 roundtrip remembers the GIF choice")
+        worker.requestResult = .success(try presentation(revision: 3, exportFormat: "gif",
+                                                         framesPerSecond: 8))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        let seek = try slider("Recording frame position", in: controller.root)
+        worker.requestResult = .success(try presentation(position: 733, revision: 4,
+            exportFormat: "gif", framesPerSecond: 8))
+        seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(fps.titleOfSelectedItem, "8 FPS", "Seek retains accepted GIF cadence")
+
+        let cleanWorker = FakeRecordingEditorWorker(presentation: try presentation())
+        let clean = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                              worker: cleanWorker, confirmDiscard: { false })
+        defer { clean.window.orderOut(nil) }
+        clean.present(artifact: recordingArtifact(id: "clean"), historyRoot: "/History",
+                      outputDirectory: "/Exports")
+        let cleanFormat = try popup("Recording export format", in: clean.root)
+        cleanFormat.selectItem(withTitle: "GIF")
+        _ = cleanFormat.sendAction(cleanFormat.action, to: cleanFormat.target)
+        XCTAssertEqual(try popup("GIF frame rate", in: clean.root).titleOfSelectedItem, "15 FPS")
+        XCTAssertTrue(cleanWorker.requests.isEmpty, "format staging should not acquire the worker")
+    }
+
     func testAcceptedSeekEstimateSaveWarningAndDirtyLifecycle() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation())
@@ -2197,6 +2314,46 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: gifPath))
         XCTAssertEqual(try Data(contentsOf: fixture.source), sourceBefore,
                        "every edit/export keeps the original byte-identical")
+    }
+
+    func testRealBridgeGifFrameRateExportsDistinctCadenceAndImmutableSource() throws {
+        let tools = try NativeMediaTools.locate()
+        let fixture = try makeRecordingFixture(tools: tools)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sourceBefore = try Data(contentsOf: fixture.source)
+        let opened = try NativeRecordingEditorSession.open(historyRoot: fixture.history.path,
+                                                            artifactID: fixture.id, tools: tools)
+        let session = opened.0
+        var edit = opened.1.snapshot.edit
+        edit["trim_start_ms"] = 211; edit["trim_end_ms"] = 1_711
+        var export = opened.1.snapshot.export
+        export["format"] = "gif"; export["quality"] = "preserve"
+        export["max_size_bytes"] = NSNull(); export["frames_per_second"] = 8
+        let eightAccepted = try session.request(["operation": "update_preview", "edit": edit,
+                                                 "export": export])
+        XCTAssertEqual((eightAccepted.snapshot.export["frames_per_second"] as? NSNumber)?.uint16Value, 8)
+        let eightPath = fixture.root.appendingPathComponent("eight-fps.gif")
+        _ = try session.save(destination: eightPath.path, export: export,
+            cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+
+        export["frames_per_second"] = 24
+        let twentyFourAccepted = try session.request([
+            "operation": "update_preview", "edit": edit, "export": export,
+        ])
+        XCTAssertEqual((twentyFourAccepted.snapshot.export["frames_per_second"] as? NSNumber)?.uint16Value,
+                       24)
+        let twentyFourPath = fixture.root.appendingPathComponent("twenty-four-fps.gif")
+        _ = try session.save(destination: twentyFourPath.path, export: export,
+            cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+
+        XCTAssertEqual(try videoFrameCount(eightPath, tools: tools), 12,
+                       "1.5 seconds at 8 FPS exports twelve frames")
+        XCTAssertEqual(try videoFrameCount(twentyFourPath, tools: tools), 36,
+                       "the same accepted trim at 24 FPS exports thirty-six frames")
+        XCTAssertEqual(try videoDimensions(eightPath, tools: tools),
+                       try videoDimensions(twentyFourPath, tools: tools))
+        XCTAssertEqual(try Data(contentsOf: fixture.source), sourceBefore,
+                       "cadence-only previews and exports keep the source byte-identical")
     }
 
     func testRealBridgeSourceFrameIsFullSourceAtAcceptedPositionAndImmutable() throws {
@@ -2557,6 +2714,7 @@ final class RecordingEditorTests: XCTestCase {
                               crop: NativeRecordingCropRect? = nil,
                               output: NativeRecordingDimensions? = nil,
                               exportFormat: String = "mp4",
+                              framesPerSecond: UInt16? = nil,
                               hasSystemAudio: Bool = false, hasMicrophoneAudio: Bool = false,
                               systemVolume: Double = 1, microphoneVolume: Double = 1,
                               muteSystem: Bool = false, muteMicrophone: Bool = false,
@@ -2566,6 +2724,7 @@ final class RecordingEditorTests: XCTestCase {
         let cropValue: Any = crop == nil ? NSNull() : crop!.dictionary
         let outputWidth: Any = output.map { NSNumber(value: $0.width) } ?? NSNull()
         let outputHeight: Any = output.map { NSNumber(value: $0.height) } ?? NSNull()
+        let fpsValue: Any = framesPerSecond.map { NSNumber(value: $0) } ?? NSNull()
         let snapshot = try XCTUnwrap(NativeRecordingEditorSnapshot([
             "artifact_id": "recording-id", "source": ["kind": "video", "mime_type": "video/mp4",
                 "width": sourceWidth, "height": sourceHeight,
@@ -2577,7 +2736,8 @@ final class RecordingEditorTests: XCTestCase {
                           "mono_output": monoOutput, "source_has_system_audio": hasSystemAudio,
                           "source_has_microphone_audio": hasMicrophoneAudio]],
             "preview_export": ["format": exportFormat, "quality": "preserve",
-                "max_size_bytes": 4_000_000, "frames_per_second": NSNull(),
+                "max_size_bytes": 4_000_000,
+                "frames_per_second": fpsValue,
                 "gif_max_colors": NSNull()],
             "position_ms": position, "revision": revision,
             "has_system_audio": hasSystemAudio,
@@ -2720,6 +2880,14 @@ final class RecordingEditorTests: XCTestCase {
         return NativeRecordingDimensions(
             width: try XCTUnwrap((stream["width"] as? NSNumber)?.uint32Value),
             height: try XCTUnwrap((stream["height"] as? NSNumber)?.uint32Value))
+    }
+
+    private func videoFrameCount(_ path: URL, tools: NativeMediaTools) throws -> Int {
+        let data = try run(tools.ffprobe, ["-v", "error", "-count_frames",
+            "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames",
+            "-of", "default=noprint_wrappers=1:nokey=1", path.path])
+        return try XCTUnwrap(Int(String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)))
     }
 
     private func decodedRGB(_ path: URL, tools: NativeMediaTools, width: Int, height: Int) throws

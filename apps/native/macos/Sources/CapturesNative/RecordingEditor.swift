@@ -625,6 +625,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var playbackLoopEnabled = false
     private var playbackSoundEnabled = false
     private var playbackAudioEnabled: Bool?
+    private var gifFramesPerSecond: UInt16 = 15
     private var playbackLoopControl: RecordingPlaybackLoopControl?
     private var sourceFrameCache: RecordingSourceImage?
     private var sourceFrameCancel: NativeRecordingEditorCancel?
@@ -675,6 +676,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var audioNote: NSTextField!
     private let format = NSPopUpButton()
     private let quality = NSPopUpButton()
+    private let gifFrameRateLabel = NSTextField(labelWithString: "GIF FPS")
+    private let gifFrameRate = NSPopUpButton()
     private let destination = NSTextField()
     private let status = NSTextField(wrappingLabelWithString: "")
     private let estimateLabel = NSTextField(labelWithString: "Size not estimated")
@@ -749,6 +752,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
         playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
+        gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
         sourceFrameCache = nil; sourceFrameCancel = nil
         cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
         previewActualSize = false
@@ -985,8 +989,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         quality.addItems(withTitles: ["Preserve", "Highest", "High", "Standard", "Small", "Tiny"])
         quality.target = self; quality.action = #selector(stageChanged)
         quality.setAccessibilityLabel("Recording export quality")
+        gifFrameRate.addItems(withTitles: ["8 FPS", "10 FPS", "12 FPS", "15 FPS",
+                                              "20 FPS", "24 FPS", "30 FPS"])
+        gifFrameRate.selectItem(withTitle: "15 FPS")
+        gifFrameRate.target = self; gifFrameRate.action = #selector(gifFrameRateChanged)
+        gifFrameRate.setAccessibilityLabel("GIF frame rate")
+        gifFrameRateLabel.textColor = tokens.color("text-muted")
         destination.delegate = self; destination.setAccessibilityLabel("Recording destination")
         root.addSubview(format); root.addSubview(quality); root.addSubview(destination)
+        root.addSubview(gifFrameRateLabel); root.addSubview(gifFrameRate)
         changeButton = button("Change…") { [weak self] in self?.chooseDestination() }
         estimateButton = button("Estimate size") { [weak self] in self?.estimateSize() }
         saveButton = button("Save new copy") { [weak self] in self?.saveNewCopy() }
@@ -1103,8 +1114,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         status.frame = NSRect(x: 24, y: barY + 8, width: width - 48, height: 36)
         progress.frame = NSRect(x: 24, y: barY + 44, width: width - 174, height: 16)
         cancelButton.frame = NSRect(x: width - 140, y: barY + 38, width: 116, height: 28)
-        destination.frame = NSRect(x: 24, y: barY + 72, width: width - 150, height: 28)
         changeButton.frame = NSRect(x: width - 116, y: barY + 70, width: 92, height: 30)
+        gifFrameRate.frame = NSRect(x: changeButton.frame.minX - 86, y: barY + 72,
+                                    width: 78, height: 28)
+        gifFrameRateLabel.frame = NSRect(x: gifFrameRate.frame.minX - 62, y: barY + 77,
+                                         width: 58, height: 20)
+        let destinationEnd = format.indexOfSelectedItem == 1
+            ? gifFrameRateLabel.frame.minX - 8 : changeButton.frame.minX - 10
+        destination.frame = NSRect(x: 24, y: barY + 72,
+                                   width: max(0, destinationEnd - 24), height: 28)
         format.frame = NSRect(x: 24, y: barY + 110, width: 92, height: 28)
         quality.frame = NSRect(x: 124, y: barY + 110, width: 116, height: 28)
         estimateLabel.frame = NSRect(x: 252, y: barY + 114, width: 190, height: 20)
@@ -1215,6 +1233,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
         select(format, value: value.snapshot.export["format"] as? String ?? "mp4")
         select(quality, value: value.snapshot.export["quality"] as? String ?? "preserve")
+        if format.indexOfSelectedItem == 1 {
+            let accepted = (value.snapshot.export["frames_per_second"] as? NSNumber)?.uint16Value
+            let supported: [UInt16] = [8, 10, 12, 15, 20, 24, 30]
+            gifFramesPerSecond = accepted.flatMap { supported.contains($0) ? $0 : nil } ?? 15
+            gifFrameRate.selectItem(withTitle: "\(gifFramesPerSecond) FPS")
+        }
         if initialize {
             savedEdit = canonicalEdit(value.snapshot.edit); savedExport = canonical(value.snapshot.export)
         } else if canonicalEdit(old?.edit) != canonicalEdit(value.snapshot.edit)
@@ -1266,6 +1290,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         var value = presentation!.snapshot.export
         value["format"] = format.indexOfSelectedItem == 1 ? "gif" : "mp4"
         value["quality"] = quality.titleOfSelectedItem?.lowercased() ?? "preserve"
+        value["frames_per_second"] = format.indexOfSelectedItem == 1
+            ? NSNumber(value: gifFramesPerSecond) : NSNull()
         return value
     }
 
@@ -1782,6 +1808,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             destination.stringValue = URL(fileURLWithPath: destination.stringValue)
                 .deletingPathExtension().appendingPathExtension(ext).path
         }
+        estimate = nil; updateControls(); layout()
+    }
+    @objc private func gifFrameRateChanged() {
+        let title = gifFrameRate.titleOfSelectedItem ?? "15 FPS"
+        gifFramesPerSecond = UInt16(title.split(separator: " ").first.map(String.init) ?? "15") ?? 15
         estimate = nil; updateControls()
     }
     @objc private func stageChanged() { estimate = nil; updateControls() }
@@ -1867,6 +1898,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let available = presentation != nil && !busy && !pickerOpen && playbackState == .idle
         let valid = pendingCropInputValid && stagedEdit != nil && stagedExport != nil
         [trimStart, trimEnd, format, quality, destination].forEach { $0.isEnabled = available }
+        let gif = format.indexOfSelectedItem == 1
+        gifFrameRateLabel.isHidden = !gif; gifFrameRate.isHidden = !gif
+        gifFrameRate.isEnabled = available && gif
         cropEnabled.isEnabled = available
         cropLock.isEnabled = available && stagedCrop != nil
         [cropX, cropY, cropWidth, cropHeight].forEach {
@@ -1878,7 +1912,6 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let hasSystem = presentation?.snapshot.hasSystemAudio == true
         let hasMicrophone = presentation?.snapshot.hasMicrophoneAudio == true
         let hasAudio = hasSystem || hasMicrophone
-        let gif = format.indexOfSelectedItem == 1
         systemAudioLabel.isHidden = !hasSystem; systemVolume.isHidden = !hasSystem
         systemMute.isHidden = !hasSystem
         microphoneAudioLabel.isHidden = !hasMicrophone; microphoneVolume.isHidden = !hasMicrophone
@@ -1962,6 +1995,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
         playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
+        gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
         sourceFrameCache = nil; sourceFrameCancel = nil
         cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
         previewActualSize = false
