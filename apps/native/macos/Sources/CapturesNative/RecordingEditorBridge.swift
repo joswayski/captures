@@ -56,6 +56,23 @@ struct RecordingEditorEstimate: Equatable {
     let exact: Bool
 }
 
+struct RecordingPlaybackMetadata: Equatable {
+    let startPositionMilliseconds: UInt64
+    let width: UInt32
+    let height: UInt32
+    let framesPerSecond: UInt16
+}
+
+struct RecordingPlaybackImage {
+    let positionMilliseconds: UInt64
+    let image: CGImage
+}
+
+enum RecordingPlaybackCompletion: Equatable {
+    case eof
+    case cancelled
+}
+
 enum RecordingEditorSaveResult: Equatable {
     case saved(path: String)
     case savedWithoutHistory(path: String, warning: String)
@@ -217,6 +234,61 @@ final class NativeRecordingEditorFrame {
     }
 }
 
+final class NativeRecordingEditorPlayback {
+    private let handle: OpaquePointer
+    let metadata: RecordingPlaybackMetadata
+
+    init?(handle: OpaquePointer, metadata: [String: Any]) {
+        guard let start = (metadata["start_position_ms"] as? NSNumber)?.uint64Value,
+              let width = (metadata["width"] as? NSNumber)?.uint32Value,
+              let height = (metadata["height"] as? NSNumber)?.uint32Value,
+              let framesPerSecond = (metadata["frames_per_second"] as? NSNumber)?.uint16Value,
+              width > 0, height > 0, framesPerSecond > 0, framesPerSecond <= 30 else { return nil }
+        self.handle = handle
+        self.metadata = RecordingPlaybackMetadata(startPositionMilliseconds: start,
+                                                  width: width, height: height,
+                                                  framesPerSecond: framesPerSecond)
+    }
+
+    deinit { captures_recording_editor_playback_free_v1(handle) }
+
+    func nextFrame() throws -> RecordingPlaybackImage? {
+        var response: UnsafeMutablePointer<CChar>?
+        let handle = captures_recording_editor_playback_next_v1(self.handle, &response)
+        defer { captures_settings_free_v1(response) }
+        guard let response else {
+            captures_recording_editor_frame_free_v1(handle)
+            throw AppBridgeError.invalidResponse
+        }
+        let value: [String: Any]
+        do { value = try AppBridge.decode(Data(bytes: response, count: strlen(response))) }
+        catch {
+            captures_recording_editor_frame_free_v1(handle)
+            throw error
+        }
+        guard let eof = value["eof"] as? Bool else {
+            captures_recording_editor_frame_free_v1(handle)
+            throw AppBridgeError.invalidResponse
+        }
+        if eof {
+            captures_recording_editor_frame_free_v1(handle)
+            guard handle == nil else { throw AppBridgeError.invalidResponse }
+            return nil
+        }
+        guard let handle,
+              let position = (value["position_ms"] as? NSNumber)?.uint64Value else {
+            captures_recording_editor_frame_free_v1(handle)
+            throw AppBridgeError.invalidResponse
+        }
+        let frame = NativeRecordingEditorFrame(handle: handle)
+        let image = try frame.image()
+        guard image.width == Int(metadata.width), image.height == Int(metadata.height) else {
+            throw AppBridgeError.invalidResponse
+        }
+        return RecordingPlaybackImage(positionMilliseconds: position, image: image)
+    }
+}
+
 final class NativeRecordingEditorThumbnails {
     private let handle: OpaquePointer
     let frameCount: UInt32
@@ -268,13 +340,18 @@ final class NativeRecordingEditorThumbnails {
 
 final class NativeRecordingEditorCancel {
     fileprivate let handle: OpaquePointer
-    private(set) var isCancelled = false
+    private let lock = NSLock()
+    private var cancelled = false
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancelled
+    }
     init?() {
         guard let handle = captures_recording_editor_cancel_create_v1() else { return nil }
         self.handle = handle
     }
     func cancel() {
-        isCancelled = true
+        lock.lock(); cancelled = true; lock.unlock()
         captures_recording_editor_cancel_v1(handle)
     }
     deinit { captures_recording_editor_cancel_free_v1(handle) }
@@ -350,6 +427,30 @@ final class NativeRecordingEditorSession {
         return RecordingEditorEstimate(sizeBytes: bytes.uint64Value, exact: exact)
     }
 
+    func playback(positionMilliseconds: UInt64,
+                  cancel: NativeRecordingEditorCancel) throws -> NativeRecordingEditorPlayback {
+        var response: UnsafeMutablePointer<CChar>?
+        let handle = captures_recording_editor_playback_open_v1(
+            self.handle, positionMilliseconds, cancel.handle, &response)
+        defer { captures_settings_free_v1(response) }
+        guard let response else {
+            captures_recording_editor_playback_free_v1(handle)
+            throw AppBridgeError.invalidResponse
+        }
+        let metadata: [String: Any]
+        do { metadata = try AppBridge.decode(Data(bytes: response, count: strlen(response))) }
+        catch {
+            captures_recording_editor_playback_free_v1(handle)
+            throw error
+        }
+        guard let handle,
+              let playback = NativeRecordingEditorPlayback(handle: handle, metadata: metadata) else {
+            captures_recording_editor_playback_free_v1(handle)
+            throw AppBridgeError.invalidResponse
+        }
+        return playback
+    }
+
     func thumbnails(cancel: NativeRecordingEditorCancel) throws -> NativeRecordingEditorThumbnails {
         var response: UnsafeMutablePointer<CChar>?
         let handle = captures_recording_editor_thumbnails_v1(self.handle, cancel.handle, &response)
@@ -414,6 +515,10 @@ protocol RecordingEditorWorking: AnyObject {
                  completion: @escaping (Result<RecordingEditorPresentation, Error>) -> Void)
     func estimate(cancel: NativeRecordingEditorCancel,
                   completion: @escaping (Result<RecordingEditorEstimate, Error>) -> Void)
+    func playback(positionMilliseconds: UInt64, cancel: NativeRecordingEditorCancel,
+                  started: @escaping (RecordingPlaybackMetadata) -> Void,
+                  frame: @escaping (RecordingPlaybackImage) -> Void,
+                  completion: @escaping (Result<RecordingPlaybackCompletion, Error>) -> Void)
     func thumbnails(cancel: NativeRecordingEditorCancel,
                     completion: @escaping (Result<CGImage, Error>) -> Void)
     func save(destination: String, export: [String: Any], cancel: NativeRecordingEditorCancel,
@@ -470,6 +575,34 @@ final class RecordingEditorWorker: RecordingEditorWorking {
         }
     }
 
+    func playback(positionMilliseconds: UInt64, cancel: NativeRecordingEditorCancel,
+                  started: @escaping (RecordingPlaybackMetadata) -> Void,
+                  frame: @escaping (RecordingPlaybackImage) -> Void,
+                  completion: @escaping (Result<RecordingPlaybackCompletion, Error>) -> Void) {
+        let delivery = RecordingPlaybackDelivery(shouldDiscardFrames: { cancel.isCancelled },
+            frame: frame) { result in
+                completion(cancel.isCancelled ? .success(.cancelled) : result)
+            }
+        let storage = storage
+        Self.queue.async {
+            let result: Result<RecordingPlaybackCompletion, Error>
+            do {
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The recording editor is closed.")
+                }
+                let playback = try session.playback(positionMilliseconds: positionMilliseconds,
+                                                    cancel: cancel)
+                let metadata = playback.metadata
+                DispatchQueue.main.async { started(metadata) }
+                while let value = try playback.nextFrame() { delivery.offer(value) }
+                result = .success(.eof)
+            } catch {
+                result = .failure(error)
+            }
+            delivery.finish(result)
+        }
+    }
+
     func thumbnails(cancel: NativeRecordingEditorCancel,
                     completion: @escaping (Result<CGImage, Error>) -> Void) {
         let storage = storage
@@ -505,4 +638,60 @@ final class RecordingEditorWorker: RecordingEditorWorking {
         Self.queue.async { storage.session = nil }
     }
     static func flush() { queue.sync {} }
+}
+
+final class RecordingPlaybackDelivery: @unchecked Sendable {
+    private let lock = NSLock()
+    private let shouldDiscardFrames: () -> Bool
+    private let frame: (RecordingPlaybackImage) -> Void
+    private let completion: (Result<RecordingPlaybackCompletion, Error>) -> Void
+    private var latest: RecordingPlaybackImage?
+    private var terminal: Result<RecordingPlaybackCompletion, Error>?
+    private var scheduled = false
+
+    init(shouldDiscardFrames: @escaping () -> Bool,
+         frame: @escaping (RecordingPlaybackImage) -> Void,
+         completion: @escaping (Result<RecordingPlaybackCompletion, Error>) -> Void) {
+        self.shouldDiscardFrames = shouldDiscardFrames
+        self.frame = frame; self.completion = completion
+    }
+
+    func offer(_ value: RecordingPlaybackImage) {
+        lock.lock()
+        guard terminal == nil else { lock.unlock(); return }
+        latest = value
+        scheduleLocked()
+        lock.unlock()
+    }
+
+    func finish(_ result: Result<RecordingPlaybackCompletion, Error>) {
+        lock.lock()
+        guard terminal == nil else { lock.unlock(); return }
+        if shouldDiscardFrames() { latest = nil }
+        terminal = result
+        scheduleLocked()
+        lock.unlock()
+    }
+
+    private func scheduleLocked() {
+        guard !scheduled else { return }
+        scheduled = true
+        DispatchQueue.main.async { [self] in drain() }
+    }
+
+    private func drain() {
+        lock.lock()
+        if shouldDiscardFrames() { latest = nil }
+        let next = latest
+        latest = nil
+        let result = next == nil ? terminal : nil
+        if result != nil { terminal = nil }
+        let again = latest != nil || terminal != nil
+        if !again { scheduled = false }
+        lock.unlock()
+
+        if let next { frame(next) }
+        if let result { completion(result) }
+        if again { DispatchQueue.main.async { [self] in drain() } }
+    }
 }
