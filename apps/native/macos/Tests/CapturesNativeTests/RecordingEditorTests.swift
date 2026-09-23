@@ -2554,8 +2554,17 @@ final class RecordingEditorTests: XCTestCase {
                                                             artifactID: retryFixture.id, tools: tools)
         let session = opened.0
         var export = opened.1.snapshot.saveExport
-        export["format"] = "gif"; export["quality"] = "preserve"
-        export["max_size_bytes"] = 100_000; export["frames_per_second"] = 30
+        export["quality"] = "preserve"; export["max_size_bytes"] = 100_000
+        let mp4Accepted = try session.request(["operation": "update_preview",
+                                               "edit": opened.1.snapshot.edit,
+                                               "export": export])
+        let mp4Path = retryFixture.root.appendingPathComponent("capped.mp4")
+        _ = try session.save(destination: mp4Path.path, export: mp4Accepted.snapshot.saveExport,
+                             cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+        XCTAssertLessThanOrEqual(try Data(contentsOf: mp4Path).count, 100_000)
+        XCTAssertEqual((mp4Accepted.image.width, mp4Accepted.image.height), (640, 360))
+
+        export["format"] = "gif"; export["frames_per_second"] = 30
         let accepted = try session.request(["operation": "update_preview",
                                             "edit": opened.1.snapshot.edit,
                                             "export": export])
