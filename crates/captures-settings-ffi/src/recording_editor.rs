@@ -3,7 +3,8 @@
 use super::region::{RegionPixels, response, text};
 use captures_app::recording_editor::{
     RecordingEditorOpenRequest, RecordingEditorRequest, RecordingEditorRequestV2,
-    RecordingEditorSession, RecordingPlayback, RecordingSaveRequest, RecordingTimelineThumbnails,
+    RecordingEditorSession, RecordingExportComparison, RecordingPlayback, RecordingSaveRequest,
+    RecordingTimelineThumbnails,
 };
 use captures_media::{CancelToken, ExportProgress, MediaToolchain};
 use image::RgbaImage;
@@ -30,6 +31,7 @@ pub type RecordingEditorProgress = Option<unsafe extern "C" fn(*mut c_void, *con
 
 pub struct RecordingEditorThumbnails(RecordingTimelineThumbnails);
 pub struct RecordingEditorPlayback(RecordingPlayback);
+pub struct RecordingEditorComparison(RecordingExportComparison);
 
 /// Open and probe one real History recording on its serialized worker.
 ///
@@ -218,6 +220,91 @@ pub unsafe extern "C" fn captures_recording_editor_source_frame_v1(
     // SAFETY: caller supplies aligned writable output storage.
     unsafe { output.write(response(value)) };
     handle
+}
+
+/// Encode a read-only first-attempt comparison of the accepted trim position.
+///
+/// # Safety
+/// Session is live and serialized, cancel remains live until return, and a
+/// non-null output is aligned writable storage. JSON and comparison are freed
+/// exactly once; cloned frames may outlive every other owner.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_comparison_v1(
+    session: *const RecordingEditorSession,
+    cancel: *const CancelToken,
+    output: *mut *mut c_char,
+) -> *mut RecordingEditorComparison {
+    if output.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains live serialized session and cancel handles.
+        let session = unsafe { session.as_ref() }.ok_or("recording editor handle is null")?;
+        let cancel = unsafe { cancel.as_ref() }.ok_or("recording export cancel handle is null")?;
+        session.export_comparison(cancel)
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    let (owner, value) = match result {
+        Ok(comparison) => {
+            let before = comparison.before_frame();
+            let value = json!({"ok":true,"result":{
+                "basis":"accepted_preview_first_attempt",
+                "revision":comparison.revision,
+                "position_ms":comparison.position_ms,
+                "after_seek_position_ms":comparison.after_seek_position_ms,
+                "sample_start_ms":comparison.sample_start_ms,
+                "sample_duration_ms":comparison.sample_duration_ms,
+                "attempts":comparison.attempts,
+                "export":comparison.export,
+                "width":before.width(),
+                "height":before.height(),
+            }});
+            (
+                Box::into_raw(Box::new(RecordingEditorComparison(comparison))),
+                value,
+            )
+        }
+        Err(error) => (ptr::null_mut(), json!({"ok":false,"error":error})),
+    };
+    // SAFETY: caller provides writable output storage.
+    unsafe { output.write(response(value)) };
+    owner
+}
+
+/// # Safety
+/// Comparison is live for the call. Returned frame has independent ownership.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_comparison_before_frame_v1(
+    comparison: *const RecordingEditorComparison,
+) -> *mut Arc<RgbaImage> {
+    // SAFETY: caller retains comparison during this call.
+    unsafe { comparison.as_ref() }
+        .map(|comparison| Box::into_raw(Box::new(comparison.0.before_frame())))
+        .unwrap_or(ptr::null_mut())
+}
+
+/// # Safety
+/// Comparison is live for the call. Returned frame has independent ownership.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_comparison_after_frame_v1(
+    comparison: *const RecordingEditorComparison,
+) -> *mut Arc<RgbaImage> {
+    // SAFETY: caller retains comparison during this call.
+    unsafe { comparison.as_ref() }
+        .map(|comparison| Box::into_raw(Box::new(comparison.0.after_frame())))
+        .unwrap_or(ptr::null_mut())
+}
+
+/// # Safety
+/// Null or one uniquely owned comparison, freed exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_comparison_free_v1(
+    comparison: *mut RecordingEditorComparison,
+) {
+    if !comparison.is_null() {
+        // SAFETY: caller transfers the uniquely owned box.
+        drop(unsafe { Box::from_raw(comparison) });
+    }
 }
 
 /// Open persistent silent playback of the accepted edit and preview export.
@@ -1007,6 +1094,35 @@ mod tests {
             "recording export cancel handle is null"
         );
         let cancel = captures_recording_editor_cancel_create_v1();
+        // SAFETY: null output refuses to start a comparison.
+        assert!(
+            unsafe { captures_recording_editor_comparison_v1(session, cancel, ptr::null_mut()) }
+                .is_null()
+        );
+        let mut comparison_response = ptr::null_mut();
+        // SAFETY: live serialized session, cancel and writable output.
+        let comparison = unsafe {
+            captures_recording_editor_comparison_v1(session, cancel, &mut comparison_response)
+        };
+        assert!(!comparison.is_null());
+        // SAFETY: comparison returned one owned response.
+        let comparison_response = unsafe { json(comparison_response) };
+        assert_eq!(
+            comparison_response["result"]["basis"],
+            "accepted_preview_first_attempt"
+        );
+        assert_eq!(comparison_response["result"]["position_ms"], 0);
+        assert_eq!(comparison_response["result"]["revision"], 1);
+        assert_eq!(comparison_response["result"]["attempts"], 1);
+        assert!(comparison_response["result"]["export"]["max_size_bytes"].is_null());
+        // SAFETY: both accessors clone independently retained frame owners.
+        let before_comparison =
+            unsafe { captures_recording_editor_comparison_before_frame_v1(comparison) };
+        let after_comparison =
+            unsafe { captures_recording_editor_comparison_after_frame_v1(comparison) };
+        assert!(!before_comparison.is_null() && !after_comparison.is_null());
+        // SAFETY: clones outlive their parent owner.
+        unsafe { captures_recording_editor_comparison_free_v1(comparison) };
         let mut source_response = ptr::null_mut();
         // SAFETY: handles/output remain live for source-frame extraction.
         let source_frame = unsafe {
@@ -1106,6 +1222,20 @@ mod tests {
         assert_eq!(source_pixels.length, 32 * 24 * 4);
         // SAFETY: retained frame is released once after the final borrow.
         unsafe { captures_recording_editor_frame_free_v1(source_frame) };
+
+        for comparison_frame in [before_comparison, after_comparison] {
+            let mut pixels = MaybeUninit::<RegionPixels>::uninit();
+            // SAFETY: independent frame remains live after comparison/session/cancel free.
+            assert!(unsafe {
+                captures_recording_editor_frame_pixels_v1(comparison_frame, pixels.as_mut_ptr())
+            });
+            // SAFETY: successful pixel borrow initialized the descriptor.
+            let pixels = unsafe { pixels.assume_init() };
+            assert_eq!((pixels.width, pixels.height), (32, 24));
+            assert_eq!(pixels.length, 32 * 24 * 4);
+            // SAFETY: owner is released once after the borrow.
+            unsafe { captures_recording_editor_frame_free_v1(comparison_frame) };
+        }
 
         let mut playback_pixels = MaybeUninit::<RegionPixels>::uninit();
         // SAFETY: retained frame remains live after playback/session/cancel free.

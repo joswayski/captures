@@ -100,6 +100,33 @@ pub struct RecordingTimelineThumbnails {
     pixels: Arc<RgbaImage>,
 }
 
+/// Encoded first-attempt comparison detached from the accepted session. The
+/// identity is session-scoped: hosts must also guard item switches with their
+/// own generation, not just revision and position.
+pub struct RecordingExportComparison {
+    pub revision: u64,
+    pub position_ms: u64,
+    pub after_seek_position_ms: u64,
+    pub sample_start_ms: u64,
+    pub sample_duration_ms: u64,
+    pub export: ExportSpec,
+    pub attempts: u8,
+    before: Arc<RgbaImage>,
+    after: Arc<RgbaImage>,
+}
+
+impl RecordingExportComparison {
+    #[must_use]
+    pub fn before_frame(&self) -> Arc<RgbaImage> {
+        self.before.clone()
+    }
+
+    #[must_use]
+    pub fn after_frame(&self) -> Arc<RgbaImage> {
+        self.after.clone()
+    }
+}
+
 impl RecordingTimelineThumbnails {
     /// Top-down straight-alpha sRGB RGBA8 pixels for the complete sprite.
     #[must_use]
@@ -314,6 +341,71 @@ impl RecordingEditorSession {
             cancel,
         )
         .map(Arc::new)
+    }
+
+    /// Compare the accepted first-attempt preview against an encoded sample.
+    /// A selected position outside the accepted trim is an error, not a
+    /// silently clamped comparison of a different point in the recording.
+    pub fn export_comparison(
+        &self,
+        cancel: &CancelToken,
+    ) -> Result<RecordingExportComparison, String> {
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled.to_string());
+        }
+        validate_session_edit(&self.probe, &self.edit)?;
+        validate_preview_export(&self.preview_export)?;
+        validate_export_spec(&self.probe, &self.edit, &self.preview_export)
+            .map_err(|error| error.to_string())?;
+        let end = self.edit.trim_end_ms.unwrap_or(
+            self.probe
+                .metadata
+                .duration_ms
+                .ok_or("Recording duration is unavailable.")?,
+        );
+        if self.position_ms < self.edit.trim_start_ms || self.position_ms >= end {
+            return Err("Selected position must stay within the accepted trim.".into());
+        }
+        let comparison = self
+            .tools
+            .compare_encoded_frame(
+                &self.source_path,
+                &self.probe,
+                &self.edit,
+                &self.preview_export,
+                self.position_ms,
+                self.scratch.path(),
+                cancel,
+            )
+            .map_err(|error| error.to_string())?;
+        let before = decode_png_bytes(&comparison.before_png)?;
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled.to_string());
+        }
+        let after = decode_png_bytes(&comparison.after_png)?;
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled.to_string());
+        }
+        // The already accepted frame is rendered by the same first-attempt
+        // filter; retries in the generic capped media operation may instead
+        // differ in dimensions and are deliberately not subjected to this.
+        let expected = self.frame.dimensions();
+        if before.dimensions() != expected || after.dimensions() != expected {
+            return Err(
+                "Encoded comparison dimensions do not match the accepted first attempt.".into(),
+            );
+        }
+        Ok(RecordingExportComparison {
+            revision: self.revision,
+            position_ms: comparison.position_ms,
+            after_seek_position_ms: comparison.after_seek_position_ms,
+            sample_start_ms: comparison.sample_start_ms,
+            sample_duration_ms: comparison.sample_duration_ms,
+            export: self.preview_export.clone(),
+            attempts: comparison.attempts,
+            before: Arc::new(before),
+            after: Arc::new(after),
+        })
     }
 
     /// Estimate the accepted edit and preview export without changing session state.
@@ -832,7 +924,14 @@ fn extract_timeline_thumbnails(
 
 fn decode_frame(path: &Path) -> Result<RgbaImage, String> {
     let bytes = read_bounded(path, MAX_FRAME_BYTES)?;
-    let reader = || ImageReader::with_format(Cursor::new(&bytes), ImageFormat::Png);
+    decode_png_bytes(&bytes)
+}
+
+fn decode_png_bytes(bytes: &[u8]) -> Result<RgbaImage, String> {
+    if bytes.len() as u64 > MAX_FRAME_BYTES {
+        return Err("Recording editor input exceeds its size limit.".into());
+    }
+    let reader = || ImageReader::with_format(Cursor::new(bytes), ImageFormat::Png);
     let (width, height) = reader()
         .into_dimensions()
         .map_err(|error| error.to_string())?;
@@ -1282,6 +1381,91 @@ mod tests {
             .unwrap();
         assert_eq!(session.snapshot_v2().save_export.max_size_bytes, None);
         assert_eq!(fs::read(&session.source_path).unwrap(), source_bytes);
+    }
+
+    #[test]
+    fn encoded_comparison_is_retained_immutable_and_rejects_outside_trim() {
+        let Some((tools, ffmpeg)) = real_tools() else {
+            return;
+        };
+        let data = tempfile::tempdir().unwrap();
+        let source = data.path().join("source.mp4");
+        create_video(&ffmpeg, &source, "2");
+        let history_root = data.path().join("history");
+        let mut session = open_session(tools, &source, &history_root);
+        let source_bytes = fs::read(&session.source_path).unwrap();
+        let edit = EditSpec {
+            trim_start_ms: 200,
+            trim_end_ms: Some(1_700),
+            crop: Some(captures_media::CropRect {
+                x: 40,
+                y: 20,
+                width: 480,
+                height: 270,
+            }),
+            ..EditSpec::default()
+        };
+        session
+            .execute_v2(RecordingEditorRequestV2::UpdatePreview {
+                edit,
+                export: ExportSpec {
+                    format: ExportFormat::Gif,
+                    quality: QualityPreset::Preserve,
+                    max_size_bytes: Some(100_000),
+                    frames_per_second: Some(8),
+                    gif_max_colors: Some(64),
+                },
+            })
+            .unwrap();
+        let outside_snapshot = serde_json::to_value(session.snapshot_v2()).unwrap();
+        let outside_frame = session.frame();
+        assert!(
+            session
+                .export_comparison(&CancelToken::default())
+                .err()
+                .unwrap()
+                .contains("accepted trim")
+        );
+        assert_eq!(
+            serde_json::to_value(session.snapshot_v2()).unwrap(),
+            outside_snapshot
+        );
+        assert!(Arc::ptr_eq(&session.frame(), &outside_frame));
+        assert_eq!(fs::read_dir(session.scratch.path()).unwrap().count(), 0);
+
+        session
+            .execute(RecordingEditorRequest::Seek { position_ms: 500 })
+            .unwrap();
+        let snapshot = serde_json::to_value(session.snapshot_v2()).unwrap();
+        let frame = session.frame();
+        let cancelled = CancelToken::default();
+        cancelled.cancel();
+        assert!(session.export_comparison(&cancelled).is_err());
+        let comparison = session.export_comparison(&CancelToken::default()).unwrap();
+        assert_eq!(comparison.position_ms, 500);
+        assert_eq!(comparison.revision, session.snapshot().revision);
+        assert_eq!(comparison.export.max_size_bytes, None);
+        assert_eq!(comparison.attempts, 1);
+        assert_eq!(comparison.before_frame().dimensions(), frame.dimensions());
+        assert_eq!(comparison.after_frame().dimensions(), frame.dimensions());
+        assert_eq!(
+            serde_json::to_value(session.snapshot_v2()).unwrap(),
+            snapshot
+        );
+        assert!(Arc::ptr_eq(&session.frame(), &frame));
+        assert_eq!(fs::read_dir(session.scratch.path()).unwrap().count(), 0);
+        assert_eq!(fs::read(&session.source_path).unwrap(), source_bytes);
+        let before = comparison.before_frame();
+        let after = comparison.after_frame();
+        assert_ne!(
+            before.as_raw(),
+            after.as_raw(),
+            "palette encoding must change high-color source pixels"
+        );
+        drop(comparison);
+        drop(session);
+        assert_eq!(before.dimensions(), (480, 270));
+        assert_eq!(after.dimensions(), (480, 270));
     }
 
     #[test]
