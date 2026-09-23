@@ -610,17 +610,15 @@ the staged values available for correction. MP4/GIF Save new copy uses
 shared encoding, reports progress and accepts independent cancellation. It never
 replaces an existing file or the original History artifact. Post-publication
 History failure reports the successfully saved path rather than inviting re-export.
-AppKit additionally confirms **Replace original…** with the exact permanent MP4/GIF
-path. Saved-path/format UI hints are not eligibility proofs: shared Rust verifies
-matching regular permanent and private recovery files and source identity. The
-serialized worker reports progress and accepts cancellation during preparation;
-success may still follow a late cancellation once publication begins. Success
-rebases the accepted position/edit/export, clears source-dependent frames, comparison,
+Both native editors confirm **Replace original…** with the opened session's exact
+permanent MP4/GIF path. Saved-path/format UI hints are not eligibility proofs:
+shared Rust verifies matching regular permanent and private recovery files and
+source identity. Serialized work reports progress and accepts cancellation during
+preparation; committed success can follow a late cancellation. Success rebases the
+accepted position/edit/export, clears source-dependent frames, comparison,
 estimate and thumbnails, regenerates thumbnails, and reloads the existing History
-item. An ordinary failure preserves the accepted state for retry; a
-`requires_reopen` failure disables media until close/reopen. No recording drafts,
-undo, or cross-directory crash-atomicity are promised. Windows/Linux host UI
-integration and physical acceptance remain open.
+item. Ordinary failure preserves accepted state for retry; a `requires_reopen`
+failure disables media until close/reopen. Physical acceptance remains open.
 Close blocks accepted work; unsaved edits require explicit discard, and normal quit
 is refused until they are saved or closed. Recording drafts are not implemented.
 The shared Replace original operation requires a regular permanent MP4/GIF outside
@@ -632,8 +630,8 @@ for host confirmation; it does not claim replacement eligibility or alter v1/v2
 snapshots, and publication revalidates the opened metadata and file identity.
 The old recovery bytes remain available during publication, but the two directories
 are not crash/power-loss atomic: a process kill can leave new permanent media with
-old or hidden History. History-only and reference-only recordings are unsupported;
-Windows/Linux have not connected the host action yet.
+old or hidden History. History-only and reference-only recordings are unsupported.
+No recording drafts or undo are promised.
 
 Platform status: shared Rust/C ABI is connected to both hosts. The first AppKit
 slice opens recordings from History in a separate native window with retained
@@ -676,12 +674,11 @@ logical point inside a bounded two-axis native scroll view; smaller frames remai
 centered. Apply, Seek, Pause and frame delivery retain the item-local mode, while a
 new History item defaults to Fit. Scrolling, scale changes and layout changes end an
 active crop gesture, and crop mapping uses the exact scrolled image rectangle.
-Windows/X11 already implement
-the same edit controls through wgpu;
-private X11/software-GL exercises provide implementation evidence only. Windows and
-Wayland presentation, physical macOS input, accessibility, playback audio, physical
-audio output, draft restoration and original
-replacement remain open. No recording-editor or cross-platform parity gate closes.
+Windows/X11 implement the same edit controls through wgpu; private X11/software-GL
+exercises provide implementation evidence only. Windows and Wayland presentation,
+physical macOS input, accessibility, playback audio, physical audio output, draft
+restoration and physical original-replacement verification remain open. No
+recording-editor or cross-platform parity gate closes.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow

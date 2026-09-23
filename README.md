@@ -241,12 +241,15 @@ and MP4/GIF **Save new copy**. Crop dimensions start aspect-locked; unlock to ch
 width and height independently. Apply edits accepts the format, quality and edits
 together before saving; failed updates leave the last accepted frame intact.
 The shared recording editor now also supports same-format replacement of an
-existing permanent MP4/GIF when History retains identical recovery media. Native
-AppKit's **Replace original…** separately confirms the opened session's saved path, then
-updates that file and its History item. It is unavailable for recovery-only or
-reference-only recordings, staged edits, or a different output format. Failure
-before publication retains the accepted edit; an uncertain result requires closing
-and reopening the editor. Windows/Linux native hosts still offer **Save new copy** only.
+existing permanent MP4/GIF when History retains identical recovery media.
+Both native editors expose **Replace original…** with confirmation of the opened
+session's exact saved path. The action is unavailable for recovery-only or
+reference-only recordings, staged edits or a different output format; the backend
+also rejects missing or divergent recovery files. Success rebases the editor and
+updates the existing History item. Cancellation stops preparation but cannot undo
+publication once it begins. Ordinary failure keeps accepted edits; an uncertain
+result requires closing and reopening. This is not crash-atomic across the saved
+file and History. **Save new copy** remains non-destructive.
 Trim handles stage changes without decoding on each pointer move; Apply updates
 the preview. Focused trim handles also accept arrow keys and Page Up/Page Down.
 **Adjust crop** shows an uncropped source frame with draggable edges/corners and

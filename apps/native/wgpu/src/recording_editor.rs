@@ -13,7 +13,7 @@ use std::{
 use captures_app::recording_editor::{
     RecordingEditorOpenRequest, RecordingEditorRequestV2 as RecordingEditorRequest,
     RecordingEditorSession, RecordingExportComparison, RecordingSaveRequest,
-    RecordingTimelineThumbnails, SavedRecording,
+    RecordingTimelineThumbnails, ReplaceOriginalError, ReplacedRecording, SavedRecording,
 };
 use captures_app::recording_timeline::{TimelineTrimDrag, TimelineTrimEdge, timeline_ratio};
 use captures_media::{
@@ -54,6 +54,7 @@ impl Presented {
 enum Job {
     Apply(RecordingEditorRequest),
     Save(RecordingSaveRequest, CancelToken),
+    Replace(CancelToken),
     Estimate(CancelToken),
     Compare(u64, CancelToken),
     Thumbnails(CancelToken),
@@ -98,9 +99,11 @@ enum PlaybackEnd {
 }
 
 enum Event {
+    Opened(Presented, Option<PathBuf>),
     Presented(Result<Presented, String>),
     Progress(ExportProgress),
     Saved(Result<SavedRecording, String>),
+    Replaced(Result<(PathBuf, Presented), ReplaceOriginalError>),
     Estimated(Result<ExportEstimate, String>),
     Compared(u64, Result<Comparison, String>),
     Thumbnails(Result<RecordingTimelineThumbnails, String>),
@@ -122,6 +125,12 @@ struct CropGesture {
     origin: egui::Pos2,
     image: egui::Rect,
     locked: bool,
+}
+
+struct ReplacementConfirmation {
+    path: PathBuf,
+    revision: u64,
+    export: ExportSpec,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -220,7 +229,11 @@ struct View {
     picker: bool,
     closed: bool,
     confirm_close: bool,
+    original_path: Option<PathBuf>,
+    confirm_replace: Option<ReplacementConfirmation>,
+    requires_reopen: bool,
     history_changed: bool,
+    original_replaced: bool,
     saved_edit: EditSpec,
     saved_export: Option<ExportSpec>,
     start_ms: u64,
@@ -268,7 +281,14 @@ impl View {
             },
             // Match the shipping editor's quality-to-palette mapping, including
             // the remembered quality while Maximum forces Preserve encoding.
-            gif_max_colors: self.gif.then_some(match self.quality {
+            // A rebased GIF's null palette already means 256. Retain that
+            // accepted identity until the user selects another quality.
+            gif_max_colors: (self.gif
+                && !(self.quality == QualityPreset::Preserve
+                    && self.presented.as_ref().is_some_and(|p| {
+                        p.export.format == ExportFormat::Gif && p.export.gif_max_colors.is_none()
+                    })))
+            .then_some(match self.quality {
                 QualityPreset::Tiny => 64,
                 QualityPreset::Small => 96,
                 QualityPreset::Standard => 128,
@@ -321,6 +341,18 @@ impl View {
             } else {
                 (width, height)
             });
+            // A rebased source has no resize. An inert width cap must not
+            // turn that accepted state into a phantom unapplied edit.
+            if p.export.format == ExportFormat::Gif
+                && p.edit.output_width.is_none()
+                && p.edit.output_height.is_none()
+                && self.crop.is_none()
+                && self.output_size.is_none()
+                && self.max_resolution == MaxResolution::Original
+                && output_size == Some((p.source.width, p.source.height))
+            {
+                output_size = None;
+            }
         }
         EditSpec {
             trim_start_ms: self.start_ms,
@@ -343,6 +375,61 @@ impl View {
             || self.presented.as_ref().is_some_and(|p| {
                 p.edit != self.saved_edit || Some(&p.export) != self.saved_export.as_ref()
             })
+    }
+
+    fn can_replace(&self) -> bool {
+        !self.busy
+            && !self.picker
+            && !self.closed
+            && !self.confirm_close
+            && !self.requires_reopen
+            && !self.unapplied()
+            && !self.adjusting_crop
+            && self.presented.as_ref().is_some_and(|p| {
+                let extension = match (p.source.mime_type.as_str(), p.export.format) {
+                    ("video/mp4", ExportFormat::Mp4) => "mp4",
+                    ("image/gif", ExportFormat::Gif) => "gif",
+                    _ => return false,
+                };
+                self.original_path.as_ref().is_some_and(|path| {
+                    path.extension()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+                })
+            })
+    }
+
+    fn begin_replace(&mut self) {
+        if !self.can_replace() || self.confirm_replace.is_some() {
+            return;
+        }
+        let p = self.presented.as_ref().unwrap();
+        self.confirm_replace = Some(ReplacementConfirmation {
+            path: self.original_path.clone().unwrap(),
+            revision: p.revision,
+            export: p.export.clone(),
+        });
+        self.trim_gesture = None;
+        self.crop_gesture = None;
+    }
+
+    fn confirm_replacement(&mut self, tx: &Sender<Job>) {
+        let Some(confirmed) = self.confirm_replace.take() else {
+            return;
+        };
+        if !self.can_replace()
+            || self.original_path.as_ref() != Some(&confirmed.path)
+            || self
+                .presented
+                .as_ref()
+                .is_none_or(|p| p.revision != confirmed.revision || p.export != confirmed.export)
+        {
+            self.error = Some("Recording changed. Review the original and confirm again.".into());
+            return;
+        }
+        let cancel = CancelToken::default();
+        self.cancel = Some(cancel.clone());
+        self.send(tx, Job::Replace(cancel));
     }
 
     fn estimate_label(&self) -> String {
@@ -399,6 +486,7 @@ impl View {
         if self.busy
             || self.picker
             || self.confirm_close
+            || self.confirm_replace.is_some()
             || self.presented.is_none()
             || self.unapplied()
             || self
@@ -417,6 +505,7 @@ impl View {
         !self.busy
             && !self.picker
             && !self.confirm_close
+            && self.confirm_replace.is_none()
             && !self.closed
             && !self.adjusting_crop
             && !self.unapplied()
@@ -452,6 +541,7 @@ impl View {
         if self.busy
             || self.picker
             || self.confirm_close
+            || self.confirm_replace.is_some()
             || self.closed
             || self.presented.is_none()
             || self.thumbnails.is_some()
@@ -467,6 +557,7 @@ impl View {
         if self.busy
             || self.picker
             || self.confirm_close
+            || self.confirm_replace.is_some()
             || self.closed
             || self.presented.is_none()
             || self.crop.is_none()
@@ -487,6 +578,8 @@ impl View {
         if self.busy
             || self.picker
             || self.confirm_close
+            || self.confirm_replace.is_some()
+            || self.requires_reopen
             || self.closed
             || self.unapplied()
             || self.adjusting_crop
@@ -541,7 +634,7 @@ impl View {
     }
 
     fn send(&mut self, tx: &Sender<Job>, job: Job) {
-        if self.busy || self.picker {
+        if self.busy || self.picker || self.confirm_replace.is_some() || self.requires_reopen {
             return;
         }
         self.trim_gesture = None;
@@ -552,7 +645,10 @@ impl View {
         } else {
             None
         };
-        if matches!(job, Job::Apply(_) | Job::Play(..) | Job::SourceFrame(_)) {
+        if matches!(
+            job,
+            Job::Apply(_) | Job::Play(..) | Job::SourceFrame(_) | Job::Replace(_)
+        ) {
             self.comparison = None;
         }
         let loading_thumbnails = matches!(job, Job::Thumbnails(_));
@@ -577,11 +673,15 @@ impl View {
                     self.estimate = None;
                 }
                 self.error = None;
-                self.status = if comparing.is_some() {
-                    Some("Encoding accepted frame comparison…".into())
-                } else {
-                    loading_source.then(|| "Loading uncropped source frame…".into())
-                };
+                // Automatic source thumbnails must not erase the preceding
+                // replacement result while refreshing the rebased timeline.
+                if !loading_thumbnails {
+                    self.status = if comparing.is_some() {
+                        Some("Encoding accepted frame comparison…".into())
+                    } else {
+                        loading_source.then(|| "Loading uncropped source frame…".into())
+                    };
+                }
             }
             Err(_) => {
                 self.error = Some("Recording editor worker stopped.".into());
@@ -592,6 +692,12 @@ impl View {
 
     fn receive(&mut self, ctx: &egui::Context, event: Event) {
         match event {
+            Event::Opened(presented, original_path) => {
+                // Confirm the session's accepted path, never an older History
+                // list hint loaded before the worker opened this recording.
+                self.original_path = original_path;
+                self.receive(ctx, Event::Presented(Ok(presented)));
+            }
             Event::Presented(result) => {
                 self.busy = false;
                 self.comparison = None;
@@ -669,6 +775,52 @@ impl View {
                 }
             }
             Event::Progress(progress) => self.progress = Some(progress),
+            Event::Replaced(result) => {
+                self.busy = false;
+                self.cancel = None;
+                self.progress = None;
+                match result {
+                    Ok((path, presented)) => {
+                        // Replacement changes the source, not just accepted edits.
+                        // Drop every source-dependent cache and saved baseline.
+                        let destination = std::mem::take(&mut self.destination);
+                        let preview_loop = self.preview_loop.clone();
+                        preview_loop.store(false, Ordering::Relaxed);
+                        *self = Self {
+                            destination,
+                            original_path: Some(path.clone()),
+                            preview_actual_size: self.preview_actual_size,
+                            preview_loop,
+                            // Preserve the new source rather than immediately
+                            // staging the default 800px cap against a 1200px GIF.
+                            gif_maximum_width: (presented.export.format == ExportFormat::Gif
+                                && presented.source.width > 800)
+                                .then_some(presented.source.width.max(1200)),
+                            history_changed: true,
+                            original_replaced: true,
+                            ..Self::default()
+                        };
+                        self.receive(ctx, Event::Presented(Ok(presented)));
+                        self.status = Some(format!("Replaced original: {}", path.display()));
+                    }
+                    Err(error) if error.requires_reopen => {
+                        self.requires_reopen = true;
+                        self.presented = None;
+                        self.texture = None;
+                        self.source_texture = None;
+                        self.thumbnails = None;
+                        self.comparison = None;
+                        self.estimate = None;
+                        self.adjusting_crop = false;
+                        self.history_changed = true;
+                        self.error = Some(format!(
+                            "{} Close and reopen this recording before continuing.",
+                            error.message
+                        ));
+                    }
+                    Err(error) => self.error = Some(error.message),
+                }
+            }
             Event::Saved(result) => {
                 self.busy = false;
                 self.cancel = None;
@@ -865,6 +1017,7 @@ impl View {
         self.trim_gesture = None;
         self.crop_gesture = None;
         self.comparison = None;
+        self.confirm_replace = None;
         if self.playing {
             self.close_after_playback = true;
             self.pause_playback();
@@ -933,7 +1086,10 @@ impl Editor {
                 MediaToolchain::from_command_names(),
             ) {
                 Ok(session) => {
-                    let _ = out.send(Event::Presented(Ok(Presented::from_session(&session))));
+                    let _ = out.send(Event::Opened(
+                        Presented::from_session(&session),
+                        session.original_save_path().map(std::path::Path::to_owned),
+                    ));
                     Some(session)
                 }
                 Err(error) => {
@@ -965,6 +1121,33 @@ impl Editor {
                                 })
                             }),
                     ),
+                    Job::Replace(cancel) => {
+                        let result = if let Some(s) = session.as_mut() {
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                s.replace_original(&cancel, |progress| {
+                                    let _ = out.send(Event::Progress(progress));
+                                    wake(&wake_ctx, viewport);
+                                })
+                                .map(
+                                    |ReplacedRecording::Replaced { path, .. }| {
+                                        (path, Presented::from_session(s))
+                                    },
+                                )
+                            }))
+                            .unwrap_or_else(|_| {
+                                Err(ReplaceOriginalError {
+                                    message: "Recording replacement was interrupted.".into(),
+                                    requires_reopen: s.requires_reopen(),
+                                })
+                            })
+                        } else {
+                            Err(ReplaceOriginalError {
+                                message: "Recording editor is unavailable.".into(),
+                                requires_reopen: true,
+                            })
+                        };
+                        Event::Replaced(result)
+                    }
                     Job::Estimate(cancel) => Event::Estimated(
                         session
                             .as_ref()
@@ -1089,6 +1272,10 @@ impl Editor {
         std::mem::take(&mut self.view.lock().unwrap().history_changed)
     }
 
+    pub fn take_original_replaced(&self) -> bool {
+        std::mem::take(&mut self.view.lock().unwrap().original_replaced)
+    }
+
     pub fn receive(&self, ctx: &egui::Context) {
         while let Ok(event) = self.rx.try_recv() {
             let mut view = self.view.lock().unwrap();
@@ -1097,8 +1284,9 @@ impl Editor {
                 view.receive_playback_frame(ctx, frame);
             }
             let opening = view.presented.is_none();
+            let replaced = matches!(&event, Event::Replaced(Ok(_)));
             view.receive(ctx, event);
-            if opening && view.presented.is_some() {
+            if (opening || replaced) && view.presented.is_some() {
                 view.request_thumbnails(&self.tx);
             }
             wake(ctx, self.viewport);
@@ -1717,6 +1905,26 @@ fn show(
                 }
             });
         }
+        if let Some(confirmation) = &view.confirm_replace {
+            let path = confirmation.path.display().to_string();
+            ui.group(|ui| {
+                ui.strong("Replace the original recording?");
+                ui.label(path);
+                ui.label("Replaces this file and its History recovery copy with the accepted edits. This cannot be undone.");
+                ui.label("A matching recovery copy is required. Cancellation stops preparation, not an update already being committed.");
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel replacement").clicked() {
+                        view.confirm_replace = None;
+                    }
+                    if ui.button("Replace original").clicked() {
+                        view.confirm_replacement(tx);
+                    }
+                });
+            });
+        }
+        if view.confirm_replace.is_some() || view.requires_reopen {
+            ui.disable();
+        }
         if let Some(progress) = &view.progress {
             ui.add(
                 egui::ProgressBar::new(f32::from(progress.completed_per_mille) / 1000.).text(
@@ -1750,8 +1958,14 @@ fn show(
                 ui.label("Destination");
                 ui.add(
                     egui::TextEdit::singleline(&mut view.destination)
-                        .desired_width((ui.available_width() - 100.).max(100.)),
+                        .desired_width((ui.available_width() - 240.).max(100.)),
                 );
+                if ui.add_enabled(view.can_replace(), egui::Button::new("Replace original…"))
+                    .on_hover_text("Replace the saved original and matching History recovery copy after confirmation. Only same-format MP4/GIF; apply edits first. A saved path is only a hint: the backend checks both files before writing.")
+                    .clicked()
+                {
+                    view.begin_replace();
+                }
                 if ui.button("Change…").clicked() {
                     view.picker = true;
                     let events = events.clone();
@@ -1825,6 +2039,9 @@ fn show(
         });
     });
     egui::CentralPanel::default().show(ui, |ui| {
+        if view.confirm_replace.is_some() || view.requires_reopen {
+            ui.disable();
+        }
         egui::ScrollArea::vertical().show(ui, |ui| {
             if view.unapplied() { view.comparison = None; }
             ui.heading("Edit recording");
@@ -2314,6 +2531,252 @@ mod tests {
             })),
         );
         view
+    }
+
+    #[test]
+    fn replacement_requires_confirmation_of_unchanged_accepted_identity() {
+        let ctx = egui::Context::default();
+        let (tx, jobs) = mpsc::channel();
+        let mut view = opened();
+        assert!(!view.can_replace());
+        view.original_path = Some("stale-history-path.mp4".into());
+        view.receive(
+            &ctx,
+            Event::Opened(opened().presented.unwrap(), Some("original.mp4".into())),
+        );
+        assert!(view.can_replace());
+        view.gif = true;
+        assert!(!view.can_replace());
+        view.gif = false;
+        view.begin_replace();
+        assert!(jobs.try_recv().is_err());
+        assert_eq!(
+            view.confirm_replace.as_ref().unwrap().path,
+            PathBuf::from("original.mp4")
+        );
+        view.request_playback(&tx);
+        view.request_comparison(&ctx, &tx);
+        view.request_estimate(&tx);
+        view.request_thumbnails(&tx);
+        assert!(jobs.try_recv().is_err() && view.cancel.is_none());
+        for change in 0..3 {
+            view.confirm_replace = None;
+            view.begin_replace();
+            match change {
+                0 => view.presented.as_mut().unwrap().revision += 1,
+                1 => view.original_path = Some("different.mp4".into()),
+                _ => view.presented.as_mut().unwrap().export.quality = QualityPreset::Tiny,
+            }
+            view.confirm_replacement(&tx);
+            assert!(jobs.try_recv().is_err(), "stale confirmation {change}");
+        }
+        view.presented.as_mut().unwrap().export.quality = QualityPreset::Preserve;
+        view.begin_replace();
+        view.confirm_replacement(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Replace(_)));
+        assert!(view.busy && view.cancel.is_some() && view.confirm_replace.is_none());
+        view.request_close();
+        assert!(!view.closed, "replacement teardown gates close");
+    }
+
+    #[test]
+    fn replacement_success_after_cancel_rebases_gif_and_discards_source_caches() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let old = view.presented.as_ref().unwrap().frame.clone();
+        view.source_texture = view.texture.clone();
+        view.thumbnails = view.texture.clone();
+        view.estimate = Some(ExportEstimate {
+            size_bytes: 50,
+            exact: true,
+        });
+        view.output_size = Some((600, 200));
+        view.start_ms = 500;
+        view.quality = QualityPreset::Tiny;
+        view.maximum_size = true;
+        view.preview_loop.store(true, Ordering::Relaxed);
+        let cancel = CancelToken::default();
+        cancel.cancel();
+        view.cancel = Some(cancel);
+        view.busy = true;
+        let mut rebased = opened().presented.unwrap();
+        rebased.revision = 4;
+        rebased.position_ms = 0;
+        rebased.source.kind = captures_media::MediaKind::Gif;
+        rebased.source.mime_type = "image/gif".into();
+        rebased.source.width = 1200;
+        rebased.source.height = 400;
+        rebased.source.duration_ms = Some(1500);
+        rebased.frame = Arc::new(RgbaImage::new(1200, 400));
+        rebased.export.format = ExportFormat::Gif;
+        rebased.preview_export = rebased.export.clone();
+        view.receive(&ctx, Event::Replaced(Ok(("original.gif".into(), rebased))));
+        assert!(view.history_changed && !view.busy && !view.dirty() && !view.unapplied());
+        assert!(
+            view.original_replaced,
+            "dismiss the stale original mini preview"
+        );
+        assert!(
+            view.estimate.is_none() && view.source_texture.is_none() && view.thumbnails.is_none()
+        );
+        assert!(view.output_size.is_none() && !view.maximum_size && view.cancel.is_none());
+        assert!(!view.preview_loop.load(Ordering::Relaxed));
+        assert_eq!((view.start_ms, view.end_ms, view.position_ms), (0, 1500, 0));
+        assert_eq!(view.texture.as_ref().unwrap().size(), [1200, 400]);
+        assert_eq!(view.gif_maximum_width, Some(1200));
+        assert_eq!(view.export_spec().gif_max_colors, None);
+        assert_eq!(
+            old.dimensions(),
+            (4, 2),
+            "old retained frame survives rebase"
+        );
+        assert!(view.can_replace());
+        let (tx, jobs) = mpsc::channel();
+        view.request_thumbnails(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Thumbnails(_)));
+        assert_eq!(
+            view.status.as_deref(),
+            Some("Replaced original: original.gif")
+        );
+        view.receive(&ctx, Event::Thumbnails(Err("cancelled".into())));
+        assert_eq!(
+            view.status.as_deref(),
+            Some("Replaced original: original.gif")
+        );
+        view.request_playback(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(0, false, _)));
+        view.busy = false;
+        view.gif_maximum_width = Some(320);
+        assert!(
+            view.unapplied(),
+            "a real post-rebase width edit still stages"
+        );
+        let edit = view.staged_edit(view.presented.as_ref().unwrap());
+        assert_eq!(
+            (edit.output_width, edit.output_height),
+            (Some(320), Some(106))
+        );
+    }
+
+    #[test]
+    fn replacement_failure_preserves_edits_but_indeterminate_failure_blocks_media() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        view.original_path = Some("original.mp4".into());
+        view.saved_edit.trim_start_ms = 100;
+        let frame = view.presented.as_ref().unwrap().frame.clone();
+        view.busy = true;
+        view.receive(
+            &ctx,
+            Event::Replaced(Err(ReplaceOriginalError {
+                message: "cancelled before commit".into(),
+                requires_reopen: false,
+            })),
+        );
+        assert!(view.dirty() && view.can_replace() && !view.history_changed);
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+        view.receive(
+            &ctx,
+            Event::Replaced(Err(ReplaceOriginalError {
+                message: "rollback failed".into(),
+                requires_reopen: true,
+            })),
+        );
+        assert!(view.requires_reopen && view.presented.is_none() && view.texture.is_none());
+        assert!(view.error.as_ref().unwrap().contains("Close and reopen"));
+        let (tx, jobs) = mpsc::channel();
+        view.request_playback(&tx);
+        view.request_estimate(&tx);
+        view.request_comparison(&ctx, &tx);
+        view.request_thumbnails(&tx);
+        view.send(
+            &tx,
+            Job::Apply(RecordingEditorRequest::Seek { position_ms: 0 }),
+        );
+        assert!(jobs.try_recv().is_err() && !view.can_replace());
+        view.request_close();
+        assert!(
+            view.closed,
+            "terminal failure allows close without stale dirty state"
+        );
+    }
+
+    #[test]
+    fn replacement_confirmation_and_save_actions_fit_minimum_window() {
+        for (name, tokens) in crate::tokens::load() {
+            let ctx = egui::Context::default();
+            tokens.apply(&ctx, name.contains("light"));
+            let mut view = opened();
+            view.original_path = Some("/recordings/original.mp4".into());
+            let (tx, jobs) = mpsc::channel();
+            let (events, _) = mpsc::channel();
+            for confirming in [false, true] {
+                if confirming {
+                    view.begin_replace();
+                }
+                let mut render = || {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(760., 580.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| show(ui, &tokens, &mut view, &tx, &events, egui::ViewportId::ROOT),
+                    );
+                    output.textures_delta.clear();
+                    output
+                };
+                render();
+                let output = render();
+                let labels = if confirming {
+                    vec![
+                        "Replace the original recording?",
+                        "/recordings/original.mp4",
+                        "Cancel replacement",
+                        "Replace original",
+                    ]
+                } else {
+                    vec![
+                        "Destination",
+                        "Replace original…",
+                        "Change…",
+                        "Estimate size",
+                        "Apply edits",
+                        "Save new copy",
+                    ]
+                };
+                let mut rects = Vec::new();
+                for label in labels {
+                    let rect = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == label => {
+                                Some(text.galley.rect.translate(text.pos.to_vec2()))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("{name}: missing {label}"));
+                    assert!(
+                        rect.min.x >= 0.
+                            && rect.min.y >= 0.
+                            && rect.max.x <= 760.
+                            && rect.max.y <= 580.,
+                        "{label}: {rect:?}"
+                    );
+                    assert!(
+                        rects
+                            .iter()
+                            .all(|other: &egui::Rect| !other.intersects(rect)),
+                        "overlapping {label}"
+                    );
+                    rects.push(rect);
+                }
+            }
+            assert!(jobs.try_recv().is_err());
+        }
     }
 
     fn comparison(view: &View) -> Comparison {
