@@ -2002,15 +2002,16 @@ final class RecordingEditorTests: XCTestCase {
             exportFormat: "gif", framesPerSecond: 8))
         seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
         XCTAssertEqual(fps.titleOfSelectedItem, "8 FPS", "Seek retains accepted GIF cadence")
+        XCTAssertFalse(controller.dirty, "Seek retains the saved accepted export identity")
 
+        fps.selectItem(withTitle: "24 FPS"); _ = fps.sendAction(fps.action, to: fps.target)
         controller.present(artifact: recordingArtifact(id: "next-recording"),
                            historyRoot: "/History", outputDirectory: "/Exports")
-        XCTAssertEqual(worker.openCount, 1, "dirty accepted cadence rejects an item switch")
-        XCTAssertEqual(fps.titleOfSelectedItem, "8 FPS")
+        XCTAssertEqual(worker.openCount, 1, "dirty staged cadence rejects an item switch")
+        XCTAssertEqual(fps.titleOfSelectedItem, "24 FPS")
 
-        worker.saveResult = .success(.saved(path: "/Exports/eight-fps-seek.gif"))
-        save.performClick(nil)
-        XCTAssertFalse(controller.dirty)
+        fps.selectItem(withTitle: "8 FPS"); _ = fps.sendAction(fps.action, to: fps.target)
+        XCTAssertFalse(controller.dirty, "restoring the saved cadence makes the item clean")
         controller.present(artifact: recordingArtifact(id: "next-recording"),
                            historyRoot: "/History", outputDirectory: "/Exports")
         XCTAssertEqual(worker.openCount, 2, "a clean item switch opens the new History item")
@@ -2332,7 +2333,9 @@ final class RecordingEditorTests: XCTestCase {
                                                             artifactID: fixture.id, tools: tools)
         let session = opened.0
         var edit = opened.1.snapshot.edit
-        edit["trim_start_ms"] = 211; edit["trim_end_ms"] = 1_711
+        // The 12 FPS fixture's third and twenty-first frame boundaries give a
+        // nonzero 1.5-second trim with deterministic output cadence.
+        edit["trim_start_ms"] = 250; edit["trim_end_ms"] = 1_750
         var export = opened.1.snapshot.export
         export["format"] = "gif"; export["quality"] = "preserve"
         export["max_size_bytes"] = NSNull(); export["frames_per_second"] = 8
