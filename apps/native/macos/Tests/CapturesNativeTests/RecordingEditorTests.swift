@@ -883,6 +883,10 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(try field("Recording crop width", in: controller.root).stringValue,
                        releasedWidth, "pointer release ends the crop gesture")
 
+        // The locked southeast resize above leaves the crop against the source's top edge.
+        // Move it down before expanding the east edge so the coupled height has room to grow.
+        XCTAssertTrue(controller.window.makeFirstResponder(overlay))
+        try dispatchCropKey(125, to: overlay, in: controller, modifiers: [.shift])
         let east = try XCTUnwrap(handles.first { $0.kind == .east })
         XCTAssertTrue(controller.window.makeFirstResponder(east))
         let keyboardWidth = try XCTUnwrap(UInt32(try field("Recording crop width",
