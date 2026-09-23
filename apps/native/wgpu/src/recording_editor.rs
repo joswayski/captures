@@ -233,6 +233,7 @@ struct View {
     confirm_replace: Option<ReplacementConfirmation>,
     requires_reopen: bool,
     history_changed: bool,
+    original_replaced: bool,
     saved_edit: EditSpec,
     saved_export: Option<ExportSpec>,
     start_ms: u64,
@@ -796,6 +797,7 @@ impl View {
                                 && presented.source.width > 800)
                                 .then_some(presented.source.width.max(1200)),
                             history_changed: true,
+                            original_replaced: true,
                             ..Self::default()
                         };
                         self.receive(ctx, Event::Presented(Ok(presented)));
@@ -1268,6 +1270,10 @@ impl Editor {
     }
     pub fn take_history_changed(&self) -> bool {
         std::mem::take(&mut self.view.lock().unwrap().history_changed)
+    }
+
+    pub fn take_original_replaced(&self) -> bool {
+        std::mem::take(&mut self.view.lock().unwrap().original_replaced)
     }
 
     pub fn receive(&self, ctx: &egui::Context) {
@@ -2606,6 +2612,10 @@ mod tests {
         rebased.preview_export = rebased.export.clone();
         view.receive(&ctx, Event::Replaced(Ok(("original.gif".into(), rebased))));
         assert!(view.history_changed && !view.busy && !view.dirty() && !view.unapplied());
+        assert!(
+            view.original_replaced,
+            "dismiss the stale original mini preview"
+        );
         assert!(
             view.estimate.is_none() && view.source_texture.is_none() && view.thumbnails.is_none()
         );
