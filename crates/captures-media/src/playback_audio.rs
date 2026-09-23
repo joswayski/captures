@@ -2,7 +2,7 @@ use std::{
     io::{self, Read},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering, fence},
     },
     thread,
     time::{Duration, Instant},
@@ -96,7 +96,11 @@ impl AudioPlaybackClock {
             }
             let published = self.published_segments.load(Ordering::Relaxed);
             if published == 0 {
-                return None;
+                fence(Ordering::Acquire);
+                if before == self.sequence.load(Ordering::Acquire) {
+                    return None;
+                }
+                continue;
             }
             let first = published.saturating_sub(CLOCK_SEGMENT_CAPACITY as u64);
             let mut selected = None;
@@ -116,6 +120,7 @@ impl AudioPlaybackClock {
                     break;
                 }
             }
+            fence(Ordering::Acquire);
             let after = self.sequence.load(Ordering::Acquire);
             if before != after {
                 continue;
@@ -144,11 +149,16 @@ impl AudioPlaybackClock {
             }
             let published = self.published_segments.load(Ordering::Relaxed);
             if published == 0 {
-                return false;
+                fence(Ordering::Acquire);
+                if before == self.sequence.load(Ordering::Acquire) {
+                    return false;
+                }
+                continue;
             }
             let segment = &self.segments[(published - 1) as usize % CLOCK_SEGMENT_CAPACITY];
             let valid_frames = segment.valid_frames.load(Ordering::Relaxed);
             let playback_nanoseconds = segment.playback_nanoseconds.load(Ordering::Relaxed);
+            fence(Ordering::Acquire);
             let after = self.sequence.load(Ordering::Acquire);
             if before != after {
                 continue;
@@ -380,22 +390,31 @@ pub(crate) fn read_audio_samples(
     mut producer: ringbuf::HeapProd<f32>,
     control: &AudioProducerControl,
     cancel: &CancelToken,
+    channels: u16,
 ) -> io::Result<()> {
+    let channel_count = usize::from(channels);
+    if channel_count == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "audio output must have at least one channel",
+        ));
+    }
     let mut bytes = [0_u8; 16 * 1024];
     let mut carry = Vec::with_capacity(3);
+    let mut pending_samples = Vec::with_capacity(channel_count);
     loop {
         if cancel.is_cancelled() || control.stopped() {
             return Ok(());
         }
         let count = reader.read(&mut bytes)?;
         if count == 0 {
-            if carry.is_empty() {
+            if carry.is_empty() && pending_samples.is_empty() {
                 control.eof();
                 return Ok(());
             }
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "FFmpeg returned a partial raw audio sample",
+                "FFmpeg returned a partial interleaved raw audio frame",
             ));
         }
         let mut input = Vec::with_capacity(carry.len() + count);
@@ -403,23 +422,26 @@ pub(crate) fn read_audio_samples(
         input.extend_from_slice(&bytes[..count]);
         let complete = input.len() / 4 * 4;
         carry.extend_from_slice(&input[complete..]);
-        let samples: Vec<f32> = input[..complete]
-            .chunks_exact(4)
-            .map(|sample| f32::from_le_bytes(sample.try_into().expect("four-byte sample")))
-            .collect();
+        pending_samples.extend(
+            input[..complete]
+                .chunks_exact(4)
+                .map(|sample| f32::from_le_bytes(sample.try_into().expect("four-byte sample"))),
+        );
+        let complete_samples = pending_samples.len() / channel_count * channel_count;
         let mut written = 0;
-        while written < samples.len() {
+        while written < complete_samples {
             if cancel.is_cancelled() || control.stopped() {
                 return Ok(());
             }
             control.pushed(1);
-            if producer.try_push(samples[written]).is_ok() {
+            if producer.try_push(pending_samples[written]).is_ok() {
                 written += 1;
             } else {
                 control.0.queued_samples.fetch_sub(1, Ordering::Release);
                 thread::sleep(PRODUCER_POLL_INTERVAL);
             }
         }
+        pending_samples.drain(..complete_samples);
     }
 }
 
@@ -624,9 +646,45 @@ mod tests {
         let (producer, _consumer) = HeapRb::<f32>::new(8).split();
         let shared = Arc::new(AudioShared::new(48_000));
         let control = AudioProducerControl(shared);
-        let error = read_audio_samples(&b"12345"[..], producer, &control, &CancelToken::default())
-            .unwrap_err();
+        let error = read_audio_samples(
+            &b"12345"[..],
+            producer,
+            &control,
+            &CancelToken::default(),
+            2,
+        )
+        .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn raw_audio_reader_rejects_a_channel_incomplete_stereo_eof() {
+        let (producer, mut consumer) = HeapRb::<f32>::new(8).split();
+        let shared = Arc::new(AudioShared::new(48_000));
+        let control = AudioProducerControl(shared.clone());
+        let samples = [0.25_f32, -0.25, 0.75];
+        let bytes = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect::<Vec<_>>();
+        let error = read_audio_samples(
+            bytes.as_slice(),
+            producer,
+            &control,
+            &CancelToken::default(),
+            2,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        assert!(!shared.producer_eof.load(Ordering::Acquire));
+        assert_eq!(
+            consumer.occupied_len(),
+            2,
+            "only one complete frame is queued"
+        );
+        let mut complete_frame = [0.0_f32; 2];
+        assert_eq!(consumer.pop_slice(&mut complete_frame), 2);
+        assert_eq!(complete_frame, [0.25, -0.25]);
     }
 
     #[test]
@@ -643,6 +701,7 @@ mod tests {
                 producer,
                 &reader_control,
                 &reader_cancel,
+                1,
             )
         });
         thread::sleep(Duration::from_millis(20));

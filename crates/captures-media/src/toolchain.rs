@@ -1192,9 +1192,13 @@ impl MediaToolchain {
         let reader_control = producer_control.clone();
         let reader_cancel = cancel.clone();
         let reader = thread::spawn(move || {
-            if let Err(error) =
-                read_audio_samples(stdout, producer, &reader_control, &reader_cancel)
-            {
+            if let Err(error) = read_audio_samples(
+                stdout,
+                producer,
+                &reader_control,
+                &reader_cancel,
+                format.channels,
+            ) {
                 reader_control.fail(format!("failed to decode playback audio: {error}"));
             }
         });
