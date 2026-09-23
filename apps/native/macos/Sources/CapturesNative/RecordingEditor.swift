@@ -1,6 +1,36 @@
 import AppKit
 import UniformTypeIdentifiers
 
+final class RecordingComparisonView: NSView {
+    var comparison: RecordingEditorComparison? { didSet { needsDisplay = true } }
+    var split: CGFloat = 0.5 { didSet { needsDisplay = true } }
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let comparison, bounds.width > 0, bounds.height > 0 else { return }
+        let before = NSImage(cgImage: comparison.before,
+                             size: NSSize(width: comparison.before.width,
+                                          height: comparison.before.height))
+        let after = NSImage(cgImage: comparison.after,
+                            size: NSSize(width: comparison.after.width,
+                                         height: comparison.after.height))
+        let scale = min(bounds.width / before.size.width, bounds.height / before.size.height)
+        let rect = NSRect(x: (bounds.width - before.size.width * scale) / 2,
+                          y: (bounds.height - before.size.height * scale) / 2,
+                          width: before.size.width * scale, height: before.size.height * scale)
+        before.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+        guard let context = NSGraphicsContext.current else { return }
+        context.saveGraphicsState()
+        NSRect(x: rect.minX + rect.width * split, y: rect.minY,
+               width: rect.width * (1 - split), height: rect.height).clip()
+        after.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+        context.restoreGraphicsState()
+        let divider = NSRect(x: rect.minX + rect.width * split - 1, y: rect.minY,
+                             width: 2, height: rect.height)
+        NSColor.white.setFill(); divider.fill()
+    }
+}
+
 final class RecordingTrimHandle: NSView {
     let edge: NativeRecordingTimelineEdge
     weak var timeline: RecordingTrimTimeline?
@@ -684,6 +714,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var thumbnailCancel: NativeRecordingEditorCancel?
     private var thumbnailRetryAvailable = false
     private var estimate: RecordingEditorEstimate?
+    private var comparison: RecordingEditorComparison?
+    private var comparisonCancel: NativeRecordingEditorCancel?
     private var playbackState = RecordingPlaybackState.idle
     private var playbackCancel: NativeRecordingEditorCancel?
     private var playbackPositionMilliseconds: UInt64?
@@ -713,6 +745,13 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let previewScroll = NSScrollView()
     private let previewCanvas = Surface()
     private let preview = NSImageView()
+    private let comparisonView = RecordingComparisonView()
+    private let comparisonSlider = NSSlider(value: 50, minValue: 0, maxValue: 100,
+                                             target: nil, action: nil)
+    private let comparisonBeforeLabel = NSTextField(labelWithString: "Before")
+    private let comparisonAfterLabel = NSTextField(labelWithString: "After")
+    private var comparisonButton: CaptureButton!
+    private var comparisonHideButton: CaptureButton!
     private let cropOverlay: RecordingCropOverlay
     private let geometryPanel = Surface()
     private let cropEnabled = NSButton(checkboxWithTitle: "Crop recording", target: nil, action: nil)
@@ -828,6 +867,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let current = generation
         artifactID = artifact.id; presentation = nil; savedEdit = nil; savedExport = nil
         estimate = nil; activeCancel = nil; thumbnailCancel = nil; busy = true; pickerOpen = false
+        invalidateComparison()
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
         playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
@@ -925,6 +965,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
     func windowDidMiniaturize(_ notification: Notification) { pausePlayback() }
     func controlTextDidChange(_ notification: Notification) {
+        invalidateComparison()
         if let field = notification.object as? NSTextField,
            [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) {
             estimate = nil; updateControls(); return
@@ -966,6 +1007,23 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         preview.imageScaling = .scaleProportionallyUpOrDown
         preview.setAccessibilityLabel("Decoded recording frame")
         previewCanvas.addSubview(preview)
+        comparisonView.isHidden = true
+        comparisonView.setAccessibilityLabel("Encoded before and after recording frame")
+        previewCanvas.addSubview(comparisonView)
+        comparisonButton = button("Compare") { [weak self] in self?.compareAcceptedFrame() }
+        comparisonButton.setAccessibilityLabel("Compare encoded recording before and after")
+        comparisonHideButton = button("Hide") { [weak self] in self?.invalidateComparison() }
+        comparisonHideButton.setAccessibilityLabel("Hide recording comparison")
+        previewPanel.addSubview(comparisonButton); previewPanel.addSubview(comparisonHideButton)
+        comparisonSlider.target = self; comparisonSlider.action = #selector(comparisonSplitChanged)
+        comparisonSlider.setAccessibilityLabel("Recording before and after split")
+        comparisonSlider.setAccessibilityHelp("Left is before encoding; right is the encoded first attempt at the accepted frame.")
+        comparisonSlider.isHidden = true
+        comparisonBeforeLabel.textColor = tokens.color("text")
+        comparisonAfterLabel.textColor = tokens.color("text")
+        comparisonBeforeLabel.isHidden = true; comparisonAfterLabel.isHidden = true
+        previewPanel.addSubview(comparisonBeforeLabel); previewPanel.addSubview(comparisonAfterLabel)
+        previewPanel.addSubview(comparisonSlider)
         cropOverlay.toolTip = "Drag inside to move. Drag a handle to resize. Arrow keys move a focused handle by 1 source pixel; Shift moves 10."
         cropOverlay.onStage = { [weak self] crop in self?.stageGraphicalCrop(crop) }
         cropOverlay.onCommitPendingInput = { [weak self] in
@@ -1040,6 +1098,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         trimTimeline.onStage = { [weak self] edge, milliseconds in
             guard let self else { return }
             (edge == .start ? self.trimStart : self.trimEnd).stringValue = String(milliseconds)
+            self.invalidateComparison()
             self.estimate = nil; self.updateControls()
         }
         trimPanel.addSubview(trimTimeline)
@@ -1141,12 +1200,20 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                                     width: availableWidth - geometryWidth - 12,
                                     height: previewHeight)
         previewTitle.frame = NSRect(x: 12, y: 8, width: 80, height: 20)
+        comparisonButton.frame = NSRect(x: 90, y: 5, width: 92, height: 26)
+        comparisonHideButton.frame = NSRect(x: 184, y: 5, width: 52, height: 26)
         previewActualButton.frame = NSRect(x: previewPanel.bounds.width - 66, y: 5,
                                            width: 54, height: 26)
         previewFitButton.frame = NSRect(x: previewActualButton.frame.minX - 50, y: 5,
                                         width: 46, height: 26)
         previewScroll.frame = NSRect(x: 0, y: 34, width: previewPanel.bounds.width,
                                      height: max(0, previewPanel.bounds.height - 34))
+        let comparisonY = previewPanel.bounds.height - 37
+        comparisonBeforeLabel.frame = NSRect(x: 12, y: comparisonY + 2, width: 48, height: 20)
+        comparisonAfterLabel.frame = NSRect(x: previewPanel.bounds.width - 52,
+                                             y: comparisonY + 2, width: 44, height: 20)
+        comparisonSlider.frame = NSRect(x: 62, y: comparisonY,
+                                         width: max(0, previewPanel.bounds.width - 118), height: 24)
         refreshPreviewLayout(resetScroll: false)
         geometryPanel.frame = NSRect(x: previewPanel.frame.maxX + 12, y: 76,
                                      width: geometryWidth, height: previewHeight)
@@ -1293,6 +1360,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             imageRect = previewCanvas.bounds.insetBy(dx: 12, dy: 12)
         }
         preview.frame = imageRect
+        comparisonView.frame = imageRect
         cropOverlay.frame = previewCanvas.bounds
         cropOverlay.presentedImageRect = actualSize ? imageRect : nil
         previewScroll.hasHorizontalScroller = actualSize && canvasSize.width > viewport.width
@@ -1304,6 +1372,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func publish(_ value: RecordingEditorPresentation, initialize: Bool = false) {
+        invalidateComparison()
         let old = presentation?.snapshot
         if old?.artifactID != value.snapshot.artifactID
             || old?.positionMilliseconds != value.snapshot.positionMilliseconds {
@@ -1471,6 +1540,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func applyEdits() {
+        invalidateComparison()
         guard commitPendingCropInput() else {
             showError("Enter valid trim, crop, audio, and output values."); return
         }
@@ -1486,6 +1556,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     @objc private func seekChanged() {
+        invalidateComparison()
         guard !busy, !stagedDiffers else {
             seekSlider.doubleValue = Double(presentation?.snapshot.positionMilliseconds ?? 0)
             if stagedDiffers { showError("Apply staged recording changes before seeking.") }
@@ -1548,6 +1619,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func startPlayback() {
+        invalidateComparison()
         guard !busy, !pickerOpen, playbackState == .idle,
               pendingCropInputValid, stagedEdit != nil, stagedExport != nil,
               !stagedDiffers, let snapshot = presentation?.snapshot,
@@ -1671,6 +1743,74 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             switch result {
             case .success(let value): self.estimate = value; self.status.stringValue = "Estimate ready."
             case .failure(let error): self.showError("Size estimate failed: \(error.localizedDescription)")
+            }
+            self.updateControls()
+        }
+    }
+
+    @objc private func comparisonSplitChanged() {
+        comparisonView.split = CGFloat(comparisonSlider.doubleValue / 100)
+    }
+
+    private func invalidateComparison() {
+        comparisonCancel?.cancel()
+        comparison = nil
+        comparisonView.comparison = nil
+        comparisonView.isHidden = true
+        comparisonSlider.isHidden = true
+        comparisonBeforeLabel.isHidden = true; comparisonAfterLabel.isHidden = true
+        comparisonHideButton?.isHidden = true
+    }
+
+    private func compareAcceptedFrame() {
+        guard !busy, !pickerOpen, playbackState == .idle, !cropAdjustmentActive,
+              !stagedDiffers, pendingCropInputValid, stagedEdit != nil, stagedExport != nil,
+              let snapshot = presentation?.snapshot,
+              let cancel = NativeRecordingEditorCancel() else { return }
+        let current = generation
+        let expectedRevision = snapshot.revision
+        let expectedPosition = snapshot.positionMilliseconds
+        let expectedExport = canonical(snapshot.export)
+        invalidateComparison()
+        busy = true; activeCancel = cancel; comparisonCancel = cancel
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Encoding before/after at accepted frame \(time(expectedPosition))…"
+        updateControls()
+        worker.comparison(cancel: cancel) { [weak self] result in
+            guard let self, self.generation == current,
+                  self.comparisonCancel === cancel else { return }
+            self.busy = false; self.activeCancel = nil; self.comparisonCancel = nil
+            guard !cancel.isCancelled else {
+                self.status.stringValue = "Comparison cancelled. Compare to retry."
+                self.updateControls(); return
+            }
+            guard let accepted = self.presentation?.snapshot,
+                  accepted.revision == expectedRevision,
+                  accepted.positionMilliseconds == expectedPosition,
+                  self.canonical(accepted.export) == expectedExport,
+                  !self.stagedDiffers, !self.cropAdjustmentActive,
+                  self.playbackState == .idle else {
+                self.status.stringValue = "Comparison no longer matches the accepted frame."
+                self.updateControls(); return
+            }
+            switch result {
+            case .success(let value):
+                guard value.revision == expectedRevision,
+                      value.positionMilliseconds == expectedPosition,
+                      self.canonical(value.export) == expectedExport else {
+                    self.showError("Encoded comparison no longer matches the accepted frame.")
+                    break
+                }
+                self.comparison = value
+                self.comparisonView.comparison = value
+                self.comparisonView.isHidden = false
+                self.comparisonBeforeLabel.isHidden = false
+                self.comparisonAfterLabel.isHidden = false
+                self.status.stringValue = accepted.saveExport["max_size_bytes"] is NSNumber
+                    ? "Encoded first attempt at accepted \(self.time(expectedPosition)); final capped save may differ."
+                    : "Encoded before/after at accepted \(self.time(expectedPosition)); playback time is independent."
+            case .failure(let error):
+                self.showError("Comparison unavailable: \(error.localizedDescription). Compare to retry.")
             }
             self.updateControls()
         }
@@ -1858,6 +1998,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func toggleCropAdjustment() {
+        invalidateComparison()
         if cropAdjustmentActive {
             finishCropAdjustment(restorePriorImage: true); updateControls(); return
         }
@@ -1944,6 +2085,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func stageGraphicalCrop(_ crop: NativeRecordingCropRect) {
+        invalidateComparison()
         guard cropAdjustmentActive, !hasPendingCropInput,
               let snapshot = presentation?.snapshot,
               let source = sourceDimensions(snapshot) else { return }
@@ -2108,6 +2250,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func updateControls() {
+        if stagedDiffers || cropAdjustmentActive || playbackState != .idle {
+            invalidateComparison()
+        }
         let available = presentation != nil && !busy && !pickerOpen && playbackState == .idle
         let validMaximum = !maximumSizeEnabled || maximumSizeBytes != nil
         let valid = pendingCropInputValid && stagedEdit != nil && stagedExport != nil
@@ -2176,6 +2321,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         previewActualButton?.needsDisplay = true
         previewFitButton?.isEnabled = preview.image != nil
         previewActualButton?.isEnabled = preview.image != nil
+        comparisonButton?.isEnabled = available && valid && !stagedDiffers
+            && !cropAdjustmentActive
+        comparisonHideButton?.isHidden = comparison == nil
+        comparisonSlider.isHidden = comparison == nil
         cropOverlay.interceptsPendingInput = cropAdjustmentActive && available
             && hasPendingCropInput
         cropOverlay.setEditingEnabled(cropAdjustmentActive && available && !hasPendingCropInput)
@@ -2227,6 +2376,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func closeSession() {
+        invalidateComparison()
         generation += 1; artifactID = nil; presentation = nil; activeCancel = nil
         thumbnailCancel = nil; thumbnailRetryAvailable = false
         playbackCancel = nil; playbackState = .idle

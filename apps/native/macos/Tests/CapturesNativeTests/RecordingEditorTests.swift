@@ -4,6 +4,146 @@ import XCTest
 @testable import CapturesNative
 
 final class RecordingEditorTests: XCTestCase {
+    func testEncodedComparisonAcceptedPositionLifecycleAndStaleDelivery() throws {
+        _ = NSApplication.shared
+        let initial = try presentation(position: 400)
+        let worker = FakeRecordingEditorWorker(presentation: initial)
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let compare = try button("Compare", in: controller.root)
+        let hide = try button("Hide", in: controller.root)
+        XCTAssertEqual(compare.accessibilityLabel(), "Compare encoded recording before and after")
+        let split = try slider("Recording before and after split", in: controller.root)
+        let start = try field("Trim start milliseconds", in: controller.root)
+        let seek = try slider("Recording frame position", in: controller.root)
+        let play = try button("Play", in: controller.root)
+        XCTAssertTrue(compare.isEnabled); XCTAssertTrue(hide.isHidden)
+        XCTAssertFalse(controller.dirty)
+
+        worker.deferComparison = true
+        compare.performClick(nil)
+        XCTAssertEqual(worker.comparisonCalls, 1)
+        XCTAssertFalse(compare.isEnabled)
+        XCTAssertTrue(hide.isHidden)
+        let cancelled = try XCTUnwrap(worker.observedComparisonCancel)
+        try button("Cancel operation", in: controller.root).performClick(nil)
+        XCTAssertTrue(cancelled.isCancelled)
+        worker.completeComparison(.success(try comparison(for: initial)))
+        XCTAssertTrue(hide.isHidden, "cancelled completion cannot publish split pixels")
+        XCTAssertTrue(compare.isEnabled)
+
+        compare.performClick(nil)
+        worker.completeComparison(.failure(AppBridgeError.backend("encode failed")))
+        XCTAssertTrue(hide.isHidden)
+        XCTAssertTrue(compare.isEnabled, "encoding errors permit explicit retry")
+        compare.performClick(nil)
+        worker.completeComparison(.success(try comparison(for: initial, position: 401)))
+        XCTAssertTrue(hide.isHidden, "wrong source-relative position is rejected")
+        compare.performClick(nil)
+        worker.completeComparison(.success(try comparison(for: initial)))
+        XCTAssertFalse(hide.isHidden); XCTAssertFalse(split.isHidden)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("accepted 0:00.400") })
+        split.doubleValue = 73; _ = split.sendAction(split.action, to: split.target)
+        hide.performClick(nil)
+        XCTAssertTrue(split.isHidden); XCTAssertFalse(controller.dirty)
+
+        worker.deferPlayback = true
+        play.performClick(nil)
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 650,
+            image: try solidImage(red: 2, green: 3, blue: 4)))
+        play.performClick(nil); worker.completePlayback(.success(.cancelled))
+        compare.performClick(nil)
+        worker.completeComparison(.success(try comparison(for: initial)))
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("accepted 0:00.400") },
+                      "paused playback time 650 is not the accepted comparison position")
+        play.performClick(nil)
+        XCTAssertTrue(hide.isHidden, "playback hides comparison without changing edits")
+        play.performClick(nil); worker.completePlayback(.success(.cancelled))
+
+        compare.performClick(nil)
+        worker.completeComparison(.success(try comparison(for: initial)))
+        start.stringValue = "200"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: start))
+        XCTAssertTrue(hide.isHidden); XCTAssertFalse(compare.isEnabled)
+        start.stringValue = "0"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: start))
+        XCTAssertTrue(compare.isEnabled)
+        compare.performClick(nil)
+        worker.completeComparison(.success(try comparison(for: initial)))
+        seek.doubleValue = 800; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertTrue(hide.isHidden)
+        XCTAssertFalse(controller.dirty)
+        controller.present(artifact: recordingArtifact(id: "next-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(worker.openCount, 2)
+        XCTAssertTrue(hide.isHidden)
+    }
+
+    func testEncodedComparisonLightDarkNormalMinimumAndMaximumWarning() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let initial = try presentation(saveMaximumBytes: 100_000)
+            let worker = FakeRecordingEditorWorker(presentation: initial)
+            worker.comparisonResult = .success(try comparison(for: initial))
+            let controller = RecordingEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker,
+                confirmDiscard: { false })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                               outputDirectory: "/Exports")
+            try button("Compare", in: controller.root)
+                .performClick(nil)
+            XCTAssertTrue(labels(in: controller.root).contains {
+                $0.contains("final capped save may differ") })
+            XCTAssertFalse(try slider("Recording before and after split", in: controller.root).isHidden)
+            XCTAssertTrue(labels(in: controller.root).contains { $0 == "Before" })
+            XCTAssertTrue(labels(in: controller.root).contains { $0 == "After" })
+            try render(controller.root, name: "recording-editor-comparison-\(appearance)")
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            try render(controller.root, name: "recording-editor-comparison-minimum-\(appearance)")
+        }
+    }
+
+    func testRealEncodedComparisonIsReadOnlyAndFramesOutliveOwner() throws {
+        guard let tools = try? NativeMediaTools.locate() else {
+            throw XCTSkip("ffmpeg and ffprobe are required")
+        }
+        let fixture = try makeRecordingFixture(tools: tools)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let original = try Data(contentsOf: fixture.source)
+        let (session, opened) = try NativeRecordingEditorSession.open(
+            historyRoot: fixture.history.path, artifactID: fixture.id, tools: tools)
+        let beforeRevision = opened.snapshot.revision
+        let beforePosition = opened.snapshot.positionMilliseconds
+        let acceptedExport = try JSONSerialization.data(withJSONObject: opened.snapshot.export,
+                                                         options: [.sortedKeys])
+        let result = try session.comparison(cancel: try XCTUnwrap(NativeRecordingEditorCancel()))
+        XCTAssertEqual(result.revision, beforeRevision)
+        XCTAssertEqual(result.positionMilliseconds, beforePosition)
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: result.export,
+                                                   options: [.sortedKeys]), acceptedExport)
+        XCTAssertEqual(result.before.width, result.after.width)
+        XCTAssertEqual(result.before.height, result.after.height)
+        XCTAssertNotNil(result.before.dataProvider?.data)
+        XCTAssertNotNil(result.after.dataProvider?.data)
+        XCTAssertEqual(try Data(contentsOf: fixture.source), original)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.source.path))
+    }
+
+    private func comparison(for presentation: RecordingEditorPresentation,
+                            position: UInt64? = nil) throws -> RecordingEditorComparison {
+        RecordingEditorComparison(revision: presentation.snapshot.revision,
+            positionMilliseconds: position ?? presentation.snapshot.positionMilliseconds,
+            export: presentation.snapshot.export,
+            before: try solidImage(red: 210, green: 35, blue: 40),
+            after: try solidImage(red: 30, green: 60, blue: 215))
+    }
+
     func testPlaybackMailboxCoalescesNaturalEOFAndRejectsCancelledPendingFrame() throws {
         var cancelled = false
         var positions: [UInt64] = []
@@ -3960,6 +4100,10 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var requestResult: Result<RecordingEditorPresentation, Error>?
     var estimateResult: Result<RecordingEditorEstimate, Error> = .failure(AppBridgeError.backend("estimate unavailable"))
     var deferEstimate = false
+    var comparisonResult: Result<RecordingEditorComparison, Error> =
+        .failure(AppBridgeError.backend("comparison unavailable"))
+    var deferComparison = false
+    var comparisonCalls = 0
     var playbackMetadata = RecordingPlaybackMetadata(startPositionMilliseconds: 0,
                                                       width: 2, height: 1,
                                                       framesPerSecond: 10,
@@ -3982,12 +4126,14 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var deferSave = false
     var closeCount = 0
     weak var observedSaveCancel: NativeRecordingEditorCancel?
+    weak var observedComparisonCancel: NativeRecordingEditorCancel?
     weak var observedThumbnailCancel: NativeRecordingEditorCancel?
     weak var observedSourceCancel: NativeRecordingEditorCancel?
     weak var observedPlaybackCancel: NativeRecordingEditorCancel?
     weak var observedPlaybackLoop: RecordingPlaybackLoopControl?
     private var pendingOpen: ((Result<RecordingEditorPresentation, Error>) -> Void)?
     private var pendingEstimate: ((Result<RecordingEditorEstimate, Error>) -> Void)?
+    private var pendingComparison: ((Result<RecordingEditorComparison, Error>) -> Void)?
     private var pendingSave: ((Result<RecordingEditorSaveResult, Error>) -> Void)?
     private var pendingThumbnails: ((Result<CGImage, Error>) -> Void)?
     private var pendingSource: ((Result<RecordingSourceImage, Error>) -> Void)?
@@ -4018,6 +4164,15 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     }
     func completeEstimate(_ result: Result<RecordingEditorEstimate, Error>) {
         let completion = pendingEstimate; pendingEstimate = nil; completion?(result)
+    }
+    func comparison(cancel: NativeRecordingEditorCancel,
+                    completion: @escaping (Result<RecordingEditorComparison, Error>) -> Void) {
+        comparisonCalls += 1; observedComparisonCancel = cancel
+        if deferComparison { pendingComparison = completion }
+        else { completion(comparisonResult) }
+    }
+    func completeComparison(_ result: Result<RecordingEditorComparison, Error>) {
+        let completion = pendingComparison; pendingComparison = nil; completion?(result)
     }
     func playback(positionMilliseconds: UInt64, loopStartMilliseconds: UInt64,
                   soundEnabled: Bool,

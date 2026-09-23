@@ -590,6 +590,14 @@ normal/minimum labels and minimum-window estimate error/retry without publishing
 estimate to History. AppKit CI covers exact/approximate light/dark normal/minimum
 labels and the same lifecycle. Physical macOS/Windows/Wayland acceptance remains
 open. Close/quit waits for accepted work, as with export.
+The shared recording comparison ABI retains independent before/after frames from
+a read-only encoding sample at the accepted source-relative position. The AppKit
+host exposes explicit Compare, split, Hide, cancellation and retry on its serialized
+worker, rejecting stale generation/revision/position/export results and hiding on
+staging, playback, crop, seek, new item or close. Paused playback time never selects
+the comparison frame. Maximum shows budget-free first-attempt fidelity, not final
+capped-save pixels. Native Windows/Linux UI integration and physical acceptance
+remain open; comparison never edits the accepted snapshot, dirty state or History.
 The preview/timeline/save hierarchy follows the shipping recording editor, but
 the UI is not a visual match; physical audio playback acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted

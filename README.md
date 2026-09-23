@@ -272,6 +272,10 @@ Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
 audio-only Preserve changes show approximate sizes. Estimation can be canceled.
 Both native recording editors show nonzero percentage changes versus the original
 recording beside accepted estimates; staged edits and Maximum mode hide the delta.
+On macOS, **Compare** explicitly encodes a read-only before/after sample at the
+accepted frame, with a split slider and Hide. It does not follow paused playback
+time or save an export. In Maximum mode it shows the first encoded attempt; the
+final capped save may differ. Windows/Linux native comparison is not yet wired.
 Both native recording editors offer **Maximum file size** for MP4/GIF, using
 decimal KB/MB/GB with a 100 KB minimum. Apply accepts the limit; the size label then
 shows the cap instead of an estimate. Save may reduce resolution, frame rate or

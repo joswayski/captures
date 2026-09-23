@@ -59,6 +59,14 @@ struct RecordingEditorEstimate: Equatable {
     let exact: Bool
 }
 
+struct RecordingEditorComparison {
+    let revision: UInt64
+    let positionMilliseconds: UInt64
+    let export: [String: Any]
+    let before: CGImage
+    let after: CGImage
+}
+
 struct RecordingPlaybackMetadata: Equatable {
     let startPositionMilliseconds: UInt64
     let width: UInt32
@@ -480,6 +488,40 @@ final class NativeRecordingEditorSession {
         return RecordingEditorEstimate(sizeBytes: bytes.uint64Value, exact: exact)
     }
 
+    func comparison(cancel: NativeRecordingEditorCancel) throws -> RecordingEditorComparison {
+        var response: UnsafeMutablePointer<CChar>?
+        let owner = captures_recording_editor_comparison_v1(handle, cancel.handle, &response)
+        defer {
+            captures_settings_free_v1(response)
+            captures_recording_editor_comparison_free_v1(owner)
+        }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        let value = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let owner, value["basis"] as? String == "accepted_preview_first_attempt",
+              let revision = (value["revision"] as? NSNumber)?.uint64Value,
+              let position = (value["position_ms"] as? NSNumber)?.uint64Value,
+              let export = value["export"] as? [String: Any],
+              let width = (value["width"] as? NSNumber)?.intValue,
+              let height = (value["height"] as? NSNumber)?.intValue else {
+            throw AppBridgeError.invalidResponse
+        }
+        guard let beforeOwner = captures_recording_editor_comparison_before_frame_v1(owner) else {
+            throw AppBridgeError.invalidResponse
+        }
+        let before = NativeRecordingEditorFrame(handle: beforeOwner)
+        guard let afterOwner = captures_recording_editor_comparison_after_frame_v1(owner) else {
+            throw AppBridgeError.invalidResponse
+        }
+        let after = NativeRecordingEditorFrame(handle: afterOwner)
+        let beforeImage = try before.image(), afterImage = try after.image()
+        guard beforeImage.width == width, beforeImage.height == height,
+              afterImage.width == width, afterImage.height == height else {
+            throw AppBridgeError.invalidResponse
+        }
+        return RecordingEditorComparison(revision: revision, positionMilliseconds: position,
+                                         export: export, before: beforeImage, after: afterImage)
+    }
+
     func playback(positionMilliseconds: UInt64, soundEnabled: Bool,
                   cancel: NativeRecordingEditorCancel) throws -> NativeRecordingEditorPlayback {
         var response: UnsafeMutablePointer<CChar>?
@@ -613,6 +655,8 @@ protocol RecordingEditorWorking: AnyObject {
                  completion: @escaping (Result<RecordingEditorPresentation, Error>) -> Void)
     func estimate(cancel: NativeRecordingEditorCancel,
                   completion: @escaping (Result<RecordingEditorEstimate, Error>) -> Void)
+    func comparison(cancel: NativeRecordingEditorCancel,
+                    completion: @escaping (Result<RecordingEditorComparison, Error>) -> Void)
     func playback(positionMilliseconds: UInt64, loopStartMilliseconds: UInt64,
                   soundEnabled: Bool,
                   loop: RecordingPlaybackLoopControl, cancel: NativeRecordingEditorCancel,
@@ -672,6 +716,20 @@ final class RecordingEditorWorker: RecordingEditorWorking {
                     throw AppBridgeError.backend("The recording editor is closed.")
                 }
                 return try session.estimate(cancel: cancel)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func comparison(cancel: NativeRecordingEditorCancel,
+                    completion: @escaping (Result<RecordingEditorComparison, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result {
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The recording editor is closed.")
+                }
+                return try session.comparison(cancel: cancel)
             }
             DispatchQueue.main.async { completion(result) }
         }
