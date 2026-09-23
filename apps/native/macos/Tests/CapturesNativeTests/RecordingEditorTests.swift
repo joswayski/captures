@@ -740,15 +740,26 @@ final class RecordingEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
+        let preview = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first)
+        let acceptedImage = preview.image
+        let acceptedWidth = try field("Recording crop width", in: controller.root).stringValue
         try button("Adjust crop", in: controller.root).performClick(nil)
         XCTAssertFalse(controller.windowShouldClose(controller.window))
         XCTAssertFalse(controller.prepareForTermination())
         let cancel = try button("Cancel operation", in: controller.root)
         cancel.performClick(nil)
         XCTAssertTrue(try XCTUnwrap(worker.observedSourceCancel).isCancelled)
-        worker.completeSource(.failure(AppBridgeError.backend("operation cancelled")))
+        worker.completeSource(.success(RecordingSourceImage(positionMilliseconds: 400,
+            image: try solidImage(width: 320, height: 180, red: 220, green: 30, blue: 20))))
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("cancelled") })
         XCTAssertTrue(try button("Adjust crop", in: controller.root).isEnabled)
+        XCTAssertTrue(preview.image === acceptedImage,
+                      "a late success after cancellation cannot replace the accepted image")
+        XCTAssertEqual(try field("Recording crop width", in: controller.root).stringValue,
+                       acceptedWidth)
+        XCTAssertTrue(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingCropOverlay }.first?.isHidden == true)
 
         try button("Adjust crop", in: controller.root).performClick(nil)
         worker.completeSource(.failure(AppBridgeError.backend("decoder unavailable")))
@@ -832,8 +843,18 @@ final class RecordingEditorTests: XCTestCase {
                                      in: controller, deltaX: 6, deltaY: 4)
         try dispatchCropOverlayMouse(.leftMouseUp, at: movePoint, to: overlay,
                                      in: controller, deltaX: 6, deltaY: 4)
-        XCTAssertNotEqual(try field("Recording crop X", in: controller.root).stringValue, "0",
+        let movedX = try XCTUnwrap(UInt32(try field("Recording crop X",
+                                                   in: controller.root).stringValue))
+        XCTAssertNotEqual(movedX, 0,
                           "the next overlay gesture moves the committed crop")
+        XCTAssertTrue(controller.window.firstResponder === overlay)
+        try dispatchCropKey(124, to: overlay, in: controller)
+        XCTAssertEqual(try XCTUnwrap(UInt32(try field("Recording crop X",
+                                                     in: controller.root).stringValue)), movedX + 1)
+        try dispatchCropKey(123, to: overlay, in: controller, modifiers: [.shift])
+        XCTAssertEqual(try XCTUnwrap(UInt32(try field("Recording crop X",
+                                                     in: controller.root).stringValue)), movedX - 9,
+                       "focused interior movement uses one source pixel, or ten with Shift")
 
         let southEast = try XCTUnwrap(handles.first { $0.kind == .southEast })
         let before = try field("Recording crop width", in: controller.root).stringValue
@@ -2511,7 +2532,19 @@ final class RecordingEditorTests: XCTestCase {
             windowNumber: controller.window.windowNumber, context: nil,
             characters: "", charactersIgnoringModifiers: "", isARepeat: false,
             keyCode: keyCode))
-        handle.keyDown(with: event)
+        XCTAssertTrue(controller.window.firstResponder === handle)
+        controller.window.sendEvent(event)
+    }
+    private func dispatchCropKey(_ keyCode: UInt16, to overlay: RecordingCropOverlay,
+                                 in controller: RecordingEditorController,
+                                 modifiers: NSEvent.ModifierFlags = []) throws {
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: controller.window.windowNumber, context: nil,
+            characters: "", charactersIgnoringModifiers: "", isARepeat: false,
+            keyCode: keyCode))
+        XCTAssertTrue(controller.window.firstResponder === overlay)
+        controller.window.sendEvent(event)
     }
     private func labels(in view: NSView) -> [String] {
         descendants(in: view).compactMap { ($0 as? NSTextField)?.stringValue }

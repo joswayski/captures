@@ -526,7 +526,15 @@ final class RecordingCropOverlay: NSView {
         continueDrag(at: convert(event.locationInWindow, from: nil)); endDrag()
     }
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { endDrag() } else { super.keyDown(with: event) }
+        let step = event.modifierFlags.contains(.shift) ? 10.0 : 1.0
+        switch event.keyCode {
+        case 123: nudge(.move, deltaX: -step, deltaY: 0)
+        case 124: nudge(.move, deltaX: step, deltaY: 0)
+        case 125: nudge(.move, deltaX: 0, deltaY: step)
+        case 126: nudge(.move, deltaX: 0, deltaY: -step)
+        case 53: endDrag()
+        default: super.keyDown(with: event)
+        }
     }
     override func resignFirstResponder() -> Bool {
         endDrag(); return super.resignFirstResponder()
@@ -1566,6 +1574,13 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             guard let self, self.generation == current,
                   self.sourceFrameCancel === cancel else { return }
             self.busy = false; self.activeCancel = nil; self.sourceFrameCancel = nil
+            guard !cancel.isCancelled else {
+                self.cropAdjustmentPriorImage = nil
+                self.status.textColor = self.tokens.color("text-muted")
+                self.status.stringValue = "Full-source crop frame cancelled. Editing remains available."
+                self.updateControls()
+                return
+            }
             switch result {
             case .success(let value):
                 guard let snapshot = self.presentation?.snapshot,
@@ -1581,12 +1596,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 self.beginCropAdjustment(with: value, source: source)
             case .failure(let error):
                 self.cropAdjustmentPriorImage = nil
-                if cancel.isCancelled {
-                    self.status.textColor = self.tokens.color("text-muted")
-                    self.status.stringValue = "Full-source crop frame cancelled. Editing remains available."
-                } else {
-                    self.showError("Full-source crop frame unavailable: \(error.localizedDescription). Editing remains available.")
-                }
+                self.showError("Full-source crop frame unavailable: \(error.localizedDescription). Editing remains available.")
             }
             self.updateControls()
         }
