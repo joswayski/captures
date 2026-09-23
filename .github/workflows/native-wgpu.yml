@@ -211,6 +211,8 @@ jobs:
             native-x11-recording-screenshot
             native-x11-recording-editor-dark
             native-x11-recording-editor-light
+            native-x11-recording-replace-dark
+            native-x11-recording-replace-light
             native-x11-recording-size-delta-dark
             native-x11-recording-size-delta-light
             native-x11-recording-crop-dark
