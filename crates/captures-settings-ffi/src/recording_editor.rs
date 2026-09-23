@@ -2,8 +2,8 @@
 
 use super::region::{RegionPixels, response, text};
 use captures_app::recording_editor::{
-    RecordingEditorOpenRequest, RecordingEditorRequest, RecordingEditorSession, RecordingPlayback,
-    RecordingSaveRequest, RecordingTimelineThumbnails,
+    RecordingEditorOpenRequest, RecordingEditorRequest, RecordingEditorRequestV2,
+    RecordingEditorSession, RecordingPlayback, RecordingSaveRequest, RecordingTimelineThumbnails,
 };
 use captures_media::{CancelToken, ExportProgress, MediaToolchain};
 use image::RgbaImage;
@@ -90,6 +90,32 @@ pub unsafe extern "C" fn captures_recording_editor_request_v1(
         let session = unsafe { session.as_mut() }.ok_or("recording editor handle is null")?;
         session.execute(request)?;
         Ok::<_, String>(json!(session.snapshot()))
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    response(match result {
+        Ok(snapshot) => json!({"ok":true,"result":snapshot}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
+}
+
+/// Execute one atomic v2 edit/seek request and return accepted save + preview state.
+///
+/// # Safety
+/// Session is live, exclusively owned, and serialized for the call. Input is
+/// readable NUL-terminated UTF-8. Free returned JSON with settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_request_v2(
+    session: *mut RecordingEditorSession,
+    request_json: *const c_char,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains readable input and exclusive session ownership.
+        let request =
+            serde_json::from_str::<RecordingEditorRequestV2>(unsafe { text(request_json) }?)
+                .map_err(|error| error.to_string())?;
+        let session = unsafe { session.as_mut() }.ok_or("recording editor handle is null")?;
+        session.execute_v2(request)?;
+        Ok::<_, String>(json!(session.snapshot_v2()))
     }))
     .unwrap_or_else(|_| Err("internal panic".into()));
     response(match result {
@@ -478,6 +504,30 @@ pub unsafe extern "C" fn captures_recording_editor_estimate_v1(
     })
 }
 
+/// Blocking estimate for the v2 session's accepted Save-new-copy export.
+///
+/// # Safety
+/// Session is live and serialized for this call. Cancel is live until return
+/// and may be atomically cancelled elsewhere. Free the returned response with
+/// captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_estimate_v2(
+    session: *const RecordingEditorSession,
+    cancel: *const CancelToken,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains live session/cancel handles for this call.
+        let session = unsafe { session.as_ref() }.ok_or("recording editor handle is null")?;
+        let cancel = unsafe { cancel.as_ref() }.ok_or("recording export cancel handle is null")?;
+        session.estimate_save_export(cancel)
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    response(match result {
+        Ok(estimate) => json!({"ok":true,"result":estimate}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
+}
+
 /// Blocking Save new copy. Progress JSON is borrowed only during each callback.
 ///
 /// # Safety
@@ -571,9 +621,29 @@ mod tests {
         assert_eq!(response["ok"], false);
         assert_eq!(response["error"], "recording editor handle is null");
 
+        // SAFETY: v2 has the same owned null-handle error contract.
+        let response = unsafe {
+            json(captures_recording_editor_request_v2(
+                ptr::null_mut(),
+                request.as_ptr(),
+            ))
+        };
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"], "recording editor handle is null");
+
         // SAFETY: null session/cancel handles are explicit owned JSON errors.
         let estimate = unsafe {
             json(captures_recording_editor_estimate_v1(
+                ptr::null(),
+                ptr::null(),
+            ))
+        };
+        assert_eq!(estimate["ok"], false);
+        assert_eq!(estimate["error"], "recording editor handle is null");
+
+        // SAFETY: v2 estimate preserves the v1 owned null-handle contract.
+        let estimate = unsafe {
+            json(captures_recording_editor_estimate_v2(
                 ptr::null(),
                 ptr::null(),
             ))
@@ -819,7 +889,106 @@ mod tests {
             unsafe { captures_recording_editor_open_v1(open_request.as_ptr(), &mut open_response) };
         assert!(!session.is_null());
         // SAFETY: open returned one owned response.
-        assert_eq!(unsafe { json(open_response) }["ok"], true);
+        let opened = unsafe { json(open_response) };
+        assert_eq!(opened["ok"], true);
+        let v1_keys = opened["result"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let accepted_v2 = CString::new(
+            serde_json::json!({
+                "operation": "update_preview",
+                "edit": captures_media::EditSpec::default(),
+                "export": {
+                    "format": "mp4",
+                    "quality": "preserve",
+                    "max_size_bytes": 100_000,
+                    "frames_per_second": null,
+                    "gif_max_colors": null,
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        // SAFETY: session and request remain live and exclusive for the call.
+        let accepted_v2 = unsafe {
+            json(captures_recording_editor_request_v2(
+                session,
+                accepted_v2.as_ptr(),
+            ))
+        };
+        assert_eq!(accepted_v2["ok"], true);
+        assert_eq!(
+            accepted_v2["result"]["save_export"]["max_size_bytes"],
+            100_000
+        );
+        assert_eq!(
+            accepted_v2["result"]["preview_export"]["max_size_bytes"],
+            serde_json::Value::Null
+        );
+
+        let snapshot = CString::new(r#"{"operation":"snapshot"}"#).unwrap();
+        // SAFETY: v1 remains callable after v2 and returns its original shape.
+        let v1_after_v2 = unsafe {
+            json(captures_recording_editor_request_v1(
+                session,
+                snapshot.as_ptr(),
+            ))
+        };
+        assert_eq!(v1_after_v2["ok"], true);
+        assert_eq!(
+            v1_after_v2["result"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            v1_keys
+        );
+        assert!(v1_after_v2["result"].get("save_export").is_none());
+        assert_eq!(
+            v1_after_v2["result"]["preview_export"]["max_size_bytes"],
+            serde_json::Value::Null
+        );
+
+        let rejected_v1 = CString::new(
+            serde_json::json!({
+                "operation": "update_preview",
+                "edit": captures_media::EditSpec::default(),
+                "export": {
+                    "format": "mp4",
+                    "quality": "preserve",
+                    "max_size_bytes": 100_000,
+                    "frames_per_second": null,
+                    "gif_max_colors": null,
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        // SAFETY: v1 request remains an owned error and cannot alter v2 state.
+        let rejected_v1 = unsafe {
+            json(captures_recording_editor_request_v1(
+                session,
+                rejected_v1.as_ptr(),
+            ))
+        };
+        assert_eq!(rejected_v1["ok"], false);
+        // SAFETY: snapshot v2 verifies rejected v1 preserved accepted state.
+        let after_rejection = unsafe {
+            json(captures_recording_editor_request_v2(
+                session,
+                snapshot.as_ptr(),
+            ))
+        };
+        assert_eq!(
+            after_rejection["result"]["save_export"]["max_size_bytes"],
+            100_000
+        );
+        assert_eq!(after_rejection["result"]["revision"], 1);
         let mut missing_cancel_response = ptr::null_mut();
         // SAFETY: session/output are live; null cancel is an explicit owned error.
         let missing_cancel = unsafe {

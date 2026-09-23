@@ -2063,6 +2063,18 @@ pub fn validate_edit_spec(probe: &ProbeResult, edit: &EditSpec) -> Result<(), Me
     Ok(())
 }
 
+/// Validate an export against trusted source metadata without probing or
+/// encoding. This builds the same retry plan used by export and estimation.
+pub fn validate_export_spec(
+    probe: &ProbeResult,
+    edit: &EditSpec,
+    spec: &ExportSpec,
+) -> Result<(), MediaToolError> {
+    validate_edit_spec(probe, edit)?;
+    drop(export_attempts(probe, edit, spec)?);
+    Ok(())
+}
+
 /// True when [`MediaToolchain::export`] would copy the source file unchanged,
 /// so the saved file's size equals the source size exactly.
 pub fn export_preserves_source_bytes(
