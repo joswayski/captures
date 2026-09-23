@@ -35,6 +35,7 @@ def main():
     parser.add_argument("--timeline", action="store_true", help="Exercise graphical trim staging, keyboard input and export")
     parser.add_argument("--thumbnails", action="store_true", help="Exercise source thumbnails, cancellation, failure/retry and trim")
     parser.add_argument("--playback", action="store_true", help="Exercise silent motion, pause/resume, trim EOF, failure and close")
+    parser.add_argument("--graphical-crop", action="store_true", help="Exercise source-view crop handles, cache, staging and export")
     args = parser.parse_args()
     if args.thumbnails:
         args.timeline = True
@@ -244,6 +245,118 @@ def main():
         dominant(output / "original.png", 0)
         run("xdotool", "windowminimize", root, "sleep", ".5")
         estimate_expectations = {}
+        if args.graphical_crop:
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            field(editor, 136, 520, 1500)
+            click(editor, 222, 520)
+            click(editor, 22, 683)
+            click(editor, 205, 683)  # Independent dimensions.
+            for x, value in ((51, 80), (114, 40), (208, 160), (309, 80)):
+                field(editor, x, 727, value)
+            click(editor, 793, 1082)
+            shot(editor, "crop-accepted-before-source")
+            missing = output / "temporarily-moved.mp4"
+            source.rename(missing)
+            try:
+                click(editor, 296, 683)
+                shot(editor, "crop-source-error")
+            finally:
+                missing.rename(source)
+            click(editor, 296, 683)
+            shot(editor, "crop-source-ready")
+
+            # Locate the actual green source image, including dimmed excluded
+            # pixels. Neutral chrome and mustard handles cannot match green.
+            rgb = run("convert", str(output / "crop-source-ready.png"), "-crop", "960x400+0+70",
+                      "-depth", "8", "rgb:-")
+            points = [(i // 3 % 960, i // 3 // 960 + 70) for i in range(0, len(rgb), 3)
+                      if rgb[i + 1] > max(rgb[i], rgb[i + 2]) + 10]
+            assert points, "full-source preview must be visible"
+            left, right = min(x for x, _ in points), max(x for x, _ in points) + 1
+            top, bottom = min(y for _, y in points), max(y for _, y in points) + 1
+            sx, sy = (right - left) / 320, (bottom - top) / 180
+            assert abs(sx - sy) < .03, (left, top, right, bottom)
+
+            def drag_source(start, delta):
+                x, y = round(left + start[0] * sx), round(top + start[1] * sy)
+                dx, dy = round(delta[0] * sx), round(delta[1] * sy)
+                run("xdotool", "mousemove", "--window", editor, str(x), str(y),
+                    "mousedown", "1", "sleep", ".15", "mousemove_relative", "--sync", "--",
+                    str(dx), str(dy), "sleep", ".2", "mouseup", "1", "sleep", ".2")
+
+            def crop_values():
+                values = []
+                for x in (51, 114, 208, 309):
+                    subprocess.run(["xclip", "-selection", "clipboard", "-i"], env=env,
+                                   input=b"waiting", check=True, timeout=5)
+                    click(editor, x, 727)
+                    run("xdotool", "key", "ctrl+a", "ctrl+c")
+                    def copied():
+                        result = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
+                                                env=env, capture_output=True, timeout=5)
+                        value = result.stdout.strip()
+                        return value if result.returncode == 0 and value.isdigit() else None
+                    values.append(int(wait(copied, "fresh crop field")))
+                    run("xdotool", "key", "Return")
+                return tuple(values)
+
+            drag_source((160, 80), (-50, -20))
+            assert crop_values() == (30, 20, 160, 80)
+            drag_source((190, 100), (30, 20))
+            assert crop_values() == (30, 20, 190, 100)
+            shot(editor, "crop-source-staged")
+            destination = exports / "graphical-crop.mp4"
+            field(editor, 360, 1038, destination)
+            click(editor, 899, 1082)
+            assert not destination.exists() and len(list(history.glob("*/metadata.json"))) == 1
+            click(editor, 296, 683)  # Done restores the unchanged accepted crop.
+            shot(editor, "crop-done-accepted")
+            def preview_pixels(name):
+                return run("convert", str(output / f"{name}.png"), "-crop", "960x380+0+85", "rgba:-")
+            assert preview_pixels("crop-done-accepted") == preview_pixels("crop-accepted-before-source")
+            source.rename(missing)
+            try:
+                click(editor, 296, 683)  # Cached pixels work even when source is temporarily absent.
+                shot(editor, "crop-source-cached")
+                assert preview_pixels("crop-source-cached") == preview_pixels("crop-source-staged")
+            finally:
+                missing.rename(source)
+            click(editor, 793, 1082)
+            shot(editor, "crop-applied")
+            click(editor, 899, 1082)
+            wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "graphical crop export")
+            info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(destination)))
+            video = next(s for s in info["streams"] if s["codec_type"] == "video")
+            assert (video["width"], video["height"]) == (190, 100), video
+            frame = run("ffmpeg", "-v", "error", "-ss", "1.5", "-i", str(destination),
+                        "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
+            white = frame[(5 * 190 + 5) * 3:(5 * 190 + 5) * 3 + 3]
+            green = frame[(50 * 190 + 100) * 3:(50 * 190 + 100) * 3 + 3]
+            assert len(frame) == 190 * 100 * 3 and min(white) > 210, white
+            assert green[1] > max(green[0], green[2]) + 40, green
+            click(editor, 296, 683)
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            shot(editor, "crop-source-minimum")
+            click(editor, 350, 57)  # Done is accessible beside the preview at minimum size.
+            shot(editor, "crop-done-minimum")
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            field(editor, 136, 520, 500)
+            click(editor, 222, 520)
+            click(editor, 296, 683)
+            shot(editor, "crop-source-after-seek")
+            dominant(output / "crop-source-after-seek.png", 0)
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            close(editor)
+            wait(lambda: not windows("Recording editor"), "saved crop closes")
+            close(root)
+            wait(lambda: app.poll() is not None, "graphical crop quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "checks": ["source-failure-retry", "source-letterbox", "interior-move", "corner-resize",
+                    "numeric-stage-sync", "unapplied-save-gate", "done-restores-accepted", "source-cache",
+                    "export-dimensions-pixels", "minimum-source-controls", "seek-invalidates-source", "immutable-source", "saved-close"]}, indent=2) + "\n")
+            print("PASS graphical recording crop: source view, move/resize, staging, export pixels and immutable source")
+            return
         if args.playback:
             def motion_click():
                 # Pause must work during an active decoder; never wait for idle.

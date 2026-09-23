@@ -21,9 +21,9 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, numeric crop, preset/custom output size, track volume/mute/mono, silent Play/Pause, opt-in Loop preview and MP4/GIF save-new-copy | Audio playback, graphical crop, audio meter/device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, numeric crop, preset/custom output size, track volume/mute/mono, silent Play/Pause, opt-in Loop preview and MP4/GIF save-new-copy; wgpu also provides graphical crop adjustment | Audio playback, AppKit graphical crop, audio meter/device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording audio playback, graphical crop and remaining controls |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording audio playback, AppKit graphical crop and remaining controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -479,6 +479,16 @@ input/accessibility remain unverified; no parity gate closes.
 Crop uses source-pixel coordinates. Numeric crop dimensions start
 aspect-locked, follow the current crop ratio and fit the remaining source bounds;
 unlocking permits independent dimensions, and relocking uses the adjusted ratio.
+The wgpu host's explicit **Adjust crop** mode lazily loads a full-source still at
+the accepted source position, independently of the accepted cropped/output preview
+and paused motion frame. Eight handles and interior move use shared source-pixel
+geometry and the current aspect lock; arrows nudge one pixel, Shift ten. Release,
+Escape, focus loss and layout changes end the gesture without reverting staged
+values. Loading is cancellable/retryable; the still is cached until accepted seek
+changes position. **Done cropping** restores the prior display, while Apply is the
+only publication boundary and playback is gated during adjustment. This host path
+is shared by Windows/X11/Wayland; automated real-media interaction is exercised on
+X11, not physical Windows/Wayland acceptance. AppKit integration remains separate.
 Typed dimensions commit on Enter/focus loss so partial input does not change the
 ratio. The lock is an input preference, not an export edit. Custom output width/height
 remain independent (no output aspect lock). Original, 1080p maximum and 720p maximum presets

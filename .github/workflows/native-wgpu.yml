@@ -93,6 +93,12 @@ jobs:
         run: |
           /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --crop-aspect --appearance light --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-crop-light
           /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --crop-aspect --presets --appearance dark --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-crop-dark
+      - name: Exercise graphical recording crop and source-frame caching on private X11
+        if: runner.os == 'Linux'
+        run: |
+          for appearance in dark light; do
+            /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --graphical-crop --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-graphical-crop-$appearance"
+          done
       - name: Exercise recording thumbnails, trim handles and exports on private X11
         if: runner.os == 'Linux'
         run: |
@@ -159,6 +165,8 @@ jobs:
             native-x11-recording-editor-light
             native-x11-recording-crop-dark
             native-x11-recording-crop-light
+            native-x11-recording-graphical-crop-dark
+            native-x11-recording-graphical-crop-light
             native-x11-recording-timeline-dark
             native-x11-recording-timeline-light
             native-x11-recording-playback-dark
