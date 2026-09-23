@@ -44,6 +44,9 @@ const PLAYBACK_MAX_HEIGHT: u32 = 720;
 const PLAYBACK_MAX_FRAMES_PER_SECOND: u16 = 30;
 const PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PLAYBACK_MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
+const EXPORT_COMPARISON_SAMPLE_MS: u64 = 1_500;
+const EXPORT_COMPARISON_FRAME_LEAD_MS: u64 = 1_000;
+const EXPORT_COMPARISON_MAX_PNG_BYTES: u64 = 128 * 1024 * 1024;
 
 /// One decoded silent-playback frame with a source-relative timestamp.
 pub struct MediaPlaybackFrame {
@@ -457,6 +460,23 @@ pub struct ExportOutcome {
     pub path: PathBuf,
     pub size_bytes: u64,
     pub attempts: u8,
+}
+
+/// Matching source-filtered and encoded PNG frames from one short export
+/// sample. The generic media operation clamps the requested position into the
+/// validated edit range and reports both positions explicitly.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EncodedFrameComparison {
+    pub requested_position_ms: u64,
+    pub position_ms: u64,
+    /// Source-relative seek requested of the encoded sample. Its decoded
+    /// frame may still land on a neighboring timestamp at output cadence.
+    pub after_seek_position_ms: u64,
+    pub sample_start_ms: u64,
+    pub sample_duration_ms: u64,
+    pub attempts: u8,
+    pub before_png: Vec<u8>,
+    pub after_png: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -952,10 +972,24 @@ impl MediaToolchain {
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
         let probe = self.probe(input)?;
-        validate_edit_spec(&probe, edit)?;
-        let attempts = export_attempts(&probe, edit, spec)?;
+        self.extract_edited_frame_with_probe(input, &probe, edit, spec, at_ms, destination, cancel)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn extract_edited_frame_with_probe(
+        &self,
+        input: &Path,
+        probe: &ProbeResult,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        at_ms: u64,
+        destination: &Path,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
+        validate_edit_spec(probe, edit)?;
+        let attempts = export_attempts(probe, edit, spec)?;
         let attempt = attempts.first().ok_or(MediaToolError::IncompleteMetadata)?;
-        let filter = preview_video_filter(&probe, edit, spec, attempt)?;
+        let filter = preview_video_filter(probe, edit, spec, attempt)?;
         let mut command = Command::new(&self.ffmpeg);
         command
             .args([
@@ -971,6 +1005,118 @@ impl MediaToolchain {
             .args(["-frames:v", "1", "-vf", &filter])
             .arg(destination);
         run_command(&mut command, cancel, "FFmpeg")
+    }
+
+    /// Encode a short sample and return matching source-filtered and encoded
+    /// PNG frames. The provided trusted probe avoids a second synchronous
+    /// probe; existing public export/extract wrappers retain their behavior.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compare_encoded_frame(
+        &self,
+        input: &Path,
+        probe: &ProbeResult,
+        edit: &EditSpec,
+        export: &ExportSpec,
+        requested_position_ms: u64,
+        scratch_root: &Path,
+        cancel: &CancelToken,
+    ) -> Result<EncodedFrameComparison, MediaToolError> {
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled);
+        }
+        validate_edit_spec(probe, edit)?;
+        drop(export_attempts(probe, edit, export)?);
+        let source_duration_ms = probe
+            .metadata
+            .duration_ms
+            .ok_or(MediaToolError::IncompleteMetadata)?;
+        let trim_start_ms = edit.trim_start_ms;
+        let trim_end_ms = edit.trim_end_ms.unwrap_or(source_duration_ms);
+        let trimmed_ms = trim_end_ms - trim_start_ms;
+        let position_ms = requested_position_ms.clamp(trim_start_ms, trim_end_ms - 1);
+        let sample_duration_ms = EXPORT_COMPARISON_SAMPLE_MS.min(trimmed_ms);
+        let sample_start_ms = position_ms
+            .saturating_sub(EXPORT_COMPARISON_FRAME_LEAD_MS)
+            .min(trim_end_ms - sample_duration_ms)
+            .max(trim_start_ms);
+        let mut sample_edit = edit.clone();
+        sample_edit.trim_start_ms = sample_start_ms;
+        sample_edit.trim_end_ms = Some(sample_start_ms + sample_duration_ms);
+        let sample_export = sampled_export_spec(export, sample_duration_ms, trimmed_ms);
+        let extension = match export.format {
+            ExportFormat::Mp4 => "mp4",
+            ExportFormat::Gif => "gif",
+            ExportFormat::WebM => {
+                return Err(MediaToolError::Process(
+                    "previews are not available for WebM".to_owned(),
+                ));
+            }
+        };
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled);
+        }
+        let scratch = tempfile::Builder::new()
+            .prefix("captures-export-comparison-")
+            .tempdir_in(scratch_root)?;
+        let sample_path = scratch.path().join(format!("sample.{extension}"));
+        let outcome = self.export_with_probe(
+            input,
+            &sample_path,
+            probe,
+            &sample_edit,
+            &sample_export,
+            cancel,
+            |_| {},
+        )?;
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled);
+        }
+        let after_path = scratch.path().join("after.png");
+        // An encoded sample has no frame at its exclusive end. For a position
+        // near that edge, seek within the final output cadence interval.
+        let frames_per_second = if export.format == ExportFormat::Gif {
+            export.frames_per_second.unwrap_or(15).clamp(1, 30)
+        } else {
+            export.frames_per_second.unwrap_or(30).clamp(15, 60)
+        };
+        let last_frame_ms =
+            sample_duration_ms.saturating_sub(1_000_u64.div_ceil(u64::from(frames_per_second)));
+        let after_seek_ms = (position_ms - sample_start_ms).min(last_frame_ms);
+        self.extract_frame(&sample_path, after_seek_ms, &after_path, cancel)?;
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled);
+        }
+        let before_path = scratch.path().join("before.png");
+        self.extract_edited_frame_with_probe(
+            input,
+            probe,
+            edit,
+            export,
+            position_ms,
+            &before_path,
+            cancel,
+        )?;
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled);
+        }
+        let after_png = read_bounded_file(&after_path, EXPORT_COMPARISON_MAX_PNG_BYTES)?;
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled);
+        }
+        let before_png = read_bounded_file(&before_path, EXPORT_COMPARISON_MAX_PNG_BYTES)?;
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled);
+        }
+        Ok(EncodedFrameComparison {
+            requested_position_ms,
+            position_ms,
+            after_seek_position_ms: sample_start_ms + after_seek_ms,
+            sample_start_ms,
+            sample_duration_ms,
+            attempts: outcome.attempts,
+            before_png,
+            after_png,
+        })
     }
 
     /// Start one persistent, silent raw-RGBA decoder for the first export
@@ -1312,9 +1458,26 @@ impl MediaToolchain {
     {
         on_progress(progress(ExportStage::Preparing, 0, 0, None));
         let probe = self.probe(input)?;
-        validate_edit_spec(&probe, edit)?;
-        let attempts = export_attempts(&probe, edit, spec)?;
-        if mp4_preserves_video_stream(&probe, edit, spec) {
+        self.export_with_probe(input, destination, &probe, edit, spec, cancel, on_progress)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn export_with_probe<F>(
+        &self,
+        input: &Path,
+        destination: &Path,
+        probe: &ProbeResult,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        cancel: &CancelToken,
+        mut on_progress: F,
+    ) -> Result<ExportOutcome, MediaToolError>
+    where
+        F: FnMut(ExportProgress),
+    {
+        validate_edit_spec(probe, edit)?;
+        let attempts = export_attempts(probe, edit, spec)?;
+        if mp4_preserves_video_stream(probe, edit, spec) {
             if cancel.is_cancelled() {
                 on_progress(progress(ExportStage::Cancelled, 0, 0, None));
                 return Err(MediaToolError::Cancelled);
@@ -2555,6 +2718,23 @@ fn read_bounded_diagnostics(reader: &mut impl Read, maximum: usize) -> io::Resul
             retained.drain(..retained.len() - maximum);
         }
     }
+}
+
+fn read_bounded_file(path: &Path, maximum: u64) -> Result<Vec<u8>, MediaToolError> {
+    let file = fs::File::open(path)?;
+    if file.metadata()?.len() > maximum {
+        return Err(MediaToolError::Process(
+            "decoded comparison frame exceeds the byte limit".to_owned(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(maximum + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > maximum {
+        return Err(MediaToolError::Process(
+            "decoded comparison frame exceeds the byte limit".to_owned(),
+        ));
+    }
+    Ok(bytes)
 }
 
 fn complete_child(status: ExitStatus, stderr: &[u8]) -> Result<(), MediaToolError> {
@@ -4136,6 +4316,66 @@ mod tests {
             .status()
             .expect("FFmpeg starts");
         assert!(status.success(), "export estimate recording generated");
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn encoded_comparison_clamps_sampled_budget_and_cleans_scratch() {
+        let Some((tools, ffmpeg, _)) = cross_platform_toolchain() else {
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.mp4");
+        create_export_estimate_recording(&ffmpeg, &source);
+        let probe = tools.probe(&source).unwrap();
+        let scratch = directory.path().join("scratch");
+        std::fs::create_dir(&scratch).unwrap();
+        let edit = EditSpec {
+            trim_start_ms: 1_000,
+            trim_end_ms: Some(5_000),
+            crop: Some(CropRect {
+                x: 40,
+                y: 20,
+                width: 480,
+                height: 270,
+            }),
+            ..EditSpec::default()
+        };
+        let export = ExportSpec {
+            format: ExportFormat::Gif,
+            quality: QualityPreset::Preserve,
+            max_size_bytes: Some(1_000_000),
+            frames_per_second: Some(12),
+            gif_max_colors: Some(64),
+        };
+        let cancelled = CancelToken::default();
+        cancelled.cancel();
+        assert!(matches!(
+            tools.compare_encoded_frame(&source, &probe, &edit, &export, 0, &scratch, &cancelled),
+            Err(MediaToolError::Cancelled)
+        ));
+        assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0);
+
+        let comparison = tools
+            .compare_encoded_frame(
+                &source,
+                &probe,
+                &edit,
+                &export,
+                5_000,
+                &scratch,
+                &CancelToken::default(),
+            )
+            .unwrap();
+        assert_eq!(comparison.requested_position_ms, 5_000);
+        assert_eq!(comparison.position_ms, 4_999);
+        assert_eq!(comparison.after_seek_position_ms, 4_916);
+        assert_eq!(comparison.sample_duration_ms, 1_500);
+        assert_eq!(comparison.sample_start_ms, 3_500);
+        assert!(comparison.attempts >= 1);
+        assert!(comparison.before_png.starts_with(b"\x89PNG"));
+        assert!(comparison.after_png.starts_with(b"\x89PNG"));
+        assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0);
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
