@@ -380,7 +380,11 @@ impl RecordingSession {
                 .map(|error| format!("Recording saved; could not remove source bundle: {error}")),
             Ok(()) => None, // GIF source media remains available for editing.
         };
-        self.recovery_lease.take();
+        if let Some(lease) = self.recovery_lease.take() {
+            // Release before returning to a host that may list the bundle on
+            // the next command, including on macOS.
+            let _ = lease.unlock();
+        }
         Ok(FinalizedRecording {
             entry,
             path,
@@ -510,7 +514,9 @@ impl RecordingSession {
             .remove(&self.manifest.session_id)
             .map_err(string)?;
         self.started_at_ms = None;
-        self.recovery_lease.take();
+        if let Some(lease) = self.recovery_lease.take() {
+            let _ = lease.unlock();
+        }
         Ok(self.snapshot())
     }
 
