@@ -103,6 +103,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var historyFilter = CaptureHistoryFilter.all
     private var historyFilterButtons: [(CaptureHistoryFilter, CaptureButton)] = []
     private var historyRows: [Int] = []
+    private var historyGeneration = 0
     private var recoveryDrafts: [RecordingRecoveryDraft] = []
     private var recoveryError: String?
     private var recoveryActionError: String?
@@ -189,6 +190,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
     private var displayMenu: ClosurePopUpButton!
+    private var refreshButton: CaptureButton!
     private var table: NSTableView!
     private var historyScroll: NSScrollView!
     private var recoveryPanel: Surface!
@@ -241,7 +243,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         displayMenu.tokens = tokens; displayMenu.setAccessibilityLabel("Display to capture")
         displayMenu.change = { _ in }; displayMenu.target = displayMenu; displayMenu.action = #selector(ClosurePopUpButton.selectedValue)
         root.addSubview(displayMenu)
-        button("Refresh", frame: NSRect(x: 340, y: 90, width: 90, height: 34)) { [weak self] in self?.loadHistory(); self?.loadDisplays() }
+        refreshButton = button("Refresh", frame: NSRect(x: 340, y: 90, width: 90, height: 34)) {
+            [weak self] in self?.loadHistory(); self?.loadDisplays()
+        }
         button("Screen access", frame: NSRect(x: 442, y: 90, width: 148, height: 34)) { [weak self] in self?.requestPermission() }
         newCaptureButton = button("New Capture…", frame: NSRect(x: 708, y: 24, width: 126, height: 34)) { [weak self] in self?.newCapture() }
         newCaptureButton.primary = true
@@ -356,6 +360,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func loadHistory(select id: String? = nil, completion: (() -> Void)? = nil) {
+        historyGeneration += 1
+        let generation = historyGeneration
         refreshRecovery()
         status.stringValue = "Loading capture history…"
         run({ [transport, historyRoot] in
@@ -369,7 +375,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 .sorted { $0.createdAt > $1.createdAt }
             guard parsed.count == all.count else { throw AppBridgeError.invalidResponse }; return parsed
         }) { [weak self] result in
-            guard let self else { return }
+            guard let self, self.historyGeneration == generation else { return }
             switch result { case .success(let values):
                 let previousID = id ?? self.selectedIndex.flatMap { self.artifacts.indices.contains($0) ? self.artifacts[$0].id : nil }
                 if let id, let requested = values.first(where: { $0.id == id }),
@@ -483,18 +489,21 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             }, completion: { [weak self] result in
                 guard let self, self.recoveryActionGeneration == current,
                       self.recoveryCancel === cancel else { return }
-                self.recoveryBusy = false; self.recoveryCancel = nil
-                self.updateActions(); self.refreshRecovery()
+                self.recoveryCancel = nil
                 switch result {
                 case .success(let recovered):
+                    self.recoveryStage = "Opening recovered recording…"
+                    self.renderRecovery()
                     self.loadHistory(select: recovered.artifactID) { [weak self] in
-                        guard let self, self.recoveryActionGeneration == current,
-                              self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
-                                  ? self.artifacts[$0].id : nil }) == recovered.artifactID else { return }
+                        guard let self, self.recoveryActionGeneration == current else { return }
+                        self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
+                        guard self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
+                            ? self.artifacts[$0].id : nil }) == recovered.artifactID else { return }
                         self.status.stringValue = recovered.warning ?? "Recording recovered into History."
                         self.editScreenshot()
                     }
                 case .failure(let error):
+                    self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
                     self.recoveryActionError = "Couldn’t recover recording: \(error.localizedDescription)"
                     self.renderRecovery()
                 }
@@ -1685,6 +1694,11 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         let selected = selectedIndex.map { artifacts.indices.contains($0) } == true
         let selectedScreenshot = selectedIndex.map { artifacts.indices.contains($0) && !artifacts[$0].isRecording } == true
         let busy = capturing || clearingHistory || recoveryBusy || recoveryConfirmation
+        refreshButton?.isEnabled = !busy
+        table?.isEnabled = !busy
+        for (filter, button) in historyFilterButtons {
+            button.isEnabled = !busy && (filter == .all || artifacts.contains(where: filter.matches))
+        }
         saveButton?.title = selected && !selectedScreenshot ? "Save file" : "Save image"
         saveButton?.setAccessibilityLabel(saveButton?.title)
         saveButton?.needsDisplay = true

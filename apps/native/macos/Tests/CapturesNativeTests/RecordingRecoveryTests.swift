@@ -42,12 +42,23 @@ final class RecordingRecoveryTests: XCTestCase {
         buttons(try XCTUnwrap(scroll.documentView), title: "Recover")[0].performClick(nil)
         XCTAssertEqual(worker.recoverCount, 1)
         XCTAssertFalse(controller.prepareEditorForTermination())
+        worker.completeRecover(.failure(AppBridgeError.backend("The bundle changed.")))
+        try waitUntil { controller.prepareEditorForTermination() }
+        XCTAssertTrue(try XCTUnwrap(scroll.documentView).subviews.compactMap { ($0 as? NSTextField)?.stringValue }
+            .contains { $0.contains("The bundle changed.") })
+        buttons(try XCTUnwrap(scroll.documentView), title: "Recover")[0].performClick(nil)
+        XCTAssertEqual(worker.recoverCount, 2, "ordinary failure retains the recovery action")
         let cancel = try XCTUnwrap(buttons(panel, title: "Cancel").first)
         cancel.performClick(nil)
         XCTAssertTrue(try XCTUnwrap(worker.cancel).isCancelled)
         worker.completeRecover(.success(RecordingRecoveryResult(artifactID: "missing-artifact", warning: nil)))
         try waitUntil { controller.prepareEditorForTermination() }
         XCTAssertEqual(worker.recoveredIdentity, "original-identity")
+        buttons(try XCTUnwrap(scroll.documentView), title: "Discard…")[0].performClick(nil)
+        try waitUntil { window.attachedSheet != nil }
+        window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertFirstButtonReturn)
+        try waitUntil { worker.discardCount == 1 && window.attachedSheet == nil }
+        XCTAssertEqual(worker.discardedIdentity, "original-identity")
     }
 
     func testMinimumLightDarkErrorAndUnavailableRowsRender() throws {
@@ -87,7 +98,21 @@ final class RecordingRecoveryTests: XCTestCase {
                                                         withIntermediateDirectories: true)
                 try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: path)
             }
+            worker.listError = AppBridgeError.backend("Recovery root is temporarily unavailable.")
+            try XCTUnwrap(buttons(root, title: "Refresh").first).performClick(nil)
+            try waitUntil { tryRecoveryError(panel).contains("Recovery root is temporarily unavailable.") }
+            worker.listError = nil
+            let content = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView)
+            try XCTUnwrap(buttons(content, title: "Retry list").first).performClick(nil)
+            try waitUntil { !tryRecoveryError(panel).contains("Recovery root is temporarily unavailable.") }
+            XCTAssertEqual(buttons(try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView),
+                                   title: "Recover").count, 1)
         }
+    }
+
+    private func tryRecoveryError(_ panel: Surface) -> String {
+        panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView?.subviews
+            .compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " ") ?? ""
     }
 
     private func draft(_ status: String, identity: String?, kind: String?, reason: String? = nil) throws
@@ -135,11 +160,15 @@ private final class RecoveryFixtureWorker: RecordingRecoveryWorking {
     var recoverCount = 0
     var discardCount = 0
     var recoveredIdentity: String?
+    var discardedIdentity: String?
+    var listError: Error?
     var cancel: NativeRecordingEditorCancel?
     private var pendingRecover: ((Result<RecordingRecoveryResult, Error>) -> Void)?
     init(drafts: [RecordingRecoveryDraft]) { self.drafts = drafts }
     func list(historyRoot: String, completion: @escaping (Result<[RecordingRecoveryDraft], Error>) -> Void) {
-        listCount += 1; completion(.success(drafts))
+        listCount += 1
+        if let listError { completion(.failure(listError)) }
+        else { completion(.success(drafts)) }
     }
     func recover(historyRoot: String, draft: RecordingRecoveryDraft, cancel: NativeRecordingEditorCancel,
                  progress: @escaping (String) -> Void,
@@ -152,6 +181,6 @@ private final class RecoveryFixtureWorker: RecordingRecoveryWorking {
     }
     func discard(historyRoot: String, draft: RecordingRecoveryDraft,
                  completion: @escaping (Result<Void, Error>) -> Void) {
-        discardCount += 1; completion(.success(()))
+        discardCount += 1; discardedIdentity = draft.identity; completion(.success(()))
     }
 }
