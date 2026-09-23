@@ -51,8 +51,14 @@ final class RecordingRecoveryTests: XCTestCase {
         let cancel = try XCTUnwrap(buttons(panel, title: "Cancel").first)
         cancel.performClick(nil)
         XCTAssertTrue(try XCTUnwrap(worker.cancel).isCancelled)
+        let listsBeforeSuccess = worker.listCount
         worker.completeRecover(.success(RecordingRecoveryResult(artifactID: "missing-artifact", warning: nil)))
+        // Supersede the recovery-owned History load before its queued response.
+        // Its stale selection/open callback must be suppressed, but cleanup must
+        // still release the recovery busy/quit latch.
+        controller.refreshHistory()
         try waitUntil { controller.prepareEditorForTermination() }
+        try waitUntil { worker.listCount > listsBeforeSuccess }
         XCTAssertEqual(worker.recoveredIdentity, "original-identity")
         buttons(try XCTUnwrap(scroll.documentView), title: "Discard…")[0].performClick(nil)
         try waitUntil { window.attachedSheet != nil }
@@ -95,6 +101,9 @@ final class RecordingRecoveryTests: XCTestCase {
                 .first { $0.stringValue.contains("The recording manifest is corrupt") })
             XCTAssertGreaterThan(reason.frame.height, 49)
             XCTAssertEqual(reason.toolTip, reason.stringValue)
+            XCTAssertEqual(reason.accessibilityHelp(), reason.stringValue)
+            XCTAssertTrue(panel.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
+                .contains("Scroll for full details."))
             if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
                 window.display(); root.layoutSubtreeIfNeeded()
                 let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))

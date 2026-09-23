@@ -137,10 +137,20 @@ final class HistoryClearTests: XCTestCase {
 
             clear.performClick(nil)
             try waitUntil { window.attachedSheet != nil }
+            let blockedGate = failPartway ? nil : transport.blockNextHistoryAfterClear()
             window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertFirstButtonReturn)
+            if !failPartway {
+                try waitUntil { transport.blockedHistoryStarted.wait(timeout: .now()) == .success }
+                controller.refreshHistory() // supersedes clear-owned reload before it returns
+                blockedGate?.signal()
+            }
             try waitUntil {
                 transport.clearCount == 1 && table.numberOfRows == (failPartway ? 1 : 0)
                     && clear.isEnabled == failPartway
+            }
+            if !failPartway {
+                let refresh = try button("Refresh")
+                try waitUntil { refresh.isEnabled }
             }
             if failPartway {
                 XCTAssertTrue(root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
@@ -198,6 +208,8 @@ private final class HistoryTransport: AppTransport {
     private let lock = NSLock()
     private var artifacts: [[String: Any]]
     private var clears = 0
+    private var blockedHistory: DispatchSemaphore?
+    let blockedHistoryStarted = DispatchSemaphore(value: 0)
     private var failPartway: Bool
     private var saves = 0
     private var exportDirectory: String?
@@ -229,10 +241,22 @@ private final class HistoryTransport: AppTransport {
     var saveCount: Int { lock.lock(); defer { lock.unlock() }; return saves }
     var savedDirectory: String? { lock.lock(); defer { lock.unlock() }; return exportDirectory }
 
+    func blockNextHistoryAfterClear() -> DispatchSemaphore {
+        let gate = DispatchSemaphore(value: 0)
+        lock.lock(); blockedHistory = gate; lock.unlock()
+        return gate
+    }
+
     func request(_ object: [String: Any]) throws -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
         switch object["operation"] as? String {
-        case "history": return ["kind": "history", "artifacts": artifacts]
+        case "history":
+            if clears > 0, let blockedHistory {
+                blockedHistoryStarted.signal()
+                _ = blockedHistory.wait(timeout: .now() + 5)
+                self.blockedHistory = nil
+            }
+            return ["kind": "history", "artifacts": artifacts]
         case "displays": return ["kind": "displays", "displays": []]
         case "save_recording":
             guard let directory = object["directory"] as? String,

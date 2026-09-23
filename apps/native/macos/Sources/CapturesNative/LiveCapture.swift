@@ -368,7 +368,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
 
-    private func loadHistory(select id: String? = nil, completion: (() -> Void)? = nil) {
+    private func loadHistory(select id: String? = nil, cleanup: (() -> Void)? = nil,
+                             completion: (() -> Void)? = nil) {
         historyGeneration += 1
         let generation = historyGeneration
         refreshRecovery()
@@ -384,7 +385,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 .sorted { $0.createdAt > $1.createdAt }
             guard parsed.count == all.count else { throw AppBridgeError.invalidResponse }; return parsed
         }) { [weak self] result in
-            guard let self, self.historyGeneration == generation else { return }
+            guard let self else { return }
+            defer { cleanup?() }
+            guard self.historyGeneration == generation else { return }
             switch result { case .success(let values):
                 let previousID = id ?? self.selectedIndex.flatMap { self.artifacts.indices.contains($0) ? self.artifacts[$0].id : nil }
                 if let id, let requested = values.first(where: { $0.id == id }),
@@ -460,6 +463,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 let reason = NSTextField(wrappingLabelWithString: message)
                 reason.font = .systemFont(ofSize: 10); reason.textColor = tokens.color("danger-text")
                 reason.toolTip = message
+                reason.setAccessibilityHelp(message)
                 let height = textHeight(message, font: reason.font!, width: 278)
                 reason.frame = NSRect(x: 2, y: y + 39, width: 278, height: height)
                 content.addSubview(reason)
@@ -471,6 +475,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             let error = NSTextField(wrappingLabelWithString: message)
             error.font = .systemFont(ofSize: 10); error.textColor = tokens.color("danger-text")
             error.toolTip = message
+            error.setAccessibilityHelp(message)
             let height = textHeight(message, font: error.font!, width: 278)
             error.frame = NSRect(x: 2, y: y + 2, width: 278, height: height)
             content.addSubview(error)
@@ -479,7 +484,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         content.frame.size.height = max(114, nextY)
         recoveryScroll.documentView = content
         recoveryStatus.stringValue = recoveryBusy ? recoveryStage
-            : (recoveryError != nil || recoveryActionError != nil ? "Scroll for full details." : "")
+            : (nextY > recoveryScroll.bounds.height ? "Scroll for full details." : "")
     }
 
     private func textHeight(_ message: String, font: NSFont, width: CGFloat) -> CGFloat {
@@ -517,9 +522,12 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     self.recoveryStage = "Opening recovered recording…"
                     self.renderRecovery()
                     let shouldOpen = self.selectionGeneration == selectedAtDispatch
-                    self.loadHistory(select: shouldOpen ? recovered.artifactID : nil) { [weak self] in
+                    self.loadHistory(select: shouldOpen ? recovered.artifactID : nil,
+                        cleanup: { [weak self] in
+                            guard let self, self.recoveryActionGeneration == current else { return }
+                            self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
+                        }) { [weak self] in
                         guard let self, self.recoveryActionGeneration == current else { return }
-                        self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
                         guard shouldOpen, self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
                             ? self.artifacts[$0].id : nil }) == recovered.artifactID else { return }
                         self.status.stringValue = recovered.warning ?? "Recording recovered into History."
@@ -1975,11 +1983,11 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             }) { [weak self] result in
                 guard let self else { return }
                 // A failed bulk delete can still remove some entries; always reload.
-                self.loadHistory { [weak self] in
+                self.loadHistory(cleanup: { [weak self] in
                     guard let self else { return }
                     self.clearingHistory = false; self.updateActions()
                     if case .failure(let error) = result { self.showError("Couldn’t clear history", error) }
-                }
+                })
             }
         }
     }
