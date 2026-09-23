@@ -21,9 +21,9 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, numeric crop, preset/custom output size, track volume/mute/mono, silent Play/Pause, opt-in Loop preview and MP4/GIF save-new-copy; wgpu also provides graphical crop adjustment | Audio playback, AppKit graphical crop, audio meter/device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, preset/custom output size, track volume/mute/mono, silent Play/Pause, opt-in Loop preview and MP4/GIF save-new-copy | Audio playback, audio meter/device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording audio playback, AppKit graphical crop and remaining controls |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording audio playback and remaining controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -488,7 +488,7 @@ values. Loading is cancellable/retryable; the still is cached until accepted see
 changes position. **Done cropping** restores the prior display, while Apply is the
 only publication boundary and playback is gated during adjustment. This host path
 is shared by Windows/X11/Wayland; automated real-media interaction is exercised on
-X11, not physical Windows/Wayland acceptance. AppKit integration remains separate.
+X11, not physical Windows/Wayland acceptance. The AppKit host path is described below.
 Typed dimensions commit on Enter/focus loss so partial input does not change the
 ratio. The lock is an input preference, not an export edit. Custom output width/height
 remain independent (no output aspect lock). Original, 1080p maximum and 720p maximum presets
@@ -570,12 +570,19 @@ identity; each lap reopens the decoder, so playback does not claim to be gapless
 Persistent bounded FFmpeg playback delivers retained latest frames and a source-relative playhead without
 mutating the accepted frame/position, dirty state, History or source. Pause, focus loss,
 minimize, close, item switching and quit retain cancellation through decoder teardown;
-errors restore the accepted still preview. Audio playback is not implemented.
+errors restore the accepted still preview. AppKit's **Adjust crop** mode lazily decodes
+and caches one immutable full-source frame at the accepted source position. Eight
+resize handles and interior movement call the shared source-pixel crop geometry and
+stage the existing numeric fields without per-pointer decoding or publication. The
+overlay maps top-down source coordinates through letterboxing in AppKit's flipped view;
+Apply remains the only publication boundary, while Done restores the exact prior
+accepted or motion frame. Source loading has the existing serialized cancel, close,
+item-generation and retry guards. Audio playback is not implemented.
 Windows/X11 already implement
 the same edit controls through wgpu;
 private X11/software-GL exercises provide implementation evidence only. Windows and
 Wayland presentation, physical macOS input, accessibility, playback audio, physical
-audio output, graphical crop handles, draft restoration and original
+audio output, draft restoration and original
 replacement remain open. No recording-editor or cross-platform parity gate closes.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams

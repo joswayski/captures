@@ -286,10 +286,13 @@ Apply remains explicit. Silent Play/Pause presents bounded accepted-edit motion
 frames and a source-relative playhead without changing the accepted preview, edits,
 History or source. Optional Loop preview repeats the accepted trim without changing
 exports or dirty state; each silent lap reopens the decoder and is not gapless.
-Audio playback is not implemented. Graphical crop handles remain absent, so this is
-not Tauri editor parity. Windows/X11 additionally implement graphical crop adjustment
-alongside the same numeric crop and output-size workflow; physical macOS, Windows and Wayland
-acceptance remains open.
+**Adjust crop** loads one immutable full-source frame at the accepted position, then
+stages source-pixel crop changes with eight resize handles or interior movement without
+decoding on each pointer event. **Done cropping** restores the prior accepted or motion
+frame; only Apply publishes the staged values. Loading is cancellable and retryable.
+Windows/X11 provide the same full-source graphical adjustment alongside numeric crop
+and output sizing. Audio playback is not implemented, and this is not Tauri editor
+parity; physical macOS, Windows and Wayland acceptance remains open.
 History displays recording posters and metadata; **Save file**
 copies the original media to the output folder without re-encoding, and
 **Show in Folder** reveals that saved copy. Both native

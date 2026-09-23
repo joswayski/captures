@@ -311,6 +311,282 @@ final class RecordingTrimTimeline: NSView {
     }
 }
 
+final class RecordingCropHandle: NSView {
+    let kind: NativeRecordingCropDragHandle
+    weak var overlay: RecordingCropOverlay?
+    var enabled = false { didSet { needsDisplay = true; setAccessibilityEnabled(enabled) } }
+
+    init(kind: NativeRecordingCropDragHandle, overlay: RecordingCropOverlay) {
+        self.kind = kind; self.overlay = overlay
+        super.init(frame: .zero)
+        setAccessibilityElement(true); setAccessibilityRole(.slider)
+        setAccessibilityLabel("Recording crop \(kind.accessibilityName) handle")
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var acceptsFirstResponder: Bool { enabled }
+
+    override func mouseDown(with event: NSEvent) {
+        guard enabled, let overlay else { return }
+        window?.makeFirstResponder(self)
+        overlay.beginDrag(kind, at: overlay.convert(event.locationInWindow, from: nil))
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard let overlay else { return }
+        overlay.continueDrag(at: overlay.convert(event.locationInWindow, from: nil))
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard let overlay else { return }
+        overlay.continueDrag(at: overlay.convert(event.locationInWindow, from: nil))
+        overlay.endDrag()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard let overlay else { return }
+        let step = event.modifierFlags.contains(.shift) ? 10.0 : 1.0
+        switch event.keyCode {
+        case 123: overlay.nudge(kind, deltaX: -step, deltaY: 0)
+        case 124: overlay.nudge(kind, deltaX: step, deltaY: 0)
+        case 125: overlay.nudge(kind, deltaX: 0, deltaY: step)
+        case 126: overlay.nudge(kind, deltaX: 0, deltaY: -step)
+        case 53: overlay.endDrag()
+        default: super.keyDown(with: event); return
+        }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder(); needsDisplay = true; return accepted
+    }
+    override func resignFirstResponder() -> Bool {
+        overlay?.endDrag()
+        let accepted = super.resignFirstResponder(); needsDisplay = true; return accepted
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let overlay else { return }
+        let focused = window?.firstResponder === self
+        let rect = bounds.insetBy(dx: 5, dy: 5)
+        let path = NSBezierPath(ovalIn: rect)
+        overlay.tokens.color(enabled ? "theme-accent" : "text-faint").setFill(); path.fill()
+        overlay.tokens.color(focused ? "glass-text" : "theme-accent-ink").setStroke()
+        path.lineWidth = focused ? 3 : 2; path.stroke()
+    }
+}
+
+final class RecordingCropOverlay: NSView {
+    fileprivate var tokens: Tokens
+    private let imageInset: CGFloat = 12
+    var sourceSize = NativeRecordingDimensions(width: 2, height: 2) {
+        didSet { endDrag(); updateHandles(); needsDisplay = true }
+    }
+    var crop = NativeRecordingCropRect(x: 0, y: 0, width: 2, height: 2) {
+        didSet { updateHandles(); updateAccessibility(); needsDisplay = true }
+    }
+    var lockAspect = true
+    var onStage: ((NativeRecordingCropRect) -> Void)?
+    var onCommitPendingInput: (() -> Void)?
+    private(set) var editingEnabled = false
+    var interceptsPendingInput = false
+    private var initialCrop: NativeRecordingCropRect?
+    private var initialPoint: NSPoint?
+    private var handles: [NativeRecordingCropDragHandle: RecordingCropHandle] = [:]
+
+    init(tokens: Tokens) {
+        self.tokens = tokens
+        super.init(frame: .zero)
+        setAccessibilityElement(true); setAccessibilityRole(.group)
+        setAccessibilityLabel("Recording crop canvas")
+        for kind in NativeRecordingCropDragHandle.allCases where kind != .move {
+            let handle = RecordingCropHandle(kind: kind, overlay: self)
+            handles[kind] = handle; addSubview(handle)
+        }
+        isHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { editingEnabled }
+
+    var fittedImageRect: NSRect {
+        let width = CGFloat(sourceSize.width), height = CGFloat(sourceSize.height)
+        let canvas = bounds.insetBy(dx: imageInset, dy: imageInset)
+        guard width > 0, height > 0, canvas.width > 0, canvas.height > 0 else { return .zero }
+        let scale = min(canvas.width / width, canvas.height / height)
+        let size = NSSize(width: width * scale, height: height * scale)
+        return NSRect(x: canvas.midX - size.width / 2, y: canvas.midY - size.height / 2,
+                      width: size.width, height: size.height)
+    }
+
+    var displayedCropRect: NSRect {
+        let image = fittedImageRect
+        guard image.width > 0, image.height > 0 else { return .zero }
+        let scaleX = image.width / CGFloat(sourceSize.width)
+        let scaleY = image.height / CGFloat(sourceSize.height)
+        return NSRect(x: image.minX + CGFloat(crop.x) * scaleX,
+                      y: image.minY + CGFloat(crop.y) * scaleY,
+                      width: CGFloat(crop.width) * scaleX,
+                      height: CGFloat(crop.height) * scaleY)
+    }
+
+    func setEditingEnabled(_ enabled: Bool) {
+        editingEnabled = enabled
+        handles.values.forEach { $0.enabled = enabled }
+        if !enabled { endDrag() }
+        window?.invalidateCursorRects(for: self)
+        needsDisplay = true
+    }
+
+    func beginDrag(_ kind: NativeRecordingCropDragHandle, at point: NSPoint) {
+        guard editingEnabled, displayedCropRect.contains(point) || kind != .move else { return }
+        activeHandle = kind; initialCrop = crop; initialPoint = point
+    }
+
+    func continueDrag(at point: NSPoint) {
+        guard editingEnabled, let initialCrop, let initialPoint else { return }
+        let image = fittedImageRect
+        guard image.width > 0, image.height > 0 else { return }
+        let deltaX = Double((point.x - initialPoint.x) * CGFloat(sourceSize.width) / image.width)
+        let deltaY = Double((point.y - initialPoint.y) * CGFloat(sourceSize.height) / image.height)
+        let kind = activeHandle ?? .move
+        guard let value = NativeRecordingGeometry.afterDrag(initialCrop, source: sourceSize,
+            handle: kind, deltaX: deltaX, deltaY: deltaY, lockAspect: lockAspect),
+            value != crop else { return }
+        crop = value; onStage?(value)
+    }
+
+    func endDrag() { initialCrop = nil; initialPoint = nil; activeHandle = nil }
+
+    func nudge(_ kind: NativeRecordingCropDragHandle, deltaX: Double, deltaY: Double) {
+        guard editingEnabled,
+              let value = NativeRecordingGeometry.afterDrag(crop, source: sourceSize,
+                handle: kind, deltaX: deltaX, deltaY: deltaY, lockAspect: lockAspect),
+              value != crop else { return }
+        crop = value; onStage?(value)
+    }
+
+    private var activeHandle: NativeRecordingCropDragHandle?
+    private func handlePoint(_ kind: NativeRecordingCropDragHandle, rect: NSRect) -> NSPoint {
+        switch kind {
+        case .north: NSPoint(x: rect.midX, y: rect.minY)
+        case .northEast: NSPoint(x: rect.maxX, y: rect.minY)
+        case .east: NSPoint(x: rect.maxX, y: rect.midY)
+        case .southEast: NSPoint(x: rect.maxX, y: rect.maxY)
+        case .south: NSPoint(x: rect.midX, y: rect.maxY)
+        case .southWest: NSPoint(x: rect.minX, y: rect.maxY)
+        case .west: NSPoint(x: rect.minX, y: rect.midY)
+        case .northWest: NSPoint(x: rect.minX, y: rect.minY)
+        case .move: NSPoint(x: rect.midX, y: rect.midY)
+        }
+    }
+
+    private func updateHandles() {
+        let rect = displayedCropRect
+        for (kind, handle) in handles {
+            let point = handlePoint(kind, rect: rect)
+            handle.frame = NSRect(x: point.x - 12, y: point.y - 12, width: 24, height: 24)
+            handle.needsDisplay = true
+        }
+    }
+
+    private func updateAccessibility() {
+        setAccessibilityValueDescription(
+            "X \(crop.x), Y \(crop.y), width \(crop.width), height \(crop.height)")
+        for (kind, handle) in handles {
+            handle.setAccessibilityValueDescription(
+                "\(kind.accessibilityName), X \(crop.x), Y \(crop.y), width \(crop.width), height \(crop.height)")
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = superview.map { convert(point, from: $0) } ?? point
+        guard !isHidden, bounds.contains(local) else { return nil }
+        if interceptsPendingInput {
+            return fittedImageRect.contains(local) ? self : nil
+        }
+        guard editingEnabled else { return nil }
+        let ordered = NativeRecordingCropDragHandle.allCases.reversed()
+        if let kind = ordered.first(where: { handles[$0]?.frame.contains(local) == true }),
+           let handle = handles[kind] { return handle }
+        return displayedCropRect.contains(local) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if interceptsPendingInput {
+            onCommitPendingInput?()
+            return
+        }
+        guard editingEnabled else { return }
+        window?.makeFirstResponder(self)
+        beginDrag(.move, at: convert(event.locationInWindow, from: nil))
+    }
+    override func mouseDragged(with event: NSEvent) {
+        continueDrag(at: convert(event.locationInWindow, from: nil))
+    }
+    override func mouseUp(with event: NSEvent) {
+        continueDrag(at: convert(event.locationInWindow, from: nil)); endDrag()
+    }
+    override func keyDown(with event: NSEvent) {
+        let step = event.modifierFlags.contains(.shift) ? 10.0 : 1.0
+        switch event.keyCode {
+        case 123: nudge(.move, deltaX: -step, deltaY: 0)
+        case 124: nudge(.move, deltaX: step, deltaY: 0)
+        case 125: nudge(.move, deltaX: 0, deltaY: step)
+        case 126: nudge(.move, deltaX: 0, deltaY: -step)
+        case 53: endDrag()
+        default: super.keyDown(with: event)
+        }
+    }
+    override func resignFirstResponder() -> Bool {
+        endDrag(); return super.resignFirstResponder()
+    }
+    override func setFrameSize(_ newSize: NSSize) {
+        if newSize != frame.size { endDrag() }
+        super.setFrameSize(newSize); updateHandles()
+    }
+    override func resetCursorRects() {
+        if editingEnabled { addCursorRect(displayedCropRect, cursor: .openHand) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard !isHidden else { return }
+        let image = fittedImageRect, selection = displayedCropRect
+        guard image.width > 0, image.height > 0, selection.width > 0, selection.height > 0 else { return }
+        NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: image.intersection(bounds)).addClip()
+        tokens.color("glass-veil-heavy").setFill()
+        for area in [
+            NSRect(x: image.minX, y: image.minY, width: image.width,
+                   height: max(0, selection.minY - image.minY)),
+            NSRect(x: image.minX, y: selection.maxY, width: image.width,
+                   height: max(0, image.maxY - selection.maxY)),
+            NSRect(x: image.minX, y: selection.minY,
+                   width: max(0, selection.minX - image.minX), height: selection.height),
+            NSRect(x: selection.maxX, y: selection.minY,
+                   width: max(0, image.maxX - selection.maxX), height: selection.height),
+        ] { NSBezierPath(rect: area).fill() }
+        let border = NSBezierPath(rect: selection)
+        tokens.color(editingEnabled ? "theme-accent" : "text-faint").setStroke()
+        border.lineWidth = 2; border.stroke()
+    }
+}
+
+private extension NativeRecordingCropDragHandle {
+    var accessibilityName: String {
+        switch self {
+        case .move: "move"
+        case .north: "north"
+        case .northEast: "north-east"
+        case .east: "east"
+        case .southEast: "south-east"
+        case .south: "south"
+        case .southWest: "south-west"
+        case .west: "west"
+        case .northWest: "north-west"
+        }
+    }
+}
+
 private enum RecordingPlaybackState {
     case idle
     case playing
@@ -344,6 +620,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var playbackFramePresented = false
     private var playbackLoopEnabled = false
     private var playbackLoopControl: RecordingPlaybackLoopControl?
+    private var sourceFrameCache: RecordingSourceImage?
+    private var sourceFrameCancel: NativeRecordingEditorCancel?
+    private var cropAdjustmentActive = false
+    private var cropAdjustmentPriorImage: NSImage?
     private var playbackStopActions: [() -> Void] = []
     private var closeAfterPlayback = false
     private var terminateAfterPlayback = false
@@ -351,6 +631,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private let previewPanel = Surface()
     private let preview = NSImageView()
+    private let cropOverlay: RecordingCropOverlay
     private let geometryPanel = Surface()
     private let cropEnabled = NSButton(checkboxWithTitle: "Crop recording", target: nil, action: nil)
     private let cropLock = NSButton(checkboxWithTitle: "Lock aspect ratio", target: nil, action: nil)
@@ -395,6 +676,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var changeButton: CaptureButton!
     private var thumbnailRetryButton: CaptureButton!
     private var playbackButton: CaptureButton!
+    private var cropAdjustmentButton: CaptureButton!
     private let playbackLoop = NSButton(checkboxWithTitle: "Loop", target: nil, action: nil)
 
     init(tokens: Tokens, worker: RecordingEditorWorking = RecordingEditorWorker(),
@@ -407,6 +689,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         self.confirmDiscard = confirmDiscard ?? RecordingEditorController.confirmDiscardAlert
         self.requestTermination = requestTermination
         trimTimeline = RecordingTrimTimeline(tokens: tokens)
+        cropOverlay = RecordingCropOverlay(tokens: tokens)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 760),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
@@ -452,6 +735,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         estimate = nil; activeCancel = nil; thumbnailCancel = nil; busy = true; pickerOpen = false
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
+        sourceFrameCache = nil; sourceFrameCancel = nil
+        cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
+        cropOverlay.isHidden = true; cropOverlay.setEditingEnabled(false)
         stagedCrop = nil; cropAspectUnlocked = false
         resolutionPreset = .original; customOutput = false
         preview.image = nil
@@ -530,9 +816,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         closeSession(); return true
     }
 
-    func windowDidResize(_ notification: Notification) { layout() }
+    func windowDidResize(_ notification: Notification) { cropOverlay.endDrag(); layout() }
     func windowDidResignKey(_ notification: Notification) {
-        trimTimeline.endDrag(); pausePlayback()
+        trimTimeline.endDrag(); cropOverlay.endDrag(); pausePlayback()
     }
     func windowDidMiniaturize(_ notification: Notification) { pausePlayback() }
     func controlTextDidChange(_ notification: Notification) {
@@ -559,6 +845,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         preview.imageScaling = .scaleProportionallyUpOrDown
         preview.setAccessibilityLabel("Decoded recording frame")
         previewPanel.addSubview(preview)
+        cropOverlay.toolTip = "Drag inside to move. Drag a handle to resize. Arrow keys move a focused handle by 1 source pixel; Shift moves 10."
+        cropOverlay.onStage = { [weak self] crop in self?.stageGraphicalCrop(crop) }
+        cropOverlay.onCommitPendingInput = { [weak self] in
+            guard let self else { return }
+            self.window.makeFirstResponder(nil)
+            _ = self.commitPendingCropInput()
+            self.updateControls()
+        }
+        previewPanel.addSubview(cropOverlay)
         root.addSubview(previewPanel)
 
         geometryPanel.wantsLayer = true
@@ -572,6 +867,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         cropLock.target = self; cropLock.action = #selector(cropLockChanged)
         cropLock.setAccessibilityLabel("Lock recording crop aspect ratio")
         geometryPanel.addSubview(cropEnabled); geometryPanel.addSubview(cropLock)
+        cropAdjustmentButton = button("Adjust crop") { [weak self] in self?.toggleCropAdjustment() }
+        cropAdjustmentButton.setAccessibilityLabel("Adjust recording crop graphically")
+        geometryPanel.addSubview(cropAdjustmentButton)
         for (field, accessibilityLabel) in [
             (cropX, "Recording crop X"), (cropY, "Recording crop Y"),
             (cropWidth, "Recording crop width"), (cropHeight, "Recording crop height"),
@@ -685,12 +983,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                                     width: availableWidth - geometryWidth - 12,
                                     height: previewHeight)
         preview.frame = previewPanel.bounds.insetBy(dx: 12, dy: 12)
+        cropOverlay.frame = previewPanel.bounds
         geometryPanel.frame = NSRect(x: previewPanel.frame.maxX + 12, y: 76,
                                      width: geometryWidth, height: previewHeight)
         let geometryLabels = geometryPanel.subviews.compactMap { $0 as? NSTextField }
             .filter { !$0.isEditable }
         geometryLabels.first { $0.stringValue == "Crop & output" }?.frame =
             NSRect(x: 14, y: 12, width: 130, height: 20)
+        cropAdjustmentButton.frame = NSRect(x: geometryPanel.bounds.width - 122, y: 7,
+                                            width: 108, height: 28)
         cropEnabled.frame = NSRect(x: 14, y: 36, width: 124, height: 24)
         cropLock.frame = NSRect(x: 142, y: 36, width: 150, height: 24)
         for (index, title) in ["X", "Y", "W", "H"].enumerated() {
@@ -770,6 +1071,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func publish(_ value: RecordingEditorPresentation, initialize: Bool = false) {
         let old = presentation?.snapshot
+        if old?.artifactID != value.snapshot.artifactID
+            || old?.positionMilliseconds != value.snapshot.positionMilliseconds {
+            sourceFrameCache = nil
+        }
         presentation = value
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         trimTimeline.setPlaybackPosition(nil)
@@ -886,9 +1191,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         guard !busy, let edit = stagedEdit, let export = stagedExport else {
             showError("Enter valid trim, crop, audio, and output values."); return
         }
-        restoreAcceptedPresentation()
+        let finishCropOnSuccess = cropAdjustmentActive
+        if !finishCropOnSuccess { restoreAcceptedPresentation() }
         request(["operation": "update_preview", "edit": edit, "export": export],
-                activity: "Applying edits and decoding preview…")
+                activity: "Applying edits and decoding preview…",
+                finishCropOnSuccess: finishCropOnSuccess)
     }
 
     @objc private func seekChanged() {
@@ -898,12 +1205,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             return
         }
         let position = UInt64(seekSlider.doubleValue.rounded())
-        restoreAcceptedPresentation()
+        let finishCropOnSuccess = cropAdjustmentActive
+        if !finishCropOnSuccess { restoreAcceptedPresentation() }
         request(["operation": "seek", "position_ms": position],
-                activity: "Decoding source-relative frame…")
+                activity: "Decoding source-relative frame…",
+                finishCropOnSuccess: finishCropOnSuccess)
     }
 
-    private func request(_ object: [String: Any], activity: String) {
+    private func request(_ object: [String: Any], activity: String,
+                         finishCropOnSuccess: Bool = false) {
         guard !busy else { return }
         let current = generation; busy = true; status.stringValue = activity
         updateControls()
@@ -911,7 +1221,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             guard let self, self.generation == current else { return }
             self.busy = false
             switch result {
-            case .success(let value): self.publish(value); self.status.stringValue = "Preview updated."
+            case .success(let value):
+                if finishCropOnSuccess { self.finishCropAdjustment(restorePriorImage: false) }
+                self.publish(value); self.status.stringValue = "Preview updated."
             case .failure(let error):
                 self.seekSlider.doubleValue = Double(self.presentation?.snapshot.positionMilliseconds ?? 0)
                 self.showError("Recording preview failed: \(error.localizedDescription)")
@@ -1096,6 +1408,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             trimTimeline.showThumbnailCancelling()
             status.textColor = tokens.color("text-muted")
             status.stringValue = "Cancelling source thumbnail generation…"
+        } else if sourceFrameCancel === activeCancel {
+            status.textColor = tokens.color("text-muted")
+            status.stringValue = "Cancelling full-source crop frame…"
         }
     }
 
@@ -1155,6 +1470,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 width: source.width, height: source.height)
         } else {
             stagedCrop = nil
+            if cropAdjustmentActive { finishCropAdjustment(restorePriorImage: true) }
         }
         estimate = nil; refreshGeometryFields(source: source, preserveCustom: customOutput)
         updateControls()
@@ -1162,6 +1478,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     @objc private func cropLockChanged() {
         cropAspectUnlocked = cropLock.state != .on
+        cropOverlay.lockAspect = !cropAspectUnlocked
         updateControls()
     }
 
@@ -1228,6 +1545,101 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         stagedCrop = crop; estimate = nil
         refreshGeometryFields(source: source, preserveCustom: customOutput)
         return true
+    }
+
+    private func toggleCropAdjustment() {
+        if cropAdjustmentActive {
+            finishCropAdjustment(restorePriorImage: true); updateControls(); return
+        }
+        guard !busy, !pickerOpen, playbackState == .idle, cropEnabled.state == .on,
+              stagedCrop != nil, !hasPendingCropInput,
+              let snapshot = presentation?.snapshot,
+              let source = sourceDimensions(snapshot) else { return }
+        window.makeFirstResponder(nil)
+        guard !hasPendingCropInput else { return }
+        cropAdjustmentPriorImage = preview.image
+        if let cached = sourceFrameCache,
+           cached.positionMilliseconds == snapshot.positionMilliseconds,
+           cached.image.width == Int(source.width), cached.image.height == Int(source.height) {
+            beginCropAdjustment(with: cached, source: source)
+            updateControls(); return
+        }
+        guard let cancel = NativeRecordingEditorCancel() else { return }
+        let current = generation
+        busy = true; activeCancel = cancel; sourceFrameCancel = cancel
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Loading immutable full-source crop frame…"
+        updateControls()
+        worker.sourceFrame(cancel: cancel) { [weak self] result in
+            guard let self, self.generation == current,
+                  self.sourceFrameCancel === cancel else { return }
+            self.busy = false; self.activeCancel = nil; self.sourceFrameCancel = nil
+            guard !cancel.isCancelled else {
+                self.cropAdjustmentPriorImage = nil
+                self.status.textColor = self.tokens.color("text-muted")
+                self.status.stringValue = "Full-source crop frame cancelled. Editing remains available."
+                self.updateControls()
+                return
+            }
+            switch result {
+            case .success(let value):
+                guard let snapshot = self.presentation?.snapshot,
+                      value.positionMilliseconds == snapshot.positionMilliseconds,
+                      value.image.width == snapshot.width,
+                      value.image.height == snapshot.height,
+                      let source = self.sourceDimensions(snapshot) else {
+                    self.cropAdjustmentPriorImage = nil
+                    self.showError("The full-source crop frame no longer matches this recording position.")
+                    self.updateControls(); return
+                }
+                self.sourceFrameCache = value
+                self.beginCropAdjustment(with: value, source: source)
+            case .failure(let error):
+                self.cropAdjustmentPriorImage = nil
+                self.showError("Full-source crop frame unavailable: \(error.localizedDescription). Editing remains available.")
+            }
+            self.updateControls()
+        }
+    }
+
+    private func beginCropAdjustment(with sourceImage: RecordingSourceImage,
+                                     source: NativeRecordingDimensions) {
+        guard let crop = stagedCrop else { return }
+        cropAdjustmentActive = true
+        preview.image = NSImage(cgImage: sourceImage.image,
+            size: NSSize(width: CGFloat(sourceImage.image.width),
+                         height: CGFloat(sourceImage.image.height)))
+        cropOverlay.sourceSize = source; cropOverlay.crop = crop
+        cropOverlay.lockAspect = !cropAspectUnlocked
+        cropOverlay.isHidden = false
+        sourceLabel.stringValue = "Full source · \(time(sourceImage.positionMilliseconds))"
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Adjust the source crop, then Apply edits or choose Done cropping."
+    }
+
+    private func finishCropAdjustment(restorePriorImage: Bool) {
+        cropOverlay.endDrag(); cropOverlay.setEditingEnabled(false); cropOverlay.isHidden = true
+        cropAdjustmentActive = false
+        if restorePriorImage {
+            preview.image = cropAdjustmentPriorImage ?? presentation.map {
+                NSImage(cgImage: $0.image,
+                        size: NSSize(width: CGFloat($0.image.width),
+                                     height: CGFloat($0.image.height)))
+            }
+        }
+        cropAdjustmentPriorImage = nil
+        if let snapshot = presentation?.snapshot {
+            sourceLabel.stringValue = "\(snapshot.width) × \(snapshot.height) source frame"
+        }
+    }
+
+    private func stageGraphicalCrop(_ crop: NativeRecordingCropRect) {
+        guard cropAdjustmentActive, !hasPendingCropInput,
+              let snapshot = presentation?.snapshot,
+              let source = sourceDimensions(snapshot) else { return }
+        stagedCrop = crop; estimate = nil
+        refreshGeometryFields(source: source, preserveCustom: customOutput)
+        updateControls()
     }
 
     @objc private func outputModeChanged() {
@@ -1319,6 +1731,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         pendingCrop.forEach { $0.0.stringValue = $0.1 }
         cropEnabled.state = stagedCrop == nil ? .off : .on
         cropLock.state = cropAspectUnlocked ? .off : .on
+        cropOverlay.lockAspect = !cropAspectUnlocked
+        if let stagedCrop { cropOverlay.crop = stagedCrop }
         if !customOutput || !preserveCustom {
             let output = resolvedPresetDimensions(source: source)
             outputWidth.stringValue = String(output.width)
@@ -1366,6 +1780,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         trimTimeline.setEditingEnabled(available && stagedEdit != nil)
         thumbnailRetryButton?.isHidden = !thumbnailRetryAvailable
         thumbnailRetryButton?.isEnabled = available && thumbnailRetryAvailable
+        cropAdjustmentButton?.title = cropAdjustmentActive ? "Done cropping" : "Adjust crop"
+        cropAdjustmentButton?.setAccessibilityLabel(cropAdjustmentActive
+            ? "Done adjusting recording crop" : "Adjust recording crop graphically")
+        cropAdjustmentButton?.isEnabled = available && (cropAdjustmentActive
+            || (stagedCrop != nil && !hasPendingCropInput))
+        cropOverlay.interceptsPendingInput = cropAdjustmentActive && available
+            && hasPendingCropInput
+        cropOverlay.setEditingEnabled(cropAdjustmentActive && available && !hasPendingCropInput)
         playbackLoop.isEnabled = presentation != nil && !busy && !pickerOpen
             && playbackState != .pausing
         switch playbackState {
@@ -1373,6 +1795,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             playbackButton?.title = "Play"
             playbackButton?.setAccessibilityLabel("Play silent recording preview")
             playbackButton?.isEnabled = available && valid && !stagedDiffers
+                && !cropAdjustmentActive
         case .playing:
             playbackButton?.title = "Pause"
             playbackButton?.setAccessibilityLabel("Pause silent recording preview")
@@ -1401,6 +1824,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackCancel = nil; playbackState = .idle
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
+        sourceFrameCache = nil; sourceFrameCancel = nil
+        cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
+        cropOverlay.setEditingEnabled(false); cropOverlay.isHidden = true
         playbackStopActions.removeAll(); closeAfterPlayback = false
         terminateAfterPlayback = false; switchAfterPlayback = nil
         trimTimeline.setPlaybackPosition(nil)

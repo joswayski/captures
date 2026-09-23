@@ -567,6 +567,365 @@ final class RecordingEditorTests: XCTestCase {
             NativeRecordingDimensions(width: 1_000, height: 500))
     }
 
+    func testGraphicalCropMapsFlippedLetterboxCoordinatesThroughSharedGeometry() throws {
+        _ = NSApplication.shared
+        let overlay = RecordingCropOverlay(tokens: Tokens.variants["light-mustard"]!)
+        overlay.frame = NSRect(x: 0, y: 0, width: 424, height: 224)
+        overlay.sourceSize = NativeRecordingDimensions(width: 400, height: 200)
+        overlay.crop = NativeRecordingCropRect(x: 40, y: 20, width: 200, height: 100)
+        overlay.isHidden = false; overlay.lockAspect = false; overlay.setEditingEnabled(true)
+        XCTAssertTrue(overlay.isFlipped)
+        XCTAssertEqual(overlay.fittedImageRect, NSRect(x: 12, y: 12, width: 400, height: 200))
+        XCTAssertEqual(overlay.displayedCropRect, NSRect(x: 52, y: 32, width: 200, height: 100))
+
+        var staged: [NativeRecordingCropRect] = []
+        overlay.onStage = { staged.append($0) }
+        let southEast = NSPoint(x: overlay.displayedCropRect.maxX,
+                                y: overlay.displayedCropRect.maxY)
+        overlay.beginDrag(.southEast, at: southEast)
+        overlay.continueDrag(at: NSPoint(x: southEast.x + 40, y: southEast.y + 20))
+        overlay.endDrag()
+        XCTAssertEqual(staged.last,
+                       NativeRecordingCropRect(x: 40, y: 20, width: 240, height: 120))
+
+        let movedFrom = NSPoint(x: overlay.displayedCropRect.midX,
+                                y: overlay.displayedCropRect.midY)
+        overlay.beginDrag(.move, at: movedFrom)
+        overlay.continueDrag(at: NSPoint(x: movedFrom.x - 20, y: movedFrom.y + 20))
+        overlay.endDrag()
+        XCTAssertEqual(staged.last,
+                       NativeRecordingCropRect(x: 20, y: 40, width: 240, height: 120),
+                       "positive flipped-view Y maps to positive top-down source Y")
+
+        overlay.lockAspect = true
+        overlay.nudge(.northWest, deltaX: -10, deltaY: -10)
+        XCTAssertEqual(staged.last,
+                       NativeRecordingCropRect(x: 0, y: 30, width: 260, height: 130))
+    }
+
+    func testGraphicalCropSourceModeCachesStagesAndRestoresPriorDisplay() throws {
+        _ = NSApplication.shared
+        let initialCrop = NativeRecordingCropRect(x: 40, y: 20, width: 160, height: 90)
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            position: 400, crop: initialCrop))
+        let source = try solidImage(width: 320, height: 180, red: 18, green: 90, blue: 170)
+        worker.sourceResult = .success(RecordingSourceImage(positionMilliseconds: 400,
+                                                             image: source))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let image = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first)
+        let acceptedImage = image.image
+        worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_234_567,
+                                                                 exact: false))
+        try button("Estimate size", in: controller.root).performClick(nil)
+        let acceptedEstimate = try XCTUnwrap(labels(in: controller.root).first {
+            $0.contains("≈") && $0.contains("MB")
+        })
+        var adjust = try button("Adjust crop", in: controller.root)
+        let play = try button("Play", in: controller.root)
+        let overlay = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingCropOverlay }.first)
+
+        adjust.performClick(nil)
+        XCTAssertEqual(worker.sourceCalls, 1)
+        XCTAssertEqual(adjust.title, "Done cropping")
+        XCTAssertFalse(overlay.isHidden); XCTAssertTrue(overlay.editingEnabled)
+        XCTAssertFalse(play.isEnabled)
+        XCTAssertEqual(image.image?.size, NSSize(width: 320, height: 180))
+        XCTAssertFalse(controller.dirty, "source display mode is transient host state")
+        XCTAssertTrue(labels(in: controller.root).contains(acceptedEstimate),
+                      "source display mode retains the accepted estimate")
+        XCTAssertTrue(worker.requests.isEmpty)
+
+        overlay.lockAspect = false
+        overlay.nudge(.east, deltaX: 11, deltaY: 0)
+        XCTAssertTrue(controller.dirty)
+        XCTAssertEqual(try field("Recording crop width", in: controller.root).stringValue, "171")
+        XCTAssertEqual(try field("Recording output width", in: controller.root).stringValue, "171",
+                       "Original reflects the staged crop without explicit output rounding")
+        let outputMode = try popup("Recording output size", in: controller.root)
+        outputMode.selectItem(withTitle: "Custom")
+        _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+        let outputWidth = try field("Recording output width", in: controller.root)
+        let outputHeight = try field("Recording output height", in: controller.root)
+        outputWidth.stringValue = "122"; outputHeight.stringValue = "78"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: outputWidth))
+        overlay.nudge(.east, deltaX: 5, deltaY: 0)
+        XCTAssertEqual(outputWidth.stringValue, "122")
+        XCTAssertEqual(outputHeight.stringValue, "78",
+                       "graphical crop preserves independent Custom output values")
+
+        adjust = try button("Done cropping", in: controller.root)
+        adjust.performClick(nil)
+        XCTAssertTrue(overlay.isHidden)
+        XCTAssertTrue(image.image === acceptedImage,
+                      "Done restores the exact accepted display object without publishing")
+        XCTAssertEqual(worker.requests.count, 0)
+
+        try button("Adjust crop", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.sourceCalls, 1, "same-item accepted-position source frame is cached")
+    }
+
+    func testGraphicalCropPendingInputApplyFailureSuccessAndMotionRestore() throws {
+        _ = NSApplication.shared
+        let initialCrop = NativeRecordingCropRect(x: 40, y: 20, width: 160, height: 90)
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            position: 400, crop: initialCrop))
+        worker.sourceResult = .success(RecordingSourceImage(positionMilliseconds: 400,
+            image: try solidImage(width: 320, height: 180, red: 180, green: 70, blue: 25)))
+        worker.deferPlayback = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let width = try field("Recording crop width", in: controller.root)
+        let adjust = try button("Adjust crop", in: controller.root)
+        width.stringValue = "-"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: width))
+        XCTAssertFalse(adjust.isEnabled)
+        adjust.performClick(nil)
+        XCTAssertEqual(worker.sourceCalls, 0)
+        XCTAssertEqual(width.stringValue, "-", "graphical input cannot discard partial text")
+        width.stringValue = "160"; _ = width.sendAction(width.action, to: width.target)
+
+        let play = try button("Play", in: controller.root)
+        let image = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first)
+        play.performClick(nil)
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 733,
+            image: try solidImage(red: 10, green: 200, blue: 30)))
+        let motionImage = image.image
+        play.performClick(nil); worker.completePlayback(.success(.cancelled))
+        adjust.performClick(nil)
+        XCTAssertTrue(labels(in: controller.root).contains {
+            $0 == "Full source · 0:00.400"
+        }, "crop mode labels the accepted source time, not the paused motion time")
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("0:00.733 / 0:02.000") },
+                      "crop mode does not change the transient playback resume position")
+        try button("Done cropping", in: controller.root).performClick(nil)
+        XCTAssertTrue(image.image === motionImage,
+                      "Done restores the exact previously presented motion frame")
+
+        adjust.performClick(nil)
+        let overlay = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingCropOverlay }.first)
+        let lock = try checkbox("Lock recording crop aspect ratio", in: controller.root)
+        lock.state = .off; _ = lock.sendAction(lock.action, to: lock.target)
+        overlay.nudge(.east, deltaX: 20, deltaY: 0)
+        let sourceImage = image.image
+        worker.requestResult = .failure(AppBridgeError.backend("crop preview unavailable"))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertFalse(overlay.isHidden)
+        XCTAssertTrue(image.image === sourceImage,
+                      "failed Apply preserves the full-source display and pending crop")
+        XCTAssertEqual(width.stringValue, "180")
+
+        worker.requestResult = .success(try presentation(position: 400, revision: 1,
+            crop: NativeRecordingCropRect(x: 40, y: 20, width: 180, height: 90)))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertTrue(overlay.isHidden, "successful Apply leaves source adjustment mode")
+        XCTAssertFalse(image.image === sourceImage)
+        XCTAssertEqual(width.stringValue, "180")
+    }
+
+    func testGraphicalCropLoadCancelErrorRetryAndSeekInvalidation() throws {
+        _ = NSApplication.shared
+        let crop = NativeRecordingCropRect(x: 20, y: 10, width: 200, height: 120)
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            position: 400, crop: crop))
+        worker.deferSource = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let preview = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first)
+        let acceptedImage = preview.image
+        let acceptedWidth = try field("Recording crop width", in: controller.root).stringValue
+        try button("Adjust crop", in: controller.root).performClick(nil)
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        XCTAssertFalse(controller.prepareForTermination())
+        let cancel = try button("Cancel operation", in: controller.root)
+        cancel.performClick(nil)
+        XCTAssertTrue(try XCTUnwrap(worker.observedSourceCancel).isCancelled)
+        worker.completeSource(.success(RecordingSourceImage(positionMilliseconds: 400,
+            image: try solidImage(width: 320, height: 180, red: 220, green: 30, blue: 20))))
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("cancelled") })
+        XCTAssertTrue(try button("Adjust crop", in: controller.root).isEnabled)
+        XCTAssertTrue(preview.image === acceptedImage,
+                      "a late success after cancellation cannot replace the accepted image")
+        XCTAssertEqual(try field("Recording crop width", in: controller.root).stringValue,
+                       acceptedWidth)
+        XCTAssertTrue(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingCropOverlay }.first?.isHidden == true)
+
+        try button("Adjust crop", in: controller.root).performClick(nil)
+        worker.completeSource(.failure(AppBridgeError.backend("decoder unavailable")))
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("decoder unavailable") })
+        XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
+
+        try button("Adjust crop", in: controller.root).performClick(nil)
+        worker.completeSource(.success(RecordingSourceImage(positionMilliseconds: 400,
+            image: try solidImage(width: 320, height: 180, red: 40, green: 80, blue: 160))))
+        try button("Done cropping", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.sourceCalls, 3)
+
+        let seek = try slider("Recording frame position", in: controller.root)
+        worker.requestResult = .success(try presentation(position: 913, revision: 1, crop: crop))
+        seek.doubleValue = 913; _ = seek.sendAction(seek.action, to: seek.target)
+        worker.sourceResult = .success(RecordingSourceImage(positionMilliseconds: 913,
+            image: try solidImage(width: 320, height: 180, red: 70, green: 120, blue: 30)))
+        worker.deferSource = false
+        try button("Adjust crop", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.sourceCalls, 4,
+                       "accepted seek position changes invalidate the full-source cache")
+
+        try button("Done cropping", in: controller.root).performClick(nil)
+        controller.present(artifact: recordingArtifact(id: "next-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(try button("Adjust crop", in: controller.root).title, "Adjust crop")
+        worker.sourceResult = .success(RecordingSourceImage(positionMilliseconds: 400,
+            image: try solidImage(width: 320, height: 180, red: 120, green: 30, blue: 80)))
+        try button("Adjust crop", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.sourceCalls, 5, "a new History item cannot reuse the prior source cache")
+    }
+
+    func testGraphicalCropWindowDispatchHitsEveryHandleAtSupportedSizes() throws {
+        _ = NSApplication.shared
+        let crop = NativeRecordingCropRect(x: 0, y: 0, width: 320, height: 180)
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 400,
+                                                                              crop: crop))
+        worker.sourceResult = .success(RecordingSourceImage(positionMilliseconds: 400,
+            image: try solidImage(width: 320, height: 180, red: 80, green: 100, blue: 150)))
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        try button("Adjust crop", in: controller.root).performClick(nil)
+        let overlay = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingCropOverlay }.first)
+        let handles = descendants(in: overlay).compactMap { $0 as? RecordingCropHandle }
+        XCTAssertEqual(handles.count, 8)
+
+        for size in [NSSize(width: 960, height: 760), NSSize(width: 760, height: 540)] {
+            controller.window.setContentSize(size)
+            for handle in handles {
+                XCTAssertTrue(try windowHit(handle, in: controller) === handle,
+                              "root dispatch reaches \(handle.kind) at \(size.width)px")
+            }
+        }
+        let widthField = try field("Recording crop width", in: controller.root)
+        widthField.selectText(nil)
+        let editor = try XCTUnwrap(controller.window.fieldEditor(false, for: widthField)
+            as? NSTextView)
+        editor.insertText("300", replacementRange: NSRange(
+            location: 0, length: editor.string.utf16.count))
+        XCTAssertTrue(overlay.interceptsPendingInput)
+        let pendingPoint = NSPoint(x: overlay.displayedCropRect.midX,
+                                   y: overlay.displayedCropRect.midY)
+        try dispatchCropOverlayMouse(.leftMouseDown, at: pendingPoint, to: overlay,
+                                     in: controller)
+        try dispatchCropOverlayMouse(.leftMouseDragged, at: pendingPoint, to: overlay,
+                                     in: controller, deltaX: 12, deltaY: 6)
+        try dispatchCropOverlayMouse(.leftMouseUp, at: pendingPoint, to: overlay,
+                                     in: controller, deltaX: 12, deltaY: 6)
+        XCTAssertEqual(widthField.stringValue, "300")
+        XCTAssertEqual(try field("Recording crop X", in: controller.root).stringValue, "0",
+                       "the first overlay click commits text without beginning a drag")
+        XCTAssertTrue(overlay.editingEnabled)
+        let movePoint = NSPoint(x: overlay.displayedCropRect.midX,
+                                y: overlay.displayedCropRect.midY)
+        try dispatchCropOverlayMouse(.leftMouseDown, at: movePoint, to: overlay, in: controller)
+        try dispatchCropOverlayMouse(.leftMouseDragged, at: movePoint, to: overlay,
+                                     in: controller, deltaX: 6, deltaY: 4)
+        try dispatchCropOverlayMouse(.leftMouseUp, at: movePoint, to: overlay,
+                                     in: controller, deltaX: 6, deltaY: 4)
+        let movedX = try XCTUnwrap(UInt32(try field("Recording crop X",
+                                                   in: controller.root).stringValue))
+        XCTAssertNotEqual(movedX, 0,
+                          "the next overlay gesture moves the committed crop")
+        XCTAssertTrue(controller.window.firstResponder === overlay)
+        try dispatchCropKey(124, to: overlay, in: controller)
+        XCTAssertEqual(try XCTUnwrap(UInt32(try field("Recording crop X",
+                                                     in: controller.root).stringValue)), movedX + 1)
+        try dispatchCropKey(123, to: overlay, in: controller, modifiers: [.shift])
+        let clampedX = UInt32(max(0, Int(movedX) - 9))
+        XCTAssertEqual(try XCTUnwrap(UInt32(try field("Recording crop X",
+                                                     in: controller.root).stringValue)),
+                       clampedX,
+                       "focused interior movement clamps a ten-pixel Shift nudge")
+        try dispatchCropKey(124, to: overlay, in: controller, modifiers: [.shift])
+        XCTAssertEqual(try XCTUnwrap(UInt32(try field("Recording crop X",
+                                                     in: controller.root).stringValue)), clampedX + 10,
+                       "the opposite in-bounds Shift nudge moves ten source pixels")
+
+        let southEast = try XCTUnwrap(handles.first { $0.kind == .southEast })
+        let before = try field("Recording crop width", in: controller.root).stringValue
+        try dispatchCropMouse(.leftMouseDown, to: southEast, in: controller)
+        try dispatchCropMouse(.leftMouseDragged, to: southEast, in: controller,
+                              deltaX: -12, deltaY: -6)
+        try dispatchCropMouse(.leftMouseUp, to: southEast, in: controller,
+                              deltaX: -12, deltaY: -6)
+        XCTAssertNotEqual(try field("Recording crop width", in: controller.root).stringValue, before)
+        XCTAssertTrue(worker.requests.isEmpty, "crop pointer dispatch only stages numeric geometry")
+        let releasedWidth = try field("Recording crop width", in: controller.root).stringValue
+        try dispatchCropMouse(.leftMouseDragged, to: southEast, in: controller,
+                              deltaX: -40, deltaY: -20)
+        XCTAssertEqual(try field("Recording crop width", in: controller.root).stringValue,
+                       releasedWidth, "pointer release ends the crop gesture")
+
+        // The locked southeast resize above leaves the crop against the source's top edge.
+        // Move it down before expanding the east edge so the coupled height has room to grow.
+        XCTAssertTrue(controller.window.makeFirstResponder(overlay))
+        try dispatchCropKey(125, to: overlay, in: controller, modifiers: [.shift])
+        let east = try XCTUnwrap(handles.first { $0.kind == .east })
+        XCTAssertTrue(controller.window.makeFirstResponder(east))
+        let keyboardWidth = try XCTUnwrap(UInt32(try field("Recording crop width",
+                                                          in: controller.root).stringValue))
+        try dispatchCropKey(124, to: east, in: controller)
+        XCTAssertEqual(try XCTUnwrap(UInt32(try field("Recording crop width",
+                                                     in: controller.root).stringValue)),
+                       keyboardWidth + 1)
+        try dispatchCropKey(124, to: east, in: controller, modifiers: [.shift])
+        XCTAssertEqual(try XCTUnwrap(UInt32(try field("Recording crop width",
+                                                     in: controller.root).stringValue)),
+                       keyboardWidth + 11,
+                       "focused handles use one source pixel, or ten with Shift")
+
+        let staged = try field("Recording crop width", in: controller.root).stringValue
+        overlay.beginDrag(.east, at: NSPoint(x: overlay.displayedCropRect.maxX,
+                                             y: overlay.displayedCropRect.midY))
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification,
+                                                   object: controller.window))
+        overlay.continueDrag(at: NSPoint(x: overlay.displayedCropRect.maxX + 30,
+                                         y: overlay.displayedCropRect.midY))
+        XCTAssertEqual(try field("Recording crop width", in: controller.root).stringValue, staged,
+                       "focus loss ends the gesture while retaining its last staged value")
+        overlay.beginDrag(.east, at: NSPoint(x: overlay.displayedCropRect.maxX,
+                                             y: overlay.displayedCropRect.midY))
+        try dispatchCropKey(53, to: east, in: controller)
+        overlay.continueDrag(at: NSPoint(x: overlay.displayedCropRect.maxX + 30,
+                                         y: overlay.displayedCropRect.midY))
+        XCTAssertEqual(try field("Recording crop width", in: controller.root).stringValue, staged,
+                       "Escape ends the gesture without rolling back the staged value")
+        overlay.beginDrag(.east, at: NSPoint(x: overlay.displayedCropRect.maxX,
+                                             y: overlay.displayedCropRect.midY))
+        controller.window.setContentSize(NSSize(width: 960, height: 760))
+        overlay.continueDrag(at: NSPoint(x: overlay.displayedCropRect.maxX + 30,
+                                         y: overlay.displayedCropRect.midY))
+        XCTAssertEqual(try field("Recording crop width", in: controller.root).stringValue, staged,
+                       "layout changes end the gesture while retaining staged geometry")
+    }
+
     func testTimelineBridgeThresholdWildSampleRecoveryAndFractionalTime() throws {
         XCTAssertEqual(try XCTUnwrap(NativeRecordingTimeline.ratio(milliseconds: 4_375,
             durationMilliseconds: 8_750)), 0.5, accuracy: 0.000_001)
@@ -1406,6 +1765,63 @@ final class RecordingEditorTests: XCTestCase {
         }
     }
 
+    func testGraphicalCropRenderedSourceLoadingErrorAndAcceptedStates() throws {
+        _ = NSApplication.shared
+        let crop = NativeRecordingCropRect(x: 40, y: 20, width: 160, height: 90)
+        func renderSizes(_ controller: RecordingEditorController, _ name: String) throws {
+            for (suffix, size) in [("normal", NSSize(width: 960, height: 760)),
+                                   ("minimum", NSSize(width: 760, height: 540))] {
+                controller.window.setContentSize(size)
+                try render(controller.root, name: "recording-editor-crop-\(name)-\(suffix)")
+            }
+        }
+        for appearance in ["light", "dark"] {
+            let activeWorker = FakeRecordingEditorWorker(presentation: try presentation(
+                position: 400, crop: crop))
+            activeWorker.sourceResult = .success(RecordingSourceImage(positionMilliseconds: 400,
+                image: try solidImage(width: 320, height: 180,
+                                      red: 48, green: 92, blue: 164)))
+            let active = RecordingEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                                                   worker: activeWorker, confirmDiscard: { false })
+            defer { active.window.orderOut(nil) }
+            active.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+            try button("Adjust crop", in: active.root).performClick(nil)
+            try renderSizes(active, "source-\(appearance)")
+
+            let loadingWorker = FakeRecordingEditorWorker(presentation: try presentation(
+                position: 400, crop: crop)); loadingWorker.deferSource = true
+            let loading = RecordingEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                worker: loadingWorker, confirmDiscard: { false })
+            defer { loading.window.orderOut(nil) }
+            loading.present(artifact: recordingArtifact(), historyRoot: "/History",
+                            outputDirectory: "/Exports")
+            try button("Adjust crop", in: loading.root).performClick(nil)
+            try renderSizes(loading, "loading-\(appearance)")
+
+            let errorWorker = FakeRecordingEditorWorker(presentation: try presentation(
+                position: 400, crop: crop))
+            errorWorker.sourceResult = .failure(AppBridgeError.backend("Full-source frame unavailable"))
+            let failed = RecordingEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                worker: errorWorker, confirmDiscard: { false })
+            defer { failed.window.orderOut(nil) }
+            failed.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+            try button("Adjust crop", in: failed.root).performClick(nil)
+            try renderSizes(failed, "error-\(appearance)")
+
+            let overlay = try XCTUnwrap(descendants(in: active.root)
+                .compactMap { $0 as? RecordingCropOverlay }.first)
+            let lock = try checkbox("Lock recording crop aspect ratio", in: active.root)
+            lock.state = .off; _ = lock.sendAction(lock.action, to: lock.target)
+            overlay.nudge(.east, deltaX: 20, deltaY: 0)
+            activeWorker.requestResult = .success(try presentation(position: 400, revision: 1,
+                crop: NativeRecordingCropRect(x: 40, y: 20, width: 180, height: 90)))
+            try button("Apply edits", in: active.root).performClick(nil)
+            try renderSizes(active, "accepted-\(appearance)")
+        }
+    }
+
     func testRealBridgeSeekTrimMp4GifCollisionAndImmutableOriginal() throws {
         let tools = try NativeMediaTools.locate()
         let fixture = try makeRecordingFixture(tools: tools)
@@ -1440,6 +1856,50 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: gifPath))
         XCTAssertEqual(try Data(contentsOf: fixture.source), sourceBefore,
                        "every edit/export keeps the original byte-identical")
+    }
+
+    func testRealBridgeSourceFrameIsFullSourceAtAcceptedPositionAndImmutable() throws {
+        let tools = try NativeMediaTools.locate()
+        let fixture = try makeCropRecordingFixture(tools: tools)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sourceBefore = try Data(contentsOf: fixture.source)
+        var retainedImage: CGImage?
+        do {
+            let opened = try NativeRecordingEditorSession.open(historyRoot: fixture.history.path,
+                                                                artifactID: fixture.id, tools: tools)
+            let session = opened.0
+            let sought = try session.request(["operation": "seek", "position_ms": 733])
+            var edit = sought.snapshot.edit
+            edit["trim_start_ms"] = 211; edit["trim_end_ms"] = 1_289
+            edit["crop"] = ["x": 60, "y": 24, "width": 80, "height": 48]
+            edit["output_width"] = 40; edit["output_height"] = 24
+            var export = sought.snapshot.export
+            export["format"] = "gif"; export["quality"] = "standard"
+            let accepted = try session.request(["operation": "update_preview", "edit": edit,
+                                                "export": export])
+            XCTAssertEqual(accepted.image.width, 40); XCTAssertEqual(accepted.image.height, 24)
+            let before = try session.request(["operation": "snapshot"]).snapshot
+            let source = try session.sourceFrame(cancel: try XCTUnwrap(NativeRecordingEditorCancel()))
+            XCTAssertEqual(source.positionMilliseconds, 733)
+            XCTAssertEqual(source.image.width, 160); XCTAssertEqual(source.image.height, 96)
+            XCTAssertEqual(try pixels(source.image).count, 160 * 96 * 4)
+            retainedImage = source.image
+
+            let cancelled = try XCTUnwrap(NativeRecordingEditorCancel()); cancelled.cancel()
+            XCTAssertThrowsError(try session.sourceFrame(cancel: cancelled))
+            let after = try session.request(["operation": "snapshot"]).snapshot
+            XCTAssertEqual(after.revision, before.revision)
+            XCTAssertEqual(after.positionMilliseconds, before.positionMilliseconds)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: after.edit, options: [.sortedKeys]),
+                           try JSONSerialization.data(withJSONObject: before.edit, options: [.sortedKeys]))
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: after.export, options: [.sortedKeys]),
+                           try JSONSerialization.data(withJSONObject: before.export, options: [.sortedKeys]))
+        }
+        let retained = try XCTUnwrap(retainedImage)
+        XCTAssertEqual(try pixels(retained).count, 160 * 96 * 4,
+                       "source-frame pixels outlive their frame owner and editor session")
+        XCTAssertEqual(try Data(contentsOf: fixture.source), sourceBefore,
+                       "source preview leaves the recording byte-identical")
     }
 
     func testRealBridgeThumbnailOwnerOutlivesSessionWithoutSnapshotMutation() throws {
@@ -1981,6 +2441,19 @@ final class RecordingEditorTests: XCTestCase {
             intent: .defaultIntent))
     }
 
+    private func solidImage(width: Int, height: Int, red: UInt8, green: UInt8,
+                            blue: UInt8) throws -> CGImage {
+        let pixel = [red, green, blue, 255]
+        let provider = try XCTUnwrap(CGDataProvider(
+            data: Data(Array(repeating: pixel, count: width * height).flatMap { $0 }) as CFData))
+        return try XCTUnwrap(CGImage(width: width, height: height, bitsPerComponent: 8,
+            bitsPerPixel: 32, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false,
+            intent: .defaultIntent))
+    }
+
     private func pixels(_ image: CGImage) throws -> Data {
         try XCTUnwrap(image.dataProvider?.data) as Data
     }
@@ -2012,6 +2485,11 @@ final class RecordingEditorTests: XCTestCase {
         let point = handle.convert(NSPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil)
         return try XCTUnwrap(controller.window.contentView?.hitTest(point))
     }
+    private func windowHit(_ handle: RecordingCropHandle,
+                           in controller: RecordingEditorController) throws -> NSView {
+        let point = handle.convert(NSPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil)
+        return try XCTUnwrap(controller.window.contentView?.hitTest(point))
+    }
     private func dispatchMouse(_ type: NSEvent.EventType, to handle: RecordingTrimHandle,
                                in controller: RecordingEditorController,
                                deltaX: CGFloat = 0) throws {
@@ -2027,6 +2505,63 @@ final class RecordingEditorTests: XCTestCase {
         case .leftMouseUp: handle.mouseUp(with: event)
         default: XCTFail("Unsupported pointer event")
         }
+    }
+    private func dispatchCropMouse(_ type: NSEvent.EventType, to handle: RecordingCropHandle,
+                                   in controller: RecordingEditorController,
+                                   deltaX: CGFloat = 0, deltaY: CGFloat = 0) throws {
+        var point = handle.convert(NSPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil)
+        point.x += deltaX; point.y += deltaY
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point,
+            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: controller.window.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1))
+        switch type {
+        case .leftMouseDown:
+            try XCTUnwrap(controller.window.contentView?.hitTest(point)).mouseDown(with: event)
+        case .leftMouseDragged: handle.mouseDragged(with: event)
+        case .leftMouseUp: handle.mouseUp(with: event)
+        default: XCTFail("Unsupported pointer event")
+        }
+    }
+    private func dispatchCropOverlayMouse(_ type: NSEvent.EventType, at localPoint: NSPoint,
+                                          to overlay: RecordingCropOverlay,
+                                          in controller: RecordingEditorController,
+                                          deltaX: CGFloat = 0, deltaY: CGFloat = 0) throws {
+        var point = overlay.convert(localPoint, to: nil)
+        point.x += deltaX; point.y += deltaY
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point,
+            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: controller.window.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1))
+        switch type {
+        case .leftMouseDown:
+            try XCTUnwrap(controller.window.contentView?.hitTest(point)).mouseDown(with: event)
+        case .leftMouseDragged: overlay.mouseDragged(with: event)
+        case .leftMouseUp: overlay.mouseUp(with: event)
+        default: XCTFail("Unsupported pointer event")
+        }
+    }
+    private func dispatchCropKey(_ keyCode: UInt16, to handle: RecordingCropHandle,
+                                 in controller: RecordingEditorController,
+                                 modifiers: NSEvent.ModifierFlags = []) throws {
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: controller.window.windowNumber, context: nil,
+            characters: "", charactersIgnoringModifiers: "", isARepeat: false,
+            keyCode: keyCode))
+        XCTAssertTrue(controller.window.firstResponder === handle)
+        controller.window.sendEvent(event)
+    }
+    private func dispatchCropKey(_ keyCode: UInt16, to overlay: RecordingCropOverlay,
+                                 in controller: RecordingEditorController,
+                                 modifiers: NSEvent.ModifierFlags = []) throws {
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: controller.window.windowNumber, context: nil,
+            characters: "", charactersIgnoringModifiers: "", isARepeat: false,
+            keyCode: keyCode))
+        XCTAssertTrue(controller.window.firstResponder === overlay)
+        controller.window.sendEvent(event)
     }
     private func labels(in view: NSView) -> [String] {
         descendants(in: view).compactMap { ($0 as? NSTextField)?.stringValue }
@@ -2056,6 +2591,10 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var playbackResult: Result<RecordingPlaybackCompletion, Error> = .success(.eof)
     var deferPlayback = false
     var deferPlaybackStarted = false
+    var sourceResult: Result<RecordingSourceImage, Error> =
+        .failure(AppBridgeError.backend("source frame unavailable"))
+    var sourceCalls = 0
+    var deferSource = false
     var thumbnailResult: Result<CGImage, Error> = .success(fakeTimelineImage())
     var thumbnailCalls = 0
     var deferThumbnails = false
@@ -2065,11 +2604,13 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var closeCount = 0
     weak var observedSaveCancel: NativeRecordingEditorCancel?
     weak var observedThumbnailCancel: NativeRecordingEditorCancel?
+    weak var observedSourceCancel: NativeRecordingEditorCancel?
     weak var observedPlaybackCancel: NativeRecordingEditorCancel?
     weak var observedPlaybackLoop: RecordingPlaybackLoopControl?
     private var pendingOpen: ((Result<RecordingEditorPresentation, Error>) -> Void)?
     private var pendingSave: ((Result<RecordingEditorSaveResult, Error>) -> Void)?
     private var pendingThumbnails: ((Result<CGImage, Error>) -> Void)?
+    private var pendingSource: ((Result<RecordingSourceImage, Error>) -> Void)?
     private var pendingPlaybackStarted: ((RecordingPlaybackMetadata) -> Void)?
     private var pendingPlaybackFrame: ((RecordingPlaybackImage) -> Void)?
     private var pendingPlaybackCompletion: ((Result<RecordingPlaybackCompletion, Error>) -> Void)?
@@ -2131,6 +2672,15 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
         pendingPlaybackStarted = nil; pendingPlaybackFrame = nil; pendingPlaybackCompletion = nil
         pendingPlaybackLoopStart = nil; playbackLapFrameCount = 0
         completion?(observedPlaybackCancel?.isCancelled == true ? .success(.cancelled) : result)
+    }
+    func sourceFrame(cancel: NativeRecordingEditorCancel,
+                     completion: @escaping (Result<RecordingSourceImage, Error>) -> Void) {
+        sourceCalls += 1; observedSourceCancel = cancel
+        if deferSource { pendingSource = completion }
+        else { completion(sourceResult) }
+    }
+    func completeSource(_ result: Result<RecordingSourceImage, Error>) {
+        let completion = pendingSource; pendingSource = nil; completion?(result)
     }
     func thumbnails(cancel: NativeRecordingEditorCancel,
                     completion: @escaping (Result<CGImage, Error>) -> Void) {
