@@ -96,6 +96,7 @@ struct View {
     presented: Option<Presented>,
     texture: Option<egui::TextureHandle>,
     source_texture: Option<egui::TextureHandle>,
+    preview_actual_size: bool,
     adjusting_crop: bool,
     crop_gesture: Option<CropGesture>,
     loading_source: bool,
@@ -1482,6 +1483,7 @@ fn show(
     egui::CentralPanel::default().show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.heading("Edit recording");
+            let previous_actual_size = view.preview_actual_size;
             ui.horizontal(|ui| {
                 ui.strong("Preview");
                 ui.weak(if view.adjusting_crop { "Source crop" } else { "Silent playback" });
@@ -1515,28 +1517,60 @@ fn show(
                     view.adjusting_crop = false;
                     view.crop_gesture = None;
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(egui::Button::new("100%").small().selected(view.preview_actual_size))
+                        .on_hover_text("One decoded image pixel per screen point. Scroll to see overflow; playback may use a reduced-size frame.")
+                        .clicked()
+                    {
+                        view.preview_actual_size = true;
+                    }
+                    if ui.add(egui::Button::new("Fit").small().selected(!view.preview_actual_size)).clicked() {
+                        view.preview_actual_size = false;
+                    }
+                });
             });
+            let scale_changed = previous_actual_size != view.preview_actual_size;
+            if scale_changed { view.crop_gesture = None; }
             let width = ui.available_width();
             let height = (ui.available_height() - 210.).clamp(140., 380.);
             let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
             ui.painter()
                 .rect_filled(rect, tokens.number("r-md"), tokens.color("surface-sunken"));
-            let preview_texture = if view.adjusting_crop { &view.source_texture } else { &view.texture };
+            let preview_texture = if view.adjusting_crop { view.source_texture.clone() } else { view.texture.clone() };
             if let Some(texture) = preview_texture {
                 let size = texture.size_vec2();
-                let bounds = if view.adjusting_crop { rect.shrink(tokens.number("s-3")) } else { rect };
-                let scale = (bounds.width() / size.x).min(bounds.height() / size.y);
-                let image_rect = egui::Rect::from_center_size(bounds.center(), size * scale);
-                ui.painter().image(
-                    texture.id(),
-                    image_rect,
-                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                    egui::Color32::WHITE,
-                );
-                if view.adjusting_crop {
-                    show_crop_overlay(ui, tokens, view, image_rect);
+                let actual_size = view.preview_actual_size;
+                let margin = if view.adjusting_crop { tokens.number("s-3") } else { 0. };
+                let source_mode = view.adjusting_crop;
+                let mut viewport = ui.new_child(egui::UiBuilder::new()
+                    .id_salt("recording-preview-viewport").max_rect(rect));
+                viewport.shrink_clip_rect(rect);
+                let mut paint = |ui: &mut egui::Ui, image_rect: egui::Rect| {
+                    ui.painter().image(texture.id(), image_rect,
+                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                        egui::Color32::WHITE);
+                    if source_mode { show_crop_overlay(ui, tokens, view, image_rect); }
+                    else { view.crop_gesture = None; }
+                };
+                if actual_size {
+                    let mut scroll = egui::ScrollArea::both()
+                        .id_salt(("recording-preview-scroll", source_mode, texture.size()))
+                        .max_width(rect.width()).max_height(rect.height())
+                        .auto_shrink([false, false])
+                        .scroll_source(egui::scroll_area::ScrollSource {
+                            drag: egui::scroll_area::DragScroll::Never,
+                            ..Default::default()
+                        });
+                    if scale_changed { scroll = scroll.scroll_offset(egui::Vec2::ZERO); }
+                    scroll.show(&mut viewport, |ui| {
+                        let extent = (size + egui::Vec2::splat(margin * 2.)).max(ui.available_size());
+                        let (content, _) = ui.allocate_exact_size(extent, egui::Sense::hover());
+                        paint(ui, egui::Rect::from_center_size(content.center(), size));
+                    });
                 } else {
-                    view.crop_gesture = None;
+                    let bounds = rect.shrink(margin);
+                    let scale = (bounds.width() / size.x).min(bounds.height() / size.y);
+                    paint(&mut viewport, egui::Rect::from_center_size(bounds.center(), size * scale));
                 }
             } else {
                 ui.label(if view.busy {
@@ -1834,6 +1868,178 @@ mod tests {
             })),
         );
         view
+    }
+
+    #[test]
+    fn actual_preview_scroll_and_crop_mapping_are_display_only() {
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let ctx = egui::Context::default();
+        tokens.apply(&ctx, true);
+        let mut view = opened();
+        let frame = Arc::new(RgbaImage::new(1200, 800));
+        let p = view.presented.as_mut().unwrap();
+        p.source.width = 1200;
+        p.source.height = 800;
+        p.frame = frame.clone();
+        view.set_frame(&ctx, &frame);
+        view.estimate = Some(ExportEstimate {
+            size_bytes: 4567,
+            exact: true,
+        });
+        view.playback_position_ms = Some(1337);
+        let (tx, jobs) = mpsc::channel();
+        let (events, _) = mpsc::channel();
+        let mut time = 0.;
+        let mut render = |view: &mut View, input: Vec<egui::Event>| {
+            time += 0.1;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(760., 580.),
+                    )),
+                    time: Some(time),
+                    events: input,
+                    ..Default::default()
+                },
+                |ui| show(ui, &tokens, view, &tx, &events, egui::ViewportId::ROOT),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let label = |output: &egui::FullOutput, name: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == name => {
+                        Some(text.galley.rect.translate(text.pos.to_vec2()).center())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {name}"))
+        };
+        let image = |output: &egui::FullOutput, id: egui::TextureId| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == id => {
+                        Some((mesh.calc_bounds(), shape.clip_rect))
+                    }
+                    _ => None,
+                })
+                .expect("preview image mesh")
+        };
+        render(&mut view, vec![]);
+        let fit = render(&mut view, vec![]);
+        let id = view.texture.as_ref().unwrap().id();
+        assert!(image(&fit, id).0.width() < 1200.);
+        let actual = label(&fit, "100%");
+        let output = render(
+            &mut view,
+            vec![
+                egui::Event::PointerMoved(actual),
+                trim_pointer(actual, true),
+                trim_pointer(actual, false),
+            ],
+        );
+        assert!(view.preview_actual_size);
+        let (actual_image, clip) = image(&output, id);
+        assert_eq!(actual_image.size(), egui::vec2(1200., 800.));
+        assert!(clip.width() <= 760. && clip.height() < 400.);
+        assert!(jobs.try_recv().is_err());
+        assert!(!view.dirty() && !view.history_changed);
+        assert_eq!(view.estimate.as_ref().unwrap().size_bytes, 4567);
+        assert_eq!(view.playback_position_ms, Some(1337));
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+
+        view.crop = Some(CropRect {
+            x: 40,
+            y: 20,
+            width: 200,
+            height: 100,
+        });
+        view.source_texture = Some(view.texture.as_ref().unwrap().clone());
+        view.adjusting_crop = true;
+        let output = render(&mut view, vec![]);
+        let (before, clip) = image(&output, id);
+        let origin = before.min + egui::vec2(100., 60.);
+        assert!(clip.contains(origin));
+        view.crop_gesture = Some(CropGesture {
+            initial: view.crop.unwrap(),
+            handle: CropDragHandle::Move,
+            origin,
+            image: before,
+            locked: true,
+        });
+        render(
+            &mut view,
+            vec![
+                egui::Event::PointerMoved(origin),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(-30., -40.),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        let output = render(&mut view, vec![]);
+        let (scrolled, clip) = image(&output, id);
+        assert!(scrolled.left() < before.left() && scrolled.top() < before.top());
+        assert_eq!(scrolled.size(), egui::vec2(1200., 800.));
+        assert!(
+            view.crop_gesture.is_none(),
+            "scrolling ends an active source gesture"
+        );
+        let point = scrolled.min + egui::vec2(100., 60.);
+        assert!(clip.contains(point));
+        render(
+            &mut view,
+            vec![
+                egui::Event::PointerMoved(point),
+                trim_pointer(point, true),
+                egui::Event::PointerMoved(point + egui::vec2(13., 7.)),
+                trim_pointer(point + egui::vec2(13., 7.), false),
+            ],
+        );
+        assert_eq!(
+            view.crop,
+            Some(CropRect {
+                x: 53,
+                y: 27,
+                width: 200,
+                height: 100
+            })
+        );
+        assert!(
+            jobs.try_recv().is_err(),
+            "scroll and crop feedback never decode"
+        );
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+        assert_eq!(view.playback_position_ms, Some(1337));
+
+        view.adjusting_crop = false;
+        view.set_frame(&ctx, &RgbaImage::new(200, 80));
+        render(&mut view, vec![]);
+        let output = render(&mut view, vec![]);
+        let (small, clip) = image(&output, id);
+        assert_eq!(
+            small.size(),
+            egui::vec2(200., 80.),
+            "100% uses decoded pixels, not source metadata"
+        );
+        assert!(
+            (small.center() - clip.center()).length() < 1.,
+            "small images stay centered"
+        );
+        view.receive(&ctx, Event::Presented(Ok(opened().presented.unwrap())));
+        assert!(
+            view.preview_actual_size,
+            "accepted updates preserve the display preference"
+        );
+        assert!(!opened().preview_actual_size, "new items default to Fit");
     }
 
     #[test]
@@ -2953,6 +3159,8 @@ mod tests {
                 let mut rects = Vec::new();
                 for label in [
                     "Play",
+                    "Fit",
+                    "100%",
                     "123456789012 bytes (exact)",
                     "Estimate size",
                     "Apply edits",

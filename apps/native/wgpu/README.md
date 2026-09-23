@@ -60,7 +60,12 @@ loads an independent full-source still at the accepted position; eight handles a
 interior move stage source-pixel coordinates with the current aspect lock. Arrow
 keys move one pixel (Shift: ten). **Done cropping** restores the previous display
 without publishing. Source loading is cancellable/retryable and cached until the
-accepted position changes. Playback waits until adjustment ends. The trim track
+accepted position changes. Playback waits until adjustment ends. **Fit / 100%**
+controls display scale without decoding or changing edits. 100% uses one decoded
+image pixel per logical screen point, with bounded two-axis scrolling; it does not
+upgrade the resolution of motion frames. New items start in Fit. Crop handles map
+through the scrolled source image, and scrolling or switching scale ends a gesture.
+The trim track
 retains full-source thumbnails across edits and seek. Generation has independent
 cancel/retry and does not change accepted preview or History state. **Play/Pause**
 provides silent playback of the accepted trim using one persistent shared decoder,

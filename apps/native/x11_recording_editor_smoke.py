@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--thumbnails", action="store_true", help="Exercise source thumbnails, cancellation, failure/retry and trim")
     parser.add_argument("--playback", action="store_true", help="Exercise silent motion, pause/resume, trim EOF, failure and close")
     parser.add_argument("--graphical-crop", action="store_true", help="Exercise source-view crop handles, cache, staging and export")
+    parser.add_argument("--preview-scale", action="store_true", help="Exercise display-only Fit/100% and bounded preview scrolling")
     args = parser.parse_args()
     if args.thumbnails:
         args.timeline = True
@@ -146,7 +147,7 @@ def main():
         artifact = history / artifact_id
         artifact.mkdir(parents=True)
         source = output / "source.mp4"
-        source_width, source_height = (640, 1440) if args.presets else (320, 180)
+        source_width, source_height = (1600, 900) if args.preview_scale else (640, 1440) if args.presets else (320, 180)
         source_size = f"{source_width}x{source_height}"
         segment_seconds = 2 if args.playback else 1
         audio_inputs = []
@@ -247,6 +248,60 @@ def main():
         dominant(output / "original.png", 0)
         run("xdotool", "windowminimize", root, "sleep", ".5")
         estimate_expectations = {}
+        if args.preview_scale:
+            def marker_size(name):
+                pixels = run("convert", str(output / f"{name}.png"), "-crop", "960x380+0+85",
+                             "-depth", "8", "rgb:-")
+                red = [(i // 3 % 960, i // 3 // 960) for i in range(0, len(pixels), 3)
+                       if pixels[i] > max(pixels[i + 1], pixels[i + 2]) + 40]
+                assert red, "red source preview"
+                left, right = min(x for x, _ in red), max(x for x, _ in red)
+                top, bottom = min(y for _, y in red), max(y for _, y in red)
+                white = [(x, y) for y in range(top, bottom + 1) for x in range(left, right + 1)
+                         if min(pixels[(y * 960 + x) * 3:(y * 960 + x) * 3 + 3]) > 210]
+                if not white:
+                    return (0, 0)
+                return (max(x for x, _ in white) - min(x for x, _ in white) + 1,
+                        max(y for _, y in white) - min(y for _, y in white) + 1)
+
+            shot(editor, "scale-fit")
+            fit_size = marker_size("scale-fit")
+            assert 0 < fit_size[0] < 30 and 0 < fit_size[1] < 20, fit_size
+            missing = output / "temporarily-moved.mp4"
+            source.rename(missing)
+            try:
+                click(editor, 930, 57)
+                shot(editor, "scale-actual")
+                actual = marker_size("scale-actual")
+                assert abs(actual[0] - 45) <= 1 and abs(actual[1] - 25) <= 1, actual
+                run("xdotool", "mousemove", "--window", editor, "500", "230",
+                    "click", "--repeat", "5", "--delay", "100", "5", "sleep", ".5")
+                shot(editor, "scale-scrolled")
+                assert marker_size("scale-scrolled") == (0, 0), "inner scrolling moves source pixels"
+                click(editor, 867, 57)
+                shot(editor, "scale-fit-again")
+                assert marker_size("scale-fit-again") == fit_size
+                click(editor, 930, 57)
+                shot(editor, "scale-actual-reset")
+                assert marker_size("scale-actual-reset") == actual, "Fit/100% resets the preview scroll"
+                run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+                shot(editor, "scale-actual-minimum")
+                click(editor, 667, 57)
+                shot(editor, "scale-fit-minimum")
+            finally:
+                missing.rename(source)
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
+            close(editor)
+            wait(lambda: not windows("Recording editor"), "display-only scaling closes without dirty prompt")
+            close(root)
+            wait(lambda: app.poll() is not None, "preview scale quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "checks": ["fit-ratio", "actual-pixel-scale", "inner-scroll", "fit-restores",
+                           "actual-scroll-reset", "minimum-controls", "no-decode", "immutable-source-history", "clean-close"]}, indent=2) + "\n")
+            print("PASS recording preview scale: Fit/100%, bounded scroll, no decode or dirty state")
+            return
         if args.graphical_crop:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
             field(editor, 136, 520, 1500)
