@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--presets", action="store_true", help="Exercise output presets on a portrait source")
     parser.add_argument("--crop-aspect", action="store_true", help="Exercise locked/unlocked numeric crop dimensions")
     parser.add_argument("--estimate", action="store_true", help="Exercise exact size estimates and missing-source retry")
+    parser.add_argument("--estimate-delta", action="store_true", help="Render exact and sampled size deltas against an immutable source")
     parser.add_argument("--timeline", action="store_true", help="Exercise graphical trim staging, keyboard input and export")
     parser.add_argument("--thumbnails", action="store_true", help="Exercise source thumbnails, cancellation, failure/retry and trim")
     parser.add_argument("--playback", action="store_true", help="Exercise silent motion, pause/resume, trim EOF, failure and close")
@@ -75,6 +76,13 @@ def main():
 
     def run(*command):
         return subprocess.check_output(command, env=env, timeout=40)
+
+    def expected_estimate(size, exact=True):
+        # Derive labels from measured file bytes using integer arithmetic,
+        # independently of the UI's floating-point formatter.
+        percent = ((size - len(original)) * 200 + len(original)) // (2 * len(original))
+        suffix = f" · {'−' if percent < 0 else '+'}{abs(percent)}%" if percent else ""
+        return f"{'≈ ' if not exact else ''}{size} bytes{' (exact)' if exact else ''}{suffix}"
 
     def windows(title):
         found = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", f"^{re.escape(title)}"],
@@ -168,7 +176,7 @@ def main():
         source = output / "source.mp4"
         source_width, source_height = (640, 360) if args.maximum_size or args.gif_quality else (1600, 900) if args.preview_scale or args.gif_width else (640, 1440) if args.presets else (320, 180)
         source_size = f"{source_width}x{source_height}"
-        segment_seconds = 2 if args.playback or args.sound else 1
+        segment_seconds = 12 if args.estimate_delta else 2 if args.playback or args.sound else 1
         audio_inputs = []
         audio_filters = ""
         audio_maps = []
@@ -1063,10 +1071,62 @@ def main():
                     "history-publication", "minimum-controls", "immutable-source", "saved-close-quit"]}, indent=2) + "\n")
             print("PASS recording timeline: pointer/keyboard staging, cancellation, save gate, MP4/GIF pixels, immutable source")
             return
+        if args.estimate_delta:
+            click(editor, 681, 882)
+            shot(editor, "delta-original-zero")
+            click(editor, 87, 882)
+            shot(editor, "delta-staged")
+            click(editor, 793, 882)
+            click(editor, 681, 882)
+            shot(editor, "delta-sampled")
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            shot(editor, "delta-sampled-minimum")
+            run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
+            field(editor, 98, 598, 1000)
+            field(editor, 227, 598, 4000)
+            click(editor, 793, 882)
+            click(editor, 681, 882)
+            shot(editor, "delta-exact")
+            assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            shot(editor, "delta-exact-minimum")
+            # A real minimum-window Estimate click checks the longer label did
+            # not steal the button's input region; a missing source must fail.
+            missing = output / "temporarily-moved.mp4"
+            source.rename(missing)
+            try:
+                click(editor, 489, 562)
+                shot(editor, "delta-estimate-error-minimum")
+            finally:
+                missing.rename(source)
+            click(editor, 489, 562)
+            shot(editor, "delta-retry-minimum")
+            run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
+            destination = exports / "delta.gif"
+            field(editor, 360, 838, destination)
+            click(editor, 899, 882)
+            wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "delta export in History")
+            idle(editor)  # History publication precedes accepted save identity on the UI thread.
+            size = destination.stat().st_size
+            expected = expected_estimate(size)
+            assert '%' in expected, "fixture must discriminate a nonzero delta"
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            close(editor)
+            wait(lambda: not windows("Recording editor"), "estimate and save retain clean close")
+            close(root)
+            wait(lambda: app.poll() is not None, "delta quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "source_bytes": len(original), "saved_bytes": size,
+                "exact_label_expectation_for_visual_inspection": expected,
+                "checks": ["zero-original", "staged", "sampled-normal-minimum", "exact-normal-minimum",
+                    "minimum-estimate-error-retry", "no-estimate-publication", "immutable-source-history", "clean-close"]}, indent=2) + "\n")
+            print(f"PASS estimate delta exports: source {len(original)} bytes, saved {size}, expected {expected}")
+            return
         if args.estimate:
             click(editor, 681, 882)
             shot(editor, "estimate-original")
-            estimate_expectations["estimate-original.png"] = f"{len(original)} bytes (exact)"
+            estimate_expectations["estimate-original.png"] = expected_estimate(len(original))
             assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
             missing = output / "temporarily-moved.mp4"
             source.rename(missing)
@@ -1077,14 +1137,14 @@ def main():
                 missing.rename(source)
             click(editor, 681, 882)
             shot(editor, "estimate-retried")
-            estimate_expectations["estimate-retried.png"] = f"{len(original)} bytes (exact)"
+            estimate_expectations["estimate-retried.png"] = expected_estimate(len(original))
             if args.audio:
                 run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
                 field(editor, 201, 866, 50)
                 click(editor, 793, 1082)
                 click(editor, 681, 1082)
                 shot(editor, "estimate-audio-approximate")
-                estimate_expectations["estimate-audio-approximate.png"] = f"≈ {len(original)} bytes"
+                estimate_expectations["estimate-audio-approximate.png"] = expected_estimate(len(original), exact=False)
                 field(editor, 201, 866, 100)
                 click(editor, 793, 1082)
                 run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
@@ -1177,7 +1237,7 @@ def main():
         shot(editor, "saved")
         saved_bytes = destination.read_bytes()
         if args.estimate:
-            estimate_expectations["estimate-trimmed.png"] = f"{len(saved_bytes)} bytes (exact)"
+            estimate_expectations["estimate-trimmed.png"] = expected_estimate(len(saved_bytes))
         click(editor, 899, 882)
         shot(editor, "collision")
         assert destination.read_bytes() == saved_bytes and len(list(history.glob("*/metadata.json"))) == 2
@@ -1195,7 +1255,7 @@ def main():
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 3, "GIF published in History")
         gif = destination.with_suffix(".gif")
         if args.estimate:
-            estimate_expectations["estimate-gif.png"] = f"{gif.stat().st_size} bytes (exact)"
+            estimate_expectations["estimate-gif.png"] = expected_estimate(gif.stat().st_size)
         dominant(gif, 1, .2)
         dominant(gif, 2, 1.0)
         shot(editor, "gif-saved")
