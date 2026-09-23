@@ -2203,6 +2203,19 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 320)
         XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 180,
                        "repeated width changes continue deriving from the custom base")
+
+        outputWidth.stringValue = "9984"; outputHeight.stringValue = "234"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: outputWidth))
+        worker.requestResult = .success(try presentation(
+            position: 733, revision: 6, sourceWidth: 2_001, sourceHeight: 3_001,
+            output: NativeRecordingDimensions(width: 320, height: 6),
+            exportFormat: "gif", framesPerSecond: 15))
+        apply.performClick(nil)
+        edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 320)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 6,
+                       "9984 × 234 uses shipping scale-first floating-point rounding")
         worker.saveResult = .success(.saved(path: "/Exports/maximum-width.gif"))
         save.performClick(nil)
         XCTAssertFalse(controller.dirty)

@@ -2058,8 +2058,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private func dimensionsAtMaximumWidth(_ input: NativeRecordingDimensions,
                                           maximumWidth: UInt32) -> NativeRecordingDimensions {
         guard input.width > maximumWidth else { return input }
-        let scaledHeight = max(2, Int((Double(input.height) * Double(maximumWidth)
-            / Double(input.width)).rounded()))
+        let scale = Double(maximumWidth) / Double(input.width)
+        let scaledHeight = max(2, Int((Double(input.height) * scale).rounded()))
         let evenHeight = scaledHeight.isMultiple(of: 2) ? scaledHeight : scaledHeight - 1
         return NativeRecordingDimensions(width: maximumWidth,
                                          height: UInt32(max(2, evenHeight)))
