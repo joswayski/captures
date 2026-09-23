@@ -104,6 +104,14 @@ final class RecordingRecoveryTests: XCTestCase {
                 try FileManager.default.createDirectory(at: path.deletingLastPathComponent(),
                                                         withIntermediateDirectories: true)
                 try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: path)
+                let scroll = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first)
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: 96))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                window.display()
+                root.cacheDisplay(in: root.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: URL(fileURLWithPath: output)
+                        .appendingPathComponent("recording-recovery-unavailable-\(appearance)-minimum.png"))
             }
             let longError = "Recovery root is temporarily unavailable. "
                 + String(repeating: "The bundle must remain on disk for manual inspection. ", count: 5)
@@ -124,8 +132,10 @@ final class RecordingRecoveryTests: XCTestCase {
                 try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: path)
             }
             worker.listError = nil
-            let content = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView)
-            try XCTUnwrap(buttons(content, title: "Retry list").first).performClick(nil)
+            let retry = try XCTUnwrap(buttons(panel, title: "Retry list").first)
+            XCTAssertFalse(retry.isHidden)
+            XCTAssertTrue(retry.isEnabled)
+            retry.performClick(nil)
             try waitUntil { !tryRecoveryError(panel).contains("Recovery root is temporarily unavailable.") }
             XCTAssertEqual(buttons(try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView),
                                    title: "Recover").count, 1)

@@ -198,6 +198,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var recoveryScroll: NSScrollView!
     private var recoveryStatus: NSTextField!
     private var recoveryCancelButton: CaptureButton!
+    private var recoveryRetryButton: CaptureButton!
     private var preview: NSImageView!
     private var status: NSTextField!
     private var detail: NSTextField!
@@ -288,8 +289,15 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         recoveryCancelButton = CaptureButton("Cancel", frame: NSRect(x: 224, y: 4, width: 86, height: 24),
                                              tokens: tokens) { [weak self] in self?.recoveryCancel?.cancel() }
         recoveryPanel.addSubview(recoveryCancelButton)
+        recoveryRetryButton = CaptureButton("Retry list", frame: NSRect(x: 224, y: 4, width: 86, height: 24),
+                                            tokens: tokens) { [weak self] in
+            self?.recoveryActionError = nil; self?.refreshRecovery()
+        }
+        recoveryPanel.addSubview(recoveryRetryButton)
         recoveryScroll = NSScrollView(frame: NSRect(x: 8, y: 45, width: 304, height: 99))
         recoveryScroll.hasVerticalScroller = true; recoveryScroll.drawsBackground = false
+        recoveryScroll.scrollerStyle = .legacy
+        recoveryScroll.setAccessibilityLabel("Interrupted recording details")
         recoveryPanel.addSubview(recoveryScroll)
         recoveryStatus = NSTextField(wrappingLabelWithString: "")
         recoveryStatus.font = .systemFont(ofSize: 11)
@@ -418,6 +426,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                                       width: 320, height: visible ? 220 : 380)
         recoveryCancelButton.isHidden = recoveryCancel == nil
         recoveryCancelButton.isEnabled = recoveryCancel != nil && recoveryCancel?.isCancelled == false
+        recoveryRetryButton.isHidden = recoveryError == nil && recoveryActionError == nil
+        recoveryRetryButton.isEnabled = !recoveryLoading && !recoveryBusy
         let content = Surface(frame: NSRect(x: 0, y: 0, width: 284, height: 114))
         var nextY: CGFloat = 0
         for draft in recoveryDrafts {
@@ -464,17 +474,12 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             let height = textHeight(message, font: error.font!, width: 278)
             error.frame = NSRect(x: 2, y: y + 2, width: 278, height: height)
             content.addSubview(error)
-            let retry = CaptureButton("Retry list", frame: NSRect(x: 2, y: y + height + 6, width: 110, height: 26),
-                                      tokens: tokens) { [weak self] in
-                self?.recoveryActionError = nil; self?.refreshRecovery()
-            }
-            retry.isEnabled = !recoveryLoading && !recoveryBusy
-            content.addSubview(retry)
-            nextY += height + 40
+            nextY += height + 10
         }
         content.frame.size.height = max(114, nextY)
         recoveryScroll.documentView = content
-        recoveryStatus.stringValue = recoveryBusy ? recoveryStage : ""
+        recoveryStatus.stringValue = recoveryBusy ? recoveryStage
+            : (recoveryError != nil || recoveryActionError != nil ? "Scroll for full details." : "")
     }
 
     private func textHeight(_ message: String, font: NSFont, width: CGFloat) -> CGFloat {
