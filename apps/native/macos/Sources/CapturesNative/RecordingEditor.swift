@@ -683,6 +683,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var playbackSoundEnabled = false
     private var playbackAudioEnabled: Bool?
     private var gifFramesPerSecond: UInt16 = 15
+    private var gifMaximumWidth: UInt32 = 800
     private var maximumSizeEnabled = false
     private var maximumSizeUnit = RecordingFileSizeUnit.megabytes
     private var qualityPreference = "Preserve"
@@ -738,6 +739,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let quality = NSPopUpButton()
     private let gifFrameRateLabel = NSTextField(labelWithString: "GIF FPS")
     private let gifFrameRate = NSPopUpButton()
+    private let gifMaximumWidthLabel = NSTextField(labelWithString: "Max width")
+    private let gifMaximumWidthControl = NSPopUpButton()
     private let maximumSize = NSButton(checkboxWithTitle: "Maximum file size", target: nil,
                                        action: nil)
     private let maximumSizeValue = NSTextField()
@@ -819,6 +822,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
         playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
         gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
+        gifMaximumWidth = 800; gifMaximumWidthControl.selectItem(withTitle: "800 px")
         maximumSizeEnabled = false; maximumSize.state = .off
         maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
         maximumSizeValue.stringValue = "10"
@@ -1068,6 +1072,13 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         gifFrameRate.target = self; gifFrameRate.action = #selector(gifFrameRateChanged)
         gifFrameRate.setAccessibilityLabel("GIF frame rate")
         gifFrameRateLabel.textColor = tokens.color("text-muted")
+        gifMaximumWidthControl.addItems(withTitles: ["320 px", "480 px", "640 px", "800 px",
+                                                        "1200 px"])
+        gifMaximumWidthControl.selectItem(withTitle: "800 px")
+        gifMaximumWidthControl.target = self
+        gifMaximumWidthControl.action = #selector(gifMaximumWidthChanged)
+        gifMaximumWidthControl.setAccessibilityLabel("GIF maximum width")
+        gifMaximumWidthLabel.textColor = tokens.color("text-muted")
         maximumSize.target = self; maximumSize.action = #selector(maximumSizeChanged)
         maximumSize.setAccessibilityLabel("Maximum recording file size")
         configureNumberField(maximumSizeValue, label: "Maximum recording file size value")
@@ -1083,6 +1094,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         destination.delegate = self; destination.setAccessibilityLabel("Recording destination")
         root.addSubview(format); root.addSubview(quality); root.addSubview(destination)
         root.addSubview(gifFrameRateLabel); root.addSubview(gifFrameRate)
+        root.addSubview(gifMaximumWidthLabel); root.addSubview(gifMaximumWidthControl)
         root.addSubview(maximumSize); root.addSubview(maximumSizeValue)
         root.addSubview(maximumSizeUnits); root.addSubview(maximumSizeWarning)
         changeButton = button("Change…") { [weak self] in self?.chooseDestination() }
@@ -1206,8 +1218,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                                     width: 78, height: 28)
         gifFrameRateLabel.frame = NSRect(x: gifFrameRate.frame.minX - 62, y: barY + 77,
                                          width: 58, height: 20)
+        gifMaximumWidthControl.frame = NSRect(x: gifFrameRateLabel.frame.minX - 86,
+                                              y: barY + 72, width: 78, height: 28)
+        gifMaximumWidthLabel.frame = NSRect(x: gifMaximumWidthControl.frame.minX - 72,
+                                            y: barY + 77, width: 68, height: 20)
         let destinationEnd = format.indexOfSelectedItem == 1
-            ? gifFrameRateLabel.frame.minX - 8 : changeButton.frame.minX - 10
+            ? gifMaximumWidthLabel.frame.minX - 8 : changeButton.frame.minX - 10
         destination.frame = NSRect(x: 24, y: barY + 72,
                                    width: max(0, destinationEnd - 24), height: 28)
         format.frame = NSRect(x: 24, y: barY + 110, width: 92, height: 28)
@@ -1304,6 +1320,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         systemMute.state = (audio["mute_system_audio"] as? Bool ?? false) ? .on : .off
         microphoneMute.state = (audio["mute_microphone"] as? Bool ?? false) ? .on : .off
         monoOutput.state = (audio["mono_output"] as? Bool ?? false) ? .on : .off
+        let acceptedExport = value.snapshot.saveExport
         if let source = sourceDimensions(value.snapshot) {
             stagedCrop = NativeRecordingCropRect(value: value.snapshot.edit["crop"],
                                                   sourceWidth: source.width,
@@ -1320,13 +1337,13 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                     customOutput = false; resolutionPreset = .original
                     outputMode.selectItem(withTitle: resolutionPreset.title)
                 }
-            } else if customOutput, let output = editOutputDimensions(value.snapshot.edit) {
+            } else if customOutput, acceptedExport["format"] as? String != "gif",
+                      let output = editOutputDimensions(value.snapshot.edit) {
                 outputWidth.stringValue = String(output.width)
                 outputHeight.stringValue = String(output.height)
             }
             refreshGeometryFields(source: source, preserveCustom: customOutput)
         }
-        let acceptedExport = value.snapshot.saveExport
         select(format, value: acceptedExport["format"] as? String ?? "mp4")
         let acceptedMaximum = (acceptedExport["max_size_bytes"] as? NSNumber)?.uint64Value
         maximumSizeEnabled = acceptedMaximum != nil
@@ -1367,13 +1384,24 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
               let duration = presentation?.snapshot.durationMilliseconds,
               let source = presentation?.snapshot,
               let sourceSize = sourceDimensions(source),
-              let outputSize = stagedOutputDimensions(source: sourceSize),
+              let baseOutputSize = stagedOutputDimensions(source: sourceSize),
               start < end, end <= duration else { return nil }
+        let gif = format.indexOfSelectedItem == 1
+        let normalizedGifBase: NativeRecordingDimensions
+        if gif {
+            normalizedGifBase = NativeRecordingGeometry.constrain(
+                baseOutputSize, preset: .original) ?? baseOutputSize
+        } else {
+            normalizedGifBase = baseOutputSize
+        }
+        let outputSize = gif
+            ? dimensionsAtMaximumWidth(normalizedGifBase, maximumWidth: gifMaximumWidth)
+            : baseOutputSize
         var edit = accepted
         edit["trim_start_ms"] = start
         edit["trim_end_ms"] = end == duration ? NSNull() : end
         edit["crop"] = stagedCrop == nil ? NSNull() : stagedCrop!.dictionary
-        if customOutput || resolutionPreset != .original {
+        if gif || customOutput || resolutionPreset != .original {
             edit["output_width"] = outputSize.width
             edit["output_height"] = outputSize.height
         } else {
@@ -1943,6 +1971,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         gifFramesPerSecond = UInt16(title.split(separator: " ").first.map(String.init) ?? "15") ?? 15
         estimate = nil; updateControls()
     }
+    @objc private func gifMaximumWidthChanged() {
+        let title = gifMaximumWidthControl.titleOfSelectedItem ?? "800 px"
+        gifMaximumWidth = UInt32(title.split(separator: " ").first.map(String.init) ?? "800") ?? 800
+        estimate = nil; updateControls()
+    }
     @objc private func maximumSizeChanged() {
         maximumSizeEnabled = maximumSize.state == .on
         if maximumSizeEnabled {
@@ -2022,6 +2055,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         return resolvedPresetDimensions(source: source)
     }
 
+    private func dimensionsAtMaximumWidth(_ input: NativeRecordingDimensions,
+                                          maximumWidth: UInt32) -> NativeRecordingDimensions {
+        guard input.width > maximumWidth else { return input }
+        let scale = Double(maximumWidth) / Double(input.width)
+        let scaledHeight = max(2, Int((Double(input.height) * scale).rounded()))
+        let evenHeight = scaledHeight.isMultiple(of: 2) ? scaledHeight : scaledHeight - 1
+        return NativeRecordingDimensions(width: maximumWidth,
+                                         height: UInt32(max(2, evenHeight)))
+    }
+
     private func refreshGeometryFields(source: NativeRecordingDimensions,
                                        preserveCustom: Bool,
                                        preservePendingCrop: Bool = false) {
@@ -2067,6 +2110,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let gif = format.indexOfSelectedItem == 1
         gifFrameRateLabel.isHidden = !gif; gifFrameRate.isHidden = !gif
         gifFrameRate.isEnabled = available && gif
+        gifMaximumWidthLabel.isHidden = !gif; gifMaximumWidthControl.isHidden = !gif
+        gifMaximumWidthControl.isEnabled = available && gif
         cropEnabled.isEnabled = available
         cropLock.isEnabled = available && stagedCrop != nil
         [cropX, cropY, cropWidth, cropHeight].forEach {
@@ -2168,6 +2213,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
         playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
         gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
+        gifMaximumWidth = 800; gifMaximumWidthControl.selectItem(withTitle: "800 px")
         maximumSizeEnabled = false; maximumSize.state = .off
         maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
         maximumSizeValue.stringValue = "10"
