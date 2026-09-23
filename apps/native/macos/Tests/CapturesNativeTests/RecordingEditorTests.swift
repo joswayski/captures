@@ -785,6 +785,11 @@ final class RecordingEditorTests: XCTestCase {
                                      "minimum destination leaves room for the GIF FPS label")
             XCTAssertLessThanOrEqual(fps.frame.maxX + 8, change.frame.minX)
             XCTAssertTrue(controller.root.bounds.intersects(fps.frame))
+            let audioNote = try XCTUnwrap(descendants(in: controller.root)
+                .compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == "GIF silent · MP4 kept" })
+            XCTAssertGreaterThanOrEqual(audioNote.frame.width, audioNote.intrinsicContentSize.width,
+                                        "minimum GIF audio status is not clipped")
             try render(controller.root,
                        name: "recording-editor-gif-24-fps-minimum-\(appearance)")
 

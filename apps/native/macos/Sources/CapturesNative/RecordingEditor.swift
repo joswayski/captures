@@ -1919,7 +1919,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         monoOutput.isHidden = !hasAudio
         if !playbackSoundEnabled {
             audioNote.stringValue = !hasAudio ? "No audio tracks"
-                : gif ? "GIF · MP4 kept · Sound off"
+                : gif ? "GIF silent · MP4 kept"
                 : "Sound preview off"
         } else if playbackAudioEnabled == true {
             audioNote.stringValue = playbackState == .playing ? "Sound active"
