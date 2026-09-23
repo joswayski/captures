@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--crop-aspect", action="store_true", help="Exercise locked/unlocked numeric crop dimensions")
     parser.add_argument("--estimate", action="store_true", help="Exercise exact size estimates and missing-source retry")
     parser.add_argument("--estimate-delta", action="store_true", help="Render exact and sampled size deltas against an immutable source")
+    parser.add_argument("--comparison", action="store_true", help="Exercise encoded before/after, hide, failure/retry and immutable identity")
     parser.add_argument("--timeline", action="store_true", help="Exercise graphical trim staging, keyboard input and export")
     parser.add_argument("--thumbnails", action="store_true", help="Exercise source thumbnails, cancellation, failure/retry and trim")
     parser.add_argument("--playback", action="store_true", help="Exercise silent motion, pause/resume, trim EOF, failure and close")
@@ -174,7 +175,7 @@ def main():
         artifact = history / artifact_id
         artifact.mkdir(parents=True)
         source = output / "source.mp4"
-        source_width, source_height = (640, 360) if args.maximum_size or args.gif_quality else (1600, 900) if args.preview_scale or args.gif_width else (640, 1440) if args.presets else (320, 180)
+        source_width, source_height = (640, 360) if args.maximum_size or args.gif_quality or args.comparison else (1600, 900) if args.preview_scale or args.gif_width else (640, 1440) if args.presets else (320, 180)
         source_size = f"{source_width}x{source_height}"
         segment_seconds = 12 if args.estimate_delta else 2 if args.playback or args.sound else 1
         audio_inputs = []
@@ -191,7 +192,7 @@ def main():
             audio_filters = (";[3:a]asplit=2[system][s];[4:a]asplit=2[mic][m];"
                              "[s][m]amix=inputs=2:normalize=0[mixed]")
             audio_maps = ["-map", "[mixed]", "-map", "[system]", "-map", "[mic]", "-c:a", "aac", "-b:a", "256k"]
-        if args.maximum_size or args.gif_quality:
+        if args.maximum_size or args.gif_quality or args.comparison:
             run("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=4",
                 "-c:v", "mpeg4", "-q:v", "2", "-an", str(source))
         else:
@@ -207,7 +208,7 @@ def main():
             "id": artifact_id, "kind": "video", "preview_url": "", "full_url": "",
             "width": source_width, "height": source_height, "size_bytes": source.stat().st_size,
             "created_at": datetime.now(timezone.utc).isoformat(), "mode": None,
-            "saved_path": str(source), "mime_type": "video/mp4", "duration_ms": 4000 if args.maximum_size or args.gif_quality else 3000 * segment_seconds,
+            "saved_path": str(source), "mime_type": "video/mp4", "duration_ms": 4000 if args.maximum_size or args.gif_quality or args.comparison else 3000 * segment_seconds,
             "target": {"type": "display", "display_id": "fixture"},
             "has_system_audio": args.audio, "has_microphone_audio": args.audio, "dropped_frames": 0,
         }))
@@ -220,16 +221,16 @@ def main():
             "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
             "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
             "auto_copy_to_clipboard": False, "show_mini_previews": False}))
-        if args.thumbnails or args.graphical_crop or args.maximum_size:
+        if args.thumbnails or args.graphical_crop or args.maximum_size or args.comparison:
             # Delay only the requested frame/export command to exercise
             # cancellation without racing a tiny fixture. Pixels still use FFmpeg.
             tools = output / "tools"
             tools.mkdir()
-            operation = "export" if args.maximum_size else "thumbnails" if args.thumbnails else "source-frame"
+            operation = "comparison" if args.comparison else "export" if args.maximum_size else "thumbnails" if args.thumbnails else "source-frame"
             started = output / f"{operation}-calls.txt"
             allowed = output / f"allow-{operation}"
-            predicate = "'-attempt-' in arg" if args.maximum_size else "'tile=' in arg" if args.thumbnails else "'source-frame-' in arg"
-            if args.maximum_size:
+            predicate = "'captures-export-comparison-' in arg" if args.comparison else "'-attempt-' in arg" if args.maximum_size else "'tile=' in arg" if args.thumbnails else "'source-frame-' in arg"
+            if args.maximum_size or args.comparison:
                 allowed.touch()
             ffmpeg = shutil.which("ffmpeg")
             assert ffmpeg
@@ -278,6 +279,83 @@ def main():
                 assert all(pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel), (x, pixel)
         wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(), "decode")
         shot(editor, "original")
+        if args.comparison:
+            click(editor, 390, 57)
+            shot(editor, "comparison-mp4")
+            assert started.exists(), "Compare must invoke the real media tool"
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            shot(editor, "comparison-minimum")
+            click(editor, 478, 57)  # Hide restores the accepted still and ordinary toolbar.
+            missing = output / "temporarily-moved.mp4"
+            source.rename(missing)
+            try:
+                click(editor, 390, 57)
+                shot(editor, "comparison-error-minimum")
+            finally:
+                missing.rename(source)
+            click(editor, 390, 57)
+            shot(editor, "comparison-retry-minimum")
+            click(editor, 478, 57)
+            run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
+            calls = len(started.read_text().splitlines())
+            allowed.unlink()
+            click(editor, 390, 57)
+            wait(lambda: len(started.read_text().splitlines()) > calls, "comparison child starts")
+            run("import", "-window", editor, str(output / "comparison-pending.png"))
+            # Bypass idle: cancellation interrupts the running tool process.
+            run("xdotool", "mousemove", "--window", editor, "80", "794", "mousedown", "1",
+                "sleep", ".15", "mouseup", "1")
+            idle(editor)
+            allowed.touch()
+            shot(editor, "comparison-cancelled")
+            click(editor, 87, 882)
+            click(editor, 793, 882)
+            click(editor, 390, 57)
+            shot(editor, "comparison-gif")
+            click(editor, 923, 57)  # 100% avoids interpolation in the pixel oracle.
+            click(editor, 161, 200)
+            shot(editor, "comparison-gif-encoded")
+            click(editor, 799, 200)
+            shot(editor, "comparison-gif-before")
+            colors = {}
+            for side in ("before", "encoded"):
+                pixels = run("convert", str(output / f"comparison-gif-{side}.png"),
+                             "-crop", "600x340+180+105", "-depth", "8", "rgb:-")
+                assert len(pixels) == 600 * 340 * 3
+                colors[side] = len(set(zip(pixels[0::3], pixels[1::3], pixels[2::3])))
+            assert colors["before"] > colors["encoded"] and colors["encoded"] <= 256, colors
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            click(editor, 668, 57)  # Fit
+            click(editor, 105, 293)
+            shot(editor, "comparison-gif-minimum")
+            click(editor, 478, 57)
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            click(editor, 33, 1082)
+            click(editor, 793, 1082)
+            click(editor, 22, 914)
+            click(editor, 793, 1082)
+            click(editor, 390, 57)
+            shot(editor, "comparison-maximum")
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            shot(editor, "comparison-maximum-minimum")
+            click(editor, 478, 57)
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
+            close(editor)
+            assert windows("Recording editor"), "comparison must not mark accepted Maximum edits saved"
+            shot(editor, "comparison-dirty-close")
+            click(editor, 250, 994)  # Explicitly discard the unsaved Maximum setting.
+            wait(lambda: not windows("Recording editor"), "explicit discard closes comparison editor")
+            close(root)
+            wait(lambda: app.poll() is not None, "comparison quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "displayed_colors": colors, "checks": ["mp4", "gif-palette-pixels", "split-pointer", "100-percent",
+                    "minimum-controls", "missing-source-retry", "running-child-cancel", "maximum-first-attempt-label",
+                    "immutable-source-history", "no-export-publication", "dirty-close-retained"]}, indent=2) + "\n")
+            print(f"PASS encoded comparison: displayed colors {colors}, cancel/retry, Maximum, immutable source and History")
+            return
         if not (args.maximum_size or args.gif_quality):
             dominant(output / "original.png", 0)
         run("xdotool", "windowminimize", root, "sleep", ".5")
