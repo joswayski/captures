@@ -4,6 +4,224 @@ import XCTest
 @testable import CapturesNative
 
 final class RecordingEditorTests: XCTestCase {
+    func testReplaceOriginalConfirmationCancelFailureAndRebase() throws {
+        _ = NSApplication.shared
+        let path = "/Exports/original.mp4"
+        let initial = try presentation(position: 400, revision: 1, originalSavePath: path)
+        let rebased = try presentation(position: 0, revision: 2)
+        let worker = FakeRecordingEditorWorker(presentation: initial)
+        var decision: ((Bool) -> Void)?
+        var confirmedPath: String?
+        var refreshed: [String] = []
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, didReplaceOriginal: { refreshed.append($0) },
+            confirmReplaceOriginal: { _, path, completion in
+                confirmedPath = path; decision = completion
+            })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(savedPath: "/Exports/stale.mp4"), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let replace = try button("Replace original…", in: controller.root)
+        XCTAssertTrue(replace.isEnabled)
+        replace.performClick(nil)
+        XCTAssertEqual(confirmedPath, path, "confirm the opened session, not a stale History-list hint")
+        XCTAssertFalse(replace.isEnabled)
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        decision?(false)
+        XCTAssertEqual(worker.replaceCalls, 0)
+        XCTAssertTrue(replace.isEnabled)
+
+        replace.performClick(nil); decision?(true)
+        XCTAssertEqual(worker.replaceCalls, 1)
+        XCTAssertFalse(controller.dirty)
+        XCTAssertTrue(replace.isEnabled, "ordinary failure preserves accepted edits")
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("replace unavailable") })
+
+        worker.deferReplace = true
+        replace.performClick(nil); decision?(true)
+        let cancel = try button("Cancel operation", in: controller.root)
+        cancel.performClick(nil)
+        XCTAssertTrue(try XCTUnwrap(worker.observedReplaceCancel).isCancelled)
+        let thumbnailCount = worker.thumbnailCalls
+        worker.completeReplace(.success(RecordingReplaceResult(path: path, presentation: rebased)))
+        XCTAssertEqual(refreshed, ["recording-id"],
+                       "success after cancellation can be committed and must be shown")
+        XCTAssertEqual(worker.thumbnailCalls, thumbnailCount + 1)
+        XCTAssertFalse(controller.dirty)
+        XCTAssertEqual(try slider("Recording frame position", in: controller.root).doubleValue, 0)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Source thumbnails ready") })
+        XCTAssertTrue(replace.isEnabled)
+    }
+
+    func testReplaceOriginalEligibilityTerminalFailureAndNewSession() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        var decision: ((Bool) -> Void)?
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+            worker: worker, confirmReplaceOriginal: { _, _, completion in decision = completion })
+        defer { controller.window.orderOut(nil) }
+        let replace = try button("Replace original…", in: controller.root)
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        XCTAssertFalse(replace.isEnabled, "recovery-only is not offered as a saved original")
+        worker.initial = try presentation(artifactID: "next",
+                                          originalSavePath: "/Exports/old.gif")
+        controller.present(artifact: recordingArtifact(id: "next", savedPath: "/Exports/old.gif"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertFalse(replace.isEnabled, "accepted path extension must match accepted MP4 format")
+        worker.initial = try presentation(artifactID: "third",
+                                          originalSavePath: "/Exports/old.mp4")
+        controller.present(artifact: recordingArtifact(id: "third", savedPath: "/Exports/old.mp4"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertTrue(replace.isEnabled)
+        worker.replaceResult = .failure(RecordingReplaceError(message: "compensation failed",
+                                                              requiresReopen: true))
+        replace.performClick(nil); decision?(true)
+        XCTAssertFalse(replace.isEnabled)
+        XCTAssertFalse(try button("Play", in: controller.root).isEnabled)
+        XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Close and reopen") })
+        XCTAssertTrue(controller.windowShouldClose(controller.window))
+        worker.initial = try presentation(originalSavePath: "/Exports/old.mp4")
+        controller.present(artifact: recordingArtifact(savedPath: "/Exports/old.mp4"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertTrue(replace.isEnabled)
+    }
+
+    func testReplaceOriginalMinimumLightDarkWithMaximumWarning() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                saveMaximumBytes: 100_000, originalSavePath: "/Exports/original.mp4"))
+            let controller = RecordingEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(savedPath: "/Exports/original.mp4"),
+                               historyRoot: "/History", outputDirectory: "/Exports")
+            XCTAssertTrue(try button("Replace original…", in: controller.root).isEnabled)
+            try render(controller.root, name: "recording-editor-replace-\(appearance)")
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            try render(controller.root, name: "recording-editor-replace-minimum-\(appearance)")
+        }
+    }
+
+    func testGifReplacementPreservesNullDefaultsAndUncappedSourceWidth() throws {
+        _ = NSApplication.shared
+        let path = "/Exports/original.gif"
+        let initial = try presentation(revision: 1, sourceWidth: 1_600, sourceHeight: 900,
+            output: NativeRecordingDimensions(width: 800, height: 450),
+            exportFormat: "gif", exportQuality: "tiny", framesPerSecond: 24, gifMaxColors: 64,
+            originalSavePath: path)
+        let rebased = try presentation(revision: 2, sourceWidth: 1_600, sourceHeight: 900,
+            previewWidth: 1_600, previewHeight: 900,
+            exportFormat: "gif", gifDefaultsAbsent: true)
+        let worker = FakeRecordingEditorWorker(presentation: initial)
+        worker.replaceResult = .success(RecordingReplaceResult(path: path, presentation: rebased))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, confirmReplaceOriginal: { _, _, completion in completion(true) })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(savedPath: path), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let replace = try button("Replace original…", in: controller.root)
+        XCTAssertTrue(replace.isEnabled, "the initial accepted GIF must be clean")
+        replace.performClick(nil)
+        XCTAssertEqual(worker.replaceCalls, 1)
+        XCTAssertFalse(controller.dirty, "no implicit 800px, 15fps or 256-color Apply")
+        XCTAssertEqual(try popup("GIF maximum width", in: controller.root).titleOfSelectedItem,
+                       "Original")
+        XCTAssertEqual(try popup("GIF frame rate", in: controller.root).titleOfSelectedItem,
+                       "15 FPS")
+        XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
+        worker.requestResult = .success(rebased)
+        let seek = try slider("Recording frame position", in: controller.root)
+        seek.doubleValue = 400; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "seek")
+        try button("Save new copy", in: controller.root).performClick(nil)
+        let savedExport = try XCTUnwrap(worker.saves.last?.export)
+        XCTAssertTrue(savedExport["frames_per_second"] is NSNull)
+        XCTAssertTrue(savedExport["gif_max_colors"] is NSNull)
+        XCTAssertFalse(controller.dirty)
+
+        let outputMode = try popup("Recording output size", in: controller.root)
+        outputMode.selectItem(withTitle: "Custom")
+        _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+        let outputWidth = try field("Recording output width", in: controller.root)
+        let outputHeight = try field("Recording output height", in: controller.root)
+        outputWidth.stringValue = "1000"; outputHeight.stringValue = "300"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: outputWidth))
+        let apply = try button("Apply edits", in: controller.root)
+        worker.requestResult = .failure(AppBridgeError.backend("keep staged geometry"))
+        apply.performClick(nil)
+        var edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1_000)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 300,
+                       "Original must not impose a hidden 800px cap on custom size")
+
+        let width = try popup("GIF maximum width", in: controller.root)
+        width.selectItem(withTitle: "320 px")
+        _ = width.sendAction(width.action, to: width.target)
+        apply.performClick(nil)
+        edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 320)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 96)
+        width.selectItem(withTitle: "Original")
+        _ = width.sendAction(width.action, to: width.target)
+        apply.performClick(nil)
+        edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1_000)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 300)
+
+        outputMode.selectItem(withTitle: "720p maximum")
+        _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+        apply.performClick(nil)
+        edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1_280)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 720,
+                       "Original width leaves the explicit resolution preset intact")
+    }
+
+    func testRealReplaceOriginalRebasesSameSessionAndPreservesHistoryIdentity() throws {
+        guard let tools = try? NativeMediaTools.locate() else {
+            throw XCTSkip("ffmpeg and ffprobe are required")
+        }
+        let fixture = try makeRecordingFixture(tools: tools)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let permanent = fixture.root.appendingPathComponent("original.mp4")
+        try FileManager.default.copyItem(at: fixture.source, to: permanent)
+        let metadataPath = fixture.history.appendingPathComponent(fixture.id)
+            .appendingPathComponent("metadata.json")
+        var metadata = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: metadataPath)) as? [String: Any])
+        metadata["saved_path"] = permanent.path
+        try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys])
+            .write(to: metadataPath)
+        let original = try Data(contentsOf: permanent)
+        let (session, opened) = try NativeRecordingEditorSession.open(
+            historyRoot: fixture.history.path, artifactID: fixture.id, tools: tools)
+        XCTAssertEqual(opened.originalSavePath, permanent.path,
+                       "confirmation path comes from the opened session metadata")
+        var edit = opened.snapshot.edit
+        edit["trim_start_ms"] = 200; edit["trim_end_ms"] = 1_400
+        let accepted = try session.request(["operation": "update_preview", "edit": edit,
+                                            "export": opened.snapshot.export])
+        let replaced = try session.replaceOriginal(
+            cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+        XCTAssertEqual(replaced.path, permanent.path)
+        XCTAssertEqual(replaced.presentation.snapshot.artifactID, fixture.id)
+        XCTAssertGreaterThan(replaced.presentation.snapshot.revision, accepted.snapshot.revision)
+        XCTAssertEqual(replaced.presentation.snapshot.positionMilliseconds, 0)
+        XCTAssertEqual(replaced.presentation.snapshot.saveExport["format"] as? String, "mp4")
+        XCTAssertEqual(replaced.presentation.snapshot.saveExport["quality"] as? String, "preserve")
+        XCTAssertNotEqual(try Data(contentsOf: permanent), original)
+        XCTAssertEqual(try Data(contentsOf: permanent), try Data(contentsOf: fixture.source))
+        let afterSeek = try session.request(["operation": "seek", "position_ms": 400])
+        XCTAssertEqual(afterSeek.snapshot.positionMilliseconds, 400)
+        XCTAssertNotNil(try session.thumbnails(
+            cancel: try XCTUnwrap(NativeRecordingEditorCancel())).image().dataProvider?.data)
+    }
+
     func testEncodedComparisonAcceptedPositionLifecycleAndStaleDelivery() throws {
         _ = NSApplication.shared
         let initial = try presentation(position: 400)
@@ -3671,7 +3889,8 @@ final class RecordingEditorTests: XCTestCase {
                        "audio exports keep the original byte-identical")
     }
 
-    private func presentation(start: UInt64 = 0, end: UInt64? = nil,
+    private func presentation(artifactID: String = "recording-id",
+                              start: UInt64 = 0, end: UInt64? = nil,
                               position: UInt64 = 0, revision: UInt64 = 0,
                               sourceWidth: Int = 320, sourceHeight: Int = 180,
                               sourceSizeBytes: UInt64 = 1_024,
@@ -3683,6 +3902,8 @@ final class RecordingEditorTests: XCTestCase {
                               saveMaximumBytes: UInt64? = nil,
                               framesPerSecond: UInt16? = nil,
                               gifMaxColors: Int? = nil,
+                              gifDefaultsAbsent: Bool = false,
+                              originalSavePath: String? = nil,
                               hasSystemAudio: Bool = false, hasMicrophoneAudio: Bool = false,
                               systemVolume: Double = 1, microphoneVolume: Double = 1,
                               muteSystem: Bool = false, muteMicrophone: Bool = false,
@@ -3692,7 +3913,8 @@ final class RecordingEditorTests: XCTestCase {
         let cropValue: Any = crop == nil ? NSNull() : crop!.dictionary
         let outputWidth: Any = output.map { NSNumber(value: $0.width) } ?? NSNull()
         let outputHeight: Any = output.map { NSNumber(value: $0.height) } ?? NSNull()
-        let fpsValue: Any = framesPerSecond.map { NSNumber(value: $0) } ?? NSNull()
+        let fpsValue: Any = gifDefaultsAbsent ? NSNull()
+            : framesPerSecond.map { NSNumber(value: $0) } ?? NSNull()
         let maximumValue: Any = saveMaximumBytes.map { NSNumber(value: $0) } ?? NSNull()
         let defaultGifColors: Int
         switch exportQuality {
@@ -3701,10 +3923,10 @@ final class RecordingEditorTests: XCTestCase {
         case "standard": defaultGifColors = 128
         default: defaultGifColors = 256
         }
-        let colorsValue: Any = exportFormat == "gif"
+        let colorsValue: Any = gifDefaultsAbsent ? NSNull() : exportFormat == "gif"
             ? NSNumber(value: gifMaxColors ?? defaultGifColors) : NSNull()
         let snapshot = try XCTUnwrap(NativeRecordingEditorSnapshot([
-            "artifact_id": "recording-id", "source": ["kind": "video", "mime_type": "video/mp4",
+            "artifact_id": artifactID, "source": ["kind": "video", "mime_type": "video/mp4",
                 "width": sourceWidth, "height": sourceHeight,
                 "duration_ms": 2_000, "size_bytes": sourceSizeBytes],
             "edit": ["trim_start_ms": start, "trim_end_ms": endValue,
@@ -3727,12 +3949,15 @@ final class RecordingEditorTests: XCTestCase {
         ]))
         return RecordingEditorPresentation(snapshot: snapshot,
                                            image: try fixtureImage(width: previewWidth,
-                                                                   height: previewHeight))
+                                                                   height: previewHeight),
+                                           originalSavePath: originalSavePath)
     }
 
-    private func recordingArtifact(id: String = "recording-id") -> CaptureArtifact {
+    private func recordingArtifact(id: String = "recording-id",
+                                   savedPath: String? = nil) -> CaptureArtifact {
         CaptureArtifact(["entry": ["id": id, "kind": "video", "width": 320,
-            "height": 180, "created_at": "2026-09-22T00:00:00Z"],
+            "height": 180, "created_at": "2026-09-22T00:00:00Z",
+            "saved_path": savedPath.map { $0 as Any } ?? NSNull()],
             "preview_path": "/History/\(id)/preview.png",
             "media_path": "/History/\(id)/media.mp4"])!
     }
@@ -4215,8 +4440,13 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var saveResult: Result<RecordingEditorSaveResult, Error> = .failure(AppBridgeError.backend("save unavailable"))
     var saves: [(destination: String, export: [String: Any])] = []
     var deferSave = false
+    var replaceResult: Result<RecordingReplaceResult, Error> =
+        .failure(RecordingReplaceError(message: "replace unavailable", requiresReopen: false))
+    var replaceCalls = 0
+    var deferReplace = false
     var closeCount = 0
     weak var observedSaveCancel: NativeRecordingEditorCancel?
+    weak var observedReplaceCancel: NativeRecordingEditorCancel?
     weak var observedComparisonCancel: NativeRecordingEditorCancel?
     weak var observedThumbnailCancel: NativeRecordingEditorCancel?
     weak var observedSourceCancel: NativeRecordingEditorCancel?
@@ -4226,6 +4456,7 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     private var pendingEstimate: ((Result<RecordingEditorEstimate, Error>) -> Void)?
     private var pendingComparison: ((Result<RecordingEditorComparison, Error>) -> Void)?
     private var pendingSave: ((Result<RecordingEditorSaveResult, Error>) -> Void)?
+    private var pendingReplace: ((Result<RecordingReplaceResult, Error>) -> Void)?
     private var pendingThumbnails: ((Result<CGImage, Error>) -> Void)?
     private var pendingSource: ((Result<RecordingSourceImage, Error>) -> Void)?
     private var pendingPlaybackStarted: ((RecordingPlaybackMetadata) -> Void)?
@@ -4333,6 +4564,16 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     }
     func completeSave(_ result: Result<RecordingEditorSaveResult, Error>) {
         let completion = pendingSave; pendingSave = nil; completion?(result)
+    }
+    func replaceOriginal(cancel: NativeRecordingEditorCancel,
+                         progress: @escaping (RecordingEditorProgress) -> Void,
+                         completion: @escaping (Result<RecordingReplaceResult, Error>) -> Void) {
+        replaceCalls += 1; observedReplaceCancel = cancel
+        if deferReplace { pendingReplace = completion }
+        else { completion(replaceResult) }
+    }
+    func completeReplace(_ result: Result<RecordingReplaceResult, Error>) {
+        let completion = pendingReplace; pendingReplace = nil; completion?(result)
     }
     func close() { closeCount += 1 }
 }
