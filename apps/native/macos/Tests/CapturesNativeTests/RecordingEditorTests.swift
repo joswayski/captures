@@ -120,16 +120,19 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(seek.doubleValue, 389)
 
         loop.performClick(nil); play.performClick(nil)
+        XCTAssertEqual(worker.playbackStarts.last, 211,
+                       "Play after completed EOF restarts at the accepted trim start")
         worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 1_500,
             image: try solidImage(red: 200, green: 30, blue: 40)))
         worker.completePlayback(.success(.eof))
-        XCTAssertEqual(Array(worker.playbackStarts.suffix(2)), [389, 211])
+        XCTAssertEqual(Array(worker.playbackStarts.suffix(2)), [211, 211],
+                       "the next nonempty lap reopens at the same accepted trim start")
         play.performClick(nil)
         XCTAssertEqual(play.title, "Pausing…")
         XCTAssertFalse(loop.isEnabled, "Loop cannot change while decoder cancellation is pending")
         worker.completePlayback(.success(.eof))
         XCTAssertEqual(play.title, "Play")
-        XCTAssertEqual(Array(worker.playbackStarts.suffix(2)), [389, 211],
+        XCTAssertEqual(Array(worker.playbackStarts.suffix(2)), [211, 211],
                        "Pause at a wrap never restarts playback")
         XCTAssertEqual(loop.state, .on, "Pause retains the item-local Loop preference")
     }
@@ -1557,9 +1560,10 @@ final class RecordingEditorTests: XCTestCase {
         let loop = RecordingPlaybackLoopControl(enabled: true)
         let loopCancel = try XCTUnwrap(NativeRecordingEditorCancel())
         var firstPositions: [UInt64] = []
+        var firstStartedCount = 0
         var firstResult: Result<RecordingPlaybackCompletion, Error>?
         worker.playback(positionMilliseconds: 701, loopStartMilliseconds: 233,
-            loop: loop, cancel: loopCancel, started: { _ in }, frame: { value in
+            loop: loop, cancel: loopCancel, started: { _ in firstStartedCount += 1 }, frame: { value in
                 if let previous = firstPositions.last, value.positionMilliseconds < previous {
                     loop.isEnabled = false
                 }
@@ -1569,6 +1573,10 @@ final class RecordingEditorTests: XCTestCase {
             })
         wait(for: [finishLoop], timeout: 10)
         XCTAssertEqual(try XCTUnwrap(firstResult).get(), .eof)
+        XCTAssertEqual(firstStartedCount, 1,
+                       "loop laps reuse one playback operation without queued metadata callbacks")
+        XCTAssertTrue(firstPositions.allSatisfy { (233..<977).contains($0) },
+                      "all presented positions remain inside the accepted half-open trim")
         XCTAssertTrue(zip(firstPositions, firstPositions.dropFirst()).contains { pair in
             pair.0 > pair.1
         },
@@ -1591,6 +1599,7 @@ final class RecordingEditorTests: XCTestCase {
             })
         wait(for: [cancelLoop], timeout: 10)
         XCTAssertEqual(try XCTUnwrap(secondResult).get(), .cancelled)
+        XCTAssertTrue(secondPositions.allSatisfy { (233..<977).contains($0) })
         XCTAssertTrue(zip(secondPositions, secondPositions.dropFirst()).contains { pair in
             pair.0 > pair.1
         })

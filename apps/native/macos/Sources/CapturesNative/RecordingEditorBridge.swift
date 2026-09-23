@@ -605,11 +605,15 @@ final class RecordingEditorWorker: RecordingEditorWorking {
                 guard let session = storage.session else {
                     throw AppBridgeError.backend("The recording editor is closed.")
                 }
+                var didStart = false
                 func runLap(from position: UInt64) throws -> Int {
                     let playback = try session.playback(positionMilliseconds: position,
                                                         cancel: cancel)
-                    let metadata = playback.metadata
-                    DispatchQueue.main.async { started(metadata) }
+                    if !didStart {
+                        didStart = true
+                        let metadata = playback.metadata
+                        DispatchQueue.main.async { started(metadata) }
+                    }
                     var frameCount = 0
                     while let value = try playback.nextFrame() {
                         frameCount += 1; delivery.offer(value)
