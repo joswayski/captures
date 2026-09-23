@@ -242,7 +242,7 @@ width and height independently. Apply edits accepts the format, quality and edit
 together before saving; failed updates leave the last accepted frame intact.
 The shared recording editor now also supports same-format replacement of an
 existing permanent MP4/GIF when History retains identical recovery media. Native
-AppKit's **Replace original…** separately confirms the exact saved path, then
+AppKit's **Replace original…** separately confirms the opened session's saved path, then
 updates that file and its History item. It is unavailable for recovery-only or
 reference-only recordings, staged edits, or a different output format. Failure
 before publication retains the accepted edit; an uncertain result requires closing
