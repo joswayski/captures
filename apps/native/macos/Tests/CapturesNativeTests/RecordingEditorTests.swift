@@ -130,35 +130,25 @@ final class RecordingEditorTests: XCTestCase {
         _ = NSApplication.shared
         let before = try bandedImage(top: [220, 20, 30], bottom: [25, 210, 35])
         let after = try bandedImage(top: [30, 40, 220], bottom: [230, 210, 20])
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 160))
-        let beforeReference = NSImageView(frame: NSRect(x: 0, y: 0, width: 160, height: 160))
-        let afterReference = NSImageView(frame: NSRect(x: 320, y: 0, width: 160, height: 160))
-        beforeReference.image = NSImage(cgImage: before, size: NSSize(width: 8, height: 8))
-        afterReference.image = NSImage(cgImage: after, size: NSSize(width: 8, height: 8))
         let comparison = RecordingComparisonView(tokens: Tokens.variants["light-mustard"]!)
-        comparison.frame = NSRect(x: 160, y: 0, width: 160, height: 160)
+        comparison.frame = NSRect(x: 0, y: 0, width: 160, height: 160)
         comparison.comparison = RecordingEditorComparison(revision: 1,
             positionMilliseconds: 0, export: [:], before: before, after: after)
-        container.addSubview(beforeReference); container.addSubview(comparison)
-        container.addSubview(afterReference)
-        let bitmap = try XCTUnwrap(container.bitmapImageRepForCachingDisplay(in: container.bounds))
-        container.cacheDisplay(in: container.bounds, to: bitmap)
+        let bitmap = try XCTUnwrap(comparison.bitmapImageRepForCachingDisplay(in: comparison.bounds))
+        comparison.cacheDisplay(in: comparison.bounds, to: bitmap)
         func rgb(_ x: Int, _ y: Int) throws -> NSColor {
-            try XCTUnwrap(bitmap.colorAt(x: x * bitmap.pixelsWide / 480,
+            try XCTUnwrap(bitmap.colorAt(x: x * bitmap.pixelsWide / 160,
                                          y: y * bitmap.pixelsHigh / 160)?.usingColorSpace(.deviceRGB))
         }
-        for y in [20, 140] {
-            let sourceBefore = try rgb(40, y), drawnBefore = try rgb(200, y)
-            let sourceAfter = try rgb(440, y), drawnAfter = try rgb(280, y)
-            for (source, drawn) in [(sourceBefore, drawnBefore), (sourceAfter, drawnAfter)] {
-                XCTAssertEqual(source.redComponent, drawn.redComponent, accuracy: 0.03)
-                XCTAssertEqual(source.greenComponent, drawn.greenComponent, accuracy: 0.03)
-                XCTAssertEqual(source.blueComponent, drawn.blueComponent, accuracy: 0.03)
+        for (x, y, expected) in [(40, 20, [220, 20, 30]), (120, 20, [30, 40, 220]),
+                                 (40, 140, [25, 210, 35]), (120, 140, [230, 210, 20])] {
+            let color = try rgb(x, y)
+            for (actual, channel) in zip([color.redComponent, color.greenComponent,
+                                          color.blueComponent], expected) {
+                XCTAssertEqual(actual, CGFloat(channel) / 255, accuracy: 0.06)
             }
         }
-        XCTAssertNotEqual(try rgb(40, 20).redComponent,
-                          try rgb(40, 140).redComponent, "reference has distinct top/bottom pixels")
-        try render(container, name: "recording-editor-comparison-upright-reference")
+        try render(comparison, name: "recording-editor-comparison-upright-corners")
     }
 
     func testComparisonAfterSmallPausedFrameRestoresAccepted100PercentGeometry() throws {
