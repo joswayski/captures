@@ -102,7 +102,7 @@ impl RecordingPlaybackFrame {
     }
 }
 
-/// Silent, clock-paced playback of the accepted edit and preview export.
+/// Clock-paced playback of the accepted edit and preview export.
 pub struct RecordingPlayback {
     inner: MediaPlayback,
 }
@@ -126,6 +126,11 @@ impl RecordingPlayback {
     #[must_use]
     pub fn start_position_ms(&self) -> u64 {
         self.inner.start_position_ms()
+    }
+
+    #[must_use]
+    pub fn audio_enabled(&self) -> bool {
+        self.inner.audio_enabled()
     }
 
     pub fn next_frame(&mut self) -> Result<Option<RecordingPlaybackFrame>, String> {
@@ -283,6 +288,29 @@ impl RecordingEditorSession {
         validate_preview_export(&self.preview_export)?;
         self.tools
             .playback(
+                &self.source_path,
+                &self.probe,
+                &self.edit,
+                &self.preview_export,
+                position_ms,
+                cancel,
+            )
+            .map(|inner| RecordingPlayback { inner })
+            .map_err(|error| error.to_string())
+    }
+
+    /// Start playback with accepted audio when it has an audible source. GIF,
+    /// audio-less, muted, and zero-gain edits remain silent without opening an
+    /// output device.
+    pub fn playback_with_audio(
+        &self,
+        position_ms: u64,
+        cancel: &CancelToken,
+    ) -> Result<RecordingPlayback, String> {
+        validate_session_edit(&self.probe, &self.edit)?;
+        validate_preview_export(&self.preview_export)?;
+        self.tools
+            .playback_with_audio(
                 &self.source_path,
                 &self.probe,
                 &self.edit,

@@ -18,6 +18,7 @@ use serde::Deserialize;
 use std::os::windows::process::CommandExt;
 use thiserror::Error;
 
+use crate::playback_audio::{AudioProducerControl, PreparedAudioOutput, read_audio_samples};
 use crate::{
     EditSpec, ExportEstimate, ExportFormat, ExportProgress, ExportSpec, ExportStage, MediaKind,
     MediaMetadata, QualityPreset, SizeBudgetError, calculate_size_budget, estimate_sample_windows,
@@ -59,7 +60,7 @@ impl MediaPlaybackFrame {
 
 struct BufferedPlaybackFrame {
     frame: MediaPlaybackFrame,
-    present_at: Instant,
+    present_at: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -100,7 +101,16 @@ pub struct MediaPlayback {
     child: Option<Child>,
     reader: Option<thread::JoinHandle<()>>,
     stderr_reader: Option<thread::JoinHandle<io::Result<Vec<u8>>>>,
+    audio: Option<MediaPlaybackAudio>,
     terminal: Option<PlaybackTerminal>,
+    closed: bool,
+}
+
+struct MediaPlaybackAudio {
+    output: PreparedAudioOutput,
+    child: Option<Child>,
+    reader: Option<thread::JoinHandle<()>>,
+    stderr_reader: Option<thread::JoinHandle<io::Result<Vec<u8>>>>,
     closed: bool,
 }
 
@@ -125,6 +135,11 @@ impl MediaPlayback {
         self.start_position_ms
     }
 
+    #[must_use]
+    pub const fn audio_enabled(&self) -> bool {
+        self.audio.is_some()
+    }
+
     /// Return the next clock-paced frame, or `None` after the exclusive trim
     /// end. A lagging consumer skips stale pending frames instead of building a
     /// queue.
@@ -142,17 +157,57 @@ impl MediaPlayback {
             let mut state = self.shared.state.lock().map_err(|_| {
                 MediaToolError::Process("playback frame buffer was poisoned".to_owned())
             })?;
+            if let Some(audio) = self.audio.as_mut() {
+                let ready = audio
+                    .check_error()
+                    .and_then(|()| audio.output.start_if_ready(state.frame.is_some()));
+                let ready = match ready {
+                    Ok(ready) => ready,
+                    Err(error) => {
+                        drop(state);
+                        let _ = self.finish(true);
+                        let error = error.to_string();
+                        self.terminal = Some(PlaybackTerminal::Error(error.clone()));
+                        return Err(MediaToolError::Process(error));
+                    }
+                };
+                if state.frame.is_some() && !ready {
+                    drop(
+                        self.shared
+                            .changed
+                            .wait_timeout(state, PLAYBACK_POLL_INTERVAL)
+                            .map_err(|_| {
+                                MediaToolError::Process(
+                                    "playback frame buffer was poisoned".to_owned(),
+                                )
+                            })?,
+                    );
+                    continue;
+                }
+            }
             if let Some(frame) = state.frame.as_ref() {
-                let now = Instant::now();
-                if now >= frame.present_at {
+                let due = if let Some(audio) = self.audio.as_ref() {
+                    audio
+                        .output
+                        .position_ms(self.start_position_ms)
+                        .is_some_and(|position| position >= frame.frame.position_ms)
+                } else {
+                    frame
+                        .present_at
+                        .is_some_and(|present_at| Instant::now() >= present_at)
+                };
+                if due {
                     let frame = state.frame.take().expect("checked pending playback frame");
                     self.shared.changed.notify_all();
                     return Ok(Some(frame.frame));
                 }
                 let wait = frame
                     .present_at
-                    .saturating_duration_since(now)
-                    .min(PLAYBACK_POLL_INTERVAL);
+                    .map_or(PLAYBACK_POLL_INTERVAL, |present_at| {
+                        present_at
+                            .saturating_duration_since(Instant::now())
+                            .min(PLAYBACK_POLL_INTERVAL)
+                    });
                 drop(self.shared.changed.wait_timeout(state, wait).map_err(|_| {
                     MediaToolError::Process("playback frame buffer was poisoned".to_owned())
                 })?);
@@ -160,6 +215,23 @@ impl MediaPlayback {
             }
 
             if let Some(end) = state.end.clone() {
+                if self
+                    .audio
+                    .as_ref()
+                    .is_some_and(|audio| !audio.output.drained())
+                {
+                    drop(
+                        self.shared
+                            .changed
+                            .wait_timeout(state, PLAYBACK_POLL_INTERVAL)
+                            .map_err(|_| {
+                                MediaToolError::Process(
+                                    "playback frame buffer was poisoned".to_owned(),
+                                )
+                            })?,
+                    );
+                    continue;
+                }
                 drop(state);
                 return match end {
                     PlaybackReaderEnd::Eof => match self.finish(false) {
@@ -204,6 +276,11 @@ impl MediaPlayback {
         self.shared.changed.notify_all();
 
         let mut result = Ok(());
+        if let Some(audio) = self.audio.as_mut()
+            && let Err(error) = audio.finish(kill, &self.cancel)
+        {
+            result = Err(error);
+        }
         let status = if let Some(mut child) = self.child.take() {
             if kill {
                 let _ = child.kill();
@@ -262,6 +339,93 @@ impl MediaPlayback {
             result = complete_child(status, &stderr);
         }
         result
+    }
+}
+
+impl MediaPlaybackAudio {
+    fn check_error(&mut self) -> Result<(), MediaToolError> {
+        self.output.check_error()?;
+        if let Some(child) = self.child.as_mut()
+            && let Some(status) = child.try_wait()?
+            && !status.success()
+        {
+            return Err(MediaToolError::Process(
+                "audio media decoder exited before playback completed".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self, kill: bool, cancel: &CancelToken) -> Result<(), MediaToolError> {
+        if self.closed {
+            return Ok(());
+        }
+        self.output.stop();
+        let mut result = Ok(());
+        let status = if let Some(mut child) = self.child.take() {
+            if kill {
+                let _ = child.kill();
+            }
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Some(status),
+                    Ok(None) if !kill && cancel.is_cancelled() => {
+                        let _ = child.kill();
+                        result = Err(MediaToolError::Cancelled);
+                    }
+                    Ok(None) => thread::sleep(PLAYBACK_POLL_INTERVAL),
+                    Err(error) => {
+                        result = Err(MediaToolError::Io(error));
+                        let _ = child.kill();
+                        break child.wait().ok();
+                    }
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(reader) = self.reader.take()
+            && reader.join().is_err()
+            && result.is_ok()
+        {
+            result = Err(MediaToolError::Process(
+                "audio playback reader panicked".to_owned(),
+            ));
+        }
+        let stderr = match self.stderr_reader.take() {
+            None => Vec::new(),
+            Some(reader) => match reader.join() {
+                Ok(Ok(stderr)) => stderr,
+                Ok(Err(error)) => {
+                    if result.is_ok() {
+                        result = Err(MediaToolError::Io(error));
+                    }
+                    Vec::new()
+                }
+                Err(_) => {
+                    if result.is_ok() {
+                        result = Err(MediaToolError::Process(
+                            "audio media tool error reader panicked".to_owned(),
+                        ));
+                    }
+                    Vec::new()
+                }
+            },
+        };
+        self.closed = true;
+        if !kill
+            && result.is_ok()
+            && let Some(status) = status
+        {
+            result = complete_child(status, &stderr);
+        }
+        result
+    }
+}
+
+impl Drop for MediaPlaybackAudio {
+    fn drop(&mut self) {
+        let _ = self.finish(true, &CancelToken::default());
     }
 }
 
@@ -820,6 +984,35 @@ impl MediaToolchain {
         position_ms: u64,
         cancel: &CancelToken,
     ) -> Result<MediaPlayback, MediaToolError> {
+        self.playback_inner(input, probe, edit, spec, position_ms, cancel, false)
+    }
+
+    /// Start persistent raw-RGBA and PCM decoders for accepted video and audio
+    /// edits. Media without audible accepted audio retains video-only playback
+    /// and reports [`MediaPlayback::audio_enabled`] as false.
+    pub fn playback_with_audio(
+        &self,
+        input: &Path,
+        probe: &ProbeResult,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        position_ms: u64,
+        cancel: &CancelToken,
+    ) -> Result<MediaPlayback, MediaToolError> {
+        self.playback_inner(input, probe, edit, spec, position_ms, cancel, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn playback_inner(
+        &self,
+        input: &Path,
+        probe: &ProbeResult,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        position_ms: u64,
+        cancel: &CancelToken,
+        request_audio: bool,
+    ) -> Result<MediaPlayback, MediaToolError> {
         if cancel.is_cancelled() {
             return Err(MediaToolError::Cancelled);
         }
@@ -849,6 +1042,19 @@ impl MediaToolchain {
                 position_ms
             };
         let playback_duration_ms = end_position_ms.saturating_sub(start_position_ms);
+        let audible = request_audio && accepted_audio_is_audible(edit, attempt);
+        let audio_filter = audible.then(|| audio_filter(edit, attempt)).transpose()?;
+        let mut audio = if let Some(audio_filter) = audio_filter {
+            Some(self.start_playback_audio(
+                input,
+                &audio_filter,
+                start_position_ms,
+                playback_duration_ms,
+                cancel,
+            )?)
+        } else {
+            None
+        };
         let frame_size = usize::try_from(width)
             .ok()
             .and_then(|width| {
@@ -875,9 +1081,13 @@ impl MediaToolchain {
             .stderr(Stdio::piped());
         #[cfg(target_os = "windows")]
         command.creation_flags(0x0800_0000);
-        let mut child = command
-            .spawn()
-            .map_err(|error| map_spawn_error(error, "FFmpeg"))?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                drop(audio.take());
+                return Err(map_spawn_error(error, "FFmpeg"));
+            }
+        };
         let Some(stdout) = child.stdout.take() else {
             let _ = child.kill();
             let _ = child.wait();
@@ -898,6 +1108,7 @@ impl MediaToolchain {
         let shared = Arc::new(PlaybackShared::default());
         let reader_shared = shared.clone();
         let reader_cancel = cancel.clone();
+        let audio_clock = audio.as_ref().map(|audio| audio.output.producer_control());
         let reader = thread::spawn(move || {
             read_playback_frames(
                 stdout,
@@ -905,6 +1116,7 @@ impl MediaToolchain {
                 frames_per_second,
                 start_position_ms,
                 end_position_ms,
+                audio_clock,
                 &reader_cancel,
                 &reader_shared,
             );
@@ -919,7 +1131,78 @@ impl MediaToolchain {
             child: Some(child),
             reader: Some(reader),
             stderr_reader: Some(stderr_reader),
+            audio,
             terminal: None,
+            closed: false,
+        })
+    }
+
+    fn start_playback_audio(
+        &self,
+        input: &Path,
+        accepted_filter: &str,
+        start_position_ms: u64,
+        playback_duration_ms: u64,
+        cancel: &CancelToken,
+    ) -> Result<MediaPlaybackAudio, MediaToolError> {
+        let mut output = PreparedAudioOutput::prepare(cancel)?;
+        let format = output.format();
+        let producer = output.take_producer()?;
+        let filter = playback_audio_filter(accepted_filter, playback_duration_ms);
+        let mut command = Command::new(&self.ffmpeg);
+        command.args(["-hide_banner", "-loglevel", "error"]);
+        if start_position_ms > 0 {
+            command.args(["-ss", &seconds(start_position_ms)]);
+        }
+        command
+            .arg("-i")
+            .arg(input)
+            .args(["-t", &seconds(playback_duration_ms)])
+            .args(["-filter_complex", &filter, "-map", "[playback_audio]"])
+            .args(["-vn", "-c:a", "pcm_f32le", "-f", "f32le"])
+            .args(["-ar", &format.sample_rate.to_string()])
+            .args(["-ac", &format.channels.to_string()])
+            .arg("pipe:1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x0800_0000);
+        let mut child = command
+            .spawn()
+            .map_err(|error| map_spawn_error(error, "FFmpeg"))?;
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(MediaToolError::Process(
+                "failed to read decoded playback audio".to_owned(),
+            ));
+        };
+        let Some(mut stderr) = child.stderr.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(MediaToolError::Process(
+                "failed to capture audio media tool errors".to_owned(),
+            ));
+        };
+        let stderr_reader = thread::spawn(move || {
+            read_bounded_diagnostics(&mut stderr, PLAYBACK_MAX_DIAGNOSTIC_BYTES)
+        });
+        let producer_control = output.producer_control();
+        let reader_control = producer_control.clone();
+        let reader_cancel = cancel.clone();
+        let reader = thread::spawn(move || {
+            if let Err(error) =
+                read_audio_samples(stdout, producer, &reader_control, &reader_cancel)
+            {
+                reader_control.fail(format!("failed to decode playback audio: {error}"));
+            }
+        });
+        Ok(MediaPlaybackAudio {
+            output,
+            child: Some(child),
+            reader: Some(reader),
+            stderr_reader: Some(stderr_reader),
             closed: false,
         })
     }
@@ -1477,6 +1760,23 @@ struct AttemptAudio {
     system_audio: bool,
     microphone_audio: bool,
     stream_count: usize,
+}
+
+fn accepted_audio_is_audible(edit: &EditSpec, attempt: &VideoAttempt) -> bool {
+    attempt.has_audio
+        && ((attempt.system_audio
+            && !edit.audio.mute_system_audio
+            && edit.audio.system_volume.clamp(0.0, 2.0) > 0.0)
+            || (attempt.microphone_audio
+                && !edit.audio.mute_microphone
+                && edit.audio.microphone_volume.clamp(0.0, 2.0) > 0.0))
+}
+
+fn playback_audio_filter(accepted_filter: &str, playback_duration_ms: u64) -> String {
+    format!(
+        "{accepted_filter};[audio_out]apad,atrim=duration={},asetpts=N/SR/TB[playback_audio]",
+        seconds(playback_duration_ms)
+    )
 }
 
 fn export_attempts(
@@ -2136,6 +2436,7 @@ fn read_playback_frames(
     frames_per_second: u16,
     start_position_ms: u64,
     end_position_ms: u64,
+    audio_clock: Option<AudioProducerControl>,
     cancel: &CancelToken,
     shared: &PlaybackShared,
 ) {
@@ -2168,10 +2469,12 @@ fn read_playback_frames(
         if position_ms >= end_position_ms {
             continue;
         }
-        let clock = *clock.get_or_insert_with(Instant::now);
-        let present_at = clock
-            .checked_add(Duration::from_millis(elapsed_ms))
-            .unwrap_or(clock);
+        let present_at = audio_clock.is_none().then(|| {
+            let clock = *clock.get_or_insert_with(Instant::now);
+            clock
+                .checked_add(Duration::from_millis(elapsed_ms))
+                .unwrap_or(clock)
+        });
         let mut pending = Some(BufferedPlaybackFrame {
             frame: MediaPlaybackFrame {
                 position_ms,
@@ -2186,14 +2489,23 @@ fn read_playback_frames(
             if cancel.is_cancelled() || shared.stop.load(Ordering::Acquire) {
                 return;
             }
-            if Instant::now() >= present_at {
+            let stale = if let Some(audio_clock) = audio_clock.as_ref() {
+                audio_clock
+                    .position_ms(start_position_ms)
+                    .is_some_and(|position| position >= position_ms)
+            } else {
+                present_at.is_some_and(|present_at| Instant::now() >= present_at)
+            };
+            if stale {
                 state.frame = pending.take();
                 shared.changed.notify_all();
                 break;
             }
-            let wait = present_at
-                .saturating_duration_since(Instant::now())
-                .min(PLAYBACK_POLL_INTERVAL);
+            let wait = present_at.map_or(PLAYBACK_POLL_INTERVAL, |present_at| {
+                present_at
+                    .saturating_duration_since(Instant::now())
+                    .min(PLAYBACK_POLL_INTERVAL)
+            });
             let Ok((next, _)) = shared.changed.wait_timeout(state, wait) else {
                 return;
             };
@@ -2360,12 +2672,12 @@ mod tests {
     };
     use super::{
         CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt,
-        aac_centered_stereo_layout_filter, aac_output_layout_filter, audio_edit_is_identity,
-        audio_filter, commit_temporary, escape_concat_path, export_attempts,
-        export_preserves_source_bytes, fit_even, fit_playback_dimensions, gif_export_filter,
-        gif_filter, preview_dimensions, preview_video_filter, read_bounded_diagnostics,
-        read_complete_frame, recording_segment_audio_graph, seconds, validate_edit_spec,
-        visual_edit_is_identity,
+        aac_centered_stereo_layout_filter, aac_output_layout_filter, accepted_audio_is_audible,
+        audio_edit_is_identity, audio_filter, commit_temporary, escape_concat_path,
+        export_attempts, export_preserves_source_bytes, fit_even, fit_playback_dimensions,
+        gif_export_filter, gif_filter, playback_audio_filter, preview_dimensions,
+        preview_video_filter, read_bounded_diagnostics, read_complete_frame,
+        recording_segment_audio_graph, seconds, validate_edit_spec, visual_edit_is_identity,
     };
     use crate::{
         AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaMetadata,
@@ -2426,6 +2738,43 @@ mod tests {
             "automatic GIF playback keeps FFmpeg -2 rounding"
         );
         assert_eq!(fit_playback_dimensions(4_000, 600), (1_280, 192));
+    }
+
+    #[test]
+    fn audible_playback_requires_a_positive_accepted_track() {
+        let mut edit = EditSpec {
+            audio: AudioEdit {
+                source_has_system_audio: true,
+                source_has_microphone_audio: true,
+                ..AudioEdit::default()
+            },
+            ..EditSpec::default()
+        };
+        let attempt = export_attempts(
+            &probe(),
+            &edit,
+            &ExportSpec {
+                format: ExportFormat::Mp4,
+                quality: QualityPreset::Preserve,
+                max_size_bytes: None,
+                frames_per_second: None,
+                gif_max_colors: None,
+            },
+        )
+        .unwrap()
+        .remove(0);
+        assert!(accepted_audio_is_audible(&edit, &attempt));
+        edit.audio.system_volume = 0.0;
+        edit.audio.microphone_volume = -1.0;
+        assert!(!accepted_audio_is_audible(&edit, &attempt));
+        edit.audio.microphone_volume = 0.25;
+        assert!(accepted_audio_is_audible(&edit, &attempt));
+        edit.audio.mute_microphone = true;
+        assert!(!accepted_audio_is_audible(&edit, &attempt));
+
+        let mut gif_attempt = attempt;
+        gif_attempt.has_audio = false;
+        assert!(!accepted_audio_is_audible(&edit, &gif_attempt));
     }
 
     #[test]
@@ -2608,11 +2957,37 @@ mod tests {
         };
         let cancel = CancelToken::default();
         cancel.cancel();
-        let result = MediaToolchain::new(executable, "unused".into()).playback(
+        let tools = MediaToolchain::new(executable, "unused".into());
+        let result = tools.playback(
             &directory.path().join("source.mp4"),
             &probe,
             &EditSpec {
                 trim_end_ms: Some(100),
+                ..EditSpec::default()
+            },
+            &ExportSpec {
+                format: ExportFormat::Mp4,
+                quality: QualityPreset::Preserve,
+                max_size_bytes: None,
+                frames_per_second: None,
+                gif_max_colors: None,
+            },
+            0,
+            &cancel,
+        );
+        assert!(matches!(result, Err(super::MediaToolError::Cancelled)));
+        let mut audible_probe = probe;
+        audible_probe.has_audio = true;
+        audible_probe.audio_stream_count = 1;
+        let result = tools.playback_with_audio(
+            &directory.path().join("source.mp4"),
+            &audible_probe,
+            &EditSpec {
+                trim_end_ms: Some(100),
+                audio: AudioEdit {
+                    source_has_system_audio: true,
+                    ..AudioEdit::default()
+                },
                 ..EditSpec::default()
             },
             &ExportSpec {
@@ -3484,6 +3859,233 @@ mod tests {
             .status()
             .expect("bundled FFmpeg starts");
         assert!(status.success(), "test recording segment generated");
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn playback_pcm_uses_accepted_gain_mono_trim_and_frequency() {
+        let Some((toolchain, ffmpeg, _ffprobe)) = cross_platform_toolchain() else {
+            return;
+        };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("audio-source.mp4");
+        let status = std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=black:size=32x24:rate=10:duration=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=1",
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-c:v",
+                "mpeg4",
+                "-c:a",
+                "aac",
+                "-shortest",
+            ])
+            .arg(&source)
+            .status()
+            .expect("FFmpeg starts");
+        assert!(status.success());
+
+        let probe = toolchain.probe(&source).expect("probe audio source");
+        let edit = EditSpec {
+            trim_start_ms: 250,
+            trim_end_ms: Some(750),
+            audio: AudioEdit {
+                source_has_system_audio: true,
+                system_volume: 0.5,
+                mono_output: true,
+                ..AudioEdit::default()
+            },
+            ..EditSpec::default()
+        };
+        let spec = ExportSpec {
+            format: ExportFormat::Mp4,
+            quality: QualityPreset::Preserve,
+            max_size_bytes: None,
+            frames_per_second: None,
+            gif_max_colors: None,
+        };
+        let attempt = export_attempts(&probe, &edit, &spec).unwrap().remove(0);
+        let accepted = audio_filter(&edit, &attempt).expect("accepted audio filter");
+        let filter = playback_audio_filter(&accepted, 500);
+        let output = std::process::Command::new(&ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-ss", "0.250"])
+            .arg("-i")
+            .arg(&source)
+            .args([
+                "-t",
+                "0.500",
+                "-filter_complex",
+                &filter,
+                "-map",
+                "[playback_audio]",
+                "-vn",
+                "-c:a",
+                "pcm_f32le",
+                "-f",
+                "f32le",
+                "-ar",
+                "48000",
+                "-ac",
+                "1",
+                "pipe:1",
+            ])
+            .output()
+            .expect("decode playback PCM");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let samples = output
+            .stdout
+            .chunks_exact(4)
+            .map(|sample| f32::from_le_bytes(sample.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(samples.len(), 24_000, "500ms of mono 48kHz PCM");
+        let rms = (samples.iter().map(|sample| sample * sample).sum::<f32>()
+            / samples.len() as f32)
+            .sqrt();
+        assert!(
+            (0.035..0.055).contains(&rms),
+            "accepted 0.5 gain RMS: {rms}"
+        );
+        let positive_crossings = samples
+            .windows(2)
+            .filter(|pair| pair[0] <= 0.0 && pair[1] > 0.0)
+            .count();
+        assert!(
+            (215..=225).contains(&positive_crossings),
+            "440Hz retained across 500ms: {positive_crossings} crossings"
+        );
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn playback_pcm_preserves_delayed_audio_and_pads_through_video_end() {
+        let Some((toolchain, ffmpeg, _ffprobe)) = cross_platform_toolchain() else {
+            return;
+        };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("delayed-short-audio.mp4");
+        let status = std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=black:size=32x24:rate=10:duration=1",
+                "-itsoffset",
+                "0.2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=0.4",
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-c:v",
+                "mpeg4",
+                "-c:a",
+                "aac",
+            ])
+            .arg(&source)
+            .status()
+            .expect("FFmpeg starts");
+        assert!(status.success());
+
+        let probe = toolchain
+            .probe(&source)
+            .expect("probe delayed audio source");
+        let edit = EditSpec {
+            trim_start_ms: 100,
+            trim_end_ms: Some(900),
+            audio: AudioEdit {
+                source_has_system_audio: true,
+                mono_output: true,
+                ..AudioEdit::default()
+            },
+            ..EditSpec::default()
+        };
+        let spec = ExportSpec {
+            format: ExportFormat::Mp4,
+            quality: QualityPreset::Preserve,
+            max_size_bytes: None,
+            frames_per_second: None,
+            gif_max_colors: None,
+        };
+        let attempt = export_attempts(&probe, &edit, &spec).unwrap().remove(0);
+        let filter = playback_audio_filter(
+            &audio_filter(&edit, &attempt).expect("accepted audio filter"),
+            800,
+        );
+        let output = std::process::Command::new(&ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-ss", "0.100"])
+            .arg("-i")
+            .arg(&source)
+            .args([
+                "-t",
+                "0.800",
+                "-filter_complex",
+                &filter,
+                "-map",
+                "[playback_audio]",
+                "-vn",
+                "-c:a",
+                "pcm_f32le",
+                "-f",
+                "f32le",
+                "-ar",
+                "48000",
+                "-ac",
+                "1",
+                "pipe:1",
+            ])
+            .output()
+            .expect("decode delayed playback PCM");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let samples = output
+            .stdout
+            .chunks_exact(4)
+            .map(|sample| f32::from_le_bytes(sample.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(samples.len(), 38_400, "audio clock spans the 800ms trim");
+        let window_rms = |start_ms: usize, end_ms: usize| {
+            let window = &samples[start_ms * 48..end_ms * 48];
+            (window.iter().map(|sample| sample * sample).sum::<f32>() / window.len() as f32).sqrt()
+        };
+        assert!(
+            window_rms(0, 80) < 0.02,
+            "source-relative delay is retained before the tone"
+        );
+        assert!(
+            window_rms(150, 450) > 0.07,
+            "the asymmetric tone occupies its source-relative interval"
+        );
+        assert!(
+            window_rms(600, 800) < 0.001,
+            "clean audio EOF is padded with clock-advancing silence"
+        );
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
