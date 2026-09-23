@@ -607,9 +607,20 @@ the UI is not a visual match; physical audio playback acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted
 frame, and unapplied values gate scrubbing/export. Failed edits keep
 the staged values available for correction. MP4/GIF Save new copy uses
-shared encoding, reports progress and accepts independent cancellation. Existing
-files and the original History artifact are never replaced. Post-publication
+shared encoding, reports progress and accepts independent cancellation. It never
+replaces an existing file or the original History artifact. Post-publication
 History failure reports the successfully saved path rather than inviting re-export.
+AppKit additionally confirms **Replace original…** with the exact permanent MP4/GIF
+path. Saved-path/format UI hints are not eligibility proofs: shared Rust verifies
+matching regular permanent and private recovery files and source identity. The
+serialized worker reports progress and accepts cancellation during preparation;
+success may still follow a late cancellation once publication begins. Success
+rebases the accepted position/edit/export, clears source-dependent frames, comparison,
+estimate and thumbnails, regenerates thumbnails, and reloads the existing History
+item. An ordinary failure preserves the accepted state for retry; a
+`requires_reopen` failure disables media until close/reopen. No recording drafts,
+undo, or cross-directory crash-atomicity are promised. Windows/Linux host UI
+integration and physical acceptance remain open.
 Close blocks accepted work; unsaved edits require explicit discard, and normal quit
 is refused until they are saved or closed. Recording drafts are not implemented.
 

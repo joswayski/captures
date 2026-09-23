@@ -709,7 +709,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let worker: RecordingEditorWorking
     private let reportError: (String) -> Void
     private let didSaveCopy: () -> Void
+    private let didReplaceOriginal: (String) -> Void
     private let confirmDiscard: () -> Bool
+    private let confirmReplaceOriginal: (NSWindow, String, @escaping (Bool) -> Void) -> Void
     private let requestTermination: () -> Void
     private var tokens: Tokens
     private var generation = 0
@@ -719,6 +721,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var savedExport: Data?
     private var busy = false
     private var pickerOpen = false
+    private var awaitingReplaceConfirmation = false
+    private var originalPath: String?
+    private var requiresReopen = false
     private var activeCancel: NativeRecordingEditorCancel?
     private var thumbnailCancel: NativeRecordingEditorCancel?
     private var thumbnailRetryAvailable = false
@@ -813,6 +818,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var applyButton: CaptureButton!
     private var estimateButton: CaptureButton!
     private var saveButton: CaptureButton!
+    private var replaceButton: CaptureButton!
+    private let replaceHelp = NSTextField(labelWithString: "")
     private var cancelButton: CaptureButton!
     private var changeButton: CaptureButton!
     private var thumbnailRetryButton: CaptureButton!
@@ -826,11 +833,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     init(tokens: Tokens, worker: RecordingEditorWorking = RecordingEditorWorker(),
          reportError: @escaping (String) -> Void = { _ in },
          didSaveCopy: @escaping () -> Void = {},
+         didReplaceOriginal: @escaping (String) -> Void = { _ in },
          confirmDiscard: (() -> Bool)? = nil,
+         confirmReplaceOriginal: ((NSWindow, String, @escaping (Bool) -> Void) -> Void)? = nil,
          requestTermination: @escaping () -> Void = { NSApp.terminate(nil) }) {
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
-        self.didSaveCopy = didSaveCopy
+        self.didSaveCopy = didSaveCopy; self.didReplaceOriginal = didReplaceOriginal
         self.confirmDiscard = confirmDiscard ?? RecordingEditorController.confirmDiscardAlert
+        self.confirmReplaceOriginal = confirmReplaceOriginal
+            ?? RecordingEditorController.presentReplaceOriginalConfirmation
         self.requestTermination = requestTermination
         trimTimeline = RecordingTrimTimeline(tokens: tokens)
         cropOverlay = RecordingCropOverlay(tokens: tokens)
@@ -870,13 +881,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }
             return
         }
-        if artifactID != nil, busy || pickerOpen || dirty {
+        if artifactID != nil, busy || pickerOpen || awaitingReplaceConfirmation || dirty {
             showError("Finish, cancel, save, or discard the current recording edits first.")
             window.makeKeyAndOrderFront(nil); return
         }
         generation += 1
         let current = generation
         artifactID = artifact.id; presentation = nil; savedEdit = nil; savedExport = nil
+        originalPath = artifact.savedPath; requiresReopen = false
         estimate = nil; activeCancel = nil; thumbnailCancel = nil; busy = true; pickerOpen = false
         invalidateComparison()
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
@@ -939,7 +951,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             showError("Pausing recording playback before quitting…")
             window.makeKeyAndOrderFront(nil); return false
         }
-        if busy || pickerOpen {
+        if busy || pickerOpen || awaitingReplaceConfirmation {
             showError("Cancel or wait for the recording operation before quitting.")
             window.makeKeyAndOrderFront(nil); return false
         }
@@ -962,7 +974,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }
             return false
         }
-        if busy || pickerOpen {
+        if busy || pickerOpen || awaitingReplaceConfirmation {
             showError("Cancel or wait for the recording operation before closing.")
             return false
         }
@@ -1182,6 +1194,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         estimateButton = button("Estimate size") { [weak self] in self?.estimateSize() }
         saveButton = button("Save new copy") { [weak self] in self?.saveNewCopy() }
         saveButton.primary = true
+        replaceButton = button("Replace original…") { [weak self] in self?.confirmReplace() }
+        replaceButton.toolTip = "Replaces the saved original MP4 or GIF and its History item."
+        replaceHelp.textColor = tokens.color("text-muted")
+        replaceHelp.font = .systemFont(ofSize: 11)
+        replaceHelp.setAccessibilityLabel("Replace original availability")
+        root.addSubview(replaceHelp)
         cancelButton = button("Cancel operation") { [weak self] in self?.cancelActiveOperation() }
         cancelButton.signal = true
         status.textColor = tokens.color("text-muted"); status.maximumNumberOfLines = 2
@@ -1283,11 +1301,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         trimEnd.frame = NSRect(x: 172, y: 76, width: 78, height: 28)
         applyButton.frame = NSRect(x: trimPanel.bounds.width - 112, y: 76, width: 98, height: 30)
         let explanation = labels.first { $0.stringValue.hasPrefix("Apply before") }
-            ?? label("Apply before seeking or saving. The original is immutable.", muted: true,
+            ?? label("Apply before seeking or saving. Replace original is explicit.", muted: true,
                      parent: trimPanel)
         explanation.stringValue = thumbnailRetryAvailable
             ? "Apply before seeking or saving."
-            : "Apply before seeking or saving. The original is immutable."
+            : "Apply before seeking or saving. Replace original is explicit."
         explanation.frame = NSRect(x: 14, y: 46,
             width: trimPanel.bounds.width - (thumbnailRetryAvailable ? 116 : 28), height: 20)
 
@@ -1326,6 +1344,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         maximumSizeUnits.frame = NSRect(x: 324, y: barY + 108, width: 62, height: 28)
         maximumSizeWarning.frame = NSRect(x: 174, y: barY + 47,
                                           width: width - 348, height: 18)
+        replaceHelp.frame = maximumSizeWarning.frame
+        replaceButton.frame = NSRect(x: width - 160, y: barY + 42, width: 136, height: 30)
         let maximumControlsWidth = maximumSizeEnabled ? maximumSizeUnits.frame.maxX + 8 : 252
         let estimateLabelEnd = maximumSizeEnabled ? width - 168 : width - 304
         estimateLabel.frame = NSRect(x: maximumControlsWidth, y: barY + 114,
@@ -1868,7 +1888,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 self.trimTimeline.showThumbnails(image)
                 self.thumbnailRetryAvailable = false
                 self.status.textColor = self.tokens.color("text-muted")
-                self.status.stringValue = "Source thumbnails ready. The original remains unchanged."
+                self.status.stringValue = "Source thumbnails ready."
             case .failure(let error):
                 let cancelled = cancel.isCancelled
                 self.trimTimeline.showThumbnailFailure(cancelled: cancelled)
@@ -1928,6 +1948,105 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 }
                 self.updateControls()
             })
+    }
+
+    private static func presentReplaceOriginalConfirmation(
+        window: NSWindow, path: String, completion: @escaping (Bool) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = "Replace the original recording?"
+        alert.informativeText = "This replaces the saved file at:\n\(path)\n\nThe existing History item will be updated. This cannot be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Replace")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { completion($0 == .alertFirstButtonReturn) }
+    }
+
+    private func confirmReplace() {
+        guard !busy, !pickerOpen, !awaitingReplaceConfirmation, !requiresReopen,
+              playbackState == .idle, !stagedDiffers, !cropAdjustmentActive,
+              let snapshot = presentation?.snapshot, let path = eligibleOriginalPath else { return }
+        let current = generation, revision = snapshot.revision
+        let accepted = canonical(snapshot.saveExport)
+        awaitingReplaceConfirmation = true; updateControls()
+        confirmReplaceOriginal(window, path) { [weak self] confirmed in
+            guard let self else { return }
+            self.awaitingReplaceConfirmation = false
+            guard confirmed else { self.updateControls(); return }
+            guard self.generation == current, self.artifactID == snapshot.artifactID,
+                  !self.busy, !self.pickerOpen, !self.requiresReopen,
+                  self.playbackState == .idle, !self.stagedDiffers,
+                  self.eligibleOriginalPath == path,
+                  self.presentation?.snapshot.revision == revision,
+                  self.canonical(self.presentation?.snapshot.saveExport) == accepted,
+                  let cancel = NativeRecordingEditorCancel() else {
+                self.showError("Recording changed before replacement was confirmed. Try again.")
+                self.updateControls(); return
+            }
+            self.busy = true; self.activeCancel = cancel
+            self.progress.doubleValue = 0; self.progress.isHidden = false
+            self.status.textColor = self.tokens.color("text-muted")
+            self.status.stringValue = "Preparing replacement…"
+            self.updateControls()
+            self.worker.replaceOriginal(cancel: cancel, progress: { [weak self] value in
+                guard let self, self.generation == current,
+                      self.activeCancel === cancel else { return }
+                self.progress.doubleValue = Double(value.completedPerMille)
+                self.status.stringValue = value.message
+            }, completion: { [weak self] result in
+                guard let self, self.generation == current,
+                      self.activeCancel === cancel else { return }
+                self.busy = false; self.activeCancel = nil; self.progress.isHidden = true
+                switch result {
+                case .success(let replaced):
+                    guard replaced.path == path,
+                          replaced.presentation.snapshot.artifactID == snapshot.artifactID,
+                          replaced.presentation.snapshot.revision > revision else {
+                        self.markRequiresReopen("Replacement result did not match the original. Close and reopen this editor.")
+                        return
+                    }
+                    self.invalidateComparison()
+                    self.sourceFrameCache = nil; self.sourceFrameCancel = nil
+                    self.cropAdjustmentPriorImage = nil; self.cropAdjustmentActive = false
+                    self.cropOverlay.isHidden = true; self.cropOverlay.setEditingEnabled(false)
+                    self.trimTimeline.clearThumbnails(); self.thumbnailRetryAvailable = false
+                    self.estimate = nil
+                    self.qualityPreference = "Preserve"
+                    self.gifFramesPerSecond = 15; self.gifMaximumWidth = 800
+                    self.maximumSizeEnabled = false; self.maximumSize.state = .off
+                    self.resolutionPreset = .original; self.customOutput = false
+                    self.stagedCrop = nil; self.cropAspectUnlocked = false
+                    self.savedEdit = nil; self.savedExport = nil
+                    self.publish(replaced.presentation, initialize: true)
+                    self.status.stringValue = "Replaced original: \(path)"
+                    self.didReplaceOriginal(snapshot.artifactID)
+                    self.generateThumbnails()
+                case .failure(let error):
+                    if (error as? RecordingReplaceError)?.requiresReopen == true {
+                        self.markRequiresReopen("Replacement state is uncertain: \(error.localizedDescription). Close and reopen this editor.")
+                        return
+                    }
+                    self.showError("Couldn’t replace original: \(error.localizedDescription)")
+                }
+                self.updateControls()
+            })
+        }
+    }
+
+    private var eligibleOriginalPath: String? {
+        guard let path = originalPath, !path.isEmpty,
+              let format = presentation?.snapshot.saveExport["format"] as? String,
+              ["mp4", "gif"].contains(format),
+              URL(fileURLWithPath: path).pathExtension.lowercased() == format else { return nil }
+        return path
+    }
+
+    private func markRequiresReopen(_ message: String) {
+        requiresReopen = true
+        invalidateComparison(); sourceFrameCache = nil; sourceFrameCancel = nil
+        cropAdjustmentPriorImage = nil; trimTimeline.clearThumbnails()
+        presentation = nil; setPreviewImage(nil)
+        showError(message); updateControls()
     }
 
     private func chooseDestination() {
@@ -2286,7 +2405,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         if stagedDiffers || cropAdjustmentActive || playbackState != .idle {
             invalidateComparison()
         }
-        let available = presentation != nil && !busy && !pickerOpen && playbackState == .idle
+        let available = presentation != nil && !busy && !pickerOpen
+            && !awaitingReplaceConfirmation && !requiresReopen && playbackState == .idle
         let validMaximum = !maximumSizeEnabled || maximumSizeBytes != nil
         let valid = pendingCropInputValid && stagedEdit != nil && stagedExport != nil
             && validMaximum
@@ -2362,8 +2482,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             && hasPendingCropInput
         cropOverlay.setEditingEnabled(cropAdjustmentActive && available && !hasPendingCropInput)
         playbackLoop.isEnabled = presentation != nil && !busy && !pickerOpen
+            && !awaitingReplaceConfirmation && !requiresReopen
             && playbackState != .pausing
-        playbackSound.isEnabled = presentation != nil && !busy && !pickerOpen
+        playbackSound.isEnabled = available
             && playbackState == .idle
         switch playbackState {
         case .idle:
@@ -2387,6 +2508,17 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         estimateButton?.isHidden = maximumSizeEnabled
         estimateButton?.isEnabled = available && valid && !stagedDiffers && !maximumSizeEnabled
         saveButton?.isEnabled = available && valid && !stagedDiffers && !destination.stringValue.isEmpty
+        let canReplace = eligibleOriginalPath != nil
+        replaceButton?.isEnabled = available && valid && !stagedDiffers
+            && !cropAdjustmentActive && canReplace
+        replaceButton?.isHidden = activeCancel != nil
+        replaceButton?.toolTip = originalPath == nil ? "No saved original file is available."
+            : canReplace ? "Confirm replacement of \(eligibleOriginalPath ?? "") and its History item."
+            : "Choose the saved original’s MP4 or GIF format."
+        replaceHelp.isHidden = maximumSizeEnabled || activeCancel != nil
+        replaceHelp.stringValue = originalPath == nil ? "No saved original file"
+            : canReplace ? "Replaces saved original and History item"
+            : "Choose the saved original’s MP4/GIF format"
         cancelButton?.isHidden = activeCancel == nil
         cancelButton?.isEnabled = activeCancel != nil
         if maximumSizeEnabled && !validMaximum {
@@ -2411,6 +2543,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private func closeSession() {
         invalidateComparison()
         generation += 1; artifactID = nil; presentation = nil; activeCancel = nil
+        originalPath = nil; requiresReopen = false; awaitingReplaceConfirmation = false
         thumbnailCancel = nil; thumbnailRetryAvailable = false
         playbackCancel = nil; playbackState = .idle
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
