@@ -7,7 +7,7 @@ final class RecordingEditorTests: XCTestCase {
     func testReplaceOriginalConfirmationCancelFailureAndRebase() throws {
         _ = NSApplication.shared
         let path = "/Exports/original.mp4"
-        let initial = try presentation(position: 400, revision: 1)
+        let initial = try presentation(position: 400, revision: 1, originalSavePath: path)
         let rebased = try presentation(position: 0, revision: 2)
         let worker = FakeRecordingEditorWorker(presentation: initial)
         var decision: ((Bool) -> Void)?
@@ -19,12 +19,12 @@ final class RecordingEditorTests: XCTestCase {
                 confirmedPath = path; decision = completion
             })
         defer { controller.window.orderOut(nil) }
-        controller.present(artifact: recordingArtifact(savedPath: path), historyRoot: "/History",
+        controller.present(artifact: recordingArtifact(savedPath: "/Exports/stale.mp4"), historyRoot: "/History",
                            outputDirectory: "/Exports")
         let replace = try button("Replace original…", in: controller.root)
         XCTAssertTrue(replace.isEnabled)
         replace.performClick(nil)
-        XCTAssertEqual(confirmedPath, path)
+        XCTAssertEqual(confirmedPath, path, "confirm the opened session, not a stale History-list hint")
         XCTAssertFalse(replace.isEnabled)
         XCTAssertFalse(controller.windowShouldClose(controller.window))
         decision?(false)
@@ -64,9 +64,11 @@ final class RecordingEditorTests: XCTestCase {
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
         XCTAssertFalse(replace.isEnabled, "recovery-only is not offered as a saved original")
+        worker.initial = try presentation(originalSavePath: "/Exports/old.gif")
         controller.present(artifact: recordingArtifact(id: "next", savedPath: "/Exports/old.gif"),
                            historyRoot: "/History", outputDirectory: "/Exports")
-        XCTAssertFalse(replace.isEnabled, "format mismatch is only a UI hint")
+        XCTAssertFalse(replace.isEnabled, "accepted path extension must match accepted MP4 format")
+        worker.initial = try presentation(originalSavePath: "/Exports/old.mp4")
         controller.present(artifact: recordingArtifact(id: "third", savedPath: "/Exports/old.mp4"),
                            historyRoot: "/History", outputDirectory: "/Exports")
         XCTAssertTrue(replace.isEnabled)
@@ -87,7 +89,7 @@ final class RecordingEditorTests: XCTestCase {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
             let worker = FakeRecordingEditorWorker(presentation: try presentation(
-                saveMaximumBytes: 100_000))
+                saveMaximumBytes: 100_000, originalSavePath: "/Exports/original.mp4"))
             let controller = RecordingEditorController(
                 tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
@@ -105,7 +107,8 @@ final class RecordingEditorTests: XCTestCase {
         let path = "/Exports/original.gif"
         let initial = try presentation(revision: 1, sourceWidth: 1_600, sourceHeight: 900,
             output: NativeRecordingDimensions(width: 800, height: 450),
-            exportFormat: "gif", framesPerSecond: 24, gifMaxColors: 64)
+            exportFormat: "gif", framesPerSecond: 24, gifMaxColors: 64,
+            originalSavePath: path)
         let rebased = try presentation(revision: 2, sourceWidth: 1_600, sourceHeight: 900,
             previewWidth: 1_600, previewHeight: 900,
             exportFormat: "gif", gifDefaultsAbsent: true)
@@ -191,6 +194,8 @@ final class RecordingEditorTests: XCTestCase {
         let original = try Data(contentsOf: permanent)
         let (session, opened) = try NativeRecordingEditorSession.open(
             historyRoot: fixture.history.path, artifactID: fixture.id, tools: tools)
+        XCTAssertEqual(opened.originalSavePath, permanent.path,
+                       "confirmation path comes from the opened session metadata")
         var edit = opened.snapshot.edit
         edit["trim_start_ms"] = 200; edit["trim_end_ms"] = 1_400
         let accepted = try session.request(["operation": "update_preview", "edit": edit,
@@ -3891,6 +3896,7 @@ final class RecordingEditorTests: XCTestCase {
                               framesPerSecond: UInt16? = nil,
                               gifMaxColors: Int? = nil,
                               gifDefaultsAbsent: Bool = false,
+                              originalSavePath: String? = nil,
                               hasSystemAudio: Bool = false, hasMicrophoneAudio: Bool = false,
                               systemVolume: Double = 1, microphoneVolume: Double = 1,
                               muteSystem: Bool = false, muteMicrophone: Bool = false,
@@ -3936,7 +3942,8 @@ final class RecordingEditorTests: XCTestCase {
         ]))
         return RecordingEditorPresentation(snapshot: snapshot,
                                            image: try fixtureImage(width: previewWidth,
-                                                                   height: previewHeight))
+                                                                   height: previewHeight),
+                                           originalSavePath: originalSavePath)
     }
 
     private func recordingArtifact(id: String = "recording-id",

@@ -888,7 +888,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         generation += 1
         let current = generation
         artifactID = artifact.id; presentation = nil; savedEdit = nil; savedExport = nil
-        originalPath = artifact.savedPath; requiresReopen = false
+        originalPath = nil; requiresReopen = false
         estimate = nil; activeCancel = nil; thumbnailCancel = nil; busy = true; pickerOpen = false
         invalidateComparison()
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
@@ -896,7 +896,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
         gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
         gifMaximumWidth = 800; gifMaximumWidthControl.selectItem(withTitle: "800 px")
-        gifMaximumWidthControl.removeItem(withTitle: "Original")
+        if gifMaximumWidthControl.item(withTitle: "Original") != nil {
+            gifMaximumWidthControl.removeItem(withTitle: "Original")
+        }
         maximumSizeEnabled = false; maximumSize.state = .off
         maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
         maximumSizeValue.stringValue = "10"
@@ -922,6 +924,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             switch result {
             case .success(let value):
                 self.busy = false
+                self.originalPath = value.originalSavePath
                 self.publish(value, initialize: true)
                 self.status.stringValue = "Original remains unchanged. Save creates a new copy."
                 self.generateThumbnails()
@@ -2566,7 +2569,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
         gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
         gifMaximumWidth = 800; gifMaximumWidthControl.selectItem(withTitle: "800 px")
-        gifMaximumWidthControl.removeItem(withTitle: "Original")
+        if gifMaximumWidthControl.item(withTitle: "Original") != nil {
+            gifMaximumWidthControl.removeItem(withTitle: "Original")
+        }
         maximumSizeEnabled = false; maximumSize.state = .off
         maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
         maximumSizeValue.stringValue = "10"

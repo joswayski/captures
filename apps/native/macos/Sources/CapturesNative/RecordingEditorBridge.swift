@@ -40,6 +40,14 @@ struct NativeRecordingEditorSnapshot {
 struct RecordingEditorPresentation {
     let snapshot: NativeRecordingEditorSnapshot
     let image: CGImage
+    let originalSavePath: String?
+
+    init(snapshot: NativeRecordingEditorSnapshot, image: CGImage,
+         originalSavePath: String? = nil) {
+        self.snapshot = snapshot
+        self.image = image
+        self.originalSavePath = originalSavePath
+    }
 }
 
 struct RecordingEditorProgress: Equatable {
@@ -471,7 +479,21 @@ final class NativeRecordingEditorSession {
             throw AppBridgeError.invalidResponse
         }
         let session = NativeRecordingEditorSession(handle: handle)
-        return (session, try session.presentation(snapshot))
+        let frame = try session.presentation(snapshot)
+        return (session, RecordingEditorPresentation(snapshot: frame.snapshot,
+            image: frame.image, originalSavePath: try session.originalSavePath()))
+    }
+
+    private func originalSavePath() throws -> String? {
+        guard let response = captures_recording_editor_original_save_path_v1(handle) else {
+            throw AppBridgeError.invalidResponse
+        }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let path = result["path"], path is NSNull || path is String else {
+            throw AppBridgeError.invalidResponse
+        }
+        return path as? String
     }
 
     func request(_ object: [String: Any]) throws -> RecordingEditorPresentation {
