@@ -654,6 +654,16 @@ enum RecordingFileSizeUnit: Int, CaseIterable {
     }
 }
 
+func formatRecordingFileSizeDelta(estimatedBytes: UInt64?, originalBytes: UInt64) -> String? {
+    guard let estimatedBytes, originalBytes > 0 else { return nil }
+    let change = (Double(estimatedBytes) / Double(originalBytes) - 1) * 100
+    let rounded = change.rounded()
+    let percent = change < 0 && abs(change - rounded) == 0.5 ? rounded + 1 : rounded
+    guard percent != 0 else { return nil }
+    let magnitude = String(format: "%.0f", abs(percent))
+    return percent < 0 ? "−\(magnitude)%" : "+\(magnitude)%"
+}
+
 final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     let window: NSWindow
     let root = Surface()
@@ -1107,6 +1117,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         status.setAccessibilityLabel("Recording editor status")
         estimateLabel.textColor = tokens.color("text-muted")
         estimateLabel.setAccessibilityLabel("Recording size estimate")
+        let estimateHelp = "Percentage change compares the estimated saved size with the original recording file size."
+        estimateLabel.toolTip = estimateHelp
+        estimateLabel.setAccessibilityHelp(estimateHelp)
         progress.minValue = 0; progress.maxValue = 1000; progress.isIndeterminate = false
         progress.setAccessibilityLabel("Recording export progress")
         root.addSubview(status); root.addSubview(estimateLabel); root.addSubview(progress)
@@ -2201,7 +2214,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             estimateLabel.stringValue = "≤ \(maximumSizeUnit.value(cap)) \(maximumSizeUnit.label)"
         }
         else if let estimate {
-            estimateLabel.stringValue = "\(estimate.exact ? "" : "≈ ")\(ByteCountFormatter.string(fromByteCount: Int64(estimate.sizeBytes), countStyle: .file))"
+            let size = "\(estimate.exact ? "" : "≈ ")\(ByteCountFormatter.string(fromByteCount: Int64(estimate.sizeBytes), countStyle: .file))"
+            let original = (presentation?.snapshot.source["size_bytes"] as? NSNumber)?.uint64Value
+                ?? 0
+            if let delta = formatRecordingFileSizeDelta(estimatedBytes: estimate.sizeBytes,
+                                                        originalBytes: original) {
+                estimateLabel.stringValue = "\(size) · \(delta)"
+            } else {
+                estimateLabel.stringValue = size
+            }
         } else { estimateLabel.stringValue = "Size not estimated" }
     }
 
