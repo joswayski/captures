@@ -705,7 +705,7 @@ final class RecordingEditorTests: XCTestCase {
         play.performClick(nil); worker.completePlayback(.success(.cancelled))
         adjust.performClick(nil)
         XCTAssertTrue(labels(in: controller.root).contains {
-            $0.contains("full source at 0:00.400")
+            $0 == "Full source · 0:00.400"
         }, "crop mode labels the accepted source time, not the paused motion time")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("0:00.733 / 0:02.000") },
                       "crop mode does not change the transient playback resume position")
