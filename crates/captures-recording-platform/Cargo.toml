@@ -12,7 +12,11 @@ captures-history = { path = "../captures-history" }
 captures-media = { path = "../captures-media" }
 captures-recording = { path = "../captures-recording" }
 chrono.workspace = true
+file-id = "0.2.3"
 serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+tempfile.workspace = true
 uuid.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

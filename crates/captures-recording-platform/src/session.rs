@@ -1,6 +1,7 @@
 //! Blocking recording lifecycle. Keep this owner on a worker, never the native
 //! event loop. The host owns selector/countdown presentation and start cancellation.
 use std::{
+    fs::File,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -25,6 +26,7 @@ pub struct FinalizedRecording {
 }
 
 pub struct RecordingSession {
+    recovery_lease: Option<File>,
     coordinator: RecordingCoordinator,
     store: DraftStore,
     manifest: RecordingDraftManifest,
@@ -51,8 +53,10 @@ impl RecordingSession {
             .transition(&manifest.session_id, RecordingState::Countdown, now)
             .map_err(string)?;
         manifest.state = RecordingState::Countdown;
+        let recovery_lease = super::recovery::lease(store.root())?;
         let directory = store.create(&manifest).map_err(string)?;
         Ok(Self {
+            recovery_lease: Some(recovery_lease),
             coordinator,
             store,
             manifest,
@@ -376,6 +380,11 @@ impl RecordingSession {
                 .map(|error| format!("Recording saved; could not remove source bundle: {error}")),
             Ok(()) => None, // GIF source media remains available for editing.
         };
+        if let Some(lease) = self.recovery_lease.take() {
+            // Release before returning to a host that may list the bundle on
+            // the next command, including on macOS.
+            let _ = lease.unlock();
+        }
         Ok(FinalizedRecording {
             entry,
             path,
@@ -480,11 +489,14 @@ impl RecordingSession {
     }
 
     pub fn discard(&mut self) -> Result<RecordingSessionSnapshot, String> {
-        if matches!(
+        if !matches!(
             self.manifest.state,
-            RecordingState::Ready | RecordingState::Finalizing
+            RecordingState::Countdown
+                | RecordingState::Recording
+                | RecordingState::Paused
+                | RecordingState::Failed
         ) {
-            return Err("Recording cannot be discarded after finalization starts".into());
+            return Err("Recording cannot be discarded after finalization or discard".into());
         }
         if let Some(segment) = self.active.take() {
             segment
@@ -502,6 +514,9 @@ impl RecordingSession {
             .remove(&self.manifest.session_id)
             .map_err(string)?;
         self.started_at_ms = None;
+        if let Some(lease) = self.recovery_lease.take() {
+            let _ = lease.unlock();
+        }
         Ok(self.snapshot())
     }
 
@@ -665,6 +680,35 @@ mod tests {
         assert!(!directory.exists());
         assert_eq!(std::fs::read(sentinel).unwrap(), b"keep");
         assert!(session.active.is_none());
+        assert!(
+            session.discard().is_err(),
+            "retained terminal owner must not write after lease release"
+        );
+    }
+
+    #[test]
+    fn failed_owner_holds_lease_for_restart_or_discard_until_host_retires_it() {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("recording-recovery");
+        let history = base.path().join("history");
+        let display = display();
+        let mut failed =
+            RecordingSession::prepare(root.clone(), options(&display), display.clone()).unwrap();
+        let id = failed.manifest().session_id.clone();
+        failed.fail("injected engine failure".into());
+        let recovery = crate::RecordingRecovery::new(history, MediaToolchain::from_command_names());
+        assert!(recovery.list().is_err());
+        assert!(
+            RecordingSession::prepare(root.clone(), options(&display), display.clone()).is_err()
+        );
+        drop(failed); // Worker must retire its failed owner before a new Prepare or recovery.
+        let rows = recovery.list().unwrap();
+        assert_eq!(
+            rows.iter().find(|row| row.session_id == id).unwrap().status,
+            "recoverable"
+        );
+        let mut next = RecordingSession::prepare(root, options(&display), display).unwrap();
+        next.discard().unwrap();
     }
 
     #[test]
@@ -1157,8 +1201,10 @@ mod tests {
         let copy_for_finalization = |kind| {
             let mut options = options(&display);
             options.kind = kind;
-            let mut copy =
-                RecordingSession::prepare(root.path().into(), options, display.clone()).unwrap();
+            // Independent finalization fixtures cannot share the live take's
+            // recovery-root lease; they own disposable bundles in separate roots.
+            let copy_root = root.path().join(format!("copy-{}", uuid::Uuid::new_v4()));
+            let mut copy = RecordingSession::prepare(copy_root, options, display.clone()).unwrap();
             copy.manifest.segments = session.manifest.segments.clone();
             for segment in &copy.manifest.segments {
                 std::fs::copy(
@@ -1338,8 +1384,12 @@ mod tests {
         assert!(failing.manifest.segments[0].complete);
         assert!(failing.directory.join("segment-000.mp4").is_file());
 
-        let mut cancelled =
-            RecordingSession::prepare(root.path().into(), options(&display), display).unwrap();
+        let mut cancelled = RecordingSession::prepare(
+            root.path().join("cancelled-recovery-root"),
+            options(&display),
+            display,
+        )
+        .unwrap();
         let cancelled_directory = cancelled.directory.clone();
         let calls = Cell::new(0);
         assert_eq!(
