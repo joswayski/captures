@@ -2489,18 +2489,39 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn playback_terminal_results_repeat_and_clock_starts_with_first_frame() {
-        let (_directory, mut playback, cancel) = scripted_playback(
-            "sleep 0.2; printf '000000000000000000000000000000000000000000000000'",
-        );
         let started = std::time::Instant::now();
+        // One frame isolates startup-clock behavior from intentional latest-frame
+        // coalescing when the consumer is descheduled on a busy runner.
+        let (_directory, mut playback, cancel) =
+            scripted_playback("sleep 0.2; printf '0000000000000000'");
         let first = playback.next_frame().unwrap().unwrap();
         assert!(started.elapsed() >= std::time::Duration::from_millis(150));
         assert_eq!(
             first.position_ms, 0,
             "slow startup must not skip the first frame"
         );
-        assert!(playback.next_frame().unwrap().is_some());
-        assert!(playback.next_frame().unwrap().is_some());
+        assert!(playback.next_frame().unwrap().is_none());
+        assert!(playback.next_frame().unwrap().is_none());
+        assert!(!cancel.is_cancelled());
+        assert!(playback.child.is_none());
+        assert!(playback.reader.is_none());
+        assert!(playback.stderr_reader.is_none());
+
+        let (_directory, mut playback, cancel) =
+            scripted_playback("printf '000000000000000000000000000000000000000000000000'");
+        // Wait for decoding, not an assumed scheduling interval. A consumer that
+        // has not polled must receive the final 66 ms frame rather than a queue.
+        let state = playback.shared.state.lock().unwrap();
+        let (state, timeout) = playback
+            .shared
+            .changed
+            .wait_timeout_while(state, std::time::Duration::from_secs(5), |state| {
+                state.end.is_none()
+            })
+            .unwrap();
+        assert!(!timeout.timed_out(), "scripted decoder must reach EOF");
+        drop(state);
+        assert_eq!(playback.next_frame().unwrap().unwrap().position_ms, 66);
         assert!(playback.next_frame().unwrap().is_none());
         assert!(playback.next_frame().unwrap().is_none());
         assert!(!cancel.is_cancelled());
