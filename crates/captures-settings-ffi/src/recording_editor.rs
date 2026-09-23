@@ -241,6 +241,57 @@ pub unsafe extern "C" fn captures_recording_editor_playback_open_v1(
     handle
 }
 
+/// Open playback with accepted audio when it is audible. GIF, audio-less,
+/// muted, and zero-gain edits do not open an output device and report
+/// `audio_enabled:false`.
+///
+/// # Safety
+/// Session is live and serialized for this call on the worker that will drive
+/// and free playback. Cancel may be atomically cancelled elsewhere and is
+/// cloned by the returned stream. Non-null output is aligned writable pointer
+/// storage. Free output JSON and playback exactly once; playback may outlive
+/// session and cancel owners.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_playback_open_v2(
+    session: *const RecordingEditorSession,
+    position_ms: u64,
+    cancel: *const CancelToken,
+    output: *mut *mut c_char,
+) -> *mut RecordingEditorPlayback {
+    if output.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains live session/cancel handles for this call.
+        let session = unsafe { session.as_ref() }.ok_or("recording editor handle is null")?;
+        let cancel = unsafe { cancel.as_ref() }.ok_or("recording export cancel handle is null")?;
+        session.playback_with_audio(position_ms, cancel)
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    let (handle, value) = match result {
+        Ok(playback) => {
+            let value = json!({
+                "ok": true,
+                "result": {
+                    "start_position_ms": playback.start_position_ms(),
+                    "width": playback.width(),
+                    "height": playback.height(),
+                    "frames_per_second": playback.frames_per_second(),
+                    "audio_enabled": playback.audio_enabled(),
+                },
+            });
+            (
+                Box::into_raw(Box::new(RecordingEditorPlayback(playback))),
+                value,
+            )
+        }
+        Err(error) => (ptr::null_mut(), json!({"ok":false,"error":error})),
+    };
+    // SAFETY: caller supplies aligned writable output storage.
+    unsafe { output.write(response(value)) };
+    handle
+}
+
 /// Return one clock-paced frame, clean EOF, or an owned error response.
 ///
 /// # Safety
@@ -608,6 +659,18 @@ mod tests {
             }
             .is_null()
         );
+        // SAFETY: v2 also refuses work before inspecting null handles.
+        assert!(
+            unsafe {
+                captures_recording_editor_playback_open_v2(
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    ptr::null_mut(),
+                )
+            }
+            .is_null()
+        );
         let mut playback_next_response = ptr::null_mut();
         assert!(
             unsafe {
@@ -817,6 +880,18 @@ mod tests {
         let response = unsafe { json(response) };
         assert_eq!(response["result"]["frame_count"], 12);
         assert_eq!(response["result"]["sprite_width"], 1_920);
+
+        let mut audible_response = ptr::null_mut();
+        // SAFETY: audio-less source must open v2 without touching a device.
+        let audio_less_playback = unsafe {
+            captures_recording_editor_playback_open_v2(session, 0, cancel, &mut audible_response)
+        };
+        assert!(!audio_less_playback.is_null());
+        // SAFETY: v2 open returned one owned response.
+        let audible_response = unsafe { json(audible_response) };
+        assert_eq!(audible_response["result"]["audio_enabled"], false);
+        // SAFETY: independent playback owner is released once.
+        unsafe { captures_recording_editor_playback_free_v1(audio_less_playback) };
 
         let mut playback_response = ptr::null_mut();
         // SAFETY: handles/output stay live through playback open.

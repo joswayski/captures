@@ -569,7 +569,14 @@ fn playback_uses_accepted_spatial_preview_trim_and_retains_session_state() {
     let snapshot_before = serde_json::to_value(session.snapshot()).unwrap();
     let accepted_frame = session.frame();
     let cancel = CancelToken::default();
+    let gif_playback = session.playback_with_audio(2_999, &cancel).unwrap();
+    assert!(
+        !gif_playback.audio_enabled(),
+        "GIF preview bypasses the output device even when sound is requested"
+    );
+    drop(gif_playback);
     let mut playback = session.playback(2_999, &cancel).unwrap();
+    assert!(!playback.audio_enabled(), "v1 playback remains silent");
     assert_eq!(playback.start_position_ms(), 1_100);
     assert_eq!((playback.width(), playback.height()), (1_280, 320));
     assert_eq!(playback.frames_per_second(), 15);
