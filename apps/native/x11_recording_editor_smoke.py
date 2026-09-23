@@ -1399,7 +1399,8 @@ def main():
         shot(editor, "minimum-saved")
 
         # Request wider-than-encoder output without a huge frame allocation.
-        # MP4 fits the shared encoder limit; GIF retains the explicit dimensions.
+        # MP4 fits the shared encoder limit. GIF applies its default 800px cap
+        # to the even-normalized custom base (4000x600), producing 800x120.
         run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
         run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "20", "--delay", "60", "4", "sleep", ".5")
         field(editor, 227, 598, 1300)
@@ -1419,16 +1420,20 @@ def main():
         click(editor, 793, 1082)
         shot(editor, "gif-sized-preview")
         click(editor, 899, 1082)
-        wait(lambda: len(list(history.glob("*/metadata.json"))) == 7, "explicit-sized GIF in History")
-        for path, width, height in ((large_destination, 3840, 576), (large_destination.with_suffix(".gif"), 4000, 600)):
+        wait(lambda: len(list(history.glob("*/metadata.json"))) == 7, "width-capped GIF in History")
+        for path, width, height in ((large_destination, 3840, 576), (large_destination.with_suffix(".gif"), 800, 120)):
             info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)))
             stream = info["streams"][0]
             assert (stream["width"], stream["height"]) == (width, height), info
             assert abs(float(info["format"]["duration"]) - .2) < .1, info
             frame = run("ffmpeg", "-v", "error", "-i", str(path), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
             assert len(frame) == width * height * 3
-            white = frame[(80 * width + 400) * 3:(80 * width + 400) * 3 + 3]
-            green = frame[(300 * width + 2000) * 3:(300 * width + 2000) * 3 + 3]
+            # Probe the same asymmetric white marker and green background in
+            # each output's coordinates, never beyond the capped GIF's bounds.
+            white_index = ((height * 2 // 15) * width + width // 10) * 3
+            green_index = ((height // 2) * width + width // 2) * 3
+            white = frame[white_index:white_index + 3]
+            green = frame[green_index:green_index + 3]
             assert min(white) > 210, (path, white)
             assert green[1] > 90 and green[1] > max(green[0], green[2]) + 40, (path, green)
         shot(editor, "format-saved")
