@@ -325,12 +325,35 @@ impl View {
                 self.maximum_unit.label()
             )
         } else if let Some(estimate) = &self.estimate {
-            format!(
+            let mut label = format!(
                 "{}{} bytes{}",
                 if estimate.exact { "" } else { "≈ " },
                 estimate.size_bytes,
                 if estimate.exact { " (exact)" } else { "" }
-            )
+            );
+            if !self.maximum_size
+                && let Some(original) = self
+                    .presented
+                    .as_ref()
+                    .map(|p| p.source.size_bytes)
+                    .filter(|size| *size > 0)
+            {
+                // Match shipping Math.round, including negative half ties toward +infinity.
+                let percent = (estimate.size_bytes as f64 / original as f64 - 1.) * 100.;
+                let percent = if percent.fract() == -0.5 {
+                    percent.ceil()
+                } else {
+                    percent.round()
+                };
+                if percent != 0. {
+                    label.push_str(&format!(
+                        " · {}{:.0}%",
+                        if percent < 0. { "−" } else { "+" },
+                        percent.abs()
+                    ));
+                }
+            }
+            label
         } else {
             "Size not estimated".into()
         }
@@ -1626,7 +1649,7 @@ fn show(
                         .into_owned();
                 }
                 ui.label(view.estimate_label())
-                    .on_hover_text("Maximum mode shows the accepted byte limit, not an estimated size. Other modes estimate the accepted export; longer recordings use approximate encoded samples. No History entry or saved file is created.");
+                    .on_hover_text("Percentage change compares the accepted estimate with the original recording file. Maximum mode shows the accepted byte limit, not an estimated size. Other modes estimate the accepted export; longer recordings use approximate encoded samples. No History entry or saved file is created.");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add_enabled(
@@ -3026,6 +3049,7 @@ mod tests {
     fn estimates_follow_accepted_settings_not_seek_or_staged_values() {
         let ctx = egui::Context::default();
         let mut view = opened();
+        view.presented.as_mut().unwrap().source.size_bytes = 20000;
         let frame = view.presented.as_ref().unwrap().frame.clone();
         view.receive(
             &ctx,
@@ -3034,7 +3058,7 @@ mod tests {
                 exact: true,
             })),
         );
-        assert_eq!(view.estimate_label(), "12345 bytes (exact)");
+        assert_eq!(view.estimate_label(), "12345 bytes (exact) · −38%");
         assert!(!view.dirty() && !view.history_changed);
         let p = view.presented.as_ref().unwrap();
         view.receive(
@@ -3049,8 +3073,14 @@ mod tests {
         );
         assert_eq!(
             view.estimate_label(),
-            "12345 bytes (exact)",
+            "12345 bytes (exact) · −38%",
             "seek cannot change file size"
+        );
+        view.receive(&ctx, Event::Presented(Err("seek failed".into())));
+        assert_eq!(
+            view.estimate_label(),
+            "12345 bytes (exact) · −38%",
+            "a failed seek leaves the accepted estimate valid"
         );
         let (tx, jobs) = mpsc::channel();
         view.gif = true;
@@ -3062,7 +3092,7 @@ mod tests {
         view.gif = false;
         assert_eq!(
             view.estimate_label(),
-            "12345 bytes (exact)",
+            "12345 bytes (exact) · −38%",
             "reverting staged edits restores the matching result"
         );
         view.gif = true;
@@ -3097,13 +3127,66 @@ mod tests {
                 exact: false,
             })),
         );
-        assert_eq!(view.estimate_label(), "≈ 67890 bytes");
+        assert_eq!(view.estimate_label(), "≈ 67890 bytes · +239%");
         assert!(!view.busy && !view.estimating && view.cancel.is_none() && view.error.is_none());
         assert!(
             view.dirty() && !view.history_changed,
             "estimating does not save edits"
         );
         assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+    }
+
+    #[test]
+    fn estimate_delta_uses_original_bytes_and_shipping_rounding_without_affecting_identity() {
+        let ctx = egui::Context::default();
+        for (original, size_bytes, suffix) in [
+            (8, 7, " · −12%"),
+            (8, 9, " · +13%"),
+            (256, 255, ""),
+            (256, 257, ""),
+            (0, 23, ""),
+            (100, 0, " · −100%"),
+            (100, 100, ""),
+        ] {
+            let mut view = opened();
+            view.presented.as_mut().unwrap().source.size_bytes = original;
+            view.receive(
+                &ctx,
+                Event::Estimated(Ok(ExportEstimate {
+                    size_bytes,
+                    exact: true,
+                })),
+            );
+            assert_eq!(
+                view.estimate_label(),
+                format!("{size_bytes} bytes (exact){suffix}")
+            );
+            assert!(!view.dirty() && !view.history_changed);
+            view.estimate.as_mut().unwrap().exact = false;
+            assert_eq!(
+                view.estimate_label(),
+                format!("≈ {size_bytes} bytes{suffix}")
+            );
+            view.estimating = true;
+            assert_eq!(view.estimate_label(), "Estimating size…");
+            view.estimating = false;
+            view.maximum_size = true;
+            view.maximum_value.clear();
+            assert!(
+                !view.estimate_label().contains('%'),
+                "invalid Maximum never advertises a reduction"
+            );
+            view.maximum_value = "10".into();
+            assert!(
+                !view.estimate_label().contains('%'),
+                "staged cap is not an estimate"
+            );
+            view.presented.as_mut().unwrap().export = view.export_spec();
+            assert_eq!(view.estimate_label(), "≤ 10 MB");
+            view.receive(&ctx, Event::Estimated(Err("cancelled".into())));
+            assert!(view.estimate.is_none());
+        }
+        assert_eq!(opened().estimate_label(), "Size not estimated");
     }
 
     #[test]
@@ -3580,6 +3663,7 @@ mod tests {
             let ctx = egui::Context::default();
             tokens.apply(&ctx, name.contains("light"));
             let mut view = opened();
+            view.presented.as_mut().unwrap().source.size_bytes = 200_000_000_000;
             view.estimate = Some(ExportEstimate {
                 size_bytes: 123456789012,
                 exact: true,
@@ -3592,7 +3676,8 @@ mod tests {
             accepted.trim_end_ms = Some(1551);
             let (tx, _) = mpsc::channel();
             let (events, _) = mpsc::channel();
-            for pass in 0..2 {
+            for pass in 0..4 {
+                view.estimate.as_mut().unwrap().exact = pass < 2;
                 let mut output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
@@ -3604,7 +3689,7 @@ mod tests {
                     |ui| show(ui, &tokens, &mut view, &tx, &events, egui::ViewportId::ROOT),
                 );
                 output.textures_delta.clear();
-                if pass == 0 {
+                if pass % 2 == 0 {
                     continue;
                 }
                 let mut rects = Vec::new();
@@ -3614,7 +3699,11 @@ mod tests {
                     "Sound",
                     "Fit",
                     "100%",
-                    "123456789012 bytes (exact)",
+                    if pass < 2 {
+                        "123456789012 bytes (exact) · −38%"
+                    } else {
+                        "≈ 123456789012 bytes · −38%"
+                    },
                     "Estimate size",
                     "Apply edits",
                     "Save new copy",
