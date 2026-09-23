@@ -2,6 +2,12 @@ import AppKit
 import UniformTypeIdentifiers
 
 final class RecordingComparisonView: NSView {
+    let tokens: Tokens
+    init(tokens: Tokens) {
+        self.tokens = tokens
+        super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     var comparison: RecordingEditorComparison? { didSet { needsDisplay = true } }
     var split: CGFloat = 0.5 { didSet { needsDisplay = true } }
     override var isFlipped: Bool { true }
@@ -25,9 +31,10 @@ final class RecordingComparisonView: NSView {
                width: rect.width * (1 - split), height: rect.height).clip()
         after.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
         context.restoreGraphicsState()
-        let divider = NSRect(x: rect.minX + rect.width * split - 1, y: rect.minY,
-                             width: 2, height: rect.height)
-        NSColor.white.setFill(); divider.fill()
+        let dividerWidth = tokens.number("s-1")
+        let divider = NSRect(x: rect.minX + rect.width * split - dividerWidth / 2,
+                             y: rect.minY, width: dividerWidth, height: rect.height)
+        tokens.color("theme-accent").setFill(); divider.fill()
     }
 }
 
@@ -716,6 +723,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var estimate: RecordingEditorEstimate?
     private var comparison: RecordingEditorComparison?
     private var comparisonCancel: NativeRecordingEditorCancel?
+    private var comparisonStatusMessage: String?
     private var playbackState = RecordingPlaybackState.idle
     private var playbackCancel: NativeRecordingEditorCancel?
     private var playbackPositionMilliseconds: UInt64?
@@ -745,7 +753,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let previewScroll = NSScrollView()
     private let previewCanvas = Surface()
     private let preview = NSImageView()
-    private let comparisonView = RecordingComparisonView()
+    private let comparisonView: RecordingComparisonView
     private let comparisonSlider = NSSlider(value: 50, minValue: 0, maxValue: 100,
                                              target: nil, action: nil)
     private let comparisonBeforeLabel = NSTextField(labelWithString: "Before")
@@ -824,6 +832,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         self.requestTermination = requestTermination
         trimTimeline = RecordingTrimTimeline(tokens: tokens)
         cropOverlay = RecordingCropOverlay(tokens: tokens)
+        comparisonView = RecordingComparisonView(tokens: tokens)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 760),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
@@ -1207,7 +1216,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         previewFitButton.frame = NSRect(x: previewActualButton.frame.minX - 50, y: 5,
                                         width: 46, height: 26)
         previewScroll.frame = NSRect(x: 0, y: 34, width: previewPanel.bounds.width,
-                                     height: max(0, previewPanel.bounds.height - 34))
+                                     height: max(0, previewPanel.bounds.height
+                                         - (comparison == nil ? 34 : 72)))
         let comparisonY = previewPanel.bounds.height - 37
         comparisonBeforeLabel.frame = NSRect(x: 12, y: comparisonY + 2, width: 48, height: 20)
         comparisonAfterLabel.frame = NSRect(x: previewPanel.bounds.width - 52,
@@ -1754,12 +1764,25 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func invalidateComparison() {
         comparisonCancel?.cancel()
+        if status.stringValue == comparisonStatusMessage {
+            status.textColor = tokens.color("text-muted")
+            status.stringValue = "Accepted recording preview."
+        }
+        comparisonStatusMessage = nil
         comparison = nil
         comparisonView.comparison = nil
         comparisonView.isHidden = true
         comparisonSlider.isHidden = true
         comparisonBeforeLabel.isHidden = true; comparisonAfterLabel.isHidden = true
         comparisonHideButton?.isHidden = true
+        layoutComparisonViewport()
+    }
+
+    private func layoutComparisonViewport() {
+        guard previewPanel.bounds.width > 0 else { return }
+        previewScroll.frame.size.height = max(0, previewPanel.bounds.height
+            - (comparison == nil ? 34 : 72))
+        refreshPreviewLayout(resetScroll: false)
     }
 
     private func compareAcceptedFrame() {
@@ -1772,9 +1795,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let expectedPosition = snapshot.positionMilliseconds
         let expectedExport = canonical(snapshot.export)
         invalidateComparison()
+        restoreAcceptedPresentation()
         busy = true; activeCancel = cancel; comparisonCancel = cancel
         status.textColor = tokens.color("text-muted")
         status.stringValue = "Encoding before/after at accepted frame \(time(expectedPosition))…"
+        comparisonStatusMessage = status.stringValue
         updateControls()
         worker.comparison(cancel: cancel) { [weak self] result in
             guard let self, self.generation == current,
@@ -1782,6 +1807,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             self.busy = false; self.activeCancel = nil; self.comparisonCancel = nil
             guard !cancel.isCancelled else {
                 self.status.stringValue = "Comparison cancelled. Compare to retry."
+                self.comparisonStatusMessage = self.status.stringValue
                 self.updateControls(); return
             }
             guard let accepted = self.presentation?.snapshot,
@@ -1791,6 +1817,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                   !self.stagedDiffers, !self.cropAdjustmentActive,
                   self.playbackState == .idle else {
                 self.status.stringValue = "Comparison no longer matches the accepted frame."
+                self.comparisonStatusMessage = self.status.stringValue
                 self.updateControls(); return
             }
             switch result {
@@ -1806,11 +1833,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 self.comparisonView.isHidden = false
                 self.comparisonBeforeLabel.isHidden = false
                 self.comparisonAfterLabel.isHidden = false
+                self.layoutComparisonViewport()
                 self.status.stringValue = accepted.saveExport["max_size_bytes"] is NSNumber
                     ? "Encoded first attempt at accepted \(self.time(expectedPosition)); final capped save may differ."
                     : "Encoded before/after at accepted \(self.time(expectedPosition)); playback time is independent."
+                self.comparisonStatusMessage = self.status.stringValue
             case .failure(let error):
                 self.showError("Comparison unavailable: \(error.localizedDescription). Compare to retry.")
+                self.comparisonStatusMessage = self.status.stringValue
             }
             self.updateControls()
         }

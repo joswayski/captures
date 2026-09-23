@@ -49,6 +49,7 @@ final class RecordingEditorTests: XCTestCase {
         split.doubleValue = 73; _ = split.sendAction(split.action, to: split.target)
         hide.performClick(nil)
         XCTAssertTrue(split.isHidden); XCTAssertFalse(controller.dirty)
+        XCTAssertTrue(labels(in: controller.root).contains { $0 == "Accepted recording preview." })
 
         worker.deferPlayback = true
         play.performClick(nil)
@@ -107,6 +108,42 @@ final class RecordingEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             try render(controller.root, name: "recording-editor-comparison-minimum-\(appearance)")
         }
+    }
+
+    func testComparisonAfterSmallPausedFrameRestoresAccepted100PercentGeometry() throws {
+        _ = NSApplication.shared
+        let initial = try presentation(position: 400, previewWidth: 640, previewHeight: 360)
+        let worker = FakeRecordingEditorWorker(presentation: initial)
+        worker.deferPlayback = true; worker.deferComparison = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        try button("100%", in: controller.root).performClick(nil)
+        let preview = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first)
+        XCTAssertEqual(preview.frame.width, 640)
+        try button("Play", in: controller.root).performClick(nil)
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 650,
+            image: try solidImage(width: 320, height: 180, red: 30, green: 40, blue: 50)))
+        try button("Pause", in: controller.root).performClick(nil)
+        worker.completePlayback(.success(.cancelled))
+        XCTAssertEqual(preview.frame.width, 320)
+        try button("Compare", in: controller.root).performClick(nil)
+        XCTAssertEqual(preview.image?.size.width, 640)
+        XCTAssertEqual(preview.frame.width, 640,
+                       "comparison 100% rect follows the accepted frame, not paused motion")
+        XCTAssertEqual(try slider("Recording frame position", in: controller.root).doubleValue, 400)
+        worker.completeComparison(.success(RecordingEditorComparison(
+            revision: initial.snapshot.revision,
+            positionMilliseconds: 400, export: initial.snapshot.export,
+            before: try solidImage(width: 640, height: 360, red: 180, green: 20, blue: 20),
+            after: try solidImage(width: 640, height: 360, red: 20, green: 20, blue: 180))))
+        let overlay = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingComparisonView }.first)
+        XCTAssertEqual(overlay.frame.width, 640)
+        XCTAssertFalse(overlay.isHidden)
     }
 
     func testRealEncodedComparisonIsReadOnlyAndFramesOutliveOwner() throws {
