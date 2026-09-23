@@ -270,6 +270,9 @@ choice while displaying Preserve and fitting the size cap; MP4 does not use it.
 **Estimate size** checks those accepted settings without publishing an export.
 Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
 audio-only Preserve changes show approximate sizes. Estimation can be canceled.
+The Windows/Linux workbench shows nonzero percentage changes versus the original
+recording beside accepted estimates; staged edits and Maximum mode hide the delta.
+AppKit percentage display is pending.
 Both native recording editors offer **Maximum file size** for MP4/GIF, using
 decimal KB/MB/GB with a 100 KB minimum. Apply accepts the limit; the size label then
 shows the cap instead of an estimate. Save may reduce resolution, frame rate or

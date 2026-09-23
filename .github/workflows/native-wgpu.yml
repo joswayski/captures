@@ -88,6 +88,12 @@ jobs:
           for appearance in dark light; do
             /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --audio --presets --estimate --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-editor-$appearance"
           done
+      - name: Exercise accepted size deltas on private X11
+        if: runner.os == 'Linux'
+        run: |
+          for appearance in dark light; do
+            /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --estimate-delta --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-size-delta-$appearance"
+          done
       - name: Exercise locked and unlocked recording crops on private X11
         if: runner.os == 'Linux'
         run: |
@@ -199,6 +205,8 @@ jobs:
             native-x11-recording-screenshot
             native-x11-recording-editor-dark
             native-x11-recording-editor-light
+            native-x11-recording-size-delta-dark
+            native-x11-recording-size-delta-light
             native-x11-recording-crop-dark
             native-x11-recording-crop-light
             native-x11-recording-graphical-crop-dark
