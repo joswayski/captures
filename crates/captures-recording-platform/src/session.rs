@@ -89,6 +89,26 @@ impl RecordingSession {
         snapshot
     }
 
+    /// Current engine microphone peak, without changing the recording or its
+    /// recovery bundle. Inactive and muted sessions have no live meter.
+    pub fn microphone_level(&self) -> f32 {
+        if self.manifest.state != RecordingState::Recording
+            || self.manifest.options.audio.microphone_device_id.is_none()
+            || self.manifest.options.audio.microphone_muted
+        {
+            return 0.0;
+        }
+        let level = self
+            .active
+            .as_ref()
+            .map_or(0.0, NativeRecordingSegment::microphone_level);
+        if level.is_finite() {
+            level.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
     pub fn manifest(&self) -> &RecordingDraftManifest {
         &self.manifest
     }
@@ -649,6 +669,50 @@ mod tests {
             audio: AudioOptions::default(),
             gif: GifOptions::default(),
         }
+    }
+
+    #[test]
+    fn microphone_polling_is_zero_outside_live_unmuted_engine_and_does_not_write() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut options = options(&display);
+        options.audio.microphone_device_id = Some("fixture-microphone".into());
+        let mut session = RecordingSession::prepare(root.path().into(), options, display).unwrap();
+        let manifest_path = session.directory().join("manifest.json");
+        assert_eq!(session.microphone_level(), 0.0); // countdown
+        session
+            .transition(RecordingState::Recording, now_ms())
+            .unwrap();
+        assert_eq!(session.microphone_level(), 0.0); // no active segment
+        session.manifest.options.audio.microphone_muted = true;
+        assert_eq!(session.microphone_level(), 0.0);
+        session.manifest.options.audio.microphone_muted = false;
+        assert_eq!(session.microphone_level(), 0.0);
+        session.pause().unwrap();
+        let before = std::fs::read(&manifest_path).unwrap();
+        assert_eq!(session.microphone_level(), 0.0);
+        for _ in 0..10 {
+            assert_eq!(session.microphone_level(), 0.0);
+        }
+        assert_eq!(std::fs::read(&manifest_path).unwrap(), before);
+        session.discard().unwrap();
+        assert_eq!(session.microphone_level(), 0.0);
+
+        let micless_display = self::display();
+        let mut micless = RecordingSession::prepare(
+            root.path().into(),
+            self::options(&micless_display),
+            micless_display,
+        )
+        .unwrap();
+        micless
+            .transition(RecordingState::Recording, now_ms())
+            .unwrap();
+        assert_eq!(micless.microphone_level(), 0.0);
+        micless.stop().unwrap();
+        assert_eq!(micless.microphone_level(), 0.0); // finalizing
+        micless.fail("test failure".into());
+        assert_eq!(micless.microphone_level(), 0.0); // failed
     }
 
     #[test]
