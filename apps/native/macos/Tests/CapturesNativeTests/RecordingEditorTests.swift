@@ -432,8 +432,8 @@ final class RecordingEditorTests: XCTestCase {
         _ = NSApplication.shared
         let crop = NativeRecordingCropRect(x: 140, y: 90, width: 500, height: 300)
         let worker = FakeRecordingEditorWorker(presentation: try presentation(
-            position: 433, sourceWidth: 1_200, sourceHeight: 800, crop: crop,
-            previewWidth: 600, previewHeight: 400))
+            position: 433, sourceWidth: 1_200, sourceHeight: 800,
+            previewWidth: 600, previewHeight: 400, crop: crop))
         worker.sourceResult = .success(RecordingSourceImage(positionMilliseconds: 433,
             image: try fixtureImage(width: 1_200, height: 800)))
         let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
