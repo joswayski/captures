@@ -2729,7 +2729,8 @@ final class RecordingEditorTests: XCTestCase {
             eventNumber: 1, clickCount: 1, pressure: 1))
         switch type {
         case .leftMouseDown:
-            try XCTUnwrap(controller.window.contentView?.hitTest(point)).mouseDown(with: event)
+            let content = try XCTUnwrap(controller.window.contentView)
+            try XCTUnwrap(content.hitTest(content.convert(point, from: nil))).mouseDown(with: event)
         case .leftMouseDragged: overlay.mouseDragged(with: event)
         case .leftMouseUp: overlay.mouseUp(with: event)
         default: XCTFail("Unsupported pointer event")
