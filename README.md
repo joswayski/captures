@@ -281,6 +281,10 @@ GIF disables audio controls without discarding the MP4 settings.
 Both native recording editors offer 8, 10, 12, 15 (default), 20, 24 or 30 FPS for
 GIF exports. Apply accepts the frame rate with the other edits; switching to MP4
 keeps the GIF choice without changing MP4 cadence.
+The macOS native editor also offers 320, 480, 640, 800 (default), or 1200 pixel
+maximum GIF widths. It derives the GIF dimensions after crop and output sizing,
+never upscales, and retains the uncapped MP4 dimensions independently. The
+Windows/Linux native companion remains in progress.
 Original, 1080p maximum and 720p maximum output presets preserve the current crop's
 aspect ratio and never upscale. Custom dimensions override the preset.
 Custom dimensions are independent (no aspect lock); the shared media engine rounds

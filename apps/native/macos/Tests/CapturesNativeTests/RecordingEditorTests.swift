@@ -774,17 +774,22 @@ final class RecordingEditorTests: XCTestCase {
             controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                                outputDirectory: "/Exports")
             let fps = try popup("GIF frame rate", in: controller.root)
+            let maximumWidth = try popup("GIF maximum width", in: controller.root)
             let destination = try field("Recording destination", in: controller.root)
             let change = try button("Change…", in: controller.root)
             XCTAssertEqual(fps.titleOfSelectedItem, "24 FPS")
+            XCTAssertEqual(maximumWidth.titleOfSelectedItem, "800 px")
             XCTAssertFalse(fps.isHiddenOrHasHiddenAncestor)
+            XCTAssertFalse(maximumWidth.isHiddenOrHasHiddenAncestor)
             try render(controller.root, name: "recording-editor-gif-24-fps-\(appearance)")
 
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            XCTAssertLessThanOrEqual(destination.frame.maxX + 8, fps.frame.minX - 62,
-                                     "minimum destination leaves room for the GIF FPS label")
+            XCTAssertLessThanOrEqual(destination.frame.maxX + 8, maximumWidth.frame.minX - 72,
+                                     "minimum destination leaves room for both GIF labels")
+            XCTAssertLessThanOrEqual(maximumWidth.frame.maxX + 8, fps.frame.minX - 62)
             XCTAssertLessThanOrEqual(fps.frame.maxX + 8, change.frame.minX)
             XCTAssertTrue(controller.root.bounds.intersects(fps.frame))
+            XCTAssertTrue(controller.root.bounds.intersects(maximumWidth.frame))
             let audioNote = try XCTUnwrap(descendants(in: controller.root)
                 .compactMap { $0 as? NSTextField }
                 .first { $0.stringValue == "GIF silent · MP4 kept" })
@@ -796,9 +801,11 @@ final class RecordingEditorTests: XCTestCase {
                        name: "recording-editor-gif-24-fps-minimum-\(appearance)")
 
             fps.selectItem(withTitle: "8 FPS"); _ = fps.sendAction(fps.action, to: fps.target)
+            maximumWidth.selectItem(withTitle: "320 px")
+            _ = maximumWidth.sendAction(maximumWidth.action, to: maximumWidth.target)
             XCTAssertTrue(controller.dirty)
             try render(controller.root,
-                       name: "recording-editor-gif-8-fps-staged-minimum-\(appearance)")
+                       name: "recording-editor-gif-8-fps-320-width-staged-minimum-\(appearance)")
         }
     }
 
@@ -2106,6 +2113,149 @@ final class RecordingEditorTests: XCTestCase {
                        "format staging should not acquire the worker")
     }
 
+    func testGifMaximumWidthDerivesFromBaseAcrossApplyFailureMp4SaveAndReset() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            sourceWidth: 2_001, sourceHeight: 3_001))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let format = try popup("Recording export format", in: controller.root)
+        let maximumWidth = try popup("GIF maximum width", in: controller.root)
+        let outputMode = try popup("Recording output size", in: controller.root)
+        let outputWidth = try field("Recording output width", in: controller.root)
+        let outputHeight = try field("Recording output height", in: controller.root)
+        let apply = try button("Apply edits", in: controller.root)
+        let save = try button("Save new copy", in: controller.root)
+        XCTAssertTrue(maximumWidth.isHiddenOrHasHiddenAncestor)
+
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertEqual(maximumWidth.itemTitles, ["320 px", "480 px", "640 px", "800 px", "1200 px"])
+        XCTAssertEqual(maximumWidth.titleOfSelectedItem, "800 px")
+        XCTAssertFalse(maximumWidth.isHiddenOrHasHiddenAncestor)
+
+        outputMode.selectItem(withTitle: "Custom")
+        _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+        outputWidth.stringValue = "1601"; outputHeight.stringValue = "901"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: outputWidth))
+        worker.requestResult = .success(try presentation(
+            revision: 1, sourceWidth: 2_001, sourceHeight: 3_001,
+            output: NativeRecordingDimensions(width: 800, height: 450),
+            exportFormat: "gif", framesPerSecond: 15))
+        apply.performClick(nil)
+        var edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 800)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 450)
+        XCTAssertEqual(outputWidth.stringValue, "1601")
+        XCTAssertEqual(outputHeight.stringValue, "901",
+                       "accepted GIF dimensions do not replace the uncapped custom base")
+
+        maximumWidth.selectItem(withTitle: "1200 px")
+        _ = maximumWidth.sendAction(maximumWidth.action, to: maximumWidth.target)
+        worker.requestResult = .failure(AppBridgeError.backend("wide GIF preview unavailable"))
+        apply.performClick(nil)
+        edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1200)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 674,
+                       "1200 derives from the normalized 1600 × 900 base, not accepted 800 × 450")
+        XCTAssertEqual(maximumWidth.titleOfSelectedItem, "1200 px")
+
+        worker.requestResult = .success(try presentation(
+            revision: 2, sourceWidth: 2_001, sourceHeight: 3_001,
+            output: NativeRecordingDimensions(width: 1200, height: 674),
+            exportFormat: "gif", framesPerSecond: 15))
+        apply.performClick(nil)
+        let seek = try slider("Recording frame position", in: controller.root)
+        worker.requestResult = .success(try presentation(
+            position: 733, revision: 3, sourceWidth: 2_001, sourceHeight: 3_001,
+            output: NativeRecordingDimensions(width: 1200, height: 674),
+            exportFormat: "gif", framesPerSecond: 15))
+        seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(maximumWidth.titleOfSelectedItem, "1200 px")
+        XCTAssertEqual(outputWidth.stringValue, "1601")
+        XCTAssertEqual(outputHeight.stringValue, "901",
+                       "seek retains both the GIF choice and its independent custom base")
+
+        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+        worker.requestResult = .success(try presentation(
+            position: 733, revision: 4, sourceWidth: 2_001, sourceHeight: 3_001,
+            output: NativeRecordingDimensions(width: 1601, height: 901)))
+        apply.performClick(nil)
+        edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1601)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 901,
+                       "MP4 restores the independent custom base dimensions")
+        XCTAssertTrue(maximumWidth.isHiddenOrHasHiddenAncestor)
+
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertEqual(maximumWidth.titleOfSelectedItem, "1200 px")
+        maximumWidth.selectItem(withTitle: "320 px")
+        _ = maximumWidth.sendAction(maximumWidth.action, to: maximumWidth.target)
+        worker.requestResult = .success(try presentation(
+            position: 733, revision: 5, sourceWidth: 2_001, sourceHeight: 3_001,
+            output: NativeRecordingDimensions(width: 320, height: 180),
+            exportFormat: "gif", framesPerSecond: 15))
+        apply.performClick(nil)
+        edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 320)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 180,
+                       "repeated width changes continue deriving from the custom base")
+        worker.saveResult = .success(.saved(path: "/Exports/maximum-width.gif"))
+        save.performClick(nil)
+        XCTAssertFalse(controller.dirty)
+
+        controller.present(artifact: recordingArtifact(id: "next-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(worker.openCount, 2)
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertEqual(maximumWidth.titleOfSelectedItem, "800 px",
+                       "a successful new-item open resets the item-local maximum width")
+    }
+
+    func testGifMaximumWidthUsesCropPresetAndNeverUpscales() throws {
+        _ = NSApplication.shared
+        let crop = NativeRecordingCropRect(x: 37, y: 53, width: 501, height: 1_001)
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            sourceWidth: 2_001, sourceHeight: 3_001, crop: crop))
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let format = try popup("Recording export format", in: controller.root)
+        let maximumWidth = try popup("GIF maximum width", in: controller.root)
+        let outputMode = try popup("Recording output size", in: controller.root)
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        maximumWidth.selectItem(withTitle: "1200 px")
+        _ = maximumWidth.sendAction(maximumWidth.action, to: maximumWidth.target)
+        worker.requestResult = .success(try presentation(
+            revision: 1, sourceWidth: 2_001, sourceHeight: 3_001, crop: crop,
+            output: NativeRecordingDimensions(width: 500, height: 1000),
+            exportFormat: "gif", framesPerSecond: 15))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        var edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 500)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 1000,
+                       "portrait crop is normalized to even dimensions but never upscaled")
+
+        outputMode.selectItem(withTitle: "720p maximum")
+        _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
+        maximumWidth.selectItem(withTitle: "320 px")
+        _ = maximumWidth.sendAction(maximumWidth.action, to: maximumWidth.target)
+        worker.requestResult = .success(try presentation(
+            revision: 2, sourceWidth: 2_001, sourceHeight: 3_001, crop: crop,
+            output: NativeRecordingDimensions(width: 320, height: 640),
+            exportFormat: "gif", framesPerSecond: 15))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 320)
+        XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 640,
+                       "the GIF width cap follows crop and preset geometry")
+    }
+
     func testGifPaletteFollowsRememberedQualityThroughMaximumFailureAndSave() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation())
@@ -2711,6 +2861,22 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertLessThanOrEqual(try Data(contentsOf: mp4Path).count, 100_000)
         XCTAssertEqual(mp4Accepted.image.width, 640)
         XCTAssertEqual(mp4Accepted.image.height, 360)
+
+        var widthEdit = opened.1.snapshot.edit
+        widthEdit["output_width"] = 320; widthEdit["output_height"] = 180
+        var widthExport = opened.1.snapshot.saveExport
+        widthExport["format"] = "gif"; widthExport["quality"] = "preserve"
+        widthExport["max_size_bytes"] = NSNull(); widthExport["frames_per_second"] = 15
+        let widthAccepted = try session.request(["operation": "update_preview", "edit": widthEdit,
+                                                 "export": widthExport])
+        XCTAssertEqual(widthAccepted.image.width, 320)
+        XCTAssertEqual(widthAccepted.image.height, 180)
+        let widthPath = retryFixture.root.appendingPathComponent("maximum-width.gif")
+        _ = try session.save(destination: widthPath.path, export: widthAccepted.snapshot.saveExport,
+                             cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+        XCTAssertEqual(try videoDimensions(widthPath, tools: tools),
+                       NativeRecordingDimensions(width: 320, height: 180),
+                       "accepted GIF maximum-width dimensions reach the encoded output")
 
         export["format"] = "gif"; export["frames_per_second"] = 30
         let accepted = try session.request(["operation": "update_preview",

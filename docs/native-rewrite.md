@@ -540,6 +540,12 @@ frame and the staged correction. Private X11 light/dark coverage exports 24 and
 dimensions, colors, source/History immutability, failure/retry and minimum layout.
 AppKit real-media coverage exercises the same asymmetric trim at both cadences;
 physical macOS/Windows/Wayland acceptance remains open.
+AppKit additionally offers shipping-compatible GIF maximum widths of
+320/480/640/800/1200 pixels (default 800). The cap applies after crop and
+preset/custom output sizing, never upscales, and always recomputes from the
+independently retained MP4 base instead of compounding an accepted GIF reduction.
+Apply/save/seek/failure/dirty/new-item behavior stays on the existing boundary.
+Windows/Linux native support and physical acceptance remain open.
 Both native hosts map their existing GIF quality choice to the shipping palette
 limits: Tiny 64, Small 96, Standard 128 and High/Highest/Preserve 256 colors. No separate
 palette control is added. Maximum uses the remembered quality for the palette while
