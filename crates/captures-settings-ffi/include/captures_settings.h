@@ -472,8 +472,9 @@ bool captures_recording_timeline_trim_update_v1(CapturesRecordingTimelineTrimDra
  * preview_export identifies the first export attempt represented by the retained
  * frame. WebM and size-budget previews are unavailable. Accepted requests atomically
  * replace snapshot/frame; failures retain the last good snapshot, frame and revision.
- * Free every JSON response with captures_settings_free_v1. No audio playback,
- * persistent draft, replacement, account, or release behavior exists. */
+ * Free every JSON response with captures_settings_free_v1. Playback v1 remains
+ * silent; playback v2 can explicitly use accepted audio. No persistent draft,
+ * replacement, account, or release behavior exists. */
 typedef struct CapturesRecordingEditorSession CapturesRecordingEditorSession;
 typedef struct CapturesRecordingEditorFrame CapturesRecordingEditorFrame;
 typedef struct CapturesRecordingEditorCancel CapturesRecordingEditorCancel;
@@ -516,6 +517,17 @@ CapturesRecordingEditorFrame *captures_recording_editor_source_frame_v1(
  * existing pixel/free functions and may outlive the stream. NULL free allowed. */
 typedef struct CapturesRecordingEditorPlayback CapturesRecordingEditorPlayback;
 CapturesRecordingEditorPlayback *captures_recording_editor_playback_open_v1(
+    const CapturesRecordingEditorSession *session, uint64_t position_ms,
+    const CapturesRecordingEditorCancel *cancel, char **output_json);
+/* Explicit accepted-audio playback. It otherwise shares v1 positioning,
+ * RGBA frames, next/free ownership, bounds, and cancellation. Success adds
+ * audio_enabled to the open result. GIF, no source audio, all accepted tracks
+ * muted, or all accepted gains zero reports false and does not open a device.
+ * Audible playback opens the default output device and a second persistent
+ * FFmpeg decoder; unavailable/broken output fails instead of falling back to
+ * silence. Create, drive, and free the stream on one serialized owning worker;
+ * backend callbacks are internal and do not allocate, block, or lock. */
+CapturesRecordingEditorPlayback *captures_recording_editor_playback_open_v2(
     const CapturesRecordingEditorSession *session, uint64_t position_ms,
     const CapturesRecordingEditorCancel *cancel, char **output_json);
 CapturesRecordingEditorFrame *captures_recording_editor_playback_next_v1(
