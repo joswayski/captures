@@ -52,7 +52,7 @@ enum Job {
     Estimate(CancelToken),
     Thumbnails(CancelToken),
     SourceFrame(CancelToken),
-    Play(u64, CancelToken),
+    Play(u64, bool, CancelToken),
     Shutdown,
 }
 
@@ -73,6 +73,7 @@ enum Event {
     Estimated(Result<ExportEstimate, String>),
     Thumbnails(Result<RecordingTimelineThumbnails, String>),
     SourceFrame(Result<Arc<RgbaImage>, String>),
+    PlaybackStarted { audio_enabled: bool },
     PlaybackFinished(Result<PlaybackEnd, String>),
     Destination(Option<PathBuf>),
 }
@@ -105,6 +106,8 @@ struct View {
     thumbnail_error: Option<String>,
     playing: bool,
     preview_loop: Arc<AtomicBool>,
+    preview_sound: bool,
+    playback_audio_enabled: bool,
     playback_position_ms: Option<u64>,
     playback_ended: bool,
     close_after_playback: bool,
@@ -271,7 +274,7 @@ impl View {
         self.position_ms = self.playback_position_ms.unwrap_or(p.position_ms);
         let cancel = CancelToken::default();
         self.cancel = Some(cancel.clone());
-        self.send(tx, Job::Play(position, cancel));
+        self.send(tx, Job::Play(position, self.preview_sound, cancel));
     }
 
     fn pause_playback(&self) {
@@ -328,6 +331,7 @@ impl View {
                 self.playing = playing;
                 if playing {
                     self.playback_ended = false;
+                    self.playback_audio_enabled = false;
                 }
                 if loading_thumbnails {
                     self.thumbnail_error = None;
@@ -496,6 +500,26 @@ impl View {
                     }
                 }
             }
+            Event::PlaybackStarted { audio_enabled } => {
+                if self.playing
+                    && self
+                        .cancel
+                        .as_ref()
+                        .is_some_and(|cancel| !cancel.is_cancelled())
+                {
+                    self.playback_audio_enabled = audio_enabled;
+                    self.status = Some(
+                        if audio_enabled {
+                            "Playing accepted audio on the default output device."
+                        } else if self.preview_sound {
+                            "Playing silently: the accepted format or audio mix has no sound."
+                        } else {
+                            "Playing silently."
+                        }
+                        .into(),
+                    );
+                }
+            }
             Event::PlaybackFinished(result) => {
                 self.busy = false;
                 self.playing = false;
@@ -506,9 +530,9 @@ impl View {
                         self.playback_ended = matches!(end, PlaybackEnd::Ended);
                         self.status = Some(
                             if self.playback_ended {
-                                "Silent playback ended. Play restarts the accepted trim."
+                                "Playback ended. Play restarts the accepted trim."
                             } else {
-                                "Silent playback paused."
+                                "Playback paused."
                             }
                             .into(),
                         );
@@ -521,9 +545,11 @@ impl View {
                             let frame = p.frame.clone();
                             self.set_frame(ctx, &frame);
                         }
+                        self.status = None;
                         self.error = Some(format!("Playback failed: {error}"));
                     }
                 }
+                self.playback_audio_enabled = false;
                 if std::mem::take(&mut self.close_after_playback) {
                     self.request_close();
                 }
@@ -658,13 +684,25 @@ impl Editor {
                             .ok_or_else(|| "Recording editor is unavailable.".to_owned())
                             .and_then(|s| s.source_frame(&cancel)),
                     ),
-                    Job::Play(position, cancel) => {
+                    Job::Play(position, sound, cancel) => {
                         let result = (|| {
                             let session =
                                 session.as_ref().ok_or("Recording editor is unavailable.")?;
                             let mut position = position;
+                            let mut started = false;
                             loop {
-                                let mut playback = session.playback(position, &cancel)?;
+                                let mut playback = if sound {
+                                    session.playback_with_audio(position, &cancel)?
+                                } else {
+                                    session.playback(position, &cancel)?
+                                };
+                                if !started {
+                                    let _ = out.send(Event::PlaybackStarted {
+                                        audio_enabled: playback.audio_enabled(),
+                                    });
+                                    wake(&wake_ctx, viewport);
+                                    started = true;
+                                }
                                 let mut decoded_frame = false;
                                 while let Some(frame) = playback.next_frame()? {
                                     if cancel.is_cancelled() {
@@ -1486,7 +1524,7 @@ fn show(
             let previous_actual_size = view.preview_actual_size;
             ui.horizontal(|ui| {
                 ui.strong("Preview");
-                ui.weak(if view.adjusting_crop { "Source crop" } else { "Silent playback" });
+                ui.weak(if view.adjusting_crop { "Source crop" } else if view.playback_audio_enabled { "Audio playback" } else if view.preview_sound && !view.playing { "Sound selected" } else { "Silent playback" });
                 if view.playing {
                     let pausing = view.cancel.as_ref().is_some_and(CancelToken::is_cancelled);
                     if ui.add_enabled(!pausing, egui::Button::new(if pausing { "Pausing…" } else { "Pause" }).small()).clicked() {
@@ -1495,7 +1533,7 @@ fn show(
                     }
                 } else if ui.add_enabled(!view.busy && !view.picker && !view.confirm_close
                     && !view.adjusting_crop && view.presented.is_some() && !view.unapplied(), egui::Button::new("Play").small())
-                    .on_hover_text("Play accepted trim without audio. Apply staged edits first. Motion preview fits within 1280 × 720.")
+                    .on_hover_text("Play the accepted trim and mix; Sound is off by default. Apply staged edits first. Motion preview fits within 1280 × 720.")
                     .clicked()
                 {
                     view.request_playback(tx);
@@ -1516,6 +1554,13 @@ fn show(
                 {
                     view.adjusting_crop = false;
                     view.crop_gesture = None;
+                }
+                if ui.add_enabled(view.presented.is_some() && !view.busy && !view.picker && !view.confirm_close,
+                    egui::Button::new("Sound").selected(view.preview_sound).small())
+                    .on_hover_text("Preview accepted MP4 audio on the default output device. Change only while stopped. If the device fails, turn Sound off and retry. This never changes the export.")
+                    .clicked()
+                {
+                    view.preview_sound = !view.preview_sound;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add(egui::Button::new("100%").small().selected(view.preview_actual_size))
@@ -1774,7 +1819,7 @@ fn show(
                     ui.weak(if view.gif {
                         "GIF has no audio. Settings are kept for MP4."
                     } else {
-                        "Applied on export · frame preview is silent"
+                        "Apply for export and Sound preview"
                     });
                     ui.add_enabled_ui(!view.gif, |ui| {
                         for (available, label, volume, mute) in [
@@ -2762,7 +2807,7 @@ mod tests {
         // Uncommitted seek text is not the frame currently being displayed.
         view.position_ms = 2200;
         view.request_playback(&tx);
-        let Job::Play(position, cancel) = jobs.recv().unwrap() else {
+        let Job::Play(position, false, cancel) = jobs.recv().unwrap() else {
             panic!("play queued")
         };
         assert_eq!(position, 700);
@@ -2813,7 +2858,7 @@ mod tests {
         view.receive(&ctx, Event::PlaybackFinished(Ok(PlaybackEnd::Paused)));
         assert!(!view.busy && !view.playing && view.cancel.is_none());
         view.request_playback(&tx);
-        assert!(matches!(jobs.recv().unwrap(), Job::Play(1100, _)));
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(1100, false, _)));
         view.receive_playback_frame(
             &ctx,
             PlaybackFrame {
@@ -2824,7 +2869,7 @@ mod tests {
         view.receive(&ctx, Event::PlaybackFinished(Ok(PlaybackEnd::Ended)));
         view.request_playback(&tx);
         assert!(
-            matches!(jobs.recv().unwrap(), Job::Play(123, _)),
+            matches!(jobs.recv().unwrap(), Job::Play(123, false, _)),
             "EOF replays accepted trim"
         );
         let p = view.presented.as_ref().unwrap();
@@ -2839,6 +2884,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut view = opened();
         view.preview_loop.store(true, Ordering::Relaxed);
+        view.preview_sound = true;
         let (tx, jobs) = mpsc::channel();
         view.request_playback(&tx);
         jobs.recv().unwrap();
@@ -2866,9 +2912,98 @@ mod tests {
             view.preview_loop.load(Ordering::Relaxed),
             "Pause/seek retains the loop preference"
         );
+        assert!(
+            view.preview_sound,
+            "Pause/seek retains the sound preference"
+        );
         view.request_playback(&tx);
-        assert!(matches!(jobs.recv().unwrap(), Job::Play(950, _)));
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(950, true, _)));
         assert!(!view.dirty());
+    }
+
+    #[test]
+    fn sound_metadata_cancellation_and_device_error_preserve_accepted_state() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let frame = view.presented.as_ref().unwrap().frame.clone();
+        view.estimate = Some(ExportEstimate {
+            size_bytes: 5678,
+            exact: true,
+        });
+        view.preview_sound = true;
+        let (tx, jobs) = mpsc::channel();
+        view.request_playback(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(700, true, _)));
+        view.receive(
+            &ctx,
+            Event::PlaybackStarted {
+                audio_enabled: true,
+            },
+        );
+        assert!(
+            view.playback_audio_enabled && view.status.as_ref().unwrap().contains("default output")
+        );
+        view.receive_playback_frame(
+            &ctx,
+            PlaybackFrame {
+                position_ms: 1337,
+                pixels: Arc::new(RgbaImage::new(2, 1)),
+            },
+        );
+        view.pause_playback();
+        view.receive(
+            &ctx,
+            Event::PlaybackStarted {
+                audio_enabled: false,
+            },
+        );
+        assert!(
+            view.playback_audio_enabled,
+            "late metadata is ignored after Pause"
+        );
+        assert_eq!(
+            view.position_ms, 1337,
+            "metadata never changes presentation time"
+        );
+        view.receive(&ctx, Event::PlaybackFinished(Ok(PlaybackEnd::Paused)));
+        assert!(view.preview_sound && !view.playback_audio_enabled);
+        view.request_playback(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(1337, true, _)));
+        view.receive(
+            &ctx,
+            Event::PlaybackStarted {
+                audio_enabled: false,
+            },
+        );
+        assert!(!view.playback_audio_enabled);
+        assert!(view.status.as_ref().unwrap().contains("has no sound"));
+        view.receive(
+            &ctx,
+            Event::PlaybackFinished(Err("output device unavailable".into())),
+        );
+        assert!(view.preview_sound && view.status.is_none());
+        assert!(
+            view.error
+                .as_ref()
+                .unwrap()
+                .contains("output device unavailable")
+        );
+        assert_eq!(view.position_ms, 700);
+        assert!(
+            jobs.try_recv().is_err(),
+            "device failure never silently retries without sound"
+        );
+        view.preview_sound = false;
+        view.request_playback(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(700, false, _)));
+        assert!(view.error.is_none());
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+        assert_eq!(view.estimate.unwrap().size_bytes, 5678);
+        assert!(!view.dirty() && !view.unapplied() && !view.history_changed);
+        assert!(
+            !opened().preview_sound,
+            "new items default to silent playback"
+        );
     }
 
     #[test]
@@ -2882,7 +3017,7 @@ mod tests {
         view.presented.as_mut().unwrap().edit.trim_start_ms = 123;
         assert!(view.dirty() && !view.unapplied());
         view.request_playback(&tx);
-        assert!(matches!(jobs.recv().unwrap(), Job::Play(700, _)));
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(700, false, _)));
         view.receive_playback_frame(
             &ctx,
             PlaybackFrame {
@@ -2896,7 +3031,7 @@ mod tests {
         assert!(view.playback_position_ms.is_none() && view.dirty());
         assert!(view.error.as_ref().unwrap().contains("source removed"));
         view.request_playback(&tx);
-        let Job::Play(_, cancel) = jobs.recv().unwrap() else {
+        let Job::Play(_, false, cancel) = jobs.recv().unwrap() else {
             panic!("retry queued")
         };
         assert!(!cancel.is_cancelled() && view.error.is_none());
@@ -2916,7 +3051,7 @@ mod tests {
         let (events, rx) = mpsc::channel();
         let mut view = opened();
         view.request_playback(&tx);
-        assert!(matches!(jobs.recv().unwrap(), Job::Play(_, _)));
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(_, false, _)));
         let editor = Editor {
             viewport: egui::ViewportId::ROOT,
             view: Arc::new(Mutex::new(view)),
@@ -2952,7 +3087,7 @@ mod tests {
             "motion alone never blocks clean quit"
         );
         editor.view.lock().unwrap().request_playback(&editor.tx);
-        let Job::Play(_, cancel) = jobs.recv().unwrap() else {
+        let Job::Play(_, false, cancel) = jobs.recv().unwrap() else {
             panic!("replay")
         };
         assert!(editor.flush(&ctx).is_err());
@@ -3159,6 +3294,8 @@ mod tests {
                 let mut rects = Vec::new();
                 for label in [
                     "Play",
+                    "Loop preview",
+                    "Sound",
                     "Fit",
                     "100%",
                     "123456789012 bytes (exact)",
@@ -3213,76 +3350,86 @@ mod tests {
     }
 
     #[test]
-    fn loop_toggle_is_transient_and_remains_available_until_pause_teardown() {
-        for state in 0..3 {
-            let tokens = crate::tokens::load().remove("light-mustard").unwrap();
-            let ctx = egui::Context::default();
-            tokens.apply(&ctx, true);
-            let mut view = opened();
-            let accepted = view.presented.as_ref().unwrap().frame.clone();
-            view.estimate = Some(ExportEstimate {
-                size_bytes: 4321,
-                exact: true,
-            });
-            let (tx, _jobs) = mpsc::channel();
-            let (events, _) = mpsc::channel();
-            assert!(!view.preview_loop.load(Ordering::Relaxed));
-            if state > 0 {
-                view.request_playback(&tx);
-            }
-            if state == 2 {
-                view.pause_playback();
-            }
-            let mut toggle = egui::Pos2::ZERO;
-            for pass in 0..3 {
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(760., 580.),
-                        )),
-                        events: if pass == 2 {
-                            vec![
-                                egui::Event::PointerMoved(toggle),
-                                trim_pointer(toggle, true),
-                                trim_pointer(toggle, false),
-                            ]
-                        } else {
-                            Vec::new()
-                        },
-                        ..Default::default()
-                    },
-                    |ui| show(ui, &tokens, &mut view, &tx, &events, egui::ViewportId::ROOT),
-                );
-                output.textures_delta.clear();
-                if pass == 1 {
-                    toggle = output
-                        .shapes
-                        .iter()
-                        .find_map(|shape| match &shape.shape {
-                            egui::Shape::Text(text) if text.galley.job.text == "Loop preview" => {
-                                Some(text.pos + text.galley.rect.center().to_vec2())
-                            }
-                            _ => None,
-                        })
-                        .expect("loop control visible at minimum size");
+    fn preview_toggles_are_transient_and_sound_waits_for_worker_teardown() {
+        for label in ["Loop preview", "Sound"] {
+            for state in 0..6 {
+                let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+                let ctx = egui::Context::default();
+                tokens.apply(&ctx, true);
+                let mut view = opened();
+                let accepted = view.presented.as_ref().unwrap().frame.clone();
+                view.estimate = Some(ExportEstimate {
+                    size_bytes: 4321,
+                    exact: true,
+                });
+                let (tx, _jobs) = mpsc::channel();
+                let (events, _) = mpsc::channel();
+                assert!(!view.preview_loop.load(Ordering::Relaxed));
+                if state == 1 || state == 2 {
+                    view.request_playback(&tx);
                 }
+                if state == 2 {
+                    view.pause_playback();
+                }
+                view.busy |= state == 3;
+                view.picker = state == 4;
+                view.confirm_close = state == 5;
+                let mut toggle = egui::Pos2::ZERO;
+                for pass in 0..3 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(760., 580.),
+                            )),
+                            events: if pass == 2 {
+                                vec![
+                                    egui::Event::PointerMoved(toggle),
+                                    trim_pointer(toggle, true),
+                                    trim_pointer(toggle, false),
+                                ]
+                            } else {
+                                Vec::new()
+                            },
+                            ..Default::default()
+                        },
+                        |ui| show(ui, &tokens, &mut view, &tx, &events, egui::ViewportId::ROOT),
+                    );
+                    output.textures_delta.clear();
+                    if pass == 1 {
+                        toggle = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) if text.galley.job.text == label => {
+                                    Some(text.pos + text.galley.rect.center().to_vec2())
+                                }
+                                _ => None,
+                            })
+                            .expect("preview control visible at minimum size");
+                    }
+                }
+                assert_eq!(
+                    if label == "Sound" {
+                        view.preview_sound
+                    } else {
+                        view.preview_loop.load(Ordering::Relaxed)
+                    },
+                    state == 0 || (label == "Loop preview" && state == 1),
+                    "{label}: sound changes only idle; loop also changes playing; both wait for teardown/other work"
+                );
+                assert!(!view.dirty() && !view.unapplied());
+                assert_eq!(view.estimate.as_ref().unwrap().size_bytes, 4321);
+                assert!(Arc::ptr_eq(
+                    &accepted,
+                    &view.presented.as_ref().unwrap().frame
+                ));
+                assert!(
+                    !opened().preview_loop.load(Ordering::Relaxed),
+                    "new editors default to non-looping playback"
+                );
+                assert!(!opened().preview_sound);
             }
-            assert_eq!(
-                view.preview_loop.load(Ordering::Relaxed),
-                state != 2,
-                "loop can change while idle/playing but not during Pause teardown"
-            );
-            assert!(!view.dirty() && !view.unapplied());
-            assert_eq!(view.estimate.as_ref().unwrap().size_bytes, 4321);
-            assert!(Arc::ptr_eq(
-                &accepted,
-                &view.presented.as_ref().unwrap().frame
-            ));
-            assert!(
-                !opened().preview_loop.load(Ordering::Relaxed),
-                "new editors default to non-looping playback"
-            );
         }
     }
 
@@ -3295,7 +3442,7 @@ mod tests {
             let (tx, jobs) = mpsc::channel();
             let (events, _) = mpsc::channel();
             view.request_playback(&tx);
-            let Job::Play(_, cancel) = jobs.recv().unwrap() else {
+            let Job::Play(_, false, cancel) = jobs.recv().unwrap() else {
                 panic!("play")
             };
             let mut pause = egui::Pos2::ZERO;

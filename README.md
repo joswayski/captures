@@ -252,19 +252,23 @@ previews scroll within the preview area. Playback
 still uses its bounded decoded size, not full-source resolution.
 The trim track shows retained full-source thumbnails, independent of the edited
 preview. Thumbnail generation can be canceled or retried without losing edits;
-it does not change the source recording. **Play/Pause** offers silent motion within
+it does not change the source recording. **Play/Pause** offers motion within
 the accepted trim, with a preview capped at 30 fps and 1280 × 720. Pause retains
 the last displayed frame; reaching the trim end makes Play restart that range.
 Editing and export controls wait for playback to stop. Losing focus or minimizing
 pauses playback. **Loop preview**, off by default, repeats the accepted trim until
 paused. It can be switched on or off during playback and never changes the export.
-Audio playback is not implemented.
+**Sound**, off by default and changeable while stopped, previews the accepted MP4
+audio mix on the default output device. GIF and mixes with no audible tracks stay
+silent without opening a device. Device failures are visible; turn Sound off to
+retry silently. Loop reopens the decoders each lap and is not gapless. Physical
+audio routing and A/V synchronization acceptance remain open.
 The preview identifies its accepted format/quality, and saving uses those settings.
 **Estimate size** checks those accepted settings without publishing an export.
 Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
 audio-only Preserve changes show approximate sizes. Estimation can be canceled.
 Available system and microphone tracks have independent volume/mute controls plus
-mono output. These settings apply to MP4 exports; the frame preview is silent.
+mono output. Accepted settings apply to MP4 exports and Sound preview.
 GIF disables audio controls without discarding the MP4 settings.
 Original, 1080p maximum and 720p maximum output presets preserve the current crop's
 aspect ratio and never upscale. Custom dimensions override the preset.

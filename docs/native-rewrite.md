@@ -21,9 +21,9 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, silent Play/Pause, opt-in Loop preview and MP4/GIF save-new-copy | Audio playback, audio meter/device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, Play/Pause (silent by default), opt-in Loop preview and MP4/GIF save-new-copy; wgpu adds opt-in accepted-mix Sound preview | AppKit audio playback, audio meter/device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording audio playback and remaining controls |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; AppKit recording audio playback and remaining controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -457,7 +457,7 @@ to the compact row. Excluded ranges are dimmed and grips retain the same hit reg
 Generation runs once on the serialized worker after open, with independent cancel
 and retry; failure leaves editing available. Edits/seek retain the source strip and
 never regenerate it or change the accepted preview. Close/quit waits for generation.
-The wgpu host also offers silent Play/Pause through a persistent shared FFmpeg
+The wgpu host also offers Play/Pause through a persistent shared FFmpeg
 decoder capped at 30 fps and 1280 × 720. Motion frames retain the accepted spatial
 edits but stay separate from session state, dirty identity, estimates and History.
 A single latest-frame slot bounds pending UI work; no timer remains after stop.
@@ -470,7 +470,16 @@ Enabled looping restarts at the accepted trim start only after a nonempty clean
 EOF and completed decoder teardown. Turning it off finishes the current lap;
 Pause, close and failure never restart. Each new editor defaults to one pass.
 AppKit implements its Loop control in the separate host slice described below.
-Audio playback and physical playback acceptance remain open.
+Sound defaults off per editor and can change only when the worker is idle, not
+during playback or Pause teardown. Opt-in Sound uses the shared accepted-mix audio
+API; silent v1 remains unchanged. One metadata event per operation reports whether
+audio is actually enabled. GIF/no-track/muted/zero-gain mixes use silent playback
+without a device. Audible MP4 uses the default output device; device failures remain
+visible and require an explicit Sound-off retry to play silently. Loop reopens both
+decoders each lap and is not gapless. Sound survives Apply/Seek/Pause/errors but
+does not change edits, estimates, dirty identity, exports or History. Private-X11
+checks capture real CPAL output through an isolated PulseAudio sink, not physical
+speakers. AppKit audio playback and physical A/V-sync/device acceptance remain open.
 Raw-input tests exercise multi-pass delivery, keyboard focus,
 thresholds, cancellation and busy gates; private-X11 tests cover staged values,
 thumbnail loading/cancel/failure/retry and temporal pixels, exported duration/colors
@@ -515,7 +524,7 @@ Available system/microphone tracks have 0–200% volume, independent mute and mo
 output controls. Availability comes from the accepted session's trusted audio
 identity, not caller-provided track flags. Audio stages with geometry/format and
 uses the same Apply/save/dirty guards; failed updates preserve staged controls
-and accepted output state. The frame preview stays silent. GIF disables audio
+and accepted output state. Accepted audio also feeds opt-in Sound preview. GIF disables audio
 controls while keeping settings for a later MP4 export. No-track recordings show
 an explicit explanation rather than editable controls. Private X11 smoke uses
 distinct stereo tones in a retained playback mix plus separate system/mic tracks,
@@ -535,7 +544,7 @@ the result; a seek retains it. Estimation has independent cancellation and error
 creates no History entry, and never marks unsaved edits as saved. No estimate promises
 a byte budget. Close/quit waits for accepted work, as with export.
 The preview/timeline/save hierarchy follows the shipping recording editor, but
-the UI is not a visual match; audio playback remains open.
+the UI is not a visual match; physical audio playback acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted
 frame, and unapplied values gate scrubbing/export. Failed edits keep
 the staged values available for correction. MP4/GIF Save new copy uses
