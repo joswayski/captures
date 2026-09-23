@@ -275,8 +275,10 @@ volume and mute controls plus mono output; audio applies to MP4 while GIF disabl
 the controls without losing their MP4 values. Its graphical trim handles overlay an
 immutable 12-frame source-relative thumbnail strip and stage the same numeric values
 without seeking; loading can be canceled or retried without disabling editing, and
-Apply remains explicit. Playback and graphical crop handles remain absent, so this
-is not Tauri editor parity. Windows/X11 implement the
+Apply remains explicit. Silent Play/Pause presents bounded accepted-edit motion
+frames and a source-relative playhead without changing the accepted preview, edits,
+History or source; audio and looping are not implemented. Graphical crop handles
+remain absent, so this is not Tauri editor parity. Windows/X11 implement the
 same numeric crop and output-size workflow; physical macOS, Windows and Wayland
 acceptance remains open.
 History displays recording posters and metadata; **Save file**
