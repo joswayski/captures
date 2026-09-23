@@ -218,7 +218,11 @@ impl CpalAudioSegment {
     }
 
     fn level(&self) -> f32 {
-        f32::from_bits(self.level_bits.load(Ordering::Acquire))
+        if self.warning().is_some() {
+            0.0
+        } else {
+            f32::from_bits(self.level_bits.load(Ordering::Acquire))
+        }
     }
 
     fn draft_info(&self) -> (PathBuf, i64) {
@@ -280,6 +284,7 @@ fn run_cpal_audio(
     };
     let _ = control.recv();
     drop(stream);
+    level_bits.store(0, Ordering::Release);
     finalize_writer(&writer)
 }
 
@@ -379,6 +384,7 @@ where
     let callback_level = level_bits.clone();
     let write_failure = failure.clone();
     let stream_failure = failure.clone();
+    let stream_level = level_bits.clone();
     let label = source.label();
     let other_audio = source.other_audio();
     let mut last_checkpoint = Instant::now();
@@ -401,6 +407,7 @@ where
                 }
             },
             move |error| {
+                stream_level.store(0, Ordering::Release);
                 set_failure(
                     &stream_failure,
                     format!("The {label} device disconnected. {other_audio} ({error})."),
@@ -552,4 +559,63 @@ pub(crate) fn audio_error(error: impl std::fmt::Display) -> XcapRecordingError {
 
 pub(crate) fn elapsed_milliseconds(started_at: Instant) -> i64 {
     i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn microphone_peak_tracks_asymmetric_samples_and_clears_on_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("microphone.wav");
+        let writer = Arc::new(Mutex::new(Some(
+            hound::WavWriter::create(
+                &path,
+                hound::WavSpec {
+                    channels: 1,
+                    sample_rate: 48_000,
+                    bits_per_sample: 32,
+                    sample_format: hound::SampleFormat::Float,
+                },
+            )
+            .unwrap(),
+        )));
+        let failure = Arc::new(Mutex::new(None));
+        let level_bits = Arc::new(AtomicU32::new(0));
+        let (control, _) = mpsc::channel();
+        let segment = CpalAudioSegment {
+            control,
+            thread: None,
+            path,
+            offset_ms: 0,
+            failure: failure.clone(),
+            level_bits: level_bits.clone(),
+        };
+        write_samples(
+            &[-0.75_f32, 0.25],
+            &writer,
+            &level_bits,
+            &failure,
+            false,
+            "microphone",
+            "video",
+        );
+        assert_eq!(segment.level(), 0.75);
+        set_failure(&failure, "device disconnected".into());
+        assert_eq!(segment.level(), 0.0);
+        // Even an in-flight callback publishing after the error cannot revive the meter.
+        write_samples(
+            &[0.5_f32],
+            &writer,
+            &level_bits,
+            &failure,
+            false,
+            "microphone",
+            "video",
+        );
+        assert_eq!(segment.level(), 0.0);
+        drop(segment);
+        finalize_writer(&writer).unwrap();
+    }
 }
