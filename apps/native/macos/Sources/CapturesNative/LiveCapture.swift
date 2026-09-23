@@ -416,11 +416,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                                       width: 320, height: visible ? 220 : 380)
         recoveryCancelButton.isHidden = recoveryCancel == nil
         recoveryCancelButton.isEnabled = recoveryCancel != nil && recoveryCancel?.isCancelled == false
-        let content = Surface(frame: NSRect(x: 0, y: 0, width: 284,
-            height: max(114, CGFloat(recoveryDrafts.count) * 96
-                + (recoveryError == nil && recoveryActionError == nil ? 0 : 76))))
-        for (index, draft) in recoveryDrafts.enumerated() {
-            let y = CGFloat(index) * 96
+        let content = Surface(frame: NSRect(x: 0, y: 0, width: 284, height: 114))
+        var nextY: CGFloat = 0
+        for draft in recoveryDrafts {
+            let y = nextY
             let title = NSTextField(labelWithString: "\(draft.kind == "gif" ? "GIF" : draft.kind == "video" ? "Video" : "Unavailable") recording")
             title.frame = NSRect(x: 2, y: y + 2, width: 278, height: 18)
             title.font = .systemFont(ofSize: 12, weight: .semibold)
@@ -442,28 +441,42 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 recover.isEnabled = !capturing && !clearingHistory && !recoveryBusy && !recoveryLoading && !recoveryConfirmation
                 discard.isEnabled = recover.isEnabled
                 content.addSubview(recover); content.addSubview(discard)
+                nextY += 96
             } else {
-                let reason = NSTextField(wrappingLabelWithString: draft.reason ?? "This bundle cannot be recovered.")
-                reason.frame = NSRect(x: 2, y: y + 39, width: 278, height: 49)
+                let message = draft.reason ?? "This bundle cannot be recovered."
+                let reason = NSTextField(wrappingLabelWithString: message)
                 reason.font = .systemFont(ofSize: 10); reason.textColor = tokens.color("danger-text")
+                reason.toolTip = message
+                let height = textHeight(message, font: reason.font!, width: 278)
+                reason.frame = NSRect(x: 2, y: y + 39, width: 278, height: height)
                 content.addSubview(reason)
+                nextY += max(96, 39 + height + 8)
             }
         }
         if let message = recoveryError ?? recoveryActionError {
-            let y = CGFloat(recoveryDrafts.count) * 96
+            let y = nextY
             let error = NSTextField(wrappingLabelWithString: message)
-            error.frame = NSRect(x: 2, y: y + 2, width: 278, height: 45)
             error.font = .systemFont(ofSize: 10); error.textColor = tokens.color("danger-text")
+            error.toolTip = message
+            let height = textHeight(message, font: error.font!, width: 278)
+            error.frame = NSRect(x: 2, y: y + 2, width: 278, height: height)
             content.addSubview(error)
-            let retry = CaptureButton("Retry list", frame: NSRect(x: 2, y: y + 48, width: 110, height: 26),
+            let retry = CaptureButton("Retry list", frame: NSRect(x: 2, y: y + height + 6, width: 110, height: 26),
                                       tokens: tokens) { [weak self] in
                 self?.recoveryActionError = nil; self?.refreshRecovery()
             }
             retry.isEnabled = !recoveryLoading && !recoveryBusy
             content.addSubview(retry)
+            nextY += height + 40
         }
+        content.frame.size.height = max(114, nextY)
         recoveryScroll.documentView = content
         recoveryStatus.stringValue = recoveryBusy ? recoveryStage : ""
+    }
+
+    private func textHeight(_ message: String, font: NSFont, width: CGFloat) -> CGFloat {
+        ceil((message as NSString).boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]).height) + 3
     }
 
     private func currentRecovery(_ draft: RecordingRecoveryDraft) -> Bool {
@@ -477,6 +490,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
               let cancel = NativeRecordingEditorCancel() else { return }
         recoveryActionGeneration += 1
         let current = recoveryActionGeneration
+        let selectedAtDispatch = selectionGeneration
         recoveryBusy = true; recoveryCancel = cancel; recoveryActionError = nil
         recoveryStage = "Preparing…"
         updateActions(); renderRecovery()
@@ -494,10 +508,11 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 case .success(let recovered):
                     self.recoveryStage = "Opening recovered recording…"
                     self.renderRecovery()
-                    self.loadHistory(select: recovered.artifactID) { [weak self] in
+                    let shouldOpen = self.selectionGeneration == selectedAtDispatch
+                    self.loadHistory(select: shouldOpen ? recovered.artifactID : nil) { [weak self] in
                         guard let self, self.recoveryActionGeneration == current else { return }
                         self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
-                        guard self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
+                        guard shouldOpen, self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
                             ? self.artifacts[$0].id : nil }) == recovered.artifactID else { return }
                         self.status.stringValue = recovered.warning ?? "Recording recovered into History."
                         self.editScreenshot()
@@ -512,17 +527,19 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func confirmDiscard(_ draft: RecordingRecoveryDraft) {
         guard currentRecovery(draft), !recoveryConfirmation else { return }
-        recoveryConfirmation = true; renderRecovery()
+        recoveryConfirmation = true; updateActions()
         let alert = NSAlert()
         alert.messageText = "Discard interrupted recording permanently?"
         alert.informativeText = "This deletes the recovery bundle \(draft.sessionID) and cannot be undone."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Discard permanently"); alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].keyEquivalent = ""; alert.buttons[1].keyEquivalent = "\r"
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self else { return }
             self.recoveryConfirmation = false
+            self.updateActions()
             guard response == .alertFirstButtonReturn, self.currentRecovery(draft) else {
-                self.renderRecovery(); return
+                return
             }
             self.recoveryActionGeneration += 1
             let current = self.recoveryActionGeneration
@@ -1537,6 +1554,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         finishCapture()
         showError("Recording stopped; recovery files were preserved",
             AppBridgeError.backend(warning ?? "The recording engine stopped unexpectedly."))
+        refreshRecovery()
     }
 
     private func stopRecording() {
