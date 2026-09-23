@@ -203,6 +203,182 @@ fn preview_spec(format: ExportFormat, quality: QualityPreset) -> ExportSpec {
 }
 
 #[test]
+fn replace_original_rebases_session_without_changing_identity_or_old_frame() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let original = fs::read(&permanent).unwrap();
+    let mut session = open(&data, &entry, tools);
+    let retained = session.frame();
+    let mut edit = EditSpec {
+        trim_start_ms: 1_000,
+        trim_end_ms: Some(2_000),
+        output_width: Some(32),
+        output_height: Some(16),
+        ..EditSpec::default()
+    };
+    edit.audio.source_has_system_audio = true;
+    session
+        .execute(RecordingEditorRequest::UpdateEdit { edit })
+        .unwrap();
+    let revision = session.snapshot().revision;
+    let replaced = session
+        .replace_original(&CancelToken::default(), |_| {})
+        .unwrap();
+    assert!(matches!(
+        replaced,
+        captures_app::recording_editor::ReplacedRecording::Replaced { .. }
+    ));
+    assert_ne!(fs::read(&permanent).unwrap(), original);
+    assert_eq!(
+        fs::read(
+            data.path()
+                .join("history")
+                .join(&entry.id)
+                .join("media.mp4")
+        )
+        .unwrap(),
+        fs::read(&permanent).unwrap()
+    );
+    let snapshot = session.snapshot_v2();
+    assert_eq!(snapshot.editor.artifact_id, entry.id);
+    assert_eq!(snapshot.editor.position_ms, 0);
+    assert_eq!(snapshot.editor.revision, revision + 1);
+    assert_eq!(
+        (snapshot.editor.source.width, snapshot.editor.source.height),
+        (32, 16)
+    );
+    assert_eq!(snapshot.editor.edit.trim_start_ms, 0);
+    assert_eq!(snapshot.save_export.max_size_bytes, None);
+    assert_eq!(retained.dimensions(), (32, 24));
+    assert_dominant(retained.get_pixel(8, 8).0, 0);
+    session
+        .execute(RecordingEditorRequest::Seek { position_ms: 500 })
+        .unwrap();
+    assert_dominant(pixel(&session), 1);
+    let mut playback = session.playback(0, &CancelToken::default()).unwrap();
+    assert!(playback.next_frame().unwrap().is_some());
+    let copy = data.path().join("copy.mp4");
+    session
+        .save_new(
+            RecordingSaveRequest {
+                destination: copy.clone(),
+                export: export_spec(),
+            },
+            &CancelToken::default(),
+            |_| {},
+        )
+        .unwrap();
+    assert!(copy.is_file());
+}
+
+#[test]
+fn replace_original_rejects_reference_and_cancel_without_publication() {
+    let Some((data, entry, tools)) = setup(false) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let before = fs::read(&permanent).unwrap();
+    let mut session = open(&data, &entry, tools);
+    let error = session
+        .replace_original(&CancelToken::default(), |_| {})
+        .unwrap_err();
+    assert!(!error.requires_reopen);
+    assert_eq!(fs::read(&permanent).unwrap(), before);
+
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let before = fs::read(&permanent).unwrap();
+    let mut session = open(&data, &entry, tools);
+    let frame = session.frame();
+    let cancel = CancelToken::default();
+    cancel.cancel();
+    let error = session.replace_original(&cancel, |_| {}).unwrap_err();
+    assert!(!error.requires_reopen);
+    assert_eq!(fs::read(&permanent).unwrap(), before);
+    assert!(Arc::ptr_eq(&frame, &session.frame()));
+    assert_eq!(session.snapshot().revision, 0);
+    assert!(!session.requires_reopen());
+}
+
+#[test]
+fn replace_original_rejects_changed_source_and_metadata_before_publication() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let mut session = open(&data, &entry, tools);
+    let metadata = data
+        .path()
+        .join("history")
+        .join(&entry.id)
+        .join("metadata.json");
+    let original_metadata = fs::read(&metadata).unwrap();
+    fs::write(&metadata, b"{}").unwrap();
+    let error = session
+        .replace_original(&CancelToken::default(), |_| {})
+        .unwrap_err();
+    assert!(!error.requires_reopen);
+    fs::write(&metadata, original_metadata).unwrap();
+    let old = fs::read(&permanent).unwrap();
+    fs::write(&permanent, b"different bytes").unwrap();
+    let error = session
+        .replace_original(&CancelToken::default(), |_| {})
+        .unwrap_err();
+    assert!(!error.requires_reopen);
+    fs::write(&permanent, old).unwrap();
+    assert!(!session.requires_reopen());
+}
+
+#[test]
+fn replace_original_cancellation_during_export_keeps_original_and_history() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let recovery = data
+        .path()
+        .join("history")
+        .join(&entry.id)
+        .join("media.mp4");
+    let old = fs::read(&permanent).unwrap();
+    let metadata = fs::read(
+        data.path()
+            .join("history")
+            .join(&entry.id)
+            .join("metadata.json"),
+    )
+    .unwrap();
+    let mut session = open(&data, &entry, tools);
+    let cancel = CancelToken::default();
+    let mut progress_count = 0;
+    let error = session
+        .replace_original(&cancel, |_| {
+            progress_count += 1;
+            cancel.cancel();
+        })
+        .unwrap_err();
+    assert!(progress_count > 0);
+    assert!(!error.requires_reopen);
+    assert_eq!(fs::read(&permanent).unwrap(), old);
+    assert_eq!(fs::read(&recovery).unwrap(), old);
+    assert_eq!(
+        fs::read(
+            data.path()
+                .join("history")
+                .join(&entry.id)
+                .join("metadata.json")
+        )
+        .unwrap(),
+        metadata
+    );
+    assert_eq!(session.snapshot().revision, 0);
+}
+
+#[test]
 fn source_relative_scrubbing_and_edit_updates_are_atomic() {
     let Some((data, entry, tools)) = setup(true) else {
         return;
