@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--preview-scale", action="store_true", help="Exercise display-only Fit/100% and bounded preview scrolling")
     parser.add_argument("--gif-frame-rate", action="store_true", help="Exercise staged GIF cadence and real exported frame counts")
     parser.add_argument("--gif-quality", action="store_true", help="Exercise quality-dependent GIF palette output")
+    parser.add_argument("--gif-width", action="store_true", help="Exercise GIF width caps without compounding accepted dimensions")
     parser.add_argument("--maximum-size", action="store_true", help="Exercise accepted size caps, encoder retries and immutable publication")
     args = parser.parse_args()
     if args.sound:
@@ -165,7 +166,7 @@ def main():
         artifact = history / artifact_id
         artifact.mkdir(parents=True)
         source = output / "source.mp4"
-        source_width, source_height = (640, 360) if args.maximum_size or args.gif_quality else (1600, 900) if args.preview_scale else (640, 1440) if args.presets else (320, 180)
+        source_width, source_height = (640, 360) if args.maximum_size or args.gif_quality else (1600, 900) if args.preview_scale or args.gif_width else (640, 1440) if args.presets else (320, 180)
         source_size = f"{source_width}x{source_height}"
         segment_seconds = 2 if args.playback or args.sound else 1
         audio_inputs = []
@@ -379,6 +380,72 @@ def main():
                     "device-failure", "explicit-silent-retry", "minimum-layout", "gif-no-device",
                     "immutable-source-history", "no-export"]}, indent=2) + "\n")
             print("PASS Sound preview: default-off, virtual audio output, EOF, device error/retry and GIF without a device")
+            return
+        if args.gif_width:
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            click(editor, 87, 1082)
+            shot(editor, "gif-width-default-staged")
+            dimensions = {}
+            # Save the default, then increase it: reusing accepted 800px output
+            # as the base would silently prevent the 1200px export.
+            for maximum, menu_y, expected in ((800, None, (800, 450)), (1200, 835, (1200, 674)), (320, 659, (320, 180))):
+                if menu_y is not None:
+                    click(editor, 358, 873)
+                    shot(editor, f"gif-width-menu-{maximum}")
+                    click(editor, 358, menu_y)
+                destination = exports / f"width-{maximum}.gif"
+                field(editor, 360, 1038, destination)
+                click(editor, 899, 1082)
+                assert not destination.exists(), "staged width cannot save"
+                click(editor, 793, 1082)
+                shot(editor, f"gif-width-{maximum}-accepted")
+                click(editor, 899, 1082)
+                wait(destination.exists, f"{maximum}px GIF export")
+                idle(editor)
+                stream = json.loads(run("ffprobe", "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height", "-of", "json", str(destination)))["streams"][0]
+                assert (stream["width"], stream["height"]) == expected, stream
+                dimensions[str(maximum)] = stream
+            click(editor, 33, 1082)
+            click(editor, 793, 1082)
+            mp4 = exports / "restored.mp4"
+            field(editor, 360, 1038, mp4)
+            click(editor, 899, 1082)
+            wait(mp4.exists, "uncapped MP4 export")
+            idle(editor)
+            stream = json.loads(run("ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height", "-of", "json", str(mp4)))["streams"][0]
+            assert (stream["width"], stream["height"]) == (1600, 900), stream
+            click(editor, 87, 1082)
+            click(editor, 793, 1082)
+            restored = exports / "restored.gif"
+            field(editor, 360, 1038, restored)
+            click(editor, 899, 1082)
+            wait(restored.exists, "remembered GIF width export")
+            idle(editor)
+            restored_stream = json.loads(run("ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height", "-of", "json", str(restored)))["streams"][0]
+            assert (restored_stream["width"], restored_stream["height"]) == (320, 180), restored_stream
+            shot(editor, "gif-width-restored")
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            run("xdotool", "mousemove", "--window", editor, "450", "410",
+                "click", "--repeat", "25", "--delay", "40", "5", "sleep", ".5")
+            shot(editor, "gif-width-minimum")
+            click(editor, 358, 360)  # Saved-status row reduces the scrolling viewport.
+            shot(editor, "gif-width-minimum-menu")
+            run("xdotool", "key", "Escape")
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            assert len(list(history.glob("*/metadata.json"))) == 6
+            close(editor)
+            wait(lambda: not windows("Recording editor"), "saved GIF width closes cleanly")
+            close(root)
+            wait(lambda: app.poll() is not None, "GIF width quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "dimensions": dimensions, "mp4_dimensions": stream,
+                "checks": ["staged-save-gate", "default-800", "increase-without-compounding", "decrease-320",
+                    "mp4-base-restored", "gif-choice-retained", "minimum-controls", "immutable-source-history", "clean-close"]}, indent=2) + "\n")
+            print(f"PASS GIF width: {dimensions}, MP4 restored to 1600x900, immutable source")
             return
         if args.gif_quality:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
