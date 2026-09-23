@@ -802,6 +802,81 @@ final class RecordingEditorTests: XCTestCase {
         }
     }
 
+    func testMaximumSizeRenderedNormalMinimumAndInvalidStates() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let uncappedWorker = FakeRecordingEditorWorker(presentation: try presentation())
+            uncappedWorker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_500_000,
+                                                                              exact: true))
+            let uncapped = RecordingEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: uncappedWorker,
+                confirmDiscard: { false })
+            defer { uncapped.window.orderOut(nil) }
+            uncapped.present(artifact: recordingArtifact(), historyRoot: "/History",
+                             outputDirectory: "/Exports")
+            let uncappedLabel = try field("Recording size estimate", in: uncapped.root)
+            let estimate = try button("Estimate size", in: uncapped.root)
+            for (suffix, size) in [("normal", NSSize(width: 960, height: 760)),
+                                   ("minimum", NSSize(width: 760, height: 540))] {
+                uncapped.window.setContentSize(size)
+                XCTAssertLessThanOrEqual(uncappedLabel.frame.maxX + 8, estimate.frame.minX,
+                                         "\(appearance) \(suffix) estimate label stays before button")
+                try render(uncapped.root,
+                           name: "recording-editor-estimate-\(appearance)-\(suffix)")
+            }
+            try dispatchButtonClick(estimate, in: uncapped)
+            XCTAssertFalse(uncappedLabel.stringValue.contains("not estimated"),
+                           "window dispatch reaches the unobscured Estimate size button")
+            let uncappedQuality = try popup("Recording export quality", in: uncapped.root)
+            uncappedQuality.selectItem(withTitle: "Tiny")
+            _ = uncappedQuality.sendAction(uncappedQuality.action, to: uncappedQuality.target)
+            try checkbox("Maximum recording file size", in: uncapped.root).performClick(nil)
+            XCTAssertEqual(uncappedQuality.titleOfSelectedItem, "Preserve")
+            try render(uncapped.root,
+                       name: "recording-editor-maximum-from-tiny-minimum-\(appearance)")
+
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                saveMaximumBytes: 100_019))
+            let controller = RecordingEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker,
+                confirmDiscard: { false })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                               outputDirectory: "/Exports")
+            let maximum = try checkbox("Maximum recording file size", in: controller.root)
+            let value = try field("Maximum recording file size value", in: controller.root)
+            let unit = try popup("Maximum recording file size unit", in: controller.root)
+            let warning = try field("Maximum recording file size preview warning",
+                                    in: controller.root)
+            XCTAssertEqual(maximum.state, .on)
+            XCTAssertEqual(value.stringValue, "0.100019")
+            XCTAssertEqual(unit.titleOfSelectedItem, "MB")
+            XCTAssertFalse(warning.isHiddenOrHasHiddenAncestor)
+            try render(controller.root, name: "recording-editor-maximum-size-\(appearance)")
+
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            XCTAssertGreaterThanOrEqual(warning.frame.width, warning.intrinsicContentSize.width,
+                                        "minimum layout shows the complete budget-free warning")
+            XCTAssertLessThanOrEqual(warning.frame.maxX + 8,
+                                     try button("Cancel operation", in: controller.root).frame.minX)
+            XCTAssertLessThanOrEqual(unit.frame.maxX + 8,
+                                     try button("Save new copy", in: controller.root).frame.minX)
+            let capLabel = try field("Recording size estimate", in: controller.root)
+            XCTAssertLessThanOrEqual(capLabel.frame.maxX + 8,
+                                     try button("Save new copy", in: controller.root).frame.minX)
+            try render(controller.root,
+                       name: "recording-editor-maximum-size-minimum-\(appearance)")
+
+            value.stringValue = ".099999"
+            controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                         object: value))
+            XCTAssertTrue(labels(in: controller.root).contains { $0 == "Enter at least 100 KB" })
+            XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+            try render(controller.root,
+                       name: "recording-editor-maximum-size-invalid-minimum-\(appearance)")
+        }
+    }
+
     func testPreviewScaleRenderedFitActualPausedAndSourceStates() throws {
         _ = NSApplication.shared
         let crop = NativeRecordingCropRect(x: 140, y: 90, width: 500, height: 300)
@@ -1535,8 +1610,8 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertNotNil(edit["audio"], "the host preserves shared edit fields it does not own")
         let export = try XCTUnwrap(request["export"] as? [String: Any])
         XCTAssertEqual(export["format"] as? String, "gif")
-        XCTAssertEqual((export["max_size_bytes"] as? NSNumber)?.uint64Value, 4_000_000,
-                       "the host preserves accepted export fields it does not own")
+        XCTAssertTrue(export["max_size_bytes"] is NSNull,
+                      "the host preserves the accepted uncapped Save export")
         XCTAssertEqual(start.stringValue, "250"); XCTAssertEqual(end.stringValue, "1250")
         XCTAssertEqual(format.titleOfSelectedItem, "GIF")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("preview unavailable") })
@@ -2031,6 +2106,139 @@ final class RecordingEditorTests: XCTestCase {
                        "format staging should not acquire the worker")
     }
 
+    func testDecimalMaximumSizeUnitsFloorBytesWithoutRoundingOrOverflow() {
+        XCTAssertEqual(RecordingFileSizeUnit.kilobytes.bytes("100.0199"), 100_019)
+        XCTAssertEqual(RecordingFileSizeUnit.megabytes.bytes(".1000199"), 100_019)
+        XCTAssertEqual(RecordingFileSizeUnit.gigabytes.bytes("0.0001000199"), 100_019)
+        XCTAssertEqual(RecordingFileSizeUnit.megabytes.bytes("0.099999999"), 99_999)
+        XCTAssertEqual(RecordingFileSizeUnit.megabytes.bytes(".1"), 100_000)
+        XCTAssertEqual(RecordingFileSizeUnit.kilobytes.bytes("18446744073709551.615"), UInt64.max)
+        for invalid in ["", ".", "-1", "NaN", "inf", "1.2.3", "1x", "０.1",
+                        "18446744073709551.616"] {
+            XCTAssertNil(RecordingFileSizeUnit.kilobytes.bytes(invalid), invalid)
+        }
+        for unit in RecordingFileSizeUnit.allCases {
+            for bytes: UInt64 in [99_999, 100_000, 100_019, 10_123_456, .max] {
+                XCTAssertEqual(unit.bytes(unit.value(bytes)), bytes)
+            }
+        }
+    }
+
+    func testMaximumSizeAcceptedSaveIdentityFailureSeekSaveAndNewItemReset() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let quality = try popup("Recording export quality", in: controller.root)
+        let maximum = try checkbox("Maximum recording file size", in: controller.root)
+        let value = try field("Maximum recording file size value", in: controller.root)
+        let unit = try popup("Maximum recording file size unit", in: controller.root)
+        let apply = try button("Apply edits", in: controller.root)
+        let estimate = try button("Estimate size", in: controller.root)
+        let save = try button("Save new copy", in: controller.root)
+        let play = try button("Play", in: controller.root)
+        let seek = try slider("Recording frame position", in: controller.root)
+
+        quality.selectItem(withTitle: "Tiny"); _ = quality.sendAction(quality.action, to: quality.target)
+        maximum.performClick(nil)
+        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
+        value.stringValue = ".1000199"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: value))
+        XCTAssertFalse(quality.isEnabled)
+        XCTAssertTrue(estimate.isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(apply.isEnabled); XCTAssertFalse(play.isEnabled)
+        worker.requestResult = .success(try presentation(revision: 1,
+                                                         saveMaximumBytes: 100_019))
+        apply.performClick(nil)
+        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
+        let acceptedRequest = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
+        XCTAssertEqual((acceptedRequest["max_size_bytes"] as? NSNumber)?.uint64Value, 100_019)
+        XCTAssertEqual(acceptedRequest["quality"] as? String, "preserve")
+        XCTAssertTrue(controller.dirty)
+        XCTAssertTrue(labels(in: controller.root).contains { $0 == "≤ 0.100019 MB" })
+
+        unit.selectItem(withTitle: "KB"); _ = unit.sendAction(unit.action, to: unit.target)
+        XCTAssertEqual(value.stringValue, "100.019")
+        XCTAssertFalse(apply.isEnabled, "an exact unit switch does not stage a change")
+
+        worker.saveResult = .failure(AppBridgeError.backend("maximum file size cannot be reached"))
+        save.performClick(nil)
+        XCTAssertTrue(controller.dirty)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("cannot be reached") })
+        XCTAssertEqual((worker.saves.last?.export["max_size_bytes"] as? NSNumber)?.uint64Value,
+                       100_019)
+        worker.saveResult = .success(.saved(path: "/Exports/capped.mp4"))
+        save.performClick(nil)
+        XCTAssertFalse(controller.dirty)
+
+        value.stringValue = "200"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: value))
+        worker.requestResult = .failure(AppBridgeError.backend("planner rejected"))
+        apply.performClick(nil)
+        XCTAssertEqual(value.stringValue, "200", "failed Apply retains the staged cap")
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("planner rejected") })
+        value.stringValue = "100.019"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: value))
+        XCTAssertFalse(controller.dirty)
+        worker.requestResult = .success(try presentation(position: 733, revision: 2,
+                                                         saveMaximumBytes: 100_019))
+        seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(value.stringValue, "100.019")
+        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
+        XCTAssertFalse(controller.dirty)
+
+        let format = try popup("Recording export format", in: controller.root)
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        worker.requestResult = .success(try presentation(position: 733, revision: 3,
+            exportFormat: "gif", saveMaximumBytes: 100_019, framesPerSecond: 15))
+        apply.performClick(nil)
+        let gifRequest = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
+        XCTAssertEqual(gifRequest["format"] as? String, "gif")
+        XCTAssertEqual((gifRequest["max_size_bytes"] as? NSNumber)?.uint64Value, 100_019)
+        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+        worker.requestResult = .success(try presentation(position: 733, revision: 4,
+                                                          saveMaximumBytes: 100_019))
+        apply.performClick(nil)
+        XCTAssertFalse(controller.dirty)
+
+        for invalid in ["", ".", "99.999", "-10", "NaN"] {
+            value.stringValue = invalid
+            controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                         object: value))
+            XCTAssertFalse(apply.isEnabled, invalid)
+            XCTAssertFalse(play.isEnabled, invalid)
+            XCTAssertFalse(seek.isEnabled, invalid)
+            XCTAssertFalse(save.isEnabled, invalid)
+        }
+        value.stringValue = "100.019"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: value))
+        maximum.performClick(nil)
+        XCTAssertTrue(quality.isEnabled)
+        XCTAssertEqual(quality.titleOfSelectedItem, "Tiny",
+                       "leaving maximum restores the prior quality preference")
+        worker.requestResult = .success(try presentation(position: 733, revision: 5,
+                                                          exportQuality: "tiny"))
+        apply.performClick(nil)
+        worker.saveResult = .success(.saved(path: "/Exports/uncapped.mp4"))
+        save.performClick(nil)
+        XCTAssertFalse(controller.dirty)
+
+        controller.present(artifact: recordingArtifact(id: "next-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(worker.openCount, 2)
+        XCTAssertEqual(maximum.state, .off)
+        XCTAssertEqual(value.stringValue, "10")
+        XCTAssertEqual(unit.titleOfSelectedItem, "MB")
+        XCTAssertFalse(controller.dirty)
+    }
+
     func testAcceptedSeekEstimateSaveWarningAndDirtyLifecycle() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation())
@@ -2371,6 +2579,106 @@ final class RecordingEditorTests: XCTestCase {
                        try videoDimensions(twentyFourPath, tools: tools))
         XCTAssertEqual(try Data(contentsOf: fixture.source), sourceBefore,
                        "cadence-only previews and exports keep the source byte-identical")
+    }
+
+    func testRealBridgeMaximumSizeRetryCancellationAndUnattainableDoNotMutatePreview() throws {
+        let tools = try NativeMediaTools.locate()
+        let retryFixture = try makeBudgetRecordingFixture(tools: tools, duration: "0.8")
+        defer { try? FileManager.default.removeItem(at: retryFixture.root) }
+        let sourceBefore = try Data(contentsOf: retryFixture.source)
+        let opened = try NativeRecordingEditorSession.open(historyRoot: retryFixture.history.path,
+                                                            artifactID: retryFixture.id, tools: tools)
+        let session = opened.0
+        var export = opened.1.snapshot.saveExport
+        export["quality"] = "preserve"; export["max_size_bytes"] = 100_000
+        let mp4Accepted = try session.request(["operation": "update_preview",
+                                               "edit": opened.1.snapshot.edit,
+                                               "export": export])
+        let mp4Path = retryFixture.root.appendingPathComponent("capped.mp4")
+        _ = try session.save(destination: mp4Path.path, export: mp4Accepted.snapshot.saveExport,
+                             cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+        XCTAssertLessThanOrEqual(try Data(contentsOf: mp4Path).count, 100_000)
+        XCTAssertEqual(mp4Accepted.image.width, 640)
+        XCTAssertEqual(mp4Accepted.image.height, 360)
+
+        export["format"] = "gif"; export["frames_per_second"] = 30
+        let accepted = try session.request(["operation": "update_preview",
+                                            "edit": opened.1.snapshot.edit,
+                                            "export": export])
+        XCTAssertEqual((accepted.snapshot.saveExport["max_size_bytes"] as? NSNumber)?.uint64Value,
+                       100_000)
+        XCTAssertTrue(accepted.snapshot.export["max_size_bytes"] is NSNull)
+        XCTAssertEqual(accepted.image.width, 640)
+        XCTAssertEqual(accepted.image.height, 360)
+        let acceptedPixels = try pixels(accepted.image)
+
+        let destination = retryFixture.root.appendingPathComponent("retry.gif")
+        _ = try session.save(destination: destination.path, export: accepted.snapshot.saveExport,
+                             cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+        XCTAssertLessThanOrEqual(try Data(contentsOf: destination).count, 100_000)
+        XCTAssertEqual(try videoDimensions(destination, tools: tools),
+                       NativeRecordingDimensions(width: 320, height: 180),
+                       "the deterministic GIF budget uses a smaller retry")
+        let afterSave = try session.request(["operation": "snapshot"])
+        XCTAssertEqual(afterSave.image.width, 640)
+        XCTAssertEqual(afterSave.image.height, 360)
+        XCTAssertEqual(try pixels(afterSave.image), acceptedPixels,
+                       "Save retries never replace the accepted budget-free preview")
+        XCTAssertEqual(try Data(contentsOf: retryFixture.source), sourceBefore)
+
+        let failureFixture = try makeBudgetRecordingFixture(tools: tools, duration: "4")
+        defer { try? FileManager.default.removeItem(at: failureFixture.root) }
+        let failureOpened = try NativeRecordingEditorSession.open(
+            historyRoot: failureFixture.history.path, artifactID: failureFixture.id, tools: tools)
+        let failureSession = failureOpened.0
+        var failureExport = failureOpened.1.snapshot.saveExport
+        failureExport["format"] = "gif"; failureExport["quality"] = "preserve"
+        failureExport["max_size_bytes"] = 100_000; failureExport["frames_per_second"] = 30
+        let failureAccepted = try failureSession.request([
+            "operation": "update_preview", "edit": failureOpened.1.snapshot.edit,
+            "export": failureExport,
+        ])
+        let failurePixels = try pixels(failureAccepted.image)
+        let historyCount = try FileManager.default.contentsOfDirectory(
+            at: failureFixture.history, includingPropertiesForKeys: nil).count
+
+        let cancelledPath = failureFixture.root.appendingPathComponent("cancelled.gif")
+        let cancelled = try XCTUnwrap(NativeRecordingEditorCancel())
+        let encodingStarted = expectation(description: "capped export started")
+        encodingStarted.assertForOverFulfill = false
+        let cancellationFinished = expectation(description: "capped export cancelled")
+        let cancellationError = RecordingTestErrorBox()
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                _ = try failureSession.save(destination: cancelledPath.path,
+                    export: failureAccepted.snapshot.saveExport, cancel: cancelled,
+                    progress: { progress in
+                        if progress.completedPerMille > 0 { encodingStarted.fulfill() }
+                    })
+            } catch {
+                cancellationError.set(error)
+            }
+            cancellationFinished.fulfill()
+        }
+        wait(for: [encodingStarted], timeout: 5)
+        cancelled.cancel()
+        wait(for: [cancellationFinished], timeout: 10)
+        XCTAssertTrue(try XCTUnwrap(cancellationError.value).localizedDescription
+            .localizedCaseInsensitiveContains("cancel"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cancelledPath.path))
+
+        let unattainablePath = failureFixture.root.appendingPathComponent("unattainable.gif")
+        XCTAssertThrowsError(try failureSession.save(destination: unattainablePath.path,
+            export: failureAccepted.snapshot.saveExport,
+            cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })) { error in
+            XCTAssertTrue(error.localizedDescription.contains("maximum file size cannot be reached"))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: unattainablePath.path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(
+            at: failureFixture.history, includingPropertiesForKeys: nil).count, historyCount)
+        let afterFailures = try failureSession.request(["operation": "snapshot"])
+        XCTAssertEqual(try pixels(afterFailures.image), failurePixels)
+        XCTAssertEqual(afterFailures.snapshot.revision, failureAccepted.snapshot.revision)
     }
 
     func testRealBridgeSourceFrameIsFullSourceAtAcceptedPositionAndImmutable() throws {
@@ -2731,6 +3039,8 @@ final class RecordingEditorTests: XCTestCase {
                               crop: NativeRecordingCropRect? = nil,
                               output: NativeRecordingDimensions? = nil,
                               exportFormat: String = "mp4",
+                              exportQuality: String = "preserve",
+                              saveMaximumBytes: UInt64? = nil,
                               framesPerSecond: UInt16? = nil,
                               hasSystemAudio: Bool = false, hasMicrophoneAudio: Bool = false,
                               systemVolume: Double = 1, microphoneVolume: Double = 1,
@@ -2742,6 +3052,7 @@ final class RecordingEditorTests: XCTestCase {
         let outputWidth: Any = output.map { NSNumber(value: $0.width) } ?? NSNull()
         let outputHeight: Any = output.map { NSNumber(value: $0.height) } ?? NSNull()
         let fpsValue: Any = framesPerSecond.map { NSNumber(value: $0) } ?? NSNull()
+        let maximumValue: Any = saveMaximumBytes.map { NSNumber(value: $0) } ?? NSNull()
         let snapshot = try XCTUnwrap(NativeRecordingEditorSnapshot([
             "artifact_id": "recording-id", "source": ["kind": "video", "mime_type": "video/mp4",
                 "width": sourceWidth, "height": sourceHeight,
@@ -2752,8 +3063,12 @@ final class RecordingEditorTests: XCTestCase {
                           "mute_system_audio": muteSystem, "mute_microphone": muteMicrophone,
                           "mono_output": monoOutput, "source_has_system_audio": hasSystemAudio,
                           "source_has_microphone_audio": hasMicrophoneAudio]],
-            "preview_export": ["format": exportFormat, "quality": "preserve",
-                "max_size_bytes": 4_000_000,
+            "preview_export": ["format": exportFormat, "quality": exportQuality,
+                "max_size_bytes": NSNull(),
+                "frames_per_second": fpsValue,
+                "gif_max_colors": NSNull()],
+            "save_export": ["format": exportFormat, "quality": exportQuality,
+                "max_size_bytes": maximumValue,
                 "frames_per_second": fpsValue,
                 "gif_max_colors": NSNull()],
             "position_ms": position, "revision": revision,
@@ -2794,6 +3109,31 @@ final class RecordingEditorTests: XCTestCase {
             "size_bytes": sourceSize,
             "created_at": "2026-09-22T00:00:00Z", "mode": "display",
             "mime_type": "video/mp4", "duration_ms": 2_000,
+            "target": ["type": "display", "display_id": "fixture"]]
+        try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys])
+            .write(to: directory.appendingPathComponent("metadata.json"))
+        return (root, history, source, id)
+    }
+
+    private func makeBudgetRecordingFixture(tools: NativeMediaTools, duration: String) throws
+        -> (root: URL, history: URL, source: URL, id: String) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let history = root.appendingPathComponent("History")
+        let id = UUID().uuidString.lowercased()
+        let directory = history.appendingPathComponent(id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appendingPathComponent("media.mp4")
+        try run(tools.ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+            "testsrc2=size=640x360:rate=30:duration=\(duration)", "-c:v", "mpeg4",
+            "-q:v", "2", "-an", "-y", source.path])
+        let sourceSize = (try FileManager.default.attributesOfItem(atPath: source.path)[.size]
+                          as? NSNumber)?.intValue ?? 0
+        let durationMilliseconds = UInt64((Double(duration) ?? 0) * 1_000)
+        let metadata: [String: Any] = ["id": id, "kind": "video",
+            "preview_url": "capture-history://\(id)/preview",
+            "full_url": "capture-history://\(id)/full", "width": 640, "height": 360,
+            "size_bytes": sourceSize, "created_at": "2026-09-22T00:00:00Z",
+            "mode": "display", "mime_type": "video/mp4", "duration_ms": durationMilliseconds,
             "target": ["type": "display", "display_id": "fixture"]]
         try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys])
             .write(to: directory.appendingPathComponent("metadata.json"))
@@ -3114,6 +3454,21 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(controller.window.firstResponder === overlay)
         controller.window.sendEvent(event)
     }
+    private func dispatchButtonClick(_ button: CaptureButton,
+                                     in controller: RecordingEditorController) throws {
+        let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+        let content = try XCTUnwrap(controller.window.contentView)
+        let contentSuperview = try XCTUnwrap(content.superview)
+        XCTAssertTrue(content.hitTest(contentSuperview.convert(point, from: nil)) === button,
+                      "root hit testing reaches \(button.title)")
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point,
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: controller.window.windowNumber, context: nil,
+                eventNumber: 1, clickCount: 1, pressure: 1))
+            controller.window.sendEvent(event)
+        }
+    }
     private func labels(in view: NSView) -> [String] {
         descendants(in: view).compactMap { ($0 as? NSTextField)?.stringValue }
     }
@@ -3125,6 +3480,14 @@ final class RecordingEditorTests: XCTestCase {
         let data = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
         try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
     }
+}
+
+private final class RecordingTestErrorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Error?
+
+    var value: Error? { lock.withLock { stored } }
+    func set(_ error: Error) { lock.withLock { stored = error } }
 }
 
 private final class FakeRecordingEditorWorker: RecordingEditorWorking {

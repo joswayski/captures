@@ -6,6 +6,7 @@ struct NativeRecordingEditorSnapshot {
     let source: [String: Any]
     let edit: [String: Any]
     let export: [String: Any]
+    let saveExport: [String: Any]
     let positionMilliseconds: UInt64
     let revision: UInt64
     let hasSystemAudio: Bool
@@ -27,7 +28,9 @@ struct NativeRecordingEditorSnapshot {
               let hasSystemAudio = value["has_system_audio"] as? Bool,
               let hasMicrophoneAudio = value["has_microphone_audio"] as? Bool else { return nil }
         self.artifactID = artifactID; self.source = source; self.edit = edit
-        self.export = export; positionMilliseconds = position.uint64Value
+        self.export = export
+        saveExport = value["save_export"] as? [String: Any] ?? export
+        positionMilliseconds = position.uint64Value
         self.revision = revision.uint64Value
         self.hasSystemAudio = hasSystemAudio
         self.hasMicrophoneAudio = hasMicrophoneAudio
@@ -455,7 +458,7 @@ final class NativeRecordingEditorSession {
     func request(_ object: [String: Any]) throws -> RecordingEditorPresentation {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         let response = String(decoding: data, as: UTF8.self).withCString {
-            captures_recording_editor_request_v1(handle, $0)
+            captures_recording_editor_request_v2(handle, $0)
         }
         guard let response else { throw AppBridgeError.invalidResponse }
         defer { captures_settings_free_v1(response) }
@@ -467,7 +470,7 @@ final class NativeRecordingEditorSession {
     }
 
     func estimate(cancel: NativeRecordingEditorCancel) throws -> RecordingEditorEstimate {
-        guard let response = captures_recording_editor_estimate_v1(handle, cancel.handle) else {
+        guard let response = captures_recording_editor_estimate_v2(handle, cancel.handle) else {
             throw AppBridgeError.invalidResponse
         }
         defer { captures_settings_free_v1(response) }

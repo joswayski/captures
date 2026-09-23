@@ -597,6 +597,63 @@ private enum RecordingPlaybackState {
     case pausing
 }
 
+enum RecordingFileSizeUnit: Int, CaseIterable {
+    case kilobytes
+    case megabytes
+    case gigabytes
+
+    var label: String {
+        switch self {
+        case .kilobytes: "KB"
+        case .megabytes: "MB"
+        case .gigabytes: "GB"
+        }
+    }
+
+    private var digits: Int {
+        switch self {
+        case .kilobytes: 3
+        case .megabytes: 6
+        case .gigabytes: 9
+        }
+    }
+
+    func bytes(_ text: String) -> UInt64? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard !parts.isEmpty, parts.count <= 2 else { return nil }
+        let wholeText = String(parts[0])
+        let fractionText = parts.count == 2 ? String(parts[1]) : ""
+        guard !(wholeText.isEmpty && fractionText.isEmpty),
+              wholeText.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+              fractionText.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }) else { return nil }
+        let whole = wholeText.isEmpty ? 0 : UInt64(wholeText)
+        guard let whole else { return nil }
+        let factor = Self.powerOfTen(digits)
+        let (wholeBytes, overflow) = whole.multipliedReportingOverflow(by: factor)
+        guard !overflow else { return nil }
+        let kept = String(fractionText.prefix(digits))
+        let fraction = kept.isEmpty ? 0 : UInt64(kept)
+        guard let fraction else { return nil }
+        let fractionBytes = fraction * Self.powerOfTen(digits - kept.count)
+        let (bytes, additionOverflow) = wholeBytes.addingReportingOverflow(fractionBytes)
+        return additionOverflow ? nil : bytes
+    }
+
+    func value(_ bytes: UInt64) -> String {
+        let factor = Self.powerOfTen(digits)
+        let rawFraction = String(format: "%0*llu", digits, bytes % factor)
+        let fraction = rawFraction.replacingOccurrences(of: "0+$", with: "",
+                                                         options: .regularExpression)
+        return fraction.isEmpty ? String(bytes / factor)
+            : "\(bytes / factor).\(fraction)"
+    }
+
+    private static func powerOfTen(_ exponent: Int) -> UInt64 {
+        (0..<exponent).reduce(1) { value, _ in value * 10 }
+    }
+}
+
 final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     let window: NSWindow
     let root = Surface()
@@ -626,6 +683,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var playbackSoundEnabled = false
     private var playbackAudioEnabled: Bool?
     private var gifFramesPerSecond: UInt16 = 15
+    private var maximumSizeEnabled = false
+    private var maximumSizeUnit = RecordingFileSizeUnit.megabytes
+    private var qualityPreference = "Preserve"
     private var playbackLoopControl: RecordingPlaybackLoopControl?
     private var sourceFrameCache: RecordingSourceImage?
     private var sourceFrameCancel: NativeRecordingEditorCancel?
@@ -678,6 +738,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let quality = NSPopUpButton()
     private let gifFrameRateLabel = NSTextField(labelWithString: "GIF FPS")
     private let gifFrameRate = NSPopUpButton()
+    private let maximumSize = NSButton(checkboxWithTitle: "Maximum file size", target: nil,
+                                       action: nil)
+    private let maximumSizeValue = NSTextField()
+    private let maximumSizeUnits = NSPopUpButton()
+    private let maximumSizeWarning = NSTextField(labelWithString:
+        "Preview is budget-free; saved output may differ.")
     private let destination = NSTextField()
     private let status = NSTextField(wrappingLabelWithString: "")
     private let estimateLabel = NSTextField(labelWithString: "Size not estimated")
@@ -753,6 +819,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
         playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
         gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
+        maximumSizeEnabled = false; maximumSize.state = .off
+        maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
+        maximumSizeValue.stringValue = "10"
+        qualityPreference = "Preserve"
         sourceFrameCache = nil; sourceFrameCancel = nil
         cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
         previewActualSize = false
@@ -788,7 +858,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     var dirty: Bool {
         guard let snapshot = presentation?.snapshot else { return false }
         return stagedDiffers || canonicalEdit(snapshot.edit) != savedEdit
-            || canonical(snapshot.export) != savedExport
+            || canonical(snapshot.saveExport) != savedExport
     }
 
     func prepareForTermination() -> Bool {
@@ -843,6 +913,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     func controlTextDidChange(_ notification: Notification) {
         if let field = notification.object as? NSTextField,
            [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) {
+            estimate = nil; updateControls(); return
+        }
+        if notification.object as? NSTextField === maximumSizeValue {
             estimate = nil; updateControls(); return
         }
         estimate = nil; syncTimelineFromFields(); updateControls()
@@ -987,7 +1060,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         format.target = self; format.action = #selector(formatChanged)
         format.setAccessibilityLabel("Recording export format")
         quality.addItems(withTitles: ["Preserve", "Highest", "High", "Standard", "Small", "Tiny"])
-        quality.target = self; quality.action = #selector(stageChanged)
+        quality.target = self; quality.action = #selector(qualityChanged)
         quality.setAccessibilityLabel("Recording export quality")
         gifFrameRate.addItems(withTitles: ["8 FPS", "10 FPS", "12 FPS", "15 FPS",
                                               "20 FPS", "24 FPS", "30 FPS"])
@@ -995,9 +1068,23 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         gifFrameRate.target = self; gifFrameRate.action = #selector(gifFrameRateChanged)
         gifFrameRate.setAccessibilityLabel("GIF frame rate")
         gifFrameRateLabel.textColor = tokens.color("text-muted")
+        maximumSize.target = self; maximumSize.action = #selector(maximumSizeChanged)
+        maximumSize.setAccessibilityLabel("Maximum recording file size")
+        configureNumberField(maximumSizeValue, label: "Maximum recording file size value")
+        maximumSizeValue.stringValue = "10"
+        maximumSizeValue.placeholderString = "At least 100 KB"
+        maximumSizeUnits.addItems(withTitles: RecordingFileSizeUnit.allCases.map { $0.label })
+        maximumSizeUnits.selectItem(withTitle: maximumSizeUnit.label)
+        maximumSizeUnits.target = self; maximumSizeUnits.action = #selector(maximumSizeUnitChanged)
+        maximumSizeUnits.setAccessibilityLabel("Maximum recording file size unit")
+        maximumSizeWarning.textColor = tokens.color("text-muted")
+        maximumSizeWarning.font = .systemFont(ofSize: 11)
+        maximumSizeWarning.setAccessibilityLabel("Maximum recording file size preview warning")
         destination.delegate = self; destination.setAccessibilityLabel("Recording destination")
         root.addSubview(format); root.addSubview(quality); root.addSubview(destination)
         root.addSubview(gifFrameRateLabel); root.addSubview(gifFrameRate)
+        root.addSubview(maximumSize); root.addSubview(maximumSizeValue)
+        root.addSubview(maximumSizeUnits); root.addSubview(maximumSizeWarning)
         changeButton = button("Change…") { [weak self] in self?.chooseDestination() }
         estimateButton = button("Estimate size") { [weak self] in self?.estimateSize() }
         saveButton = button("Save new copy") { [weak self] in self?.saveNewCopy() }
@@ -1112,7 +1199,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
         let barY = height - saveHeight
         status.frame = NSRect(x: 24, y: barY + 8, width: width - 48, height: 36)
-        progress.frame = NSRect(x: 24, y: barY + 44, width: width - 174, height: 16)
+        progress.frame = NSRect(x: 174, y: barY + 48, width: width - 324, height: 16)
         cancelButton.frame = NSRect(x: width - 140, y: barY + 38, width: 116, height: 28)
         changeButton.frame = NSRect(x: width - 116, y: barY + 70, width: 92, height: 30)
         gifFrameRate.frame = NSRect(x: changeButton.frame.minX - 86, y: barY + 72,
@@ -1125,7 +1212,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                                    width: max(0, destinationEnd - 24), height: 28)
         format.frame = NSRect(x: 24, y: barY + 110, width: 92, height: 28)
         quality.frame = NSRect(x: 124, y: barY + 110, width: 116, height: 28)
-        estimateLabel.frame = NSRect(x: 252, y: barY + 114, width: 190, height: 20)
+        maximumSize.frame = NSRect(x: 24, y: barY + 45, width: 142, height: 24)
+        maximumSizeValue.frame = NSRect(x: 248, y: barY + 108, width: 72, height: 28)
+        maximumSizeUnits.frame = NSRect(x: 324, y: barY + 108, width: 62, height: 28)
+        maximumSizeWarning.frame = NSRect(x: 174, y: barY + 47,
+                                          width: width - 348, height: 18)
+        let maximumControlsWidth = maximumSizeEnabled ? maximumSizeUnits.frame.maxX + 8 : 252
+        let estimateLabelEnd = maximumSizeEnabled ? width - 168 : width - 304
+        estimateLabel.frame = NSRect(x: maximumControlsWidth, y: barY + 114,
+                                     width: max(0, estimateLabelEnd - maximumControlsWidth), height: 20)
         estimateButton.frame = NSRect(x: width - 296, y: barY + 106, width: 126, height: 32)
         saveButton.frame = NSRect(x: width - 160, y: barY + 106, width: 136, height: 32)
     }
@@ -1231,18 +1326,36 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }
             refreshGeometryFields(source: source, preserveCustom: customOutput)
         }
-        select(format, value: value.snapshot.export["format"] as? String ?? "mp4")
-        select(quality, value: value.snapshot.export["quality"] as? String ?? "preserve")
+        let acceptedExport = value.snapshot.saveExport
+        select(format, value: acceptedExport["format"] as? String ?? "mp4")
+        let acceptedMaximum = (acceptedExport["max_size_bytes"] as? NSNumber)?.uint64Value
+        maximumSizeEnabled = acceptedMaximum != nil
+        maximumSize.state = maximumSizeEnabled ? .on : .off
+        if let acceptedMaximum {
+            if maximumSizeUnit.bytes(maximumSizeValue.stringValue) != acceptedMaximum {
+                maximumSizeValue.stringValue = maximumSizeUnit.value(acceptedMaximum)
+            }
+            if initialize { qualityPreference = "Preserve" }
+            select(quality, value: "preserve")
+        } else {
+            select(quality, value: acceptedExport["quality"] as? String ?? "preserve")
+            qualityPreference = quality.titleOfSelectedItem ?? "Preserve"
+            if initialize {
+                maximumSizeUnit = .megabytes
+                maximumSizeUnits.selectItem(withTitle: maximumSizeUnit.label)
+                maximumSizeValue.stringValue = "10"
+            }
+        }
         if format.indexOfSelectedItem == 1 {
-            let accepted = (value.snapshot.export["frames_per_second"] as? NSNumber)?.uint16Value
+            let accepted = (acceptedExport["frames_per_second"] as? NSNumber)?.uint16Value
             let supported: [UInt16] = [8, 10, 12, 15, 20, 24, 30]
             gifFramesPerSecond = accepted.flatMap { supported.contains($0) ? $0 : nil } ?? 15
             gifFrameRate.selectItem(withTitle: "\(gifFramesPerSecond) FPS")
         }
         if initialize {
-            savedEdit = canonicalEdit(value.snapshot.edit); savedExport = canonical(value.snapshot.export)
+            savedEdit = canonicalEdit(value.snapshot.edit); savedExport = canonical(acceptedExport)
         } else if canonicalEdit(old?.edit) != canonicalEdit(value.snapshot.edit)
-                    || canonical(old?.export) != canonical(value.snapshot.export) {
+                    || canonical(old?.saveExport) != canonical(acceptedExport) {
             estimate = nil
         }
         updateControls()
@@ -1287,9 +1400,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private var stagedExport: [String: Any]? {
         guard presentation != nil else { return nil }
-        var value = presentation!.snapshot.export
+        var value = presentation!.snapshot.saveExport
         value["format"] = format.indexOfSelectedItem == 1 ? "gif" : "mp4"
-        value["quality"] = quality.titleOfSelectedItem?.lowercased() ?? "preserve"
+        value["quality"] = maximumSizeEnabled
+            ? "preserve" : quality.titleOfSelectedItem?.lowercased() ?? "preserve"
+        value["max_size_bytes"] = maximumSizeEnabled
+            ? NSNumber(value: maximumSizeBytes ?? 0) : NSNull()
         value["frames_per_second"] = format.indexOfSelectedItem == 1
             ? NSNumber(value: gifFramesPerSecond) : NSNull()
         return value
@@ -1299,7 +1415,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         guard let snapshot = presentation?.snapshot else { return false }
         return hasPendingCropInput
             || canonicalEdit(stagedEdit) != canonicalEdit(snapshot.edit)
-            || canonical(stagedExport) != canonical(snapshot.export)
+            || canonical(stagedExport) != canonical(snapshot.saveExport)
     }
 
     private func applyEdits() {
@@ -1493,6 +1609,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func estimateSize() {
         guard !busy, !stagedDiffers, presentation != nil,
+              (presentation?.snapshot.saveExport["max_size_bytes"] as? NSNumber) == nil,
               let cancel = NativeRecordingEditorCancel() else { return }
         let current = generation; busy = true; activeCancel = cancel; estimate = nil
         status.stringValue = "Estimating accepted recording settings…"; updateControls()
@@ -1556,7 +1673,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func saveNewCopy() {
-        guard !busy, !stagedDiffers, let export = presentation?.snapshot.export,
+        guard !busy, !stagedDiffers, let export = presentation?.snapshot.saveExport,
               !destination.stringValue.isEmpty,
               let cancel = NativeRecordingEditorCancel() else { return }
         let current = generation; busy = true; activeCancel = cancel
@@ -1574,7 +1691,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 case .success(let saved):
                     if let snapshot = self.presentation?.snapshot {
                         self.savedEdit = self.canonicalEdit(snapshot.edit)
-                        self.savedExport = self.canonical(snapshot.export)
+                        self.savedExport = self.canonical(snapshot.saveExport)
                     }
                     switch saved {
                     case .saved(let path):
@@ -1815,7 +1932,36 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         gifFramesPerSecond = UInt16(title.split(separator: " ").first.map(String.init) ?? "15") ?? 15
         estimate = nil; updateControls()
     }
+    @objc private func maximumSizeChanged() {
+        maximumSizeEnabled = maximumSize.state == .on
+        if maximumSizeEnabled {
+            qualityPreference = quality.titleOfSelectedItem ?? qualityPreference
+            select(quality, value: "preserve")
+        } else {
+            quality.selectItem(withTitle: qualityPreference)
+        }
+        estimate = nil; updateControls(); layout()
+    }
+    @objc private func maximumSizeUnitChanged() {
+        guard let title = maximumSizeUnits.titleOfSelectedItem,
+              let unit = RecordingFileSizeUnit.allCases.first(where: { $0.label == title }) else {
+            maximumSizeUnits.selectItem(withTitle: maximumSizeUnit.label); return
+        }
+        if let bytes = maximumSizeUnit.bytes(maximumSizeValue.stringValue) {
+            maximumSizeValue.stringValue = unit.value(bytes)
+        }
+        maximumSizeUnit = unit
+        estimate = nil; updateControls(); layout()
+    }
+    @objc private func qualityChanged() {
+        qualityPreference = quality.titleOfSelectedItem ?? "Preserve"
+        estimate = nil; updateControls()
+    }
     @objc private func stageChanged() { estimate = nil; updateControls() }
+
+    private var maximumSizeBytes: UInt64? {
+        maximumSizeUnit.bytes(maximumSizeValue.stringValue).flatMap { $0 >= 100_000 ? $0 : nil }
+    }
 
     private func sourceDimensions(_ snapshot: NativeRecordingEditorSnapshot)
         -> NativeRecordingDimensions? {
@@ -1896,8 +2042,17 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func updateControls() {
         let available = presentation != nil && !busy && !pickerOpen && playbackState == .idle
+        let validMaximum = !maximumSizeEnabled || maximumSizeBytes != nil
         let valid = pendingCropInputValid && stagedEdit != nil && stagedExport != nil
-        [trimStart, trimEnd, format, quality, destination].forEach { $0.isEnabled = available }
+            && validMaximum
+        [trimStart, trimEnd, format, destination].forEach { $0.isEnabled = available }
+        quality.isEnabled = available && !maximumSizeEnabled
+        maximumSize.isEnabled = available
+        maximumSizeValue.isHidden = !maximumSizeEnabled
+        maximumSizeUnits.isHidden = !maximumSizeEnabled
+        maximumSizeWarning.isHidden = !maximumSizeEnabled || !progress.isHidden
+        maximumSizeValue.isEnabled = available && maximumSizeEnabled
+        maximumSizeUnits.isEnabled = available && maximumSizeEnabled
         let gif = format.indexOfSelectedItem == 1
         gifFrameRateLabel.isHidden = !gif; gifFrameRate.isHidden = !gif
         gifFrameRate.isEnabled = available && gif
@@ -1978,11 +2133,17 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         applyButton?.isEnabled = available && valid && stagedDiffers
         seekSlider.isEnabled = available && valid && !stagedDiffers
         changeButton?.isEnabled = available
-        estimateButton?.isEnabled = available && valid && !stagedDiffers
+        estimateButton?.isHidden = maximumSizeEnabled
+        estimateButton?.isEnabled = available && valid && !stagedDiffers && !maximumSizeEnabled
         saveButton?.isEnabled = available && valid && !stagedDiffers && !destination.stringValue.isEmpty
         cancelButton?.isHidden = activeCancel == nil
         cancelButton?.isEnabled = activeCancel != nil
-        if stagedDiffers { estimateLabel.stringValue = "Apply edits to estimate size" }
+        if maximumSizeEnabled && !validMaximum {
+            estimateLabel.stringValue = "Enter at least 100 KB"
+        } else if stagedDiffers { estimateLabel.stringValue = "Apply edits to estimate size" }
+        else if let cap = (presentation?.snapshot.saveExport["max_size_bytes"] as? NSNumber)?.uint64Value {
+            estimateLabel.stringValue = "≤ \(maximumSizeUnit.value(cap)) \(maximumSizeUnit.label)"
+        }
         else if let estimate {
             estimateLabel.stringValue = "\(estimate.exact ? "" : "≈ ")\(ByteCountFormatter.string(fromByteCount: Int64(estimate.sizeBytes), countStyle: .file))"
         } else { estimateLabel.stringValue = "Size not estimated" }
@@ -1996,6 +2157,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
         playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
         gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
+        maximumSizeEnabled = false; maximumSize.state = .off
+        maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
+        maximumSizeValue.stringValue = "10"
+        qualityPreference = "Preserve"
         sourceFrameCache = nil; sourceFrameCancel = nil
         cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
         previewActualSize = false
