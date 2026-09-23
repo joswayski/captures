@@ -1612,7 +1612,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         cropOverlay.sourceSize = source; cropOverlay.crop = crop
         cropOverlay.lockAspect = !cropAspectUnlocked
         cropOverlay.isHidden = false
-        sourceLabel.stringValue = "\(source.width) × \(source.height) full source · crop adjustment"
+        sourceLabel.stringValue = "\(source.width) × \(source.height) full source at \(time(sourceImage.positionMilliseconds)) · crop adjustment"
         status.textColor = tokens.color("text-muted")
         status.stringValue = "Adjust the source crop, then Apply edits or choose Done cropping."
     }

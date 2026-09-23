@@ -703,6 +703,11 @@ final class RecordingEditorTests: XCTestCase {
         let motionImage = image.image
         play.performClick(nil); worker.completePlayback(.success(.cancelled))
         adjust.performClick(nil)
+        XCTAssertTrue(labels(in: controller.root).contains {
+            $0.contains("full source at 0:00.400")
+        }, "crop mode labels the accepted source time, not the paused motion time")
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("0:00.733 / 0:02.000") },
+                      "crop mode does not change the transient playback resume position")
         try button("Done cropping", in: controller.root).performClick(nil)
         XCTAssertTrue(image.image === motionImage,
                       "Done restores the exact previously presented motion frame")
