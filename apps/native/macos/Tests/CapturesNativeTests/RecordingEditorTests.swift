@@ -465,13 +465,16 @@ final class RecordingEditorTests: XCTestCase {
         overlay.continueDrag(at: NSPoint(x: start.x + 23, y: start.y + 17))
         XCTAssertEqual(try field("Recording crop X", in: controller.root).stringValue, beforeX,
                        "scrolling ends an active crop gesture")
-        XCTAssertTrue(overlay.visibleRect.contains(start),
+        let visibleCrop = overlay.displayedCropRect.intersection(overlay.visibleRect)
+        XCTAssertFalse(visibleCrop.isEmpty, "the staged crop intersects the scrolled viewport")
+        let dispatchStart = NSPoint(x: visibleCrop.midX, y: visibleCrop.midY)
+        XCTAssertTrue(overlay.visibleRect.contains(dispatchStart),
                       "the root-dispatched drag starts inside the scrolled viewport")
 
-        try dispatchCropOverlayMouse(.leftMouseDown, at: start, to: overlay, in: controller)
-        try dispatchCropOverlayMouse(.leftMouseDragged, at: start, to: overlay,
+        try dispatchCropOverlayMouse(.leftMouseDown, at: dispatchStart, to: overlay, in: controller)
+        try dispatchCropOverlayMouse(.leftMouseDragged, at: dispatchStart, to: overlay,
                                      in: controller, deltaX: 13, deltaY: -7)
-        try dispatchCropOverlayMouse(.leftMouseUp, at: start, to: overlay,
+        try dispatchCropOverlayMouse(.leftMouseUp, at: dispatchStart, to: overlay,
                                      in: controller, deltaX: 13, deltaY: -7)
         XCTAssertEqual(try field("Recording crop X", in: controller.root).stringValue, "153")
         XCTAssertEqual(try field("Recording crop Y", in: controller.root).stringValue, "97",
