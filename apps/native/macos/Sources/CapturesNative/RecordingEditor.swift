@@ -896,6 +896,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
         gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
         gifMaximumWidth = 800; gifMaximumWidthControl.selectItem(withTitle: "800 px")
+        gifMaximumWidthControl.removeItem(withTitle: "Original")
         maximumSizeEnabled = false; maximumSize.state = .off
         maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
         maximumSizeValue.stringValue = "10"
@@ -1483,6 +1484,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             let supported: [UInt16] = [8, 10, 12, 15, 20, 24, 30]
             gifFramesPerSecond = accepted.flatMap { supported.contains($0) ? $0 : nil } ?? 15
             gifFrameRate.selectItem(withTitle: "\(gifFramesPerSecond) FPS")
+            if initialize && editOutputDimensions(value.snapshot.edit) == nil {
+                if gifMaximumWidthControl.item(withTitle: "Original") == nil {
+                    gifMaximumWidthControl.insertItem(withTitle: "Original", at: 0)
+                }
+                gifMaximumWidthControl.selectItem(withTitle: "Original")
+            }
         }
         if initialize {
             savedEdit = canonicalEdit(value.snapshot.edit); savedExport = canonical(acceptedExport)
@@ -1516,7 +1523,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         edit["trim_start_ms"] = start
         edit["trim_end_ms"] = end == duration ? NSNull() : end
         edit["crop"] = stagedCrop == nil ? NSNull() : stagedCrop!.dictionary
-        if gif || customOutput || resolutionPreset != .original {
+        if (gif && gifMaximumWidthControl.titleOfSelectedItem != "Original")
+            || customOutput || resolutionPreset != .original {
             edit["output_width"] = outputSize.width
             edit["output_height"] = outputSize.height
         } else {
@@ -1550,9 +1558,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             ? "preserve" : quality.titleOfSelectedItem?.lowercased() ?? "preserve"
         value["max_size_bytes"] = maximumSizeEnabled
             ? NSNumber(value: maximumSizeBytes ?? 0) : NSNull()
-        value["frames_per_second"] = gif
-            ? NSNumber(value: gifFramesPerSecond) : NSNull()
-        value["gif_max_colors"] = gif ? NSNumber(value: gifMaxColors) : NSNull()
+        let accepted = presentation?.snapshot.saveExport
+        let acceptedGif = accepted?["format"] as? String == "gif"
+        value["frames_per_second"] = gif && (!acceptedGif
+            || accepted?["frames_per_second"] is NSNumber
+            || gifFramesPerSecond != 15) ? NSNumber(value: gifFramesPerSecond) : NSNull()
+        value["gif_max_colors"] = gif && (!acceptedGif
+            || accepted?["gif_max_colors"] is NSNumber
+            || gifMaxColors != 256) ? NSNumber(value: gifMaxColors) : NSNull()
         return value
     }
 
@@ -2551,6 +2564,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
         gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
         gifMaximumWidth = 800; gifMaximumWidthControl.selectItem(withTitle: "800 px")
+        gifMaximumWidthControl.removeItem(withTitle: "Original")
         maximumSizeEnabled = false; maximumSize.state = .off
         maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
         maximumSizeValue.stringValue = "10"

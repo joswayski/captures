@@ -100,6 +100,36 @@ final class RecordingEditorTests: XCTestCase {
         }
     }
 
+    func testGifReplacementPreservesNullDefaultsAndUncappedSourceWidth() throws {
+        _ = NSApplication.shared
+        let path = "/Exports/original.gif"
+        let initial = try presentation(revision: 1, sourceWidth: 1_200, sourceHeight: 600,
+            output: NativeRecordingDimensions(width: 800, height: 400),
+            exportFormat: "gif", framesPerSecond: 24, gifMaxColors: 64)
+        let rebased = try presentation(revision: 2, sourceWidth: 1_200, sourceHeight: 600,
+            previewWidth: 1_200, previewHeight: 600,
+            exportFormat: "gif", gifDefaultsAbsent: true)
+        let worker = FakeRecordingEditorWorker(presentation: initial)
+        worker.replaceResult = .success(RecordingReplaceResult(path: path, presentation: rebased))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, confirmReplaceOriginal: { _, _, completion in completion(true) })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(savedPath: path), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        try button("Replace original…", in: controller.root).performClick(nil)
+        XCTAssertFalse(controller.dirty, "no implicit 800px, 15fps or 256-color Apply")
+        XCTAssertEqual(try popup("GIF maximum width", in: controller.root).titleOfSelectedItem,
+                       "Original")
+        XCTAssertEqual(try popup("GIF frame rate", in: controller.root).titleOfSelectedItem,
+                       "15 FPS")
+        XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
+        let width = try popup("GIF maximum width", in: controller.root)
+        width.selectItem(withTitle: "800 px")
+        _ = width.sendAction(width.action, to: width.target)
+        XCTAssertTrue(controller.dirty, "an explicit width choice may now stage a cap")
+    }
+
     func testRealReplaceOriginalRebasesSameSessionAndPreservesHistoryIdentity() throws {
         guard let tools = try? NativeMediaTools.locate() else {
             throw XCTSkip("ffmpeg and ffprobe are required")
@@ -3817,6 +3847,7 @@ final class RecordingEditorTests: XCTestCase {
                               saveMaximumBytes: UInt64? = nil,
                               framesPerSecond: UInt16? = nil,
                               gifMaxColors: Int? = nil,
+                              gifDefaultsAbsent: Bool = false,
                               hasSystemAudio: Bool = false, hasMicrophoneAudio: Bool = false,
                               systemVolume: Double = 1, microphoneVolume: Double = 1,
                               muteSystem: Bool = false, muteMicrophone: Bool = false,
@@ -3826,7 +3857,8 @@ final class RecordingEditorTests: XCTestCase {
         let cropValue: Any = crop == nil ? NSNull() : crop!.dictionary
         let outputWidth: Any = output.map { NSNumber(value: $0.width) } ?? NSNull()
         let outputHeight: Any = output.map { NSNumber(value: $0.height) } ?? NSNull()
-        let fpsValue: Any = framesPerSecond.map { NSNumber(value: $0) } ?? NSNull()
+        let fpsValue: Any = gifDefaultsAbsent ? NSNull()
+            : framesPerSecond.map { NSNumber(value: $0) } ?? NSNull()
         let maximumValue: Any = saveMaximumBytes.map { NSNumber(value: $0) } ?? NSNull()
         let defaultGifColors: Int
         switch exportQuality {
@@ -3835,7 +3867,7 @@ final class RecordingEditorTests: XCTestCase {
         case "standard": defaultGifColors = 128
         default: defaultGifColors = 256
         }
-        let colorsValue: Any = exportFormat == "gif"
+        let colorsValue: Any = gifDefaultsAbsent ? NSNull() : exportFormat == "gif"
             ? NSNumber(value: gifMaxColors ?? defaultGifColors) : NSNull()
         let snapshot = try XCTUnwrap(NativeRecordingEditorSnapshot([
             "artifact_id": "recording-id", "source": ["kind": "video", "mime_type": "video/mp4",
