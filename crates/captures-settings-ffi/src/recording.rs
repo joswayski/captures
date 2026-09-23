@@ -27,6 +27,7 @@ struct PrepareRequest {
 #[serde(tag = "operation", rename_all = "snake_case")]
 enum RecordingRequest {
     Snapshot,
+    MicrophoneLevel,
     Start {
         generation: u64,
         #[serde(default)]
@@ -169,6 +170,9 @@ pub unsafe extern "C" fn captures_recording_request_v1(
         let session = unsafe { &mut *handle };
         match request {
             RecordingRequest::Snapshot => Ok(json!({"snapshot":session.snapshot()})),
+            RecordingRequest::MicrophoneLevel => {
+                Ok(json!({"microphone_peak":session.microphone_level()}))
+            }
             RecordingRequest::Start {
                 generation,
                 exclude_captures_app,
@@ -341,6 +345,64 @@ mod tests {
         let bundle = root.join(id);
         assert!(bundle.is_dir());
         (handle, bundle)
+    }
+
+    #[test]
+    fn microphone_level_is_owned_read_only_json_without_snapshot_shape_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let (handle, bundle) = prepared_session(root.path());
+        let manifest = bundle.join("manifest.json");
+        let before = std::fs::read(&manifest).unwrap();
+        let level = CString::new(r#"{"operation":"microphone_level"}"#).unwrap();
+        let snapshot = CString::new(r#"{"operation":"snapshot"}"#).unwrap();
+        let initial = take(unsafe {
+            captures_recording_request_v1(handle, snapshot.as_ptr(), None, ptr::null_mut())
+        });
+        assert!(
+            initial["result"]["snapshot"]
+                .get("microphone_peak")
+                .is_none()
+        );
+        for _ in 0..10 {
+            assert_eq!(
+                take(unsafe {
+                    captures_recording_request_v1(handle, level.as_ptr(), None, ptr::null_mut())
+                }),
+                json!({"ok":true,"result":{"microphone_peak":0.0}})
+            );
+        }
+        assert_eq!(std::fs::read(&manifest).unwrap(), before);
+        assert_eq!(
+            take(unsafe {
+                captures_recording_request_v1(handle, snapshot.as_ptr(), None, ptr::null_mut())
+            })["result"]["snapshot"],
+            initial["result"]["snapshot"]
+        );
+        let bad = CString::new(r#"{"operation":"microphone_level","unexpected":true"#).unwrap();
+        assert_eq!(
+            take(unsafe {
+                captures_recording_request_v1(handle, bad.as_ptr(), None, ptr::null_mut())
+            })["ok"],
+            false
+        );
+        assert_eq!(
+            take(unsafe {
+                captures_recording_request_v1(handle, ptr::null(), None, ptr::null_mut())
+            })["error"],
+            "string pointer is null"
+        );
+        assert_eq!(
+            take(unsafe {
+                captures_recording_request_v1(
+                    ptr::null_mut(),
+                    level.as_ptr(),
+                    None,
+                    ptr::null_mut(),
+                )
+            })["error"],
+            "recording session pointer is null"
+        );
+        unsafe { captures_recording_free_v1(handle) };
     }
 
     #[test]

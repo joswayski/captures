@@ -916,6 +916,13 @@ Wayland remains gated with native live capture. A synthetic tone verifies decode
 audible/silent/audible intervals across mute/unmute, not physical microphone
 fidelity or gapless device/encoder transitions.
 
+The shared recording session also exposes a read-only live microphone peak through
+`microphone_level` on the existing v1 recording request: `{microphone_peak}` is
+finite in 0–1, and zero for countdown, pause, stopped/failed/discarded, muted or
+mic-less sessions. The engine clears a disconnected microphone's meter while
+retaining its warning and captured media. This is a host integration boundary,
+not a shipped native meter or physical-device acceptance result.
+
 The opt-in `--live` workspace now connects full-display PNG capture and local
 screenshot history on both native hosts through `captures-app`. It includes
 explicit copy, export, reveal and history deletion while keeping exports and the

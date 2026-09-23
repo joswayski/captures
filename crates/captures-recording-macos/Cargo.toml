@@ -15,6 +15,9 @@ cpal = "0.16"
 hound = "3.5"
 screencapturekit = { version = "=8.0.1", features = ["macos_15_0"] }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints.rust]
 unsafe_code = "allow"
 

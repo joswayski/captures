@@ -699,8 +699,11 @@ void captures_window_free_v1(CapturesWindowSession *session);
 /* Owned mutable recording lifecycle. Prepare and every request may block: run
  * them on one serialized worker, never AppKit's event thread. Prepare JSON is
  * {recovery_root,options,display}; success returns {snapshot}. Lifecycle request
- * operations are snapshot, start, pause, set_microphone_muted, restart, stop,
- * finish and discard. Start and set_microphone_muted accept
+ * operations are snapshot, microphone_level, start, pause,
+ * set_microphone_muted, restart, stop, finish and discard. Microphone_level
+ * returns {microphone_peak: number} in [0,1], or zero when not actively
+ * recording with an unmuted microphone; polling does not write media/state.
+ * Start and set_microphone_muted accept
  * generation/exclude_captures_app and require an is_current callback, invoked
  * around any engine opening together with the shared capture-flow gate;
  * it must only read a thread-safe host cancellation gate. Finish accepts
