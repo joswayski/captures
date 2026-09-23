@@ -217,12 +217,12 @@ closing the window quits instead of leaving an unreachable background process.
 Native Record creates H.264 MP4 using the stored recording defaults and supported
 audio options. Its compact controls support pause/resume, confirmed restart with
 the stored countdown, microphone mute/unmute, stop/save to development History,
-and discard. The macOS recording controls show a live microphone-level meter while
-visible, running, and unmuted; it clears when paused, muted, hidden, or busy.
-This does not establish physical microphone or device acceptance. Running mute
-changes durably complete the current segment before continuing with the same
-target and options; paused changes do not resume. Restart
-replaces only the current take and resets its elapsed time. Hide removes only the controls, shows a temporary
+and discard. Running mute changes durably complete the current segment before
+continuing with the same target and options; paused changes do not resume. Restart
+replaces only the current take and resets its elapsed time. Both native HUDs show
+live microphone level while visible, running, and unmuted, clearing it when paused,
+muted, hidden, or changing the take. Physical microphone and device acceptance
+remain open. Hide removes only the controls, shows a temporary
 noninteractive notice, and preserves the session, timer, pause and microphone state. The menu bar/tray,
 app reactivation, and configured New Capture shortcut restore the controls; Linux disables Hide without a
 usable tray and restores the controls and workspace if its tray host disappears. FFmpeg and FFprobe must

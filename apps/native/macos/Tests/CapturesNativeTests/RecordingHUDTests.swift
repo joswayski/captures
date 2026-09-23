@@ -32,6 +32,10 @@ final class RecordingHUDTests: XCTestCase {
                 .first { $0.accessibilityLabel()?.contains("Microphone unavailable") == true })
             let meter = try XCTUnwrap(hud.subviews.first { $0.accessibilityLabel() == "Microphone level" })
             let fill = try XCTUnwrap(meter.subviews.first)
+            XCTAssertTrue(meter.isAccessibilityElement())
+            XCTAssertFalse(fill.isAccessibilityElement())
+            XCTAssertFalse(hud.subviews.compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == "OFF" }?.isAccessibilityElement() ?? true)
             XCTAssertEqual(meter.accessibilityValue() as? String, "0%, off")
             XCTAssertEqual(fill.frame.width, 0)
             XCTAssertFalse(microphone.isEnabled)

@@ -99,12 +99,15 @@ final class RecordingHUDView: NSView {
         meterFill.wantsLayer = true
         meterFill.layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassText.rawValue).cgColor
         meterFill.layer?.cornerRadius = 3
+        meterFill.setAccessibilityElement(false)
         meterTrack.addSubview(meterFill); addSubview(meterTrack)
         meterLabel.frame = NSRect(x: 262, y: 39, width: 42, height: 16)
         meterLabel.alignment = .center
         meterLabel.font = .systemFont(ofSize: 9, weight: .medium)
         meterLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
+        meterLabel.setAccessibilityElement(false)
         addSubview(meterLabel)
+        meterTrack.setAccessibilityElement(true)
         meterTrack.setAccessibilityRole(.progressIndicator)
         meterTrack.setAccessibilityLabel("Microphone level")
         microphoneButton.frame = NSRect(x: 304, y: 39, width: 38, height: 34)

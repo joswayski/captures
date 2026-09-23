@@ -50,7 +50,9 @@ a temporary noninteractive fixed-glass notice. The tray, app reactivation, or co
 New Capture shortcut restores it; Hide is disabled if no tray restore path exists, and Linux
 tray-host loss restores the HUD and workspace. Microphone mute/unmute rotates the active segment without
 changing the selected device or global preference, while paused changes remain
-paused; mic-less sessions explain why the control is unavailable. Successful output is listed in native History with its
+paused; mic-less sessions explain why the control is unavailable. A live microphone
+meter uses the existing capture stream, with bounded worker sampling while visible
+and unmuted; pause, mute and lifecycle changes clear the meter. Successful output is listed in native History with its
 poster and metadata. **Edit recording** opens a decoded-frame editor with staged
 graphical/numeric trim and crop, output size, audio settings and MP4/GIF
 save-new-copy. Trim grips share the shipping pointer geometry and support focused
@@ -359,6 +361,15 @@ editor opening and preservation of unrelated History and corrupt bundles:
 
 ```sh
 python apps/native/x11_recovery_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recovery
+```
+
+The private PulseAudio microphone exercise varies live volume, checks empty
+silence/paused/muted meters, resumes sampling after unmute, and independently
+decodes the saved audio. It requires `pulseaudio` and `pulseaudio-utils`; this is
+virtual-audio evidence, not physical microphone or Windows/Wayland acceptance.
+
+```sh
+/usr/bin/python3 apps/native/x11_recording_smoke.py --restart-only --virtual-microphone --appearance dark --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-microphone-dark
 ```
 
 ```sh

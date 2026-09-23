@@ -68,6 +68,7 @@ pub enum Event {
     },
     Snapshot {
         generation: u64,
+        microphone_peak: f32,
         result: Result<RecordingSessionSnapshot, String>,
     },
     Prepared {
@@ -133,6 +134,9 @@ impl Worker {
                     },
                     Command::Snapshot { generation } => Event::Snapshot {
                         generation,
+                        microphone_peak: session
+                            .as_ref()
+                            .map_or(0., RecordingSession::microphone_level),
                         result: session.as_ref().map_or_else(
                             || Err("Recording session is unavailable".into()),
                             |session| Ok(session.snapshot()),

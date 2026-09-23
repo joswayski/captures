@@ -602,6 +602,7 @@ impl Workbench {
                 busy: self.options.hud_state == HudState::Busy,
                 has_microphone: self.options.hud_state != HudState::NoMicrophone,
                 microphone_muted: self.options.hud_state == HudState::Muted,
+                microphone_peak: 0.625,
                 elapsed_ms: 24_000,
                 notice: "These controls won’t show in recordings",
                 warning: false,
