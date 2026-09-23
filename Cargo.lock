@@ -644,9 +644,9 @@ dependencies = [
  "captures-session",
  "captures-settings",
  "chrono",
+ "file-id",
  "global-hotkey",
  "image",
- "same-file",
  "serde",
  "serde_json",
  "sha2",
@@ -1928,6 +1928,15 @@ checksum = "38e2275cc4e4fc009b0669731a1e5ab7ebf11f469eaede2bab9309a5b4d6057f"
 dependencies = [
  "memoffset",
  "rustc_version",
+]
+
+[[package]]
+name = "file-id"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1fc6a637b6dc58414714eddd9170ff187ecb0933d4c7024d1abbd23a3cc26e9"
+dependencies = [
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
