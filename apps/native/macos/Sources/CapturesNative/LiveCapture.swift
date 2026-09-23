@@ -1434,7 +1434,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         meter.setActive(recordingSession === session && !recordingLifecycle.busy
             && !recordingControlsHidden
             && recordingScreenshotGeneration == nil && !recordingPendingStart
-            && hud.isVisible && !hud.isHidden && !hud.hud.paused
+            && hud.isVisible && !hud.hud.isHidden && !hud.hud.paused
             && !hud.hud.microphoneMuted && hud.hud.microphoneAvailable)
     }
 
