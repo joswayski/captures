@@ -48,6 +48,11 @@ struct PublicationIntent {
     session_id: String,
     artifact_id: String,
     content_sha256: String,
+    source_identity: String,
+    source_sha256: String,
+    manifest_sha256: String,
+    published_manifest_sha256: String,
+    entry_sha256: String,
 }
 
 pub struct RecordingRecovery {
@@ -60,16 +65,13 @@ pub struct RecordingRecovery {
 /// on separate inodes. A live native session holds this until finish/discard.
 pub(crate) fn lease(root: &Path) -> Result<File, String> {
     fs::create_dir_all(root).map_err(string)?;
-    if !fs::symlink_metadata(root)
-        .map_err(string)?
-        .file_type()
-        .is_dir()
-    {
+    let metadata = fs::symlink_metadata(root).map_err(string)?;
+    if !metadata.is_dir() || is_link(&metadata) {
         return Err("Recovery root must be a real directory".into());
     }
     let lock = root.join(".recording-recovery.lock");
     if let Ok(metadata) = fs::symlink_metadata(&lock)
-        && !metadata.file_type().is_file()
+        && (!metadata.file_type().is_file() || is_link(&metadata))
     {
         return Err("Recovery lock must be a regular file".into());
     }
@@ -158,9 +160,6 @@ impl RecordingRecovery {
         let _lease = lease(&self.root)?;
         check_cancel(cancel)?;
         let (mut manifest, identity) = self.read(session_id)?;
-        if identity != expected_identity {
-            return Err("Recovery draft changed since listing".into());
-        }
         let bundle = self.root.join(session_id);
         let intent_path = bundle.join(INTENT);
         let intent = if intent_path.exists() {
@@ -172,16 +171,47 @@ impl RecordingRecovery {
             {
                 return Err("Recovery publication intent is invalid".into());
             }
+            if intent.source_identity != expected_identity
+                || manifest_digest(&manifest)?.as_str()
+                    != if manifest.state == RecordingState::Ready {
+                        intent.published_manifest_sha256.as_str()
+                    } else {
+                        intent.manifest_sha256.as_str()
+                    }
+                || source_digest(&bundle, &manifest, cancel)? != intent.source_sha256
+            {
+                return Err("Recovery source changed since publication intent".into());
+            }
             intent
         } else {
+            if identity != expected_identity {
+                return Err("Recovery draft changed since listing".into());
+            }
             PublicationIntent {
                 version: 1,
                 session_id: session_id.into(),
                 artifact_id: session_id.into(),
                 content_sha256: String::new(),
+                source_identity: identity.clone(),
+                source_sha256: source_digest(&bundle, &manifest, cancel)?,
+                manifest_sha256: manifest_digest(&manifest)?,
+                published_manifest_sha256: String::new(),
+                entry_sha256: String::new(),
             }
         };
-        if let Some(previous) = self.previous(&intent, &manifest)? {
+        if let Some(mut previous) = self.previous(&intent, &manifest, cancel)? {
+            manifest.state = RecordingState::Ready;
+            manifest.final_path = Some(previous.path.to_string_lossy().into_owned());
+            previous.warning = DraftStore::new(self.root.clone())
+                .save(&manifest)
+                .err()
+                .map(|error| error.to_string());
+            if previous.warning.is_none() && manifest.options.kind == RecordingKind::Video {
+                previous.warning = DraftStore::new(self.root.clone())
+                    .remove(session_id)
+                    .err()
+                    .map(|error| error.to_string());
+            }
             return Ok(previous);
         }
         if !recoverable(manifest.state) {
@@ -190,6 +220,7 @@ impl RecordingRecovery {
         check_cancel(cancel)?;
         progress(RecoveryProgress::Scanning);
         let mut segments = Vec::new();
+        let mut system_audio_available = false;
         for segment in &mut manifest.segments {
             let video = child(&bundle, &segment.relative_path)?;
             if !video.exists() && !segment.complete {
@@ -218,9 +249,11 @@ impl RecordingRecovery {
                     .transpose()
                     .map(|path| path.filter(|path| path.is_file()))
             };
+            let system_audio_path = sidecar(&segment.system_audio_relative_path)?;
+            system_audio_available |= probe.has_audio || system_audio_path.is_some();
             segments.push(RecordingSegmentInput {
                 video_path: video,
-                system_audio_path: sidecar(&segment.system_audio_relative_path)?,
+                system_audio_path,
                 system_audio_offset_ms: segment.system_audio_offset_ms,
                 microphone_path: sidecar(&segment.microphone_relative_path)?,
                 microphone_offset_ms: segment.microphone_offset_ms,
@@ -239,7 +272,8 @@ impl RecordingRecovery {
             RecordingKind::Video => (
                 "mp4",
                 RecordingAssemblyKind::Video {
-                    capture_system_audio: manifest.options.audio.capture_system_audio,
+                    capture_system_audio: manifest.options.audio.capture_system_audio
+                        && system_audio_available,
                 },
             ),
             RecordingKind::Gif => (
@@ -283,20 +317,21 @@ impl RecordingRecovery {
         check_cancel(cancel)?;
         // Recheck source and metadata after slow media work. Intent is recorded
         // before History publication, so a process kill can retry by ID.
-        if self.read(session_id)?.1 != identity {
+        if self.read(session_id)?.1 != identity
+            || source_digest(&bundle, &manifest, cancel)? != intent.source_sha256
+        {
             return Err("Recovery draft changed during assembly".into());
         }
         if self.history_entry(session_id)?.is_some() {
             return Err("History artifact ID is already occupied".into());
         }
-        let intent = PublicationIntent {
-            content_sha256: digest_file(&assembled)?,
+        let mut intent = PublicationIntent {
+            content_sha256: digest_file(&assembled, cancel)?,
+            published_manifest_sha256: manifest_digest(&manifest)?,
             ..intent
         };
-        atomic_intent(&intent_path, &intent)?;
-        check_cancel(cancel)?;
         let entry = HistoryEntry {
-            id: intent.artifact_id,
+            id: intent.artifact_id.clone(),
             kind: if extension == "gif" {
                 ArtifactKind::Gif
             } else {
@@ -315,7 +350,8 @@ impl RecordingRecovery {
             target: Some(manifest.options.target.clone()),
             has_system_audio: extension == "mp4"
                 && probe.has_audio
-                && manifest.options.audio.capture_system_audio,
+                && manifest.options.audio.capture_system_audio
+                && system_audio_available,
             has_microphone_audio: extension == "mp4"
                 && probe.has_audio
                 && outcome.has_microphone_audio,
@@ -326,6 +362,12 @@ impl RecordingRecovery {
                 .map(|s| s.dropped_frames)
                 .sum(),
         };
+        intent.entry_sha256 = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec_pretty(&entry).map_err(string)?)
+        );
+        atomic_intent(&intent_path, &intent)?;
+        check_cancel(cancel)?;
         progress(RecoveryProgress::Publishing);
         let path =
             captures_history::save_recording(&self.history_root, &entry, &poster, &assembled)
@@ -373,34 +415,40 @@ impl RecordingRecovery {
         if file_id::get_file_id(&quarantine).map_err(string)? != bundle_id {
             return Err("Recovery bundle changed while discarding".into());
         }
-        reject_links(&quarantine)?;
-        fs::remove_dir_all(quarantine).map_err(string)?;
+        if let Err(error) =
+            reject_links(&quarantine).and_then(|()| fs::remove_dir_all(&quarantine).map_err(string))
+        {
+            let restored = fs::rename(&quarantine, &bundle);
+            return Err(match restored {
+                Ok(()) => error,
+                Err(restore) => format!(
+                    "Discard failed ({error}); remaining bundle is at {} (restore failed: {restore})",
+                    quarantine.display()
+                ),
+            });
+        }
         Ok("discarded")
     }
 
     fn read(&self, id: &str) -> Result<(RecordingDraftManifest, String), String> {
         uuid::Uuid::parse_str(id).map_err(string)?;
         let bundle = self.root.join(id);
-        if !fs::symlink_metadata(&bundle)
-            .map_err(string)?
-            .file_type()
-            .is_dir()
-        {
+        let metadata = fs::symlink_metadata(&bundle).map_err(string)?;
+        if !metadata.is_dir() || is_link(&metadata) {
             return Err("Recovery bundle is not a real directory".into());
         }
+        reject_links(&bundle)?;
         let manifest_path = bundle.join("manifest.json");
-        let bytes = regular_bytes(&manifest_path)?;
-        if bytes.len() > 8 * 1024 * 1024 {
+        if fs::metadata(&manifest_path).map_err(string)?.len() > 8 * 1024 * 1024 {
             return Err("Recovery manifest is too large".into());
         }
+        let bytes = regular_bytes(&manifest_path)?;
         let manifest: RecordingDraftManifest = serde_json::from_slice(&bytes).map_err(string)?;
         if manifest.schema_version != 1 || manifest.session_id != id {
             return Err("Foreign recovery manifest".into());
         }
         let directory_id = file_id::get_file_id(&bundle).map_err(string)?;
-        let mut hash = Sha256::new();
-        hash.update(format!("{directory_id:?}"));
-        hash.update(&bytes);
+        let mut identity = format!("{directory_id:?}:{}", file_fingerprint(&manifest_path)?);
         for segment in &manifest.segments {
             for relative in [
                 Some(&segment.relative_path),
@@ -411,15 +459,18 @@ impl RecordingRecovery {
             .flatten()
             {
                 let path = child(&bundle, relative)?;
-                hash.update(relative.as_bytes());
+                identity.push_str(relative);
                 if path.exists() {
-                    hash.update(digest_file(&path)?.as_bytes());
+                    identity.push_str(&file_fingerprint(&path)?);
                 } else {
-                    hash.update(b"missing");
+                    identity.push_str("missing");
                 }
             }
         }
-        Ok((manifest, format!("{:x}", hash.finalize())))
+        Ok((
+            manifest,
+            format!("{:x}", Sha256::digest(identity.as_bytes())),
+        ))
     }
 
     fn history_entry(&self, id: &str) -> Result<Option<HistoryEntry>, String> {
@@ -429,11 +480,8 @@ impl RecordingRecovery {
         {
             return Ok(None);
         }
-        if !fs::symlink_metadata(&path)
-            .map_err(string)?
-            .file_type()
-            .is_dir()
-        {
+        let metadata = fs::symlink_metadata(&path).map_err(string)?;
+        if !metadata.is_dir() || is_link(&metadata) {
             return Err("History artifact path is not a real directory".into());
         }
         let entry: HistoryEntry = serde_json::from_slice(&regular_bytes(
@@ -447,6 +495,7 @@ impl RecordingRecovery {
         &self,
         intent: &PublicationIntent,
         manifest: &RecordingDraftManifest,
+        cancel: &CancelToken,
     ) -> Result<Option<RecoveryOutcome>, String> {
         let Some(entry) = self.history_entry(&intent.artifact_id)? else {
             return Ok(None);
@@ -461,6 +510,10 @@ impl RecordingRecovery {
                     ArtifactKind::Video
                 }
             || entry.saved_path.is_some()
+            || format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec_pretty(&entry).map_err(string)?)
+            ) != intent.entry_sha256
         {
             return Err("History artifact ID is already occupied".into());
         }
@@ -471,7 +524,7 @@ impl RecordingRecovery {
             .map_err(string)?
             .file_type()
             .is_file()
-            || digest_file(&path)? != intent.content_sha256
+            || digest_file(&path, cancel)? != intent.content_sha256
         {
             return Err("Published media is unavailable".into());
         }
@@ -506,7 +559,7 @@ fn child(bundle: &Path, relative: &str) -> Result<PathBuf, String> {
     for (index, component) in relative.components().enumerate() {
         path.push(component);
         match fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
+            Ok(metadata) if is_link(&metadata) => {
                 return Err("Recovery media contains a link".into());
             }
             Ok(metadata) if index + 1 < relative.components().count() && !metadata.is_dir() => {
@@ -525,7 +578,7 @@ fn child(bundle: &Path, relative: &str) -> Result<PathBuf, String> {
 
 fn reject_links(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path).map_err(string)?;
-    if metadata.file_type().is_symlink() || !(metadata.is_dir() || metadata.is_file()) {
+    if is_link(&metadata) || !(metadata.is_dir() || metadata.is_file()) {
         return Err("Recovery bundle contains a link or special file".into());
     }
     if metadata.is_dir() {
@@ -536,11 +589,28 @@ fn reject_links(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn digest_file(path: &Path) -> Result<String, String> {
+fn is_link(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // Directory junctions and other reparse points need rejection too.
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+fn digest_file(path: &Path, cancel: &CancelToken) -> Result<String, String> {
     let mut file = fs::File::open(path).map_err(string)?;
     let mut hash = Sha256::new();
     let mut chunk = [0u8; 64 * 1024];
     loop {
+        check_cancel(cancel)?;
         let read = file.read(&mut chunk).map_err(string)?;
         if read == 0 {
             break;
@@ -548,6 +618,74 @@ fn digest_file(path: &Path) -> Result<String, String> {
         hash.update(&chunk[..read]);
     }
     Ok(format!("{:x}", hash.finalize()))
+}
+
+fn file_fingerprint(path: &Path) -> Result<String, String> {
+    let metadata = fs::symlink_metadata(path).map_err(string)?;
+    if !metadata.file_type().is_file() {
+        return Err("Recovery source is not a regular file".into());
+    }
+    let id = file_id::get_file_id(path).map_err(string)?;
+    let changed = metadata.modified().map_err(string)?;
+    #[cfg(unix)]
+    let change_time = {
+        use std::os::unix::fs::MetadataExt;
+        format!("{}:{}", metadata.ctime(), metadata.ctime_nsec())
+    };
+    #[cfg(not(unix))]
+    let change_time = String::new();
+    Ok(format!(
+        "{id:?}:{}:{changed:?}:{change_time}",
+        metadata.len()
+    ))
+}
+
+fn source_digest(
+    bundle: &Path,
+    manifest: &RecordingDraftManifest,
+    cancel: &CancelToken,
+) -> Result<String, String> {
+    let mut hash = Sha256::new();
+    for segment in &manifest.segments {
+        for relative in [
+            Some(&segment.relative_path),
+            segment.system_audio_relative_path.as_ref(),
+            segment.microphone_relative_path.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            check_cancel(cancel)?;
+            hash.update(relative.as_bytes());
+            let path = child(bundle, relative)?;
+            if path.exists() {
+                let mut file = File::open(path).map_err(string)?;
+                let mut bytes = [0u8; 64 * 1024];
+                loop {
+                    check_cancel(cancel)?;
+                    let count = file.read(&mut bytes).map_err(string)?;
+                    if count == 0 {
+                        break;
+                    }
+                    hash.update(&bytes[..count]);
+                }
+            } else {
+                hash.update(b"missing");
+            }
+        }
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn manifest_digest(manifest: &RecordingDraftManifest) -> Result<String, String> {
+    let mut normalized = manifest.clone();
+    // Publication is allowed to transition Ready and set final_path only.
+    normalized.state = RecordingState::Ready;
+    normalized.final_path = None;
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&normalized).map_err(string)?)
+    ))
 }
 
 fn regular_bytes(path: &Path) -> Result<Vec<u8>, String> {
@@ -581,4 +719,432 @@ fn check_cancel(token: &CancelToken) -> Result<(), String> {
 
 fn string(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use captures_capture::DisplayDescriptor;
+    use captures_recording::{
+        AudioOptions, CaptureRect, GifOptions, MaxResolution, RecordingOptions,
+        RecordingSegmentManifest, RecordingTarget,
+    };
+    use std::process::Command;
+
+    fn test_ffmpeg() -> std::ffi::OsString {
+        std::env::var_os("CAPTURES_TEST_FFMPEG").unwrap_or_else(|| "ffmpeg".into())
+    }
+
+    fn test_ffprobe() -> std::ffi::OsString {
+        std::env::var_os("CAPTURES_TEST_FFPROBE").unwrap_or_else(|| "ffprobe".into())
+    }
+
+    fn options(kind: RecordingKind) -> RecordingOptions {
+        RecordingOptions {
+            kind,
+            target: RecordingTarget::Region {
+                display_id: "fixture".into(),
+                rect: CaptureRect {
+                    x: 0,
+                    y: 0,
+                    width: 64,
+                    height: 48,
+                },
+            },
+            frames_per_second: 15,
+            max_resolution: MaxResolution::Original,
+            countdown_seconds: 0,
+            show_cursor: false,
+            highlight_clicks: false,
+            show_keystrokes: false,
+            audio: AudioOptions {
+                capture_system_audio: true,
+                ..AudioOptions::default()
+            },
+            gif: GifOptions::default(),
+        }
+    }
+
+    fn fixture(kind: RecordingKind) -> Option<(tempfile::TempDir, RecordingRecovery, String)> {
+        let tools = MediaToolchain::new(test_ffmpeg().into(), test_ffprobe().into());
+        if tools.verify().is_err() {
+            return None;
+        }
+        let base = tempfile::tempdir().unwrap();
+        let history = base.path().join("history");
+        let recovery = RecordingRecovery::new(history, tools);
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut manifest = RecordingDraftManifest::new(id.clone(), options(kind), 10);
+        manifest.state = RecordingState::Failed;
+        let store = DraftStore::new(recovery.root.clone());
+        let directory = store.create(&manifest).unwrap();
+        for (index, color) in ["red", "blue"].iter().enumerate() {
+            let name = format!("segment-{index:03}.mp4");
+            let path = directory.join(&name);
+            let status = Command::new(test_ffmpeg())
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                ])
+                .arg(format!("color=c={color}:size=64x48:rate=10:duration=0.5"))
+                .args([
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=0.5",
+                    "-c:v",
+                    "mpeg4",
+                    "-c:a",
+                    "aac",
+                    "-shortest",
+                ])
+                .arg(&path)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            manifest.segments.push(RecordingSegmentManifest {
+                index: index as u32,
+                relative_path: name,
+                system_audio_relative_path: None,
+                system_audio_offset_ms: 0,
+                system_audio_warning: None,
+                microphone_relative_path: None,
+                microphone_offset_ms: 0,
+                microphone_warning: None,
+                started_at_ms: index as u64 * 500,
+                duration_ms: 500,
+                width: 64,
+                height: 48,
+                size_bytes: fs::metadata(path).unwrap().len(),
+                dropped_frames: index as u64,
+                complete: true,
+            });
+        }
+        store.save(&manifest).unwrap();
+        Some((base, recovery, id))
+    }
+
+    fn identity(recovery: &RecordingRecovery, id: &str) -> String {
+        recovery
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|row| row.session_id == id)
+            .unwrap()
+            .identity
+            .unwrap()
+    }
+
+    #[test]
+    fn native_lease_excludes_recovery_and_remains_stable_after_release() {
+        let base = tempfile::tempdir().unwrap();
+        let history = base.path().join("history");
+        let recovery = RecordingRecovery::new(history, MediaToolchain::from_command_names());
+        let display = DisplayDescriptor {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            x: 0,
+            y: 0,
+            width: 64,
+            height: 48,
+            scale_factor: 1.,
+            is_primary: true,
+        };
+        let mut live = crate::RecordingSession::prepare(
+            recovery.root.clone(),
+            options(RecordingKind::Video),
+            display,
+        )
+        .unwrap();
+        assert!(recovery.list().unwrap_err().contains("active"));
+        assert!(lease(&recovery.root).is_err());
+        live.discard().unwrap();
+        assert!(recovery.list().unwrap().is_empty());
+        assert!(recovery.root.join(".recording-recovery.lock").is_file());
+    }
+
+    #[test]
+    fn recovers_asymmetric_segments_once_and_preserves_provenance() {
+        for kind in [RecordingKind::Video, RecordingKind::Gif] {
+            let Some((_base, recovery, id)) = fixture(kind) else {
+                return;
+            };
+            let identity = identity(&recovery, &id);
+            let mut stages = Vec::new();
+            let saved = recovery
+                .recover(&id, &identity, &CancelToken::default(), |stage| {
+                    stages.push(stage)
+                })
+                .unwrap();
+            assert_eq!(saved.status, "recovered");
+            assert_eq!(
+                saved.entry.kind,
+                if kind == RecordingKind::Gif {
+                    ArtifactKind::Gif
+                } else {
+                    ArtifactKind::Video
+                }
+            );
+            assert_eq!(saved.entry.dropped_frames, 1);
+            assert_eq!(saved.entry.has_system_audio, kind == RecordingKind::Video);
+            assert!(!saved.entry.has_microphone_audio);
+            assert!(saved.path.is_file());
+            assert!(matches!(
+                stages.as_slice(),
+                [
+                    RecoveryProgress::Scanning,
+                    RecoveryProgress::Assembling,
+                    RecoveryProgress::Poster,
+                    RecoveryProgress::Publishing
+                ]
+            ));
+            if kind == RecordingKind::Gif {
+                let again = recovery
+                    .recover(&id, &identity, &CancelToken::default(), |_| {})
+                    .unwrap();
+                assert_eq!(again.status, "already_recovered");
+                assert_eq!(again.path, saved.path);
+                assert!(recovery.root.join(&id).is_dir());
+            } else {
+                assert!(!recovery.root.join(&id).exists());
+                assert!(
+                    recovery
+                        .recover(&id, &identity, &CancelToken::default(), |_| {})
+                        .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn surviving_microphone_does_not_invent_system_audio() {
+        let Some((_base, recovery, id)) = fixture(RecordingKind::Video) else {
+            return;
+        };
+        let bundle = recovery.root.join(&id);
+        let store = DraftStore::new(recovery.root.clone());
+        let mut manifest = store.load(&id).unwrap();
+        for segment in &mut manifest.segments {
+            let video = bundle.join(&segment.relative_path);
+            let silent = bundle.join(format!("silent-{}.mp4", segment.index));
+            assert!(
+                Command::new(test_ffmpeg())
+                    .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+                    .arg(&video)
+                    .args(["-c:v", "copy", "-an"])
+                    .arg(&silent)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            fs::rename(silent, &video).unwrap();
+            let mic = format!("mic-{}.wav", segment.index);
+            assert!(
+                Command::new(test_ffmpeg())
+                    .args([
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "sine=frequency=731:duration=0.5"
+                    ])
+                    .arg(bundle.join(&mic))
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            segment.microphone_relative_path = Some(mic);
+            segment.microphone_offset_ms = if segment.index == 0 { 120 } else { -80 };
+        }
+        store.save(&manifest).unwrap();
+        let accepted = identity(&recovery, &id);
+        let saved = recovery
+            .recover(&id, &accepted, &CancelToken::default(), |_| {})
+            .unwrap();
+        assert!(!saved.entry.has_system_audio);
+        assert!(saved.entry.has_microphone_audio);
+        let probe = recovery.tools.probe(&saved.path).unwrap();
+        assert!(probe.has_audio);
+        assert_eq!((probe.metadata.width, probe.metadata.height), (64, 48));
+    }
+
+    #[test]
+    fn incomplete_tail_is_preserved_while_playable_segment_is_published() {
+        let Some((_base, recovery, id)) = fixture(RecordingKind::Gif) else {
+            return;
+        };
+        let store = DraftStore::new(recovery.root.clone());
+        let mut manifest = store.load(&id).unwrap();
+        manifest.segments[1].complete = false;
+        store.save(&manifest).unwrap();
+        let tail = recovery
+            .root
+            .join(&id)
+            .join(&manifest.segments[1].relative_path);
+        fs::write(&tail, b"interrupted partial mp4").unwrap();
+        let accepted = identity(&recovery, &id);
+        let saved = recovery
+            .recover(&id, &accepted, &CancelToken::default(), |_| {})
+            .unwrap();
+        assert_eq!(saved.entry.kind, ArtifactKind::Gif);
+        assert_eq!(saved.entry.dropped_frames, 0);
+        assert_eq!(fs::read(&tail).unwrap(), b"interrupted partial mp4");
+        assert!(saved.path.is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_kills_active_probe_and_assembly_without_publication() {
+        use std::{
+            os::unix::fs::PermissionsExt,
+            sync::mpsc,
+            time::{Duration, Instant},
+        };
+        for probe_phase in [true, false] {
+            let Some((base, mut recovery, id)) = fixture(RecordingKind::Video) else {
+                return;
+            };
+            let accepted = identity(&recovery, &id);
+            let bundle = recovery.root.join(&id);
+            let history = recovery.history_root.clone();
+            let marker = base.path().join("entered-child");
+            let wrapper = base.path().join("media-wrapper.sh");
+            let real = if probe_phase {
+                test_ffprobe()
+            } else {
+                test_ffmpeg()
+            };
+            let real = real.to_string_lossy().replace('\'', "'\\''");
+            let marker_name = marker.to_string_lossy().replace('\'', "'\\''");
+            let match_name = if probe_phase {
+                "*segment-000.mp4*"
+            } else {
+                "*assembled.mp4*"
+            };
+            fs::write(&wrapper, format!("#!/bin/sh\nfor arg do\n case \"$arg\" in {match_name}) : > '{marker_name}'; for n in 1 2 3 4 5 6 7 8 9 10; do sleep 1; done; exit 42;; esac\ndone\nexec '{real}' \"$@\"\n")).unwrap();
+            fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+            if probe_phase {
+                recovery.tools = MediaToolchain::new(test_ffmpeg().into(), wrapper);
+            } else {
+                recovery.tools = MediaToolchain::new(wrapper, test_ffprobe().into());
+            }
+            let cancel = CancelToken::default();
+            let worker_cancel = cancel.clone();
+            let (tx, rx) = mpsc::channel();
+            let worker_id = id.clone();
+            let worker_identity = accepted.clone();
+            let worker = std::thread::spawn(move || {
+                let result = recovery.recover(&worker_id, &worker_identity, &worker_cancel, |_| {});
+                tx.send(result).unwrap();
+            });
+            let start = Instant::now();
+            while !marker.exists() && start.elapsed() < Duration::from_secs(5) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            cancel.cancel();
+            let result = rx
+                .recv_timeout(Duration::from_secs(12))
+                .expect("recovery worker must terminate");
+            worker.join().unwrap();
+            assert!(
+                marker.exists(),
+                "child did not enter gated phase: {result:?}"
+            );
+            assert!(result.is_err());
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "cancellation did not promptly kill child"
+            );
+            let listing =
+                RecordingRecovery::new(history.clone(), MediaToolchain::from_command_names());
+            assert_eq!(identity(&listing, &id), accepted);
+            assert!(bundle.is_dir());
+            assert!(!history.join(&id).exists());
+            assert!(!fs::read_dir(bundle).unwrap().any(|item| {
+                item.unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".recovery-")
+            }));
+        }
+    }
+
+    #[test]
+    fn refuses_stale_foreign_and_colliding_bundles_without_deleting_sources() {
+        let Some((base, recovery, id)) = fixture(RecordingKind::Video) else {
+            return;
+        };
+        let old = identity(&recovery, &id);
+        let bundle = recovery.root.join(&id);
+        fs::write(bundle.join("segment-000.mp4"), b"changed").unwrap();
+        assert!(recovery.discard(&id, &old).is_err());
+        assert!(
+            recovery
+                .recover(&id, &old, &CancelToken::default(), |_| {})
+                .is_err()
+        );
+        assert!(bundle.is_dir());
+        let fresh = identity(&recovery, &id);
+        let collision = recovery.history_root.join(&id);
+        fs::create_dir_all(&collision).unwrap();
+        fs::write(
+            collision.join(captures_history::HISTORY_METADATA_FILE),
+            b"foreign",
+        )
+        .unwrap();
+        assert!(
+            recovery
+                .recover(&id, &fresh, &CancelToken::default(), |_| {})
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(collision.join(captures_history::HISTORY_METADATA_FILE)).unwrap(),
+            b"foreign"
+        );
+        let unrelated = base.path().join("unrelated");
+        fs::write(&unrelated, b"keep").unwrap();
+        assert!(recovery.discard("../unrelated", &fresh).is_err());
+        assert_eq!(fs::read(unrelated).unwrap(), b"keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lists_corrupt_and_linked_bundles_as_unavailable_without_touching_targets() {
+        use std::os::unix::fs::symlink;
+        let Some((base, recovery, id)) = fixture(RecordingKind::Video) else {
+            return;
+        };
+        let external = base.path().join("outside");
+        fs::write(&external, b"keep").unwrap();
+        let bundle = recovery.root.join(&id);
+        let token = identity(&recovery, &id);
+        symlink(&external, bundle.join("foreign-link")).unwrap();
+        let linked = recovery
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|row| row.session_id == id)
+            .unwrap();
+        assert_eq!(linked.status, "unavailable");
+        assert!(recovery.discard(&id, &token).is_err());
+        fs::write(bundle.join("manifest.json"), b"corrupt").unwrap();
+        let row = recovery
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|row| row.session_id == id)
+            .unwrap();
+        assert_eq!(row.status, "unavailable");
+        assert!(row.identity.is_none());
+        assert!(recovery.discard(&id, &token).is_err());
+        assert_eq!(fs::read(external).unwrap(), b"keep");
+    }
 }

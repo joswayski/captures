@@ -123,3 +123,45 @@ pub unsafe extern "C" fn captures_recording_recovery_discard_v1(
         Err(error) => json!({"ok":false,"error":error}),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::{CStr, CString};
+
+    fn owned(ptr: *mut c_char) -> serde_json::Value {
+        let result = serde_json::from_slice(unsafe { CStr::from_ptr(ptr) }.to_bytes()).unwrap();
+        unsafe { crate::captures_settings_free_v1(ptr) };
+        result
+    }
+
+    #[test]
+    fn recovery_abi_envelopes_and_owned_json() {
+        let root = tempfile::tempdir().unwrap();
+        let request =
+            CString::new(json!({"history_root": root.path().join("history")}).to_string()).unwrap();
+        let list = owned(unsafe { captures_recording_recovery_list_v1(request.as_ptr()) });
+        assert_eq!(list, json!({"ok":true,"result":{"drafts":[]}}));
+        let recover = owned(unsafe {
+            captures_recording_recovery_recover_v1(
+                request.as_ptr(),
+                std::ptr::null(),
+                None,
+                std::ptr::null_mut(),
+            )
+        });
+        assert_eq!(recover["ok"], false);
+        assert!(recover["error"].as_str().unwrap().contains("session_id"));
+        let discard = owned(unsafe { captures_recording_recovery_discard_v1(request.as_ptr()) });
+        assert_eq!(discard["ok"], false);
+        let malformed = CString::new("not JSON").unwrap();
+        assert_eq!(
+            owned(unsafe { captures_recording_recovery_list_v1(malformed.as_ptr()) })["ok"],
+            false
+        );
+        assert_eq!(
+            owned(unsafe { captures_recording_recovery_list_v1(std::ptr::null()) })["ok"],
+            false
+        );
+    }
+}

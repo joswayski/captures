@@ -44,7 +44,6 @@ impl RecordingSession {
         options: RecordingOptions,
         display: DisplayDescriptor,
     ) -> Result<Self, String> {
-        let recovery_lease = super::recovery::lease(&recovery_root)?;
         let now = now_ms();
         let mut coordinator = RecordingCoordinator::default();
         let initial = coordinator.begin(options.clone(), now).map_err(string)?;
@@ -54,6 +53,7 @@ impl RecordingSession {
             .transition(&manifest.session_id, RecordingState::Countdown, now)
             .map_err(string)?;
         manifest.state = RecordingState::Countdown;
+        let recovery_lease = super::recovery::lease(store.root())?;
         let directory = store.create(&manifest).map_err(string)?;
         Ok(Self {
             recovery_lease: Some(recovery_lease),
