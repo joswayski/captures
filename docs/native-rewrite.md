@@ -591,13 +591,17 @@ estimate to History. AppKit CI covers exact/approximate light/dark normal/minimu
 labels and the same lifecycle. Physical macOS/Windows/Wayland acceptance remains
 open. Close/quit waits for accepted work, as with export.
 The shared recording comparison ABI retains independent before/after frames from
-a read-only encoding sample at the accepted source-relative position. The AppKit
-host exposes explicit Compare, split, Hide, cancellation and retry on its serialized
-worker, rejecting stale generation/revision/position/export results and hiding on
-staging, playback, crop, seek, new item or close. Paused playback time never selects
-the comparison frame. Maximum shows budget-free first-attempt fidelity, not final
-capped-save pixels. Native Windows/Linux UI integration and physical acceptance
-remain open; comparison never edits the accepted snapshot, dirty state or History.
+a read-only encoding sample at the accepted source-relative position. Both native
+editors expose explicit Compare, split and Hide, cancellation and retry on their
+serialized workers. They restore the accepted still/time from paused playback;
+paused playback time never selects the comparison frame. Generation, cancellation,
+accepted revision, position and preview export guard delivery. Staging, playback,
+crop, seek, new item and close discard comparison without changing accepted edits,
+dirty state or History. The wgpu split also supports pointer dragging and keyboard
+adjustment. Maximum displays the budget-free first attempt and warns that final
+capped-save pixels can differ. Requested/fallback seek positions are not decoded
+PTS; output cadence can select neighboring frames. Physical macOS, Windows and
+Wayland input, accessibility and mixed-DPI acceptance remain open.
 The preview/timeline/save hierarchy follows the shipping recording editor, but
 the UI is not a visual match; physical audio playback acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted

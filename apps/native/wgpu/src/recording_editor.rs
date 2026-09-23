@@ -12,7 +12,8 @@ use std::{
 
 use captures_app::recording_editor::{
     RecordingEditorOpenRequest, RecordingEditorRequestV2 as RecordingEditorRequest,
-    RecordingEditorSession, RecordingSaveRequest, RecordingTimelineThumbnails, SavedRecording,
+    RecordingEditorSession, RecordingExportComparison, RecordingSaveRequest,
+    RecordingTimelineThumbnails, SavedRecording,
 };
 use captures_app::recording_timeline::{TimelineTrimDrag, TimelineTrimEdge, timeline_ratio};
 use captures_media::{
@@ -26,6 +27,8 @@ use image::RgbaImage;
 use crate::tokens::Tokens;
 
 struct Presented {
+    revision: u64,
+    preview_export: ExportSpec,
     source: MediaMetadata,
     edit: EditSpec,
     export: ExportSpec,
@@ -37,6 +40,8 @@ impl Presented {
     fn from_session(session: &RecordingEditorSession) -> Self {
         let snapshot = session.snapshot_v2();
         Self {
+            revision: snapshot.editor.revision,
+            preview_export: snapshot.editor.preview_export.clone(),
             source: snapshot.editor.source.clone(),
             edit: snapshot.editor.edit.clone(),
             export: snapshot.save_export.clone(),
@@ -50,10 +55,36 @@ enum Job {
     Apply(RecordingEditorRequest),
     Save(RecordingSaveRequest, CancelToken),
     Estimate(CancelToken),
+    Compare(u64, CancelToken),
     Thumbnails(CancelToken),
     SourceFrame(CancelToken),
     Play(u64, bool, CancelToken),
     Shutdown,
+}
+
+struct Comparison {
+    revision: u64,
+    position_ms: u64,
+    after_seek_position_ms: u64,
+    export: ExportSpec,
+    frames: [Arc<RgbaImage>; 2],
+}
+
+impl From<RecordingExportComparison> for Comparison {
+    fn from(result: RecordingExportComparison) -> Self {
+        Self {
+            revision: result.revision,
+            position_ms: result.position_ms,
+            after_seek_position_ms: result.after_seek_position_ms,
+            export: result.export.clone(),
+            frames: [result.before_frame(), result.after_frame()],
+        }
+    }
+}
+
+struct ComparisonPreview {
+    result: Comparison,
+    textures: [egui::TextureHandle; 2],
 }
 
 struct PlaybackFrame {
@@ -71,6 +102,7 @@ enum Event {
     Progress(ExportProgress),
     Saved(Result<SavedRecording, String>),
     Estimated(Result<ExportEstimate, String>),
+    Compared(u64, Result<Comparison, String>),
     Thumbnails(Result<RecordingTimelineThumbnails, String>),
     SourceFrame(Result<Arc<RgbaImage>, String>),
     PlaybackStarted { audio_enabled: bool },
@@ -163,6 +195,10 @@ struct View {
     presented: Option<Presented>,
     texture: Option<egui::TextureHandle>,
     source_texture: Option<egui::TextureHandle>,
+    comparison: Option<ComparisonPreview>,
+    comparison_split: f32,
+    comparison_generation: u64,
+    comparing: Option<u64>,
     preview_actual_size: bool,
     adjusting_crop: bool,
     crop_gesture: Option<CropGesture>,
@@ -377,6 +413,41 @@ impl View {
         self.send(tx, Job::Estimate(cancel));
     }
 
+    fn can_compare(&self) -> bool {
+        !self.busy
+            && !self.picker
+            && !self.confirm_close
+            && !self.closed
+            && !self.adjusting_crop
+            && !self.unapplied()
+            && self.presented.as_ref().is_some_and(|p| {
+                p.position_ms >= p.edit.trim_start_ms
+                    && p.position_ms
+                        < p.edit
+                            .trim_end_ms
+                            .unwrap_or(p.source.duration_ms.unwrap_or(0))
+            })
+    }
+
+    fn request_comparison(&mut self, ctx: &egui::Context, tx: &Sender<Job>) {
+        if !self.can_compare() {
+            return;
+        }
+        // Playback owns transient pixels/time. Comparison explicitly returns to
+        // the accepted still rather than silently relabelling a paused frame.
+        let p = self.presented.as_ref().unwrap();
+        self.position_ms = p.position_ms;
+        let frame = p.frame.clone();
+        self.set_frame(ctx, &frame);
+        self.playback_position_ms = None;
+        self.playback_ended = false;
+        self.comparison = None;
+        self.comparison_generation += 1;
+        let cancel = CancelToken::default();
+        self.cancel = Some(cancel.clone());
+        self.send(tx, Job::Compare(self.comparison_generation, cancel));
+    }
+
     fn request_thumbnails(&mut self, tx: &Sender<Job>) {
         if self.busy
             || self.picker
@@ -403,6 +474,7 @@ impl View {
             return;
         }
         if self.source_texture.is_some() {
+            self.comparison = None;
             self.adjusting_crop = true;
         } else {
             let cancel = CancelToken::default();
@@ -475,6 +547,14 @@ impl View {
         self.trim_gesture = None;
         self.crop_gesture = None;
         let estimating = matches!(job, Job::Estimate(_));
+        let comparing = if let Job::Compare(generation, _) = &job {
+            Some(*generation)
+        } else {
+            None
+        };
+        if matches!(job, Job::Apply(_) | Job::Play(..) | Job::SourceFrame(_)) {
+            self.comparison = None;
+        }
         let loading_thumbnails = matches!(job, Job::Thumbnails(_));
         let loading_source = matches!(job, Job::SourceFrame(_));
         let playing = matches!(job, Job::Play(..));
@@ -482,6 +562,7 @@ impl View {
             Ok(()) => {
                 self.busy = true;
                 self.estimating = estimating;
+                self.comparing = comparing;
                 self.loading_thumbnails = loading_thumbnails;
                 self.loading_source = loading_source;
                 self.playing = playing;
@@ -496,7 +577,11 @@ impl View {
                     self.estimate = None;
                 }
                 self.error = None;
-                self.status = loading_source.then(|| "Loading uncropped source frame…".into());
+                self.status = if comparing.is_some() {
+                    Some("Encoding accepted frame comparison…".into())
+                } else {
+                    loading_source.then(|| "Loading uncropped source frame…".into())
+                };
             }
             Err(_) => {
                 self.error = Some("Recording editor worker stopped.".into());
@@ -509,6 +594,7 @@ impl View {
         match event {
             Event::Presented(result) => {
                 self.busy = false;
+                self.comparison = None;
                 match result {
                     Ok(p) => {
                         self.adjusting_crop = false;
@@ -620,6 +706,45 @@ impl View {
                     Err(error) => {
                         self.estimate = None;
                         self.error = Some(error);
+                    }
+                }
+            }
+            Event::Compared(generation, result) => {
+                // Each editor owns a private channel/session. A request ID also
+                // rejects late replies from an earlier cancelled comparison.
+                if self.comparing != Some(generation) {
+                    return;
+                }
+                self.comparing = None;
+                self.busy = false;
+                self.status = None;
+                let cancelled = self
+                    .cancel
+                    .take()
+                    .is_none_or(|cancel| cancel.is_cancelled());
+                self.comparison = None;
+                if cancelled {
+                    self.error = Some("Encoded comparison cancelled.".into());
+                } else {
+                    match result {
+                        Ok(result) if self.can_compare() && self.presented.as_ref().is_some_and(|p|
+                            result.revision == p.revision && result.position_ms == p.position_ms
+                                && result.export == p.preview_export) => {
+                            let textures = std::array::from_fn(|index| {
+                                let pixels = &result.frames[index];
+                                ctx.load_texture(
+                                    format!("recording-comparison-{index}"),
+                                    egui::ColorImage::from_rgba_unmultiplied(
+                                        [pixels.width() as usize, pixels.height() as usize], pixels.as_raw()),
+                                    egui::TextureOptions::LINEAR,
+                                )
+                            });
+                            self.comparison = Some(ComparisonPreview { result, textures });
+                            self.comparison_split = 0.5;
+                            self.error = None;
+                        }
+                        Ok(_) => self.error = Some("Encoded comparison no longer matches the accepted frame. Retry after applying edits.".into()),
+                        Err(error) => self.error = Some(format!("Encoded comparison failed: {error}")),
                     }
                 }
             }
@@ -739,6 +864,7 @@ impl View {
     fn request_close(&mut self) {
         self.trim_gesture = None;
         self.crop_gesture = None;
+        self.comparison = None;
         if self.playing {
             self.close_after_playback = true;
             self.pause_playback();
@@ -844,6 +970,13 @@ impl Editor {
                             .as_ref()
                             .ok_or_else(|| "Recording editor is unavailable.".to_owned())
                             .and_then(|s| s.estimate_save_export(&cancel)),
+                    ),
+                    Job::Compare(generation, cancel) => Event::Compared(
+                        generation,
+                        session
+                            .as_ref()
+                            .ok_or_else(|| "Recording editor is unavailable.".to_owned())
+                            .and_then(|s| s.export_comparison(&cancel).map(Comparison::from)),
                     ),
                     Job::Thumbnails(cancel) => Event::Thumbnails(
                         session
@@ -1596,7 +1729,7 @@ fn show(
         }
         if let Some(cancel) = &view.cancel
             && ui
-                .add_enabled(!cancel.is_cancelled(), egui::Button::new(if view.playing { "Pause playback" } else if view.loading_source { "Cancel source preview" } else if view.loading_thumbnails { "Cancel thumbnails" } else if view.estimating { "Cancel estimate" } else { "Cancel export" }))
+                .add_enabled(!cancel.is_cancelled(), egui::Button::new(if view.playing { "Pause playback" } else if view.loading_source { "Cancel source preview" } else if view.loading_thumbnails { "Cancel thumbnails" } else if view.estimating { "Cancel estimate" } else if view.comparing.is_some() { "Cancel comparison" } else { "Cancel export" }))
                 .clicked()
         {
             cancel.cancel();
@@ -1693,11 +1826,12 @@ fn show(
     });
     egui::CentralPanel::default().show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
+            if view.unapplied() { view.comparison = None; }
             ui.heading("Edit recording");
             let previous_actual_size = view.preview_actual_size;
             ui.horizontal(|ui| {
                 ui.strong("Preview");
-                ui.weak(if view.adjusting_crop { "Source crop" } else if view.playback_audio_enabled { "Audio playback" } else if view.preview_sound && !view.playing { "Sound selected" } else { "Silent playback" });
+                ui.weak(if view.adjusting_crop { "Source crop" } else if view.comparison.is_some() { "Encoded comparison" } else if view.playback_audio_enabled { "Audio playback" } else if view.preview_sound && !view.playing { "Sound selected" } else { "Silent playback" });
                 if view.playing {
                     let pausing = view.cancel.as_ref().is_some_and(CancelToken::is_cancelled);
                     if ui.add_enabled(!pausing, egui::Button::new(if pausing { "Pausing…" } else { "Pause" }).small()).clicked() {
@@ -1735,6 +1869,14 @@ fn show(
                 {
                     view.preview_sound = !view.preview_sound;
                 }
+                if ui.add_enabled(view.can_compare(), egui::Button::new(
+                    if view.comparison.is_some() { "Hide compare" } else { "Compare" }).small())
+                    .on_hover_text("Encode a sample at the accepted still frame, not the paused playback position. Before is spatially edited; Encoded includes compression, GIF palette and cadence. First attempt only: a Maximum-size save may differ. Apply staged edits and seek inside the accepted trim first.")
+                    .clicked()
+                {
+                    if view.comparison.is_some() { view.comparison = None; }
+                    else { view.request_comparison(ui.ctx(), tx); }
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add(egui::Button::new("100%").small().selected(view.preview_actual_size))
                         .on_hover_text("One decoded image pixel per screen point. Scroll to see overflow; playback may use a reduced-size frame.")
@@ -1754,7 +1896,9 @@ fn show(
             let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
             ui.painter()
                 .rect_filled(rect, tokens.number("r-md"), tokens.color("surface-sunken"));
-            let preview_texture = if view.adjusting_crop { view.source_texture.clone() } else { view.texture.clone() };
+            let preview_texture = if view.adjusting_crop { view.source_texture.clone() }
+                else if let Some(comparison) = &view.comparison { Some(comparison.textures[0].clone()) }
+                else { view.texture.clone() };
             if let Some(texture) = preview_texture {
                 let size = texture.size_vec2();
                 let actual_size = view.preview_actual_size;
@@ -1767,6 +1911,21 @@ fn show(
                     ui.painter().image(texture.id(), image_rect,
                         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
                         egui::Color32::WHITE);
+                    if let Some(comparison) = &view.comparison {
+                        let response = ui.interact(image_rect.intersect(ui.clip_rect()),
+                            ui.scope_id().with("encoded-comparison-divider"), egui::Sense::click_and_drag())
+                            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                        if (response.clicked() || response.dragged()) && let Some(pos) = response.interact_pointer_pos() {
+                            view.comparison_split = ((pos.x - image_rect.left()) / image_rect.width()).clamp(0., 1.);
+                        }
+                        let split = image_rect.left() + image_rect.width() * view.comparison_split;
+                        let encoded_rect = egui::Rect::from_min_max(egui::pos2(split, image_rect.top()), image_rect.max);
+                        ui.painter().with_clip_rect(ui.clip_rect().intersect(encoded_rect)).image(
+                            comparison.textures[1].id(), image_rect,
+                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)), egui::Color32::WHITE);
+                        ui.painter().line_segment([egui::pos2(split, image_rect.top()), egui::pos2(split, image_rect.bottom())],
+                            egui::Stroke::new(tokens.number("s-1"), tokens.color("text")));
+                    }
                     if source_mode { show_crop_overlay(ui, tokens, view, image_rect); }
                     else { view.crop_gesture = None; }
                 };
@@ -1810,6 +1969,20 @@ fn show(
             if view.adjusting_crop {
                 ui.label(format!("Uncropped source: {:.3}s · {} × {} · Drag to stage crop; Apply edits to preview output.",
                     displayed_position as f64 / 1000., source_size.0, source_size.1));
+            } else if let Some(comparison) = &view.comparison {
+                ui.horizontal(|ui| {
+                    ui.label("Before");
+                    let split = ui.add(egui::Slider::new(&mut view.comparison_split, 0.0..=1.0)
+                        .show_value(false).text("Encoded split"));
+                    if split.is_pointer_button_down_on() { split.request_focus(); }
+                    ui.label(format!("Encoded · accepted {:.3}s · {} × {}", comparison.result.position_ms as f64 / 1000.,
+                        comparison.result.frames[0].width(), comparison.result.frames[0].height()));
+                });
+                ui.weak(if p.export.max_size_bytes.is_some() {
+                    "Encoded first attempt; final Maximum-size save may differ."
+                } else { "Encoded sample; cadence may select neighboring frames." })
+                    .on_hover_text(format!("Selected source position: {} ms. Encoded sample seek: {} ms. Seek positions are timeline intent, not exact decoded frame timestamps.",
+                        comparison.result.position_ms, comparison.result.after_seek_position_ms));
             } else {
             ui.label(format!(
                 "Source frame: {:.3}s / {:.3}s · {} × {} · {:?} {:?} preview: {} × {}",
@@ -2110,6 +2283,9 @@ fn show(
             });
         });
     });
+    if view.unapplied() {
+        view.comparison = None;
+    }
 }
 
 #[cfg(test)]
@@ -2121,6 +2297,8 @@ mod tests {
         view.receive(
             &egui::Context::default(),
             Event::Presented(Ok(Presented {
+                revision: 1,
+                preview_export: view.export_spec(),
                 source: MediaMetadata {
                     kind: captures_media::MediaKind::Video,
                     mime_type: "video/mp4".into(),
@@ -2136,6 +2314,285 @@ mod tests {
             })),
         );
         view
+    }
+
+    fn comparison(view: &View) -> Comparison {
+        let p = view.presented.as_ref().unwrap();
+        Comparison {
+            revision: p.revision,
+            position_ms: p.position_ms,
+            after_seek_position_ms: 650,
+            export: p.preview_export.clone(),
+            frames: [
+                Arc::new(RgbaImage::from_pixel(4, 2, image::Rgba([210, 30, 10, 255]))),
+                Arc::new(RgbaImage::from_pixel(4, 2, image::Rgba([10, 60, 180, 255]))),
+            ],
+        }
+    }
+
+    #[test]
+    fn comparison_uses_accepted_not_paused_pixels_and_does_not_save_or_edit() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let accepted = view.presented.as_ref().unwrap().frame.clone();
+        view.playback_position_ms = Some(2300);
+        view.position_ms = 2300;
+        view.set_frame(&ctx, &RgbaImage::new(2, 1));
+        let (tx, jobs) = mpsc::channel();
+        view.request_comparison(&ctx, &tx);
+        let Job::Compare(generation, cancel) = jobs.recv().unwrap() else {
+            panic!("comparison")
+        };
+        assert!(!cancel.is_cancelled());
+        assert_eq!(view.position_ms, 700);
+        assert_eq!(view.playback_position_ms, None);
+        assert_eq!(view.texture.as_ref().unwrap().size(), [4, 2]);
+        view.request_comparison(&ctx, &tx);
+        assert!(jobs.try_recv().is_err());
+        let result = comparison(&view);
+        let frames = result.frames.clone();
+        view.receive(&ctx, Event::Compared(generation, Ok(result)));
+        let preview = view.comparison.as_ref().unwrap();
+        assert!(Arc::ptr_eq(&preview.result.frames[0], &frames[0]));
+        assert!(Arc::ptr_eq(&preview.result.frames[1], &frames[1]));
+        assert_ne!(preview.textures[0].id(), preview.textures[1].id());
+        assert_eq!(preview.result.position_ms, 700);
+        assert_eq!(view.comparison_split, 0.5);
+        assert!(!view.busy && view.cancel.is_none() && !view.dirty() && !view.history_changed);
+        assert!(Arc::ptr_eq(
+            &accepted,
+            &view.presented.as_ref().unwrap().frame
+        ));
+        view.send(
+            &tx,
+            Job::Apply(RecordingEditorRequest::Seek { position_ms: 900 }),
+        );
+        assert!(view.comparison.is_none());
+        view.receive(&ctx, Event::Presented(Err("seek failed".into())));
+        assert!(view.comparison.is_none());
+        view.request_close();
+        assert!(view.closed && !view.confirm_close);
+    }
+
+    #[test]
+    fn comparison_cancel_failure_stale_identity_and_request_generation_never_publish() {
+        let ctx = egui::Context::default();
+        for invalid in 0..7 {
+            let mut view = opened();
+            let (tx, jobs) = mpsc::channel();
+            view.request_comparison(&ctx, &tx);
+            let Job::Compare(first, cancel) = jobs.recv().unwrap() else {
+                panic!("comparison")
+            };
+            let mut result = comparison(&view);
+            match invalid {
+                0 => cancel.cancel(),
+                1 => result.revision += 1,
+                2 => result.position_ms += 1,
+                3 => result.export.quality = QualityPreset::Tiny,
+                4 => view.gif = true,
+                5 => view.closed = true,
+                _ => {}
+            }
+            view.receive(
+                &ctx,
+                Event::Compared(
+                    first,
+                    if invalid == 6 {
+                        Err("encoder missing".into())
+                    } else {
+                        Ok(result)
+                    },
+                ),
+            );
+            assert!(
+                view.comparison.is_none() && !view.busy && view.cancel.is_none(),
+                "case {invalid}"
+            );
+            assert!(view.error.is_some() && !view.history_changed);
+            view.gif = false;
+            view.closed = false;
+            view.request_comparison(&ctx, &tx);
+            let Job::Compare(second, _) = jobs.recv().unwrap() else {
+                panic!("retry")
+            };
+            assert!(second > first);
+            let result = comparison(&view);
+            view.receive(&ctx, Event::Compared(first, Ok(result)));
+            assert!(view.busy && view.comparing == Some(second) && view.comparison.is_none());
+            let result = comparison(&view);
+            view.receive(&ctx, Event::Compared(second, Ok(result)));
+            assert!(view.comparison.is_some() && view.error.is_none());
+        }
+    }
+
+    #[test]
+    fn comparison_trim_gates_and_maximum_use_budget_free_identity() {
+        let ctx = egui::Context::default();
+        let (tx, jobs) = mpsc::channel();
+        let mut view = opened();
+        view.start_ms = 700;
+        view.end_ms = 900;
+        view.maximum_size = true;
+        view.maximum_value = ".1".into();
+        let export = view.export_spec();
+        let edit = view.staged_edit(view.presented.as_ref().unwrap());
+        let p = view.presented.as_mut().unwrap();
+        p.edit = edit;
+        p.export = export.clone();
+        p.preview_export = ExportSpec {
+            max_size_bytes: None,
+            ..export
+        };
+        for (position, allowed) in [(699, false), (700, true), (899, true), (900, false)] {
+            view.presented.as_mut().unwrap().position_ms = position;
+            assert_eq!(view.can_compare(), allowed);
+        }
+        view.request_comparison(&ctx, &tx);
+        assert!(jobs.try_recv().is_err());
+        view.presented.as_mut().unwrap().position_ms = 700;
+        view.request_comparison(&ctx, &tx);
+        let Job::Compare(generation, _) = jobs.recv().unwrap() else {
+            panic!("Maximum comparison")
+        };
+        let result = comparison(&view);
+        assert_eq!(result.export.max_size_bytes, None);
+        view.receive(&ctx, Event::Compared(generation, Ok(result)));
+        assert!(view.comparison.is_some());
+        assert_eq!(
+            view.presented.as_ref().unwrap().export.max_size_bytes,
+            Some(100_000)
+        );
+        assert!(view.dirty() && !view.history_changed);
+        view.request_playback(&tx);
+        assert!(view.comparison.is_none());
+        assert!(matches!(jobs.recv().unwrap(), Job::Play(..)));
+    }
+
+    #[test]
+    fn comparison_split_controls_and_clip_follow_input_at_minimum_size() {
+        for (name, tokens) in crate::tokens::load() {
+            let ctx = egui::Context::default();
+            tokens.apply(&ctx, name.contains("light"));
+            let mut view = opened();
+            let (tx, jobs) = mpsc::channel();
+            let (events, _) = mpsc::channel();
+            view.request_comparison(&ctx, &tx);
+            let Job::Compare(generation, _) = jobs.recv().unwrap() else {
+                panic!("comparison")
+            };
+            let result = comparison(&view);
+            view.receive(&ctx, Event::Compared(generation, Ok(result)));
+            let ids = view
+                .comparison
+                .as_ref()
+                .unwrap()
+                .textures
+                .each_ref()
+                .map(|t| t.id());
+            let render = |view: &mut View, input| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760., 580.),
+                        )),
+                        events: input,
+                        ..Default::default()
+                    },
+                    |ui| show(ui, &tokens, view, &tx, &events, egui::ViewportId::ROOT),
+                );
+                output.textures_delta.clear();
+                output
+            };
+            render(&mut view, vec![]);
+            let output = render(&mut view, vec![]);
+            let mut rects = Vec::new();
+            for label in [
+                "Play",
+                "Loop preview",
+                "Sound",
+                "Hide compare",
+                "Fit",
+                "100%",
+                "Before",
+                "Encoded split",
+                "Encoded · accepted 0.700s · 4 × 2",
+                "Estimate size",
+                "Save new copy",
+            ] {
+                let rect = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == label => {
+                            Some(text.galley.rect.translate(text.pos.to_vec2()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing {label} in {name}"));
+                assert!(
+                    rect.min.x >= 0.
+                        && rect.min.y >= 0.
+                        && rect.max.x <= 760.
+                        && rect.max.y <= 580.,
+                    "{label}: {rect:?}"
+                );
+                for prior in &rects {
+                    assert!(!rect.intersects(*prior), "{label} overlaps {prior:?}");
+                }
+                rects.push(rect);
+            }
+            let bounds = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == ids[0] => {
+                        Some(mesh.calc_bounds())
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let pointer = egui::pos2(bounds.left() + bounds.width() * 0.25, bounds.center().y);
+            render(&mut view, vec![egui::Event::PointerMoved(pointer)]);
+            render(&mut view, vec![trim_pointer(pointer, true)]);
+            render(&mut view, vec![trim_pointer(pointer, false)]);
+            assert!((view.comparison_split - 0.25).abs() < 0.001);
+            let output = render(&mut view, vec![]);
+            let encoded_clip = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == ids[1] => Some(shape.clip_rect),
+                    _ => None,
+                })
+                .unwrap();
+            assert!((encoded_clip.left() - pointer.x).abs() < 0.1);
+            assert!((encoded_clip.right() - bounds.right()).abs() < 0.1);
+            let slider = egui::pos2(rects[7].left() - 40., rects[7].center().y);
+            render(&mut view, vec![egui::Event::PointerMoved(slider)]);
+            render(&mut view, vec![trim_pointer(slider, true)]);
+            render(&mut view, vec![trim_pointer(slider, false)]);
+            let before_key = view.comparison_split;
+            render(&mut view, vec![trim_key(egui::Key::ArrowRight)]);
+            assert!(
+                view.comparison_split > before_key,
+                "focused split slider accepts arrow input"
+            );
+            assert!(!view.dirty() && !view.history_changed && jobs.try_recv().is_err());
+            view.gif = true;
+            render(&mut view, vec![]);
+            assert!(
+                view.comparison.is_none(),
+                "staged format must hide comparison"
+            );
+            view.gif = false;
+            render(&mut view, vec![]);
+            assert!(
+                view.comparison.is_none(),
+                "undoing staging does not restore stale pixels"
+            );
+        }
     }
 
     #[test]
@@ -3064,6 +3521,8 @@ mod tests {
         view.receive(
             &ctx,
             Event::Presented(Ok(Presented {
+                revision: p.revision + 1,
+                preview_export: p.preview_export.clone(),
                 source: p.source.clone(),
                 edit: p.edit.clone(),
                 export: p.export.clone(),
@@ -3100,6 +3559,8 @@ mod tests {
         view.receive(
             &ctx,
             Event::Presented(Ok(Presented {
+                revision: p.revision + 1,
+                preview_export: view.export_spec(),
                 source: p.source.clone(),
                 edit: view.staged_edit(p),
                 export: view.export_spec(),
@@ -3961,6 +4422,8 @@ mod tests {
         view.receive(
             &ctx,
             Event::Presented(Ok(Presented {
+                revision: 2,
+                preview_export: view.export_spec(),
                 source: view.presented.as_ref().unwrap().source.clone(),
                 edit,
                 export: view.export_spec(),
@@ -4051,6 +4514,8 @@ mod tests {
         view.receive(
             &ctx,
             Event::Presented(Ok(Presented {
+                revision: 2,
+                preview_export: view.export_spec(),
                 source: view.presented.as_ref().unwrap().source.clone(),
                 edit,
                 export: view.export_spec(),
@@ -4251,6 +4716,8 @@ mod tests {
         view.receive(
             &ctx,
             Event::Presented(Ok(Presented {
+                revision: 2,
+                preview_export: view.export_spec(),
                 source,
                 edit: view.staged_edit(view.presented.as_ref().unwrap()),
                 export: view.export_spec(),
@@ -4431,6 +4898,8 @@ mod tests {
         view.receive(
             &ctx,
             Event::Presented(Ok(Presented {
+                revision: p.revision + 1,
+                preview_export: export.clone(),
                 source: p.source.clone(),
                 edit: view.staged_edit(p),
                 position_ms: p.position_ms,
