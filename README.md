@@ -275,8 +275,10 @@ immutable 12-frame source-relative thumbnail strip and stage the same numeric va
 without seeking; loading can be canceled or retried without disabling editing, and
 Apply remains explicit. Silent Play/Pause presents bounded accepted-edit motion
 frames and a source-relative playhead without changing the accepted preview, edits,
-History or source; audio and looping are not implemented. Graphical crop handles
-remain absent, so this is not Tauri editor parity. Windows/X11 implement the
+History or source. Optional Loop preview repeats the accepted trim without changing
+exports or dirty state; each silent lap reopens the decoder and is not gapless.
+Audio playback is not implemented. Graphical crop handles remain absent, so this is
+not Tauri editor parity. Windows/X11 implement the
 same numeric crop and output-size workflow; physical macOS, Windows and Wayland
 acceptance remains open.
 History displays recording posters and metadata; **Save file**

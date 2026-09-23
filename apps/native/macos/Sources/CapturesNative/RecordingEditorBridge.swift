@@ -70,7 +70,20 @@ struct RecordingPlaybackImage {
 
 enum RecordingPlaybackCompletion: Equatable {
     case eof
+    case empty
     case cancelled
+}
+
+final class RecordingPlaybackLoopControl: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Bool
+
+    init(enabled: Bool) { value = enabled }
+
+    var isEnabled: Bool {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
+    }
 }
 
 enum RecordingEditorSaveResult: Equatable {
@@ -515,7 +528,8 @@ protocol RecordingEditorWorking: AnyObject {
                  completion: @escaping (Result<RecordingEditorPresentation, Error>) -> Void)
     func estimate(cancel: NativeRecordingEditorCancel,
                   completion: @escaping (Result<RecordingEditorEstimate, Error>) -> Void)
-    func playback(positionMilliseconds: UInt64, cancel: NativeRecordingEditorCancel,
+    func playback(positionMilliseconds: UInt64, loopStartMilliseconds: UInt64,
+                  loop: RecordingPlaybackLoopControl, cancel: NativeRecordingEditorCancel,
                   started: @escaping (RecordingPlaybackMetadata) -> Void,
                   frame: @escaping (RecordingPlaybackImage) -> Void,
                   completion: @escaping (Result<RecordingPlaybackCompletion, Error>) -> Void)
@@ -575,7 +589,8 @@ final class RecordingEditorWorker: RecordingEditorWorking {
         }
     }
 
-    func playback(positionMilliseconds: UInt64, cancel: NativeRecordingEditorCancel,
+    func playback(positionMilliseconds: UInt64, loopStartMilliseconds: UInt64,
+                  loop: RecordingPlaybackLoopControl, cancel: NativeRecordingEditorCancel,
                   started: @escaping (RecordingPlaybackMetadata) -> Void,
                   frame: @escaping (RecordingPlaybackImage) -> Void,
                   completion: @escaping (Result<RecordingPlaybackCompletion, Error>) -> Void) {
@@ -590,12 +605,32 @@ final class RecordingEditorWorker: RecordingEditorWorking {
                 guard let session = storage.session else {
                     throw AppBridgeError.backend("The recording editor is closed.")
                 }
-                let playback = try session.playback(positionMilliseconds: positionMilliseconds,
-                                                    cancel: cancel)
-                let metadata = playback.metadata
-                DispatchQueue.main.async { started(metadata) }
-                while let value = try playback.nextFrame() { delivery.offer(value) }
-                result = .success(.eof)
+                func runLap(from position: UInt64) throws -> Int {
+                    let playback = try session.playback(positionMilliseconds: position,
+                                                        cancel: cancel)
+                    let metadata = playback.metadata
+                    DispatchQueue.main.async { started(metadata) }
+                    var frameCount = 0
+                    while let value = try playback.nextFrame() {
+                        frameCount += 1; delivery.offer(value)
+                    }
+                    return frameCount
+                }
+
+                var position = positionMilliseconds
+                while true {
+                    let frameCount = try runLap(from: position)
+                    if cancel.isCancelled {
+                        result = .success(.cancelled); break
+                    }
+                    guard frameCount > 0 else {
+                        result = .success(.empty); break
+                    }
+                    guard loop.isEnabled else {
+                        result = .success(.eof); break
+                    }
+                    position = loopStartMilliseconds
+                }
             } catch {
                 result = .failure(error)
             }

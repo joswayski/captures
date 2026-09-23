@@ -342,6 +342,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var playbackPositionMilliseconds: UInt64?
     private var playbackReachedEOF = false
     private var playbackFramePresented = false
+    private var playbackLoopEnabled = false
+    private var playbackLoopControl: RecordingPlaybackLoopControl?
     private var playbackStopActions: [() -> Void] = []
     private var closeAfterPlayback = false
     private var terminateAfterPlayback = false
@@ -393,6 +395,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var changeButton: CaptureButton!
     private var thumbnailRetryButton: CaptureButton!
     private var playbackButton: CaptureButton!
+    private let playbackLoop = NSButton(checkboxWithTitle: "Loop", target: nil, action: nil)
 
     init(tokens: Tokens, worker: RecordingEditorWorking = RecordingEditorWorker(),
          reportError: @escaping (String) -> Void = { _ in },
@@ -448,6 +451,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         artifactID = artifact.id; presentation = nil; savedEdit = nil; savedExport = nil
         estimate = nil; activeCancel = nil; thumbnailCancel = nil; busy = true; pickerOpen = false
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
+        playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
         stagedCrop = nil; cropAspectUnlocked = false
         resolutionPreset = .original; customOutput = false
         preview.image = nil
@@ -600,6 +604,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         root.addSubview(seekLabel)
         playbackButton = button("Play") { [weak self] in self?.togglePlayback() }
         playbackButton.setAccessibilityLabel("Play silent recording preview")
+        playbackLoop.target = self; playbackLoop.action = #selector(playbackLoopChanged)
+        playbackLoop.setAccessibilityLabel("Loop silent recording preview")
+        root.addSubview(playbackLoop)
         trimPanel.wantsLayer = true; trimPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         trimPanel.layer?.cornerRadius = tokens.number("r-md")
         root.addSubview(trimPanel)
@@ -706,7 +713,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackButton.frame = NSRect(x: width * 0.27, y: seekY - 4, width: 104, height: 28)
         seekLabel.frame = NSRect(x: width * 0.77, y: seekY, width: width * 0.2 - 24, height: 20)
         let seekGap = tokens.number("s-2")
-        let seekX = playbackButton.frame.maxX + seekGap
+        playbackLoop.frame = NSRect(x: playbackButton.frame.maxX + seekGap, y: seekY - 2,
+                                    width: 64, height: 24)
+        let seekX = playbackLoop.frame.maxX + seekGap
         seekSlider.frame = NSRect(x: seekX, y: seekY,
                                   width: max(0, seekLabel.frame.minX - seekGap - seekX), height: 20)
         let controlGap: CGFloat = 12
@@ -919,6 +928,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
     }
 
+    @objc private func playbackLoopChanged() {
+        guard presentation != nil, !busy, !pickerOpen, playbackState != .pausing else {
+            playbackLoop.state = playbackLoopEnabled ? .on : .off
+            return
+        }
+        playbackLoopEnabled = playbackLoop.state == .on
+        playbackLoopControl?.isEnabled = playbackLoopEnabled
+        updateControls()
+    }
+
     private func startPlayback() {
         guard !busy, !pickerOpen, playbackState == .idle,
               pendingCropInputValid, stagedEdit != nil, stagedExport != nil,
@@ -929,12 +948,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let trimStart = (snapshot.edit["trim_start_ms"] as? NSNumber)?.uint64Value ?? 0
         let position = playbackReachedEOF ? trimStart
             : playbackPositionMilliseconds ?? snapshot.positionMilliseconds
+        let loop = RecordingPlaybackLoopControl(enabled: playbackLoopEnabled)
         let current = generation
-        playbackState = .playing; playbackCancel = cancel; playbackReachedEOF = false
+        playbackState = .playing; playbackCancel = cancel; playbackLoopControl = loop
+        playbackReachedEOF = false
         status.textColor = tokens.color("text-muted")
         status.stringValue = "Starting silent playback…"
         updateControls()
-        worker.playback(positionMilliseconds: position, cancel: cancel,
+        worker.playback(positionMilliseconds: position, loopStartMilliseconds: trimStart,
+            loop: loop, cancel: cancel,
             started: { [weak self] metadata in
                 guard let self, self.generation == current,
                       self.playbackCancel === cancel,
@@ -953,12 +975,17 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }, completion: { [weak self] result in
                 guard let self, self.generation == current,
                       self.playbackCancel === cancel else { return }
-                self.playbackCancel = nil; self.playbackState = .idle
+                self.playbackCancel = nil; self.playbackLoopControl = nil
+                self.playbackState = .idle
                 switch result {
                 case .success(.eof):
                     self.playbackReachedEOF = true
                     self.status.textColor = self.tokens.color("text-muted")
                     self.status.stringValue = "Silent playback ended. Play restarts at the accepted trim start."
+                case .success(.empty):
+                    self.playbackReachedEOF = true
+                    self.status.textColor = self.tokens.color("text-muted")
+                    self.status.stringValue = "Silent playback ended without frames. Loop did not restart."
                 case .success(.cancelled):
                     self.playbackReachedEOF = false
                     self.status.textColor = self.tokens.color("text-muted")
@@ -1339,6 +1366,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         trimTimeline.setEditingEnabled(available && stagedEdit != nil)
         thumbnailRetryButton?.isHidden = !thumbnailRetryAvailable
         thumbnailRetryButton?.isEnabled = available && thumbnailRetryAvailable
+        playbackLoop.isEnabled = presentation != nil && !busy && !pickerOpen
+            && playbackState != .pausing
         switch playbackState {
         case .idle:
             playbackButton?.title = "Play"
@@ -1371,6 +1400,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         thumbnailCancel = nil; thumbnailRetryAvailable = false
         playbackCancel = nil; playbackState = .idle
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
+        playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
         playbackStopActions.removeAll(); closeAfterPlayback = false
         terminateAfterPlayback = false; switchAfterPlayback = nil
         trimTimeline.setPlaybackPosition(nil)

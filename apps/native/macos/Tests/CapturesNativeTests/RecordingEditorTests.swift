@@ -81,6 +81,132 @@ final class RecordingEditorTests: XCTestCase {
                        "Play after EOF restarts at accepted trim start")
     }
 
+    func testLoopToggleWrapDisableAndPauseCancellationStayOnePlaybackOperation() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            start: 211, end: 1_611, position: 537))
+        worker.deferPlayback = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let play = try button("Play", in: controller.root)
+        let loop = try checkbox("Loop silent recording preview", in: controller.root)
+        let seek = try slider("Recording frame position", in: controller.root)
+
+        XCTAssertEqual(loop.state, .off)
+        loop.performClick(nil)
+        XCTAssertFalse(controller.dirty)
+        play.performClick(nil)
+        XCTAssertTrue(try XCTUnwrap(worker.observedPlaybackLoop).isEnabled)
+        XCTAssertEqual(worker.playbackStarts, [537])
+
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 1_403,
+            image: try solidImage(red: 10, green: 190, blue: 30)))
+        worker.completePlayback(.success(.eof))
+        XCTAssertEqual(worker.playbackStarts, [537, 211])
+        XCTAssertEqual(play.title, "Pause", "looping never exposes an idle export gate")
+        XCTAssertFalse(seek.isEnabled)
+
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 389,
+            image: try solidImage(red: 30, green: 40, blue: 210)))
+        loop.performClick(nil)
+        XCTAssertEqual(loop.state, .off)
+        worker.completePlayback(.success(.eof))
+        XCTAssertEqual(worker.playbackStarts, [537, 211],
+                       "turning Loop off finishes the current lap without another decoder")
+        XCTAssertEqual(play.title, "Play")
+        XCTAssertEqual(seek.doubleValue, 389)
+
+        loop.performClick(nil); play.performClick(nil)
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 1_500,
+            image: try solidImage(red: 200, green: 30, blue: 40)))
+        worker.completePlayback(.success(.eof))
+        XCTAssertEqual(Array(worker.playbackStarts.suffix(2)), [389, 211])
+        play.performClick(nil)
+        XCTAssertEqual(play.title, "Pausing…")
+        XCTAssertFalse(loop.isEnabled, "Loop cannot change while decoder cancellation is pending")
+        worker.completePlayback(.success(.eof))
+        XCTAssertEqual(play.title, "Play")
+        XCTAssertEqual(Array(worker.playbackStarts.suffix(2)), [389, 211],
+                       "Pause at a wrap never restarts playback")
+        XCTAssertEqual(loop.state, .on, "Pause retains the item-local Loop preference")
+    }
+
+    func testLoopEmptyErrorApplySeekAndNewItemLifecycle() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            start: 200, end: 1_800, position: 400))
+        worker.deferPlayback = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let loop = try checkbox("Loop silent recording preview", in: controller.root)
+        let play = try button("Play", in: controller.root)
+        let estimate = try button("Estimate size", in: controller.root)
+        let save = try button("Save new copy", in: controller.root)
+        loop.performClick(nil)
+        XCTAssertFalse(controller.dirty); XCTAssertTrue(estimate.isEnabled); XCTAssertTrue(save.isEnabled)
+
+        play.performClick(nil)
+        worker.completePlayback(.success(.empty))
+        XCTAssertEqual(worker.playbackStarts, [400], "zero-frame EOF cannot spin")
+        XCTAssertEqual(play.title, "Play"); XCTAssertEqual(loop.state, .on)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("without frames") })
+
+        play.performClick(nil)
+        worker.completePlayback(.failure(AppBridgeError.backend("loop decoder failed")))
+        XCTAssertEqual(worker.playbackStarts, [400, 200])
+        XCTAssertEqual(loop.state, .on, "playback errors retain the item-local preference")
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("loop decoder failed") })
+
+        let trimEnd = try field("Trim end milliseconds", in: controller.root)
+        trimEnd.stringValue = "1600"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: trimEnd))
+        worker.requestResult = .success(try presentation(start: 200, end: 1_600,
+                                                         position: 400, revision: 1))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertEqual(loop.state, .on)
+        let acceptedDirty = controller.dirty
+        let requestCount = worker.requests.count
+        worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_500_000,
+                                                                  exact: false))
+        estimate.performClick(nil)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("≈") && $0.contains("MB") })
+        loop.performClick(nil); loop.performClick(nil)
+        XCTAssertEqual(controller.dirty, acceptedDirty,
+                       "Loop never changes accepted or saved editor identity")
+        XCTAssertEqual(worker.requests.count, requestCount,
+                       "Loop is host-only and never enters the session snapshot")
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("≈") && $0.contains("MB") },
+                      "Loop leaves the accepted-settings estimate intact")
+        XCTAssertTrue(worker.saves.isEmpty); XCTAssertEqual(worker.openCount, 1)
+        XCTAssertTrue(estimate.isEnabled); XCTAssertTrue(save.isEnabled)
+
+        let seek = try slider("Recording frame position", in: controller.root)
+        worker.requestResult = .success(try presentation(start: 200, end: 1_600,
+                                                         position: 733, revision: 2))
+        seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(loop.state, .on, "Apply and Seek retain Loop for the current item")
+
+        let cleanWorker = FakeRecordingEditorWorker(presentation: try presentation())
+        let cleanController = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                        worker: cleanWorker, confirmDiscard: { false })
+        defer { cleanController.window.orderOut(nil) }
+        cleanController.present(artifact: recordingArtifact(), historyRoot: "/History",
+                                outputDirectory: "/Exports")
+        let cleanLoop = try checkbox("Loop silent recording preview", in: cleanController.root)
+        cleanLoop.performClick(nil)
+        cleanController.present(artifact: recordingArtifact(id: "next-recording"),
+                                historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(cleanLoop.state, .off, "each History item defaults Loop off")
+        XCTAssertFalse(cleanController.dirty)
+    }
+
     func testSilentPlaybackErrorRestoresAcceptedFrameAndAllowsRetry() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation(
@@ -187,6 +313,7 @@ final class RecordingEditorTests: XCTestCase {
                            outputDirectory: "/Exports")
         let play = try button("Play", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
+        let loop = try checkbox("Loop silent recording preview", in: controller.root)
         let timestamp = try XCTUnwrap(descendants(in: controller.root)
             .compactMap { $0 as? NSTextField }
             .first { !$0.isEditable && $0.stringValue.contains(" / ") })
@@ -194,14 +321,18 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(seek.doubleValue, 0, "layout coverage keeps the playhead at source start")
         for size in [NSSize(width: 760, height: 540), NSSize(width: 960, height: 760)] {
             controller.window.setContentSize(size)
-            XCTAssertFalse(play.isHidden); XCTAssertFalse(seek.isHidden); XCTAssertFalse(timestamp.isHidden)
+            XCTAssertFalse(play.isHidden); XCTAssertFalse(loop.isHidden)
+            XCTAssertFalse(seek.isHidden); XCTAssertFalse(timestamp.isHidden)
             XCTAssertGreaterThan(seek.frame.width, 0)
             XCTAssertTrue(controller.root.bounds.intersects(play.frame))
+            XCTAssertTrue(controller.root.bounds.intersects(loop.frame))
             XCTAssertTrue(controller.root.bounds.intersects(seek.frame))
             XCTAssertTrue(controller.root.bounds.intersects(timestamp.frame))
             let gap = tokens.number("s-2")
-            XCTAssertLessThanOrEqual(play.frame.maxX + gap, seek.frame.minX,
-                                     "Play must not overlap the seek slider at width \(size.width)")
+            XCTAssertLessThanOrEqual(play.frame.maxX + gap, loop.frame.minX,
+                                     "Play must not overlap Loop at width \(size.width)")
+            XCTAssertLessThanOrEqual(loop.frame.maxX + gap, seek.frame.minX,
+                                     "Loop must not overlap the seek slider at width \(size.width)")
             XCTAssertLessThanOrEqual(seek.frame.maxX + gap, timestamp.frame.minX,
                                      "the seek slider must not overlap its timestamp at width \(size.width)")
         }
@@ -306,19 +437,24 @@ final class RecordingEditorTests: XCTestCase {
             controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                                outputDirectory: "/Exports")
             let play = try button("Play", in: controller.root)
+            let loop = try checkbox("Loop silent recording preview", in: controller.root)
+            loop.state = .on; _ = loop.sendAction(loop.action, to: loop.target)
             play.performClick(nil)
             worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 700,
                 image: try solidImage(red: 20, green: 210, blue: 30)))
-            try render(controller.root, name: "recording-editor-playback-\(appearance)")
+            try render(controller.root, name: "recording-editor-looping-\(appearance)")
 
             play.performClick(nil); worker.completePlayback(.success(.cancelled))
-            try render(controller.root, name: "recording-editor-playback-paused-\(appearance)")
+            try render(controller.root, name: "recording-editor-loop-paused-\(appearance)")
 
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             play.performClick(nil)
             worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 1_100,
                 image: try solidImage(red: 30, green: 40, blue: 220)))
-            try render(controller.root, name: "recording-editor-playback-minimum-\(appearance)")
+            try render(controller.root, name: "recording-editor-looping-minimum-\(appearance)")
+            play.performClick(nil); worker.completePlayback(.success(.cancelled))
+            try render(controller.root, name: "recording-editor-loop-paused-minimum-\(appearance)")
+            play.performClick(nil)
             worker.completePlayback(.failure(AppBridgeError.backend("decoder stopped")))
             try render(controller.root, name: "recording-editor-playback-error-minimum-\(appearance)")
         }
@@ -365,8 +501,10 @@ final class RecordingEditorTests: XCTestCase {
         let timeline = try XCTUnwrap(descendants(in: controller.root)
             .compactMap { $0 as? RecordingTrimTimeline }.first)
         let retry = try button("Retry", in: controller.root)
+        let loop = try checkbox("Loop silent recording preview", in: controller.root)
         XCTAssertEqual(timeline.thumbnailStateDescription, "Source thumbnails unavailable")
         XCTAssertFalse(retry.isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(loop.isEnabled)
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled,
                       "thumbnail failure leaves the rest of editing available")
         XCTAssertFalse(controller.dirty)
@@ -374,6 +512,8 @@ final class RecordingEditorTests: XCTestCase {
         worker.deferThumbnails = true
         retry.performClick(nil)
         XCTAssertEqual(timeline.thumbnailStateDescription, "Loading source thumbnails…")
+        XCTAssertFalse(loop.isEnabled,
+                       "Loop cannot change while another operation owns the serialized worker")
         XCTAssertFalse(controller.windowShouldClose(controller.window),
                        "accepted thumbnail generation uses the existing busy close gate")
         let cancel = try button("Cancel operation", in: controller.root)
@@ -383,6 +523,7 @@ final class RecordingEditorTests: XCTestCase {
         worker.completeThumbnails(.failure(AppBridgeError.backend("operation cancelled")))
         XCTAssertEqual(timeline.thumbnailStateDescription, "Source thumbnails cancelled")
         XCTAssertFalse(retry.isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(loop.isEnabled)
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
 
         worker.deferThumbnails = false
@@ -1386,6 +1527,93 @@ final class RecordingEditorTests: XCTestCase {
                        "playback keeps the original recording byte-identical")
     }
 
+    func testRealWorkerLoopsAsymmetricTrimThenDisablesAndCancelsWithoutMutation() throws {
+        let tools = try NativeMediaTools.locate()
+        let fixture = try makeRecordingFixture(tools: tools)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sourceBefore = try Data(contentsOf: fixture.source)
+        let worker = RecordingEditorWorker()
+        defer { worker.close(); RecordingEditorWorker.flush() }
+
+        let openedExpectation = expectation(description: "open recording worker")
+        var openedResult: Result<RecordingEditorPresentation, Error>?
+        worker.open(historyRoot: fixture.history.path, artifactID: fixture.id) {
+            openedResult = $0; openedExpectation.fulfill()
+        }
+        wait(for: [openedExpectation], timeout: 10)
+        let opened = try XCTUnwrap(openedResult).get()
+        var edit = opened.snapshot.edit
+        edit["trim_start_ms"] = 233; edit["trim_end_ms"] = 977
+        let acceptedExpectation = expectation(description: "accept asymmetric trim")
+        var acceptedResult: Result<RecordingEditorPresentation, Error>?
+        worker.request(["operation": "update_preview", "edit": edit,
+                        "export": opened.snapshot.export]) {
+            acceptedResult = $0; acceptedExpectation.fulfill()
+        }
+        wait(for: [acceptedExpectation], timeout: 10)
+        let accepted = try XCTUnwrap(acceptedResult).get()
+
+        let finishLoop = expectation(description: "loop finishes after disable")
+        let loop = RecordingPlaybackLoopControl(enabled: true)
+        let loopCancel = try XCTUnwrap(NativeRecordingEditorCancel())
+        var firstPositions: [UInt64] = []
+        var firstResult: Result<RecordingPlaybackCompletion, Error>?
+        worker.playback(positionMilliseconds: 701, loopStartMilliseconds: 233,
+            loop: loop, cancel: loopCancel, started: { _ in }, frame: { value in
+                if let previous = firstPositions.last, value.positionMilliseconds < previous {
+                    loop.isEnabled = false
+                }
+                firstPositions.append(value.positionMilliseconds)
+            }, completion: {
+                firstResult = $0; finishLoop.fulfill()
+            })
+        wait(for: [finishLoop], timeout: 10)
+        XCTAssertEqual(try XCTUnwrap(firstResult).get(), .eof)
+        XCTAssertTrue(zip(firstPositions, firstPositions.dropFirst()).contains { pair in
+            pair.0 > pair.1
+        },
+                      "a nonempty EOF reopens at the asymmetric source-relative trim start")
+        XCTAssertFalse(loopCancel.isCancelled)
+
+        let cancelLoop = expectation(description: "loop cancellation finishes")
+        let secondLoop = RecordingPlaybackLoopControl(enabled: true)
+        let secondCancel = try XCTUnwrap(NativeRecordingEditorCancel())
+        var secondPositions: [UInt64] = []
+        var secondResult: Result<RecordingPlaybackCompletion, Error>?
+        worker.playback(positionMilliseconds: 701, loopStartMilliseconds: 233,
+            loop: secondLoop, cancel: secondCancel, started: { _ in }, frame: { value in
+                if let previous = secondPositions.last, value.positionMilliseconds < previous {
+                    secondCancel.cancel()
+                }
+                secondPositions.append(value.positionMilliseconds)
+            }, completion: {
+                secondResult = $0; cancelLoop.fulfill()
+            })
+        wait(for: [cancelLoop], timeout: 10)
+        XCTAssertEqual(try XCTUnwrap(secondResult).get(), .cancelled)
+        XCTAssertTrue(zip(secondPositions, secondPositions.dropFirst()).contains { pair in
+            pair.0 > pair.1
+        })
+
+        let snapshotExpectation = expectation(description: "read immutable snapshot")
+        var snapshotResult: Result<RecordingEditorPresentation, Error>?
+        worker.request(["operation": "snapshot"]) {
+            snapshotResult = $0; snapshotExpectation.fulfill()
+        }
+        wait(for: [snapshotExpectation], timeout: 10)
+        let after = try XCTUnwrap(snapshotResult).get().snapshot
+        XCTAssertEqual(after.revision, accepted.snapshot.revision)
+        XCTAssertEqual(after.positionMilliseconds, accepted.snapshot.positionMilliseconds)
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: after.edit, options: [.sortedKeys]),
+                       try JSONSerialization.data(withJSONObject: accepted.snapshot.edit,
+                                                  options: [.sortedKeys]))
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: after.export, options: [.sortedKeys]),
+                       try JSONSerialization.data(withJSONObject: accepted.snapshot.export,
+                                                  options: [.sortedKeys]))
+        XCTAssertEqual(try Data(contentsOf: fixture.source), sourceBefore,
+                       "looped playback keeps the source byte-identical")
+    }
+
     func testRealBridgeCropOutputDimensionsContentAndImmutableOriginal() throws {
         let tools = try NativeMediaTools.locate()
         let fixture = try makeCropRecordingFixture(tools: tools)
@@ -1829,12 +2057,15 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     weak var observedSaveCancel: NativeRecordingEditorCancel?
     weak var observedThumbnailCancel: NativeRecordingEditorCancel?
     weak var observedPlaybackCancel: NativeRecordingEditorCancel?
+    weak var observedPlaybackLoop: RecordingPlaybackLoopControl?
     private var pendingOpen: ((Result<RecordingEditorPresentation, Error>) -> Void)?
     private var pendingSave: ((Result<RecordingEditorSaveResult, Error>) -> Void)?
     private var pendingThumbnails: ((Result<CGImage, Error>) -> Void)?
     private var pendingPlaybackStarted: ((RecordingPlaybackMetadata) -> Void)?
     private var pendingPlaybackFrame: ((RecordingPlaybackImage) -> Void)?
     private var pendingPlaybackCompletion: ((Result<RecordingPlaybackCompletion, Error>) -> Void)?
+    private var pendingPlaybackLoopStart: UInt64?
+    private var playbackLapFrameCount = 0
 
     init(presentation: RecordingEditorPresentation) { initial = presentation }
     func open(historyRoot: String, artifactID: String,
@@ -1854,11 +2085,14 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
                   completion: @escaping (Result<RecordingEditorEstimate, Error>) -> Void) {
         completion(estimateResult)
     }
-    func playback(positionMilliseconds: UInt64, cancel: NativeRecordingEditorCancel,
+    func playback(positionMilliseconds: UInt64, loopStartMilliseconds: UInt64,
+                  loop: RecordingPlaybackLoopControl, cancel: NativeRecordingEditorCancel,
                   started: @escaping (RecordingPlaybackMetadata) -> Void,
                   frame: @escaping (RecordingPlaybackImage) -> Void,
                   completion: @escaping (Result<RecordingPlaybackCompletion, Error>) -> Void) {
         playbackStarts.append(positionMilliseconds); observedPlaybackCancel = cancel
+        observedPlaybackLoop = loop; pendingPlaybackLoopStart = loopStartMilliseconds
+        playbackLapFrameCount = 0
         if deferPlaybackStarted { pendingPlaybackStarted = started }
         else { started(playbackMetadata) }
         if deferPlayback {
@@ -1871,11 +2105,23 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
         let started = pendingPlaybackStarted; pendingPlaybackStarted = nil
         started?(playbackMetadata)
     }
-    func sendPlaybackFrame(_ value: RecordingPlaybackImage) { pendingPlaybackFrame?(value) }
+    func sendPlaybackFrame(_ value: RecordingPlaybackImage) {
+        playbackLapFrameCount += 1; pendingPlaybackFrame?(value)
+    }
     func completePlayback(_ result: Result<RecordingPlaybackCompletion, Error>) {
+        if case .success(.eof) = result,
+           observedPlaybackCancel?.isCancelled == false,
+           playbackLapFrameCount > 0,
+           observedPlaybackLoop?.isEnabled == true,
+           let loopStart = pendingPlaybackLoopStart {
+            playbackStarts.append(loopStart); playbackLapFrameCount = 0
+            if !deferPlaybackStarted { pendingPlaybackStarted?(playbackMetadata) }
+            return
+        }
         let completion = pendingPlaybackCompletion
         pendingPlaybackStarted = nil; pendingPlaybackFrame = nil; pendingPlaybackCompletion = nil
-        completion?(result)
+        pendingPlaybackLoopStart = nil; playbackLapFrameCount = 0
+        completion?(observedPlaybackCancel?.isCancelled == true ? .success(.cancelled) : result)
     }
     func thumbnails(cancel: NativeRecordingEditorCancel,
                     completion: @escaping (Result<CGImage, Error>) -> Void) {

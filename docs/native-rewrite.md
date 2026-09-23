@@ -540,7 +540,10 @@ separately from accepted edited frames, and has independent loading, cancel, fai
 and retry states; failure leaves the rest of editing available, while accepted work
 keeps the existing close/quit gate. Seeking and applying edits do not regenerate the
 strip or turn thumbnail clicks into a new seek gesture. AppKit also provides silent,
-non-looping Play/Pause of the accepted trim and spatial edits. Persistent bounded
+Play/Pause of the accepted trim and spatial edits. A transient Loop control can
+repeat nonempty completed trims without changing accepted edits, exports or dirty
+identity; each lap reopens the decoder, so playback does not claim to be gapless.
+Persistent bounded
 FFmpeg playback delivers retained latest frames and a source-relative playhead without
 mutating the accepted frame/position, dirty state, History or source. Pause, focus loss,
 minimize, close, item switching and quit retain cancellation through decoder teardown;
