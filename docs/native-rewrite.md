@@ -546,8 +546,9 @@ palette control is added. Maximum uses the remembered quality for the palette wh
 forcing Preserve export quality; MP4 omits the GIF field without losing the choice.
 Private X11 exports a high-color source at Tiny and High and checks decoded colors,
 Apply/save gating and source/History immutability. AppKit CI distinguishes 64- and
-256-color accepted previews and saved GIFs, including failed Apply and accepted-save
-identity. Physical macOS/Windows/Wayland verification remains open.
+256-color saved GIFs while retaining the high-color edit-preview pixels, including
+failed Apply and accepted preview/save identity. Physical macOS/Windows/Wayland
+verification remains open.
 Unapplied format/quality gates save and seek alongside geometric edits; failed
 updates retain all accepted state and preserve staged values for correction.
 Save uses the accepted configuration, and format/quality-only changes require

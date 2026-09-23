@@ -2676,9 +2676,11 @@ final class RecordingEditorTests: XCTestCase {
 
         let tinyPreviewColors = try uniqueColorCount(tinyAccepted.image)
         let highPreviewColors = try uniqueColorCount(highAccepted.image)
-        XCTAssertLessThanOrEqual(tinyPreviewColors, 64)
-        XCTAssertGreaterThan(highPreviewColors, tinyPreviewColors,
-                             "accepted previews reflect the selected GIF palette")
+        XCTAssertGreaterThan(tinyPreviewColors, 256,
+                             "the retained edit preview uses a genuinely high-color frame")
+        XCTAssertEqual(highPreviewColors, tinyPreviewColors)
+        XCTAssertEqual(try pixels(tinyAccepted.image), try pixels(highAccepted.image),
+                       "palette changes accepted export identity, not edit-preview pixels")
         let tinyOutputColors = try uniqueRGBColorCount(tinyPath, tools: tools,
                                                        width: 160, height: 90)
         let highOutputColors = try uniqueRGBColorCount(highPath, tools: tools,
