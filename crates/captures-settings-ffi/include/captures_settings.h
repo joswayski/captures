@@ -480,6 +480,12 @@ typedef struct CapturesRecordingEditorFrame CapturesRecordingEditorFrame;
 typedef struct CapturesRecordingEditorCancel CapturesRecordingEditorCancel;
 CapturesRecordingEditorSession *captures_recording_editor_open_v1(
     const char *request_json, char **output);
+/* Read-only accepted-session saved_path for a host confirmation hint. Owned
+ * {ok:true,result:{path:<string|null>}} or {ok:false,error}; free with
+ * captures_settings_free_v1. No filesystem work or replace eligibility promise.
+ * Do not substitute a possibly stale History-list artifact path. */
+char *captures_recording_editor_original_save_path_v1(
+    const CapturesRecordingEditorSession *session);
 char *captures_recording_editor_request_v1(CapturesRecordingEditorSession *session,
     const char *request_json);
 /* Additive accepted-save-export contract. Requests retain the v1 operation

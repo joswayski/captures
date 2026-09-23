@@ -4,7 +4,9 @@
 //! buffers; media bytes, FFmpeg commands, and source-audio identity stay shared.
 
 use std::{
+    collections::hash_map::DefaultHasher,
     fs,
+    hash::{Hash, Hasher},
     io::{Cursor, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::Arc,
@@ -30,6 +32,15 @@ const MAX_FRAME_BYTES: u64 = 128 * 1024 * 1024;
 const TIMELINE_FRAME_COUNT: u32 = 12;
 const TIMELINE_FRAME_WIDTH: u32 = 160;
 const TIMELINE_FRAME_HEIGHT: u32 = 90;
+
+/// Snapshot of file identity without retaining a Windows handle across
+/// permanent/History renames. The same-file fingerprint hashes the OS file ID
+/// (volume + file index on Windows), not the path or timestamps. Content and
+/// change times are checked separately before publication.
+struct FileIdentity {
+    metadata: fs::Metadata,
+    fingerprint: u64,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -267,9 +278,9 @@ pub struct RecordingEditorSession {
     artifact_id: String,
     source_entry: HistoryEntry,
     source_path: PathBuf,
-    source_identity: fs::Metadata,
-    metadata_identity: fs::Metadata,
-    permanent_identity: Option<fs::Metadata>,
+    source_identity: FileIdentity,
+    metadata_identity: FileIdentity,
+    permanent_identity: Option<FileIdentity>,
     tools: MediaToolchain,
     probe: ProbeResult,
     edit: EditSpec,
@@ -293,7 +304,7 @@ impl RecordingEditorSession {
             captures_history::entry_directory(&request.history_root, &request.artifact_id)
                 .map_err(|error| error.to_string())?;
         let metadata_path = directory.join(captures_history::HISTORY_METADATA_FILE);
-        let metadata_identity = fs::metadata(&metadata_path).map_err(|error| error.to_string())?;
+        let metadata_identity = file_identity(&metadata_path)?;
         let metadata = read_bounded(&metadata_path, MAX_METADATA_BYTES)?;
         let entry: HistoryEntry =
             serde_json::from_slice(&metadata).map_err(|error| error.to_string())?;
@@ -304,7 +315,7 @@ impl RecordingEditorSession {
             .recording_media_path(&request.history_root)
             .filter(|path| path.is_file())
             .ok_or("The recording media is no longer available.")?;
-        let source_identity = fs::metadata(&source_path).map_err(|error| error.to_string())?;
+        let source_identity = file_identity(&source_path)?;
         let probe = tools
             .probe(&source_path)
             .map_err(|error| error.to_string())?;
@@ -334,7 +345,7 @@ impl RecordingEditorSession {
         let permanent_identity = entry
             .saved_path
             .as_ref()
-            .and_then(|path| fs::symlink_metadata(path).ok());
+            .and_then(|path| file_identity(Path::new(path)).ok());
         Ok(Self {
             history_root: request.history_root,
             artifact_id: request.artifact_id,
@@ -369,6 +380,14 @@ impl RecordingEditorSession {
     #[must_use]
     pub fn requires_reopen(&self) -> bool {
         self.invalidated
+    }
+
+    /// The accepted session's permanent-save hint, without filesystem work or
+    /// any replacement eligibility guarantee. Hosts use this exact path in
+    /// confirmation UI instead of a potentially stale History-list artifact.
+    #[must_use]
+    pub fn original_save_path(&self) -> Option<&Path> {
+        self.source_entry.saved_path.as_deref().map(Path::new)
     }
 
     #[must_use]
@@ -802,12 +821,8 @@ impl RecordingEditorSession {
                 "The permanent save differs from its History recovery copy.".into(),
             ));
         }
-        let recovery_identity = original_recovery
-            .metadata()
-            .map_err(|error| unchanged(error.to_string()))?;
-        let permanent_identity = original_permanent
-            .metadata()
-            .map_err(|error| unchanged(error.to_string()))?;
+        let recovery_identity = file_identity(&recovery).map_err(unchanged)?;
+        let permanent_identity = file_identity(&permanent).map_err(unchanged)?;
         let old_digest = file_digest(&recovery).map_err(unchanged)?;
         let metadata_path = directory.join(captures_history::HISTORY_METADATA_FILE);
         if !unchanged_file_at_path(&self.metadata_identity, &metadata_path).map_err(unchanged)? {
@@ -976,6 +991,11 @@ impl RecordingEditorSession {
                 if restored.is_ok()
                     && file_digest(&permanent).is_ok_and(|digest| digest == old_digest)
                 {
+                    self.permanent_identity = Some(file_identity(&permanent).map_err(|stat_error| {
+                        ReplaceOriginalError::indeterminate(format!(
+                            "Permanent bytes were restored but their identity could not be verified: {stat_error}"
+                        ))
+                    })?);
                     self.invalidated = false;
                     return Err(unchanged(error.to_string()));
                 }
@@ -984,14 +1004,14 @@ impl RecordingEditorSession {
                 "History replacement failed and the permanent save could not safely be restored: {error}"
             )));
         }
-        let published_identity = fs::metadata(&recovery).map_err(|error| {
+        let published_identity = file_identity(&recovery).map_err(|error| {
             ReplaceOriginalError::indeterminate(format!(
                 "Recording published, but its recovery source cannot be verified: {error}"
             ))
         })?;
-        let published_metadata = fs::metadata(&metadata_path)
+        let published_metadata = file_identity(&metadata_path)
             .map_err(|error| ReplaceOriginalError::indeterminate(error.to_string()))?;
-        let published_permanent = fs::metadata(&permanent)
+        let published_permanent = file_identity(&permanent)
             .map_err(|error| ReplaceOriginalError::indeterminate(error.to_string()))?;
         self.source_entry = new_entry.clone();
         self.source_path = recovery;
@@ -1358,51 +1378,68 @@ fn regular_file(path: &Path) -> Result<fs::File, String> {
     fs::File::open(path).map_err(|error| error.to_string())
 }
 
-fn same_file_at_path(old: &fs::Metadata, path: &Path) -> Result<bool, String> {
+fn file_identity(path: &Path) -> Result<FileIdentity, String> {
+    let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+    let handle = same_file::Handle::from_path(path).map_err(|error| error.to_string())?;
+    let mut hasher = DefaultHasher::new();
+    handle.hash(&mut hasher);
+    Ok(FileIdentity {
+        metadata,
+        fingerprint: hasher.finish(),
+    })
+}
+
+fn same_file_at_path(old: &FileIdentity, path: &Path) -> Result<bool, String> {
+    // In replacement only regular non-symlink files are eligible. Open the
+    // file afresh, compare the stable same-file OS identifier, and drop the
+    // handle before any Windows directory/permanent rename.
     let current = regular_file(path)?;
     let new = current.metadata().map_err(|error| error.to_string())?;
+    let handle = same_file::Handle::from_file(current).map_err(|error| error.to_string())?;
+    let mut hasher = DefaultHasher::new();
+    handle.hash(&mut hasher);
+    if old.fingerprint != hasher.finish() {
+        return Ok(false);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        Ok(old.dev() == new.dev() && old.ino() == new.ino())
+        Ok(old.metadata.dev() == new.dev() && old.metadata.ino() == new.ino())
     }
-    #[cfg(windows)]
+    #[cfg(not(unix))]
     {
-        use std::os::windows::fs::MetadataExt;
-        Ok(old.volume_serial_number() == new.volume_serial_number()
-            && old.file_index() == new.file_index())
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        Ok(old.len() == new.len()
-            && old.created().ok() == new.created().ok()
-            && old.modified().ok() == new.modified().ok())
+        Ok(old.metadata.len() == new.len())
     }
 }
 
-fn unchanged_file_at_path(old: &fs::Metadata, path: &Path) -> Result<bool, String> {
+fn unchanged_file_at_path(old: &FileIdentity, path: &Path) -> Result<bool, String> {
     if !same_file_at_path(old, path)? {
         return Ok(false);
     }
     unchanged_open_path(old, path)
 }
 
-fn unchanged_open_path(old: &fs::Metadata, path: &Path) -> Result<bool, String> {
+fn unchanged_open_path(old: &FileIdentity, path: &Path) -> Result<bool, String> {
     let current = fs::metadata(path).map_err(|error| error.to_string())?;
+    let current_identity = file_identity(path)?;
+    if old.fingerprint != current_identity.fingerprint {
+        return Ok(false);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        Ok(old.dev() == current.dev()
-            && old.ino() == current.ino()
-            && old.len() == current.len()
-            && old.mtime() == current.mtime()
-            && old.mtime_nsec() == current.mtime_nsec()
-            && old.ctime() == current.ctime()
-            && old.ctime_nsec() == current.ctime_nsec())
+        Ok(old.metadata.dev() == current.dev()
+            && old.metadata.ino() == current.ino()
+            && old.metadata.len() == current.len()
+            && old.metadata.mtime() == current.mtime()
+            && old.metadata.mtime_nsec() == current.mtime_nsec()
+            && old.metadata.ctime() == current.ctime()
+            && old.metadata.ctime_nsec() == current.ctime_nsec())
     }
     #[cfg(not(unix))]
     {
-        Ok(old.len() == current.len() && old.modified().ok() == current.modified().ok())
+        Ok(old.metadata.len() == current.len()
+            && old.metadata.modified().ok() == current.modified().ok())
     }
 }
 
@@ -1603,6 +1640,16 @@ mod tests {
         session
             .execute(RecordingEditorRequest::Seek { position_ms: 300 })
             .unwrap();
+        session
+            .replace_original(&CancelToken::default(), |_| {})
+            .unwrap();
+        assert!(!session.requires_reopen());
+        assert_eq!(session.snapshot().revision, 2);
+        assert_eq!(session.snapshot().position_ms, 0);
+        assert_eq!(
+            fs::read(&permanent).unwrap(),
+            fs::read(history.join(&session.artifact_id).join("media.mp4")).unwrap()
+        );
     }
 
     #[test]
