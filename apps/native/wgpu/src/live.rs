@@ -2024,9 +2024,16 @@ impl Live {
                             self.status = "Recording in progress".into();
                             request_hidden_root_paint(ctx);
                         }
-                        Err(error) => {
-                            self.error = Some(error);
-                            if self.recording_has_started {
+                        Err(failure) => {
+                            self.error = Some(failure.error);
+                            if failure
+                                .snapshot
+                                .is_some_and(|snapshot| snapshot.state == RecordingState::Failed)
+                            {
+                                // Failed sessions retain their completed media for
+                                // recovery; stop/finalize would only replace this error.
+                                self.finish_capture(ctx, false);
+                            } else if self.recording_has_started {
                                 self.capture_phase = Some(CapturePhase::RecordingFinalizing);
                                 self.status =
                                     "Resume failed; preserving the accepted recording…".into();

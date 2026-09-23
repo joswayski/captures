@@ -32,6 +32,8 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--restart-only", action="store_true",
                         help="stop after running/paused Restart and replacement-media checks")
+    parser.add_argument("--device-change", choices=("default", "explicit"),
+                        help="verify device re-resolution at resume with two private microphones")
     parser.add_argument("--hide-controls-only", action="store_true",
                         help="exercise real-SNI Hide/restore, tray loss and finalized media")
     parser.add_argument("--screenshot-only", action="store_true",
@@ -42,6 +44,8 @@ def main():
     parser.add_argument("--virtual-microphone", action="store_true",
                         help="use a disposable PulseAudio microphone to verify live meter and mute segments")
     args = parser.parse_args()
+    if args.device_change:
+        args.virtual_microphone = True
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -257,13 +261,30 @@ def main():
             spawn("pulseaudio", ["pulseaudio", "--daemonize=no", "--exit-idle-time=-1"])
             wait(lambda: subprocess.run(["pactl", "info"], env=env, capture_output=True).returncode == 0,
                  "PulseAudio virtual microphone server")
-            run("pactl", "load-module", "module-null-sink", "sink_name=captures",
-                "sink_properties=device.description=CapturesVirtualMicrophone")
+            microphone_module = run("pactl", "load-module", "module-null-sink", "sink_name=captures",
+                "sink_properties=device.description=CapturesVirtualMicrophone").decode().strip()
             run("pactl", "set-default-source", "captures.monitor")
             tone = output / "microphone-tone.wav"
             run("ffmpeg", "-v", "error", "-f", "lavfi", "-i",
                 "sine=frequency=730:sample_rate=48000", "-af", "volume=4", "-t", "120", str(tone))
             spawn("microphone-tone", ["paplay", "--device=captures", str(tone)])
+            if args.device_change:
+                run("pactl", "load-module", "module-null-sink", "sink_name=captures_b")
+                second_tone = output / "microphone-b.wav"
+                run("ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                    "sine=frequency=1310:sample_rate=48000", "-af", "volume=4", "-t", "120", str(second_tone))
+                spawn("microphone-b", ["paplay", "--device=captures_b", str(second_tone)])
+                # CPAL 0.16 enumerates built-in ALSA names, not arbitrary PCM hints.
+                # Keep "default" following the server, but pin the private "pulse"
+                # endpoint to A. Missing A must not become the new default B.
+                alsa = output / "config/alsa/asoundrc"
+                alsa.parent.mkdir(parents=True, exist_ok=True)
+                alsa.write_text('''pcm.!default { type pulse }
+pcm.!pulse {
+    type pulse
+    device "captures.monitor"
+}
+''')
         time.sleep(1)
         if args.screenshot_only:
             wallpaper = output / "asymmetric-wallpaper.png"
@@ -287,7 +308,8 @@ def main():
                           "video_shortcut": "Ctrl+Alt+R", "window_shortcut": "Ctrl+Alt+W",
                           "display_shortcut": "Ctrl+Alt+D",
                           "highlight_clicks": False, "capture_system_audio": False,
-                          "microphone_device_id": "default" if args.virtual_microphone else None,
+                          "microphone_device_id": "microphone:pulse" if args.device_change == "explicit"
+                              else "default" if args.virtual_microphone else None,
                           "open_editor_after_recording": False},
         }))
         if args.ready_notice_only:
@@ -312,6 +334,84 @@ def main():
         run("xdotool", "key", "ctrl+alt+d")
         hud = running_hud()
         shot(hud, "hud-running")
+        if args.device_change:
+            bundle = next((output / "recording-recovery").glob("*/manifest.json")).parent
+
+            def recorded_microphone(index):
+                value = manifest()
+                if value and len(value["segments"]) > index:
+                    relative = value["segments"][index]["microphone_relative_path"]
+                    path = bundle / relative if relative else None
+                    if path and path.exists() and path.stat().st_size > 192000:
+                        return path
+                return None
+
+            def tone_frequency(path, offset=0.2):
+                pcm = run("ffmpeg", "-v", "error", "-i", str(path), "-ss", str(offset),
+                          "-t", "0.4", "-ac", "1", "-ar", "24000", "-f", "f32le", "-")
+                samples = [sample[0] for sample in struct.iter_unpack("<f", pcm)]
+                assert len(samples) >= 9000, "need a complete tone window, not encoder tail"
+                rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples))
+                assert rms > .05, f"microphone must contain actual tone, RMS={rms}"
+                crossings = sum(left < 0 <= right for left, right in zip(samples, samples[1:]))
+                return crossings * 24000 / len(samples)
+
+            first = wait(lambda: recorded_microphone(0), "actual microphone A samples")
+            click(hud, 178, 54)
+            wait(lambda: manifest()["state"] == "paused", "device-change pause")
+            first_frequency = tone_frequency(first)
+            assert abs(first_frequency - 730) < 10, first_frequency
+            first_bytes = first.read_bytes()
+            first_video = bundle / manifest()["segments"][0]["relative_path"]
+            first_video_bytes = first_video.read_bytes()
+            run("pactl", "set-default-source", "captures_b.monitor")
+            if args.device_change == "explicit":
+                run("pactl", "unload-module", microphone_module)
+            hud = wait(lambda: windows("Captures Recording Controls"), "paused device-change HUD")[0]
+            click(hud, 178, 54)
+            if args.device_change == "default":
+                wait(lambda: (value := manifest())["state"] == "recording"
+                     and len(value["segments"]) == 2, "default-device resume")
+                second = wait(lambda: recorded_microphone(1), "actual microphone B samples")
+                hud = wait(lambda: windows("Captures Recording Controls"), "resumed device-change HUD")[0]
+                click(hud, 178, 54)
+                wait(lambda: manifest()["state"] == "paused", "second segment completed")
+                second_frequency = tone_frequency(second)
+                assert abs(second_frequency - 1310) < 10, second_frequency
+                value = manifest()
+                assert value["options"]["audio"]["microphone_device_id"] == "default"
+                second_start = value["segments"][0]["duration_ms"] / 1000
+                hud = wait(lambda: windows("Captures Recording Controls"), "paused publication HUD")[0]
+                click(hud, 142, 54)
+                finished(1)
+                metadata = next(iter(history()))
+                entry = json.loads(metadata.read_text())
+                assert entry["has_microphone_audio"]
+                media = metadata.parent / "media.mp4"
+                assert abs(tone_frequency(media) - 730) < 10
+                assert abs(tone_frequency(media, second_start + .3) - 1310) < 10
+                result = {"first_hz": first_frequency, "resumed_hz": second_frequency,
+                          "saved_audio_matches": True, "options_remain_default": True}
+            else:
+                wait(lambda: manifest()["state"] == "failed", "explicit missing microphone refuses resume")
+                wait(lambda: not windows("Captures Recording Controls"), "failed take retires HUD")
+                root = wait(lambda: windows("Captures"), "failed take restores workspace")[0]
+                value = manifest()
+                assert value["last_error"] and not history()
+                assert value["segments"][0]["complete"] and first.read_bytes() == first_bytes
+                assert first_video.read_bytes() == first_video_bytes
+                assert value["options"]["audio"]["microphone_device_id"] == "microphone:pulse"
+                assert not any(segment["complete"] for segment in value["segments"][1:])
+                wait(lambda: int(run("import", "-window", root, "-format", "%k", "info:")) > 32,
+                     "painted microphone failure workspace")
+                time.sleep(.3) # allow the independently queued recovery list to paint
+                shot(root, "explicit-microphone-unavailable")
+                result = {"first_hz": first_frequency, "no_default_fallback": True,
+                          "completed_media_preserved": True, "error": value["last_error"]}
+            result["scope"] = "Private X11/PulseAudio reopen only; not physical unplug or hot switching"
+            (output / f"acceptance-device-{args.device_change}.json").write_text(json.dumps(result, indent=2))
+            print(f"PASS microphone {args.device_change} device reopen: {result}", flush=True)
+            return
         if args.virtual_microphone:
             run("xdotool", "mousemove", "0", "0")
             wait(lambda: meter_pixels(hud) >= 20, "nonzero live microphone meter with root hidden")

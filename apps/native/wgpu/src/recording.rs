@@ -77,7 +77,7 @@ pub enum Event {
     },
     Started {
         generation: u64,
-        result: Result<RecordingSessionSnapshot, String>,
+        result: Result<RecordingSessionSnapshot, MutationFailure>,
     },
     Paused {
         generation: u64,
@@ -166,11 +166,20 @@ impl Worker {
                     } => Event::Started {
                         generation,
                         result: session.as_mut().map_or_else(
-                            || Err("Recording session is unavailable".into()),
-                            |session| {
-                                session.start(exclude_captures_app, || {
-                                    captures_app::capture_flow::is_current(generation)
+                            || {
+                                Err(MutationFailure {
+                                    error: "Recording session is unavailable".into(),
+                                    snapshot: None,
                                 })
+                            },
+                            |session| match session.start(exclude_captures_app, || {
+                                captures_app::capture_flow::is_current(generation)
+                            }) {
+                                Ok(snapshot) => Ok(snapshot),
+                                Err(error) => Err(MutationFailure {
+                                    error,
+                                    snapshot: Some(Box::new(session.snapshot())),
+                                }),
                             },
                         ),
                     },
@@ -359,6 +368,24 @@ mod tests {
             worker.rx.recv_timeout(Duration::from_secs(5)).unwrap(),
             Event::Prepared { result: Ok(_), .. }
         ));
+        // A cancelled start changes Countdown to Discarded. The error must carry
+        // the state after the operation, not a stale pre-start snapshot.
+        worker.send(Command::Start {
+            generation: u64::MAX,
+            exclude_captures_app: false,
+        });
+        let Event::Started {
+            result: Err(failure),
+            ..
+        } = worker.rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("stale start must fail")
+        };
+        assert_eq!(failure.error, "Recording cancelled");
+        assert_eq!(
+            failure.snapshot.unwrap().state,
+            captures_recording::RecordingState::Discarded
+        );
         worker.send(Command::Retire);
         assert!(matches!(
             worker.rx.recv_timeout(Duration::from_secs(5)).unwrap(),
