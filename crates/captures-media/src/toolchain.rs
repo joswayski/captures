@@ -1072,17 +1072,30 @@ impl MediaToolchain {
             return Err(MediaToolError::Cancelled);
         }
         let after_path = scratch.path().join("after.png");
-        // An encoded sample has no frame at its exclusive end. For a position
-        // near that edge, seek within the final output cadence interval.
-        let frames_per_second = if export.format == ExportFormat::Gif {
-            export.frames_per_second.unwrap_or(15).clamp(1, 30)
-        } else {
-            export.frames_per_second.unwrap_or(30).clamp(15, 60)
-        };
-        let last_frame_ms =
-            sample_duration_ms.saturating_sub(1_000_u64.div_ceil(u64::from(frames_per_second)));
-        let after_seek_ms = (position_ms - sample_start_ms).min(last_frame_ms);
-        self.extract_frame(&sample_path, after_seek_ms, &after_path, cancel)?;
+        // FFmpeg may produce no image (with a successful status) when seeking
+        // beyond the final encoded PTS. Neither the requested FPS nor the
+        // retry plan predicts that PTS, especially for GIF centisecond timing.
+        // Retry a bounded number of earlier positions, reporting the seek
+        // actually used rather than pretending it was the selected time.
+        let requested_offset_ms = position_ms - sample_start_ms;
+        let mut after_seek_ms = None;
+        for backoff_ms in [0, 100, 250, 500, 1_000, 1_500] {
+            if cancel.is_cancelled() {
+                return Err(MediaToolError::Cancelled);
+            }
+            let seek_ms = requested_offset_ms.saturating_sub(backoff_ms);
+            self.extract_frame(&sample_path, seek_ms, &after_path, cancel)?;
+            if after_path.is_file() {
+                after_seek_ms = Some(seek_ms);
+                break;
+            }
+            if seek_ms == 0 {
+                break;
+            }
+        }
+        let after_seek_ms = after_seek_ms.ok_or_else(|| {
+            MediaToolError::Process("encoded comparison sample contains no decodable frame".into())
+        })?;
         if cancel.is_cancelled() {
             return Err(MediaToolError::Cancelled);
         }
@@ -4369,12 +4382,166 @@ mod tests {
             .unwrap();
         assert_eq!(comparison.requested_position_ms, 5_000);
         assert_eq!(comparison.position_ms, 4_999);
-        assert_eq!(comparison.after_seek_position_ms, 4_916);
+        assert!(comparison.after_seek_position_ms <= comparison.position_ms);
+        assert!(comparison.after_seek_position_ms >= 4_749);
         assert_eq!(comparison.sample_duration_ms, 1_500);
         assert_eq!(comparison.sample_start_ms, 3_500);
         assert!(comparison.attempts >= 1);
         assert!(comparison.before_png.starts_with(b"\x89PNG"));
         assert!(comparison.after_png.starts_with(b"\x89PNG"));
+        assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0);
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn encoded_comparison_preserves_copy_seek_and_falls_back_only_past_gif_last_frame() {
+        let Some((tools, ffmpeg, _)) = cross_platform_toolchain() else {
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let scratch = directory.path().join("scratch");
+        std::fs::create_dir(&scratch).unwrap();
+        for (name, rate, duration) in [("fast", 60, "1.5"), ("slow", 12, "3")] {
+            let source = directory.path().join(format!("{name}.mp4"));
+            let status = std::process::Command::new(&ffmpeg)
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                ])
+                .arg(format!(
+                    "testsrc2=size=320x180:rate={rate}:duration={duration}"
+                ))
+                .args(["-c:v", "mpeg4", "-q:v", "2", "-an"])
+                .arg(&source)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            let probe = tools.probe(&source).unwrap();
+            let (edit, export, position) = if name == "fast" {
+                (
+                    EditSpec::default(),
+                    ExportSpec {
+                        format: ExportFormat::Mp4,
+                        quality: QualityPreset::Preserve,
+                        max_size_bytes: None,
+                        frames_per_second: None,
+                        gif_max_colors: None,
+                    },
+                    1_480,
+                )
+            } else {
+                (
+                    EditSpec {
+                        trim_start_ms: 211,
+                        trim_end_ms: Some(1_711),
+                        ..EditSpec::default()
+                    },
+                    ExportSpec {
+                        format: ExportFormat::Gif,
+                        quality: QualityPreset::Preserve,
+                        max_size_bytes: None,
+                        frames_per_second: Some(24),
+                        gif_max_colors: Some(64),
+                    },
+                    1_700,
+                )
+            };
+            let comparison = tools
+                .compare_encoded_frame(
+                    &source,
+                    &probe,
+                    &edit,
+                    &export,
+                    position,
+                    &scratch,
+                    &CancelToken::default(),
+                )
+                .unwrap();
+            assert_eq!(comparison.position_ms, position);
+            if name == "fast" {
+                assert_eq!(comparison.after_seek_position_ms, position);
+                assert_eq!(
+                    comparison.before_png, comparison.after_png,
+                    "copied moving source should compare the same decoded frame"
+                );
+            } else {
+                assert!(
+                    comparison.after_seek_position_ms < position,
+                    "GIF final PTS precedes the requested in-trim time"
+                );
+                assert!(comparison.after_png.starts_with(b"\x89PNG"));
+            }
+            assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn encoded_comparison_cancels_a_stalled_export_and_removes_scratch() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let Some((tools, ffmpeg, ffprobe)) = cross_platform_toolchain() else {
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.mp4");
+        create_export_estimate_recording(&ffmpeg, &source);
+        let probe = tools.probe(&source).unwrap();
+        let script = directory.path().join("stalled-ffmpeg");
+        let marker = directory.path().join("child-started");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho started > '{}'\nexec sleep 30\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).unwrap();
+        let tools = MediaToolchain::new(script, ffprobe);
+        let scratch = directory.path().join("scratch");
+        std::fs::create_dir(&scratch).unwrap();
+        let cancel = CancelToken::default();
+        let worker_cancel = cancel.clone();
+        let worker_scratch = scratch.clone();
+        let started = std::time::Instant::now();
+        let worker = std::thread::spawn(move || {
+            tools.compare_encoded_frame(
+                &source,
+                &probe,
+                &EditSpec {
+                    trim_end_ms: Some(2_000),
+                    ..EditSpec::default()
+                },
+                &ExportSpec {
+                    format: ExportFormat::Gif,
+                    quality: QualityPreset::Preserve,
+                    max_size_bytes: None,
+                    frames_per_second: Some(12),
+                    gif_max_colors: Some(64),
+                },
+                750,
+                &worker_scratch,
+                &worker_cancel,
+            )
+        });
+        while !marker.exists() {
+            assert!(started.elapsed() < std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        cancel.cancel();
+        assert!(matches!(
+            worker.join().unwrap(),
+            Err(MediaToolError::Cancelled)
+        ));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
         assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0);
     }
 
