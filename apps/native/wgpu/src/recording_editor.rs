@@ -132,6 +132,7 @@ struct View {
     position_ms: u64,
     destination: String,
     gif: bool,
+    gif_frames_per_second: Option<u16>,
     quality: QualityPreset,
     progress: Option<ExportProgress>,
     status: Option<String>,
@@ -148,7 +149,11 @@ impl View {
             },
             quality: self.quality,
             max_size_bytes: None,
-            frames_per_second: None,
+            frames_per_second: if self.gif {
+                self.gif_frames_per_second
+            } else {
+                None
+            },
             gif_max_colors: None,
         }
     }
@@ -387,6 +392,9 @@ impl View {
                         self.audio = p.edit.audio.clone();
                         self.position_ms = p.position_ms;
                         self.gif = p.export.format == ExportFormat::Gif;
+                        if self.gif {
+                            self.gif_frames_per_second = p.export.frames_per_second;
+                        }
                         self.quality = p.export.quality;
                         // The initial edit includes trusted audio flags.
                         if self.presented.is_none() {
@@ -1863,6 +1871,22 @@ fn show(
                         ui.checkbox(&mut view.audio.mono_output, "Mono output");
                     });
                 });
+                if view.gif {
+                    ui.horizontal(|ui| {
+                        ui.strong("GIF frame rate");
+                        let mut fps = view.gif_frames_per_second.unwrap_or(15);
+                        egui::ComboBox::from_id_salt("recording-gif-frame-rate")
+                            .selected_text(format!("{fps} FPS"))
+                            .height(7.0 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.y))
+                            .show_ui(ui, |ui| {
+                                for value in [8, 10, 12, 15, 20, 24, 30] {
+                                    if ui.selectable_value(&mut fps, value, format!("{value} FPS")).changed() {
+                                        view.gif_frames_per_second = Some(fps);
+                                    }
+                                }
+                            });
+                    });
+                }
                 ui.horizontal(|ui| {
                     ui.strong("Save quality");
                     egui::ComboBox::from_id_salt("recording-quality")
@@ -3745,6 +3769,101 @@ mod tests {
         assert!(view.unapplied());
         view.request_close();
         assert!(view.confirm_close && !view.closed);
+    }
+
+    #[test]
+    fn gif_frame_rate_is_accepted_output_state_and_retained_across_mp4() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        view.gif = true;
+        assert_eq!(view.gif_frames_per_second.unwrap_or(15), 15);
+        view.gif_frames_per_second = Some(8);
+        view.estimate = Some(ExportEstimate {
+            size_bytes: 1234,
+            exact: true,
+        });
+        assert!(view.unapplied() && view.dirty());
+        let (tx, jobs) = mpsc::channel();
+        view.request_estimate(&tx);
+        view.request_playback(&tx);
+        assert!(
+            jobs.try_recv().is_err(),
+            "staged FPS gates estimate and playback"
+        );
+        assert_eq!(view.estimate_label(), "Apply edits to estimate size");
+        let export = view.export_spec();
+        assert_eq!(export.format, ExportFormat::Gif);
+        assert_eq!(export.frames_per_second, Some(8));
+        view.send(
+            &tx,
+            Job::Apply(RecordingEditorRequest::UpdatePreview {
+                edit: view.staged_edit(view.presented.as_ref().unwrap()),
+                export,
+            }),
+        );
+        let Job::Apply(RecordingEditorRequest::UpdatePreview { edit, export }) =
+            jobs.recv().unwrap()
+        else {
+            panic!("frame rate is sent through Apply")
+        };
+        let mut p = opened().presented.unwrap();
+        p.edit = edit;
+        p.export = export;
+        view.receive(&ctx, Event::Presented(Ok(p)));
+        assert!(!view.unapplied() && view.dirty() && view.estimate.is_none());
+        view.receive(
+            &ctx,
+            Event::Saved(Ok(SavedRecording::SavedWithoutHistory {
+                path: "eight-fps.gif".into(),
+                warning: "History unavailable".into(),
+            })),
+        );
+        assert!(!view.dirty());
+        let accepted_frame = view.presented.as_ref().unwrap().frame.clone();
+        view.gif_frames_per_second = Some(24);
+        view.receive(&ctx, Event::Presented(Err("preview failed".into())));
+        assert!(Arc::ptr_eq(
+            &accepted_frame,
+            &view.presented.as_ref().unwrap().frame
+        ));
+        assert_eq!(
+            view.gif_frames_per_second,
+            Some(24),
+            "failed Apply keeps the correction available"
+        );
+        assert_eq!(
+            view.presented.as_ref().unwrap().export.frames_per_second,
+            Some(8)
+        );
+        view.gif_frames_per_second = Some(8);
+        let mut seek = opened().presented.unwrap();
+        seek.export = view.export_spec();
+        seek.position_ms = 1377;
+        view.receive(&ctx, Event::Presented(Ok(seek)));
+        assert!(!view.dirty() && !view.unapplied());
+        assert_eq!(view.gif_frames_per_second, Some(8));
+        view.gif = false;
+        assert_eq!(
+            view.export_spec().frames_per_second,
+            None,
+            "GIF FPS never changes MP4 cadence"
+        );
+        let mut mp4 = opened().presented.unwrap();
+        mp4.export = view.export_spec();
+        view.receive(&ctx, Event::Presented(Ok(mp4)));
+        assert_eq!(
+            view.gif_frames_per_second,
+            Some(8),
+            "MP4 acceptance retains the GIF choice"
+        );
+        view.gif = true;
+        assert_eq!(view.export_spec().frames_per_second, Some(8));
+        assert_eq!(
+            opened().gif_frames_per_second,
+            None,
+            "new items start at the 15 FPS default"
+        );
+        assert!(!view.history_changed);
     }
 
     #[test]
