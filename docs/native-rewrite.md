@@ -633,6 +633,20 @@ are not crash/power-loss atomic: a process kill can leave new permanent media wi
 old or hidden History. History-only and reference-only recordings are unsupported.
 No recording drafts or undo are promised.
 
+Interrupted capture bundles are separate from editor drafts. The Windows/Linux
+History workspace has a bounded recovery list with recoverable and read-only
+unavailable rows, identity-bound permanent-discard confirmation, coarse progress,
+cancellation and retry. A serialized worker uses shared recovery publication;
+late cancellation cannot hide success. Success refreshes History and opens the
+recovered recording only if selection has not changed. Terminal recording owners
+are dropped before listing or preparing another take, releasing their root lease
+without discarding retained media. Quit waits for recovery/discard to finish.
+Native development roots only: shipping Tauri does not share the native lease.
+Linux X11/software-GL input verifies real media, confirmation/cancel and History
+publication failure/retry. Windows uses the same host code; physical Windows and
+Wayland runtime/input/accessibility remain unverified. AppKit integration is a
+separate pending slice. No parity gate is closed.
+
 Platform status: shared Rust/C ABI is connected to both hosts. The first AppKit
 slice opens recordings from History in a separate native window with retained
 decoded frames, source-relative seek, numeric trim, MP4/GIF format and quality,
