@@ -267,6 +267,11 @@ The preview identifies its accepted format/quality, and saving uses those settin
 **Estimate size** checks those accepted settings without publishing an export.
 Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
 audio-only Preserve changes show approximate sizes. Estimation can be canceled.
+The Windows/Linux candidate also offers **Maximum file size** for MP4/GIF, using
+decimal KB/MB/GB with a 100 KB minimum. Apply accepts the limit; the size label then
+shows the cap instead of an estimate. Save may reduce resolution, frame rate or
+audio quality to fit, so its first-attempt preview is not a promise of final output.
+An unattainable limit fails without publishing a copy. AppKit's limit control is pending.
 Available system and microphone tracks have independent volume/mute controls plus
 mono output. Accepted settings apply to MP4 exports and Sound preview.
 GIF disables audio controls without discarding the MP4 settings.

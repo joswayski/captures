@@ -482,6 +482,15 @@ CapturesRecordingEditorSession *captures_recording_editor_open_v1(
     const char *request_json, char **output);
 char *captures_recording_editor_request_v1(CapturesRecordingEditorSession *session,
     const char *request_json);
+/* Additive accepted-save-export contract. Requests retain the v1 operation
+ * spellings. update_preview accepts MP4/GIF export with an optional hard byte
+ * budget; a budget requires Preserve quality and at least 100000 bytes. Success
+ * returns the v1 snapshot fields plus save_export. preview_export is the visual
+ * first-attempt derivative with max_size_bytes:null, while save_export retains
+ * the accepted budget. v1 request/snapshot behavior and budget rejection remain
+ * unchanged, including after v2 use. */
+char *captures_recording_editor_request_v2(CapturesRecordingEditorSession *session,
+    const char *request_json);
 void captures_recording_editor_free_v1(CapturesRecordingEditorSession *session);
 /* Retained preview RGBA follows CapturesRegionPixels and may outlive edits/session.
  * Borrow only while frame is live; never mutate/free data. NULL free is allowed. */
@@ -570,6 +579,11 @@ void captures_recording_editor_cancel_free_v1(CapturesRecordingEditorCancel *can
  * {ok:true,result:{size_bytes,exact}} or {ok:false,error}. It does not mutate
  * session/frame/revision, publish History, or invoke a progress callback. */
 char *captures_recording_editor_estimate_v1(const CapturesRecordingEditorSession *session,
+    const CapturesRecordingEditorCancel *cancel);
+/* Blocking estimate of accepted edit + save_export. Maximum-mode hosts should
+ * present the accepted hard cap rather than promise this advisory encoded
+ * estimate. Ownership, cancellation, and response envelopes match v1. */
+char *captures_recording_editor_estimate_v2(const CapturesRecordingEditorSession *session,
     const CapturesRecordingEditorCancel *cancel);
 char *captures_recording_editor_save_new_v1(const CapturesRecordingEditorSession *session,
     const char *request_json, const CapturesRecordingEditorCancel *cancel,
