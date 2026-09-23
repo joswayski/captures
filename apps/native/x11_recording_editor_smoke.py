@@ -312,8 +312,12 @@ def main():
             click(editor, 782, 1038)
             click(editor, 267, 980)
             wait(lambda: started.exists() and len(started.read_text().splitlines()) > calls, "replacement encoder started")
+            # The child marker can precede the UI's progress event. Let that
+            # row settle before targeting Cancel, without waiting for idle.
+            run("xdotool", "windowactivate", "--sync", editor, "windowfocus", "--sync", editor,
+                "sleep", "1", "mousemove", "--sync", "--window", editor, "90", "994", "sleep", ".5")
             run("import", "-window", editor, str(output / "replace-running.png"))
-            run("xdotool", "mousemove", "--window", editor, "90", "994", "click", "1")
+            run("xdotool", "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
             shot(editor, "replace-cancelled")
             assert source.read_bytes() == original == recovery.read_bytes()
             assert metadata.read_bytes() == original_metadata
