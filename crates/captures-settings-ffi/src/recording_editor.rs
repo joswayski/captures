@@ -1138,6 +1138,20 @@ mod tests {
         let cancelled = captures_recording_editor_cancel_create_v1();
         // SAFETY: token is live and independently owned.
         unsafe { captures_recording_editor_cancel_v1(cancelled) };
+        let mut cancelled_comparison_response = ptr::null_mut();
+        // SAFETY: pre-cancelled comparison returns an owned error, no frame.
+        assert!(
+            unsafe {
+                captures_recording_editor_comparison_v1(
+                    session,
+                    cancelled,
+                    &mut cancelled_comparison_response,
+                )
+            }
+            .is_null()
+        );
+        // SAFETY: failed comparison returned one owned JSON response.
+        assert_eq!(unsafe { json(cancelled_comparison_response) }["ok"], false);
         let mut cancelled_response = ptr::null_mut();
         // SAFETY: handles/output remain live; pre-cancellation is supported.
         let cancelled_frame = unsafe {
