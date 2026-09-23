@@ -614,7 +614,15 @@ Close blocks accepted work; unsaved edits require explicit discard, and normal q
 is refused until they are saved or closed. Recording drafts are not implemented.
 The shared editor now separately supports same-format Replace original only for a
 regular permanent MP4/GIF outside History with byte-identical private recovery.
-Hosts have not connected this action. It stages the edited media, publishes the
+The Windows/Linux editor connects this action through exact-path confirmation
+and its serialized worker. Staged edits, active media work and format mismatch
+block dispatch; the backend authoritatively checks both files. Success rebases
+the saved baseline, frame, geometry and duration and discards source-dependent
+thumbnails, crop frames, playback and comparison state before reloading History.
+Ordinary failure preserves accepted edits; indeterminate rollback disables media
+until close/reopen. A late cancellation cannot hide committed success.
+AppKit integration and physical platform acceptance remain open.
+It stages the edited media, publishes the
 permanent path atomically, then updates History; a History failure restores the
 permanent path from intact recovery or requires reopening an indeterminate session.
 The old recovery bytes remain available during publication, but the two directories
@@ -666,7 +674,7 @@ Windows/X11 already implement
 the same edit controls through wgpu;
 private X11/software-GL exercises provide implementation evidence only. Windows and
 Wayland presentation, physical macOS input, accessibility, playback audio, physical
-audio output, draft restoration and original
+audio output, draft restoration and AppKit original
 replacement remain open. No recording-editor or cross-platform parity gate closes.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
