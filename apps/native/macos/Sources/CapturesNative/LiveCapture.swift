@@ -1580,7 +1580,11 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                         self.recordingEditor = RecordingEditorController(
                             tokens: self.tokens,
                             reportError: { [weak self] message in self?.reportError(message) },
-                            didSaveCopy: { [weak self] in self?.loadHistory() })
+                            didSaveCopy: { [weak self] in self?.loadHistory() },
+                            didReplaceOriginal: { [weak self] artifactID in
+                                self?.miniPreviews?.dismiss(artifactID)
+                                self?.loadHistory(select: artifactID)
+                            })
                     }
                     self.recordingEditor?.present(artifact: artifact,
                                                   historyRoot: self.historyRoot,

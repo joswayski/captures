@@ -40,6 +40,14 @@ struct NativeRecordingEditorSnapshot {
 struct RecordingEditorPresentation {
     let snapshot: NativeRecordingEditorSnapshot
     let image: CGImage
+    let originalSavePath: String?
+
+    init(snapshot: NativeRecordingEditorSnapshot, image: CGImage,
+         originalSavePath: String? = nil) {
+        self.snapshot = snapshot
+        self.image = image
+        self.originalSavePath = originalSavePath
+    }
 }
 
 struct RecordingEditorProgress: Equatable {
@@ -106,6 +114,17 @@ final class RecordingPlaybackLoopControl: @unchecked Sendable {
 enum RecordingEditorSaveResult: Equatable {
     case saved(path: String)
     case savedWithoutHistory(path: String, warning: String)
+}
+
+struct RecordingReplaceResult {
+    let path: String
+    let presentation: RecordingEditorPresentation
+}
+
+struct RecordingReplaceError: LocalizedError {
+    let message: String
+    let requiresReopen: Bool
+    var errorDescription: String? { message }
 }
 
 enum NativeRecordingTimelineEdge: UInt8 {
@@ -460,7 +479,21 @@ final class NativeRecordingEditorSession {
             throw AppBridgeError.invalidResponse
         }
         let session = NativeRecordingEditorSession(handle: handle)
-        return (session, try session.presentation(snapshot))
+        let frame = try session.presentation(snapshot)
+        return (session, RecordingEditorPresentation(snapshot: frame.snapshot,
+            image: frame.image, originalSavePath: try session.originalSavePath()))
+    }
+
+    private func originalSavePath() throws -> String? {
+        guard let response = captures_recording_editor_original_save_path_v1(handle) else {
+            throw AppBridgeError.invalidResponse
+        }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let path = result["path"], path is NSNull || path is String else {
+            throw AppBridgeError.invalidResponse
+        }
+        return path as? String
     }
 
     func request(_ object: [String: Any]) throws -> RecordingEditorPresentation {
@@ -638,6 +671,42 @@ final class NativeRecordingEditorSession {
         return .savedWithoutHistory(path: path, warning: warning)
     }
 
+    func replaceOriginal(cancel: NativeRecordingEditorCancel,
+                         progress: @escaping (RecordingEditorProgress) -> Void) throws
+        -> RecordingReplaceResult {
+        let sink = RecordingEditorProgressSink(progress)
+        let response = captures_recording_editor_replace_original_v1(
+            handle, cancel.handle, recordingEditorProgressCallback,
+            Unmanaged.passUnretained(sink).toOpaque())
+        withExtendedLifetime(sink) {}
+        guard let response else {
+            throw RecordingReplaceError(message: "No replacement result was returned.",
+                                        requiresReopen: true)
+        }
+        defer { captures_settings_free_v1(response) }
+        guard let envelope = try? JSONSerialization.jsonObject(
+            with: Data(bytes: response, count: strlen(response))) as? [String: Any],
+              let ok = envelope["ok"] as? Bool else {
+            throw RecordingReplaceError(message: "Replacement result was invalid.",
+                                        requiresReopen: true)
+        }
+        guard ok else {
+            throw RecordingReplaceError(message: envelope["error"] as? String ?? "Replacement failed.",
+                                        requiresReopen: envelope["requires_reopen"] as? Bool ?? true)
+        }
+        guard let result = envelope["result"] as? [String: Any],
+              let replacement = result["replacement"] as? [String: Any],
+              replacement["status"] as? String == "replaced",
+              let path = replacement["path"] as? String, !path.isEmpty,
+              let value = result["snapshot"] as? [String: Any],
+              let snapshot = NativeRecordingEditorSnapshot(value),
+              let frame = try? presentation(snapshot) else {
+            throw RecordingReplaceError(message: "Replacement completed but its new frame could not be loaded.",
+                                        requiresReopen: true)
+        }
+        return RecordingReplaceResult(path: path, presentation: frame)
+    }
+
     private func presentation(_ snapshot: NativeRecordingEditorSnapshot) throws
         -> RecordingEditorPresentation {
         guard let handle = captures_recording_editor_frame_v1(handle) else {
@@ -670,6 +739,9 @@ protocol RecordingEditorWorking: AnyObject {
     func save(destination: String, export: [String: Any], cancel: NativeRecordingEditorCancel,
               progress: @escaping (RecordingEditorProgress) -> Void,
               completion: @escaping (Result<RecordingEditorSaveResult, Error>) -> Void)
+    func replaceOriginal(cancel: NativeRecordingEditorCancel,
+                         progress: @escaping (RecordingEditorProgress) -> Void,
+                         completion: @escaping (Result<RecordingReplaceResult, Error>) -> Void)
     func close()
 }
 
@@ -829,6 +901,22 @@ final class RecordingEditorWorker: RecordingEditorWorking {
                 }
                 return try session.save(destination: destination, export: export,
                                         cancel: cancel, progress: progress)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func replaceOriginal(cancel: NativeRecordingEditorCancel,
+                         progress: @escaping (RecordingEditorProgress) -> Void,
+                         completion: @escaping (Result<RecordingReplaceResult, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result {
+                guard let session = storage.session else {
+                    throw RecordingReplaceError(message: "The recording editor is closed.",
+                                                requiresReopen: true)
+                }
+                return try session.replaceOriginal(cancel: cancel, progress: progress)
             }
             DispatchQueue.main.async { completion(result) }
         }
