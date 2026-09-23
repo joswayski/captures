@@ -626,7 +626,9 @@ section separate from artifact rows. Recover/Discard use the shared per-root lea
 expected identity, serialized worker and explicit permanent-discard confirmation.
 Unavailable or corrupt entries have no actions. Cancellable media preparation leaves
 the bundle intact; a late cancellation cannot hide committed success. Successful
-recovery reloads/selects History before opening the editor. This is limited to
+recovery reloads/selects History before opening the editor. Terminal recording
+sessions retire on the serialized worker before recovery listing or new capture
+can acquire the native root lease. This is limited to
 isolated native development roots: no installed-data migration or Tauri recovery
 change. Windows/Linux host integration and physical acceptance remain open.
 The shared Replace original operation requires a regular permanent MP4/GIF outside

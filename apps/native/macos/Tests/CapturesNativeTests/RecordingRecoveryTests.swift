@@ -281,6 +281,36 @@ final class RecordingRecoveryTests: XCTestCase {
         XCTAssertNotNil(try session.request(["operation": "seek", "position_ms": 200]).image.dataProvider?.data)
     }
 
+    func testNativeSessionKeepsRecoveryLeaseUntilOwnerIsRetired() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let history = base.appendingPathComponent("history")
+        let recoveryRoot = base.appendingPathComponent("recording-recovery")
+        try FileManager.default.createDirectory(at: history, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let options: [String: Any] = ["kind": "video", "target": ["type": "display", "display_id": "fixture"],
+                                      "frames_per_second": 15, "max_resolution": "original",
+                                      "countdown_seconds": 0, "show_cursor": false]
+        let display: [String: Any] = ["id": "fixture", "name": "Fixture", "x": 0, "y": 0,
+                                      "width": 640, "height": 360, "scale_factor": 1.0, "is_primary": true]
+        var session: NativeRecordingSession? = try NativeRecordingSession.prepare(
+            recoveryRoot: recoveryRoot.path, options: options, display: display).0
+        let worker = RecordingRecoveryWorker()
+        var result: Result<[RecordingRecoveryDraft], Error>?
+        worker.list(historyRoot: history.path) { result = $0 }
+        try waitUntil { result != nil }
+        XCTAssertThrowsError(try result!.get(), "a live handle owns the lease even while idle")
+        _ = try session?.discard()
+        result = nil
+        worker.list(historyRoot: history.path) { result = $0 }
+        try waitUntil { result != nil }
+        XCTAssertThrowsError(try result!.get(), "terminal state still owns the lease")
+        session = nil
+        result = nil
+        worker.list(historyRoot: history.path) { result = $0 }
+        try waitUntil { result != nil }
+        XCTAssertEqual(try result!.get().count, 0)
+    }
+
     private func tryRecoveryError(_ panel: Surface) -> String {
         panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView?.subviews
             .compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " ") ?? ""

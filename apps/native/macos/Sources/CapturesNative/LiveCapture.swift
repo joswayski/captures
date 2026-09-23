@@ -114,6 +114,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var recoveryCancel: NativeRecordingEditorCancel?
     private var recoveryStage = ""
     private var recoveryActionGeneration = 0
+    private var recordingRetiring = false
     private var selectedImage: NSImage?
     private var selectedIndex: Int?
     private var selectionGeneration = 0
@@ -388,7 +389,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func refreshRecovery() {
-        guard !historyRoot.isEmpty, !recoveryBusy, !recoveryConfirmation else { return }
+        guard !historyRoot.isEmpty, !capturing, !recoveryBusy, !recoveryConfirmation,
+              !recordingRetiring else { return }
         recoveryGeneration += 1
         let current = recoveryGeneration, root = historyRoot
         recoveryLoading = true; renderRecovery()
@@ -438,7 +440,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                                             tokens: tokens) { [weak self] in self?.recover(draft) }
                 let discard = CaptureButton("Discard…", frame: NSRect(x: 120, y: y + 42, width: 112, height: 29),
                                             tokens: tokens) { [weak self] in self?.confirmDiscard(draft) }
-                recover.isEnabled = !capturing && !clearingHistory && !recoveryBusy && !recoveryLoading && !recoveryConfirmation
+                recover.isEnabled = !capturing && !clearingHistory && !recoveryBusy
+                    && !recoveryLoading && !recoveryConfirmation && !recordingRetiring
                 discard.isEnabled = recover.isEnabled
                 content.addSubview(recover); content.addSubview(discard)
                 nextY += 96
@@ -480,7 +483,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func currentRecovery(_ draft: RecordingRecoveryDraft) -> Bool {
-        !capturing && !clearingHistory && !recoveryBusy && !recoveryLoading
+        !capturing && !clearingHistory && !recoveryBusy && !recoveryLoading && !recordingRetiring
             && recoveryDrafts.contains { $0.sessionID == draft.sessionID && $0.identity == draft.identity
                 && $0.status == "recoverable" && draft.identity != nil }
     }
@@ -594,7 +597,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     @discardableResult func capture(_ kind: StillCaptureKind) -> Bool {
         recordingSavedNotice.dismiss()
         let index = displayMenu.indexOfSelectedItem
-        guard !capturing, !recoveryBusy, !recoveryConfirmation,
+        guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]; setBusy(true, message: "Preparing capture…")
@@ -638,7 +641,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     @discardableResult func newCapture(recordingTarget: UnifiedCaptureTarget? = nil) -> Bool {
         recordingSavedNotice.dismiss()
         let index = displayMenu.indexOfSelectedItem
-        guard !capturing, !recoveryBusy, !recoveryConfirmation,
+        guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]
@@ -843,6 +846,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 guard self.flowGeneration == generation else {
                     if case .success(let value) = result {
                         Self.queue.async { _ = try? value.0.discard() }
+                        self.retireRecordingSession(value.0)
+                    } else {
+                        self.recordingRetiring = false
+                        self.updateActions(); self.refreshRecovery()
                     }
                     return
                 }
@@ -1084,7 +1091,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     self.startRecordingPolling()
                 } catch {
                     self.recordingSession = nil
-                    Self.queue.async { withExtendedLifetime(session) {} }
+                    self.retireRecordingSession(session)
                     self.finishCapture(); self.showError("Recording failed to start", error)
                 }
             }
@@ -1395,6 +1402,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             guard let self, self.recordingSession === session else { return }
             switch result {
             case .success(let snapshot):
+                guard snapshot.state != "failed" else {
+                    self.preserveFailedRecording(session, warning: snapshot.warning)
+                    return
+                }
                 self.recordingLifecycle.end()
                 hud.hud.setLifecycleActionsEnabled(true)
                 hud.hud.setPaused(snapshot.state == "paused",
@@ -1550,11 +1561,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         recordingSession = nil
         clearRecordingControlsHiddenState()
         recordingHUD?.close(); recordingHUD = nil
-        Self.queue.async { withExtendedLifetime(session) {} }
+        retireRecordingSession(session)
         finishCapture()
         showError("Recording stopped; recovery files were preserved",
             AppBridgeError.backend(warning ?? "The recording engine stopped unexpectedly."))
-        refreshRecovery()
     }
 
     private func stopRecording() {
@@ -1573,7 +1583,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             switch result {
             case .success(let finalized):
                 self.recordingSession = nil
-                Self.queue.async { withExtendedLifetime(session) {} }
+                self.retireRecordingSession(session)
                 self.recordingHUD?.close(); self.recordingHUD = nil
                 self.recordingGate.set(nil); self.activeRecordingGeneration = nil
                 self.recordingLifecycle.end()
@@ -1609,7 +1619,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             switch result {
             case .success:
                 self.recordingSession = nil
-                Self.queue.async { withExtendedLifetime(session) {} }
+                self.retireRecordingSession(session)
                 self.recordingHUD?.close(); self.recordingHUD = nil
                 self.recordingGate.set(nil); self.activeRecordingGeneration = nil
                 self.recordingLifecycle.end()
@@ -1617,12 +1627,32 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             case .failure(let error):
                 self.recordingLifecycle.end()
                 if let hud = self.recordingHUD {
-                    hud.hud.isHidden = false
-                    hud.hud.setLifecycleActionsEnabled(true)
-                    self.showError("Couldn’t discard recording", error)
+                    self.run({ try session.snapshot() }) { [weak self] snapshotResult in
+                        guard let self, self.recordingSession === session else { return }
+                        if case .success(let snapshot) = snapshotResult, snapshot.state == "failed" {
+                            self.preserveFailedRecording(session, warning: error.localizedDescription)
+                        } else {
+                            hud.hud.isHidden = false
+                            hud.hud.setLifecycleActionsEnabled(true)
+                            self.showError("Couldn’t discard recording", error)
+                        }
+                    }
                 } else {
                     self.preserveFailedRecording(session, warning: error.localizedDescription)
                 }
+            }
+        }
+    }
+
+    private func retireRecordingSession(_ session: NativeRecordingSession) {
+        recordingRetiring = true; updateActions()
+        // The first queue item drops the last owner after earlier worker work;
+        // the second is a barrier before allowing a new lease/list request.
+        Self.queue.async { withExtendedLifetime(session) {} }
+        Self.queue.async { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.recordingRetiring = false; self.updateActions(); self.refreshRecovery()
             }
         }
     }
@@ -1631,6 +1661,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         if recordingScreenshotGeneration != nil {
             finishRecordingScreenshot()
         }
+        if preparingRecording { recordingRetiring = true }
         recordingSavedNotice.dismiss()
         recordingRegionPanel?.close(); recordingRegionPanel = nil
         clearRecordingControlsHiddenState()
@@ -1651,6 +1682,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     }
                 }
             }
+            retireRecordingSession(session)
         }
         selectorShortcutGeneration = nil
         countdownTimer?.invalidate(); countdownTimer = nil
@@ -1711,7 +1743,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private func updateActions() {
         let selected = selectedIndex.map { artifacts.indices.contains($0) } == true
         let selectedScreenshot = selectedIndex.map { artifacts.indices.contains($0) && !artifacts[$0].isRecording } == true
-        let busy = capturing || clearingHistory || recoveryBusy || recoveryConfirmation
+        let busy = capturing || clearingHistory || recoveryBusy || recoveryConfirmation || recordingRetiring
         refreshButton?.isEnabled = !busy
         table?.isEnabled = !busy
         for (filter, button) in historyFilterButtons {
@@ -1945,8 +1977,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     // One process-wide queue also drains operations from a closed workspace view.
     func prepareEditorForTermination() -> Bool {
-        if recoveryBusy || recoveryConfirmation {
-            status.stringValue = "Wait for or cancel recording recovery before quitting."
+        if recoveryBusy || recoveryConfirmation || recordingRetiring {
+            status.stringValue = recordingRetiring
+                ? "Wait for recording media to finish before quitting."
+                : "Wait for or cancel recording recovery before quitting."
             return false
         }
         guard screenshotEditor?.prepareForTermination() ?? true else { return false }
