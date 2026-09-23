@@ -241,7 +241,11 @@ and MP4/GIF **Save new copy**. Crop dimensions start aspect-locked; unlock to ch
 width and height independently. Apply edits accepts the format, quality and edits
 together before saving; failed updates leave the last accepted frame intact.
 Trim handles stage changes without decoding on each pointer move; Apply updates
-the preview. Focused handles also accept arrow keys and Page Up/Page Down.
+the preview. Focused trim handles also accept arrow keys and Page Up/Page Down.
+**Adjust crop** shows an uncropped source frame with draggable edges/corners and
+interior move. Crop handles follow the aspect lock; arrows move one source pixel,
+or ten with Shift. **Done cropping** restores the prior preview without accepting
+changes; Apply remains explicit. Loading this source frame can be canceled or retried.
 The trim track shows retained full-source thumbnails, independent of the edited
 preview. Thumbnail generation can be canceled or retried without losing edits;
 it does not change the source recording. **Play/Pause** offers silent motion within
@@ -283,9 +287,9 @@ exports or dirty state; each silent lap reopens the decoder and is not gapless.
 stages source-pixel crop changes with eight resize handles or interior movement without
 decoding on each pointer event. **Done cropping** restores the prior accepted or motion
 frame; only Apply publishes the staged values. Loading is cancellable and retryable.
-Audio playback is not implemented, and this is not Tauri editor parity. Windows/X11
-implement the same numeric crop and output-size workflow; physical macOS, Windows and
-Wayland acceptance remains open.
+Windows/X11 provide the same full-source graphical adjustment alongside numeric crop
+and output sizing. Audio playback is not implemented, and this is not Tauri editor
+parity; physical macOS, Windows and Wayland acceptance remains open.
 History displays recording posters and metadata; **Save file**
 copies the original media to the output folder without re-encoding, and
 **Show in Folder** reveals that saved copy. Both native

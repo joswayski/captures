@@ -52,10 +52,15 @@ tray-host loss restores the HUD and workspace. Microphone mute/unmute rotates th
 changing the selected device or global preference, while paused changes remain
 paused; mic-less sessions explain why the control is unavailable. Successful output is listed in native History with its
 poster and metadata. **Edit recording** opens a decoded-frame editor with staged
-graphical/numeric trim, numeric crop/output size, audio settings and MP4/GIF
+graphical/numeric trim and crop, output size, audio settings and MP4/GIF
 save-new-copy. Trim grips share the shipping pointer geometry and support focused
 arrow/Page Up/Page Down keys. Dragging changes staged values, not decoded frames;
-Apply publishes the preview before seeking, estimating or saving. The trim track
+Apply publishes the preview before seeking, estimating or saving. **Adjust crop**
+loads an independent full-source still at the accepted position; eight handles and
+interior move stage source-pixel coordinates with the current aspect lock. Arrow
+keys move one pixel (Shift: ten). **Done cropping** restores the previous display
+without publishing. Source loading is cancellable/retryable and cached until the
+accepted position changes. Playback waits until adjustment ends. The trim track
 retains full-source thumbnails across edits and seek. Generation has independent
 cancel/retry and does not change accepted preview or History state. **Play/Pause**
 provides silent playback of the accepted trim using one persistent shared decoder,
