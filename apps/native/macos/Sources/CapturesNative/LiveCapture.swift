@@ -118,6 +118,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var selectedImage: NSImage?
     private var selectedIndex: Int?
     private var selectionGeneration = 0
+    private var userSelectionGeneration = 0
+    private var reloadingHistorySelection = false
     private var capturing = false
     private var windowRestoration = CaptureWindowRestoration()
     private var clearingHistory = false
@@ -263,6 +265,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             let control = button(filter.title, frame: NSRect(x: filterX, y: 144, width: width, height: 34)) { [weak self] in
                 guard let self else { return }
                 let previousID = self.selectedIndex.map { self.artifacts[$0].id }
+                self.userSelectionGeneration += 1
                 self.historyFilter = filter
                 self.reloadHistorySelection(previousID)
             }
@@ -504,7 +507,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
               let cancel = NativeRecordingEditorCancel() else { return }
         recoveryActionGeneration += 1
         let current = recoveryActionGeneration
-        let selectedAtDispatch = selectionGeneration
+        let selectedAtDispatch = userSelectionGeneration
         recoveryBusy = true; recoveryCancel = cancel; recoveryActionError = nil
         recoveryStage = "Preparing…"
         updateActions(); renderRecovery()
@@ -522,7 +525,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 case .success(let recovered):
                     self.recoveryStage = "Opening recovered recording…"
                     self.renderRecovery()
-                    let shouldOpen = self.selectionGeneration == selectedAtDispatch
+                    let shouldOpen = self.userSelectionGeneration == selectedAtDispatch
                     self.loadHistory(select: shouldOpen ? recovered.artifactID : nil,
                         cleanup: { [weak self] in
                             guard let self, self.recoveryActionGeneration == current else { return }
@@ -575,6 +578,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func reloadHistorySelection(_ previousID: String?) {
+        reloadingHistorySelection = true
+        defer { reloadingHistorySelection = false }
         historyRows = artifacts.indices.filter { historyFilter.matches(artifacts[$0]) }
         clearSelection(); table.reloadData()
         let rows = historyRows
@@ -1840,6 +1845,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         let view = CaptureHistoryRow(); view.tokens = tokens; return view
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
+        if !reloadingHistorySelection { userSelectionGeneration += 1 }
         let rows = historyRows
         guard rows.indices.contains(table.selectedRow) else { clearSelection(); return }
         select(rows[table.selectedRow])

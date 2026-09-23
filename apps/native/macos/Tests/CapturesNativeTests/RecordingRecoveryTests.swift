@@ -195,6 +195,14 @@ final class RecordingRecoveryTests: XCTestCase {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
+        let settingsPath = folder.appendingPathComponent("settings.json").path
+        let settingsBridge = SettingsBridge()
+        var settings = try XCTUnwrap(settingsBridge.request([
+            "operation": "load", "path": settingsPath])["settings"] as? [String: Any])
+        settings["output_directory"] = folder.path
+        _ = try settingsBridge.request(["operation": "save", "path": settingsPath, "settings": settings])
+        let initialHistoryGate = DispatchSemaphore(value: 0)
+        defer { initialHistoryGate.signal() }
         let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
         let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -203,7 +211,8 @@ final class RecordingRecoveryTests: XCTestCase {
         let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
         let worker = RecoveryFixtureWorker(drafts: [try draft("recoverable", identity: "accepted", kind: "video")])
         let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
-            historyRoot: folder.path, settingsPath: nil, transport: EmptyHistoryTransport(),
+            historyRoot: folder.path, settingsPath: settingsPath,
+            transport: EmptyHistoryTransport(initialHistoryGate: initialHistoryGate),
             recoveryWorker: worker, showPreferences: {})
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
@@ -232,8 +241,13 @@ final class RecordingRecoveryTests: XCTestCase {
             "target": ["type": "display", "display_id": "fixture"]]
         try JSONSerialization.data(withJSONObject: metadata)
             .write(to: directory.appendingPathComponent("metadata.json"))
-        worker.completeRecover(.success(RecordingRecoveryResult(artifactID: id, warning: nil)))
+        // The initial History response may arrive after Recover was clicked.
+        // Its programmatic selection must not count as user selection intent.
+        initialHistoryGate.signal()
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
+        try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
+        XCTAssertEqual(worker.recoverCount, 1)
+        worker.completeRecover(.success(RecordingRecoveryResult(artifactID: id, warning: nil)))
         try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
         try waitUntil { NSApp.windows.contains { $0.title == "Recording editor" && $0.isVisible } }
         let editor = try XCTUnwrap(NSApp.windows.first { $0.title == "Recording editor" && $0.isVisible })
@@ -421,10 +435,18 @@ final class RecordingRecoveryTests: XCTestCase {
 
 private final class EmptyHistoryTransport: AppTransport {
     let artifacts: [[String: Any]]
-    init(artifacts: [[String: Any]] = []) { self.artifacts = artifacts }
+    private var initialHistoryGate: DispatchSemaphore?
+    init(artifacts: [[String: Any]] = [], initialHistoryGate: DispatchSemaphore? = nil) {
+        self.artifacts = artifacts; self.initialHistoryGate = initialHistoryGate
+    }
     func request(_ object: [String: Any]) throws -> [String: Any] {
         switch object["operation"] as? String {
-        case "history": return ["artifacts": artifacts]
+        case "history":
+            if let gate = initialHistoryGate {
+                initialHistoryGate = nil
+                gate.wait()
+            }
+            return ["artifacts": artifacts]
         case "displays": return ["displays": []]
         default: throw AppBridgeError.invalidResponse
         }
