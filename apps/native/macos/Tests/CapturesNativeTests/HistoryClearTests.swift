@@ -29,7 +29,8 @@ final class HistoryClearTests: XCTestCase {
             let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
                 failPartway: false, kinds: ["video", "screenshot", "gif", "screenshot", "video"])
             let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
-                historyRoot: directory.path, settingsPath: settingsPath, transport: transport, showPreferences: {})
+                historyRoot: directory.path, settingsPath: settingsPath, transport: transport,
+                recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
             let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
@@ -114,7 +115,8 @@ final class HistoryClearTests: XCTestCase {
                 failPartway: failPartway, kinds: failPartway ? ["screenshot", "video", "gif"] : ["video", "gif"])
             let controller = LiveCaptureController(root: root, window: window,
                 tokens: tokens, historyRoot: directory.path,
-                settingsPath: nil, transport: transport, showPreferences: {})
+                settingsPath: nil, transport: transport,
+                recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
             let clear = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }.first { $0.title == "Clear history…" })
@@ -135,10 +137,25 @@ final class HistoryClearTests: XCTestCase {
 
             clear.performClick(nil)
             try waitUntil { window.attachedSheet != nil }
+            let blockedGate = failPartway ? nil : transport.blockNextHistoryAfterClear()
             window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertFirstButtonReturn)
+            if !failPartway {
+                var historyStarted = false
+                try waitUntil {
+                    historyStarted = historyStarted || transport.blockedHistoryStarted.wait(timeout: .now()) == .success
+                    return historyStarted
+                }
+                controller.refreshHistory() // supersedes clear-owned reload before it returns
+                blockedGate?.signal()
+            }
             try waitUntil {
                 transport.clearCount == 1 && table.numberOfRows == (failPartway ? 1 : 0)
                     && clear.isEnabled == failPartway
+            }
+            if !failPartway {
+                let refresh = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }
+                    .first { $0.title == "Refresh" })
+                try waitUntil { refresh.isEnabled }
             }
             if failPartway {
                 XCTAssertTrue(root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
@@ -177,10 +194,27 @@ final class HistoryClearTests: XCTestCase {
     }
 }
 
+private final class EmptyRecoveryWorker: RecordingRecoveryWorking {
+    func list(historyRoot: String, completion: @escaping (Result<[RecordingRecoveryDraft], Error>) -> Void) {
+        completion(.success([]))
+    }
+    func recover(historyRoot: String, draft: RecordingRecoveryDraft, cancel: NativeRecordingEditorCancel,
+                 progress: @escaping (String) -> Void,
+                 completion: @escaping (Result<RecordingRecoveryResult, Error>) -> Void) {
+        XCTFail("History-only fixture must not recover a recording")
+    }
+    func discard(historyRoot: String, draft: RecordingRecoveryDraft,
+                 completion: @escaping (Result<Void, Error>) -> Void) {
+        XCTFail("History-only fixture must not discard a recording")
+    }
+}
+
 private final class HistoryTransport: AppTransport {
     private let lock = NSLock()
     private var artifacts: [[String: Any]]
     private var clears = 0
+    private var blockedHistory: DispatchSemaphore?
+    let blockedHistoryStarted = DispatchSemaphore(value: 0)
     private var failPartway: Bool
     private var saves = 0
     private var exportDirectory: String?
@@ -212,10 +246,22 @@ private final class HistoryTransport: AppTransport {
     var saveCount: Int { lock.lock(); defer { lock.unlock() }; return saves }
     var savedDirectory: String? { lock.lock(); defer { lock.unlock() }; return exportDirectory }
 
+    func blockNextHistoryAfterClear() -> DispatchSemaphore {
+        let gate = DispatchSemaphore(value: 0)
+        lock.lock(); blockedHistory = gate; lock.unlock()
+        return gate
+    }
+
     func request(_ object: [String: Any]) throws -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
         switch object["operation"] as? String {
-        case "history": return ["kind": "history", "artifacts": artifacts]
+        case "history":
+            if clears > 0, let blockedHistory {
+                blockedHistoryStarted.signal()
+                _ = blockedHistory.wait(timeout: .now() + 5)
+                self.blockedHistory = nil
+            }
+            return ["kind": "history", "artifacts": artifacts]
         case "displays": return ["kind": "displays", "displays": []]
         case "save_recording":
             guard let directory = object["directory"] as? String,
