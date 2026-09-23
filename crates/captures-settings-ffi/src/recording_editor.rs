@@ -647,6 +647,43 @@ pub unsafe extern "C" fn captures_recording_editor_save_new_v1(
     })
 }
 
+/// Blocking replacement of this session's original permanent MP4/GIF. The
+/// new response alone includes `requires_reopen` on every error.
+///
+/// # Safety
+/// Session is live, exclusively owned and serialized on its worker. Cancel is
+/// live until return and may be atomically cancelled elsewhere. Callback and
+/// context remain callable during the operation and borrowed progress JSON
+/// must be copied to retain it. Free the response with settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_replace_original_v1(
+    session: *mut RecordingEditorSession,
+    cancel: *const CancelToken,
+    progress: RecordingEditorProgress,
+    context: *mut c_void,
+) -> *mut c_char {
+    let mut session = unsafe { session.as_mut() };
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let session = session
+            .as_deref_mut()
+            .ok_or_else(|| ("recording editor handle is null".to_string(), false))?;
+        let cancel = unsafe { cancel.as_ref() }
+            .ok_or_else(|| ("recording export cancel handle is null".to_string(), false))?;
+        let replaced = session
+            .replace_original(cancel, |event| emit_progress(progress, context, &event))
+            .map_err(|error| (error.message, error.requires_reopen))?;
+        Ok::<_, (String, bool)>(json!({"replacement":replaced,"snapshot":session.snapshot_v2()}))
+    }));
+    response(match result {
+        Ok(Ok(snapshot)) => json!({"ok":true,"result":snapshot}),
+        Ok(Err((error, requires_reopen))) => {
+            json!({"ok":false,"error":error,"requires_reopen":requires_reopen})
+        }
+        Err(_) => json!({"ok":false,"error":"internal panic",
+            "requires_reopen":session.as_ref().is_some_and(|session| session.requires_reopen())}),
+    })
+}
+
 fn emit_progress(
     callback: RecordingEditorProgress,
     context: *mut c_void,
@@ -1217,6 +1254,48 @@ mod tests {
         let next_response = unsafe { json(next_response) };
         assert_eq!(next_response["result"]["eof"], false);
         assert_eq!(next_response["result"]["position_ms"], 0);
+
+        // SAFETY: the new owned error envelope never changes old ABI shapes.
+        let missing = unsafe {
+            json(captures_recording_editor_replace_original_v1(
+                session,
+                ptr::null(),
+                None,
+                ptr::null_mut(),
+            ))
+        };
+        assert_eq!(missing["ok"], false);
+        assert_eq!(missing["requires_reopen"], false);
+        // SAFETY: the pre-cancelled token is live throughout this call.
+        let cancelled = captures_recording_editor_cancel_create_v1();
+        unsafe { captures_recording_editor_cancel_v1(cancelled) };
+        let rejected = unsafe {
+            json(captures_recording_editor_replace_original_v1(
+                session,
+                cancelled,
+                None,
+                ptr::null_mut(),
+            ))
+        };
+        assert_eq!(rejected["ok"], false);
+        assert_eq!(rejected["requires_reopen"], false);
+        unsafe { captures_recording_editor_cancel_free_v1(cancelled) };
+        // SAFETY: the live session and token are used exclusively for replace.
+        let replaced = unsafe {
+            json(captures_recording_editor_replace_original_v1(
+                session,
+                cancel,
+                None,
+                ptr::null_mut(),
+            ))
+        };
+        assert_eq!(replaced["ok"], true, "{replaced}");
+        assert_eq!(replaced["result"]["replacement"]["status"], "replaced");
+        assert_eq!(replaced["result"]["snapshot"]["revision"], 2);
+        assert_eq!(
+            replaced["result"]["snapshot"]["save_export"]["max_size_bytes"],
+            serde_json::Value::Null
+        );
 
         // SAFETY: playback/generation are complete, so owners may be released.
         unsafe {
