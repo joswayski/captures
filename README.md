@@ -278,6 +278,9 @@ GIF disables audio controls without discarding the MP4 settings.
 Both native recording editors offer 8, 10, 12, 15 (default), 20, 24 or 30 FPS for
 GIF exports. Apply accepts the frame rate with the other edits; switching to MP4
 keeps the GIF choice without changing MP4 cadence.
+On AppKit, the existing quality choice also controls GIF palette size: Tiny uses
+64 colors, Small 96, Standard 128, and High/Highest/Preserve 256. Maximum file
+size still displays Preserve while retaining that palette preference for GIF saves.
 Original, 1080p maximum and 720p maximum output presets preserve the current crop's
 aspect ratio and never upscale. Custom dimensions override the preset.
 Custom dimensions are independent (no aspect lock); the shared media engine rounds
