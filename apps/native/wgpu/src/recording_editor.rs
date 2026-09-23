@@ -229,7 +229,14 @@ impl View {
             } else {
                 None
             },
-            gif_max_colors: None,
+            // Match the shipping editor's quality-to-palette mapping, including
+            // the remembered quality while Maximum forces Preserve encoding.
+            gif_max_colors: self.gif.then_some(match self.quality {
+                QualityPreset::Tiny => 64,
+                QualityPreset::Small => 96,
+                QualityPreset::Standard => 128,
+                QualityPreset::Preserve | QualityPreset::High | QualityPreset::Highest => 256,
+            }),
         }
     }
 
@@ -4118,6 +4125,46 @@ mod tests {
     }
 
     #[test]
+    fn gif_quality_controls_palette_even_when_maximum_uses_preserve() {
+        let ctx = egui::Context::default();
+        for (quality, colors) in [
+            (QualityPreset::Tiny, 64),
+            (QualityPreset::Small, 96),
+            (QualityPreset::Standard, 128),
+            (QualityPreset::High, 256),
+            (QualityPreset::Highest, 256),
+            (QualityPreset::Preserve, 256),
+        ] {
+            let mut view = opened();
+            view.gif = true;
+            view.quality = quality;
+            assert_eq!(view.export_spec().gif_max_colors, Some(colors));
+            view.maximum_size = true;
+            let export = view.export_spec();
+            assert_eq!(export.quality, QualityPreset::Preserve);
+            assert_eq!(export.gif_max_colors, Some(colors));
+            let mut accepted = opened().presented.unwrap();
+            accepted.export = export.clone();
+            view.receive(&ctx, Event::Presented(Ok(accepted)));
+            assert!(!view.unapplied());
+            assert_eq!(view.export_spec(), export);
+            view.receive(&ctx, Event::Presented(Err("preview failed".into())));
+            assert_eq!(view.presented.as_ref().unwrap().export, export);
+            assert_eq!(view.export_spec(), export);
+            view.gif = false;
+            assert_eq!(view.export_spec().gif_max_colors, None);
+            let mut mp4 = opened().presented.unwrap();
+            mp4.export = view.export_spec();
+            view.receive(&ctx, Event::Presented(Ok(mp4)));
+            view.gif = true;
+            assert_eq!(view.export_spec().gif_max_colors, Some(colors));
+            view.maximum_size = false;
+            assert_eq!(view.export_spec().quality, quality);
+            assert_eq!(view.export_spec().gif_max_colors, Some(colors));
+        }
+    }
+
+    #[test]
     fn format_and_quality_changes_require_preview_acceptance_and_a_successful_save() {
         let mut view = opened();
         assert!(!view.dirty());
@@ -4137,7 +4184,7 @@ mod tests {
             quality: QualityPreset::High,
             max_size_bytes: None,
             frames_per_second: None,
-            gif_max_colors: None,
+            gif_max_colors: Some(256),
         };
         view.receive(
             &ctx,

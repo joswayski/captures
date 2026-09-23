@@ -540,6 +540,13 @@ frame and the staged correction. Private X11 light/dark coverage exports 24 and
 dimensions, colors, source/History immutability, failure/retry and minimum layout.
 AppKit real-media coverage exercises the same asymmetric trim at both cadences;
 physical macOS/Windows/Wayland acceptance remains open.
+The wgpu host also maps its existing GIF quality choice to the shipping palette
+limits: Tiny 64, Small 96, Standard 128, High/Highest/Preserve 256 colors. No separate
+palette control is added. Maximum uses the remembered quality for the palette while
+forcing Preserve export quality; MP4 omits the GIF field without losing the choice.
+Private X11 exports a high-color source at Tiny and High and checks decoded colors,
+Apply/save gating and source/History immutability. AppKit's companion and physical
+Windows/Wayland verification remain open.
 Unapplied format/quality gates save and seek alongside geometric edits; failed
 updates retain all accepted state and preserve staged values for correction.
 Save uses the accepted configuration, and format/quality-only changes require

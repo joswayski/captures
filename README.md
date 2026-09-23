@@ -264,6 +264,9 @@ silent without opening a device. Device failures are visible; turn Sound off to
 retry silently. Loop reopens the decoders each lap and is not gapless. Physical
 audio routing and A/V synchronization acceptance remain open.
 The preview identifies its accepted format/quality, and saving uses those settings.
+The Windows/Linux candidate maps GIF quality to palette limits: Tiny 64 colors,
+Small 96, Standard 128, and High/Highest/Preserve 256. Maximum mode retains that
+choice while fitting the size cap. AppKit's matching quality behavior is pending.
 **Estimate size** checks those accepted settings without publishing an export.
 Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
 audio-only Preserve changes show approximate sizes. Estimation can be canceled.
