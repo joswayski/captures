@@ -579,8 +579,8 @@ fn replace_original_cancellation_during_candidate_frame_kills_child_and_keeps_st
     }
     if !marker.exists() {
         fs::write(&release, b"").unwrap();
-        worker.join().unwrap();
-        panic!("candidate-frame child did not start");
+        let (_, result) = worker.join().unwrap();
+        panic!("candidate-frame child did not start: {result:?}");
     }
     let started = Instant::now();
     cancel.cancel();
