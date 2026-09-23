@@ -4032,8 +4032,8 @@ final class RecordingEditorTests: XCTestCase {
     }
 
     private func bandedImage(top: [UInt8], bottom: [UInt8]) throws -> CGImage {
-        let bytes = (0..<8).flatMap { row in
-            Array(repeating: (row < 4 ? top : bottom) + [255], count: 8).flatMap { $0 }
+        let bytes: [UInt8] = (0..<8).flatMap { row in
+            Array(repeating: (row < 4 ? top : bottom) + [UInt8(255)], count: 8).flatMap { $0 }
         }
         let provider = try XCTUnwrap(CGDataProvider(data: Data(bytes) as CFData))
         return try XCTUnwrap(CGImage(width: 8, height: 8, bitsPerComponent: 8,
