@@ -620,7 +620,15 @@ estimate and thumbnails, regenerates thumbnails, and reloads the existing Histor
 item. Ordinary failure preserves accepted state for retry; a `requires_reopen`
 failure disables media until close/reopen. Physical acceptance remains open.
 Close blocks accepted work; unsaved edits require explicit discard, and normal quit
-is refused until they are saved or closed. Recording drafts are not implemented.
+is refused until they are saved or closed. Recording-editor edit drafts are not implemented.
+The macOS workbench lists interrupted native capture bundles in a bounded History
+section separate from artifact rows. Recover/Discard use the shared per-root lease,
+expected identity, serialized worker and explicit permanent-discard confirmation.
+Unavailable or corrupt entries have no actions. Cancellable media preparation leaves
+the bundle intact; a late cancellation cannot hide committed success. Successful
+recovery reloads/selects History before opening the editor. This is limited to
+isolated native development roots: no installed-data migration or Tauri recovery
+change. Windows/Linux host integration and physical acceptance remain open.
 The shared Replace original operation requires a regular permanent MP4/GIF outside
 History with byte-identical private recovery. It stages edited media, publishes the
 permanent path atomically, then updates History; a History failure restores the
@@ -631,7 +639,7 @@ snapshots, and publication revalidates the opened metadata and file identity.
 The old recovery bytes remain available during publication, but the two directories
 are not crash/power-loss atomic: a process kill can leave new permanent media with
 old or hidden History. History-only and reference-only recordings are unsupported.
-No recording drafts or undo are promised.
+No recording-editor edit drafts or undo are promised.
 
 Platform status: shared Rust/C ABI is connected to both hosts. The first AppKit
 slice opens recordings from History in a separate native window with retained

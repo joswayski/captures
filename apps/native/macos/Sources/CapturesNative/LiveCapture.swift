@@ -85,6 +85,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private let window: NSWindow
     private let tokens: Tokens
     private let transport: AppTransport
+    private let recoveryWorker: RecordingRecoveryWorking
     static let queue = DispatchQueue(label: "es.captures.native.capture", qos: .userInitiated)
     private let historyRootOverride: String?
     private let settingsPath: String?
@@ -102,6 +103,16 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var historyFilter = CaptureHistoryFilter.all
     private var historyFilterButtons: [(CaptureHistoryFilter, CaptureButton)] = []
     private var historyRows: [Int] = []
+    private var recoveryDrafts: [RecordingRecoveryDraft] = []
+    private var recoveryError: String?
+    private var recoveryActionError: String?
+    private var recoveryGeneration = 0
+    private var recoveryLoading = false
+    private var recoveryBusy = false
+    private var recoveryConfirmation = false
+    private var recoveryCancel: NativeRecordingEditorCancel?
+    private var recoveryStage = ""
+    private var recoveryActionGeneration = 0
     private var selectedImage: NSImage?
     private var selectedIndex: Int?
     private var selectionGeneration = 0
@@ -179,6 +190,11 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
     private var displayMenu: ClosurePopUpButton!
     private var table: NSTableView!
+    private var historyScroll: NSScrollView!
+    private var recoveryPanel: Surface!
+    private var recoveryScroll: NSScrollView!
+    private var recoveryStatus: NSTextField!
+    private var recoveryCancelButton: CaptureButton!
     private var preview: NSImageView!
     private var status: NSTextField!
     private var detail: NSTextField!
@@ -194,7 +210,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var newCaptureButton: CaptureButton!
 
     init(root: Surface, window: NSWindow, tokens: Tokens, historyRoot: String?, settingsPath: String?,
-         transport: AppTransport = AppBridge(), miniPreviews: MiniPreviewController? = nil,
+         transport: AppTransport = AppBridge(), recoveryWorker: RecordingRecoveryWorking = RecordingRecoveryWorker(),
+         miniPreviews: MiniPreviewController? = nil,
          miniPreviewActions: MiniPreviewActions? = nil,
          initialSelectionID: String? = nil,
          captureStateChanged: @escaping (Bool) -> Void = { _ in },
@@ -203,7 +220,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
          reportError: @escaping (String) -> Void = { _ in },
          showPreferences: @escaping () -> Void) {
         self.root = root; self.window = window; self.tokens = tokens
-        historyRootOverride = historyRoot; self.transport = transport; self.showPreferences = showPreferences
+        historyRootOverride = historyRoot; self.transport = transport
+        self.recoveryWorker = recoveryWorker; self.showPreferences = showPreferences
         self.settingsPath = settingsPath; self.miniPreviews = miniPreviews
         self.miniPreviewActions = miniPreviewActions
         self.initialSelectionID = initialSelectionID
@@ -244,13 +262,38 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             control.setButtonType(.toggle)
             historyFilterButtons.append((filter, control)); filterX += width + 8
         }
-        let scroll = NSScrollView(frame: NSRect(x: 28, y: 194, width: 320, height: 380))
-        scroll.hasVerticalScroller = true; scroll.drawsBackground = false
-        table = NSTableView(frame: scroll.bounds)
+        historyScroll = NSScrollView(frame: NSRect(x: 28, y: 194, width: 320, height: 380))
+        historyScroll.hasVerticalScroller = true; historyScroll.drawsBackground = false
+        table = NSTableView(frame: historyScroll.bounds)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("history")); column.width = 300
         table.addTableColumn(column); table.headerView = nil; table.rowHeight = 62
         table.backgroundColor = tokens.color("surface-canvas"); table.dataSource = self; table.delegate = self
-        table.setAccessibilityLabel("Capture history"); scroll.documentView = table; root.addSubview(scroll)
+        table.setAccessibilityLabel("Capture history"); historyScroll.documentView = table
+        root.addSubview(historyScroll)
+
+        recoveryPanel = Surface(frame: NSRect(x: 28, y: 194, width: 320, height: 152))
+        recoveryPanel.wantsLayer = true
+        recoveryPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
+        recoveryPanel.layer?.cornerRadius = tokens.number("r-md")
+        let heading = NSTextField(labelWithString: "Interrupted recordings")
+        heading.frame = NSRect(x: 10, y: 6, width: 205, height: 20)
+        heading.font = .systemFont(ofSize: 13, weight: .semibold)
+        heading.textColor = tokens.color("text")
+        recoveryPanel.addSubview(heading)
+        recoveryCancelButton = CaptureButton("Cancel", frame: NSRect(x: 224, y: 4, width: 86, height: 24),
+                                             tokens: tokens) { [weak self] in self?.recoveryCancel?.cancel() }
+        recoveryPanel.addSubview(recoveryCancelButton)
+        recoveryScroll = NSScrollView(frame: NSRect(x: 8, y: 45, width: 304, height: 99))
+        recoveryScroll.hasVerticalScroller = true; recoveryScroll.drawsBackground = false
+        recoveryPanel.addSubview(recoveryScroll)
+        recoveryStatus = NSTextField(wrappingLabelWithString: "")
+        recoveryStatus.font = .systemFont(ofSize: 11)
+        recoveryStatus.textColor = tokens.color("text-muted")
+        recoveryStatus.setAccessibilityLabel("Interrupted recording status")
+        recoveryStatus.frame = NSRect(x: 10, y: 26, width: 295, height: 17)
+        recoveryPanel.addSubview(recoveryStatus)
+        root.addSubview(recoveryPanel)
+        renderRecovery()
 
         let previewPanel = Surface(frame: NSRect(x: 372, y: 194, width: 600, height: 354))
         previewPanel.wantsLayer = true; previewPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
@@ -313,6 +356,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func loadHistory(select id: String? = nil, completion: (() -> Void)? = nil) {
+        refreshRecovery()
         status.stringValue = "Loading capture history…"
         run({ [transport, historyRoot] in
             let result = try transport.request(["operation": "history", "root": historyRoot])
@@ -334,6 +378,156 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 self.miniPreviews?.reconcileHistory(ids: Set(values.map(\.id)))
             case .failure(let error): self.artifacts = []; self.reloadHistorySelection(nil); self.showError("Couldn’t load capture history", error) }
             self.updateActions(); completion?()
+        }
+    }
+
+    private func refreshRecovery() {
+        guard !historyRoot.isEmpty, !recoveryBusy, !recoveryConfirmation else { return }
+        recoveryGeneration += 1
+        let current = recoveryGeneration, root = historyRoot
+        recoveryLoading = true; renderRecovery()
+        recoveryWorker.list(historyRoot: root) { [weak self] result in
+            guard let self, self.recoveryGeneration == current, self.historyRoot == root else { return }
+            self.recoveryLoading = false
+            switch result {
+            case .success(let drafts):
+                self.recoveryDrafts = drafts
+                self.recoveryError = nil
+            case .failure(let error):
+                self.recoveryDrafts = []
+                self.recoveryError = "Couldn’t list interrupted recordings: \(error.localizedDescription)"
+            }
+            self.renderRecovery()
+        }
+    }
+
+    private func renderRecovery() {
+        guard let recoveryPanel else { return }
+        let visible = !recoveryDrafts.isEmpty || recoveryError != nil
+            || recoveryActionError != nil || recoveryBusy
+        recoveryPanel.isHidden = !visible
+        historyScroll.frame = NSRect(x: 28, y: visible ? 354 : 194,
+                                      width: 320, height: visible ? 220 : 380)
+        recoveryCancelButton.isHidden = recoveryCancel == nil
+        recoveryCancelButton.isEnabled = recoveryCancel != nil && recoveryCancel?.isCancelled == false
+        let content = Surface(frame: NSRect(x: 0, y: 0, width: 284,
+            height: max(114, CGFloat(recoveryDrafts.count) * 96
+                + (recoveryError == nil && recoveryActionError == nil ? 0 : 76))))
+        for (index, draft) in recoveryDrafts.enumerated() {
+            let y = CGFloat(index) * 96
+            let title = NSTextField(labelWithString: "\(draft.kind == "gif" ? "GIF" : draft.kind == "video" ? "Video" : "Unavailable") recording")
+            title.frame = NSRect(x: 2, y: y + 2, width: 278, height: 18)
+            title.font = .systemFont(ofSize: 12, weight: .semibold)
+            title.textColor = tokens.color("text")
+            content.addSubview(title)
+            let date = draft.createdAtMilliseconds.map {
+                Date(timeIntervalSince1970: Double($0) / 1_000).formatted(date: .abbreviated, time: .shortened)
+            } ?? "Unknown date"
+            let seconds = draft.completedDurationMilliseconds / 1_000
+            let details = NSTextField(labelWithString: "\(date) · \(seconds)s playable")
+            details.frame = NSRect(x: 2, y: y + 20, width: 278, height: 17)
+            details.font = .systemFont(ofSize: 10); details.textColor = tokens.color("text-muted")
+            content.addSubview(details)
+            if draft.status == "recoverable", draft.identity != nil {
+                let recover = CaptureButton("Recover", frame: NSRect(x: 2, y: y + 42, width: 112, height: 29),
+                                            tokens: tokens) { [weak self] in self?.recover(draft) }
+                let discard = CaptureButton("Discard…", frame: NSRect(x: 120, y: y + 42, width: 112, height: 29),
+                                            tokens: tokens) { [weak self] in self?.confirmDiscard(draft) }
+                recover.isEnabled = !capturing && !clearingHistory && !recoveryBusy && !recoveryLoading && !recoveryConfirmation
+                discard.isEnabled = recover.isEnabled
+                content.addSubview(recover); content.addSubview(discard)
+            } else {
+                let reason = NSTextField(wrappingLabelWithString: draft.reason ?? "This bundle cannot be recovered.")
+                reason.frame = NSRect(x: 2, y: y + 39, width: 278, height: 49)
+                reason.font = .systemFont(ofSize: 10); reason.textColor = tokens.color("danger-text")
+                content.addSubview(reason)
+            }
+        }
+        if let message = recoveryError ?? recoveryActionError {
+            let y = CGFloat(recoveryDrafts.count) * 96
+            let error = NSTextField(wrappingLabelWithString: message)
+            error.frame = NSRect(x: 2, y: y + 2, width: 278, height: 45)
+            error.font = .systemFont(ofSize: 10); error.textColor = tokens.color("danger-text")
+            content.addSubview(error)
+            let retry = CaptureButton("Retry list", frame: NSRect(x: 2, y: y + 48, width: 110, height: 26),
+                                      tokens: tokens) { [weak self] in
+                self?.recoveryActionError = nil; self?.refreshRecovery()
+            }
+            retry.isEnabled = !recoveryLoading && !recoveryBusy
+            content.addSubview(retry)
+        }
+        recoveryScroll.documentView = content
+        recoveryStatus.stringValue = recoveryBusy ? recoveryStage : ""
+    }
+
+    private func currentRecovery(_ draft: RecordingRecoveryDraft) -> Bool {
+        !capturing && !clearingHistory && !recoveryBusy && !recoveryLoading
+            && recoveryDrafts.contains { $0.sessionID == draft.sessionID && $0.identity == draft.identity
+                && $0.status == "recoverable" && draft.identity != nil }
+    }
+
+    private func recover(_ draft: RecordingRecoveryDraft) {
+        guard !recoveryConfirmation, currentRecovery(draft),
+              let cancel = NativeRecordingEditorCancel() else { return }
+        recoveryActionGeneration += 1
+        let current = recoveryActionGeneration
+        recoveryBusy = true; recoveryCancel = cancel; recoveryActionError = nil
+        recoveryStage = "Preparing…"
+        updateActions(); renderRecovery()
+        recoveryWorker.recover(historyRoot: historyRoot, draft: draft, cancel: cancel,
+            progress: { [weak self] stage in
+                guard let self, self.recoveryActionGeneration == current,
+                      self.recoveryCancel === cancel else { return }
+                self.recoveryStage = "\(stage.capitalized)…"
+                self.recoveryStatus.stringValue = self.recoveryStage
+            }, completion: { [weak self] result in
+                guard let self, self.recoveryActionGeneration == current,
+                      self.recoveryCancel === cancel else { return }
+                self.recoveryBusy = false; self.recoveryCancel = nil
+                self.updateActions(); self.refreshRecovery()
+                switch result {
+                case .success(let recovered):
+                    self.loadHistory(select: recovered.artifactID) { [weak self] in
+                        guard let self, self.recoveryActionGeneration == current,
+                              self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
+                                  ? self.artifacts[$0].id : nil }) == recovered.artifactID else { return }
+                        self.status.stringValue = recovered.warning ?? "Recording recovered into History."
+                        self.editScreenshot()
+                    }
+                case .failure(let error):
+                    self.recoveryActionError = "Couldn’t recover recording: \(error.localizedDescription)"
+                    self.renderRecovery()
+                }
+            })
+    }
+
+    private func confirmDiscard(_ draft: RecordingRecoveryDraft) {
+        guard currentRecovery(draft), !recoveryConfirmation else { return }
+        recoveryConfirmation = true; renderRecovery()
+        let alert = NSAlert()
+        alert.messageText = "Discard interrupted recording permanently?"
+        alert.informativeText = "This deletes the recovery bundle \(draft.sessionID) and cannot be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Discard permanently"); alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            self.recoveryConfirmation = false
+            guard response == .alertFirstButtonReturn, self.currentRecovery(draft) else {
+                self.renderRecovery(); return
+            }
+            self.recoveryActionGeneration += 1
+            let current = self.recoveryActionGeneration
+            self.recoveryBusy = true; self.recoveryActionError = nil
+            self.recoveryStage = "Discarding…"
+            self.updateActions(); self.renderRecovery()
+            self.recoveryWorker.discard(historyRoot: self.historyRoot, draft: draft) { [weak self] result in
+                guard let self, self.recoveryActionGeneration == current else { return }
+                self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
+                if case .failure(let error) = result {
+                    self.recoveryActionError = "Couldn’t discard recording: \(error.localizedDescription)"
+                    self.renderRecovery()
+                }
+            }
         }
     }
 
@@ -374,7 +568,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     @discardableResult func capture(_ kind: StillCaptureKind) -> Bool {
         recordingSavedNotice.dismiss()
         let index = displayMenu.indexOfSelectedItem
-        guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return false }
+        guard !capturing, !recoveryBusy, !recoveryConfirmation,
+              displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]; setBusy(true, message: "Preparing capture…")
         run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self] result in
@@ -417,7 +612,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     @discardableResult func newCapture(recordingTarget: UnifiedCaptureTarget? = nil) -> Bool {
         recordingSavedNotice.dismiss()
         let index = displayMenu.indexOfSelectedItem
-        guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return false }
+        guard !capturing, !recoveryBusy, !recoveryConfirmation,
+              displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]
         unifiedControlsState = .initial
@@ -1488,7 +1684,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private func updateActions() {
         let selected = selectedIndex.map { artifacts.indices.contains($0) } == true
         let selectedScreenshot = selectedIndex.map { artifacts.indices.contains($0) && !artifacts[$0].isRecording } == true
-        let busy = capturing || clearingHistory
+        let busy = capturing || clearingHistory || recoveryBusy || recoveryConfirmation
         saveButton?.title = selected && !selectedScreenshot ? "Save file" : "Save image"
         saveButton?.setAccessibilityLabel(saveButton?.title)
         saveButton?.needsDisplay = true
@@ -1505,6 +1701,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         regionButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
         windowButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
         newCaptureButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
+        renderRecovery()
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { historyRows.count }
@@ -1573,6 +1770,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         run({ [settingsPath] in try CapturePreferences.load(path: settingsPath).directory }) {
             [weak self] result in
             guard let self else { return }
+            guard self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
+                ? self.artifacts[$0].id : nil }) == artifact.id else { return }
             switch result {
             case .success(let outputDirectory):
                 if artifact.isRecording {
@@ -1683,7 +1882,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func confirmClearHistory() {
-        guard !artifacts.isEmpty, !capturing, !clearingHistory else { return }
+        guard !artifacts.isEmpty, !capturing, !clearingHistory,
+              !recoveryBusy, !recoveryConfirmation else { return }
         let alert = NSAlert(); alert.messageText = "Clear all capture history?"
         alert.informativeText = "This deletes all screenshots, videos and GIFs in native history, including captures outside this filter. Exported files and recovery drafts stay on disk."
         alert.alertStyle = .warning
@@ -1713,6 +1913,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     // One process-wide queue also drains operations from a closed workspace view.
     func prepareEditorForTermination() -> Bool {
+        if recoveryBusy || recoveryConfirmation {
+            status.stringValue = "Wait for or cancel recording recovery before quitting."
+            return false
+        }
         guard screenshotEditor?.prepareForTermination() ?? true else { return false }
         return recordingEditor?.prepareForTermination() ?? true
     }

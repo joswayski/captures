@@ -250,6 +250,10 @@ updates the existing History item. Cancellation stops preparation but cannot und
 publication once it begins. Ordinary failure keeps accepted edits; an uncertain
 result requires closing and reopening. This is not crash-atomic across the saved
 file and History. **Save new copy** remains non-destructive.
+The macOS native workbench also lists interrupted recording bundles in History.
+Recover assembles available media into a History recording; **Discard permanently**
+deletes only the confirmed recovery bundle. Unavailable bundles are read-only.
+This is capture recovery, not an editable recording draft or an installed-data migration.
 Trim handles stage changes without decoding on each pointer move; Apply updates
 the preview. Focused trim handles also accept arrow keys and Page Up/Page Down.
 **Adjust crop** shows an uncropped source frame with draggable edges/corners and

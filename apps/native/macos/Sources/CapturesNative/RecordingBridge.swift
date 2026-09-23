@@ -126,6 +126,124 @@ struct NativeRecordingInfo {
     }
 }
 
+struct RecordingRecoveryDraft {
+    let sessionID: String
+    let status: String
+    let kind: String?
+    let createdAtMilliseconds: UInt64?
+    let completedDurationMilliseconds: UInt64
+    let identity: String?
+    let reason: String?
+
+    init?(_ value: [String: Any]) {
+        guard let id = value["session_id"] as? String, !id.isEmpty,
+              let status = value["status"] as? String,
+              ["recoverable", "unavailable"].contains(status),
+              let duration = value["completed_duration_ms"] as? NSNumber,
+              let kindValue = value["kind"], kindValue is NSNull || ["video", "gif"].contains(kindValue as? String ?? ""),
+              let created = value["created_at_ms"], created is NSNull || created is NSNumber,
+              let identityValue = value["identity"], identityValue is NSNull || identityValue is String,
+              let reasonValue = value["reason"], reasonValue is NSNull || reasonValue is String else { return nil }
+        let identity = identityValue as? String
+        guard status != "recoverable" || identity?.isEmpty == false else { return nil }
+        sessionID = id; self.status = status; kind = kindValue as? String
+        createdAtMilliseconds = (created as? NSNumber)?.uint64Value
+        completedDurationMilliseconds = duration.uint64Value
+        self.identity = identity; reason = reasonValue as? String
+    }
+}
+
+struct RecordingRecoveryResult {
+    let artifactID: String
+    let warning: String?
+}
+
+private final class RecordingRecoveryProgressSink {
+    let report: (String) -> Void
+    init(_ report: @escaping (String) -> Void) { self.report = report }
+}
+
+private func recordingRecoveryProgress(_ context: UnsafeMutableRawPointer?,
+                                       _ json: UnsafePointer<CChar>?) {
+    guard let context, let json,
+          let value = try? JSONSerialization.jsonObject(with: Data(bytes: json, count: strlen(json))) as? [String: Any],
+          let stage = value["stage"] as? String,
+          ["scanning", "assembling", "poster", "publishing"].contains(stage) else { return }
+    let sink = Unmanaged<RecordingRecoveryProgressSink>.fromOpaque(context).takeUnretainedValue()
+    DispatchQueue.main.async { sink.report(stage) }
+}
+
+protocol RecordingRecoveryWorking: AnyObject {
+    func list(historyRoot: String, completion: @escaping (Result<[RecordingRecoveryDraft], Error>) -> Void)
+    func recover(historyRoot: String, draft: RecordingRecoveryDraft, cancel: NativeRecordingEditorCancel,
+                 progress: @escaping (String) -> Void,
+                 completion: @escaping (Result<RecordingRecoveryResult, Error>) -> Void)
+    func discard(historyRoot: String, draft: RecordingRecoveryDraft,
+                 completion: @escaping (Result<Void, Error>) -> Void)
+}
+
+final class RecordingRecoveryWorker: RecordingRecoveryWorking {
+    private static func request(_ object: [String: Any],
+                                call: (UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?) throws -> [String: Any] {
+        let data = try JSONSerialization.data(withJSONObject: object)
+        let response = String(decoding: data, as: UTF8.self).withCString(call)
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        return try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+    }
+
+    func list(historyRoot: String, completion: @escaping (Result<[RecordingRecoveryDraft], Error>) -> Void) {
+        LiveCaptureController.queue.async {
+            let result = Result { () throws -> [RecordingRecoveryDraft] in
+                let value = try Self.request(["history_root": historyRoot], call: captures_recording_recovery_list_v1)
+                guard let values = value["drafts"] as? [[String: Any]] else { throw AppBridgeError.invalidResponse }
+                let drafts = values.compactMap(RecordingRecoveryDraft.init)
+                guard drafts.count == values.count else { throw AppBridgeError.invalidResponse }
+                return drafts
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func recover(historyRoot: String, draft: RecordingRecoveryDraft, cancel: NativeRecordingEditorCancel,
+                 progress: @escaping (String) -> Void,
+                 completion: @escaping (Result<RecordingRecoveryResult, Error>) -> Void) {
+        LiveCaptureController.queue.async {
+            let result = Result { () throws -> RecordingRecoveryResult in
+                guard let identity = draft.identity else { throw AppBridgeError.invalidResponse }
+                let tools = try NativeMediaTools.locate()
+                let sink = RecordingRecoveryProgressSink(progress)
+                let value = try Self.request(["history_root": historyRoot, "session_id": draft.sessionID,
+                    "expected_identity": identity, "ffmpeg": tools.ffmpeg, "ffprobe": tools.ffprobe], call: {
+                    captures_recording_recovery_recover_v1($0, cancel.handle,
+                        recordingRecoveryProgress, Unmanaged.passUnretained(sink).toOpaque())
+                })
+                withExtendedLifetime(sink) {}
+                guard let status = value["status"] as? String,
+                      ["recovered", "already_recovered"].contains(status),
+                      let entry = value["entry"] as? [String: Any],
+                      let id = entry["id"] as? String, !id.isEmpty,
+                      value["path"] as? String != nil else { throw AppBridgeError.invalidResponse }
+                return RecordingRecoveryResult(artifactID: id, warning: value["warning"] as? String)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func discard(historyRoot: String, draft: RecordingRecoveryDraft,
+                 completion: @escaping (Result<Void, Error>) -> Void) {
+        LiveCaptureController.queue.async {
+            let result = Result { () throws -> Void in
+                guard let identity = draft.identity else { throw AppBridgeError.invalidResponse }
+                let value = try Self.request(["history_root": historyRoot, "session_id": draft.sessionID,
+                    "expected_identity": identity], call: captures_recording_recovery_discard_v1)
+                guard value["status"] as? String == "discarded" else { throw AppBridgeError.invalidResponse }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+}
+
 final class NativeRecordingSession {
     private let handle: OpaquePointer
 

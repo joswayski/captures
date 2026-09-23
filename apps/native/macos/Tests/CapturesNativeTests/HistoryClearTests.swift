@@ -29,7 +29,8 @@ final class HistoryClearTests: XCTestCase {
             let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
                 failPartway: false, kinds: ["video", "screenshot", "gif", "screenshot", "video"])
             let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
-                historyRoot: directory.path, settingsPath: settingsPath, transport: transport, showPreferences: {})
+                historyRoot: directory.path, settingsPath: settingsPath, transport: transport,
+                recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
             let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
@@ -114,7 +115,8 @@ final class HistoryClearTests: XCTestCase {
                 failPartway: failPartway, kinds: failPartway ? ["screenshot", "video", "gif"] : ["video", "gif"])
             let controller = LiveCaptureController(root: root, window: window,
                 tokens: tokens, historyRoot: directory.path,
-                settingsPath: nil, transport: transport, showPreferences: {})
+                settingsPath: nil, transport: transport,
+                recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
             let clear = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }.first { $0.title == "Clear history…" })
@@ -174,6 +176,21 @@ final class HistoryClearTests: XCTestCase {
         while !condition() && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
         XCTAssertTrue(condition(), "native history action did not settle")
         guard condition() else { throw AppBridgeError.invalidResponse }
+    }
+}
+
+private final class EmptyRecoveryWorker: RecordingRecoveryWorking {
+    func list(historyRoot: String, completion: @escaping (Result<[RecordingRecoveryDraft], Error>) -> Void) {
+        completion(.success([]))
+    }
+    func recover(historyRoot: String, draft: RecordingRecoveryDraft, cancel: NativeRecordingEditorCancel,
+                 progress: @escaping (String) -> Void,
+                 completion: @escaping (Result<RecordingRecoveryResult, Error>) -> Void) {
+        XCTFail("History-only fixture must not recover a recording")
+    }
+    func discard(historyRoot: String, draft: RecordingRecoveryDraft,
+                 completion: @escaping (Result<Void, Error>) -> Void) {
+        XCTFail("History-only fixture must not discard a recording")
     }
 }
 

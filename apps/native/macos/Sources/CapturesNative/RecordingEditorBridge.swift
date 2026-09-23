@@ -419,7 +419,7 @@ final class NativeRecordingEditorThumbnails {
 }
 
 final class NativeRecordingEditorCancel {
-    fileprivate let handle: OpaquePointer
+    let handle: OpaquePointer
     private let lock = NSLock()
     private var cancelled = false
     var isCancelled: Bool {
