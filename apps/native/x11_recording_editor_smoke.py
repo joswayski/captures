@@ -431,7 +431,7 @@ def main():
             run("xdotool", "mousemove", "--window", editor, "450", "410",
                 "click", "--repeat", "25", "--delay", "40", "5", "sleep", ".5")
             shot(editor, "gif-width-minimum")
-            click(editor, 358, 387)
+            click(editor, 358, 360)  # Saved-status row reduces the scrolling viewport.
             shot(editor, "gif-width-minimum-menu")
             run("xdotool", "key", "Escape")
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
