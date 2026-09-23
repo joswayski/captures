@@ -21,7 +21,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, preset/custom output size, track volume/mute/mono, Play/Pause, opt-in Loop preview and MP4/GIF save-new-copy; wgpu adds opt-in accepted-mix Sound preview | AppKit audio playback, audio meter/device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, Play/Pause (silent by default), opt-in Loop preview and MP4/GIF save-new-copy; wgpu adds opt-in accepted-mix Sound preview | AppKit audio playback, audio meter/device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; AppKit recording audio playback and remaining controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
@@ -511,15 +511,15 @@ size-budget retries, instead of silently ignoring output height. Re-encoded MP4 
 Windows/Linux fits within 3840 × 2160 (portrait: 2160 × 3840); format-aware preview
 now reflects that cap without applying it to Preserve copy/remux or GIF paths.
 The accepted format/quality and frame dimensions appear beside the preview.
-The wgpu recording preview also has display-only **Fit / 100%**. Fit retains its
+Both native recording previews have display-only **Fit / 100%**. Fit retains their
 existing scaling; 100% maps each decoded pixel to one logical screen point and
 scrolls overflowing pixels inside the preview. Smaller images stay centered.
 This applies to accepted, motion and crop-source frames without media I/O, edits,
 estimate invalidation or History changes. Apply/Seek retain the mode; another item
 defaults to Fit. Crop gestures use the scrolled image rectangle and end on scroll,
 scale or layout changes. Motion remains capped at 1280 × 720 regardless of display
-scale. AppKit's matching display control remains a separate host slice; physical
-Windows/Wayland/mixed-DPI acceptance is still open.
+scale. Physical AppKit input/accessibility and Windows/Wayland/mixed-DPI acceptance
+are still open.
 Available system/microphone tracks have 0–200% volume, independent mute and mono
 output controls. Availability comes from the accepted session's trusted audio
 identity, not caller-provided track flags. Audio stages with geometry/format and
@@ -595,6 +595,12 @@ overlay maps top-down source coordinates through letterboxing in AppKit's flippe
 Apply remains the only publication boundary, while Done restores the exact prior
 accepted or motion frame. Source loading has the existing serialized cancel, close,
 item-generation and retry guards. Audio playback is not implemented.
+Its display-only Fit/100% control uses the currently decoded accepted, motion or
+crop-source frame without a new decode. At 100%, one decoded pixel occupies one
+logical point inside a bounded two-axis native scroll view; smaller frames remain
+centered. Apply, Seek, Pause and frame delivery retain the item-local mode, while a
+new History item defaults to Fit. Scrolling, scale changes and layout changes end an
+active crop gesture, and crop mapping uses the exact scrolled image rectangle.
 Windows/X11 already implement
 the same edit controls through wgpu;
 private X11/software-GL exercises provide implementation evidence only. Windows and

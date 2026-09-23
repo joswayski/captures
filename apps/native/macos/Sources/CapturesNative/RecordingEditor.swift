@@ -376,6 +376,9 @@ final class RecordingCropHandle: NSView {
 final class RecordingCropOverlay: NSView {
     fileprivate var tokens: Tokens
     private let imageInset: CGFloat = 12
+    var presentedImageRect: NSRect? {
+        didSet { endDrag(); updateHandles(); needsDisplay = true }
+    }
     var sourceSize = NativeRecordingDimensions(width: 2, height: 2) {
         didSet { endDrag(); updateHandles(); needsDisplay = true }
     }
@@ -408,6 +411,7 @@ final class RecordingCropOverlay: NSView {
     override var acceptsFirstResponder: Bool { editingEnabled }
 
     var fittedImageRect: NSRect {
+        if let presentedImageRect { return presentedImageRect }
         let width = CGFloat(sourceSize.width), height = CGFloat(sourceSize.height)
         let canvas = bounds.insetBy(dx: imageInset, dy: imageInset)
         guard width > 0, height > 0, canvas.width > 0, canvas.height > 0 else { return .zero }
@@ -499,7 +503,7 @@ final class RecordingCropOverlay: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = superview.map { convert(point, from: $0) } ?? point
-        guard !isHidden, bounds.contains(local) else { return nil }
+        guard !isHidden, bounds.contains(local), visibleRect.contains(local) else { return nil }
         if interceptsPendingInput {
             return fittedImageRect.contains(local) ? self : nil
         }
@@ -624,12 +628,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var sourceFrameCancel: NativeRecordingEditorCancel?
     private var cropAdjustmentActive = false
     private var cropAdjustmentPriorImage: NSImage?
+    private var previewActualSize = false
     private var playbackStopActions: [() -> Void] = []
     private var closeAfterPlayback = false
     private var terminateAfterPlayback = false
     private var switchAfterPlayback: String?
 
     private let previewPanel = Surface()
+    private let previewTitle = NSTextField(labelWithString: "Preview")
+    private let previewScroll = NSScrollView()
+    private let previewCanvas = Surface()
     private let preview = NSImageView()
     private let cropOverlay: RecordingCropOverlay
     private let geometryPanel = Surface()
@@ -677,6 +685,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var thumbnailRetryButton: CaptureButton!
     private var playbackButton: CaptureButton!
     private var cropAdjustmentButton: CaptureButton!
+    private var previewFitButton: CaptureButton!
+    private var previewActualButton: CaptureButton!
     private let playbackLoop = NSButton(checkboxWithTitle: "Loop", target: nil, action: nil)
 
     init(tokens: Tokens, worker: RecordingEditorWorking = RecordingEditorWorker(),
@@ -737,10 +747,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
         sourceFrameCache = nil; sourceFrameCancel = nil
         cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
+        previewActualSize = false
         cropOverlay.isHidden = true; cropOverlay.setEditingEnabled(false)
         stagedCrop = nil; cropAspectUnlocked = false
         resolutionPreset = .original; customOutput = false
-        preview.image = nil
+        setPreviewImage(nil)
         trimTimeline.clearThumbnails()
         destination.stringValue = URL(fileURLWithPath: outputDirectory)
             .appendingPathComponent("recording-edit-\(artifact.id.prefix(8)).mp4").path
@@ -842,9 +853,24 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         previewPanel.wantsLayer = true
         previewPanel.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         previewPanel.layer?.cornerRadius = tokens.number("r-md")
+        previewTitle.font = .systemFont(ofSize: 12, weight: .semibold)
+        previewTitle.textColor = tokens.color("text")
+        previewPanel.addSubview(previewTitle)
+        previewFitButton = button("Fit") { [weak self] in self?.setPreviewActualSize(false) }
+        previewActualButton = button("100%") { [weak self] in self?.setPreviewActualSize(true) }
+        previewFitButton.toolTip = "Fit the decoded frame within the preview."
+        previewActualButton.toolTip = "One decoded image pixel per screen point. Scroll to see overflow; playback may use a reduced-size frame."
+        previewPanel.addSubview(previewFitButton); previewPanel.addSubview(previewActualButton)
+        previewScroll.drawsBackground = false; previewScroll.borderType = .noBorder
+        previewScroll.scrollerStyle = .overlay; previewScroll.autohidesScrollers = true
+        previewScroll.contentView.drawsBackground = false
+        previewScroll.contentView.postsBoundsChangedNotifications = true
+        previewScroll.setAccessibilityLabel("Recording preview viewport")
+        previewScroll.documentView = previewCanvas
+        previewPanel.addSubview(previewScroll)
         preview.imageScaling = .scaleProportionallyUpOrDown
         preview.setAccessibilityLabel("Decoded recording frame")
-        previewPanel.addSubview(preview)
+        previewCanvas.addSubview(preview)
         cropOverlay.toolTip = "Drag inside to move. Drag a handle to resize. Arrow keys move a focused handle by 1 source pixel; Shift moves 10."
         cropOverlay.onStage = { [weak self] crop in self?.stageGraphicalCrop(crop) }
         cropOverlay.onCommitPendingInput = { [weak self] in
@@ -853,8 +879,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             _ = self.commitPendingCropInput()
             self.updateControls()
         }
-        previewPanel.addSubview(cropOverlay)
+        previewCanvas.addSubview(cropOverlay)
         root.addSubview(previewPanel)
+        NotificationCenter.default.addObserver(self, selector: #selector(previewDidScroll(_:)),
+            name: NSView.boundsDidChangeNotification, object: previewScroll.contentView)
 
         geometryPanel.wantsLayer = true
         geometryPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
@@ -982,8 +1010,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         previewPanel.frame = NSRect(x: 24, y: 76,
                                     width: availableWidth - geometryWidth - 12,
                                     height: previewHeight)
-        preview.frame = previewPanel.bounds.insetBy(dx: 12, dy: 12)
-        cropOverlay.frame = previewPanel.bounds
+        previewTitle.frame = NSRect(x: 12, y: 8, width: 80, height: 20)
+        previewActualButton.frame = NSRect(x: previewPanel.bounds.width - 66, y: 5,
+                                           width: 54, height: 26)
+        previewFitButton.frame = NSRect(x: previewActualButton.frame.minX - 50, y: 5,
+                                        width: 46, height: 26)
+        previewScroll.frame = NSRect(x: 0, y: 34, width: previewPanel.bounds.width,
+                                     height: max(0, previewPanel.bounds.height - 34))
+        refreshPreviewLayout(resetScroll: false)
         geometryPanel.frame = NSRect(x: previewPanel.frame.maxX + 12, y: 76,
                                      width: geometryWidth, height: previewHeight)
         let geometryLabels = geometryPanel.subviews.compactMap { $0 as? NSTextField }
@@ -1069,6 +1103,55 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         saveButton.frame = NSRect(x: width - 160, y: barY + 106, width: 136, height: 32)
     }
 
+    private func setPreviewActualSize(_ actualSize: Bool) {
+        guard previewActualSize != actualSize else { return }
+        previewActualSize = actualSize
+        cropOverlay.endDrag()
+        refreshPreviewLayout(resetScroll: true)
+        updateControls()
+    }
+
+    @objc private func previewDidScroll(_ notification: Notification) {
+        guard let clipView = notification.object as? NSClipView,
+              clipView === previewScroll.contentView else { return }
+        cropOverlay.endDrag()
+    }
+
+    private func setPreviewImage(_ image: NSImage?) {
+        preview.image = image
+        refreshPreviewLayout(resetScroll: false)
+    }
+
+    private func refreshPreviewLayout(resetScroll: Bool) {
+        let viewport = previewScroll.contentSize
+        guard viewport.width > 0, viewport.height > 0 else { return }
+        let imageSize = preview.image?.size ?? .zero
+        let actualSize = previewActualSize && imageSize.width > 0 && imageSize.height > 0
+        let margin: CGFloat = actualSize && cropAdjustmentActive ? 12 : 0
+        let canvasSize = actualSize
+            ? NSSize(width: max(viewport.width, imageSize.width + margin * 2),
+                     height: max(viewport.height, imageSize.height + margin * 2))
+            : viewport
+        previewCanvas.frame = NSRect(origin: .zero, size: canvasSize)
+        let imageRect: NSRect
+        if actualSize {
+            imageRect = NSRect(x: (canvasSize.width - imageSize.width) / 2,
+                               y: (canvasSize.height - imageSize.height) / 2,
+                               width: imageSize.width, height: imageSize.height)
+        } else {
+            imageRect = previewCanvas.bounds.insetBy(dx: 12, dy: 12)
+        }
+        preview.frame = imageRect
+        cropOverlay.frame = previewCanvas.bounds
+        cropOverlay.presentedImageRect = actualSize ? imageRect : nil
+        previewScroll.hasHorizontalScroller = actualSize && canvasSize.width > viewport.width
+        previewScroll.hasVerticalScroller = actualSize && canvasSize.height > viewport.height
+        if resetScroll || !actualSize {
+            previewScroll.contentView.scroll(to: .zero)
+            previewScroll.reflectScrolledClipView(previewScroll.contentView)
+        }
+    }
+
     private func publish(_ value: RecordingEditorPresentation, initialize: Bool = false) {
         let old = presentation?.snapshot
         if old?.artifactID != value.snapshot.artifactID
@@ -1078,9 +1161,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         presentation = value
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         trimTimeline.setPlaybackPosition(nil)
-        preview.image = NSImage(cgImage: value.image,
+        setPreviewImage(NSImage(cgImage: value.image,
                                 size: NSSize(width: CGFloat(value.image.width),
-                                             height: CGFloat(value.image.height)))
+                                             height: CGFloat(value.image.height))))
         sourceLabel.stringValue = "\(value.snapshot.width) × \(value.snapshot.height) source frame"
         seekSlider.maxValue = Double(max(1, value.snapshot.durationMilliseconds))
         seekSlider.doubleValue = Double(value.snapshot.positionMilliseconds)
@@ -1281,8 +1364,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                       self.playbackState != .idle else { return }
                 self.playbackPositionMilliseconds = value.positionMilliseconds
                 self.playbackFramePresented = true
-                self.preview.image = NSImage(cgImage: value.image,
-                    size: NSSize(width: CGFloat(value.image.width), height: CGFloat(value.image.height)))
+                self.setPreviewImage(NSImage(cgImage: value.image,
+                    size: NSSize(width: CGFloat(value.image.width), height: CGFloat(value.image.height))))
                 self.updatePlaybackPosition(value.positionMilliseconds)
             }, completion: { [weak self] result in
                 guard let self, self.generation == current,
@@ -1341,9 +1424,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         trimTimeline.setPlaybackPosition(nil)
         if restoreFrame {
-            preview.image = NSImage(cgImage: presentation.image,
+            setPreviewImage(NSImage(cgImage: presentation.image,
                                     size: NSSize(width: CGFloat(presentation.image.width),
-                                                 height: CGFloat(presentation.image.height)))
+                                                 height: CGFloat(presentation.image.height))))
         }
         sourceLabel.stringValue = "\(presentation.snapshot.width) × \(presentation.snapshot.height) source frame"
         seekSlider.doubleValue = Double(presentation.snapshot.positionMilliseconds)
@@ -1606,9 +1689,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                                      source: NativeRecordingDimensions) {
         guard let crop = stagedCrop else { return }
         cropAdjustmentActive = true
-        preview.image = NSImage(cgImage: sourceImage.image,
+        setPreviewImage(NSImage(cgImage: sourceImage.image,
             size: NSSize(width: CGFloat(sourceImage.image.width),
-                         height: CGFloat(sourceImage.image.height)))
+                         height: CGFloat(sourceImage.image.height))))
         cropOverlay.sourceSize = source; cropOverlay.crop = crop
         cropOverlay.lockAspect = !cropAspectUnlocked
         cropOverlay.isHidden = false
@@ -1621,11 +1704,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         cropOverlay.endDrag(); cropOverlay.setEditingEnabled(false); cropOverlay.isHidden = true
         cropAdjustmentActive = false
         if restorePriorImage {
-            preview.image = cropAdjustmentPriorImage ?? presentation.map {
+            setPreviewImage(cropAdjustmentPriorImage ?? presentation.map {
                 NSImage(cgImage: $0.image,
                         size: NSSize(width: CGFloat($0.image.width),
                                      height: CGFloat($0.image.height)))
-            }
+            })
         }
         cropAdjustmentPriorImage = nil
         if let snapshot = presentation?.snapshot {
@@ -1785,6 +1868,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             ? "Done adjusting recording crop" : "Adjust recording crop graphically")
         cropAdjustmentButton?.isEnabled = available && (cropAdjustmentActive
             || (stagedCrop != nil && !hasPendingCropInput))
+        previewFitButton?.selected = !previewActualSize
+        previewActualButton?.selected = previewActualSize
+        previewFitButton?.needsDisplay = true
+        previewActualButton?.needsDisplay = true
+        previewFitButton?.isEnabled = preview.image != nil
+        previewActualButton?.isEnabled = preview.image != nil
         cropOverlay.interceptsPendingInput = cropAdjustmentActive && available
             && hasPendingCropInput
         cropOverlay.setEditingEnabled(cropAdjustmentActive && available && !hasPendingCropInput)
@@ -1826,6 +1915,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
         sourceFrameCache = nil; sourceFrameCancel = nil
         cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
+        previewActualSize = false
         cropOverlay.setEditingEnabled(false); cropOverlay.isHidden = true
         playbackStopActions.removeAll(); closeAfterPlayback = false
         terminateAfterPlayback = false; switchAfterPlayback = nil
