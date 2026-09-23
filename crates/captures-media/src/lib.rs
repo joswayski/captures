@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod export;
+mod playback_audio;
 mod range;
 mod toolchain;
 
