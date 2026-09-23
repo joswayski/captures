@@ -39,6 +39,7 @@ def main():
     parser.add_argument("--graphical-crop", action="store_true", help="Exercise source-view crop handles, cache, staging and export")
     parser.add_argument("--preview-scale", action="store_true", help="Exercise display-only Fit/100% and bounded preview scrolling")
     parser.add_argument("--gif-frame-rate", action="store_true", help="Exercise staged GIF cadence and real exported frame counts")
+    parser.add_argument("--gif-quality", action="store_true", help="Exercise quality-dependent GIF palette output")
     parser.add_argument("--maximum-size", action="store_true", help="Exercise accepted size caps, encoder retries and immutable publication")
     args = parser.parse_args()
     if args.sound:
@@ -164,7 +165,7 @@ def main():
         artifact = history / artifact_id
         artifact.mkdir(parents=True)
         source = output / "source.mp4"
-        source_width, source_height = (640, 360) if args.maximum_size else (1600, 900) if args.preview_scale else (640, 1440) if args.presets else (320, 180)
+        source_width, source_height = (640, 360) if args.maximum_size or args.gif_quality else (1600, 900) if args.preview_scale else (640, 1440) if args.presets else (320, 180)
         source_size = f"{source_width}x{source_height}"
         segment_seconds = 2 if args.playback or args.sound else 1
         audio_inputs = []
@@ -181,7 +182,7 @@ def main():
             audio_filters = (";[3:a]asplit=2[system][s];[4:a]asplit=2[mic][m];"
                              "[s][m]amix=inputs=2:normalize=0[mixed]")
             audio_maps = ["-map", "[mixed]", "-map", "[system]", "-map", "[mic]", "-c:a", "aac", "-b:a", "256k"]
-        if args.maximum_size:
+        if args.maximum_size or args.gif_quality:
             run("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=4",
                 "-c:v", "mpeg4", "-q:v", "2", "-an", str(source))
         else:
@@ -197,7 +198,7 @@ def main():
             "id": artifact_id, "kind": "video", "preview_url": "", "full_url": "",
             "width": source_width, "height": source_height, "size_bytes": source.stat().st_size,
             "created_at": datetime.now(timezone.utc).isoformat(), "mode": None,
-            "saved_path": str(source), "mime_type": "video/mp4", "duration_ms": 4000 if args.maximum_size else 3000 * segment_seconds,
+            "saved_path": str(source), "mime_type": "video/mp4", "duration_ms": 4000 if args.maximum_size or args.gif_quality else 3000 * segment_seconds,
             "target": {"type": "display", "display_id": "fixture"},
             "has_system_audio": args.audio, "has_microphone_audio": args.audio, "dropped_frames": 0,
         }))
@@ -268,7 +269,7 @@ def main():
                 assert all(pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel), (x, pixel)
         wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(), "decode")
         shot(editor, "original")
-        if not args.maximum_size:
+        if not (args.maximum_size or args.gif_quality):
             dominant(output / "original.png", 0)
         run("xdotool", "windowminimize", root, "sleep", ".5")
         estimate_expectations = {}
@@ -378,6 +379,44 @@ def main():
                     "device-failure", "explicit-silent-retry", "minimum-layout", "gif-no-device",
                     "immutable-source-history", "no-export"]}, indent=2) + "\n")
             print("PASS Sound preview: default-off, virtual audio output, EOF, device error/retry and GIF without a device")
+            return
+        if args.gif_quality:
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            click(editor, 87, 1082)
+            colors = {}
+            for quality, menu_y, wheel in (("tiny", 886, "5"), ("high", 798, "4")):
+                click(editor, 149, 900)
+                # The six-row quality popup scrolls; Tiny starts below its clip.
+                run("xdotool", "mousemove", "--window", editor, "149", "840",
+                    "click", "--repeat", "10", "--delay", "40", wheel, "sleep", ".4")
+                shot(editor, f"gif-quality-menu-{quality}")
+                click(editor, 149, menu_y)
+                destination = exports / f"{quality}.gif"
+                field(editor, 360, 1038, destination)
+                click(editor, 899, 1082)
+                assert not destination.exists(), "staged quality cannot save"
+                click(editor, 793, 1082)
+                shot(editor, f"gif-quality-{quality}-accepted")
+                click(editor, 899, 1082)
+                wait(destination.exists, f"{quality} GIF export")
+                idle(editor)  # Destination publication precedes History completion.
+                pixels = run("ffmpeg", "-v", "error", "-i", str(destination), "-frames:v", "1",
+                             "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1")
+                assert len(pixels) == 640 * 360 * 3
+                colors[quality] = len(set(zip(pixels[0::3], pixels[1::3], pixels[2::3])))
+            assert 32 < colors["tiny"] <= 64, colors
+            assert 128 < colors["high"] <= 256, colors
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            assert len(list(history.glob("*/metadata.json"))) == 3
+            close(editor)
+            wait(lambda: not windows("Recording editor"), "saved GIF quality closes cleanly")
+            close(root)
+            wait(lambda: app.poll() is not None, "GIF quality quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "decoded_colors": colors, "checks": ["staged-save-gate", "quality-palette-output",
+                    "immutable-source-history", "clean-close"]}, indent=2) + "\n")
+            print(f"PASS GIF quality: decoded colors {colors}, Apply/save and immutable source")
             return
         if args.gif_frame_rate:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
