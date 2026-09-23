@@ -149,7 +149,8 @@ final class HistoryClearTests: XCTestCase {
                     && clear.isEnabled == failPartway
             }
             if !failPartway {
-                let refresh = try button("Refresh")
+                let refresh = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }
+                    .first { $0.title == "Refresh" })
                 try waitUntil { refresh.isEnabled }
             }
             if failPartway {
