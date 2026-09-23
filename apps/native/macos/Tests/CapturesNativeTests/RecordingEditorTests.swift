@@ -43,6 +43,20 @@ final class RecordingEditorTests: XCTestCase {
         worker.completeComparison(.success(try comparison(for: initial, position: 401)))
         XCTAssertTrue(hide.isHidden, "wrong source-relative position is rejected")
         compare.performClick(nil)
+        let original = try comparison(for: initial)
+        let wrongRevision = RecordingEditorComparison(revision: initial.snapshot.revision + 1,
+            positionMilliseconds: original.positionMilliseconds,
+            export: original.export, before: original.before, after: original.after)
+        worker.completeComparison(.success(wrongRevision))
+        XCTAssertTrue(hide.isHidden, "wrong accepted revision is rejected")
+        compare.performClick(nil)
+        var changedExport = original.export; changedExport["quality"] = "tiny"
+        let wrongExport = RecordingEditorComparison(revision: original.revision,
+            positionMilliseconds: original.positionMilliseconds,
+            export: changedExport, before: original.before, after: original.after)
+        worker.completeComparison(.success(wrongExport))
+        XCTAssertTrue(hide.isHidden, "wrong accepted preview export is rejected")
+        compare.performClick(nil)
         worker.completeComparison(.success(try comparison(for: initial)))
         XCTAssertFalse(hide.isHidden); XCTAssertFalse(split.isHidden)
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("accepted 0:00.400") })
