@@ -296,10 +296,30 @@ final class RecordingEditorTests: XCTestCase {
                        "the visible device error requires an explicit Sound-off retry")
         worker.completePlayback(.success(.cancelled))
 
+        sound.performClick(nil)
         controller.present(artifact: recordingArtifact(id: "next-recording"),
                            historyRoot: "/History", outputDirectory: "/Exports")
-        XCTAssertEqual(sound.state, .off, "a new History item resets Sound off")
-        XCTAssertFalse(controller.dirty)
+        XCTAssertEqual(worker.openCount, 1, "dirty accepted edits reject an item switch")
+        XCTAssertEqual(sound.state, .on, "a rejected switch retains the current item preference")
+        XCTAssertTrue(controller.dirty)
+        XCTAssertTrue(labels(in: controller.root).contains {
+            $0.contains("save, or discard the current recording edits")
+        })
+
+        let cleanWorker = FakeRecordingEditorWorker(presentation: try presentation())
+        let cleanController = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                        worker: cleanWorker, confirmDiscard: { false })
+        defer { cleanController.window.orderOut(nil) }
+        cleanController.present(artifact: recordingArtifact(id: "clean-recording"),
+                                historyRoot: "/History", outputDirectory: "/Exports")
+        let cleanSound = try checkbox("Preview accepted recording audio", in: cleanController.root)
+        cleanSound.performClick(nil)
+        XCTAssertEqual(cleanSound.state, .on); XCTAssertFalse(cleanController.dirty)
+        cleanController.present(artifact: recordingArtifact(id: "clean-next-recording"),
+                                historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(cleanWorker.openCount, 2, "a clean item switch opens the new History item")
+        XCTAssertEqual(cleanSound.state, .off, "a successful new-item open resets Sound off")
+        XCTAssertFalse(cleanController.dirty)
     }
 
     func testSoundSelectedSilentMetadataExplainsNoTrackMutedMixAndGIF() throws {
