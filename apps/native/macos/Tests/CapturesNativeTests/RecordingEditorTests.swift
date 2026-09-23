@@ -2598,7 +2598,8 @@ final class RecordingEditorTests: XCTestCase {
         _ = try session.save(destination: mp4Path.path, export: mp4Accepted.snapshot.saveExport,
                              cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
         XCTAssertLessThanOrEqual(try Data(contentsOf: mp4Path).count, 100_000)
-        XCTAssertEqual((mp4Accepted.image.width, mp4Accepted.image.height), (640, 360))
+        XCTAssertEqual(mp4Accepted.image.width, 640)
+        XCTAssertEqual(mp4Accepted.image.height, 360)
 
         export["format"] = "gif"; export["frames_per_second"] = 30
         let accepted = try session.request(["operation": "update_preview",
@@ -2607,7 +2608,8 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual((accepted.snapshot.saveExport["max_size_bytes"] as? NSNumber)?.uint64Value,
                        100_000)
         XCTAssertTrue(accepted.snapshot.export["max_size_bytes"] is NSNull)
-        XCTAssertEqual((accepted.image.width, accepted.image.height), (640, 360))
+        XCTAssertEqual(accepted.image.width, 640)
+        XCTAssertEqual(accepted.image.height, 360)
         let acceptedPixels = try pixels(accepted.image)
 
         let destination = retryFixture.root.appendingPathComponent("retry.gif")
@@ -2618,7 +2620,8 @@ final class RecordingEditorTests: XCTestCase {
                        NativeRecordingDimensions(width: 320, height: 180),
                        "the deterministic GIF budget uses a smaller retry")
         let afterSave = try session.request(["operation": "snapshot"])
-        XCTAssertEqual((afterSave.image.width, afterSave.image.height), (640, 360))
+        XCTAssertEqual(afterSave.image.width, 640)
+        XCTAssertEqual(afterSave.image.height, 360)
         XCTAssertEqual(try pixels(afterSave.image), acceptedPixels,
                        "Save retries never replace the accepted budget-free preview")
         XCTAssertEqual(try Data(contentsOf: retryFixture.source), sourceBefore)
