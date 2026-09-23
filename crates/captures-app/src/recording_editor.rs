@@ -14,7 +14,7 @@ use captures_history::{ArtifactKind, HistoryEntry};
 use captures_media::{
     CancelToken, EditSpec, ExportEstimate, ExportFormat, ExportProgress, ExportSpec, MediaKind,
     MediaMetadata, MediaPlayback, MediaToolError, MediaToolchain, ProbeResult, QualityPreset,
-    TimelineSpriteSpec, validate_edit_spec,
+    TimelineSpriteSpec, validate_edit_spec, validate_export_spec,
 };
 use image::{ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,17 @@ pub enum RecordingEditorRequest {
     Seek { position_ms: u64 },
 }
 
+/// Additive request contract whose export is the accepted Save-new-copy
+/// configuration. Its retained visual preview omits only the byte budget.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RecordingEditorRequestV2 {
+    Snapshot,
+    UpdateEdit { edit: EditSpec },
+    UpdatePreview { edit: EditSpec, export: ExportSpec },
+    Seek { position_ms: u64 },
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecordingSaveRequest {
@@ -67,6 +78,15 @@ pub struct RecordingEditorSnapshot<'a> {
     pub revision: u64,
     pub has_system_audio: bool,
     pub has_microphone_audio: bool,
+}
+
+/// The v1 snapshot plus the accepted Save-new-copy configuration. Flattening
+/// preserves every existing v1 field and adds only `save_export`.
+#[derive(Debug, Serialize)]
+pub struct RecordingEditorSnapshotV2<'a> {
+    #[serde(flatten)]
+    pub editor: RecordingEditorSnapshot<'a>,
+    pub save_export: &'a ExportSpec,
 }
 
 /// A retained full-source thumbnail strip independent of accepted editor state.
@@ -162,6 +182,21 @@ pub enum SavedRecording {
     },
 }
 
+enum SessionRequest {
+    Snapshot,
+    UpdateEdit {
+        edit: EditSpec,
+    },
+    UpdatePreview {
+        edit: EditSpec,
+        preview_export: ExportSpec,
+        save_export: ExportSpec,
+    },
+    Seek {
+        position_ms: u64,
+    },
+}
+
 pub struct RecordingEditorSession {
     history_root: PathBuf,
     artifact_id: String,
@@ -171,6 +206,7 @@ pub struct RecordingEditorSession {
     probe: ProbeResult,
     edit: EditSpec,
     preview_export: ExportSpec,
+    save_export: ExportSpec,
     position_ms: u64,
     revision: u64,
     has_system_audio: bool,
@@ -209,6 +245,7 @@ impl RecordingEditorSession {
         set_source_audio(&mut edit, has_system_audio, has_microphone_audio);
         validate_session_edit(&probe, &edit)?;
         let preview_export = default_preview_export();
+        let save_export = preview_export.clone();
         let scratch = tempfile::tempdir().map_err(|error| error.to_string())?;
         let frame = extract_preview(
             &tools,
@@ -228,6 +265,7 @@ impl RecordingEditorSession {
             probe,
             edit,
             preview_export,
+            save_export,
             position_ms: 0,
             revision: 0,
             has_system_audio,
@@ -248,6 +286,14 @@ impl RecordingEditorSession {
             revision: self.revision,
             has_system_audio: self.has_system_audio,
             has_microphone_audio: self.has_microphone_audio,
+        }
+    }
+
+    #[must_use]
+    pub fn snapshot_v2(&self) -> RecordingEditorSnapshotV2<'_> {
+        RecordingEditorSnapshotV2 {
+            editor: self.snapshot(),
+            save_export: &self.save_export,
         }
     }
 
@@ -274,6 +320,13 @@ impl RecordingEditorSession {
     pub fn estimate_export(&self, cancel: &CancelToken) -> Result<ExportEstimate, String> {
         self.tools
             .estimate_export_size(&self.source_path, &self.edit, &self.preview_export, cancel)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Estimate the accepted Save-new-copy export without changing session state.
+    pub fn estimate_save_export(&self, cancel: &CancelToken) -> Result<ExportEstimate, String> {
+        self.tools
+            .estimate_export_size(&self.source_path, &self.edit, &self.save_export, cancel)
             .map_err(|error| error.to_string())
     }
 
@@ -341,11 +394,51 @@ impl RecordingEditorSession {
     }
 
     pub fn execute(&mut self, request: RecordingEditorRequest) -> Result<(), String> {
+        let request = match request {
+            RecordingEditorRequest::Snapshot => SessionRequest::Snapshot,
+            RecordingEditorRequest::UpdateEdit { edit } => SessionRequest::UpdateEdit { edit },
+            RecordingEditorRequest::UpdatePreview { edit, export } => {
+                validate_preview_export(&export)?;
+                SessionRequest::UpdatePreview {
+                    edit,
+                    preview_export: export.clone(),
+                    save_export: export,
+                }
+            }
+            RecordingEditorRequest::Seek { position_ms } => SessionRequest::Seek { position_ms },
+        };
+        self.execute_request(request)
+    }
+
+    /// Execute the additive accepted-save-export contract. Existing v1 calls
+    /// retain their budget rejection and snapshot shape.
+    pub fn execute_v2(&mut self, request: RecordingEditorRequestV2) -> Result<(), String> {
+        let request = match request {
+            RecordingEditorRequestV2::Snapshot => SessionRequest::Snapshot,
+            RecordingEditorRequestV2::UpdateEdit { edit } => SessionRequest::UpdateEdit { edit },
+            RecordingEditorRequestV2::UpdatePreview { edit, export } => {
+                validate_save_export_policy(&export)?;
+                let mut preview_export = export.clone();
+                preview_export.max_size_bytes = None;
+                SessionRequest::UpdatePreview {
+                    edit,
+                    preview_export,
+                    save_export: export,
+                }
+            }
+            RecordingEditorRequestV2::Seek { position_ms } => SessionRequest::Seek { position_ms },
+        };
+        self.execute_request(request)
+    }
+
+    fn execute_request(&mut self, request: SessionRequest) -> Result<(), String> {
         match request {
-            RecordingEditorRequest::Snapshot => Ok(()),
-            RecordingEditorRequest::UpdateEdit { mut edit } => {
+            SessionRequest::Snapshot => Ok(()),
+            SessionRequest::UpdateEdit { mut edit } => {
                 set_source_audio(&mut edit, self.has_system_audio, self.has_microphone_audio);
                 validate_session_edit(&self.probe, &edit)?;
+                validate_export_spec(&self.probe, &edit, &self.save_export)
+                    .map_err(|error| error.to_string())?;
                 let frame = extract_preview(
                     &self.tools,
                     &self.source_path,
@@ -360,26 +453,32 @@ impl RecordingEditorSession {
                 self.revision = self.revision.saturating_add(1);
                 Ok(())
             }
-            RecordingEditorRequest::UpdatePreview { mut edit, export } => {
+            SessionRequest::UpdatePreview {
+                mut edit,
+                preview_export,
+                save_export,
+            } => {
                 set_source_audio(&mut edit, self.has_system_audio, self.has_microphone_audio);
                 validate_session_edit(&self.probe, &edit)?;
-                validate_preview_export(&export)?;
+                validate_export_spec(&self.probe, &edit, &save_export)
+                    .map_err(|error| error.to_string())?;
                 let frame = extract_preview(
                     &self.tools,
                     &self.source_path,
                     &self.probe,
                     &edit,
-                    &export,
+                    &preview_export,
                     self.position_ms,
                     self.scratch.path(),
                 )?;
                 self.edit = edit;
-                self.preview_export = export;
+                self.preview_export = preview_export;
+                self.save_export = save_export;
                 self.frame = Arc::new(frame);
                 self.revision = self.revision.saturating_add(1);
                 Ok(())
             }
-            RecordingEditorRequest::Seek { position_ms } => {
+            SessionRequest::Seek { position_ms } => {
                 validate_position(&self.probe, position_ms)?;
                 let frame = extract_preview(
                     &self.tools,
@@ -608,6 +707,21 @@ fn validate_preview_export(export: &ExportSpec) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_save_export_policy(export: &ExportSpec) -> Result<(), String> {
+    if export.format == ExportFormat::WebM {
+        return Err("WebM export is not supported.".into());
+    }
+    if let Some(maximum) = export.max_size_bytes {
+        if maximum < 100_000 {
+            return Err("Maximum file size must be at least 100000 bytes.".into());
+        }
+        if export.quality != QualityPreset::Preserve {
+            return Err("Maximum file size requires Preserve quality.".into());
+        }
+    }
+    Ok(())
+}
+
 fn validate_position(probe: &ProbeResult, position_ms: u64) -> Result<(), String> {
     let duration = probe
         .metadata
@@ -768,6 +882,7 @@ fn validate_destination(destination: &Path, format: ExportFormat) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use captures_recording::RecordingTarget;
     use std::process::Command;
 
     fn real_tools() -> Option<(MediaToolchain, PathBuf)> {
@@ -784,6 +899,77 @@ mod tests {
                 eprintln!("timeline scratch test skipped: {error}");
                 None
             }
+        }
+    }
+
+    fn create_video(ffmpeg: &Path, path: &Path, duration: &str) {
+        let status = Command::new(ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("testsrc2=size=640x360:rate=30:duration={duration}"),
+                "-c:v",
+                "mpeg4",
+                "-q:v",
+                "2",
+                "-an",
+            ])
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    fn open_session(
+        tools: MediaToolchain,
+        source: &Path,
+        history_root: &Path,
+    ) -> RecordingEditorSession {
+        let probe = tools.probe(source).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let entry = HistoryEntry {
+            id: id.clone(),
+            kind: ArtifactKind::Video,
+            preview_url: String::new(),
+            full_url: String::new(),
+            width: probe.metadata.width,
+            height: probe.metadata.height,
+            size_bytes: probe.metadata.size_bytes,
+            created_at: "2026-09-23T00:00:00Z".into(),
+            mode: None,
+            saved_path: Some(source.to_string_lossy().into_owned()),
+            mime_type: Some(probe.metadata.mime_type),
+            duration_ms: probe.metadata.duration_ms,
+            target: Some(RecordingTarget::Display {
+                display_id: "test-display".into(),
+            }),
+            has_system_audio: false,
+            has_microphone_audio: false,
+            dropped_frames: 0,
+        };
+        captures_history::save_recording(history_root, &entry, b"poster", source).unwrap();
+        RecordingEditorSession::open(
+            RecordingEditorOpenRequest {
+                history_root: history_root.to_path_buf(),
+                artifact_id: id,
+            },
+            tools,
+        )
+        .unwrap()
+    }
+
+    fn maximum_gif() -> ExportSpec {
+        ExportSpec {
+            format: ExportFormat::Gif,
+            quality: QualityPreset::Preserve,
+            max_size_bytes: Some(100_000),
+            frames_per_second: Some(30),
+            gif_max_colors: Some(256),
         }
     }
 
@@ -876,5 +1062,166 @@ mod tests {
             .is_err()
         );
         assert!(is_clean());
+    }
+
+    #[test]
+    fn v2_budget_preview_is_atomic_and_retry_output_can_change_dimensions() {
+        let Some((tools, ffmpeg)) = real_tools() else {
+            return;
+        };
+        let data = tempfile::tempdir().unwrap();
+        let source = data.path().join("source.mp4");
+        create_video(&ffmpeg, &source, "0.8");
+        let history_root = data.path().join("history");
+        let mut session = open_session(tools.clone(), &source, &history_root);
+        let source_bytes = fs::read(&session.source_path).unwrap();
+        let original_frame = session.frame();
+        let original = serde_json::to_value(session.snapshot_v2()).unwrap();
+
+        for export in [
+            ExportSpec {
+                max_size_bytes: Some(99_999),
+                ..maximum_gif()
+            },
+            ExportSpec {
+                quality: QualityPreset::Standard,
+                ..maximum_gif()
+            },
+            ExportSpec {
+                format: ExportFormat::WebM,
+                ..maximum_gif()
+            },
+        ] {
+            assert!(
+                session
+                    .execute_v2(RecordingEditorRequestV2::UpdatePreview {
+                        edit: EditSpec::default(),
+                        export,
+                    })
+                    .is_err()
+            );
+            assert_eq!(
+                serde_json::to_value(session.snapshot_v2()).unwrap(),
+                original
+            );
+            assert!(Arc::ptr_eq(&session.frame(), &original_frame));
+        }
+
+        session
+            .execute_v2(RecordingEditorRequestV2::UpdatePreview {
+                edit: EditSpec::default(),
+                export: maximum_gif(),
+            })
+            .unwrap();
+        let accepted = session.snapshot_v2();
+        assert_eq!(accepted.save_export.max_size_bytes, Some(100_000));
+        assert_eq!(accepted.editor.preview_export.max_size_bytes, None);
+        assert_eq!(session.frame().dimensions(), (640, 360));
+        let preview_estimate = session.estimate_export(&CancelToken::default()).unwrap();
+        let save_estimate = session
+            .estimate_save_export(&CancelToken::default())
+            .unwrap();
+        assert!(preview_estimate.exact && save_estimate.exact);
+        assert!(preview_estimate.size_bytes > 100_000);
+        assert!(save_estimate.size_bytes <= 100_000);
+
+        let destination = data.path().join("retry.gif");
+        let saved = session
+            .save_new(
+                RecordingSaveRequest {
+                    destination: destination.clone(),
+                    export: accepted.save_export.clone(),
+                },
+                &CancelToken::default(),
+                |_| {},
+            )
+            .unwrap();
+        let SavedRecording::Saved { artifact, .. } = saved else {
+            panic!("History publication must succeed")
+        };
+        assert!(fs::metadata(&destination).unwrap().len() <= 100_000);
+        assert_eq!((artifact.entry.width, artifact.entry.height), (320, 180));
+        assert_eq!(session.frame().dimensions(), (640, 360));
+        assert_eq!(session.snapshot_v2().editor.revision, 1);
+        assert_eq!(fs::read(&session.source_path).unwrap(), source_bytes);
+    }
+
+    #[test]
+    fn failed_cancelled_and_unattainable_saves_do_not_publish() {
+        let Some((tools, ffmpeg)) = real_tools() else {
+            return;
+        };
+        let data = tempfile::tempdir().unwrap();
+        let source = data.path().join("source.mp4");
+        create_video(&ffmpeg, &source, "4");
+        let history_root = data.path().join("history");
+        let mut session = open_session(tools, &source, &history_root);
+        session
+            .execute_v2(RecordingEditorRequestV2::UpdatePreview {
+                edit: EditSpec::default(),
+                export: maximum_gif(),
+            })
+            .unwrap();
+        let accepted = serde_json::to_value(session.snapshot_v2()).unwrap();
+        let frame = session.frame();
+        let source_bytes = fs::read(&session.source_path).unwrap();
+        let history_entries = || fs::read_dir(&history_root).unwrap().count();
+        let original_history_entries = history_entries();
+
+        let existing = data.path().join("existing.gif");
+        fs::write(&existing, b"keep").unwrap();
+        assert!(
+            session
+                .save_new(
+                    RecordingSaveRequest {
+                        destination: existing.clone(),
+                        export: maximum_gif(),
+                    },
+                    &CancelToken::default(),
+                    |_| {},
+                )
+                .is_err()
+        );
+        assert_eq!(fs::read(existing).unwrap(), b"keep");
+
+        let cancelled_path = data.path().join("cancelled.gif");
+        let cancel = CancelToken::default();
+        cancel.cancel();
+        assert!(
+            session
+                .save_new(
+                    RecordingSaveRequest {
+                        destination: cancelled_path.clone(),
+                        export: maximum_gif(),
+                    },
+                    &cancel,
+                    |_| {},
+                )
+                .is_err()
+        );
+        assert!(!cancelled_path.exists());
+
+        let unattainable = data.path().join("unattainable.gif");
+        assert!(
+            session
+                .save_new(
+                    RecordingSaveRequest {
+                        destination: unattainable.clone(),
+                        export: maximum_gif(),
+                    },
+                    &CancelToken::default(),
+                    |_| {},
+                )
+                .unwrap_err()
+                .contains("maximum file size cannot be reached")
+        );
+        assert!(!unattainable.exists());
+        assert_eq!(history_entries(), original_history_entries);
+        assert_eq!(
+            serde_json::to_value(session.snapshot_v2()).unwrap(),
+            accepted
+        );
+        assert!(Arc::ptr_eq(&session.frame(), &frame));
+        assert_eq!(fs::read(&session.source_path).unwrap(), source_bytes);
     }
 }
