@@ -341,6 +341,153 @@ final class RecordingEditorTests: XCTestCase {
         }
     }
 
+    func testPreviewFitActualSizeLifecycleIsDisplayOnlyAndItemLocal() throws {
+        _ = NSApplication.shared
+        let accepted = try presentation(position: 417, sourceWidth: 1_600, sourceHeight: 900,
+                                        previewWidth: 1_200, previewHeight: 800)
+        let worker = FakeRecordingEditorWorker(presentation: accepted)
+        worker.deferPlayback = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        controller.window.setContentSize(NSSize(width: 760, height: 540))
+        let fit = try button("Fit", in: controller.root)
+        let actual = try button("100%", in: controller.root)
+        let image = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first)
+        let scroll = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSScrollView }
+            .first { $0.accessibilityLabel() == "Recording preview viewport" })
+        XCTAssertTrue(fit.selected); XCTAssertFalse(actual.selected)
+        XCTAssertLessThan(image.frame.width, 1_200)
+
+        worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 4_567, exact: true))
+        try button("Estimate size", in: controller.root).performClick(nil)
+        let estimateText = labels(in: controller.root).first { $0.contains("KB") }
+        let dirty = controller.dirty
+        let requests = worker.requests.count
+        let acceptedImage = image.image
+        actual.performClick(nil)
+        XCTAssertFalse(fit.selected); XCTAssertTrue(actual.selected)
+        XCTAssertEqual(image.frame.size, NSSize(width: 1_200, height: 800),
+                       "100% is one decoded image pixel per logical point")
+        XCTAssertTrue(scroll.hasHorizontalScroller); XCTAssertTrue(scroll.hasVerticalScroller)
+        XCTAssertTrue(image.image === acceptedImage)
+        XCTAssertEqual(controller.dirty, dirty); XCTAssertEqual(worker.requests.count, requests)
+        XCTAssertEqual(labels(in: controller.root).first { $0.contains("KB") }, estimateText,
+                       "display scale leaves the accepted estimate intact")
+
+        let play = try button("Play", in: controller.root)
+        play.performClick(nil)
+        XCTAssertTrue(actual.isEnabled, "display scale remains available during playback")
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 733,
+            image: try fixtureImage(width: 640, height: 360)))
+        XCTAssertTrue(actual.selected)
+        XCTAssertEqual(image.frame.size, NSSize(width: 640, height: 360),
+                       "100% follows the current decoded motion-frame dimensions")
+        fit.performClick(nil); actual.performClick(nil)
+        XCTAssertEqual(worker.playbackStarts, [417])
+        XCTAssertEqual(worker.requests.count, requests,
+                       "scale changes never acquire a worker operation")
+        play.performClick(nil); worker.completePlayback(.success(.cancelled))
+        XCTAssertTrue(actual.selected, "Pause retains the item-local display preference")
+
+        let trimEnd = try field("Trim end milliseconds", in: controller.root)
+        trimEnd.stringValue = "1700"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: trimEnd))
+        worker.requestResult = .success(try presentation(end: 1_700, position: 417, revision: 1,
+            sourceWidth: 1_600, sourceHeight: 900, previewWidth: 480, previewHeight: 270))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertTrue(actual.selected, "Apply preserves 100%")
+
+        worker.requestResult = .success(try presentation(end: 1_700, position: 811, revision: 2,
+            sourceWidth: 1_600, sourceHeight: 900, previewWidth: 320, previewHeight: 120))
+        let seek = try slider("Recording frame position", in: controller.root)
+        seek.doubleValue = 811; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertTrue(actual.selected, "Seek preserves 100%")
+        XCTAssertEqual(image.frame.size, NSSize(width: 320, height: 120))
+        XCTAssertEqual(image.frame.midX, scroll.documentView!.bounds.midX, accuracy: 0.5)
+        XCTAssertEqual(image.frame.midY, scroll.documentView!.bounds.midY, accuracy: 0.5,
+                       "smaller decoded images remain centered")
+
+        let cleanWorker = FakeRecordingEditorWorker(presentation: accepted)
+        let cleanController = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                        worker: cleanWorker,
+                                                        confirmDiscard: { false })
+        defer { cleanController.window.orderOut(nil) }
+        cleanController.present(artifact: recordingArtifact(), historyRoot: "/History",
+                                outputDirectory: "/Exports")
+        try button("100%", in: cleanController.root).performClick(nil)
+        cleanController.present(artifact: recordingArtifact(id: "next-recording"),
+                                historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertTrue(try button("Fit", in: cleanController.root).selected)
+        XCTAssertFalse(try button("100%", in: cleanController.root).selected,
+                       "each History item defaults to Fit")
+    }
+
+    func testActualSizeCropUsesScrolledImageRectAndEndsGestureOnViewportChanges() throws {
+        _ = NSApplication.shared
+        let crop = NativeRecordingCropRect(x: 140, y: 90, width: 500, height: 300)
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            position: 433, sourceWidth: 1_200, sourceHeight: 800, crop: crop,
+            previewWidth: 600, previewHeight: 400))
+        worker.sourceResult = .success(RecordingSourceImage(positionMilliseconds: 433,
+            image: try fixtureImage(width: 1_200, height: 800)))
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        controller.window.setContentSize(NSSize(width: 760, height: 540))
+        try button("100%", in: controller.root).performClick(nil)
+        try button("Adjust crop", in: controller.root).performClick(nil)
+        let overlay = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingCropOverlay }.first)
+        let image = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first)
+        let scroll = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSScrollView }
+            .first { $0.accessibilityLabel() == "Recording preview viewport" })
+        XCTAssertEqual(overlay.fittedImageRect, image.frame)
+        XCTAssertEqual(image.frame.size, NSSize(width: 1_200, height: 800))
+
+        scroll.contentView.scroll(to: NSPoint(x: 113, y: 71))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let beforeX = try field("Recording crop X", in: controller.root).stringValue
+        let start = NSPoint(x: overlay.displayedCropRect.midX,
+                            y: overlay.displayedCropRect.midY)
+        overlay.beginDrag(.move, at: start)
+        scroll.contentView.scroll(to: NSPoint(x: 151, y: 109))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        overlay.continueDrag(at: NSPoint(x: start.x + 23, y: start.y + 17))
+        XCTAssertEqual(try field("Recording crop X", in: controller.root).stringValue, beforeX,
+                       "scrolling ends an active crop gesture")
+
+        try dispatchCropOverlayMouse(.leftMouseDown, at: start, to: overlay, in: controller)
+        try dispatchCropOverlayMouse(.leftMouseDragged, at: start, to: overlay,
+                                     in: controller, deltaX: 13, deltaY: 7)
+        try dispatchCropOverlayMouse(.leftMouseUp, at: start, to: overlay,
+                                     in: controller, deltaX: 13, deltaY: 7)
+        XCTAssertEqual(try field("Recording crop X", in: controller.root).stringValue, "153")
+        XCTAssertEqual(try field("Recording crop Y", in: controller.root).stringValue, "97",
+                       "actual-size crop mapping is one source pixel per point after scrolling")
+        XCTAssertTrue(worker.requests.isEmpty)
+
+        overlay.beginDrag(.move, at: NSPoint(x: overlay.displayedCropRect.midX,
+                                             y: overlay.displayedCropRect.midY))
+        try button("Fit", in: controller.root).performClick(nil)
+        let staged = try field("Recording crop X", in: controller.root).stringValue
+        overlay.continueDrag(at: NSPoint(x: overlay.displayedCropRect.midX + 30,
+                                         y: overlay.displayedCropRect.midY + 20))
+        XCTAssertEqual(try field("Recording crop X", in: controller.root).stringValue, staged,
+                       "scale changes end active crop gestures")
+        XCTAssertTrue(controller.dirty, "the staged crop remains pending without publishing")
+        XCTAssertTrue(worker.requests.isEmpty)
+    }
+
     func testPlaybackPauseCompletesBeforeSessionSwitchAndTerminationRetry() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 250))
@@ -460,6 +607,49 @@ final class RecordingEditorTests: XCTestCase {
             play.performClick(nil)
             worker.completePlayback(.failure(AppBridgeError.backend("decoder stopped")))
             try render(controller.root, name: "recording-editor-playback-error-minimum-\(appearance)")
+        }
+    }
+
+    func testPreviewScaleRenderedFitActualPausedAndSourceStates() throws {
+        _ = NSApplication.shared
+        let crop = NativeRecordingCropRect(x: 140, y: 90, width: 500, height: 300)
+        for appearance in ["light", "dark"] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                position: 433, sourceWidth: 1_200, sourceHeight: 800,
+                previewWidth: 1_200, previewHeight: 800, crop: crop))
+            worker.deferPlayback = true
+            worker.sourceResult = .success(RecordingSourceImage(positionMilliseconds: 433,
+                image: try fixtureImage(width: 1_200, height: 800)))
+            let controller = RecordingEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker,
+                confirmDiscard: { false })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                               outputDirectory: "/Exports")
+            for (suffix, size) in [("normal", NSSize(width: 960, height: 760)),
+                                   ("minimum", NSSize(width: 760, height: 540))] {
+                controller.window.setContentSize(size)
+                try render(controller.root,
+                           name: "recording-editor-preview-fit-\(appearance)-\(suffix)")
+                try button("100%", in: controller.root).performClick(nil)
+                try render(controller.root,
+                           name: "recording-editor-preview-actual-\(appearance)-\(suffix)")
+                try button("Fit", in: controller.root).performClick(nil)
+            }
+
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            try button("100%", in: controller.root).performClick(nil)
+            let play = try button("Play", in: controller.root)
+            play.performClick(nil)
+            worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 733,
+                image: try fixtureImage(width: 640, height: 360)))
+            play.performClick(nil); worker.completePlayback(.success(.cancelled))
+            try render(controller.root,
+                       name: "recording-editor-preview-actual-paused-\(appearance)-minimum")
+
+            try button("Adjust crop", in: controller.root).performClick(nil)
+            try render(controller.root,
+                       name: "recording-editor-preview-actual-source-\(appearance)-minimum")
         }
     }
 
@@ -2196,6 +2386,7 @@ final class RecordingEditorTests: XCTestCase {
     private func presentation(start: UInt64 = 0, end: UInt64? = nil,
                               position: UInt64 = 0, revision: UInt64 = 0,
                               sourceWidth: Int = 320, sourceHeight: Int = 180,
+                              previewWidth: Int = 16, previewHeight: Int = 9,
                               crop: NativeRecordingCropRect? = nil,
                               output: NativeRecordingDimensions? = nil,
                               hasSystemAudio: Bool = false, hasMicrophoneAudio: Bool = false,
@@ -2224,7 +2415,9 @@ final class RecordingEditorTests: XCTestCase {
             "has_system_audio": hasSystemAudio,
             "has_microphone_audio": hasMicrophoneAudio,
         ]))
-        return RecordingEditorPresentation(snapshot: snapshot, image: try fixtureImage())
+        return RecordingEditorPresentation(snapshot: snapshot,
+                                           image: try fixtureImage(width: previewWidth,
+                                                                   height: previewHeight))
     }
 
     private func recordingArtifact(id: String = "recording-id") -> CaptureArtifact {
@@ -2421,11 +2614,12 @@ final class RecordingEditorTests: XCTestCase {
         return data
     }
 
-    private func fixtureImage() throws -> CGImage {
-        let bytes = [UInt8](repeating: 80, count: 16 * 9 * 4)
+    private func fixtureImage(width: Int = 16, height: Int = 9) throws -> CGImage {
+        let bytes = [UInt8](repeating: 80, count: width * height * 4)
         let provider = try XCTUnwrap(CGDataProvider(data: Data(bytes) as CFData))
-        return try XCTUnwrap(CGImage(width: 16, height: 9, bitsPerComponent: 8, bitsPerPixel: 32,
-                       bytesPerRow: 64, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        return try XCTUnwrap(CGImage(width: width, height: height,
+                       bitsPerComponent: 8, bitsPerPixel: 32,
+                       bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
                        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
                        provider: provider, decode: nil, shouldInterpolate: false,
                        intent: .defaultIntent))

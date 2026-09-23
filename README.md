@@ -246,8 +246,9 @@ the preview. Focused trim handles also accept arrow keys and Page Up/Page Down.
 interior move. Crop handles follow the aspect lock; arrows move one source pixel,
 or ten with Shift. **Done cropping** restores the prior preview without accepting
 changes; Apply remains explicit. Loading this source frame can be canceled or retried.
-**Fit / 100%** changes only the displayed scale. At 100%, one decoded image pixel
-occupies one screen point; larger previews scroll within the preview area. Playback
+Both native recording editors provide **Fit / 100%**, which changes only the
+displayed scale. At 100%, one decoded image pixel occupies one screen point; larger
+previews scroll within the preview area. Playback
 still uses its bounded decoded size, not full-source resolution.
 The trim track shows retained full-source thumbnails, independent of the edited
 preview. Thumbnail generation can be canceled or retried without losing edits;
@@ -290,6 +291,8 @@ exports or dirty state; each silent lap reopens the decoder and is not gapless.
 stages source-pixel crop changes with eight resize handles or interior movement without
 decoding on each pointer event. **Done cropping** restores the prior accepted or motion
 frame; only Apply publishes the staged values. Loading is cancellable and retryable.
+Fit or 100% applies to the accepted, paused/playback or crop-source frame without
+decoding again or changing edits, estimates, exports or History; each item defaults to Fit.
 Windows/X11 provide the same full-source graphical adjustment alongside numeric crop
 and output sizing. Audio playback is not implemented, and this is not Tauri editor
 parity; physical macOS, Windows and Wayland acceptance remains open.
