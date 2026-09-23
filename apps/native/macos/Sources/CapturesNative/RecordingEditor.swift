@@ -24,12 +24,14 @@ final class RecordingComparisonView: NSView {
         let rect = NSRect(x: (bounds.width - before.size.width * scale) / 2,
                           y: (bounds.height - before.size.height * scale) / 2,
                           width: before.size.width * scale, height: before.size.height * scale)
-        before.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+        before.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
+                    respectFlipped: true, hints: nil)
         guard let context = NSGraphicsContext.current else { return }
         context.saveGraphicsState()
         NSRect(x: rect.minX + rect.width * split, y: rect.minY,
                width: rect.width * (1 - split), height: rect.height).clip()
-        after.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+        after.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
+                   respectFlipped: true, hints: nil)
         context.restoreGraphicsState()
         let dividerWidth = tokens.number("s-1")
         let divider = NSRect(x: rect.minX + rect.width * split - dividerWidth / 2,
@@ -1021,12 +1023,13 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         previewCanvas.addSubview(comparisonView)
         comparisonButton = button("Compare") { [weak self] in self?.compareAcceptedFrame() }
         comparisonButton.setAccessibilityLabel("Compare encoded recording before and after")
+        comparisonButton.toolTip = "Compares the accepted source-relative position, not paused playback time. Encoding may select a neighboring frame at the output cadence."
         comparisonHideButton = button("Hide") { [weak self] in self?.invalidateComparison() }
         comparisonHideButton.setAccessibilityLabel("Hide recording comparison")
         previewPanel.addSubview(comparisonButton); previewPanel.addSubview(comparisonHideButton)
         comparisonSlider.target = self; comparisonSlider.action = #selector(comparisonSplitChanged)
         comparisonSlider.setAccessibilityLabel("Recording before and after split")
-        comparisonSlider.setAccessibilityHelp("Left is before encoding; right is the encoded first attempt at the accepted frame.")
+        comparisonSlider.setAccessibilityHelp("Left is before encoding; right is the encoded first attempt at the accepted source-relative position. Output cadence may select a neighboring frame.")
         comparisonSlider.isHidden = true
         comparisonBeforeLabel.textColor = tokens.color("text")
         comparisonAfterLabel.textColor = tokens.color("text")

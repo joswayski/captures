@@ -16,7 +16,9 @@ final class RecordingEditorTests: XCTestCase {
         let compare = try button("Compare", in: controller.root)
         let hide = try button("Hide", in: controller.root)
         XCTAssertEqual(compare.accessibilityLabel(), "Compare encoded recording before and after")
+        XCTAssertTrue(compare.toolTip?.contains("neighboring frame") == true)
         let split = try slider("Recording before and after split", in: controller.root)
+        XCTAssertTrue(split.accessibilityHelp()?.contains("neighboring frame") == true)
         let start = try field("Trim start milliseconds", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
         let play = try button("Play", in: controller.root)
@@ -122,6 +124,41 @@ final class RecordingEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             try render(controller.root, name: "recording-editor-comparison-minimum-\(appearance)")
         }
+    }
+
+    func testComparisonDrawsBothImagesUprightInFlippedView() throws {
+        _ = NSApplication.shared
+        let before = try bandedImage(top: [220, 20, 30], bottom: [25, 210, 35])
+        let after = try bandedImage(top: [30, 40, 220], bottom: [230, 210, 20])
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 160))
+        let beforeReference = NSImageView(frame: NSRect(x: 0, y: 0, width: 160, height: 160))
+        let afterReference = NSImageView(frame: NSRect(x: 320, y: 0, width: 160, height: 160))
+        beforeReference.image = NSImage(cgImage: before, size: NSSize(width: 8, height: 8))
+        afterReference.image = NSImage(cgImage: after, size: NSSize(width: 8, height: 8))
+        let comparison = RecordingComparisonView(tokens: Tokens.variants["light-mustard"]!)
+        comparison.frame = NSRect(x: 160, y: 0, width: 160, height: 160)
+        comparison.comparison = RecordingEditorComparison(revision: 1,
+            positionMilliseconds: 0, export: [:], before: before, after: after)
+        container.addSubview(beforeReference); container.addSubview(comparison)
+        container.addSubview(afterReference)
+        let bitmap = try XCTUnwrap(container.bitmapImageRepForCachingDisplay(in: container.bounds))
+        container.cacheDisplay(in: container.bounds, to: bitmap)
+        func rgb(_ x: Int, _ y: Int) throws -> NSColor {
+            try XCTUnwrap(bitmap.colorAt(x: x * bitmap.pixelsWide / 480,
+                                         y: y * bitmap.pixelsHigh / 160)?.usingColorSpace(.deviceRGB))
+        }
+        for y in [20, 140] {
+            let sourceBefore = try rgb(40, y), drawnBefore = try rgb(200, y)
+            let sourceAfter = try rgb(440, y), drawnAfter = try rgb(280, y)
+            for (source, drawn) in [(sourceBefore, drawnBefore), (sourceAfter, drawnAfter)] {
+                XCTAssertEqual(source.redComponent, drawn.redComponent, accuracy: 0.03)
+                XCTAssertEqual(source.greenComponent, drawn.greenComponent, accuracy: 0.03)
+                XCTAssertEqual(source.blueComponent, drawn.blueComponent, accuracy: 0.03)
+            }
+        }
+        XCTAssertNotEqual(try rgb(40, 20).redComponent,
+                          try rgb(40, 140).redComponent, "reference has distinct top/bottom pixels")
+        try render(container, name: "recording-editor-comparison-upright-reference")
     }
 
     func testComparisonAfterSmallPausedFrameRestoresAccepted100PercentGeometry() throws {
@@ -3988,6 +4025,19 @@ final class RecordingEditorTests: XCTestCase {
             data: Data(Array(repeating: pixel, count: width * height).flatMap { $0 }) as CFData))
         return try XCTUnwrap(CGImage(width: width, height: height, bitsPerComponent: 8,
             bitsPerPixel: 32, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false,
+            intent: .defaultIntent))
+    }
+
+    private func bandedImage(top: [UInt8], bottom: [UInt8]) throws -> CGImage {
+        let bytes = (0..<8).flatMap { row in
+            Array(repeating: (row < 4 ? top : bottom) + [255], count: 8).flatMap { $0 }
+        }
+        let provider = try XCTUnwrap(CGDataProvider(data: Data(bytes) as CFData))
+        return try XCTUnwrap(CGImage(width: 8, height: 8, bitsPerComponent: 8,
+            bitsPerPixel: 32, bytesPerRow: 32,
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
             provider: provider, decode: nil, shouldInterpolate: false,
