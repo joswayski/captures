@@ -346,6 +346,21 @@ and dark captures are emitted for inspection. Run it as an unprivileged user:
 python apps/native/x11_history_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-history
 ```
 
+Live History also lists interrupted recording bundles separately from saved
+artifacts. Recover publishes MP4/GIF through the shared worker, then selects and
+opens the recovered recording unless selection changed. Discard permanently
+requires confirmation; corrupt/unavailable bundles stay read-only. Cancellation
+stops preparation, not committed publication. These are isolated native capture
+bundles, not recording-editor drafts or installed Tauri data.
+
+The real-media recovery exercise checks both appearances, discard confirmation,
+encoder cancellation, History permission failure/retry, decoded red/blue output,
+editor opening and preservation of unrelated History and corrupt bundles:
+
+```sh
+python apps/native/x11_recovery_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recovery
+```
+
 ```sh
 sudo apt-get install xvfb dbus python3-dbus python3-gi openbox picom hsetroot xdotool x11-utils x11-apps imagemagick libgl1-mesa-dri
 /usr/bin/python3 apps/native/x11_capture_smoke.py \

@@ -103,6 +103,7 @@ impl HistoryFilter {
 enum Job {
     LoadHistory {
         root: PathBuf,
+        open_recording: Option<(String, PathBuf, u64)>,
     },
     Execute {
         request: Request,
@@ -156,7 +157,10 @@ enum Job {
 }
 
 enum Reply {
-    HistoryLoaded(Result<Vec<Artifact>, String>),
+    HistoryLoaded {
+        result: Result<Vec<Artifact>, String>,
+        open_recording: Option<(String, PathBuf, u64)>,
+    },
     Executed {
         preview: Option<PreviewGuard>,
         notice: Option<crate::recording_saved_notice::Guard>,
@@ -659,6 +663,8 @@ pub struct Live {
     artifacts: Vec<Artifact>,
     editors: HashMap<String, crate::editor::Editor>,
     recording_editors: HashMap<String, crate::recording_editor::Editor>,
+    recovery: crate::recording_recovery::Recovery,
+    recovery_selection: u64,
     history_filter: HistoryFilter,
     selection: Selection,
     texture: Option<egui::TextureHandle>,
@@ -748,7 +754,13 @@ impl Live {
             while let Ok(job) = jobs.recv() {
                 let reply = match job {
                     Job::Shutdown => break,
-                    Job::LoadHistory { root } => Reply::HistoryLoaded(load_history(&root)),
+                    Job::LoadHistory {
+                        root,
+                        open_recording,
+                    } => Reply::HistoryLoaded {
+                        result: load_history(&root),
+                        open_recording,
+                    },
                     Job::Execute {
                         request,
                         preview,
@@ -858,6 +870,8 @@ impl Live {
             }
         });
         let mut live = Self {
+            recovery: crate::recording_recovery::Recovery::new(ctx.clone(), root.clone()),
+            recovery_selection: 0,
             root,
             tx,
             rx,
@@ -949,7 +963,10 @@ impl Live {
     }
 
     pub fn can_launch_capture(&self) -> bool {
-        self.pending == 0 && !self.is_capturing() && self.requested_capture.is_none()
+        self.pending == 0
+            && !self.recovery.blocking()
+            && !self.is_capturing()
+            && self.requested_capture.is_none()
     }
 
     pub fn recording_controls_hidden(&self) -> bool {
@@ -1024,7 +1041,7 @@ impl Live {
             self.requested_capture = None;
             return;
         }
-        if self.pending > 0 || self.is_capturing() || self.requested_capture.is_some() {
+        if !self.can_launch_capture() {
             self.error = Some("Another capture or history action is still in progress.".into());
         } else {
             self.requested_capture = Some(request);
@@ -1172,6 +1189,7 @@ impl Live {
     }
 
     pub fn flush_editors(&self, ctx: &egui::Context) -> Result<(), String> {
+        self.recovery.can_quit()?;
         for editor in self.recording_editors.values() {
             editor.flush(ctx)?;
         }
@@ -1259,9 +1277,11 @@ impl Live {
     }
 
     fn load_history(&mut self) {
+        self.recovery.refresh();
         self.pending += 1;
         let _ = self.tx.send(Job::LoadHistory {
             root: self.root.clone(),
+            open_recording: None,
         });
     }
 
@@ -1349,6 +1369,14 @@ impl Live {
     }
 
     pub fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if let Some((outcome, directory)) = self.recovery.receive() {
+            self.previews.remove(&outcome.entry.id);
+            self.pending += 1;
+            let _ = self.tx.send(Job::LoadHistory {
+                root: self.root.clone(),
+                open_recording: Some((outcome.entry.id, directory, self.recovery_selection)),
+            });
+        }
         let mut editor_history_changed = false;
         for (id, editor) in &self.recording_editors {
             editor.receive(ctx);
@@ -2134,6 +2162,10 @@ impl Live {
                     }
                     self.finish_capture(ctx, false);
                 }
+                recording::Event::Retired => {
+                    self.pending = self.pending.saturating_sub(1);
+                    self.recovery.refresh();
+                }
                 recording::Event::ToolchainVerified { .. }
                 | recording::Event::Microphones { .. }
                 | recording::Event::Snapshot { .. }
@@ -2490,10 +2522,35 @@ impl Live {
         }
         while let Ok(reply) = self.rx.try_recv() {
             match reply {
-                Reply::HistoryLoaded(result) => {
+                Reply::HistoryLoaded {
+                    result,
+                    open_recording,
+                } => {
                     self.pending = self.pending.saturating_sub(1);
+                    let open_recording = open_recording
+                        .filter(|(_, _, generation)| self.selection.accepts(*generation));
                     match result {
-                        Ok(artifacts) => self.apply(Response::History { artifacts }, false),
+                        Ok(artifacts) => {
+                            self.apply(Response::History { artifacts }, false);
+                            if let Some((id, directory, _)) = open_recording
+                                && self
+                                    .artifacts
+                                    .iter()
+                                    .any(|artifact| artifact.entry.id == id)
+                            {
+                                self.select(id.clone());
+                                let editor =
+                                    self.recording_editors.entry(id.clone()).or_insert_with(|| {
+                                        crate::recording_editor::Editor::open(
+                                            ctx,
+                                            self.root.clone(),
+                                            id,
+                                            directory,
+                                        )
+                                    });
+                                editor.focus(ctx);
+                            }
+                        }
                         Err(error) => self.error = Some(error),
                     }
                 }
@@ -2962,6 +3019,12 @@ impl Live {
     }
 
     fn finish_capture(&mut self, ctx: &egui::Context, preserve_auto_copy: bool) {
+        if is_recording_phase(self.capture_phase) {
+            // A failed session deliberately holds its recovery-root lease until
+            // the owner is dropped. List only after that worker acknowledges it.
+            self.pending += 1;
+            self.recording_worker.send(recording::Command::Retire);
+        }
         self.selector_scope_generation.store(0, Ordering::Release);
         self.recording_screenshot_flow = None;
         self.recording_screenshot_phase = None;
@@ -4156,7 +4219,7 @@ impl Live {
                 }
                 if ui
                     .add_enabled(
-                        self.pending == 0 && !self.artifacts.is_empty(),
+                        self.pending == 0 && !self.recovery.blocking() && !self.artifacts.is_empty(),
                         egui::Button::new("Clear history…"),
                     )
                     .clicked()
@@ -4179,7 +4242,7 @@ impl Live {
                             }
                             if ui
                                 .add_enabled(
-                                    self.pending == 0,
+                                    self.pending == 0 && !self.recovery.blocking(),
                                     egui::Button::new(
                                         RichText::new("Delete all").color(t.color("theme-signal")),
                                     ),
@@ -4193,6 +4256,18 @@ impl Live {
                             }
                         });
                     });
+                }
+                let recovery_enabled = self.pending == 0 && !self.is_capturing()
+                    && self.requested_capture.is_none() && !self.confirm_clear_history
+                    && self.confirm_delete.is_none();
+                if let Some(target) = self.recovery.ui(ui, t, recovery_enabled) {
+                    match settings() {
+                        Ok(settings) => {
+                            self.recovery_selection = self.selection.generation;
+                            self.recovery.recover(target, settings.output_directory.into());
+                        }
+                        Err(error) => self.error = Some(error),
+                    }
                 }
                 let visible: Vec<usize> = self
                     .artifacts
@@ -4260,7 +4335,7 @@ impl Live {
                     .add_enabled(
                         selected_is_screenshot
                             && self.decoded_path.is_some()
-                            && self.pending == 0,
+                            && self.pending == 0 && !self.recovery.blocking(),
                         egui::Button::new("Copy pixels"),
                     )
                     .clicked()
@@ -4269,7 +4344,7 @@ impl Live {
                 }
                 if ui
                     .add_enabled(
-                        selected.is_some() && self.pending == 0,
+                        selected.is_some() && self.pending == 0 && !self.recovery.blocking(),
                         egui::Button::new(if selected.is_some() && !selected_is_screenshot { "Save file" } else { "Save image" }),
                     )
                     .clicked()
@@ -4293,7 +4368,7 @@ impl Live {
                 }
                 if ui
                     .add_enabled(
-                        selected.is_some() && self.pending == 0,
+                        selected.is_some() && self.pending == 0 && !self.recovery.blocking(),
                         egui::Button::new("Delete from history…"),
                     )
                     .clicked()
@@ -4314,7 +4389,7 @@ impl Live {
                 {
                     self.error = Some(format!("Could not reveal export: {error}"));
                 }
-                if ui.add_enabled(selected.is_some() && self.pending == 0,
+                if ui.add_enabled(selected.is_some() && self.pending == 0 && !self.recovery.blocking(),
                     egui::Button::new(if selected_is_screenshot { "Edit screenshot" } else { "Edit recording" })).clicked()
                     && let Some(id) = selected.clone()
                 {
@@ -4356,7 +4431,7 @@ impl Live {
                     ))
                     .color(t.color("text-muted")),
                 );
-                ui.label("The native recording editor is not connected yet. History is showing the saved poster frame.");
+                ui.label("History shows the saved poster frame. Open Edit recording for playback and editing.");
             }
             if let Some(id) = self.confirm_delete.clone() {
                 ui.group(|ui| {
@@ -4365,7 +4440,7 @@ impl Live {
                         if ui.button("Cancel").clicked() {
                             self.confirm_delete = None;
                         }
-                        if ui.button("Delete capture").clicked() {
+                        if ui.add_enabled(self.pending == 0 && !self.recovery.blocking(), egui::Button::new("Delete capture")).clicked() {
                             self.send(Request::Delete {
                                 root: self.root.clone(),
                                 id,
@@ -5221,7 +5296,16 @@ mod tests {
     #[test]
     fn external_capture_requests_are_single_flight() {
         let root = tempfile::tempdir().unwrap();
-        let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
+        let mut live = Live::new(egui::Context::default(), Some(root.path().join("history")));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live.recovery.blocking() {
+            live.recovery.receive();
+            assert!(
+                Instant::now() < deadline,
+                "initial recovery list did not settle"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
         live.pending = 0;
 
         live.request_capture(CaptureRequest::Region);
