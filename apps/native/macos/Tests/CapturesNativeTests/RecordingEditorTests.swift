@@ -346,6 +346,7 @@ final class RecordingEditorTests: XCTestCase {
         }
 
         let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            output: NativeRecordingDimensions(width: 320, height: 180),
             exportFormat: "gif", hasSystemAudio: true))
         worker.deferPlayback = true
         let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
@@ -765,6 +766,7 @@ final class RecordingEditorTests: XCTestCase {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
             let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                output: NativeRecordingDimensions(width: 320, height: 180),
                 exportFormat: "gif", framesPerSecond: 24,
                 hasSystemAudio: true, hasMicrophoneAudio: true))
             let controller = RecordingEditorController(
@@ -2047,8 +2049,9 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(worker.requests.isEmpty, "GIF cadence is staged without worker work")
 
         fps.selectItem(withTitle: "8 FPS"); _ = fps.sendAction(fps.action, to: fps.target)
-        worker.requestResult = .success(try presentation(revision: 1, exportFormat: "gif",
-                                                         framesPerSecond: 8))
+        worker.requestResult = .success(try presentation(revision: 1,
+            output: NativeRecordingDimensions(width: 320, height: 180),
+            exportFormat: "gif", framesPerSecond: 8))
         try button("Apply edits", in: controller.root).performClick(nil)
         let gifExport = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
         XCTAssertEqual(gifExport["format"] as? String, "gif")
@@ -2083,11 +2086,13 @@ final class RecordingEditorTests: XCTestCase {
 
         format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertEqual(fps.titleOfSelectedItem, "8 FPS", "MP4 roundtrip remembers the GIF choice")
-        worker.requestResult = .success(try presentation(revision: 3, exportFormat: "gif",
-                                                         framesPerSecond: 8))
+        worker.requestResult = .success(try presentation(revision: 3,
+            output: NativeRecordingDimensions(width: 320, height: 180),
+            exportFormat: "gif", framesPerSecond: 8))
         try button("Apply edits", in: controller.root).performClick(nil)
         let seek = try slider("Recording frame position", in: controller.root)
         worker.requestResult = .success(try presentation(position: 733, revision: 4,
+            output: NativeRecordingDimensions(width: 320, height: 180),
             exportFormat: "gif", framesPerSecond: 8))
         seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
         XCTAssertEqual(fps.titleOfSelectedItem, "8 FPS", "Seek retains accepted GIF cadence")
@@ -2291,7 +2296,9 @@ final class RecordingEditorTests: XCTestCase {
             quality.selectItem(withTitle: palette.0)
             _ = quality.sendAction(quality.action, to: quality.target)
             worker.requestResult = .success(try presentation(
-                revision: UInt64(index + 1), exportFormat: "gif",
+                revision: UInt64(index + 1),
+                output: NativeRecordingDimensions(width: 320, height: 180),
+                exportFormat: "gif",
                 exportQuality: palette.0.lowercased(), framesPerSecond: 15,
                 gifMaxColors: palette.1))
             apply.performClick(nil)
@@ -2312,7 +2319,8 @@ final class RecordingEditorTests: XCTestCase {
         maximum.performClick(nil)
         XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
         worker.requestResult = .success(try presentation(
-            revision: 8, exportFormat: "gif", exportQuality: "preserve",
+            revision: 8, output: NativeRecordingDimensions(width: 320, height: 180),
+            exportFormat: "gif", exportQuality: "preserve",
             saveMaximumBytes: 10_000_000, framesPerSecond: 15, gifMaxColors: 64))
         apply.performClick(nil)
         let capped = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
@@ -2436,6 +2444,7 @@ final class RecordingEditorTests: XCTestCase {
         let format = try popup("Recording export format", in: controller.root)
         format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
         worker.requestResult = .success(try presentation(position: 733, revision: 3,
+            output: NativeRecordingDimensions(width: 320, height: 180),
             exportFormat: "gif", saveMaximumBytes: 100_019, framesPerSecond: 15))
         apply.performClick(nil)
         let gifRequest = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
