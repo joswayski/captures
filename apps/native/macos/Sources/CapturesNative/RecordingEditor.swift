@@ -685,6 +685,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var gifFramesPerSecond: UInt16 = 15
     private var maximumSizeEnabled = false
     private var maximumSizeUnit = RecordingFileSizeUnit.megabytes
+    private var qualityPreference = "Preserve"
     private var playbackLoopControl: RecordingPlaybackLoopControl?
     private var sourceFrameCache: RecordingSourceImage?
     private var sourceFrameCancel: NativeRecordingEditorCancel?
@@ -821,6 +822,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         maximumSizeEnabled = false; maximumSize.state = .off
         maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
         maximumSizeValue.stringValue = "10"
+        qualityPreference = "Preserve"
         sourceFrameCache = nil; sourceFrameCancel = nil
         cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
         previewActualSize = false
@@ -1058,7 +1060,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         format.target = self; format.action = #selector(formatChanged)
         format.setAccessibilityLabel("Recording export format")
         quality.addItems(withTitles: ["Preserve", "Highest", "High", "Standard", "Small", "Tiny"])
-        quality.target = self; quality.action = #selector(stageChanged)
+        quality.target = self; quality.action = #selector(qualityChanged)
         quality.setAccessibilityLabel("Recording export quality")
         gifFrameRate.addItems(withTitles: ["8 FPS", "10 FPS", "12 FPS", "15 FPS",
                                               "20 FPS", "24 FPS", "30 FPS"])
@@ -1216,8 +1218,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         maximumSizeWarning.frame = NSRect(x: 174, y: barY + 47,
                                           width: width - 348, height: 18)
         let maximumControlsWidth = maximumSizeEnabled ? maximumSizeUnits.frame.maxX + 8 : 252
+        let estimateLabelEnd = maximumSizeEnabled ? width - 168 : width - 304
         estimateLabel.frame = NSRect(x: maximumControlsWidth, y: barY + 114,
-                                     width: max(0, width - 170 - maximumControlsWidth), height: 20)
+                                     width: max(0, estimateLabelEnd - maximumControlsWidth), height: 20)
         estimateButton.frame = NSRect(x: width - 296, y: barY + 106, width: 126, height: 32)
         saveButton.frame = NSRect(x: width - 160, y: barY + 106, width: 136, height: 32)
     }
@@ -1332,9 +1335,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             if maximumSizeUnit.bytes(maximumSizeValue.stringValue) != acceptedMaximum {
                 maximumSizeValue.stringValue = maximumSizeUnit.value(acceptedMaximum)
             }
-            if initialize { select(quality, value: "preserve") }
+            if initialize { qualityPreference = "Preserve" }
+            select(quality, value: "preserve")
         } else {
             select(quality, value: acceptedExport["quality"] as? String ?? "preserve")
+            qualityPreference = quality.titleOfSelectedItem ?? "Preserve"
             if initialize {
                 maximumSizeUnit = .megabytes
                 maximumSizeUnits.selectItem(withTitle: maximumSizeUnit.label)
@@ -1929,6 +1934,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
     @objc private func maximumSizeChanged() {
         maximumSizeEnabled = maximumSize.state == .on
+        if maximumSizeEnabled {
+            qualityPreference = quality.titleOfSelectedItem ?? qualityPreference
+            select(quality, value: "preserve")
+        } else {
+            quality.selectItem(withTitle: qualityPreference)
+        }
         estimate = nil; updateControls(); layout()
     }
     @objc private func maximumSizeUnitChanged() {
@@ -1941,6 +1952,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
         maximumSizeUnit = unit
         estimate = nil; updateControls(); layout()
+    }
+    @objc private func qualityChanged() {
+        qualityPreference = quality.titleOfSelectedItem ?? "Preserve"
+        estimate = nil; updateControls()
     }
     @objc private func stageChanged() { estimate = nil; updateControls() }
 
@@ -2145,6 +2160,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         maximumSizeEnabled = false; maximumSize.state = .off
         maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
         maximumSizeValue.stringValue = "10"
+        qualityPreference = "Preserve"
         sourceFrameCache = nil; sourceFrameCancel = nil
         cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
         previewActualSize = false

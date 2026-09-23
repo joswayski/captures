@@ -805,6 +805,36 @@ final class RecordingEditorTests: XCTestCase {
     func testMaximumSizeRenderedNormalMinimumAndInvalidStates() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
+            let uncappedWorker = FakeRecordingEditorWorker(presentation: try presentation())
+            uncappedWorker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_500_000,
+                                                                              exact: true))
+            let uncapped = RecordingEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: uncappedWorker,
+                confirmDiscard: { false })
+            defer { uncapped.window.orderOut(nil) }
+            uncapped.present(artifact: recordingArtifact(), historyRoot: "/History",
+                             outputDirectory: "/Exports")
+            let uncappedLabel = try field("Recording size estimate", in: uncapped.root)
+            let estimate = try button("Estimate size", in: uncapped.root)
+            for (suffix, size) in [("normal", NSSize(width: 960, height: 760)),
+                                   ("minimum", NSSize(width: 760, height: 540))] {
+                uncapped.window.setContentSize(size)
+                XCTAssertLessThanOrEqual(uncappedLabel.frame.maxX + 8, estimate.frame.minX,
+                                         "\(appearance) \(suffix) estimate label stays before button")
+                try render(uncapped.root,
+                           name: "recording-editor-estimate-\(appearance)-\(suffix)")
+            }
+            try dispatchButtonClick(estimate, in: uncapped)
+            XCTAssertFalse(uncappedLabel.stringValue.contains("not estimated"),
+                           "window dispatch reaches the unobscured Estimate size button")
+            let uncappedQuality = try popup("Recording export quality", in: uncapped.root)
+            uncappedQuality.selectItem(withTitle: "Tiny")
+            _ = uncappedQuality.sendAction(uncappedQuality.action, to: uncappedQuality.target)
+            try checkbox("Maximum recording file size", in: uncapped.root).performClick(nil)
+            XCTAssertEqual(uncappedQuality.titleOfSelectedItem, "Preserve")
+            try render(uncapped.root,
+                       name: "recording-editor-maximum-from-tiny-minimum-\(appearance)")
+
             let worker = FakeRecordingEditorWorker(presentation: try presentation(
                 saveMaximumBytes: 100_019))
             let controller = RecordingEditorController(
@@ -830,6 +860,9 @@ final class RecordingEditorTests: XCTestCase {
             XCTAssertLessThanOrEqual(warning.frame.maxX + 8,
                                      try button("Cancel operation", in: controller.root).frame.minX)
             XCTAssertLessThanOrEqual(unit.frame.maxX + 8,
+                                     try button("Save new copy", in: controller.root).frame.minX)
+            let capLabel = try field("Recording size estimate", in: controller.root)
+            XCTAssertLessThanOrEqual(capLabel.frame.maxX + 8,
                                      try button("Save new copy", in: controller.root).frame.minX)
             try render(controller.root,
                        name: "recording-editor-maximum-size-minimum-\(appearance)")
@@ -2111,6 +2144,7 @@ final class RecordingEditorTests: XCTestCase {
 
         quality.selectItem(withTitle: "Tiny"); _ = quality.sendAction(quality.action, to: quality.target)
         maximum.performClick(nil)
+        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
         value.stringValue = ".1000199"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: value))
@@ -2120,6 +2154,7 @@ final class RecordingEditorTests: XCTestCase {
         worker.requestResult = .success(try presentation(revision: 1,
                                                          saveMaximumBytes: 100_019))
         apply.performClick(nil)
+        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
         let acceptedRequest = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
         XCTAssertEqual((acceptedRequest["max_size_bytes"] as? NSNumber)?.uint64Value, 100_019)
         XCTAssertEqual(acceptedRequest["quality"] as? String, "preserve")
@@ -2155,6 +2190,7 @@ final class RecordingEditorTests: XCTestCase {
                                                          saveMaximumBytes: 100_019))
         seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
         XCTAssertEqual(value.stringValue, "100.019")
+        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
         XCTAssertFalse(controller.dirty)
 
         let format = try popup("Recording export format", in: controller.root)
@@ -2604,9 +2640,28 @@ final class RecordingEditorTests: XCTestCase {
             at: failureFixture.history, includingPropertiesForKeys: nil).count
 
         let cancelledPath = failureFixture.root.appendingPathComponent("cancelled.gif")
-        let cancelled = try XCTUnwrap(NativeRecordingEditorCancel()); cancelled.cancel()
-        XCTAssertThrowsError(try failureSession.save(destination: cancelledPath.path,
-            export: failureAccepted.snapshot.saveExport, cancel: cancelled, progress: { _ in }))
+        let cancelled = try XCTUnwrap(NativeRecordingEditorCancel())
+        let encodingStarted = expectation(description: "capped export started")
+        encodingStarted.assertForOverFulfill = false
+        let cancellationFinished = expectation(description: "capped export cancelled")
+        let cancellationError = RecordingTestErrorBox()
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                _ = try failureSession.save(destination: cancelledPath.path,
+                    export: failureAccepted.snapshot.saveExport, cancel: cancelled,
+                    progress: { progress in
+                        if progress.completedPerMille > 0 { encodingStarted.fulfill() }
+                    })
+            } catch {
+                cancellationError.set(error)
+            }
+            cancellationFinished.fulfill()
+        }
+        wait(for: [encodingStarted], timeout: 5)
+        cancelled.cancel()
+        wait(for: [cancellationFinished], timeout: 10)
+        XCTAssertTrue(try XCTUnwrap(cancellationError.value).localizedDescription
+            .localizedCaseInsensitiveContains("cancel"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: cancelledPath.path))
 
         let unattainablePath = failureFixture.root.appendingPathComponent("unattainable.gif")
@@ -3396,6 +3451,21 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(controller.window.firstResponder === overlay)
         controller.window.sendEvent(event)
     }
+    private func dispatchButtonClick(_ button: CaptureButton,
+                                     in controller: RecordingEditorController) throws {
+        let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+        let content = try XCTUnwrap(controller.window.contentView)
+        let contentSuperview = try XCTUnwrap(content.superview)
+        XCTAssertTrue(content.hitTest(contentSuperview.convert(point, from: nil)) === button,
+                      "root hit testing reaches \(button.title)")
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point,
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: controller.window.windowNumber, context: nil,
+                eventNumber: 1, clickCount: 1, pressure: 1))
+            controller.window.sendEvent(event)
+        }
+    }
     private func labels(in view: NSView) -> [String] {
         descendants(in: view).compactMap { ($0 as? NSTextField)?.stringValue }
     }
@@ -3407,6 +3477,14 @@ final class RecordingEditorTests: XCTestCase {
         let data = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
         try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
     }
+}
+
+private final class RecordingTestErrorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Error?
+
+    var value: Error? { lock.withLock { stored } }
+    func set(_ error: Error) { lock.withLock { stored = error } }
 }
 
 private final class FakeRecordingEditorWorker: RecordingEditorWorking {
