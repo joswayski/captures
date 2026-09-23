@@ -973,6 +973,16 @@ mod tests {
         }
     }
 
+    fn maximum_mp4() -> ExportSpec {
+        ExportSpec {
+            format: ExportFormat::Mp4,
+            quality: QualityPreset::Preserve,
+            max_size_bytes: Some(100_000),
+            frames_per_second: Some(30),
+            gif_max_colors: None,
+        }
+    }
+
     #[test]
     fn read_only_frame_scratch_is_clean_after_success_failure_and_cancellation() {
         let Some((tools, ffmpeg)) = real_tools() else {
@@ -1143,6 +1153,134 @@ mod tests {
         assert_eq!((artifact.entry.width, artifact.entry.height), (320, 180));
         assert_eq!(session.frame().dimensions(), (640, 360));
         assert_eq!(session.snapshot_v2().editor.revision, 1);
+        assert_eq!(fs::read(&session.source_path).unwrap(), source_bytes);
+    }
+
+    #[test]
+    fn v2_mp4_budget_revalidates_edits_and_v1_resets_only_through_preview() {
+        let Some((tools, ffmpeg)) = real_tools() else {
+            return;
+        };
+        let data = tempfile::tempdir().unwrap();
+        let source = data.path().join("source.mp4");
+        create_video(&ffmpeg, &source, "4");
+        let history_root = data.path().join("history");
+        let mut session = open_session(tools, &source, &history_root);
+        let source_bytes = fs::read(&session.source_path).unwrap();
+        let initial_frame = session.frame();
+        let mut short_edit = EditSpec {
+            trim_end_ms: Some(2_500),
+            ..EditSpec::default()
+        };
+
+        let uncapped_mp4 = ExportSpec {
+            max_size_bytes: None,
+            ..maximum_mp4()
+        };
+        session
+            .execute(RecordingEditorRequest::UpdatePreview {
+                edit: short_edit.clone(),
+                export: uncapped_mp4,
+            })
+            .unwrap();
+        let before_budget_frame = session.frame();
+
+        session
+            .execute_v2(RecordingEditorRequestV2::UpdatePreview {
+                edit: short_edit.clone(),
+                export: maximum_mp4(),
+            })
+            .unwrap();
+        let accepted = session.snapshot_v2();
+        assert_eq!(accepted.editor.revision, 2);
+        assert_eq!(accepted.editor.edit, &short_edit);
+        assert_eq!(accepted.editor.preview_export.max_size_bytes, None);
+        assert_eq!(accepted.save_export.max_size_bytes, Some(100_000));
+        assert!(!Arc::ptr_eq(&session.frame(), &initial_frame));
+        assert!(!Arc::ptr_eq(&session.frame(), &before_budget_frame));
+
+        let destination = data.path().join("capped.mp4");
+        let accepted_save_export = accepted.save_export.clone();
+        let mut final_attempt = 0;
+        session
+            .save_new(
+                RecordingSaveRequest {
+                    destination: destination.clone(),
+                    export: accepted_save_export,
+                },
+                &CancelToken::default(),
+                |progress| final_attempt = final_attempt.max(progress.attempt),
+            )
+            .unwrap();
+        assert!(fs::metadata(destination).unwrap().len() <= 100_000);
+        assert!((1..=4).contains(&final_attempt));
+        assert_eq!(session.frame().dimensions(), (640, 360));
+
+        // Both request versions retain the accepted Save-new-copy budget when
+        // changing only the edit, and therefore revalidate its retry plan.
+        short_edit.crop = Some(captures_media::CropRect {
+            x: 20,
+            y: 10,
+            width: 600,
+            height: 340,
+        });
+        session
+            .execute(RecordingEditorRequest::UpdateEdit {
+                edit: short_edit.clone(),
+            })
+            .unwrap();
+        assert_eq!(session.snapshot_v2().save_export, &maximum_mp4());
+        let before_invalid_edit = serde_json::to_value(session.snapshot_v2()).unwrap();
+        let before_invalid_frame = session.frame();
+        assert!(
+            session
+                .execute_v2(RecordingEditorRequestV2::UpdateEdit {
+                    edit: EditSpec::default(),
+                })
+                .unwrap_err()
+                .contains("maximum file size cannot be reached")
+        );
+        assert_eq!(
+            serde_json::to_value(session.snapshot_v2()).unwrap(),
+            before_invalid_edit
+        );
+        assert!(Arc::ptr_eq(&session.frame(), &before_invalid_frame));
+
+        let preview_export = session.snapshot().preview_export.clone();
+        let save_export = session.snapshot_v2().save_export.clone();
+        session
+            .execute_v2(RecordingEditorRequestV2::Seek { position_ms: 750 })
+            .unwrap();
+        assert_eq!(session.snapshot().preview_export, &preview_export);
+        assert_eq!(session.snapshot_v2().save_export, &save_export);
+        let after_seek = serde_json::to_value(session.snapshot_v2()).unwrap();
+        let after_seek_frame = session.frame();
+        let playback = session.playback(750, &CancelToken::default()).unwrap();
+        assert_eq!(playback.start_position_ms(), 750);
+        drop(playback);
+        assert_eq!(
+            serde_json::to_value(session.snapshot_v2()).unwrap(),
+            after_seek
+        );
+        assert!(Arc::ptr_eq(&session.frame(), &after_seek_frame));
+
+        // A v1 preview acceptance intentionally replaces both exports with its
+        // budget-free spec. A later v1 edit is consequently no longer subject
+        // to the previously accepted v2 budget.
+        session
+            .execute(RecordingEditorRequest::UpdatePreview {
+                edit: short_edit,
+                export: preview_export.clone(),
+            })
+            .unwrap();
+        assert_eq!(session.snapshot().preview_export, &preview_export);
+        assert_eq!(session.snapshot_v2().save_export, &preview_export);
+        session
+            .execute(RecordingEditorRequest::UpdateEdit {
+                edit: EditSpec::default(),
+            })
+            .unwrap();
+        assert_eq!(session.snapshot_v2().save_export.max_size_bytes, None);
         assert_eq!(fs::read(&session.source_path).unwrap(), source_bytes);
     }
 
