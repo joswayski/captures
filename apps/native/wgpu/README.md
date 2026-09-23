@@ -372,6 +372,19 @@ virtual-audio evidence, not physical microphone or Windows/Wayland acceptance.
 /usr/bin/python3 apps/native/x11_recording_smoke.py --restart-only --virtual-microphone --appearance dark --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-microphone-dark
 ```
 
+Segment reopen tests use two different virtual tones. `default` verifies that a
+paused recording picks up the new default microphone on resume and saves both
+tones. `explicit` removes the selected microphone endpoint before resume and
+requires failure with completed audio preserved, never substitution of the other
+microphone. These test reopen behavior, not in-stream hot switching or physical
+unplug notifications.
+
+```sh
+for device in default explicit; do
+  /usr/bin/python3 apps/native/x11_recording_smoke.py --device-change "$device" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-device-$device"
+done
+```
+
 ```sh
 sudo apt-get install xvfb dbus python3-dbus python3-gi openbox picom hsetroot xdotool x11-utils x11-apps imagemagick libgl1-mesa-dri
 /usr/bin/python3 apps/native/x11_capture_smoke.py \
