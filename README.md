@@ -219,9 +219,10 @@ audio options. Its compact controls support pause/resume, confirmed restart with
 the stored countdown, microphone mute/unmute, stop/save to development History,
 and discard. Running mute changes durably complete the current segment before
 continuing with the same target and options; paused changes do not resume. Restart
-replaces only the current take and resets its elapsed time. The Windows/Linux HUD
-shows live microphone level and clears it while paused, muted, or changing the take.
-Hide removes only the controls, shows a temporary
+replaces only the current take and resets its elapsed time. Both native HUDs show
+live microphone level while visible, running, and unmuted, clearing it when paused,
+muted, hidden, or changing the take. Physical microphone and device acceptance
+remain open. Hide removes only the controls, shows a temporary
 noninteractive notice, and preserves the session, timer, pause and microphone state. The menu bar/tray,
 app reactivation, and configured New Capture shortcut restore the controls; Linux disables Hide without a
 usable tray and restores the controls and workspace if its tray host disappears. FFmpeg and FFprobe must

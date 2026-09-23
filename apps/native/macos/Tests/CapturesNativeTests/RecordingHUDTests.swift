@@ -30,6 +30,14 @@ final class RecordingHUDTests: XCTestCase {
                 "mic-less sessions keep mute unavailable")
             let microphone = try XCTUnwrap(hud.subviews.compactMap { $0 as? CaptureButton }
                 .first { $0.accessibilityLabel()?.contains("Microphone unavailable") == true })
+            let meter = try XCTUnwrap(hud.subviews.first { $0.accessibilityLabel() == "Microphone level" })
+            let fill = try XCTUnwrap(meter.subviews.first)
+            XCTAssertTrue(meter.isAccessibilityElement())
+            XCTAssertFalse(fill.isAccessibilityElement())
+            XCTAssertFalse(hud.subviews.compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == "OFF" }?.isAccessibilityElement() ?? true)
+            XCTAssertEqual(meter.accessibilityValue() as? String, "0%, off")
+            XCTAssertEqual(fill.frame.width, 0)
             XCTAssertFalse(microphone.isEnabled)
             XCTAssertEqual(microphone.toolTip,
                 "Microphone unavailable because no microphone was selected")
@@ -46,10 +54,14 @@ final class RecordingHUDTests: XCTestCase {
             hud.setLifecycleActionsEnabled(true)
             XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 6)
             hud.setMicrophone(muted: false, available: true)
+            hud.setMicrophoneLevel(0.73)
+            XCTAssertEqual(meter.accessibilityValue() as? String, "73%, recording")
+            XCTAssertEqual(fill.frame.width, meter.bounds.width * 0.73, accuracy: 0.01)
             XCTAssertTrue(microphone.isEnabled)
             XCTAssertEqual(microphone.accessibilityLabel(), "Mute microphone")
             XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 7)
             try render(hud, window: window, name: "recording-hud-\(appearance)-unmuted")
+            try render(hud, window: window, name: "recording-hud-\(appearance)-meter-73")
             let bitmap = try XCTUnwrap(microphone.bitmapImageRepForCachingDisplay(in: microphone.bounds))
             microphone.cacheDisplay(in: microphone.bounds, to: bitmap)
             let scale = CGFloat(bitmap.pixelsHigh) / microphone.bounds.height
@@ -62,10 +74,13 @@ final class RecordingHUDTests: XCTestCase {
             XCTAssertGreaterThan(stand.redComponent, capsuleInterior.redComponent + 0.2,
                 "the microphone stand must be below its hollow capsule, not upside down")
             hud.setLifecycleActionsEnabled(false)
+            XCTAssertEqual(meter.accessibilityValue() as? String, "0%, busy")
+            XCTAssertEqual(fill.frame.width, 0)
             // A snapshot queued before the mutation can arrive while it is busy.
             hud.setMicrophone(muted: true, available: true)
             XCTAssertFalse(microphone.isEnabled, "a late snapshot must not unlock lifecycle actions")
             XCTAssertTrue(microphone.selected)
+            XCTAssertEqual(meter.accessibilityValue() as? String, "0%, muted")
             XCTAssertEqual(microphone.accessibilityLabel(), "Unmute microphone")
             XCTAssertEqual((microphone.accessibilityValue() as? NSNumber)?.intValue, 1)
             try render(hud, window: window, name: "recording-hud-\(appearance)-mic-busy")
@@ -84,8 +99,17 @@ final class RecordingHUDTests: XCTestCase {
             hud.setPaused(false, elapsedMilliseconds: 94_000)
             XCTAssertFalse(hud.paused)
             try render(hud, window: window, name: "recording-hud-\(appearance)-running")
+            hud.setMicrophone(muted: false, available: true)
+            hud.setMicrophoneLevel(0.19)
+            XCTAssertEqual(meter.accessibilityValue() as? String, "19%, recording")
+            XCTAssertEqual(fill.frame.width, meter.bounds.width * 0.19, accuracy: 0.01)
+            try render(hud, window: window, name: "recording-hud-\(appearance)-meter-19")
             hud.setPaused(true, elapsedMilliseconds: 94_000)
             XCTAssertTrue(hud.paused)
+            XCTAssertEqual(meter.accessibilityValue() as? String, "0%, paused")
+            XCTAssertEqual(fill.frame.width, 0)
+            hud.setMicrophoneLevel(0.92)
+            XCTAssertEqual(fill.frame.width, 0, "paused HUD must not show a stale peak")
             try render(hud, window: window, name: "recording-hud-\(appearance)-paused")
         }
     }

@@ -86,6 +86,57 @@ final class RecordingGenerationGate {
     func accepts(_ value: UInt64) -> Bool { lock.withLock { generation == value } }
 }
 
+final class RecordingMicrophoneSampler {
+    private let queue: DispatchQueue
+    private let read: () throws -> Double
+    private let useful: () -> Bool
+    private let deliver: (Double) -> Void
+    private let interval: TimeInterval
+    private let gate = RecordingGenerationGate()
+    private var generation: UInt64 = 0
+    private var active = false
+    private var pending = false
+    private var timer: Timer?
+
+    init(queue: DispatchQueue, read: @escaping () throws -> Double,
+         useful: @escaping () -> Bool, interval: TimeInterval = 0.1,
+         deliver: @escaping (Double) -> Void) {
+        self.queue = queue; self.read = read; self.useful = useful
+        self.interval = interval; self.deliver = deliver
+    }
+
+    func setActive(_ enabled: Bool) {
+        guard active != enabled else { return }
+        active = enabled
+        generation &+= 1
+        gate.set(enabled ? generation : nil)
+        if enabled {
+            let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in self?.sample() }
+            self.timer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        } else {
+            timer?.invalidate(); timer = nil
+            deliver(0)
+        }
+    }
+
+    func sample() {
+        guard active, !pending, useful() else { return }
+        pending = true
+        let generation = generation
+        queue.async { [self] in
+            let level = gate.accepts(generation) ? (try? read()) ?? 0 : 0
+            DispatchQueue.main.async { [self] in
+                pending = false
+                guard active, gate.accepts(generation), useful() else { return }
+                deliver(level)
+            }
+        }
+    }
+
+    deinit { timer?.invalidate(); gate.set(nil) }
+}
+
 private func recordingIsCurrent(_ context: UnsafeMutableRawPointer?,
                                 _ generation: UInt64) -> Bool {
     guard let context else { return false }
@@ -302,6 +353,15 @@ final class NativeRecordingSession {
 
     func snapshot() throws -> NativeRecordingSnapshot {
         try snapshot(request(["operation": "snapshot"]))
+    }
+
+    func microphoneLevel() throws -> Double {
+        let value = try request(["operation": "microphone_level"])
+        guard let peak = value["microphone_peak"] as? NSNumber,
+              peak.doubleValue.isFinite, (0...1).contains(peak.doubleValue) else {
+            throw AppBridgeError.invalidResponse
+        }
+        return peak.doubleValue
     }
 
     func stop() throws -> NativeRecordingSnapshot {

@@ -21,7 +21,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause (silent by default), opt-in Loop and accepted-mix Sound preview, and MP4/GIF save-new-copy | Audio meter/device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause (silent by default), opt-in Loop and accepted-mix Sound preview, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; remaining recording controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
@@ -934,13 +934,13 @@ The shared recording session also exposes a read-only live microphone peak throu
 `microphone_level` on the existing v1 recording request: `{microphone_peak}` is
 finite in 0–1, and zero for countdown, pause, stopped/failed/discarded, muted or
 mic-less sessions. The engine clears a disconnected microphone's meter while
-retaining its warning and captured media. The Windows/Linux HUD samples this on
-its recording worker at up to 10 Hz while visible and unmuted, with one request
-in flight. Its neutral fixed-glass meter clears during pause, mute and lifecycle
-work; hidden controls retain only the existing warning polling cadence. AppKit
-meter integration is separate. Private X11 virtual-audio tests check changing
-volume, silence, mute/unmute and pause alongside decoded media; Windows runtime,
-physical microphones, accessibility and Wayland acceptance remain open.
+retaining its warning and captured media. Both HUDs sample the existing serialized
+session worker at up to 10 Hz while visible and unmuted, with one read in flight.
+Their neutral fixed-glass meters clear during pause, mute and lifecycle work;
+stale completions cannot revive a previous take. Hidden controls retain only the
+existing warning polling cadence. Private X11 virtual-audio tests check changing
+volume, silence, mute/unmute and pause alongside decoded media. Physical macOS and
+Windows microphones, accessibility and Wayland acceptance remain open.
 
 The opt-in `--live` workspace now connects full-display PNG capture and local
 screenshot history on both native hosts through `captures-app`. It includes
