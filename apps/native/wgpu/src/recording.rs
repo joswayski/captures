@@ -52,6 +52,8 @@ pub enum Command {
     Discard {
         generation: u64,
     },
+    /// Release a terminal owner without deleting its retained recovery media.
+    Retire,
     Shutdown,
 }
 
@@ -96,6 +98,7 @@ pub enum Event {
         generation: u64,
         result: Result<RecordingSessionSnapshot, String>,
     },
+    Retired,
 }
 
 pub struct MutationFailure {
@@ -227,6 +230,10 @@ impl Worker {
                             RecordingSession::discard,
                         ),
                     },
+                    Command::Retire => {
+                        session = None;
+                        Event::Retired
+                    }
                     Command::Shutdown => break,
                 };
                 if events.send(event).is_err() {
@@ -268,5 +275,90 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use captures_recording_platform::RecordingRecovery;
+    use std::time::Duration;
+
+    #[test]
+    fn terminal_owner_is_retired_before_recovery_or_next_prepare() {
+        let root = tempfile::tempdir().unwrap();
+        let recovery_root = root.path().join("recording-recovery");
+        let history_root = root.path().join("history");
+        let recovery =
+            RecordingRecovery::new(history_root.clone(), MediaToolchain::from_command_names());
+        let worker = Worker::new(egui::Context::default());
+        let prepare = || Command::Prepare {
+            generation: 4,
+            recovery_root: recovery_root.clone(),
+            display: DisplayDescriptor {
+                id: "fixture".into(),
+                name: "Fixture".into(),
+                x: 0,
+                y: 0,
+                width: 640,
+                height: 480,
+                scale_factor: 1.,
+                is_primary: true,
+            },
+            options: serde_json::from_value(serde_json::json!({
+                "kind":"video", "target":{"type":"display","display_id":"fixture"},
+                "frames_per_second":15, "max_resolution":"original", "countdown_seconds":0,
+                "show_cursor":false
+            }))
+            .unwrap(),
+        };
+        worker.send(prepare());
+        let Event::Prepared {
+            result: Ok(snapshot),
+            ..
+        } = worker.rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("prepare failed")
+        };
+        let bundle = recovery_root.join(snapshot.id);
+        let sentinel = bundle.join("keep.mp4");
+        std::fs::write(&sentinel, b"accepted media must survive retirement").unwrap();
+        let manifest = std::fs::read(bundle.join("manifest.json")).unwrap();
+        assert!(recovery.list().is_err());
+        // Finish before Start is an intentional deterministic terminal host error;
+        // it must release ownership without treating retirement as discard.
+        worker.send(Command::Finish {
+            generation: 4,
+            history_root,
+        });
+        assert!(matches!(
+            worker.rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Event::Finished { result: Err(_), .. }
+        ));
+        assert!(recovery.list().is_err());
+        worker.send(Command::Retire);
+        assert!(matches!(
+            worker.rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Event::Retired
+        ));
+        assert_eq!(
+            std::fs::read(sentinel).unwrap(),
+            b"accepted media must survive retirement"
+        );
+        assert_eq!(
+            std::fs::read(bundle.join("manifest.json")).unwrap(),
+            manifest
+        );
+        assert!(recovery.list().is_ok());
+        worker.send(prepare());
+        assert!(matches!(
+            worker.rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Event::Prepared { result: Ok(_), .. }
+        ));
+        worker.send(Command::Retire);
+        assert!(matches!(
+            worker.rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Event::Retired
+        ));
     }
 }

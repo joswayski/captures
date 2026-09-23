@@ -140,7 +140,11 @@ final class HistoryClearTests: XCTestCase {
             let blockedGate = failPartway ? nil : transport.blockNextHistoryAfterClear()
             window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertFirstButtonReturn)
             if !failPartway {
-                try waitUntil { transport.blockedHistoryStarted.wait(timeout: .now()) == .success }
+                var historyStarted = false
+                try waitUntil {
+                    historyStarted = historyStarted || transport.blockedHistoryStarted.wait(timeout: .now()) == .success
+                    return historyStarted
+                }
                 controller.refreshHistory() // supersedes clear-owned reload before it returns
                 blockedGate?.signal()
             }

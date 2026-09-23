@@ -621,16 +621,20 @@ item. Ordinary failure preserves accepted state for retry; a `requires_reopen`
 failure disables media until close/reopen. Physical acceptance remains open.
 Close blocks accepted work; unsaved edits require explicit discard, and normal quit
 is refused until they are saved or closed. Recording-editor edit drafts are not implemented.
-The macOS workbench lists interrupted native capture bundles in a bounded History
+Both native workbenches list interrupted native capture bundles in a bounded History
 section separate from artifact rows. Recover/Discard use the shared per-root lease,
-expected identity, serialized worker and explicit permanent-discard confirmation.
-Unavailable or corrupt entries have no actions. Cancellable media preparation leaves
-the bundle intact; a late cancellation cannot hide committed success. Successful
-recovery reloads/selects History before opening the editor. Terminal recording
-sessions retire on the serialized worker before recovery listing or new capture
-can acquire the native root lease. This is limited to
-isolated native development roots: no installed-data migration or Tauri recovery
-change. Windows/Linux host integration and physical acceptance remain open.
+expected identity, serialized worker, and explicit permanent-discard confirmation.
+Unavailable or corrupt entries are read-only; cancellable preparation leaves the
+bundle intact and late cancellation cannot hide committed success. Recovery refreshes
+History and opens the recovered recording only if selection is still current. Terminal
+recording sessions retire before listing or preparing another take, releasing the
+lease without discarding retained media. Quit waits for recovery/discard to finish.
+This is limited to isolated native development roots: no installed-data migration
+or Tauri recovery change. Linux X11/software-GL input verifies real media,
+confirmation/cancel and History publication failure/retry. Windows shares that host
+code; physical Windows and Wayland runtime/input/accessibility remain unverified.
+AppKit CI covers lifecycle and rendered fixtures; physical acceptance remains open.
+No parity gate is closed.
 The shared Replace original operation requires a regular permanent MP4/GIF outside
 History with byte-identical private recovery. It stages edited media, publishes the
 permanent path atomically, then updates History; a History failure restores the
