@@ -5,7 +5,7 @@
 
 use std::{
     fs,
-    io::Cursor,
+    io::{Cursor, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -18,6 +18,7 @@ use captures_media::{
 };
 use image::{ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
     Artifact,
@@ -209,6 +210,43 @@ pub enum SavedRecording {
     },
 }
 
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ReplacedRecording {
+    Replaced {
+        path: PathBuf,
+        artifact: Box<Artifact>,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReplaceOriginalError {
+    pub message: String,
+    pub requires_reopen: bool,
+}
+
+impl ReplaceOriginalError {
+    fn unchanged(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            requires_reopen: false,
+        }
+    }
+
+    fn indeterminate(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            requires_reopen: true,
+        }
+    }
+}
+
+impl std::fmt::Display for ReplaceOriginalError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.message.fmt(formatter)
+    }
+}
+
 enum SessionRequest {
     Snapshot,
     UpdateEdit {
@@ -240,6 +278,7 @@ pub struct RecordingEditorSession {
     has_microphone_audio: bool,
     frame: Arc<RgbaImage>,
     scratch: tempfile::TempDir,
+    invalidated: bool,
 }
 
 impl RecordingEditorSession {
@@ -299,7 +338,21 @@ impl RecordingEditorSession {
             has_microphone_audio,
             frame: Arc::new(frame),
             scratch,
+            invalidated: false,
         })
+    }
+
+    fn ensure_active(&self) -> Result<(), String> {
+        if self.invalidated {
+            Err("Recording replacement is indeterminate; close and reopen this editor.".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    #[must_use]
+    pub fn requires_reopen(&self) -> bool {
+        self.invalidated
     }
 
     #[must_use]
@@ -332,6 +385,7 @@ impl RecordingEditorSession {
     /// Decode the immutable full source at the accepted source-relative
     /// position without applying trim, crop, output, or export effects.
     pub fn source_frame(&self, cancel: &CancelToken) -> Result<Arc<RgbaImage>, String> {
+        self.ensure_active()?;
         extract_source_frame(
             &self.tools,
             &self.source_path,
@@ -350,6 +404,7 @@ impl RecordingEditorSession {
         &self,
         cancel: &CancelToken,
     ) -> Result<RecordingExportComparison, String> {
+        self.ensure_active()?;
         if cancel.is_cancelled() {
             return Err(MediaToolError::Cancelled.to_string());
         }
@@ -410,6 +465,7 @@ impl RecordingEditorSession {
 
     /// Estimate the accepted edit and preview export without changing session state.
     pub fn estimate_export(&self, cancel: &CancelToken) -> Result<ExportEstimate, String> {
+        self.ensure_active()?;
         self.tools
             .estimate_export_size(&self.source_path, &self.edit, &self.preview_export, cancel)
             .map_err(|error| error.to_string())
@@ -417,6 +473,7 @@ impl RecordingEditorSession {
 
     /// Estimate the accepted Save-new-copy export without changing session state.
     pub fn estimate_save_export(&self, cancel: &CancelToken) -> Result<ExportEstimate, String> {
+        self.ensure_active()?;
         self.tools
             .estimate_export_size(&self.source_path, &self.edit, &self.save_export, cancel)
             .map_err(|error| error.to_string())
@@ -429,6 +486,7 @@ impl RecordingEditorSession {
         position_ms: u64,
         cancel: &CancelToken,
     ) -> Result<RecordingPlayback, String> {
+        self.ensure_active()?;
         validate_session_edit(&self.probe, &self.edit)?;
         validate_preview_export(&self.preview_export)?;
         self.tools
@@ -452,6 +510,7 @@ impl RecordingEditorSession {
         position_ms: u64,
         cancel: &CancelToken,
     ) -> Result<RecordingPlayback, String> {
+        self.ensure_active()?;
         validate_session_edit(&self.probe, &self.edit)?;
         validate_preview_export(&self.preview_export)?;
         self.tools
@@ -473,6 +532,7 @@ impl RecordingEditorSession {
         &self,
         cancel: &CancelToken,
     ) -> Result<RecordingTimelineThumbnails, String> {
+        self.ensure_active()?;
         extract_timeline_thumbnails(
             &self.tools,
             &self.source_path,
@@ -486,6 +546,7 @@ impl RecordingEditorSession {
     }
 
     pub fn execute(&mut self, request: RecordingEditorRequest) -> Result<(), String> {
+        self.ensure_active()?;
         let request = match request {
             RecordingEditorRequest::Snapshot => SessionRequest::Snapshot,
             RecordingEditorRequest::UpdateEdit { edit } => SessionRequest::UpdateEdit { edit },
@@ -505,6 +566,7 @@ impl RecordingEditorSession {
     /// Execute the additive accepted-save-export contract. Existing v1 calls
     /// retain their budget rejection and snapshot shape.
     pub fn execute_v2(&mut self, request: RecordingEditorRequestV2) -> Result<(), String> {
+        self.ensure_active()?;
         let request = match request {
             RecordingEditorRequestV2::Snapshot => SessionRequest::Snapshot,
             RecordingEditorRequestV2::UpdateEdit { edit } => SessionRequest::UpdateEdit { edit },
@@ -595,6 +657,7 @@ impl RecordingEditorSession {
         cancel: &CancelToken,
         on_progress: impl FnMut(ExportProgress),
     ) -> Result<SavedRecording, String> {
+        self.ensure_active()?;
         validate_destination(&request.destination, request.export.format)?;
         self.tools
             .export(
@@ -617,6 +680,281 @@ impl RecordingEditorSession {
                 warning,
             }),
         }
+    }
+
+    /// Replace only an existing permanent recording and its byte-identical
+    /// private recovery copy. No cancellation-only exit occurs after the
+    /// permanent rename: History is published or the permanent path is
+    /// compensated from the intact recovery source. This is not crash-atomic
+    /// across the two directories.
+    pub fn replace_original(
+        &mut self,
+        cancel: &CancelToken,
+        on_progress: impl FnMut(ExportProgress),
+    ) -> Result<ReplacedRecording, ReplaceOriginalError> {
+        let unchanged = ReplaceOriginalError::unchanged;
+        if self.invalidated {
+            return Err(ReplaceOriginalError::indeterminate(
+                "Recording replacement is indeterminate; close and reopen this editor.",
+            ));
+        }
+        if cancel.is_cancelled() {
+            return Err(unchanged(MediaToolError::Cancelled.to_string()));
+        }
+        let extension = match (self.source_entry.kind, self.save_export.format) {
+            (ArtifactKind::Video, ExportFormat::Mp4) => "mp4",
+            (ArtifactKind::Gif, ExportFormat::Gif) => "gif",
+            _ => {
+                return Err(unchanged(
+                    "Replace original requires the source's MP4 or GIF format.".into(),
+                ));
+            }
+        };
+        let directory = captures_history::entry_directory(&self.history_root, &self.artifact_id)
+            .map_err(|error| unchanged(error.to_string()))?;
+        let recovery = directory.join(format!("media.{extension}"));
+        if self.source_path != recovery {
+            return Err(unchanged(
+                "Replace original requires an existing private recovery copy.".into(),
+            ));
+        }
+        let permanent = self
+            .source_entry
+            .saved_path
+            .as_ref()
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                unchanged("Replace original requires an existing permanent save.".into())
+            })?;
+        if !permanent
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+        {
+            return Err(unchanged(
+                "Permanent recording extension does not match its source.".into(),
+            ));
+        }
+        let history_root =
+            fs::canonicalize(&self.history_root).map_err(|error| unchanged(error.to_string()))?;
+        let permanent_canonical =
+            fs::canonicalize(&permanent).map_err(|error| unchanged(error.to_string()))?;
+        if permanent_canonical.starts_with(&history_root)
+            || permanent_canonical
+                == fs::canonicalize(&recovery).map_err(|error| unchanged(error.to_string()))?
+        {
+            return Err(unchanged(
+                "The permanent save must be outside private History.".into(),
+            ));
+        }
+        let mut original_recovery = regular_file(&recovery).map_err(unchanged)?;
+        let mut original_permanent = regular_file(&permanent).map_err(unchanged)?;
+        if !matches_original(&mut original_recovery, &permanent).map_err(unchanged)? {
+            return Err(unchanged(
+                "The permanent save differs from its History recovery copy.".into(),
+            ));
+        }
+        let recovery_identity = original_recovery
+            .metadata()
+            .map_err(|error| unchanged(error.to_string()))?;
+        let permanent_identity = original_permanent
+            .metadata()
+            .map_err(|error| unchanged(error.to_string()))?;
+        let old_digest = file_digest(&recovery).map_err(unchanged)?;
+        let metadata_path = directory.join(captures_history::HISTORY_METADATA_FILE);
+        let metadata_identity = regular_file(&metadata_path)
+            .and_then(|file| file.metadata().map_err(|error| error.to_string()))
+            .map_err(unchanged)?;
+        let original_metadata =
+            read_bounded(&metadata_path, MAX_METADATA_BYTES).map_err(unchanged)?;
+        if serde_json::to_value(
+            serde_json::from_slice::<HistoryEntry>(&original_metadata)
+                .map_err(|error| unchanged(error.to_string()))?,
+        )
+        .map_err(|error| unchanged(error.to_string()))?
+            != serde_json::to_value(&self.source_entry)
+                .map_err(|error| unchanged(error.to_string()))?
+        {
+            return Err(unchanged(
+                "History metadata no longer matches the opened recording.".into(),
+            ));
+        }
+        validate_session_edit(&self.probe, &self.edit).map_err(unchanged)?;
+        validate_save_export_policy(&self.save_export).map_err(unchanged)?;
+        validate_export_spec(&self.probe, &self.edit, &self.save_export)
+            .map_err(|error| unchanged(error.to_string()))?;
+
+        let parent = permanent
+            .parent()
+            .ok_or_else(|| unchanged("Permanent save folder is unavailable.".into()))?;
+        let stage_dir = tempfile::Builder::new()
+            .prefix(".captures-replace-")
+            .tempdir_in(parent)
+            .map_err(|error| unchanged(error.to_string()))?;
+        let stage = stage_dir.path().join(format!("staged.{extension}"));
+        self.tools
+            .export(
+                &recovery,
+                &stage,
+                &self.edit,
+                &self.save_export,
+                cancel,
+                on_progress,
+            )
+            .map_err(|error| unchanged(error.to_string()))?;
+        if cancel.is_cancelled() {
+            return Err(unchanged(MediaToolError::Cancelled.to_string()));
+        }
+        let new_probe = self
+            .tools
+            .probe(&stage)
+            .map_err(|error| unchanged(error.to_string()))?;
+        validate_source(&self.source_entry, &new_probe).map_err(unchanged)?;
+        if !new_probe
+            .metadata
+            .mime_type
+            .eq_ignore_ascii_case(if extension == "mp4" {
+                "video/mp4"
+            } else {
+                "image/gif"
+            })
+        {
+            return Err(unchanged(
+                "Exported recording format does not match its source.".into(),
+            ));
+        }
+        if cancel.is_cancelled() {
+            return Err(unchanged(MediaToolError::Cancelled.to_string()));
+        }
+        let poster_path = stage_dir.path().join("poster.png");
+        self.tools
+            .create_poster(&stage, &poster_path, cancel)
+            .map_err(|error| unchanged(error.to_string()))?;
+        let poster = read_bounded(&poster_path, MAX_FRAME_BYTES).map_err(unchanged)?;
+        if cancel.is_cancelled() {
+            return Err(unchanged(MediaToolError::Cancelled.to_string()));
+        }
+        let (new_system, new_microphone) = output_audio(
+            self.source_entry.kind,
+            &self.edit,
+            self.has_system_audio,
+            self.has_microphone_audio,
+            &new_probe,
+        );
+        let mut new_edit = EditSpec::default();
+        set_source_audio(&mut new_edit, new_system, new_microphone);
+        let new_export = ExportSpec {
+            format: self.save_export.format,
+            ..default_preview_export()
+        };
+        let new_frame = extract_preview(
+            &self.tools,
+            &stage,
+            &new_probe,
+            &new_edit,
+            &new_export,
+            0,
+            self.scratch.path(),
+        )
+        .map_err(unchanged)?;
+        if cancel.is_cancelled() {
+            return Err(unchanged(MediaToolError::Cancelled.to_string()));
+        }
+        let mut new_entry = self.source_entry.clone();
+        new_entry.width = new_probe.metadata.width;
+        new_entry.height = new_probe.metadata.height;
+        new_entry.size_bytes = new_probe.metadata.size_bytes;
+        new_entry.duration_ms = new_probe.metadata.duration_ms;
+        new_entry.mime_type = Some(new_probe.metadata.mime_type.clone());
+        new_entry.has_system_audio = new_system;
+        new_entry.has_microphone_audio = new_microphone;
+        fs::File::open(&stage)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| unchanged(error.to_string()))?;
+        if cancel.is_cancelled() {
+            return Err(unchanged(MediaToolError::Cancelled.to_string()));
+        }
+        if !same_file_at_path(&metadata_identity, &metadata_path).map_err(unchanged)?
+            || fs::read(&metadata_path).map_err(|error| unchanged(error.to_string()))?
+                != original_metadata
+            || !same_file_at_path(&recovery_identity, &recovery).map_err(unchanged)?
+            || !same_file_at_path(&permanent_identity, &permanent).map_err(unchanged)?
+            || !matches_original(&mut original_recovery, &recovery).map_err(unchanged)?
+            || !matches_original(&mut original_permanent, &permanent).map_err(unchanged)?
+        {
+            return Err(unchanged(
+                "Recording source or History changed while preparing replacement.".into(),
+            ));
+        }
+        if cancel.is_cancelled() {
+            return Err(unchanged(MediaToolError::Cancelled.to_string()));
+        }
+        // Windows cannot replace an open destination or rename an open History
+        // directory. Keep metadata identity + digest, not live handles, across
+        // publication and compensation.
+        drop(original_recovery);
+        drop(original_permanent);
+
+        // A panic or failed compensation leaves this guard set. Existing
+        // infallible snapshot/frame accessors retain old data, but no media
+        // operation can use it until the session is reopened.
+        self.invalidated = true;
+        if let Err(error) = fs::rename(&stage, &permanent) {
+            if same_file_at_path(&permanent_identity, &permanent).unwrap_or(false)
+                && file_digest(&permanent).is_ok_and(|digest| digest == old_digest)
+            {
+                self.invalidated = false;
+                return Err(unchanged(error.to_string()));
+            }
+            return Err(ReplaceOriginalError::indeterminate(format!(
+                "Permanent replacement failed and its old bytes cannot be verified: {error}"
+            )));
+        }
+        if let Err(error) =
+            captures_history::save_recording(&self.history_root, &new_entry, &poster, &permanent)
+        {
+            let history_intact = same_file_at_path(&metadata_identity, &metadata_path)
+                .unwrap_or(false)
+                && fs::read(&metadata_path).is_ok_and(|bytes| bytes == original_metadata)
+                && same_file_at_path(&recovery_identity, &recovery).unwrap_or(false)
+                && file_digest(&recovery).is_ok_and(|digest| digest == old_digest);
+            if history_intact {
+                let rollback = stage_dir.path().join(format!("rollback.{extension}"));
+                let restored = fs::copy(&recovery, &rollback)
+                    .and_then(|_| fs::File::open(&rollback)?.sync_all())
+                    .and_then(|_| fs::rename(&rollback, &permanent));
+                if restored.is_ok()
+                    && file_digest(&permanent).is_ok_and(|digest| digest == old_digest)
+                {
+                    self.invalidated = false;
+                    return Err(unchanged(error.to_string()));
+                }
+            }
+            return Err(ReplaceOriginalError::indeterminate(format!(
+                "History replacement failed and the permanent save could not safely be restored: {error}"
+            )));
+        }
+        self.source_entry = new_entry.clone();
+        self.source_path = recovery;
+        self.probe = new_probe;
+        self.has_system_audio = new_system;
+        self.has_microphone_audio = new_microphone;
+        self.edit = new_edit;
+        self.preview_export = new_export.clone();
+        self.save_export = new_export;
+        self.position_ms = 0;
+        self.frame = Arc::new(new_frame);
+        self.revision = self.revision.saturating_add(1);
+        self.invalidated = false;
+        let preview_path = directory.join(captures_history::HISTORY_PREVIEW_FILE);
+        Ok(ReplacedRecording::Replaced {
+            path: permanent,
+            artifact: Box::new(Artifact {
+                entry: new_entry,
+                image_path: preview_path.clone(),
+                preview_path,
+            }),
+        })
     }
 
     fn publish_history(
@@ -948,6 +1286,79 @@ fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
         return Err("Recording editor input exceeds its size limit.".into());
     }
     fs::read(path).map_err(|error| error.to_string())
+}
+
+fn regular_file(path: &Path) -> Result<fs::File, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_file() {
+        return Err("Replace original requires a regular, non-symlink recording file.".into());
+    }
+    fs::File::open(path).map_err(|error| error.to_string())
+}
+
+fn same_file_at_path(old: &fs::Metadata, path: &Path) -> Result<bool, String> {
+    let current = regular_file(path)?;
+    let new = current.metadata().map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(old.dev() == new.dev() && old.ino() == new.ino())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        Ok(old.volume_serial_number() == new.volume_serial_number()
+            && old.file_index() == new.file_index())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Ok(old.len() == new.len()
+            && old.created().ok() == new.created().ok()
+            && old.modified().ok() == new.modified().ok())
+    }
+}
+
+fn file_digest(path: &Path) -> Result<[u8; 32], String> {
+    let mut file = regular_file(path)?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    Ok(hash.finalize().into())
+}
+
+fn matches_original(original: &mut fs::File, path: &Path) -> Result<bool, String> {
+    let mut current = regular_file(path)?;
+    if original
+        .metadata()
+        .map_err(|error| error.to_string())?
+        .len()
+        != current.metadata().map_err(|error| error.to_string())?.len()
+    {
+        return Ok(false);
+    }
+    original
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| error.to_string())?;
+    let mut old = [0_u8; 64 * 1024];
+    let mut new = [0_u8; 64 * 1024];
+    loop {
+        let count = original.read(&mut old).map_err(|error| error.to_string())?;
+        current
+            .read_exact(&mut new[..count])
+            .map_err(|error| error.to_string())?;
+        if old[..count] != new[..count] {
+            return Ok(false);
+        }
+        if count == 0 {
+            return Ok(true);
+        }
+    }
 }
 
 fn validate_destination(destination: &Path, format: ExportFormat) -> Result<(), String> {
