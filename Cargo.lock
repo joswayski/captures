@@ -808,6 +808,7 @@ dependencies = [
  "cpal",
  "hound",
  "screencapturekit",
+ "tempfile",
  "thiserror 2.0.19",
 ]
 
@@ -842,6 +843,7 @@ dependencies = [
  "image",
  "parking_lot",
  "pipewire",
+ "tempfile",
  "thiserror 2.0.19",
  "windows-sys 0.61.2",
  "x11rb",

@@ -29,6 +29,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints.rust]
 unsafe_code = "allow"
 
