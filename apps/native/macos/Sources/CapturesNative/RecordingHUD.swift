@@ -3,6 +3,7 @@ import AppKit
 enum RecordingHUDColorToken: String, CaseIterable {
     case glassStrong = "glass-strong"
     case glassBorder = "glass-border"
+    case glassActive = "glass-active"
     case glassText = "glass-text"
     case glassTextSubtle = "glass-text-subtle"
     case themeAccent = "theme-accent"
@@ -19,6 +20,10 @@ final class RecordingHUDView: NSView {
     private let noticeLabel = NSTextField(labelWithString: "These controls won’t show in recordings")
     private let pauseButton: CaptureButton
     private let microphoneButton: CaptureButton
+    private let meterTrack = NSView()
+    private let meterFill = NSView()
+    private let meterLabel = NSTextField(labelWithString: "OFF")
+    private var meterLevel = 0.0
     private var lifecycleButtons: [CaptureButton] = []
     private var lifecycleActionsEnabled = true
     private var elapsedMilliseconds: UInt64 = 0
@@ -26,7 +31,7 @@ final class RecordingHUDView: NSView {
     private var timer: Timer?
     private(set) var paused = false
     private(set) var microphoneMuted = false
-    private var microphoneAvailable = false
+    private(set) var microphoneAvailable = false
     var pauseOrResume: () -> Void = {}
     var toggleMicrophone: () -> Void = {}
     var restart: () -> Void = {}
@@ -86,7 +91,22 @@ final class RecordingHUDView: NSView {
             [weak self] in self?.screenshot()
         }
         screenshot.setAccessibilityLabel("Take region screenshot")
-        unavailable("—", x: 264, label: "Audio meter is unavailable in this version")
+        meterTrack.frame = NSRect(x: 267, y: 58, width: 32, height: 6)
+        meterTrack.wantsLayer = true
+        meterTrack.layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassActive.rawValue).cgColor
+        meterTrack.layer?.cornerRadius = 3
+        meterFill.frame = NSRect(x: 0, y: 0, width: 0, height: 6)
+        meterFill.wantsLayer = true
+        meterFill.layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassText.rawValue).cgColor
+        meterFill.layer?.cornerRadius = 3
+        meterTrack.addSubview(meterFill); addSubview(meterTrack)
+        meterLabel.frame = NSRect(x: 262, y: 39, width: 42, height: 16)
+        meterLabel.alignment = .center
+        meterLabel.font = .systemFont(ofSize: 9, weight: .medium)
+        meterLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
+        addSubview(meterLabel)
+        meterTrack.setAccessibilityRole(.progressIndicator)
+        meterTrack.setAccessibilityLabel("Microphone level")
         microphoneButton.frame = NSRect(x: 304, y: 39, width: 38, height: 34)
         microphoneButton.actionBlock = { [weak self] in self?.toggleMicrophone() }
         addSubview(microphoneButton)
@@ -111,15 +131,12 @@ final class RecordingHUDView: NSView {
         button.toolTip = help; addSubview(button); return button
     }
 
-    private func unavailable(_ title: String, x: CGFloat, label: String) {
-        let button = hudButton(title, x: x, help: label) {}
-        button.isEnabled = false; button.setAccessibilityLabel(label)
-    }
-
     func setPaused(_ paused: Bool, elapsedMilliseconds: UInt64) {
+        if self.paused != paused { setMicrophoneLevel(0) }
         self.paused = paused; self.elapsedMilliseconds = elapsedMilliseconds
         resumedAt = paused ? nil : Date()
         statusLabel.stringValue = paused ? "PAUSED" : "RECORDING"
+        updateMeterLabel()
         let statusToken: RecordingHUDColorToken = paused ? .themeAccent : .themeSignal
         statusDot.layer?.backgroundColor = tokens.color(statusToken.rawValue).cgColor
         pauseButton.title = paused ? "▶" : "Ⅱ"
@@ -140,6 +157,7 @@ final class RecordingHUDView: NSView {
     }
 
     func setMicrophone(muted: Bool, available: Bool) {
+        if microphoneMuted != muted || microphoneAvailable != available { setMicrophoneLevel(0) }
         microphoneMuted = muted
         microphoneAvailable = available
         microphoneButton.icon = .microphone(muted: muted)
@@ -151,15 +169,35 @@ final class RecordingHUDView: NSView {
         microphoneButton.setAccessibilityLabel(available ? action : unavailable)
         microphoneButton.setAccessibilityValue(muted ? 1 : 0)
         microphoneButton.needsDisplay = true
+        updateMeterLabel()
+    }
+
+    func setMicrophoneLevel(_ peak: Double) {
+        let level = !paused && !microphoneMuted && microphoneAvailable && lifecycleActionsEnabled
+            ? min(1, max(0, peak.isFinite ? peak : 0)) : 0
+        meterLevel = level
+        meterFill.frame.size.width = meterTrack.bounds.width * level
+        updateMeterLabel()
+    }
+
+    private func updateMeterLabel() {
+        let state = !microphoneAvailable ? "off" : paused ? "paused"
+            : microphoneMuted ? "muted" : !lifecycleActionsEnabled ? "busy" : "recording"
+        meterLabel.stringValue = state == "recording" ? "\(Int((meterLevel * 100).rounded()))%" : state.uppercased()
+        let value = "\(Int((meterLevel * 100).rounded()))%, \(state)"
+        meterTrack.setAccessibilityValue(value)
+        meterTrack.toolTip = "Microphone level: \(value)"
     }
 
     func setLifecycleActionsEnabled(_ enabled: Bool) {
         lifecycleActionsEnabled = enabled
+        if !enabled { setMicrophoneLevel(0) }
         lifecycleButtons.forEach {
             $0.isEnabled = enabled
             $0.needsDisplay = true
         }
         microphoneButton.isEnabled = enabled && microphoneAvailable
+        updateMeterLabel()
     }
 
     private func updateTimer() {
