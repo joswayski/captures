@@ -1195,8 +1195,10 @@ mod tests {
         let copy_for_finalization = |kind| {
             let mut options = options(&display);
             options.kind = kind;
-            let mut copy =
-                RecordingSession::prepare(root.path().into(), options, display.clone()).unwrap();
+            // Independent finalization fixtures cannot share the live take's
+            // recovery-root lease; they own disposable bundles in separate roots.
+            let copy_root = root.path().join(format!("copy-{}", uuid::Uuid::new_v4()));
+            let mut copy = RecordingSession::prepare(copy_root, options, display.clone()).unwrap();
             copy.manifest.segments = session.manifest.segments.clone();
             for segment in &copy.manifest.segments {
                 std::fs::copy(
@@ -1376,8 +1378,12 @@ mod tests {
         assert!(failing.manifest.segments[0].complete);
         assert!(failing.directory.join("segment-000.mp4").is_file());
 
-        let mut cancelled =
-            RecordingSession::prepare(root.path().into(), options(&display), display).unwrap();
+        let mut cancelled = RecordingSession::prepare(
+            root.path().join("cancelled-recovery-root"),
+            options(&display),
+            display,
+        )
+        .unwrap();
         let cancelled_directory = cancelled.directory.clone();
         let calls = Cell::new(0);
         assert_eq!(
