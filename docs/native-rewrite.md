@@ -464,8 +464,13 @@ A single latest-frame slot bounds pending UI work; no timer remains after stop.
 Pause retains the last presented source position, EOF replays from accepted trim
 start, and failures restore the accepted still. Focus loss/minimize requests Pause;
 close cancels and waits for teardown before the normal unsaved-edit confirmation.
-Seek/edit/save/estimate remain gated while decoding. AppKit playback is a separate
-slice; audio playback, looping and physical playback acceptance remain open.
+Seek/edit/save/estimate remain gated while decoding. Loop preview defaults off;
+it can change while playing without changing accepted edits, estimates or History.
+Enabled looping restarts at the accepted trim start only after a nonempty clean
+EOF and completed decoder teardown. Turning it off finishes the current lap;
+Pause, close and failure never restart. Each new editor defaults to one pass.
+AppKit playback/looping is a separate slice; audio playback and physical playback
+acceptance remain open.
 Raw-input tests exercise multi-pass delivery, keyboard focus,
 thresholds, cancellation and busy gates; private-X11 tests cover staged values,
 thumbnail loading/cancel/failure/retry and temporal pixels, exported duration/colors
@@ -511,7 +516,7 @@ the result; a seek retains it. Estimation has independent cancellation and error
 creates no History entry, and never marks unsaved edits as saved. No estimate promises
 a byte budget. Close/quit waits for accepted work, as with export.
 The preview/timeline/save hierarchy follows the shipping recording editor, but
-the UI is not a visual match; audio playback and looping remain open.
+the UI is not a visual match; audio playback remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted
 frame, and unapplied values gate scrubbing/export. Failed edits keep
 the staged values available for correction. MP4/GIF Save new copy uses

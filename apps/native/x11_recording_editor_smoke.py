@@ -251,13 +251,25 @@ def main():
                 run("xdotool", "mousemove", "--window", editor, "192", "57", "sleep", ".05",
                     "mousedown", "1", "sleep", ".08", "mouseup", "1")
 
+            def loop_click():
+                run("xdotool", "mousemove", "--window", editor, "254", "57", "sleep", ".05",
+                    "mousedown", "1", "sleep", ".08", "mouseup", "1")
+
             def playing():
                 return "Working…" in run("xdotool", "getwindowname", editor).decode()
 
             def position():
+                # A fixed sleep can return an older clipboard value under load.
+                subprocess.run(["xclip", "-selection", "clipboard", "-i"], env=env,
+                    input=b"waiting for playback position", check=True, timeout=5)
                 click(editor, 136, 520)
-                run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".1")
-                return int(run("xclip", "-selection", "clipboard", "-o").strip())
+                run("xdotool", "key", "ctrl+a", "ctrl+c")
+                def copied_position():
+                    result = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
+                        env=env, capture_output=True, timeout=5)
+                    value = result.stdout.strip()
+                    return value if result.returncode == 0 and value.isdigit() else None
+                return int(wait(copied_position, "fresh playback position clipboard value"))
 
             field(editor, 98, 598, 1500)
             field(editor, 211, 598, 4500)
@@ -274,14 +286,15 @@ def main():
                 str(output / "playback-motion.mp4")])
             motion_click()
             wait(playing, "Play owns decoder")
-            def green_motion():
+            def motion_color(channel, name):
                 # Decoder startup is not presentation time. Observe an actual
                 # temporal transition instead of assuming fixed startup latency.
-                path = output / "playback-running.png"
+                path = output / f"{name}.png"
                 run("import", "-window", editor, str(path))
                 pixel = run("convert", str(path), "-crop", "1x1+480+220", "-depth", "8", "rgb:-")
-                return len(pixel) == 3 and pixel[1] > 90 and pixel[1] > max(pixel[0], pixel[2]) + 40
-            wait(green_motion, "real playback crosses from red to green")
+                return len(pixel) == 3 and pixel[channel] > 90 and all(
+                    pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel)
+            wait(lambda: motion_color(1, "playback-running"), "real playback crosses from red to green")
             dominant(output / "playback-running.png", 1)
             motion_click()
             idle(editor)
@@ -303,6 +316,27 @@ def main():
             ended_at = position()
             assert 4400 <= ended_at < 4500, ended_at
             dominant(output / "playback-ended.png", 2)
+            assert recording.wait(timeout=20) == 0
+            loop_recording = spawn("loop-capture", ["ffmpeg", "-v", "error", "-f", "x11grab",
+                "-framerate", "15", "-video_size", "960x900", "-i", env["DISPLAY"] + "+80,60",
+                "-t", "14", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                str(output / "playback-loop-motion.mp4")])
+            motion_click()
+            wait(playing, "loop playback starts")
+            loop_click()  # Turn on while already playing, not only before Play.
+            wait(lambda: motion_color(2, "loop-first-end"), "loop reaches blue trim end")
+            wait(lambda: motion_color(0, "loop-restart"), "loop returns to red accepted trim start")
+            assert playing(), "loop must retain worker ownership across EOF"
+            motion_click()
+            idle(editor)
+            shot(editor, "loop-paused")
+            motion_click()
+            wait(playing, "loop resumes after Pause")
+            loop_click()  # Turn off while active; stop at this lap's exclusive end.
+            idle(editor)
+            assert 4400 <= position() < 4500
+            shot(editor, "loop-disabled-ended")
+            assert loop_recording.wait(timeout=20) == 0
             motion_click()
             wait(playing, "EOF replay decoder")
             time.sleep(.2)
@@ -312,7 +346,7 @@ def main():
             run("xdotool", "windowactivate", "--sync", editor)
             replay_at = position()
             assert 1500 <= replay_at < 3000, replay_at
-            assert recording.wait(timeout=20) == 0
+            loop_click()  # A decoder failure must not restart even with looping enabled.
             missing = output / "temporarily-moved.mp4"
             source.rename(missing)
             try:
@@ -323,6 +357,7 @@ def main():
                 assert position() == 0, "failure restores accepted still and source position"
             finally:
                 missing.rename(source)
+            loop_click()
             motion_click()
             wait(playing, "failure retry decoder")
             time.sleep(.7)
@@ -334,6 +369,7 @@ def main():
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             motion_click()
             wait(playing, "minimum Play")
+            loop_click()  # Close must cancel looping just like single-pass playback.
             # The title changes in the click's layout pass; capture after the
             # first decoder frame redraw, not that transient old Play label.
             time.sleep(.4)
@@ -364,6 +400,7 @@ def main():
                 "appearance": args.appearance, "paused_at_ms": paused_at, "ended_at_ms": ended_at,
                 "replay_at_ms": replay_at, "checks": ["staged-play-gate", "temporal-motion",
                     "pause-stable", "resume", "exclusive-trim-end", "replay", "focus-pause",
+                    "loop-active-toggle", "loop-trim-restart", "loop-pause-resume", "loop-disable-eof",
                     "failure-restores-still", "retry", "minimum-layout", "dirty-close",
                     "accepted-export-duration-colors", "source-immutable", "clean-close"]}, indent=2) + "\n")
             print("PASS silent playback: real motion, pause/resume/EOF, failure/retry, close, accepted export and immutable source")
