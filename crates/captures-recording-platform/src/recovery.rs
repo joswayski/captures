@@ -155,7 +155,24 @@ impl RecordingRecovery {
         session_id: &str,
         expected_identity: &str,
         cancel: &CancelToken,
+        progress: impl FnMut(RecoveryProgress),
+    ) -> Result<RecoveryOutcome, String> {
+        self.recover_with_cleanup(
+            session_id,
+            expected_identity,
+            cancel,
+            progress,
+            |store, id| store.remove(id).map_err(string),
+        )
+    }
+
+    fn recover_with_cleanup(
+        &self,
+        session_id: &str,
+        expected_identity: &str,
+        cancel: &CancelToken,
         mut progress: impl FnMut(RecoveryProgress),
+        cleanup: impl Fn(&DraftStore, &str) -> Result<(), String>,
     ) -> Result<RecoveryOutcome, String> {
         let _lease = lease(&self.root)?;
         check_cancel(cancel)?;
@@ -164,7 +181,7 @@ impl RecordingRecovery {
         let intent_path = bundle.join(INTENT);
         let intent = if intent_path.exists() {
             let intent: PublicationIntent =
-                serde_json::from_slice(&regular_bytes(&intent_path)?).map_err(string)?;
+                serde_json::from_slice(&regular_bytes(&intent_path, 64 * 1024)?).map_err(string)?;
             if intent.version != 1
                 || intent.session_id != session_id
                 || intent.artifact_id != session_id
@@ -207,10 +224,7 @@ impl RecordingRecovery {
                 .err()
                 .map(|error| error.to_string());
             if previous.warning.is_none() && manifest.options.kind == RecordingKind::Video {
-                previous.warning = DraftStore::new(self.root.clone())
-                    .remove(session_id)
-                    .err()
-                    .map(|error| error.to_string());
+                previous.warning = cleanup(&DraftStore::new(self.root.clone()), session_id).err();
             }
             return Ok(previous);
         }
@@ -313,7 +327,7 @@ impl RecordingRecovery {
         self.tools
             .create_poster(&assembled, &poster, cancel)
             .map_err(string)?;
-        let poster = regular_bytes(&poster)?;
+        let poster = regular_bytes(&poster, 128 * 1024 * 1024)?;
         check_cancel(cancel)?;
         // Recheck source and metadata after slow media work. Intent is recorded
         // before History publication, so a process kill can retry by ID.
@@ -380,10 +394,7 @@ impl RecordingRecovery {
             .err()
             .map(|error| error.to_string());
         if warning.is_none() && manifest.options.kind == RecordingKind::Video {
-            warning = DraftStore::new(self.root.clone())
-                .remove(session_id)
-                .err()
-                .map(|error| error.to_string());
+            warning = cleanup(&DraftStore::new(self.root.clone()), session_id).err();
         }
         Ok(RecoveryOutcome {
             status: "recovered",
@@ -397,6 +408,17 @@ impl RecordingRecovery {
         &self,
         session_id: &str,
         expected_identity: &str,
+    ) -> Result<&'static str, String> {
+        self.discard_with(session_id, expected_identity, |path| {
+            fs::remove_dir_all(path)
+        })
+    }
+
+    fn discard_with(
+        &self,
+        session_id: &str,
+        expected_identity: &str,
+        remove: impl FnOnce(&Path) -> std::io::Result<()>,
     ) -> Result<&'static str, String> {
         let _lease = lease(&self.root)?;
         let (manifest, identity) = self.read(session_id)?;
@@ -412,11 +434,14 @@ impl RecordingRecovery {
         let quarantine = self.root.join(format!(".discard-{}", uuid::Uuid::new_v4()));
         fs::rename(&bundle, &quarantine).map_err(string)?;
         // Never recursively remove an unexpected tree substituted at the path.
-        if file_id::get_file_id(&quarantine).map_err(string)? != bundle_id {
-            return Err("Recovery bundle changed while discarding".into());
+        if file_id::get_file_id(&quarantine).ok() != Some(bundle_id) {
+            return Err(format!(
+                "Recovery bundle changed while discarding; remaining data is at {}",
+                quarantine.display()
+            ));
         }
         if let Err(error) =
-            reject_links(&quarantine).and_then(|()| fs::remove_dir_all(&quarantine).map_err(string))
+            reject_links(&quarantine).and_then(|()| remove(&quarantine).map_err(string))
         {
             let restored = fs::rename(&quarantine, &bundle);
             return Err(match restored {
@@ -439,10 +464,7 @@ impl RecordingRecovery {
         }
         reject_links(&bundle)?;
         let manifest_path = bundle.join("manifest.json");
-        if fs::metadata(&manifest_path).map_err(string)?.len() > 8 * 1024 * 1024 {
-            return Err("Recovery manifest is too large".into());
-        }
-        let bytes = regular_bytes(&manifest_path)?;
+        let bytes = regular_bytes(&manifest_path, 8 * 1024 * 1024)?;
         let manifest: RecordingDraftManifest = serde_json::from_slice(&bytes).map_err(string)?;
         if manifest.schema_version != 1 || manifest.session_id != id {
             return Err("Foreign recovery manifest".into());
@@ -486,6 +508,7 @@ impl RecordingRecovery {
         }
         let entry: HistoryEntry = serde_json::from_slice(&regular_bytes(
             &path.join(captures_history::HISTORY_METADATA_FILE),
+            8 * 1024 * 1024,
         )?)
         .map_err(string)?;
         Ok(Some(entry))
@@ -688,7 +711,7 @@ fn manifest_digest(manifest: &RecordingDraftManifest) -> Result<String, String> 
     ))
 }
 
-fn regular_bytes(path: &Path) -> Result<Vec<u8>, String> {
+fn regular_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
     if !fs::symlink_metadata(path)
         .map_err(string)?
         .file_type()
@@ -696,7 +719,16 @@ fn regular_bytes(path: &Path) -> Result<Vec<u8>, String> {
     {
         return Err("Recovery file must be regular".into());
     }
-    fs::read(path).map_err(string)
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(string)?
+        .take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(string)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err("Recovery metadata exceeds its size limit".into());
+    }
+    Ok(bytes)
 }
 
 fn atomic_intent(path: &Path, intent: &PublicationIntent) -> Result<(), String> {
@@ -866,6 +898,33 @@ mod tests {
         live.discard().unwrap();
         assert!(recovery.list().unwrap().is_empty());
         assert!(recovery.root.join(".recording-recovery.lock").is_file());
+    }
+
+    #[cfg(unix)] // set_len creates a sparse file here; Windows may allocate 8 GiB.
+    #[test]
+    fn listing_does_not_stream_large_media() {
+        let Some((_base, recovery, id)) = fixture(RecordingKind::Video) else {
+            return;
+        };
+        let video = recovery.root.join(&id).join("segment-000.mp4");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(video)
+            .unwrap()
+            .set_len(8 * 1024 * 1024 * 1024)
+            .unwrap();
+        let start = std::time::Instant::now();
+        let row = recovery
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|draft| draft.session_id == id)
+            .unwrap();
+        assert_eq!(row.status, "recoverable");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "listing read the recording media"
+        );
     }
 
     #[test]
@@ -1115,6 +1174,129 @@ mod tests {
         assert_eq!(fs::read(unrelated).unwrap(), b"keep");
     }
 
+    #[test]
+    fn partial_discard_failure_restores_visible_bundle_for_manual_recovery() {
+        let Some((_base, recovery, id)) = fixture(RecordingKind::Video) else {
+            return;
+        };
+        let accepted = identity(&recovery, &id);
+        let bundle = recovery.root.join(&id);
+        let failure = recovery.discard_with(&id, &accepted, |quarantine| {
+            fs::remove_file(quarantine.join("segment-001.mp4"))?;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected removal failure",
+            ))
+        });
+        assert!(failure.unwrap_err().contains("injected removal failure"));
+        assert!(bundle.join("manifest.json").is_file());
+        assert!(bundle.join("segment-000.mp4").is_file());
+        assert_eq!(
+            recovery
+                .list()
+                .unwrap()
+                .iter()
+                .filter(|draft| draft.session_id == id)
+                .count(),
+            1
+        );
+        assert!(!fs::read_dir(&recovery.root).unwrap().any(|item| {
+            item.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".discard-")
+        }));
+    }
+
+    #[test]
+    fn changed_history_metadata_cannot_be_claimed_as_previous_publication() {
+        let Some((_base, recovery, id)) = fixture(RecordingKind::Gif) else {
+            return;
+        };
+        let accepted = identity(&recovery, &id);
+        let saved = recovery
+            .recover(&id, &accepted, &CancelToken::default(), |_| {})
+            .unwrap();
+        let metadata = recovery
+            .history_root
+            .join(&id)
+            .join(captures_history::HISTORY_METADATA_FILE);
+        let mut entry: HistoryEntry =
+            serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+        entry.has_system_audio = true;
+        fs::write(&metadata, serde_json::to_vec_pretty(&entry).unwrap()).unwrap();
+        let before = fs::read(&metadata).unwrap();
+        assert!(
+            recovery
+                .recover(&id, &accepted, &CancelToken::default(), |_| {})
+                .is_err()
+        );
+        assert_eq!(fs::read(metadata).unwrap(), before);
+        assert!(saved.path.is_file());
+        assert!(recovery.root.join(id).is_dir());
+    }
+
+    #[test]
+    fn publication_retry_finishes_cleanup_without_second_history_entry() {
+        let Some((_base, recovery, id)) = fixture(RecordingKind::Gif) else {
+            return;
+        };
+        let store = DraftStore::new(recovery.root.clone());
+        let interrupted = store.load(&id).unwrap();
+        let accepted = identity(&recovery, &id);
+        let saved = recovery
+            .recover(&id, &accepted, &CancelToken::default(), |_| {})
+            .unwrap();
+        let media = fs::read(&saved.path).unwrap();
+        // Simulate a process exit after History publication but before the
+        // recovery manifest's Ready transition was persisted.
+        store.save(&interrupted).unwrap();
+        let retry = recovery
+            .recover(&id, &accepted, &CancelToken::default(), |_| {})
+            .unwrap();
+        assert_eq!(retry.status, "already_recovered");
+        assert_eq!(retry.entry.id, saved.entry.id);
+        assert_eq!(fs::read(retry.path).unwrap(), media);
+        assert_eq!(store.load(&id).unwrap().state, RecordingState::Ready);
+        assert_eq!(fs::read_dir(&recovery.history_root).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn cleanup_failure_is_success_warning_and_retry_does_not_publish_twice() {
+        let Some((_base, recovery, id)) = fixture(RecordingKind::Video) else {
+            return;
+        };
+        let accepted = identity(&recovery, &id);
+        let saved = recovery
+            .recover_with_cleanup(
+                &id,
+                &accepted,
+                &CancelToken::default(),
+                |_| {},
+                |_store, _id| Err("injected post-publication cleanup failure".into()),
+            )
+            .unwrap();
+        assert_eq!(saved.status, "recovered");
+        assert!(
+            saved
+                .warning
+                .as_deref()
+                .unwrap()
+                .contains("cleanup failure")
+        );
+        assert!(saved.path.is_file());
+        assert!(recovery.root.join(&id).is_dir());
+        let media = fs::read(&saved.path).unwrap();
+        let retry = recovery
+            .recover(&id, &accepted, &CancelToken::default(), |_| {})
+            .unwrap();
+        assert_eq!(retry.status, "already_recovered");
+        assert_eq!(retry.entry.id, saved.entry.id);
+        assert_eq!(fs::read(retry.path).unwrap(), media);
+        assert!(!recovery.root.join(&id).exists());
+        assert_eq!(fs::read_dir(&recovery.history_root).unwrap().count(), 1);
+    }
+
     #[cfg(unix)]
     #[test]
     fn lists_corrupt_and_linked_bundles_as_unavailable_without_touching_targets() {
@@ -1146,5 +1328,35 @@ mod tests {
         assert!(row.identity.is_none());
         assert!(recovery.discard(&id, &token).is_err());
         assert_eq!(fs::read(external).unwrap(), b"keep");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_junction_bundle_is_unavailable_and_never_discarded() {
+        let Some((base, recovery, id)) = fixture(RecordingKind::Video) else {
+            return;
+        };
+        let bundle = recovery.root.join(&id);
+        let accepted = identity(&recovery, &id);
+        let external = base.path().join("external-owned-bundle");
+        fs::rename(&bundle, &external).unwrap();
+        assert!(
+            Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&bundle)
+                .arg(&external)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let row = recovery
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|row| row.session_id == id)
+            .unwrap();
+        assert_eq!(row.status, "unavailable");
+        assert!(recovery.discard(&id, &accepted).is_err());
+        assert!(external.join("manifest.json").is_file());
     }
 }

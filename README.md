@@ -226,7 +226,9 @@ usable tray and restores the controls and workspace if its tray host disappears.
 be installed separately for these development builds; native media-tool bundling
 is not connected. Started recordings are saved on session loss instead of being
 discarded; failed finalization retains recovery data. Linux cannot exclude the
-controls from captured pixels, so Hide is the native workaround on X11.
+controls from captured pixels, so Hide is the native workaround on X11. Shared
+native recovery can identify, assemble, or explicitly discard interrupted takes
+in isolated development History; the native hosts do not yet expose those actions.
 Region recordings keep a click-through boundary and dimming outside the recorded
 area during countdown, recording, pause, and hidden controls. The guide leaves
 the recorded pixels transparent and disappears when the take ends or is cancelled.
