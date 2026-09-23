@@ -2003,17 +2003,24 @@ final class RecordingEditorTests: XCTestCase {
         seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
         XCTAssertEqual(fps.titleOfSelectedItem, "8 FPS", "Seek retains accepted GIF cadence")
 
-        let cleanWorker = FakeRecordingEditorWorker(presentation: try presentation())
-        let clean = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
-                                              worker: cleanWorker, confirmDiscard: { false })
-        defer { clean.window.orderOut(nil) }
-        clean.present(artifact: recordingArtifact(id: "clean"), historyRoot: "/History",
-                      outputDirectory: "/Exports")
-        let cleanFormat = try popup("Recording export format", in: clean.root)
-        cleanFormat.selectItem(withTitle: "GIF")
-        _ = cleanFormat.sendAction(cleanFormat.action, to: cleanFormat.target)
-        XCTAssertEqual(try popup("GIF frame rate", in: clean.root).titleOfSelectedItem, "15 FPS")
-        XCTAssertTrue(cleanWorker.requests.isEmpty, "format staging should not acquire the worker")
+        controller.present(artifact: recordingArtifact(id: "next-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(worker.openCount, 1, "dirty accepted cadence rejects an item switch")
+        XCTAssertEqual(fps.titleOfSelectedItem, "8 FPS")
+
+        worker.saveResult = .success(.saved(path: "/Exports/eight-fps-seek.gif"))
+        save.performClick(nil)
+        XCTAssertFalse(controller.dirty)
+        controller.present(artifact: recordingArtifact(id: "next-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(worker.openCount, 2, "a clean item switch opens the new History item")
+        XCTAssertTrue(fps.isHiddenOrHasHiddenAncestor)
+        let requestCount = worker.requests.count
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertEqual(fps.titleOfSelectedItem, "15 FPS",
+                       "a successful new-item open resets remembered GIF cadence")
+        XCTAssertEqual(worker.requests.count, requestCount,
+                       "format staging should not acquire the worker")
     }
 
     func testAcceptedSeekEstimateSaveWarningAndDirtyLifecycle() throws {
