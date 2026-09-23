@@ -551,12 +551,19 @@ identity; each lap reopens the decoder, so playback does not claim to be gapless
 Persistent bounded FFmpeg playback delivers retained latest frames and a source-relative playhead without
 mutating the accepted frame/position, dirty state, History or source. Pause, focus loss,
 minimize, close, item switching and quit retain cancellation through decoder teardown;
-errors restore the accepted still preview. Audio playback is not implemented.
+errors restore the accepted still preview. AppKit's **Adjust crop** mode lazily decodes
+and caches one immutable full-source frame at the accepted source position. Eight
+resize handles and interior movement call the shared source-pixel crop geometry and
+stage the existing numeric fields without per-pointer decoding or publication. The
+overlay maps top-down source coordinates through letterboxing in AppKit's flipped view;
+Apply remains the only publication boundary, while Done restores the exact prior
+accepted or motion frame. Source loading has the existing serialized cancel, close,
+item-generation and retry guards. Audio playback is not implemented.
 Windows/X11 already implement
 the same edit controls through wgpu;
 private X11/software-GL exercises provide implementation evidence only. Windows and
 Wayland presentation, physical macOS input, accessibility, playback audio, physical
-audio output, graphical crop handles, draft restoration and original
+audio output, draft restoration and original
 replacement remain open. No recording-editor or cross-platform parity gate closes.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams

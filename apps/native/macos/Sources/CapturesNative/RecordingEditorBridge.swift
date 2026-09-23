@@ -68,6 +68,11 @@ struct RecordingPlaybackImage {
     let image: CGImage
 }
 
+struct RecordingSourceImage {
+    let positionMilliseconds: UInt64
+    let image: CGImage
+}
+
 enum RecordingPlaybackCompletion: Equatable {
     case eof
     case empty
@@ -138,6 +143,18 @@ enum NativeRecordingCropAxis: UInt8 {
     case height = 1
 }
 
+enum NativeRecordingCropDragHandle: UInt8, CaseIterable {
+    case move = 0
+    case north = 1
+    case northEast = 2
+    case east = 3
+    case southEast = 4
+    case south = 5
+    case southWest = 6
+    case west = 7
+    case northWest = 8
+}
+
 enum NativeRecordingResolutionPreset: UInt8, CaseIterable {
     case original = 0
     case p1080 = 1
@@ -153,6 +170,24 @@ enum NativeRecordingResolutionPreset: UInt8, CaseIterable {
 }
 
 enum NativeRecordingGeometry {
+    static func afterDrag(_ crop: NativeRecordingCropRect,
+                          source: NativeRecordingDimensions,
+                          handle: NativeRecordingCropDragHandle,
+                          deltaX: Double,
+                          deltaY: Double,
+                          lockAspect: Bool) -> NativeRecordingCropRect? {
+        var input = CapturesRecordingCropRect()
+        input.x = crop.x; input.y = crop.y
+        input.width = crop.width; input.height = crop.height
+        var dimensions = CapturesRecordingDimensions()
+        dimensions.width = source.width; dimensions.height = source.height
+        var output = CapturesRecordingCropRect()
+        guard captures_recording_crop_after_drag_v1(input, dimensions, handle.rawValue,
+            deltaX, deltaY, lockAspect, &output) else { return nil }
+        return NativeRecordingCropRect(x: output.x, y: output.y,
+                                       width: output.width, height: output.height)
+    }
+
     static func resizeLocked(_ crop: NativeRecordingCropRect,
                              source: NativeRecordingDimensions,
                              axis: NativeRecordingCropAxis,
@@ -464,6 +499,37 @@ final class NativeRecordingEditorSession {
         return playback
     }
 
+    func sourceFrame(cancel: NativeRecordingEditorCancel) throws -> RecordingSourceImage {
+        var response: UnsafeMutablePointer<CChar>?
+        let handle = captures_recording_editor_source_frame_v1(self.handle, cancel.handle,
+                                                                &response)
+        defer { captures_settings_free_v1(response) }
+        guard let response else {
+            captures_recording_editor_frame_free_v1(handle)
+            throw AppBridgeError.invalidResponse
+        }
+        let value: [String: Any]
+        do { value = try AppBridge.decode(Data(bytes: response, count: strlen(response))) }
+        catch {
+            captures_recording_editor_frame_free_v1(handle)
+            throw error
+        }
+        guard let handle,
+              let position = (value["position_ms"] as? NSNumber)?.uint64Value,
+              let width = (value["width"] as? NSNumber)?.intValue,
+              let height = (value["height"] as? NSNumber)?.intValue,
+              width > 0, height > 0 else {
+            captures_recording_editor_frame_free_v1(handle)
+            throw AppBridgeError.invalidResponse
+        }
+        let frame = NativeRecordingEditorFrame(handle: handle)
+        let image = try frame.image()
+        guard image.width == width, image.height == height else {
+            throw AppBridgeError.invalidResponse
+        }
+        return RecordingSourceImage(positionMilliseconds: position, image: image)
+    }
+
     func thumbnails(cancel: NativeRecordingEditorCancel) throws -> NativeRecordingEditorThumbnails {
         var response: UnsafeMutablePointer<CChar>?
         let handle = captures_recording_editor_thumbnails_v1(self.handle, cancel.handle, &response)
@@ -533,6 +599,8 @@ protocol RecordingEditorWorking: AnyObject {
                   started: @escaping (RecordingPlaybackMetadata) -> Void,
                   frame: @escaping (RecordingPlaybackImage) -> Void,
                   completion: @escaping (Result<RecordingPlaybackCompletion, Error>) -> Void)
+    func sourceFrame(cancel: NativeRecordingEditorCancel,
+                     completion: @escaping (Result<RecordingSourceImage, Error>) -> Void)
     func thumbnails(cancel: NativeRecordingEditorCancel,
                     completion: @escaping (Result<CGImage, Error>) -> Void)
     func save(destination: String, export: [String: Any], cancel: NativeRecordingEditorCancel,
@@ -639,6 +707,20 @@ final class RecordingEditorWorker: RecordingEditorWorking {
                 result = .failure(error)
             }
             delivery.finish(result)
+        }
+    }
+
+    func sourceFrame(cancel: NativeRecordingEditorCancel,
+                     completion: @escaping (Result<RecordingSourceImage, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result {
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The recording editor is closed.")
+                }
+                return try session.sourceFrame(cancel: cancel)
+            }
+            DispatchQueue.main.async { completion(result) }
         }
     }
 
