@@ -39,6 +39,57 @@ pub enum CropResizeAxis {
     Height = 1,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum CropDragHandle {
+    Move = 0,
+    North = 1,
+    NorthEast = 2,
+    East = 3,
+    SouthEast = 4,
+    South = 5,
+    SouthWest = 6,
+    West = 7,
+    NorthWest = 8,
+}
+
+impl TryFrom<u8> for CropDragHandle {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Move),
+            1 => Ok(Self::North),
+            2 => Ok(Self::NorthEast),
+            3 => Ok(Self::East),
+            4 => Ok(Self::SouthEast),
+            5 => Ok(Self::South),
+            6 => Ok(Self::SouthWest),
+            7 => Ok(Self::West),
+            8 => Ok(Self::NorthWest),
+            _ => Err(()),
+        }
+    }
+}
+
+impl CropDragHandle {
+    const fn west(self) -> bool {
+        matches!(self, Self::SouthWest | Self::West | Self::NorthWest)
+    }
+
+    const fn east(self) -> bool {
+        matches!(self, Self::NorthEast | Self::East | Self::SouthEast)
+    }
+
+    const fn north(self) -> bool {
+        matches!(self, Self::North | Self::NorthEast | Self::NorthWest)
+    }
+
+    const fn south(self) -> bool {
+        matches!(self, Self::SouthEast | Self::South | Self::SouthWest)
+    }
+}
+
 impl TryFrom<u8> for CropResizeAxis {
     type Error = ();
 
@@ -52,6 +103,153 @@ impl TryFrom<u8> for CropResizeAxis {
 }
 
 impl CropRect {
+    /// Apply a source-pixel drag from this immutable original rectangle.
+    /// Locked edge handles retain the opposite edge and center the coupled
+    /// dimension; locked corners retain both opposite edges.
+    #[must_use]
+    pub fn after_drag(
+        self,
+        source_width: u32,
+        source_height: u32,
+        handle: CropDragHandle,
+        delta_x: f64,
+        delta_y: f64,
+        lock_aspect: bool,
+    ) -> Option<Self> {
+        if source_width < 2
+            || source_height < 2
+            || self.width < 2
+            || self.height < 2
+            || self.x.checked_add(self.width)? > source_width
+            || self.y.checked_add(self.height)? > source_height
+            || !delta_x.is_finite()
+            || !delta_y.is_finite()
+        {
+            return None;
+        }
+
+        if handle == CropDragHandle::Move {
+            return Some(Self {
+                x: rounded_clamp(f64::from(self.x) + delta_x, 0, source_width - self.width),
+                y: rounded_clamp(f64::from(self.y) + delta_y, 0, source_height - self.height),
+                ..self
+            });
+        }
+
+        let west = handle.west();
+        let east = handle.east();
+        let north = handle.north();
+        let south = handle.south();
+        let original_right = self.x + self.width;
+        let original_bottom = self.y + self.height;
+        let mut left = f64::from(self.x) + if west { delta_x } else { 0.0 };
+        let mut right = f64::from(original_right) + if east { delta_x } else { 0.0 };
+        let mut top = f64::from(self.y) + if north { delta_y } else { 0.0 };
+        let mut bottom = f64::from(original_bottom) + if south { delta_y } else { 0.0 };
+
+        if !lock_aspect {
+            if west {
+                left = left.clamp(0.0, right - 2.0);
+            }
+            if east {
+                right = right.clamp(left + 2.0, f64::from(source_width));
+            }
+            if north {
+                top = top.clamp(0.0, bottom - 2.0);
+            }
+            if south {
+                bottom = bottom.clamp(top + 2.0, f64::from(source_height));
+            }
+            let left = left.round() as u32;
+            let right = right.round() as u32;
+            let top = top.round() as u32;
+            let bottom = bottom.round() as u32;
+            return Some(Self {
+                x: left,
+                y: top,
+                width: right - left,
+                height: bottom - top,
+            });
+        }
+
+        let ratio = f64::from(self.width) / f64::from(self.height);
+        let center_x = f64::from(self.x) + f64::from(self.width) / 2.0;
+        let center_y = f64::from(self.y) + f64::from(self.height) / 2.0;
+        let mut width = (right - left).max(2.0);
+        let mut height = (bottom - top).max(2.0);
+        if (west || east) && (north || south) {
+            let width_change = (width - f64::from(self.width)).abs() / f64::from(self.width);
+            let height_change = (height - f64::from(self.height)).abs() / f64::from(self.height);
+            if width_change >= height_change {
+                height = width / ratio;
+            } else {
+                width = height * ratio;
+            }
+        } else if west || east {
+            height = width / ratio;
+        } else {
+            width = height * ratio;
+        }
+
+        let anchor_x = if west {
+            f64::from(original_right)
+        } else if east {
+            f64::from(self.x)
+        } else {
+            center_x
+        };
+        let anchor_y = if north {
+            f64::from(original_bottom)
+        } else if south {
+            f64::from(self.y)
+        } else {
+            center_y
+        };
+        let max_width = if west {
+            anchor_x
+        } else if east {
+            f64::from(source_width) - anchor_x
+        } else {
+            2.0 * anchor_x.min(f64::from(source_width) - anchor_x)
+        };
+        let max_height = if north {
+            anchor_y
+        } else if south {
+            f64::from(source_height) - anchor_y
+        } else {
+            2.0 * anchor_y.min(f64::from(source_height) - anchor_y)
+        };
+        let fit = 1.0_f64.min(max_width / width).min(max_height / height);
+        width = (width * fit).max(2.0);
+        height = (height * fit).max(2.0);
+        let width = (width.round() as u32).clamp(2, max_width.round() as u32);
+        let height = (height.round() as u32).clamp(2, max_height.round() as u32);
+        let x = if west {
+            original_right - width
+        } else if east {
+            self.x
+        } else {
+            rounded_clamp(center_x - f64::from(width) / 2.0, 0, source_width - width)
+        };
+        let y = if north {
+            original_bottom - height
+        } else if south {
+            self.y
+        } else {
+            rounded_clamp(
+                center_y - f64::from(height) / 2.0,
+                0,
+                source_height - height,
+            )
+        };
+        Some(Self {
+            x,
+            y,
+            width,
+            height,
+        })
+    }
+
     /// Resize one numeric crop dimension while preserving the current ratio and
     /// fitting the coupled dimensions inside the source from this crop's origin.
     #[must_use]
@@ -85,6 +283,10 @@ impl CropRect {
         }
         self
     }
+}
+
+fn rounded_clamp(value: f64, minimum: u32, maximum: u32) -> u32 {
+    value.clamp(f64::from(minimum), f64::from(maximum)).round() as u32
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -313,11 +515,94 @@ pub fn sampled_export_spec(export: &ExportSpec, window_ms: u64, total_ms: u64) -
 #[cfg(test)]
 mod tests {
     use super::{
-        CropRect, CropResizeAxis, ESTIMATE_SAMPLE_WINDOW_MS, ExportFormat, ExportSpec,
-        GifExportAttempt, QualityPreset, SizeBudgetError, calculate_size_budget,
+        CropDragHandle, CropRect, CropResizeAxis, ESTIMATE_SAMPLE_WINDOW_MS, ExportFormat,
+        ExportSpec, GifExportAttempt, QualityPreset, SizeBudgetError, calculate_size_budget,
         estimate_sample_windows, extrapolate_sampled_size, gif_export_attempts,
         sampled_export_spec,
     };
+
+    fn crop(x: u32, y: u32, width: u32, height: u32) -> CropRect {
+        CropRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn crop_drag_moves_and_resizes_unlocked_edges_from_the_original() {
+        let initial = crop(100, 50, 400, 200);
+        assert_eq!(
+            initial.after_drag(1_140, 692, CropDragHandle::Move, 900.0, 900.0, false),
+            Some(crop(740, 492, 400, 200))
+        );
+        assert_eq!(
+            initial.after_drag(1_140, 692, CropDragHandle::NorthWest, -150.0, 175.0, false),
+            Some(crop(0, 225, 500, 25))
+        );
+        assert_eq!(
+            initial.after_drag(1_140, 692, CropDragHandle::East, -900.0, 0.0, false),
+            Some(crop(100, 50, 2, 200))
+        );
+        assert_eq!(
+            initial.after_drag(1_140, 692, CropDragHandle::South, 900.0, 900.0, false),
+            Some(crop(100, 50, 400, 642)),
+            "irrelevant axis deltas do not move an unlocked edge"
+        );
+    }
+
+    #[test]
+    fn crop_drag_lock_preserves_opposite_and_center_anchors_inside_bounds() {
+        let initial = crop(100, 50, 400, 200);
+        assert_eq!(
+            initial.after_drag(1_140, 692, CropDragHandle::SouthEast, 120.0, 20.0, true),
+            Some(crop(100, 50, 520, 260))
+        );
+        assert_eq!(
+            initial.after_drag(1_140, 692, CropDragHandle::West, -250.0, 0.0, true),
+            Some(crop(0, 25, 500, 250)),
+            "west retains right edge and vertical center"
+        );
+        assert_eq!(
+            initial.after_drag(1_140, 692, CropDragHandle::North, 0.0, -400.0, true),
+            Some(crop(50, 0, 500, 250)),
+            "north retains bottom edge and horizontal center"
+        );
+
+        let odd = crop(17, 23, 101, 61);
+        for handle in [
+            CropDragHandle::North,
+            CropDragHandle::NorthEast,
+            CropDragHandle::East,
+            CropDragHandle::SouthEast,
+            CropDragHandle::South,
+            CropDragHandle::SouthWest,
+            CropDragHandle::West,
+            CropDragHandle::NorthWest,
+        ] {
+            let resized = odd
+                .after_drag(173, 129, handle, 500.75, -300.25, true)
+                .unwrap();
+            assert!(resized.width >= 2 && resized.height >= 2);
+            assert!(resized.x + resized.width <= 173);
+            assert!(resized.y + resized.height <= 129);
+        }
+    }
+
+    #[test]
+    fn crop_drag_rejects_invalid_geometry_and_nonfinite_deltas() {
+        let initial = crop(10, 10, 20, 12);
+        for result in [
+            crop(10, 10, 1, 12).after_drag(100, 80, CropDragHandle::East, 1.0, 0.0, false),
+            crop(90, 10, 20, 12).after_drag(100, 80, CropDragHandle::East, 1.0, 0.0, false),
+            initial.after_drag(1, 80, CropDragHandle::East, 1.0, 0.0, false),
+            initial.after_drag(100, 80, CropDragHandle::East, f64::NAN, 0.0, false),
+            initial.after_drag(100, 80, CropDragHandle::East, 0.0, f64::INFINITY, false),
+        ] {
+            assert!(result.is_none());
+        }
+    }
 
     #[test]
     fn aspect_locked_crop_resize_preserves_ratio_rounding_and_origin_bounds() {

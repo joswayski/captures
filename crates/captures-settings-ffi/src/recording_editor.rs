@@ -149,6 +149,51 @@ pub unsafe extern "C" fn captures_recording_editor_frame_free_v1(frame: *mut Arc
     }
 }
 
+/// Decode and retain the immutable full source at the accepted position.
+///
+/// # Safety
+/// Session is live and serialized for this call. Cancel remains live until the
+/// call returns and may be atomically cancelled elsewhere. Non-null output is
+/// aligned writable pointer storage. Free output JSON and returned frame once;
+/// the frame may outlive session and cancel owners.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_source_frame_v1(
+    session: *const RecordingEditorSession,
+    cancel: *const CancelToken,
+    output: *mut *mut c_char,
+) -> *mut Arc<RgbaImage> {
+    if output.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains live session/cancel handles for this call.
+        let session = unsafe { session.as_ref() }.ok_or("recording editor handle is null")?;
+        let cancel = unsafe { cancel.as_ref() }.ok_or("recording export cancel handle is null")?;
+        let position_ms = session.snapshot().position_ms;
+        session
+            .source_frame(cancel)
+            .map(|frame| (position_ms, frame))
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    let (handle, value) = match result {
+        Ok((position_ms, frame)) => {
+            let value = json!({
+                "ok": true,
+                "result": {
+                    "position_ms": position_ms,
+                    "width": frame.width(),
+                    "height": frame.height(),
+                },
+            });
+            (Box::into_raw(Box::new(frame)), value)
+        }
+        Err(error) => (ptr::null_mut(), json!({"ok":false,"error":error})),
+    };
+    // SAFETY: caller supplies aligned writable output storage.
+    unsafe { output.write(response(value)) };
+    handle
+}
+
 /// Open persistent silent playback of the accepted edit and preview export.
 ///
 /// # Safety
@@ -502,10 +547,34 @@ mod tests {
             thumbnails_response["error"],
             "recording editor handle is null"
         );
+        let mut source_frame_response = ptr::null_mut();
+        // SAFETY: output is writable; null session is an explicit owned error.
+        let source_frame = unsafe {
+            captures_recording_editor_source_frame_v1(
+                ptr::null(),
+                ptr::null(),
+                &mut source_frame_response,
+            )
+        };
+        assert!(source_frame.is_null());
+        // SAFETY: failed generation returned one owned response.
+        let source_frame_response = unsafe { json(source_frame_response) };
+        assert_eq!(source_frame_response["ok"], false);
+        assert_eq!(
+            source_frame_response["error"],
+            "recording editor handle is null"
+        );
         // SAFETY: null output refuses work and every thumbnail free accepts null.
         assert!(
             unsafe {
                 captures_recording_editor_thumbnails_v1(ptr::null(), ptr::null(), ptr::null_mut())
+            }
+            .is_null()
+        );
+        // SAFETY: null output refuses work before inspecting other handles.
+        assert!(
+            unsafe {
+                captures_recording_editor_source_frame_v1(ptr::null(), ptr::null(), ptr::null_mut())
             }
             .is_null()
         );
@@ -706,6 +775,39 @@ mod tests {
             "recording export cancel handle is null"
         );
         let cancel = captures_recording_editor_cancel_create_v1();
+        let mut source_response = ptr::null_mut();
+        // SAFETY: handles/output remain live for source-frame extraction.
+        let source_frame = unsafe {
+            captures_recording_editor_source_frame_v1(session, cancel, &mut source_response)
+        };
+        assert!(!source_frame.is_null());
+        // SAFETY: extraction returned one owned response.
+        let source_response = unsafe { json(source_response) };
+        assert_eq!(source_response["result"]["position_ms"], 0);
+        assert_eq!(source_response["result"]["width"], 32);
+        assert_eq!(source_response["result"]["height"], 24);
+
+        let cancelled = captures_recording_editor_cancel_create_v1();
+        // SAFETY: token is live and independently owned.
+        unsafe { captures_recording_editor_cancel_v1(cancelled) };
+        let mut cancelled_response = ptr::null_mut();
+        // SAFETY: handles/output remain live; pre-cancellation is supported.
+        let cancelled_frame = unsafe {
+            captures_recording_editor_source_frame_v1(session, cancelled, &mut cancelled_response)
+        };
+        assert!(cancelled_frame.is_null());
+        // SAFETY: failed extraction returned one owned response.
+        let cancelled_response = unsafe { json(cancelled_response) };
+        assert_eq!(cancelled_response["ok"], false);
+        assert!(
+            cancelled_response["error"]
+                .as_str()
+                .unwrap()
+                .contains("cancelled")
+        );
+        // SAFETY: cancelled owner is released exactly once after the call.
+        unsafe { captures_recording_editor_cancel_free_v1(cancelled) };
+
         let mut response = ptr::null_mut();
         // SAFETY: handles and output remain live for generation.
         let thumbnails =
@@ -748,6 +850,18 @@ mod tests {
             captures_recording_editor_free_v1(session);
             captures_recording_editor_cancel_free_v1(cancel);
         }
+
+        let mut source_pixels = MaybeUninit::<RegionPixels>::uninit();
+        // SAFETY: retained source frame outlives session/cancel owners.
+        assert!(unsafe {
+            captures_recording_editor_frame_pixels_v1(source_frame, source_pixels.as_mut_ptr())
+        });
+        // SAFETY: successful access initialized the descriptor.
+        let source_pixels = unsafe { source_pixels.assume_init() };
+        assert_eq!((source_pixels.width, source_pixels.height), (32, 24));
+        assert_eq!(source_pixels.length, 32 * 24 * 4);
+        // SAFETY: retained frame is released once after the final borrow.
+        unsafe { captures_recording_editor_frame_free_v1(source_frame) };
 
         let mut playback_pixels = MaybeUninit::<RegionPixels>::uninit();
         // SAFETY: retained frame remains live after playback/session/cancel free.

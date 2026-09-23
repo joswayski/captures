@@ -53,7 +53,7 @@ fn create_recording(path: &Path) {
             "-i",
             "sine=frequency=440:sample_rate=48000:duration=3",
             "-filter_complex",
-            "[0:v][1:v][2:v]concat=n=3:v=1:a=0,format=yuv420p[v]",
+            "[0:v][1:v][2:v]concat=n=3:v=1:a=0,drawbox=x=28:y=0:w=4:h=24:color=white:t=fill,format=yuv420p[v]",
             "-map",
             "[v]",
             "-map",
@@ -481,6 +481,60 @@ fn timeline_thumbnails_span_the_immutable_source_without_changing_session_state(
     );
     assert_eq!(serde_json::to_value(session.snapshot()).unwrap(), snapshot);
     assert!(Arc::ptr_eq(&frame, &session.frame()));
+}
+
+#[test]
+fn source_frame_ignores_spatial_preview_and_retains_session_state() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let history = data.path().join("history");
+    let source = entry.recording_media_path(&history).unwrap();
+    let source_bytes = fs::read(&source).unwrap();
+    let mut session = open(&data, &entry, tools);
+    session
+        .execute(RecordingEditorRequest::UpdatePreview {
+            edit: EditSpec {
+                trim_start_ms: 1_100,
+                trim_end_ms: Some(2_300),
+                crop: Some(CropRect {
+                    x: 0,
+                    y: 2,
+                    width: 24,
+                    height: 18,
+                }),
+                output_width: Some(16),
+                output_height: Some(12),
+                ..EditSpec::default()
+            },
+            export: preview_spec(ExportFormat::Gif, QualityPreset::Standard),
+        })
+        .unwrap();
+    session
+        .execute(RecordingEditorRequest::Seek { position_ms: 1_500 })
+        .unwrap();
+    assert_eq!(session.frame().dimensions(), (16, 12));
+    let snapshot = serde_json::to_value(session.snapshot()).unwrap();
+    let accepted = session.frame();
+    let history_entries = fs::read_dir(&history).unwrap().count();
+
+    let source_frame = session.source_frame(&CancelToken::default()).unwrap();
+
+    assert_eq!(source_frame.dimensions(), (32, 24));
+    assert_dominant(source_frame.get_pixel(8, 8).0, 1);
+    let outside_crop = source_frame.get_pixel(30, 8).0;
+    assert!(
+        outside_crop[0] > 180 && outside_crop[1] > 180 && outside_crop[2] > 180,
+        "expected the source-only white strip: {outside_crop:?}"
+    );
+    assert_eq!(serde_json::to_value(session.snapshot()).unwrap(), snapshot);
+    assert!(Arc::ptr_eq(&accepted, &session.frame()));
+    assert_eq!(fs::read_dir(&history).unwrap().count(), history_entries);
+    assert_eq!(fs::read(&source).unwrap(), source_bytes);
+
+    let retained = source_frame.clone();
+    drop(session);
+    assert_eq!(retained.dimensions(), (32, 24));
 }
 
 #[test]
