@@ -485,11 +485,14 @@ impl RecordingSession {
     }
 
     pub fn discard(&mut self) -> Result<RecordingSessionSnapshot, String> {
-        if matches!(
+        if !matches!(
             self.manifest.state,
-            RecordingState::Ready | RecordingState::Finalizing
+            RecordingState::Countdown
+                | RecordingState::Recording
+                | RecordingState::Paused
+                | RecordingState::Failed
         ) {
-            return Err("Recording cannot be discarded after finalization starts".into());
+            return Err("Recording cannot be discarded after finalization or discard".into());
         }
         if let Some(segment) = self.active.take() {
             segment
@@ -671,6 +674,35 @@ mod tests {
         assert!(!directory.exists());
         assert_eq!(std::fs::read(sentinel).unwrap(), b"keep");
         assert!(session.active.is_none());
+        assert!(
+            session.discard().is_err(),
+            "retained terminal owner must not write after lease release"
+        );
+    }
+
+    #[test]
+    fn failed_owner_holds_lease_for_restart_or_discard_until_host_retires_it() {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("recording-recovery");
+        let history = base.path().join("history");
+        let display = display();
+        let mut failed =
+            RecordingSession::prepare(root.clone(), options(&display), display.clone()).unwrap();
+        let id = failed.manifest().session_id.clone();
+        failed.fail("injected engine failure".into());
+        let recovery = crate::RecordingRecovery::new(history, MediaToolchain::from_command_names());
+        assert!(recovery.list().is_err());
+        assert!(
+            RecordingSession::prepare(root.clone(), options(&display), display.clone()).is_err()
+        );
+        drop(failed); // Worker must retire its failed owner before a new Prepare or recovery.
+        let rows = recovery.list().unwrap();
+        assert_eq!(
+            rows.iter().find(|row| row.session_id == id).unwrap().status,
+            "recoverable"
+        );
+        let mut next = RecordingSession::prepare(root, options(&display), display).unwrap();
+        next.discard().unwrap();
     }
 
     #[test]
