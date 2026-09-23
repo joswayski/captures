@@ -590,18 +590,18 @@ normal/minimum labels and minimum-window estimate error/retry without publishing
 estimate to History. AppKit CI covers exact/approximate light/dark normal/minimum
 labels and the same lifecycle. Physical macOS/Windows/Wayland acceptance remains
 open. Close/quit waits for accepted work, as with export.
-The Windows/Linux wgpu editor's explicit **Compare** action uses the shared encoded
-comparison operation on its serialized worker. It restores the accepted still/time
-from paused playback and presents a Before/Encoded split in Fit or 100% mode.
-Pointer dragging and the keyboard-accessible slider change only display clipping.
-The private per-editor channel, request generation, accepted revision, position and
-full preview export guard delivery. Cancellation rejects even a late successful
-reply. Staging, seek, playback, crop adjustment and close discard the comparison;
-failures permit retry without mutating accepted pixels, dirty state or History.
-Maximum uses the budget-free first attempt and visibly warns that final capped
-output can differ. Requested/fallback seek positions are not exact decoded PTS:
-cadence can select neighboring frames. AppKit integration and physical Windows/
-Wayland input, accessibility and mixed-DPI acceptance remain separate open work.
+The shared recording comparison ABI retains independent before/after frames from
+a read-only encoding sample at the accepted source-relative position. Both native
+editors expose explicit Compare, split and Hide, cancellation and retry on their
+serialized workers. They restore the accepted still/time from paused playback;
+paused playback time never selects the comparison frame. Generation, cancellation,
+accepted revision, position and preview export guard delivery. Staging, playback,
+crop, seek, new item and close discard comparison without changing accepted edits,
+dirty state or History. The wgpu split also supports pointer dragging and keyboard
+adjustment. Maximum displays the budget-free first attempt and warns that final
+capped-save pixels can differ. Requested/fallback seek positions are not decoded
+PTS; output cadence can select neighboring frames. Physical macOS, Windows and
+Wayland input, accessibility and mixed-DPI acceptance remain open.
 The preview/timeline/save hierarchy follows the shipping recording editor, but
 the UI is not a visual match; physical audio playback acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted

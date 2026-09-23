@@ -272,11 +272,11 @@ Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
 audio-only Preserve changes show approximate sizes. Estimation can be canceled.
 Both native recording editors show nonzero percentage changes versus the original
 recording beside accepted estimates; staged edits and Maximum mode hide the delta.
-The Windows/Linux native editor's **Compare** action encodes a before/after sample
-at the accepted still frame, with a draggable split, Fit/100%, cancellation and retry.
-It returns from paused playback to that accepted frame. Staged edits hide comparison;
-no file or History entry is published. Maximum mode compares the first attempt,
-not the final capped save; output cadence can select neighboring frames.
+Both native recording editors' **Compare** action explicitly encodes a read-only
+before/after sample at the accepted frame, with a split slider, Hide, cancellation
+and retry. It does not follow paused playback time or publish a file or History
+entry; staged edits hide it. Maximum mode shows the first encoded attempt, not
+necessarily the final capped save; output cadence may select neighboring frames.
 Both native recording editors offer **Maximum file size** for MP4/GIF, using
 decimal KB/MB/GB with a 100 KB minimum. Apply accepts the limit; the size label then
 shows the cap instead of an estimate. Save may reduce resolution, frame rate or
