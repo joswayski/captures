@@ -21,9 +21,9 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, numeric crop, preset/custom output size, track volume/mute/mono and MP4/GIF save-new-copy | Playback, graphical crop, audio meter/device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, numeric crop, preset/custom output size, track volume/mute/mono, silent Play/Pause and MP4/GIF save-new-copy; wgpu also offers opt-in Loop preview | Audio playback, AppKit looping, graphical crop, audio meter/device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording playback/graphical crop and remaining controls |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording audio playback/AppKit looping, graphical crop and remaining controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -464,8 +464,13 @@ A single latest-frame slot bounds pending UI work; no timer remains after stop.
 Pause retains the last presented source position, EOF replays from accepted trim
 start, and failures restore the accepted still. Focus loss/minimize requests Pause;
 close cancels and waits for teardown before the normal unsaved-edit confirmation.
-Seek/edit/save/estimate remain gated while decoding. AppKit playback is a separate
-slice; audio playback, looping and physical playback acceptance remain open.
+Seek/edit/save/estimate remain gated while decoding. Loop preview defaults off;
+it can change while playing without changing accepted edits, estimates or History.
+Enabled looping restarts at the accepted trim start only after a nonempty clean
+EOF and completed decoder teardown. Turning it off finishes the current lap;
+Pause, close and failure never restart. Each new editor defaults to one pass.
+AppKit has silent Play/Pause; its looping is a separate slice. Audio playback and physical playback
+acceptance remain open.
 Raw-input tests exercise multi-pass delivery, keyboard focus,
 thresholds, cancellation and busy gates; private-X11 tests cover staged values,
 thumbnail loading/cancel/failure/retry and temporal pixels, exported duration/colors
@@ -511,7 +516,7 @@ the result; a seek retains it. Estimation has independent cancellation and error
 creates no History entry, and never marks unsaved edits as saved. No estimate promises
 a byte budget. Close/quit waits for accepted work, as with export.
 The preview/timeline/save hierarchy follows the shipping recording editor, but
-the UI is not a visual match; audio playback and looping remain open.
+the UI is not a visual match; audio playback remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted
 frame, and unapplied values gate scrubbing/export. Failed edits keep
 the staged values available for correction. MP4/GIF Save new copy uses
@@ -548,7 +553,7 @@ errors restore the accepted still preview. Audio playback is not implemented.
 Windows/X11 already implement
 the same edit controls through wgpu;
 private X11/software-GL exercises provide implementation evidence only. Windows and
-Wayland presentation, physical macOS input, accessibility, playback audio and looping,
+Wayland presentation, physical macOS input, accessibility, playback audio and AppKit looping,
 physical audio output, graphical crop handles, draft restoration and original
 replacement remain open. No recording-editor or cross-platform parity gate closes.
 

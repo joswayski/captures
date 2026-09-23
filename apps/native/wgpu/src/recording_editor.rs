@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
@@ -88,6 +89,7 @@ struct View {
     loading_thumbnails: bool,
     thumbnail_error: Option<String>,
     playing: bool,
+    preview_loop: Arc<AtomicBool>,
     playback_position_ms: Option<u64>,
     playback_ended: bool,
     close_after_playback: bool,
@@ -514,6 +516,8 @@ impl Editor {
         let wake_ctx = ctx.clone();
         let playback_frame = Arc::new(Mutex::new(None));
         let latest_frame = playback_frame.clone();
+        let preview_loop = Arc::<AtomicBool>::default();
+        let loop_enabled = preview_loop.clone();
         let worker = thread::spawn(move || {
             let mut session = match RecordingEditorSession::open(
                 RecordingEditorOpenRequest {
@@ -571,23 +575,37 @@ impl Editor {
                         let result = (|| {
                             let session =
                                 session.as_ref().ok_or("Recording editor is unavailable.")?;
-                            let mut playback = session.playback(position, &cancel)?;
-                            while let Some(frame) = playback.next_frame()? {
-                                if cancel.is_cancelled() {
+                            let mut position = position;
+                            loop {
+                                let mut playback = session.playback(position, &cancel)?;
+                                let mut decoded_frame = false;
+                                while let Some(frame) = playback.next_frame()? {
+                                    if cancel.is_cancelled() {
+                                        break;
+                                    }
+                                    decoded_frame = true;
+                                    let needs_wake = {
+                                        let mut latest = latest_frame.lock().unwrap();
+                                        let empty = latest.is_none();
+                                        *latest = Some(PlaybackFrame {
+                                            position_ms: frame.position_ms,
+                                            pixels: frame.pixels(),
+                                        });
+                                        empty
+                                    };
+                                    if needs_wake {
+                                        wake(&wake_ctx, viewport);
+                                    }
+                                }
+                                // Never restart an empty stream or a cancelled/failed
+                                // decoder. Drop finishes teardown before the next lap.
+                                if cancel.is_cancelled()
+                                    || !decoded_frame
+                                    || !loop_enabled.load(Ordering::Relaxed)
+                                {
                                     break;
                                 }
-                                let needs_wake = {
-                                    let mut latest = latest_frame.lock().unwrap();
-                                    let empty = latest.is_none();
-                                    *latest = Some(PlaybackFrame {
-                                        position_ms: frame.position_ms,
-                                        pixels: frame.pixels(),
-                                    });
-                                    empty
-                                };
-                                if needs_wake {
-                                    wake(&wake_ctx, viewport);
-                                }
+                                position = session.snapshot().edit.trim_start_ms;
                             }
                             Ok(PlaybackEnd::Ended)
                         })();
@@ -609,6 +627,7 @@ impl Editor {
             viewport,
             view: Arc::new(Mutex::new(View {
                 busy: true,
+                preview_loop,
                 destination: directory
                     .join(format!(
                         "Captures_{}_edited.mp4",
@@ -1148,6 +1167,16 @@ fn show(
                 {
                     view.request_playback(tx);
                     ui.ctx().request_repaint();
+                }
+                let looping = view.preview_loop.load(Ordering::Relaxed);
+                if ui.add_enabled(view.presented.is_some() && (!view.busy || view.playing)
+                    && !view.picker && !view.confirm_close
+                    && view.cancel.as_ref().is_none_or(|cancel| !cancel.is_cancelled()),
+                    egui::Button::new("Loop preview").selected(looping).small())
+                    .on_hover_text("Repeat the accepted trim until paused. This changes only playback, not the saved recording.")
+                    .clicked()
+                {
+                    view.preview_loop.store(!looping, Ordering::Relaxed);
                 }
             });
             let width = ui.available_width();
@@ -1874,6 +1903,7 @@ mod tests {
     fn seek_after_playback_replaces_transient_frame_and_resume_position() {
         let ctx = egui::Context::default();
         let mut view = opened();
+        view.preview_loop.store(true, Ordering::Relaxed);
         let (tx, jobs) = mpsc::channel();
         view.request_playback(&tx);
         jobs.recv().unwrap();
@@ -1897,6 +1927,10 @@ mod tests {
         assert_eq!(view.texture.as_ref().unwrap().size(), [4, 2]);
         assert_eq!(view.position_ms, 950);
         assert!(view.playback_position_ms.is_none() && !view.playback_ended);
+        assert!(
+            view.preview_loop.load(Ordering::Relaxed),
+            "Pause/seek retains the loop preference"
+        );
         view.request_playback(&tx);
         assert!(matches!(jobs.recv().unwrap(), Job::Play(950, _)));
         assert!(!view.dirty());
@@ -2238,6 +2272,80 @@ mod tests {
                     rects.push(rect);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn loop_toggle_is_transient_and_remains_available_until_pause_teardown() {
+        for state in 0..3 {
+            let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+            let ctx = egui::Context::default();
+            tokens.apply(&ctx, true);
+            let mut view = opened();
+            let accepted = view.presented.as_ref().unwrap().frame.clone();
+            view.estimate = Some(ExportEstimate {
+                size_bytes: 4321,
+                exact: true,
+            });
+            let (tx, _jobs) = mpsc::channel();
+            let (events, _) = mpsc::channel();
+            assert!(!view.preview_loop.load(Ordering::Relaxed));
+            if state > 0 {
+                view.request_playback(&tx);
+            }
+            if state == 2 {
+                view.pause_playback();
+            }
+            let mut toggle = egui::Pos2::ZERO;
+            for pass in 0..3 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760., 580.),
+                        )),
+                        events: if pass == 2 {
+                            vec![
+                                egui::Event::PointerMoved(toggle),
+                                trim_pointer(toggle, true),
+                                trim_pointer(toggle, false),
+                            ]
+                        } else {
+                            Vec::new()
+                        },
+                        ..Default::default()
+                    },
+                    |ui| show(ui, &tokens, &mut view, &tx, &events, egui::ViewportId::ROOT),
+                );
+                output.textures_delta.clear();
+                if pass == 1 {
+                    toggle = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == "Loop preview" => {
+                                Some(text.pos + text.galley.rect.center().to_vec2())
+                            }
+                            _ => None,
+                        })
+                        .expect("loop control visible at minimum size");
+                }
+            }
+            assert_eq!(
+                view.preview_loop.load(Ordering::Relaxed),
+                state != 2,
+                "loop can change while idle/playing but not during Pause teardown"
+            );
+            assert!(!view.dirty() && !view.unapplied());
+            assert_eq!(view.estimate.as_ref().unwrap().size_bytes, 4321);
+            assert!(Arc::ptr_eq(
+                &accepted,
+                &view.presented.as_ref().unwrap().frame
+            ));
+            assert!(
+                !opened().preview_loop.load(Ordering::Relaxed),
+                "new editors default to non-looping playback"
+            );
         }
     }
 

@@ -63,7 +63,10 @@ at up to 30 fps and 1280 × 720. A single latest-frame slot prevents queued stal
 frames. Pause retains the last displayed frame; EOF makes the next Play restart
 the trim. Focus loss/minimize pauses, and close waits for teardown before checking
 unsaved edits. Seek/edit/save/estimate wait for playback to stop; playback never
-changes accepted edits or History. Audio playback and looping remain open. See the
+changes accepted edits or History. **Loop preview** defaults off and can be changed
+while playing; turning it off finishes the current lap, while Pause stops it.
+Each lap reopens the accepted trim after the previous decoder finishes teardown.
+Audio playback remains open. See the
 [recording-editor status](../../../docs/native-rewrite.md#recording-editor-first-wgpu-host-not-playback-parity)
 for accepted-frame, export and platform limitations.
 After finalization, a fixed-glass Recording ready notice offers Save file using
