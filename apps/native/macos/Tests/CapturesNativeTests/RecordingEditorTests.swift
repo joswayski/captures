@@ -857,9 +857,15 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(UInt32(try field("Recording crop X",
                                                      in: controller.root).stringValue)), movedX + 1)
         try dispatchCropKey(123, to: overlay, in: controller, modifiers: [.shift])
+        let clampedX = UInt32(max(0, Int(movedX) - 9))
         XCTAssertEqual(try XCTUnwrap(UInt32(try field("Recording crop X",
-                                                     in: controller.root).stringValue)), movedX - 9,
-                       "focused interior movement uses one source pixel, or ten with Shift")
+                                                     in: controller.root).stringValue)),
+                       clampedX,
+                       "focused interior movement clamps a ten-pixel Shift nudge")
+        try dispatchCropKey(124, to: overlay, in: controller, modifiers: [.shift])
+        XCTAssertEqual(try XCTUnwrap(UInt32(try field("Recording crop X",
+                                                     in: controller.root).stringValue)), clampedX + 10,
+                       "the opposite in-bounds Shift nudge moves ten source pixels")
 
         let southEast = try XCTUnwrap(handles.first { $0.kind == .southEast })
         let before = try field("Recording crop width", in: controller.root).stringValue
