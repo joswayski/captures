@@ -251,6 +251,20 @@ impl RecordingEditorSession {
         self.frame.clone()
     }
 
+    /// Decode the immutable full source at the accepted source-relative
+    /// position without applying trim, crop, output, or export effects.
+    pub fn source_frame(&self, cancel: &CancelToken) -> Result<Arc<RgbaImage>, String> {
+        extract_source_frame(
+            &self.tools,
+            &self.source_path,
+            &self.probe,
+            self.position_ms,
+            self.scratch.path(),
+            cancel,
+        )
+        .map(Arc::new)
+    }
+
     /// Estimate the accepted edit and preview export without changing session state.
     pub fn estimate_export(&self, cancel: &CancelToken) -> Result<ExportEstimate, String> {
         self.tools
@@ -603,6 +617,31 @@ fn extract_preview(
     result
 }
 
+fn extract_source_frame(
+    tools: &MediaToolchain,
+    source: &Path,
+    probe: &ProbeResult,
+    position_ms: u64,
+    scratch: &Path,
+    cancel: &CancelToken,
+) -> Result<RgbaImage, String> {
+    validate_position(probe, position_ms)?;
+    let path = scratch.join(format!("source-frame-{}.png", uuid::Uuid::new_v4()));
+    let result = tools
+        .extract_frame(source, position_ms, &path, cancel)
+        .map_err(|error| error.to_string())
+        .and_then(|()| decode_frame(&path))
+        .and_then(|frame| {
+            if frame.dimensions() == (probe.metadata.width, probe.metadata.height) {
+                Ok(frame)
+            } else {
+                Err("Decoded source frame dimensions do not match the recording metadata.".into())
+            }
+        });
+    let _ = fs::remove_file(path);
+    result
+}
+
 fn extract_timeline_thumbnails(
     tools: &MediaToolchain,
     source: &Path,
@@ -721,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn timeline_scratch_is_clean_after_success_failure_and_cancellation() {
+    fn read_only_frame_scratch_is_clean_after_success_failure_and_cancellation() {
         let Some((tools, ffmpeg)) = real_tools() else {
             return;
         };
@@ -747,6 +786,39 @@ mod tests {
         assert!(status.success());
         let scratch = tempfile::tempdir().unwrap();
         let is_clean = || fs::read_dir(scratch.path()).unwrap().next().is_none();
+        let probe = tools.probe(&source).unwrap();
+
+        extract_source_frame(
+            &tools,
+            &source,
+            &probe,
+            0,
+            scratch.path(),
+            &CancelToken::default(),
+        )
+        .unwrap();
+        assert!(is_clean());
+
+        let source_cancel = CancelToken::default();
+        source_cancel.cancel();
+        assert!(
+            extract_source_frame(&tools, &source, &probe, 0, scratch.path(), &source_cancel)
+                .is_err()
+        );
+        assert!(is_clean());
+
+        assert!(
+            extract_source_frame(
+                &tools,
+                &data.path().join("missing.mp4"),
+                &probe,
+                0,
+                scratch.path(),
+                &CancelToken::default(),
+            )
+            .is_err()
+        );
+        assert!(is_clean());
 
         extract_timeline_thumbnails(
             &tools,

@@ -1,6 +1,6 @@
 //! Allocation-free recording crop and output-size geometry for native hosts.
 
-use captures_media::{CropRect, CropResizeAxis};
+use captures_media::{CropDragHandle, CropRect, CropResizeAxis};
 use captures_recording::MaxResolution;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,6 +17,46 @@ fn valid_crop(crop: CropRect, source: RecordingDimensions) -> bool {
         && crop.height >= 2
         && crop.x <= source.width - 2
         && crop.y <= source.height - 2
+}
+
+/// Apply one source-pixel crop drag from the immutable original rectangle.
+///
+/// Handles 0..8 are move, N, NE, E, SE, S, SW, W and NW. Locked corners
+/// retain both opposite edges; locked edge handles retain the opposite edge and
+/// center the coupled dimension.
+///
+/// # Safety
+/// `output` is null or writable aligned storage for one `CropRect`. False leaves
+/// it untouched. Inputs and output are copied and no allocation is performed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_crop_after_drag_v1(
+    initial: CropRect,
+    source: RecordingDimensions,
+    handle: u8,
+    delta_x: f64,
+    delta_y: f64,
+    lock_aspect: bool,
+    output: *mut CropRect,
+) -> bool {
+    if output.is_null() {
+        return false;
+    }
+    let Ok(handle) = CropDragHandle::try_from(handle) else {
+        return false;
+    };
+    let Some(crop) = initial.after_drag(
+        source.width,
+        source.height,
+        handle,
+        delta_x,
+        delta_y,
+        lock_aspect,
+    ) else {
+        return false;
+    };
+    // SAFETY: caller supplies writable output; all values are copied.
+    unsafe { output.write(crop) };
+    true
 }
 
 /// Resize one crop dimension while preserving its current aspect ratio.
@@ -145,6 +185,39 @@ mod tests {
     }
 
     #[test]
+    fn crop_drag_abi_preserves_handle_orientation_locking_and_rounding() {
+        let source = RecordingDimensions {
+            width: 1_140,
+            height: 692,
+        };
+        let initial = crop(100, 50, 400, 200);
+        for (handle, delta_x, delta_y, locked, expected) in [
+            (0, 900.0, 900.0, false, crop(740, 492, 400, 200)),
+            (8, -150.0, 175.0, false, crop(0, 225, 500, 25)),
+            (3, -900.0, 0.0, false, crop(100, 50, 2, 200)),
+            (4, 120.0, 20.0, true, crop(100, 50, 520, 260)),
+            (7, -250.0, 0.0, true, crop(0, 25, 500, 250)),
+            (1, 0.0, -400.0, true, crop(50, 0, 500, 250)),
+            (5, 0.0, 19.6, false, crop(100, 50, 400, 220)),
+        ] {
+            let mut output = crop(1, 2, 3, 4);
+            // SAFETY: output is writable local storage.
+            assert!(unsafe {
+                captures_recording_crop_after_drag_v1(
+                    initial,
+                    source,
+                    handle,
+                    delta_x,
+                    delta_y,
+                    locked,
+                    &mut output,
+                )
+            });
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
     fn resolution_abi_uses_existing_even_cap_and_no_upscale_rules() {
         for (preset, input, expected) in [
             (
@@ -241,6 +314,27 @@ mod tests {
             });
             assert_eq!(output_crop, sentinel_crop);
         }
+        for (initial, handle, delta_x, delta_y) in [
+            (crop(0, 0, 160, 90), 9, 1.0, 1.0),
+            (crop(319, 0, 2, 2), 0, 1.0, 1.0),
+            (crop(0, 0, 1, 2), 3, 1.0, 0.0),
+            (crop(0, 0, 160, 90), 3, f64::NAN, 0.0),
+            (crop(0, 0, 160, 90), 3, 0.0, f64::INFINITY),
+        ] {
+            // SAFETY: output is writable local storage.
+            assert!(!unsafe {
+                captures_recording_crop_after_drag_v1(
+                    initial,
+                    source,
+                    handle,
+                    delta_x,
+                    delta_y,
+                    false,
+                    &mut output_crop,
+                )
+            });
+            assert_eq!(output_crop, sentinel_crop);
+        }
 
         let sentinel_dimensions = RecordingDimensions {
             width: 17,
@@ -275,6 +369,15 @@ mod tests {
                 source,
                 0,
                 40,
+                ptr::null_mut(),
+            ));
+            assert!(!captures_recording_crop_after_drag_v1(
+                crop(0, 0, 160, 90),
+                source,
+                0,
+                1.0,
+                1.0,
+                false,
                 ptr::null_mut(),
             ));
             assert!(!captures_recording_max_resolution_constrain_v1(

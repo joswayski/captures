@@ -391,10 +391,25 @@ char *captures_editor_save_original_v1(const CapturesEditorSession *session,
  * Max-resolution presets 0/1/2 are Original/1080p/720p and call the shared
  * recording model directly for positive source dimensions, including 1px;
  * Original still normalizes dimensions to an even minimum of 2px.
- * False means null/invalid input and leaves output untouched. Inputs/outputs are
- * copied; these functions allocate nothing and access no session or media I/O. */
+ * Crop drag handles 0..8 are move/N/NE/E/SE/S/SW/W/NW. Drag deltas use source
+ * pixels from the immutable pointer-down rectangle. Unlocked handles move their
+ * edges; locked corners anchor opposite edges and locked edges center the coupled
+ * dimension while fitting the current ratio in bounds. Final integer geometry
+ * is rounded and re-bounded with a 2px minimum.
+ * False means null/nonfinite/invalid input and leaves output untouched.
+ * Inputs/outputs are copied; functions allocate nothing and access no session
+ * or media I/O. */
 #define CAPTURES_RECORDING_CROP_RESIZE_WIDTH 0
 #define CAPTURES_RECORDING_CROP_RESIZE_HEIGHT 1
+#define CAPTURES_RECORDING_CROP_HANDLE_MOVE 0
+#define CAPTURES_RECORDING_CROP_HANDLE_N 1
+#define CAPTURES_RECORDING_CROP_HANDLE_NE 2
+#define CAPTURES_RECORDING_CROP_HANDLE_E 3
+#define CAPTURES_RECORDING_CROP_HANDLE_SE 4
+#define CAPTURES_RECORDING_CROP_HANDLE_S 5
+#define CAPTURES_RECORDING_CROP_HANDLE_SW 6
+#define CAPTURES_RECORDING_CROP_HANDLE_W 7
+#define CAPTURES_RECORDING_CROP_HANDLE_NW 8
 #define CAPTURES_RECORDING_MAX_RESOLUTION_ORIGINAL 0
 #define CAPTURES_RECORDING_MAX_RESOLUTION_1080P 1
 #define CAPTURES_RECORDING_MAX_RESOLUTION_720P 2
@@ -407,6 +422,9 @@ typedef struct {
 bool captures_recording_crop_resize_locked_v1(CapturesRecordingCropRect crop,
     CapturesRecordingDimensions source, uint8_t axis, uint32_t value,
     CapturesRecordingCropRect *output);
+bool captures_recording_crop_after_drag_v1(CapturesRecordingCropRect initial,
+    CapturesRecordingDimensions source, uint8_t handle, double delta_x,
+    double delta_y, bool lock_aspect, CapturesRecordingCropRect *output);
 bool captures_recording_max_resolution_constrain_v1(uint8_t preset,
     CapturesRecordingDimensions input, CapturesRecordingDimensions *output);
 
@@ -471,6 +489,17 @@ CapturesRecordingEditorFrame *captures_recording_editor_frame_v1(
 bool captures_recording_editor_frame_pixels_v1(const CapturesRecordingEditorFrame *frame,
     CapturesRegionPixels *output);
 void captures_recording_editor_frame_free_v1(CapturesRecordingEditorFrame *frame);
+
+/* Blocking full-source still at the accepted source-relative position. It
+ * ignores accepted trim/crop/output/export effects. Success returns an existing
+ * retained frame owner plus owned {ok:true,result:{position_ms,width,height}};
+ * failure returns NULL plus owned {ok:false,error}. output_json must be non-NULL
+ * and is freed with captures_settings_free_v1. Cancel stays live through the
+ * call. Frame pixels may outlive session/cancel through the existing frame
+ * pixels/free functions. No accepted session or History state is changed. */
+CapturesRecordingEditorFrame *captures_recording_editor_source_frame_v1(
+    const CapturesRecordingEditorSession *session,
+    const CapturesRecordingEditorCancel *cancel, char **output_json);
 
 /* Persistent silent playback of accepted edit + preview_export. position_ms is
  * source-relative and normalizes outside accepted [trim_start,trim_end) to trim
