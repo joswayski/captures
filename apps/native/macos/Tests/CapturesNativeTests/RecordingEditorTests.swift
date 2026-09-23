@@ -64,11 +64,13 @@ final class RecordingEditorTests: XCTestCase {
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
         XCTAssertFalse(replace.isEnabled, "recovery-only is not offered as a saved original")
-        worker.initial = try presentation(originalSavePath: "/Exports/old.gif")
+        worker.initial = try presentation(artifactID: "next",
+                                          originalSavePath: "/Exports/old.gif")
         controller.present(artifact: recordingArtifact(id: "next", savedPath: "/Exports/old.gif"),
                            historyRoot: "/History", outputDirectory: "/Exports")
         XCTAssertFalse(replace.isEnabled, "accepted path extension must match accepted MP4 format")
-        worker.initial = try presentation(originalSavePath: "/Exports/old.mp4")
+        worker.initial = try presentation(artifactID: "third",
+                                          originalSavePath: "/Exports/old.mp4")
         controller.present(artifact: recordingArtifact(id: "third", savedPath: "/Exports/old.mp4"),
                            historyRoot: "/History", outputDirectory: "/Exports")
         XCTAssertTrue(replace.isEnabled)
@@ -80,6 +82,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Close and reopen") })
         XCTAssertTrue(controller.windowShouldClose(controller.window))
+        worker.initial = try presentation(originalSavePath: "/Exports/old.mp4")
         controller.present(artifact: recordingArtifact(savedPath: "/Exports/old.mp4"),
                            historyRoot: "/History", outputDirectory: "/Exports")
         XCTAssertTrue(replace.isEnabled)
@@ -107,7 +110,7 @@ final class RecordingEditorTests: XCTestCase {
         let path = "/Exports/original.gif"
         let initial = try presentation(revision: 1, sourceWidth: 1_600, sourceHeight: 900,
             output: NativeRecordingDimensions(width: 800, height: 450),
-            exportFormat: "gif", framesPerSecond: 24, gifMaxColors: 64,
+            exportFormat: "gif", exportQuality: "tiny", framesPerSecond: 24, gifMaxColors: 64,
             originalSavePath: path)
         let rebased = try presentation(revision: 2, sourceWidth: 1_600, sourceHeight: 900,
             previewWidth: 1_600, previewHeight: 900,
@@ -119,7 +122,10 @@ final class RecordingEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: recordingArtifact(savedPath: path), historyRoot: "/History",
                            outputDirectory: "/Exports")
-        try button("Replace original…", in: controller.root).performClick(nil)
+        let replace = try button("Replace original…", in: controller.root)
+        XCTAssertTrue(replace.isEnabled, "the initial accepted GIF must be clean")
+        replace.performClick(nil)
+        XCTAssertEqual(worker.replaceCalls, 1)
         XCTAssertFalse(controller.dirty, "no implicit 800px, 15fps or 256-color Apply")
         XCTAssertEqual(try popup("GIF maximum width", in: controller.root).titleOfSelectedItem,
                        "Original")
@@ -3883,7 +3889,8 @@ final class RecordingEditorTests: XCTestCase {
                        "audio exports keep the original byte-identical")
     }
 
-    private func presentation(start: UInt64 = 0, end: UInt64? = nil,
+    private func presentation(artifactID: String = "recording-id",
+                              start: UInt64 = 0, end: UInt64? = nil,
                               position: UInt64 = 0, revision: UInt64 = 0,
                               sourceWidth: Int = 320, sourceHeight: Int = 180,
                               sourceSizeBytes: UInt64 = 1_024,
@@ -3919,7 +3926,7 @@ final class RecordingEditorTests: XCTestCase {
         let colorsValue: Any = gifDefaultsAbsent ? NSNull() : exportFormat == "gif"
             ? NSNumber(value: gifMaxColors ?? defaultGifColors) : NSNull()
         let snapshot = try XCTUnwrap(NativeRecordingEditorSnapshot([
-            "artifact_id": "recording-id", "source": ["kind": "video", "mime_type": "video/mp4",
+            "artifact_id": artifactID, "source": ["kind": "video", "mime_type": "video/mp4",
                 "width": sourceWidth, "height": sourceHeight,
                 "duration_ms": 2_000, "size_bytes": sourceSizeBytes],
             "edit": ["trim_start_ms": start, "trim_end_ms": endValue,
