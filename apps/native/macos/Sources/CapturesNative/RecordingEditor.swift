@@ -1401,14 +1401,25 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var stagedExport: [String: Any]? {
         guard presentation != nil else { return nil }
         var value = presentation!.snapshot.saveExport
-        value["format"] = format.indexOfSelectedItem == 1 ? "gif" : "mp4"
+        let gif = format.indexOfSelectedItem == 1
+        value["format"] = gif ? "gif" : "mp4"
         value["quality"] = maximumSizeEnabled
             ? "preserve" : quality.titleOfSelectedItem?.lowercased() ?? "preserve"
         value["max_size_bytes"] = maximumSizeEnabled
             ? NSNumber(value: maximumSizeBytes ?? 0) : NSNull()
-        value["frames_per_second"] = format.indexOfSelectedItem == 1
+        value["frames_per_second"] = gif
             ? NSNumber(value: gifFramesPerSecond) : NSNull()
+        value["gif_max_colors"] = gif ? NSNumber(value: gifMaxColors) : NSNull()
         return value
+    }
+
+    private var gifMaxColors: Int {
+        switch qualityPreference.lowercased() {
+        case "tiny": 64
+        case "small": 96
+        case "standard": 128
+        default: 256
+        }
     }
 
     private var stagedDiffers: Bool {

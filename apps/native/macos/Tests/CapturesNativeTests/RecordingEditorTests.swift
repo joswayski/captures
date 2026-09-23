@@ -2106,6 +2106,83 @@ final class RecordingEditorTests: XCTestCase {
                        "format staging should not acquire the worker")
     }
 
+    func testGifPaletteFollowsRememberedQualityThroughMaximumFailureAndSave() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let format = try popup("Recording export format", in: controller.root)
+        let quality = try popup("Recording export quality", in: controller.root)
+        let maximum = try checkbox("Maximum recording file size", in: controller.root)
+        let maximumValue = try field("Maximum recording file size value", in: controller.root)
+        let apply = try button("Apply edits", in: controller.root)
+        let save = try button("Save new copy", in: controller.root)
+
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        let palettes = [("Preserve", 256), ("Highest", 256), ("High", 256),
+                        ("Standard", 128), ("Small", 96), ("Tiny", 64)]
+        for (index, palette) in palettes.enumerated() {
+            quality.selectItem(withTitle: palette.0)
+            _ = quality.sendAction(quality.action, to: quality.target)
+            worker.requestResult = .success(try presentation(
+                revision: UInt64(index + 1), exportFormat: "gif",
+                exportQuality: palette.0.lowercased(), framesPerSecond: 15,
+                gifMaxColors: palette.1))
+            apply.performClick(nil)
+            let request = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
+            XCTAssertEqual((request["gif_max_colors"] as? NSNumber)?.intValue, palette.1,
+                           palette.0)
+        }
+
+        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+        worker.requestResult = .success(try presentation(revision: 7, exportQuality: "tiny"))
+        apply.performClick(nil)
+        let mp4 = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
+        XCTAssertTrue(mp4["gif_max_colors"] is NSNull,
+                      "GIF palette never changes an MP4 request")
+        XCTAssertEqual(quality.titleOfSelectedItem, "Tiny")
+
+        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        maximum.performClick(nil)
+        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
+        worker.requestResult = .success(try presentation(
+            revision: 8, exportFormat: "gif", exportQuality: "preserve",
+            saveMaximumBytes: 10_000_000, framesPerSecond: 15, gifMaxColors: 64))
+        apply.performClick(nil)
+        let capped = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
+        XCTAssertEqual(capped["quality"] as? String, "preserve")
+        XCTAssertEqual((capped["gif_max_colors"] as? NSNumber)?.intValue, 64,
+                       "Maximum keeps Tiny's compression palette behind Preserve")
+        let acceptedImage = try XCTUnwrap(try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first).image)
+
+        maximumValue.stringValue = "11"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: maximumValue))
+        worker.requestResult = .failure(AppBridgeError.backend("GIF palette preview unavailable"))
+        apply.performClick(nil)
+        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
+        let failedRequest = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
+        XCTAssertEqual((failedRequest["gif_max_colors"] as? NSNumber)?.intValue, 64)
+        XCTAssertTrue(try XCTUnwrap(try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSImageView }.first).image) === acceptedImage,
+                      "failed Apply retains the accepted palette preview")
+
+        maximumValue.stringValue = "10"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: maximumValue))
+        worker.saveResult = .success(.saved(path: "/Exports/tiny-capped.gif"))
+        save.performClick(nil)
+        let saved = try XCTUnwrap(worker.saves.last?.export)
+        XCTAssertEqual(saved["quality"] as? String, "preserve")
+        XCTAssertEqual((saved["gif_max_colors"] as? NSNumber)?.intValue, 64,
+                       "Save uses the accepted palette while Maximum displays Preserve")
+        XCTAssertFalse(controller.dirty)
+    }
+
     func testDecimalMaximumSizeUnitsFloorBytesWithoutRoundingOrOverflow() {
         XCTAssertEqual(RecordingFileSizeUnit.kilobytes.bytes("100.0199"), 100_019)
         XCTAssertEqual(RecordingFileSizeUnit.megabytes.bytes(".1000199"), 100_019)
@@ -2577,8 +2654,42 @@ final class RecordingEditorTests: XCTestCase {
                        "the same accepted trim at 24 FPS exports thirty-six frames")
         XCTAssertEqual(try videoDimensions(eightPath, tools: tools),
                        try videoDimensions(twentyFourPath, tools: tools))
+
+        export["frames_per_second"] = 15; export["gif_max_colors"] = 64
+        let tinyAccepted = try session.request([
+            "operation": "update_preview", "edit": edit, "export": export,
+        ])
+        XCTAssertEqual((tinyAccepted.snapshot.export["gif_max_colors"] as? NSNumber)?.intValue, 64)
+        let tinyPath = fixture.root.appendingPathComponent("tiny-palette.gif")
+        _ = try session.save(destination: tinyPath.path, export: export,
+            cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+
+        export["gif_max_colors"] = 256
+        let highAccepted = try session.request([
+            "operation": "update_preview", "edit": edit, "export": export,
+        ])
+        XCTAssertEqual((highAccepted.snapshot.export["gif_max_colors"] as? NSNumber)?.intValue,
+                       256)
+        let highPath = fixture.root.appendingPathComponent("high-palette.gif")
+        _ = try session.save(destination: highPath.path, export: export,
+            cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+
+        let tinyPreviewColors = try uniqueColorCount(tinyAccepted.image)
+        let highPreviewColors = try uniqueColorCount(highAccepted.image)
+        XCTAssertGreaterThan(tinyPreviewColors, 256,
+                             "the retained edit preview uses a genuinely high-color frame")
+        XCTAssertEqual(highPreviewColors, tinyPreviewColors)
+        XCTAssertEqual(try pixels(tinyAccepted.image), try pixels(highAccepted.image),
+                       "palette changes accepted export identity, not edit-preview pixels")
+        let tinyOutputColors = try uniqueRGBColorCount(tinyPath, tools: tools,
+                                                       width: 160, height: 90)
+        let highOutputColors = try uniqueRGBColorCount(highPath, tools: tools,
+                                                       width: 160, height: 90)
+        XCTAssertLessThanOrEqual(tinyOutputColors, 64)
+        XCTAssertGreaterThan(highOutputColors, tinyOutputColors,
+                             "saved high-color GIF retains more colors than Tiny")
         XCTAssertEqual(try Data(contentsOf: fixture.source), sourceBefore,
-                       "cadence-only previews and exports keep the source byte-identical")
+                       "cadence and palette previews/exports keep the source byte-identical")
     }
 
     func testRealBridgeMaximumSizeRetryCancellationAndUnattainableDoNotMutatePreview() throws {
@@ -3042,6 +3153,7 @@ final class RecordingEditorTests: XCTestCase {
                               exportQuality: String = "preserve",
                               saveMaximumBytes: UInt64? = nil,
                               framesPerSecond: UInt16? = nil,
+                              gifMaxColors: Int? = nil,
                               hasSystemAudio: Bool = false, hasMicrophoneAudio: Bool = false,
                               systemVolume: Double = 1, microphoneVolume: Double = 1,
                               muteSystem: Bool = false, muteMicrophone: Bool = false,
@@ -3053,6 +3165,15 @@ final class RecordingEditorTests: XCTestCase {
         let outputHeight: Any = output.map { NSNumber(value: $0.height) } ?? NSNull()
         let fpsValue: Any = framesPerSecond.map { NSNumber(value: $0) } ?? NSNull()
         let maximumValue: Any = saveMaximumBytes.map { NSNumber(value: $0) } ?? NSNull()
+        let defaultGifColors: Int
+        switch exportQuality {
+        case "tiny": defaultGifColors = 64
+        case "small": defaultGifColors = 96
+        case "standard": defaultGifColors = 128
+        default: defaultGifColors = 256
+        }
+        let colorsValue: Any = exportFormat == "gif"
+            ? NSNumber(value: gifMaxColors ?? defaultGifColors) : NSNull()
         let snapshot = try XCTUnwrap(NativeRecordingEditorSnapshot([
             "artifact_id": "recording-id", "source": ["kind": "video", "mime_type": "video/mp4",
                 "width": sourceWidth, "height": sourceHeight,
@@ -3066,11 +3187,11 @@ final class RecordingEditorTests: XCTestCase {
             "preview_export": ["format": exportFormat, "quality": exportQuality,
                 "max_size_bytes": NSNull(),
                 "frames_per_second": fpsValue,
-                "gif_max_colors": NSNull()],
+                "gif_max_colors": colorsValue],
             "save_export": ["format": exportFormat, "quality": exportQuality,
                 "max_size_bytes": maximumValue,
                 "frames_per_second": fpsValue,
-                "gif_max_colors": NSNull()],
+                "gif_max_colors": colorsValue],
             "position_ms": position, "revision": revision,
             "has_system_audio": hasSystemAudio,
             "has_microphone_audio": hasMicrophoneAudio,
@@ -3253,6 +3374,36 @@ final class RecordingEditorTests: XCTestCase {
             "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])
         XCTAssertEqual(data.count, width * height * 3)
         return Array(data)
+    }
+
+    private func uniqueRGBColorCount(_ path: URL, tools: NativeMediaTools,
+                                     width: Int, height: Int) throws -> Int {
+        let data = try decodedRGB(path, tools: tools, width: width, height: height)
+        var colors = Set<UInt32>()
+        for offset in stride(from: 0, to: data.count, by: 3) {
+            let red = UInt32(data[offset]) << 16
+            let green = UInt32(data[offset + 1]) << 8
+            let blue = UInt32(data[offset + 2])
+            colors.insert(red | green | blue)
+        }
+        return colors.count
+    }
+
+    private func uniqueColorCount(_ image: CGImage) throws -> Int {
+        let data = try pixels(image)
+        let bytesPerPixel = image.bitsPerPixel / 8
+        XCTAssertGreaterThanOrEqual(bytesPerPixel, 3)
+        var colors = Set<UInt32>()
+        for y in 0..<image.height {
+            for x in 0..<image.width {
+                let offset = y * image.bytesPerRow + x * bytesPerPixel
+                let first = UInt32(data[offset]) << 16
+                let second = UInt32(data[offset + 1]) << 8
+                let third = UInt32(data[offset + 2])
+                colors.insert(first | second | third)
+            }
+        }
+        return colors.count
     }
 
     private func rgb(_ pixels: [UInt8], width: Int, x: Int, y: Int)

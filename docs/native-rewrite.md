@@ -21,7 +21,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, Play/Pause (silent by default), opt-in Loop and accepted-mix Sound preview, and MP4/GIF save-new-copy | Audio meter/device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence and quality-mapped palettes, Play/Pause (silent by default), opt-in Loop and accepted-mix Sound preview, and MP4/GIF save-new-copy | Audio meter/device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; remaining recording controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
@@ -540,13 +540,15 @@ frame and the staged correction. Private X11 light/dark coverage exports 24 and
 dimensions, colors, source/History immutability, failure/retry and minimum layout.
 AppKit real-media coverage exercises the same asymmetric trim at both cadences;
 physical macOS/Windows/Wayland acceptance remains open.
-The wgpu host also maps its existing GIF quality choice to the shipping palette
-limits: Tiny 64, Small 96, Standard 128, High/Highest/Preserve 256 colors. No separate
+Both native hosts map their existing GIF quality choice to the shipping palette
+limits: Tiny 64, Small 96, Standard 128 and High/Highest/Preserve 256 colors. No separate
 palette control is added. Maximum uses the remembered quality for the palette while
 forcing Preserve export quality; MP4 omits the GIF field without losing the choice.
 Private X11 exports a high-color source at Tiny and High and checks decoded colors,
-Apply/save gating and source/History immutability. AppKit's companion and physical
-Windows/Wayland verification remain open.
+Apply/save gating and source/History immutability. AppKit CI distinguishes 64- and
+256-color saved GIFs while retaining the high-color edit-preview pixels, including
+failed Apply and accepted preview/save identity. Physical macOS/Windows/Wayland
+verification remains open.
 Unapplied format/quality gates save and seek alongside geometric edits; failed
 updates retain all accepted state and preserve staged values for correction.
 Save uses the accepted configuration, and format/quality-only changes require
