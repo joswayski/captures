@@ -530,6 +530,14 @@ an explicit explanation rather than editable controls. Private X11 smoke uses
 distinct stereo tones in a retained playback mix plus separate system/mic tracks,
 then measures decoded export frequencies/amplitudes, mono channel count, mute,
 GIF silence, restored MP4 settings and History audio identity.
+The wgpu GIF frame-rate control offers 8/10/12/15/20/24/30 FPS (default 15), staged
+through the existing accepted export/Apply boundary. It participates in save,
+playback, estimate and dirty guards, survives an MP4 roundtrip without modifying
+MP4 cadence, and resets for a new item. Failed Apply retains both the accepted
+frame and the staged correction. Private X11 light/dark coverage exports 24 and
+72 frames over the same three-second source at 8 and 24 FPS, checks duration,
+dimensions, colors, source/History immutability, failure/retry and minimum layout.
+AppKit's companion control and physical Windows/Wayland acceptance remain open.
 Unapplied format/quality gates save and seek alongside geometric edits; failed
 updates retain all accepted state and preserve staged values for correction.
 Save uses the accepted configuration, and format/quality-only changes require
