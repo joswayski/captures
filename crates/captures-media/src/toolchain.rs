@@ -2672,16 +2672,16 @@ mod tests {
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     use super::{
         CAPTURE_MASTER_BITS_PER_PIXEL_PERCENT, MediaToolError, RecordingAssemblyKind,
-        RecordingSegmentInput, openh264_bitrate,
+        RecordingSegmentInput, openh264_bitrate, playback_audio_filter,
     };
     use super::{
         CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt,
         aac_centered_stereo_layout_filter, aac_output_layout_filter, accepted_audio_is_audible,
         audio_edit_is_identity, audio_filter, commit_temporary, escape_concat_path,
         export_attempts, export_preserves_source_bytes, fit_even, fit_playback_dimensions,
-        gif_export_filter, gif_filter, playback_audio_filter, preview_dimensions,
-        preview_video_filter, read_bounded_diagnostics, read_complete_frame,
-        recording_segment_audio_graph, seconds, validate_edit_spec, visual_edit_is_identity,
+        gif_export_filter, gif_filter, preview_dimensions, preview_video_filter,
+        read_bounded_diagnostics, read_complete_frame, recording_segment_audio_graph, seconds,
+        validate_edit_spec, visual_edit_is_identity,
     };
     use crate::{
         AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaMetadata,
