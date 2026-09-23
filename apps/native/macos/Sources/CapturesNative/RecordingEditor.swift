@@ -1885,20 +1885,20 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         microphoneMute.isHidden = !hasMicrophone
         monoOutput.isHidden = !hasAudio
         if !playbackSoundEnabled {
-            audioNote.stringValue = !hasAudio ? "No audio tracks · Sound off"
+            audioNote.stringValue = !hasAudio ? "No audio tracks"
                 : gif ? "GIF · MP4 kept · Sound off"
                 : "Sound preview off"
         } else if playbackAudioEnabled == true {
-            audioNote.stringValue = playbackState == .playing ? "Sound preview active"
-                : "Sound selected · last playback used audio"
+            audioNote.stringValue = playbackState == .playing ? "Sound active"
+                : "Audio used"
         } else if gif {
-            audioNote.stringValue = "Sound selected · GIF preview is silent"
+            audioNote.stringValue = "GIF · no audio"
         } else if !hasAudio {
-            audioNote.stringValue = "Sound selected · no audio tracks"
+            audioNote.stringValue = "No audio tracks"
         } else if playbackAudioEnabled == false {
-            audioNote.stringValue = "Sound selected · accepted mix is silent"
+            audioNote.stringValue = "Mix silent"
         } else {
-            audioNote.stringValue = "Sound selected · plays accepted mix"
+            audioNote.stringValue = "Uses accepted mix"
         }
         systemVolume.isEnabled = available && !gif && systemMute.state != .on
         microphoneVolume.isEnabled = available && !gif && microphoneMute.state != .on
