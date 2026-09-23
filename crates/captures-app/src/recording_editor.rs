@@ -4,9 +4,7 @@
 //! buffers; media bytes, FFmpeg commands, and source-audio identity stay shared.
 
 use std::{
-    collections::hash_map::DefaultHasher,
     fs,
-    hash::{Hash, Hasher},
     io::{Cursor, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::Arc,
@@ -33,13 +31,11 @@ const TIMELINE_FRAME_COUNT: u32 = 12;
 const TIMELINE_FRAME_WIDTH: u32 = 160;
 const TIMELINE_FRAME_HEIGHT: u32 = 90;
 
-/// Snapshot of file identity without retaining a Windows handle across
-/// permanent/History renames. The same-file fingerprint hashes the OS file ID
-/// (volume + file index on Windows), not the path or timestamps. Content and
-/// change times are checked separately before publication.
+/// Snapshot of the OS file ID without retaining an open Windows handle across
+/// permanent/History renames. Content and change times are checked separately.
 struct FileIdentity {
     metadata: fs::Metadata,
-    fingerprint: u64,
+    id: file_id::FileId,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1380,25 +1376,17 @@ fn regular_file(path: &Path) -> Result<fs::File, String> {
 
 fn file_identity(path: &Path) -> Result<FileIdentity, String> {
     let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
-    let handle = same_file::Handle::from_path(path).map_err(|error| error.to_string())?;
-    let mut hasher = DefaultHasher::new();
-    handle.hash(&mut hasher);
-    Ok(FileIdentity {
-        metadata,
-        fingerprint: hasher.finish(),
-    })
+    let id = file_id::get_file_id(path).map_err(|error| error.to_string())?;
+    Ok(FileIdentity { metadata, id })
 }
 
 fn same_file_at_path(old: &FileIdentity, path: &Path) -> Result<bool, String> {
     // In replacement only regular non-symlink files are eligible. Open the
-    // file afresh, compare the stable same-file OS identifier, and drop the
-    // handle before any Windows directory/permanent rename.
+    // file ID afresh, and drop its internal Windows handle before renaming.
     let current = regular_file(path)?;
     let new = current.metadata().map_err(|error| error.to_string())?;
-    let handle = same_file::Handle::from_file(current).map_err(|error| error.to_string())?;
-    let mut hasher = DefaultHasher::new();
-    handle.hash(&mut hasher);
-    if old.fingerprint != hasher.finish() {
+    drop(current);
+    if old.id != file_id::get_file_id(path).map_err(|error| error.to_string())? {
         return Ok(false);
     }
     #[cfg(unix)]
@@ -1422,7 +1410,7 @@ fn unchanged_file_at_path(old: &FileIdentity, path: &Path) -> Result<bool, Strin
 fn unchanged_open_path(old: &FileIdentity, path: &Path) -> Result<bool, String> {
     let current = fs::metadata(path).map_err(|error| error.to_string())?;
     let current_identity = file_identity(path)?;
-    if old.fingerprint != current_identity.fingerprint {
+    if old.id != current_identity.id {
         return Ok(false);
     }
     #[cfg(unix)]
