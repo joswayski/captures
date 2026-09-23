@@ -16,8 +16,8 @@ use captures_app::recording_editor::{
 };
 use captures_app::recording_timeline::{TimelineTrimDrag, TimelineTrimEdge, timeline_ratio};
 use captures_media::{
-    AudioEdit, CancelToken, CropRect, CropResizeAxis, EditSpec, ExportEstimate, ExportFormat,
-    ExportProgress, ExportSpec, MediaMetadata, MediaToolchain, QualityPreset,
+    AudioEdit, CancelToken, CropDragHandle, CropRect, CropResizeAxis, EditSpec, ExportEstimate,
+    ExportFormat, ExportProgress, ExportSpec, MediaMetadata, MediaToolchain, QualityPreset,
 };
 use captures_recording::MaxResolution;
 use eframe::egui;
@@ -51,6 +51,7 @@ enum Job {
     Save(RecordingSaveRequest, CancelToken),
     Estimate(CancelToken),
     Thumbnails(CancelToken),
+    SourceFrame(CancelToken),
     Play(u64, CancelToken),
     Shutdown,
 }
@@ -71,6 +72,7 @@ enum Event {
     Saved(Result<SavedRecording, String>),
     Estimated(Result<ExportEstimate, String>),
     Thumbnails(Result<RecordingTimelineThumbnails, String>),
+    SourceFrame(Result<Arc<RgbaImage>, String>),
     PlaybackFinished(Result<PlaybackEnd, String>),
     Destination(Option<PathBuf>),
 }
@@ -81,10 +83,22 @@ struct TrimGesture {
     track: egui::Rect,
 }
 
+struct CropGesture {
+    initial: CropRect,
+    handle: CropDragHandle,
+    origin: egui::Pos2,
+    image: egui::Rect,
+    locked: bool,
+}
+
 #[derive(Default)]
 struct View {
     presented: Option<Presented>,
     texture: Option<egui::TextureHandle>,
+    source_texture: Option<egui::TextureHandle>,
+    adjusting_crop: bool,
+    crop_gesture: Option<CropGesture>,
+    loading_source: bool,
     thumbnails: Option<egui::TextureHandle>,
     loading_thumbnails: bool,
     thumbnail_error: Option<String>,
@@ -218,8 +232,33 @@ impl View {
         self.send(tx, Job::Thumbnails(cancel));
     }
 
+    fn request_crop_view(&mut self, tx: &Sender<Job>) {
+        if self.busy
+            || self.picker
+            || self.confirm_close
+            || self.closed
+            || self.presented.is_none()
+            || self.crop.is_none()
+        {
+            return;
+        }
+        if self.source_texture.is_some() {
+            self.adjusting_crop = true;
+        } else {
+            let cancel = CancelToken::default();
+            self.cancel = Some(cancel.clone());
+            self.send(tx, Job::SourceFrame(cancel));
+        }
+    }
+
     fn request_playback(&mut self, tx: &Sender<Job>) {
-        if self.busy || self.picker || self.confirm_close || self.closed || self.unapplied() {
+        if self.busy
+            || self.picker
+            || self.confirm_close
+            || self.closed
+            || self.unapplied()
+            || self.adjusting_crop
+        {
             return;
         }
         let Some(p) = &self.presented else { return };
@@ -274,14 +313,17 @@ impl View {
             return;
         }
         self.trim_gesture = None;
+        self.crop_gesture = None;
         let estimating = matches!(job, Job::Estimate(_));
         let loading_thumbnails = matches!(job, Job::Thumbnails(_));
+        let loading_source = matches!(job, Job::SourceFrame(_));
         let playing = matches!(job, Job::Play(..));
         match tx.send(job) {
             Ok(()) => {
                 self.busy = true;
                 self.estimating = estimating;
                 self.loading_thumbnails = loading_thumbnails;
+                self.loading_source = loading_source;
                 self.playing = playing;
                 if playing {
                     self.playback_ended = false;
@@ -293,7 +335,7 @@ impl View {
                     self.estimate = None;
                 }
                 self.error = None;
-                self.status = None;
+                self.status = loading_source.then(|| "Loading uncropped source frame…".into());
             }
             Err(_) => {
                 self.error = Some("Recording editor worker stopped.".into());
@@ -308,6 +350,14 @@ impl View {
                 self.busy = false;
                 match result {
                     Ok(p) => {
+                        self.adjusting_crop = false;
+                        if self
+                            .presented
+                            .as_ref()
+                            .is_none_or(|old| old.position_ms != p.position_ms)
+                        {
+                            self.source_texture = None;
+                        }
                         if self
                             .presented
                             .as_ref()
@@ -416,6 +466,35 @@ impl View {
                     Err(error) => self.thumbnail_error = Some(error),
                 }
             }
+            Event::SourceFrame(result) => {
+                self.busy = false;
+                self.loading_source = false;
+                self.status = None;
+                let result = if self.cancel.as_ref().is_some_and(CancelToken::is_cancelled) {
+                    Err("Source preview cancelled.".into())
+                } else {
+                    result
+                };
+                self.cancel = None;
+                match result {
+                    Ok(pixels) => {
+                        self.source_texture = Some(ctx.load_texture(
+                            "recording-crop-source",
+                            egui::ColorImage::from_rgba_unmultiplied(
+                                [pixels.width() as usize, pixels.height() as usize],
+                                pixels.as_raw(),
+                            ),
+                            egui::TextureOptions::LINEAR,
+                        ));
+                        self.adjusting_crop = true;
+                        self.error = None;
+                    }
+                    Err(error) => {
+                        self.adjusting_crop = false;
+                        self.error = Some(format!("Source preview failed: {error}"));
+                    }
+                }
+            }
             Event::PlaybackFinished(result) => {
                 self.busy = false;
                 self.playing = false;
@@ -459,6 +538,7 @@ impl View {
 
     fn request_close(&mut self) {
         self.trim_gesture = None;
+        self.crop_gesture = None;
         if self.playing {
             self.close_after_playback = true;
             self.pause_playback();
@@ -570,6 +650,12 @@ impl Editor {
                             .as_ref()
                             .ok_or_else(|| "Recording editor is unavailable.".to_owned())
                             .and_then(|s| s.timeline_thumbnails(&cancel)),
+                    ),
+                    Job::SourceFrame(cancel) => Event::SourceFrame(
+                        session
+                            .as_ref()
+                            .ok_or_else(|| "Recording editor is unavailable.".to_owned())
+                            .and_then(|s| s.source_frame(&cancel)),
                     ),
                     Job::Play(position, cancel) => {
                         let result = (|| {
@@ -742,6 +828,251 @@ impl Drop for Editor {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+    }
+}
+
+fn show_crop_overlay(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, image: egui::Rect) {
+    let Some(initial) = view.crop else {
+        view.crop_gesture = None;
+        return;
+    };
+    let Some(presented) = &view.presented else {
+        return;
+    };
+    let (width, height) = (presented.source.width, presented.source.height);
+    if initial
+        .after_drag(width, height, CropDragHandle::Move, 0., 0., false)
+        .is_none()
+    {
+        view.crop_gesture = None;
+        return;
+    }
+    let to_view = |crop: CropRect| {
+        egui::Rect::from_min_max(
+            image.min
+                + egui::vec2(
+                    crop.x as f32 / width as f32 * image.width(),
+                    crop.y as f32 / height as f32 * image.height(),
+                ),
+            image.min
+                + egui::vec2(
+                    (f64::from(crop.x) + f64::from(crop.width)) as f32 / width as f32
+                        * image.width(),
+                    (f64::from(crop.y) + f64::from(crop.height)) as f32 / height as f32
+                        * image.height(),
+                ),
+        )
+    };
+    let handle_positions = |crop: CropRect| {
+        let rect = to_view(crop);
+        [
+            (CropDragHandle::NorthWest, rect.left_top(), "Crop top left"),
+            (
+                CropDragHandle::NorthEast,
+                rect.right_top(),
+                "Crop top right",
+            ),
+            (
+                CropDragHandle::SouthEast,
+                rect.right_bottom(),
+                "Crop bottom right",
+            ),
+            (
+                CropDragHandle::SouthWest,
+                rect.left_bottom(),
+                "Crop bottom left",
+            ),
+            (CropDragHandle::North, rect.center_top(), "Crop top"),
+            (CropDragHandle::East, rect.right_center(), "Crop right"),
+            (CropDragHandle::South, rect.center_bottom(), "Crop bottom"),
+            (CropDragHandle::West, rect.left_center(), "Crop left"),
+        ]
+    };
+    let enabled = ui.is_enabled()
+        && !view.busy
+        && !view.picker
+        && !view.confirm_close
+        && ui.input(|input| input.focused)
+        && !egui::Popup::is_any_open(ui.ctx());
+    if !enabled
+        || view
+            .crop_gesture
+            .as_ref()
+            .is_some_and(|drag| drag.image != image)
+    {
+        view.crop_gesture = None;
+    }
+    let sense = if enabled {
+        egui::Sense::click_and_drag()
+    } else {
+        egui::Sense::hover()
+    };
+    let pending_text = ui
+        .ctx()
+        .memory(|memory| memory.focused())
+        .filter(|id| egui::TextEdit::load_state(ui.ctx(), *id).is_some());
+    let mut responses = vec![(
+        CropDragHandle::Move,
+        ui.interact(to_view(initial), ui.scope_id().with("Move crop"), sense)
+            .on_hover_cursor(egui::CursorIcon::Move),
+    )];
+    responses[0]
+        .1
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "Move crop"));
+    let hit_size = tokens.number("s-5");
+    for (handle, center, label) in handle_positions(initial) {
+        let response = ui
+            .interact(
+                egui::Rect::from_center_size(center, egui::Vec2::splat(hit_size)),
+                ui.scope_id().with(label),
+                sense,
+            )
+            .on_hover_text(format!(
+                "{label}: drag or use arrows; Shift moves 10 source pixels."
+            ));
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+        responses.push((handle, response));
+    }
+    if enabled && ui.ctx().current_pass_index() == 0 {
+        for event in ui.input(|input| input.events.clone()) {
+            match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    ..
+                } => {
+                    view.crop_gesture = None;
+                    if !ui.clip_rect().contains(pos) {
+                        continue;
+                    }
+                    let handle = handle_positions(view.crop.unwrap())
+                        .into_iter()
+                        .find(|(_, center, _)| {
+                            egui::Rect::from_center_size(*center, egui::Vec2::splat(hit_size))
+                                .contains(pos)
+                        })
+                        .map(|(handle, _, _)| handle)
+                        .or_else(|| {
+                            to_view(view.crop.unwrap())
+                                .contains(pos)
+                                .then_some(CropDragHandle::Move)
+                        });
+                    if let Some(handle) = handle {
+                        if let Some(id) = pending_text {
+                            // Numeric fields commit later in this UI pass. Let
+                            // that commit finish before capturing drag geometry.
+                            ui.memory_mut(|memory| memory.surrender_focus(id));
+                            continue;
+                        }
+                        if let Some((_, response)) =
+                            responses.iter().find(|(candidate, _)| *candidate == handle)
+                        {
+                            response.request_focus();
+                        }
+                        view.crop_gesture = Some(CropGesture {
+                            initial: view.crop.unwrap(),
+                            handle,
+                            origin: pos,
+                            image,
+                            locked: !view.crop_aspect_unlocked,
+                        });
+                    }
+                }
+                egui::Event::PointerMoved(pos) => {
+                    if let Some(drag) = &view.crop_gesture {
+                        let delta = pos - drag.origin;
+                        if let Some(crop) = drag.initial.after_drag(
+                            width,
+                            height,
+                            drag.handle,
+                            f64::from(delta.x / image.width()) * f64::from(width),
+                            f64::from(delta.y / image.height()) * f64::from(height),
+                            drag.locked,
+                        ) {
+                            view.crop = Some(crop);
+                        }
+                    }
+                }
+                egui::Event::PointerButton {
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    ..
+                }
+                | egui::Event::PointerGone
+                | egui::Event::Key {
+                    key: egui::Key::Escape,
+                    pressed: true,
+                    ..
+                } => view.crop_gesture = None,
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if !modifiers.ctrl && !modifiers.alt && !modifiers.command => {
+                    let step = if modifiers.shift { 10. } else { 1. };
+                    let delta = match key {
+                        egui::Key::ArrowLeft => (-step, 0.),
+                        egui::Key::ArrowRight => (step, 0.),
+                        egui::Key::ArrowUp => (0., -step),
+                        egui::Key::ArrowDown => (0., step),
+                        _ => continue,
+                    };
+                    if let Some((handle, _)) =
+                        responses.iter().find(|(_, response)| response.has_focus())
+                    {
+                        ui.input_mut(|input| input.consume_key(modifiers, key));
+                        view.crop_gesture = None;
+                        if let Some(crop) = view.crop.unwrap().after_drag(
+                            width,
+                            height,
+                            *handle,
+                            delta.0,
+                            delta.1,
+                            !view.crop_aspect_unlocked,
+                        ) {
+                            view.crop = Some(crop);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let selected = to_view(view.crop.unwrap()).intersect(image);
+    for dim in [
+        egui::Rect::from_min_max(image.min, egui::pos2(image.right(), selected.top())),
+        egui::Rect::from_min_max(egui::pos2(image.left(), selected.bottom()), image.max),
+        egui::Rect::from_min_max(
+            egui::pos2(image.left(), selected.top()),
+            selected.left_bottom(),
+        ),
+        egui::Rect::from_min_max(
+            selected.right_top(),
+            egui::pos2(image.right(), selected.bottom()),
+        ),
+    ] {
+        ui.painter()
+            .rect_filled(dim, 0., tokens.color("surface-sunken").gamma_multiply(0.75));
+    }
+    ui.painter().rect_stroke(
+        selected,
+        0.,
+        egui::Stroke::new(tokens.number("s-1"), tokens.color("theme-accent")),
+        egui::StrokeKind::Inside,
+    );
+    for (_, center, _) in handle_positions(view.crop.unwrap()) {
+        let handle = egui::Rect::from_center_size(center, egui::Vec2::splat(tokens.number("s-4")));
+        ui.painter()
+            .rect_filled(handle, tokens.number("r-xs"), tokens.color("theme-accent"));
+        ui.painter().rect_stroke(
+            handle,
+            tokens.number("r-xs"),
+            egui::Stroke::new(tokens.number("s-1"), tokens.color("surface-raised")),
+            egui::StrokeKind::Inside,
+        );
     }
 }
 
@@ -1053,7 +1384,7 @@ fn show(
         }
         if let Some(cancel) = &view.cancel
             && ui
-                .add_enabled(!cancel.is_cancelled(), egui::Button::new(if view.playing { "Pause playback" } else if view.loading_thumbnails { "Cancel thumbnails" } else if view.estimating { "Cancel estimate" } else { "Cancel export" }))
+                .add_enabled(!cancel.is_cancelled(), egui::Button::new(if view.playing { "Pause playback" } else if view.loading_source { "Cancel source preview" } else if view.loading_thumbnails { "Cancel thumbnails" } else if view.estimating { "Cancel estimate" } else { "Cancel export" }))
                 .clicked()
         {
             cancel.cancel();
@@ -1153,7 +1484,7 @@ fn show(
             ui.heading("Edit recording");
             ui.horizontal(|ui| {
                 ui.strong("Preview");
-                ui.weak("Silent playback");
+                ui.weak(if view.adjusting_crop { "Source crop" } else { "Silent playback" });
                 if view.playing {
                     let pausing = view.cancel.as_ref().is_some_and(CancelToken::is_cancelled);
                     if ui.add_enabled(!pausing, egui::Button::new(if pausing { "Pausing…" } else { "Pause" }).small()).clicked() {
@@ -1161,7 +1492,7 @@ fn show(
                         ui.ctx().request_repaint();
                     }
                 } else if ui.add_enabled(!view.busy && !view.picker && !view.confirm_close
-                    && view.presented.is_some() && !view.unapplied(), egui::Button::new("Play").small())
+                    && !view.adjusting_crop && view.presented.is_some() && !view.unapplied(), egui::Button::new("Play").small())
                     .on_hover_text("Play accepted trim without audio. Apply staged edits first. Motion preview fits within 1280 × 720.")
                     .clicked()
                 {
@@ -1178,21 +1509,35 @@ fn show(
                 {
                     view.preview_loop.store(!looping, Ordering::Relaxed);
                 }
+                if view.adjusting_crop && ui.add_enabled(!view.busy && !view.picker && !view.confirm_close,
+                    egui::Button::new("Done cropping").small()).clicked()
+                {
+                    view.adjusting_crop = false;
+                    view.crop_gesture = None;
+                }
             });
             let width = ui.available_width();
             let height = (ui.available_height() - 210.).clamp(140., 380.);
             let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
             ui.painter()
                 .rect_filled(rect, tokens.number("r-md"), tokens.color("surface-sunken"));
-            if let Some(texture) = &view.texture {
+            let preview_texture = if view.adjusting_crop { &view.source_texture } else { &view.texture };
+            if let Some(texture) = preview_texture {
                 let size = texture.size_vec2();
-                let scale = (rect.width() / size.x).min(rect.height() / size.y);
+                let bounds = if view.adjusting_crop { rect.shrink(tokens.number("s-3")) } else { rect };
+                let scale = (bounds.width() / size.x).min(bounds.height() / size.y);
+                let image_rect = egui::Rect::from_center_size(bounds.center(), size * scale);
                 ui.painter().image(
                     texture.id(),
-                    egui::Rect::from_center_size(rect.center(), size * scale),
+                    image_rect,
                     egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
                     egui::Color32::WHITE,
                 );
+                if view.adjusting_crop {
+                    show_crop_overlay(ui, tokens, view, image_rect);
+                } else {
+                    view.crop_gesture = None;
+                }
             } else {
                 ui.label(if view.busy {
                     "Decoding recording…"
@@ -1204,10 +1549,16 @@ fn show(
                 return;
             };
             let duration = p.source.duration_ms.unwrap_or(0);
-            let displayed_position = view.playback_position_ms.unwrap_or(p.position_ms);
+            let displayed_position = if view.adjusting_crop { p.position_ms } else {
+                view.playback_position_ms.unwrap_or(p.position_ms)
+            };
             let source_size = (p.source.width, p.source.height);
             let system_audio = p.edit.audio.source_has_system_audio;
             let microphone_audio = p.edit.audio.source_has_microphone_audio;
+            if view.adjusting_crop {
+                ui.label(format!("Uncropped source: {:.3}s · {} × {} · Drag to stage crop; Apply edits to preview output.",
+                    displayed_position as f64 / 1000., source_size.0, source_size.1));
+            } else {
             ui.label(format!(
                 "Source frame: {:.3}s / {:.3}s · {} × {} · {:?} {:?} preview: {} × {}",
                 displayed_position as f64 / 1000.,
@@ -1219,6 +1570,7 @@ fn show(
                 view.texture.as_ref().map_or(p.frame.width() as usize, |t| t.size()[0]),
                 view.texture.as_ref().map_or(p.frame.height() as usize, |t| t.size()[1])
             ));
+            }
             ui.add_enabled_ui(!view.busy && !view.picker && !view.confirm_close, |ui| {
                 ui.add_enabled_ui(!view.unapplied(), |ui| {
                     ui.horizontal(|ui| {
@@ -1283,11 +1635,21 @@ fn show(
                                 width: source_size.0,
                                 height: source_size.1,
                             });
+                            if !crop_enabled {
+                                view.adjusting_crop = false;
+                            }
                         }
                         ui.add_enabled_ui(crop_enabled, |ui| {
                             let mut locked = !view.crop_aspect_unlocked;
                             if ui.checkbox(&mut locked, "Lock aspect ratio").changed() {
                                 view.crop_aspect_unlocked = !locked;
+                            }
+                            if ui.button(if view.adjusting_crop { "Done cropping" } else { "Adjust crop" }).clicked() {
+                                if view.adjusting_crop {
+                                    view.adjusting_crop = false;
+                                } else {
+                                    view.request_crop_view(tx);
+                                }
                             }
                         });
                     });
@@ -1472,6 +1834,373 @@ mod tests {
             })),
         );
         view
+    }
+
+    #[test]
+    fn source_crop_view_is_independent_cached_and_invalidated_by_seek() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        view.crop = Some(CropRect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
+        });
+        view.estimate = Some(ExportEstimate {
+            size_bytes: 5432,
+            exact: true,
+        });
+        let frame = view.presented.as_ref().unwrap().frame.clone();
+        let texture = view.texture.as_ref().unwrap().id();
+        let dirty = view.dirty();
+        let (tx, jobs) = mpsc::channel();
+        view.request_crop_view(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::SourceFrame(_)));
+        assert!(view.busy && !view.adjusting_crop);
+        view.receive(&ctx, Event::SourceFrame(Ok(Arc::new(RgbaImage::new(4, 2)))));
+        assert!(!view.busy && view.adjusting_crop);
+        assert_eq!(view.texture.as_ref().unwrap().id(), texture);
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+        assert_eq!(view.dirty(), dirty);
+        assert_eq!(view.estimate.as_ref().unwrap().size_bytes, 5432);
+        assert_eq!(view.position_ms, 700);
+        view.adjusting_crop = false;
+        view.request_crop_view(&tx);
+        assert!(
+            view.adjusting_crop && jobs.try_recv().is_err(),
+            "same-position source is reused"
+        );
+        view.request_playback(&tx);
+        assert!(
+            jobs.try_recv().is_err(),
+            "source crop mode never starts motion"
+        );
+
+        let p = opened().presented.unwrap();
+        view.receive(&ctx, Event::Presented(Ok(p)));
+        assert!(
+            !view.adjusting_crop && view.source_texture.is_some(),
+            "same-position Apply retains source pixels"
+        );
+        let mut p = opened().presented.unwrap();
+        p.position_ms = 1337;
+        view.receive(&ctx, Event::Presented(Ok(p)));
+        assert!(
+            view.source_texture.is_none(),
+            "Seek cannot reuse another position's source still"
+        );
+        assert!(
+            opened().source_texture.is_none(),
+            "another item has no cached source pixels"
+        );
+    }
+
+    #[test]
+    fn source_crop_cancel_late_success_failure_retry_and_busy_gates() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        view.crop = Some(CropRect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
+        });
+        let frame = view.presented.as_ref().unwrap().frame.clone();
+        let (tx, jobs) = mpsc::channel();
+        view.request_crop_view(&tx);
+        let Job::SourceFrame(cancel) = jobs.recv().unwrap() else {
+            panic!("source job")
+        };
+        view.request_crop_view(&tx);
+        view.request_close();
+        assert!(!view.closed && jobs.try_recv().is_err());
+        cancel.cancel();
+        view.receive(&ctx, Event::SourceFrame(Ok(Arc::new(RgbaImage::new(4, 2)))));
+        assert!(!view.adjusting_crop && view.source_texture.is_none() && !view.busy);
+        view.request_crop_view(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::SourceFrame(_)));
+        view.receive(&ctx, Event::SourceFrame(Err("missing source".into())));
+        assert!(!view.adjusting_crop && !view.busy);
+        assert!(view.error.as_ref().unwrap().contains("missing source"));
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+        view.request_crop_view(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::SourceFrame(_)));
+    }
+
+    #[test]
+    fn crop_pointer_maps_letterboxed_source_and_preserves_accepted_identity() {
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let image = egui::Rect::from_min_size(egui::pos2(50., 75.), egui::vec2(400., 225.));
+        let initial = CropRect {
+            x: 40,
+            y: 20,
+            width: 160,
+            height: 80,
+        };
+        for (start, end, locked, expected) in [
+            (
+                egui::pos2(180., 150.),
+                egui::pos2(205., 162.5),
+                false,
+                CropRect {
+                    x: 60,
+                    y: 30,
+                    width: 160,
+                    height: 80,
+                },
+            ),
+            (
+                egui::pos2(102., 102.),
+                egui::pos2(77., 89.5),
+                true,
+                CropRect {
+                    x: 20,
+                    y: 10,
+                    width: 180,
+                    height: 90,
+                },
+            ),
+            (
+                egui::pos2(302., 202.),
+                egui::pos2(342., 227.),
+                false,
+                CropRect {
+                    x: 40,
+                    y: 20,
+                    width: 192,
+                    height: 100,
+                },
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            tokens.apply(&ctx, true);
+            let mut view = opened();
+            view.presented.as_mut().unwrap().source.width = 320;
+            view.presented.as_mut().unwrap().source.height = 180;
+            view.crop = Some(initial);
+            view.crop_aspect_unlocked = !locked;
+            let accepted = view.presented.as_ref().unwrap().frame.clone();
+            let mut run = |events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 400.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        show_crop_overlay(ui, &tokens, &mut view, image);
+                        if ctx.current_pass_index() == 0 {
+                            ctx.request_discard("crop input runs once");
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+            };
+            run(vec![]);
+            run(vec![
+                egui::Event::PointerMoved(start),
+                trim_pointer(start, true),
+                egui::Event::PointerMoved(end),
+                trim_pointer(end, false),
+            ]);
+            assert_eq!(view.crop, Some(expected));
+            assert!(view.crop_gesture.is_none());
+            assert!(Arc::ptr_eq(
+                &accepted,
+                &view.presented.as_ref().unwrap().frame
+            ));
+            assert!(view.unapplied(), "only staged geometry changes");
+            assert_eq!(view.position_ms, 700);
+        }
+    }
+
+    #[test]
+    fn crop_gesture_ends_on_escape_focus_layout_and_busy_and_keys_use_source_pixels() {
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let ctx = egui::Context::default();
+        tokens.apply(&ctx, false);
+        let image = egui::Rect::from_min_size(egui::pos2(50., 75.), egui::vec2(400., 225.));
+        let mut view = opened();
+        view.presented.as_mut().unwrap().source.width = 320;
+        view.presented.as_mut().unwrap().source.height = 180;
+        view.crop = Some(CropRect {
+            x: 40,
+            y: 20,
+            width: 160,
+            height: 80,
+        });
+        let mut run = |events, image, focused, busy| {
+            view.busy = busy;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 400.),
+                    )),
+                    events,
+                    focused,
+                    ..Default::default()
+                },
+                |ui| show_crop_overlay(ui, &tokens, &mut view, image),
+            );
+            output.textures_delta.clear();
+            (view.crop.unwrap(), view.crop_gesture.is_some())
+        };
+        run(vec![], image, true, false);
+        let start = egui::pos2(180., 150.);
+        let moved = egui::pos2(205., 162.5);
+        let expected = CropRect {
+            x: 60,
+            y: 30,
+            width: 160,
+            height: 80,
+        };
+        assert_eq!(
+            run(
+                vec![trim_pointer(start, true), egui::Event::PointerMoved(moved)],
+                image,
+                true,
+                false
+            ),
+            (expected, true)
+        );
+        assert_eq!(
+            run(
+                vec![
+                    trim_key(egui::Key::Escape),
+                    egui::Event::PointerMoved(egui::pos2(400., 300.))
+                ],
+                image,
+                true,
+                false
+            ),
+            (expected, false)
+        );
+        run(
+            vec![trim_pointer(moved, false), trim_pointer(moved, true)],
+            image,
+            true,
+            false,
+        );
+        assert_eq!(
+            run(
+                vec![egui::Event::PointerMoved(egui::pos2(400., 300.))],
+                image,
+                false,
+                false
+            ),
+            (expected, false)
+        );
+        assert_eq!(
+            run(
+                vec![
+                    trim_pointer(moved, false),
+                    trim_pointer(moved, true),
+                    egui::Event::PointerMoved(egui::pos2(400., 300.))
+                ],
+                image,
+                true,
+                true
+            ),
+            (expected, false)
+        );
+        run(
+            vec![trim_pointer(moved, false), trim_pointer(moved, true)],
+            image,
+            true,
+            false,
+        );
+        assert_eq!(
+            run(
+                vec![egui::Event::PointerMoved(egui::pos2(400., 300.))],
+                image.translate(egui::vec2(10., 0.)),
+                true,
+                false
+            ),
+            (expected, false)
+        );
+        run(
+            vec![
+                trim_pointer(moved, false),
+                trim_pointer(moved, true),
+                trim_pointer(moved, false),
+            ],
+            image,
+            true,
+            false,
+        );
+        assert_eq!(
+            run(vec![trim_key(egui::Key::ArrowRight)], image, true, false)
+                .0
+                .x,
+            61
+        );
+        let shift = egui::Event::Key {
+            key: egui::Key::ArrowDown,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::SHIFT,
+        };
+        assert_eq!(
+            run(vec![shift], image, true, false).0.y,
+            40,
+            "Shift nudge is ten source pixels, not ten scaled view points"
+        );
+    }
+
+    #[test]
+    fn crop_pointer_finishes_pending_text_before_starting_a_new_gesture() {
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let ctx = egui::Context::default();
+        tokens.apply(&ctx, true);
+        let mut view = opened();
+        view.presented.as_mut().unwrap().source.width = 320;
+        view.presented.as_mut().unwrap().source.height = 180;
+        let initial = CropRect {
+            x: 40,
+            y: 20,
+            width: 160,
+            height: 80,
+        };
+        view.crop = Some(initial);
+        let image = egui::Rect::from_min_size(egui::pos2(50., 75.), egui::vec2(400., 225.));
+        let id = egui::Id::unique("pending numeric text");
+        let mut pending = "200".to_owned();
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.add(egui::TextEdit::singleline(&mut pending).id(id))
+                    .request_focus();
+            });
+            output.textures_delta.clear();
+        }
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(id));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![
+                    trim_pointer(egui::pos2(180., 150.), true),
+                    egui::Event::PointerMoved(egui::pos2(205., 162.5)),
+                    trim_pointer(egui::pos2(205., 162.5), false),
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                show_crop_overlay(ui, &tokens, &mut view, image);
+                ui.add(egui::TextEdit::singleline(&mut pending).id(id));
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(
+            view.crop,
+            Some(initial),
+            "do not move from stale geometry while a field commits"
+        );
+        assert!(view.crop_gesture.is_none());
+        assert_eq!(pending, "200");
+        assert_ne!(ctx.memory(|memory| memory.focused()), Some(id));
     }
 
     fn timeline_frame(
