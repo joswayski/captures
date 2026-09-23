@@ -117,6 +117,12 @@ jobs:
           for appearance in dark light; do
             /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --gif-quality --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-gif-quality-$appearance"
           done
+      - name: Exercise GIF maximum width and MP4 sizing on private X11
+        if: runner.os == 'Linux'
+        run: |
+          for appearance in dark light; do
+            /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --gif-width --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-gif-width-$appearance"
+          done
       - name: Exercise accepted file-size limits and export retries on private X11
         if: runner.os == 'Linux'
         run: |
@@ -203,6 +209,8 @@ jobs:
             native-x11-recording-gif-frame-rate-light
             native-x11-recording-gif-quality-dark
             native-x11-recording-gif-quality-light
+            native-x11-recording-gif-width-dark
+            native-x11-recording-gif-width-light
             native-x11-recording-maximum-size-dark
             native-x11-recording-maximum-size-light
             native-x11-recording-timeline-dark

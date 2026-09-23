@@ -199,6 +199,7 @@ struct View {
     destination: String,
     gif: bool,
     gif_frames_per_second: Option<u16>,
+    gif_maximum_width: Option<u32>,
     quality: QualityPreset,
     maximum_size: bool,
     maximum_value: String,
@@ -266,7 +267,25 @@ impl View {
     }
 
     fn staged_edit(&self, p: &Presented) -> EditSpec {
-        let output_size = self.output_dimensions((p.source.width, p.source.height));
+        let mut output_size = self.output_dimensions((p.source.width, p.source.height));
+        if self.gif {
+            let base = output_size.unwrap_or_else(|| {
+                self.crop.map_or((p.source.width, p.source.height), |crop| {
+                    (crop.width, crop.height)
+                })
+            });
+            let (width, height) = MaxResolution::Original.constrain(base.0, base.1);
+            let maximum = self.gif_maximum_width.unwrap_or(800);
+            output_size = Some(if width > maximum {
+                let scale = f64::from(maximum) / f64::from(width);
+                (
+                    maximum,
+                    ((f64::from(height) * scale).round().max(2.0) as u32) & !1,
+                )
+            } else {
+                (width, height)
+            });
+        }
         EditSpec {
             trim_start_ms: self.start_ms,
             trim_end_ms: (self.end_ms != p.source.duration_ms.unwrap_or(0)).then_some(self.end_ms),
@@ -495,7 +514,11 @@ impl View {
                         self.crop = p.edit.crop;
                         // A preset's resolved pixels are not a custom size:
                         // retain the preset so later crop changes recompute it.
-                        if self.presented.is_none() || self.output_size.is_some() {
+                        // GIF dimensions are also derived: do not overwrite the
+                        // uncapped custom base or compound later width changes.
+                        if self.presented.is_none()
+                            || (self.output_size.is_some() && p.export.format != ExportFormat::Gif)
+                        {
                             self.output_size = p.edit.output_width.zip(p.edit.output_height);
                         }
                         self.audio = p.edit.audio.clone();
@@ -2007,6 +2030,17 @@ fn show(
                                     }
                                 }
                             });
+                        ui.strong("Maximum width");
+                        let mut maximum = view.gif_maximum_width.unwrap_or(800);
+                        egui::ComboBox::from_id_salt("recording-gif-maximum-width")
+                            .selected_text(format!("{maximum} px"))
+                            .show_ui(ui, |ui| {
+                                for value in [320, 480, 640, 800, 1200] {
+                                    if ui.selectable_value(&mut maximum, value, format!("{value} px")).changed() {
+                                        view.gif_maximum_width = Some(maximum);
+                                    }
+                                }
+                            });
                     });
                 }
                 ui.add_enabled_ui(!view.maximum_size, |ui| { ui.horizontal(|ui| {
@@ -3037,7 +3071,7 @@ mod tests {
             &ctx,
             Event::Presented(Ok(Presented {
                 source: p.source.clone(),
-                edit: p.edit.clone(),
+                edit: view.staged_edit(p),
                 export: view.export_spec(),
                 position_ms: 1200,
                 frame: frame.clone(),
@@ -3972,6 +4006,122 @@ mod tests {
     }
 
     #[test]
+    fn gif_width_derives_from_even_crop_preset_or_custom_base_without_upscaling() {
+        let mut view = opened();
+        view.gif = true;
+        assert_eq!(view.gif_maximum_width.unwrap_or(800), 800);
+        view.output_size = Some((1601, 901));
+        for (maximum, expected) in [
+            (320, (320, 180)),
+            (480, (480, 270)),
+            (640, (640, 360)),
+            (800, (800, 450)),
+            (1200, (1200, 674)),
+        ] {
+            view.gif_maximum_width = Some(maximum);
+            let edit = view.staged_edit(view.presented.as_ref().unwrap());
+            assert_eq!(edit.output_width.zip(edit.output_height), Some(expected));
+        }
+        view.gif_maximum_width = Some(320);
+        for (base, expected) in [
+            ((301, 151), (300, 150)), // Never upscale; normalize both axes first.
+            ((9984, 234), (320, 6)),  // Shipping height * (cap / width), not height * cap / width.
+            ((1600, 2), (320, 2)),    // Preserve the encoder's minimum dimension.
+        ] {
+            view.output_size = Some(base);
+            let edit = view.staged_edit(view.presented.as_ref().unwrap());
+            assert_eq!(edit.output_width.zip(edit.output_height), Some(expected));
+        }
+        view.output_size = None;
+        view.crop = Some(CropRect {
+            x: 17,
+            y: 29,
+            width: 501,
+            height: 1001,
+        });
+        view.gif_maximum_width = Some(800);
+        let edit = view.staged_edit(view.presented.as_ref().unwrap());
+        assert_eq!(edit.output_width.zip(edit.output_height), Some((500, 1000)));
+        view.max_resolution = MaxResolution::P720;
+        view.gif_maximum_width = Some(320);
+        let edit = view.staged_edit(view.presented.as_ref().unwrap());
+        assert_eq!(edit.output_width.zip(edit.output_height), Some((320, 640)));
+    }
+
+    #[test]
+    fn gif_width_acceptance_keeps_uncapped_base_for_repeat_changes_seek_and_mp4() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        view.gif = true;
+        view.output_size = Some((1601, 901));
+        for (maximum, expected) in [(800, (800, 450)), (1200, (1200, 674)), (320, (320, 180))] {
+            view.gif_maximum_width = Some(maximum);
+            assert!(view.unapplied() && view.dirty());
+            let (tx, jobs) = mpsc::channel();
+            view.request_estimate(&tx);
+            view.request_playback(&tx);
+            assert!(jobs.try_recv().is_err());
+            let mut p = opened().presented.unwrap();
+            p.edit = view.staged_edit(view.presented.as_ref().unwrap());
+            p.export = view.export_spec();
+            assert_eq!(
+                p.edit.output_width.zip(p.edit.output_height),
+                Some(expected)
+            );
+            view.receive(&ctx, Event::Presented(Ok(p)));
+            assert!(!view.unapplied() && view.dirty());
+            assert_eq!(view.output_size, Some((1601, 901)));
+        }
+        view.receive(
+            &ctx,
+            Event::Saved(Ok(SavedRecording::SavedWithoutHistory {
+                path: "width.gif".into(),
+                warning: "History unavailable".into(),
+            })),
+        );
+        assert!(!view.dirty());
+        let accepted = view.presented.as_ref().unwrap();
+        let frame = accepted.frame.clone();
+        let edit = accepted.edit.clone();
+        view.gif_maximum_width = Some(1200);
+        view.receive(&ctx, Event::Presented(Err("preview failed".into())));
+        assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+        assert_eq!(view.presented.as_ref().unwrap().edit, edit);
+        assert_eq!(view.gif_maximum_width, Some(1200));
+        assert!(view.unapplied());
+        view.gif_maximum_width = Some(320);
+        let mut seek = opened().presented.unwrap();
+        seek.edit = edit;
+        seek.export = view.export_spec();
+        seek.position_ms = 1391;
+        view.receive(&ctx, Event::Presented(Ok(seek)));
+        assert!(!view.dirty() && !view.unapplied());
+        assert_eq!(view.output_size, Some((1601, 901)));
+        view.gif = false;
+        let mut mp4 = opened().presented.unwrap();
+        mp4.edit = view.staged_edit(view.presented.as_ref().unwrap());
+        mp4.export = view.export_spec();
+        assert_eq!(
+            mp4.edit.output_width.zip(mp4.edit.output_height),
+            Some((1601, 901))
+        );
+        view.receive(&ctx, Event::Presented(Ok(mp4)));
+        assert!(!view.unapplied());
+        view.gif = true;
+        assert_eq!(view.gif_maximum_width, Some(320));
+        assert_eq!(
+            view.staged_edit(view.presented.as_ref().unwrap())
+                .output_width,
+            Some(320)
+        );
+        assert_eq!(
+            opened().gif_maximum_width,
+            None,
+            "each new editor resets to 800"
+        );
+    }
+
+    #[test]
     fn audio_changes_stage_with_geometry_and_survive_failed_apply_and_gif() {
         let mut view = opened();
         let p = view.presented.as_mut().unwrap();
@@ -4007,12 +4157,13 @@ mod tests {
         assert_eq!(p.edit.audio.system_volume, 1.);
         assert!(!p.edit.audio.mute_system_audio && !p.edit.audio.mono_output);
         assert_eq!(view.audio, edit.audio);
+        let source = p.source.clone();
         view.gif = true;
         view.receive(
             &ctx,
             Event::Presented(Ok(Presented {
-                source: p.source.clone(),
-                edit: edit.clone(),
+                source,
+                edit: view.staged_edit(view.presented.as_ref().unwrap()),
                 export: view.export_spec(),
                 position_ms: 700,
                 frame,
@@ -4095,6 +4246,7 @@ mod tests {
         );
         view.gif_frames_per_second = Some(8);
         let mut seek = opened().presented.unwrap();
+        seek.edit = view.presented.as_ref().unwrap().edit.clone();
         seek.export = view.export_spec();
         seek.position_ms = 1377;
         view.receive(&ctx, Event::Presented(Ok(seek)));
@@ -4144,6 +4296,7 @@ mod tests {
             assert_eq!(export.quality, QualityPreset::Preserve);
             assert_eq!(export.gif_max_colors, Some(colors));
             let mut accepted = opened().presented.unwrap();
+            accepted.edit = view.staged_edit(view.presented.as_ref().unwrap());
             accepted.export = export.clone();
             view.receive(&ctx, Event::Presented(Ok(accepted)));
             assert!(!view.unapplied());
@@ -4190,7 +4343,7 @@ mod tests {
             &ctx,
             Event::Presented(Ok(Presented {
                 source: p.source.clone(),
-                edit: p.edit.clone(),
+                edit: view.staged_edit(p),
                 position_ms: p.position_ms,
                 frame,
                 export: export.clone(),
