@@ -228,12 +228,12 @@ is not connected. Started recordings are saved on session loss instead of being
 discarded; failed finalization retains recovery data. Linux cannot exclude the
 controls from captured pixels, so Hide is the native workaround on X11. Shared
 native recovery can identify, assemble, or explicitly discard interrupted takes
-in isolated development History. The Windows/Linux workbench lists interrupted
-recordings separately in History, with cancellable recovery and confirmed permanent
-discard. Recovery preserves unavailable bundles for manual inspection; failures allow
-retry, and cancellation cannot undo a recording already published to History.
-This is interrupted capture recovery, not persistent recording-editor drafts or an
-installed-data migration. AppKit recovery controls are a separate pending slice.
+in isolated development History. Both native workbenches list interrupted recordings
+separately in History, with cancellable recovery and confirmed permanent discard.
+Unavailable bundles remain read-only for manual inspection; failures allow retry,
+and cancellation cannot undo a recording already published to History. This is
+interrupted capture recovery, not persistent recording-editor drafts or an
+installed-data migration.
 Region recordings keep a click-through boundary and dimming outside the recorded
 area during countdown, recording, pause, and hidden controls. The guide leaves
 the recorded pixels transparent and disappears when the take ends or is cancelled.

@@ -620,7 +620,21 @@ estimate and thumbnails, regenerates thumbnails, and reloads the existing Histor
 item. Ordinary failure preserves accepted state for retry; a `requires_reopen`
 failure disables media until close/reopen. Physical acceptance remains open.
 Close blocks accepted work; unsaved edits require explicit discard, and normal quit
-is refused until they are saved or closed. Recording drafts are not implemented.
+is refused until they are saved or closed. Recording-editor edit drafts are not implemented.
+Both native workbenches list interrupted native capture bundles in a bounded History
+section separate from artifact rows. Recover/Discard use the shared per-root lease,
+expected identity, serialized worker, and explicit permanent-discard confirmation.
+Unavailable or corrupt entries are read-only; cancellable preparation leaves the
+bundle intact and late cancellation cannot hide committed success. Recovery refreshes
+History and opens the recovered recording only if selection is still current. Terminal
+recording sessions retire before listing or preparing another take, releasing the
+lease without discarding retained media. Quit waits for recovery/discard to finish.
+This is limited to isolated native development roots: no installed-data migration
+or Tauri recovery change. Linux X11/software-GL input verifies real media,
+confirmation/cancel and History publication failure/retry. Windows shares that host
+code; physical Windows and Wayland runtime/input/accessibility remain unverified.
+AppKit CI covers lifecycle and rendered fixtures; physical acceptance remains open.
+No parity gate is closed.
 The shared Replace original operation requires a regular permanent MP4/GIF outside
 History with byte-identical private recovery. It stages edited media, publishes the
 permanent path atomically, then updates History; a History failure restores the
@@ -631,21 +645,7 @@ snapshots, and publication revalidates the opened metadata and file identity.
 The old recovery bytes remain available during publication, but the two directories
 are not crash/power-loss atomic: a process kill can leave new permanent media with
 old or hidden History. History-only and reference-only recordings are unsupported.
-No recording drafts or undo are promised.
-
-Interrupted capture bundles are separate from editor drafts. The Windows/Linux
-History workspace has a bounded recovery list with recoverable and read-only
-unavailable rows, identity-bound permanent-discard confirmation, coarse progress,
-cancellation and retry. A serialized worker uses shared recovery publication;
-late cancellation cannot hide success. Success refreshes History and opens the
-recovered recording only if selection has not changed. Terminal recording owners
-are dropped before listing or preparing another take, releasing their root lease
-without discarding retained media. Quit waits for recovery/discard to finish.
-Native development roots only: shipping Tauri does not share the native lease.
-Linux X11/software-GL input verifies real media, confirmation/cancel and History
-publication failure/retry. Windows uses the same host code; physical Windows and
-Wayland runtime/input/accessibility remain unverified. AppKit integration is a
-separate pending slice. No parity gate is closed.
+No recording-editor edit drafts or undo are promised.
 
 Platform status: shared Rust/C ABI is connected to both hosts. The first AppKit
 slice opens recordings from History in a separate native window with retained
