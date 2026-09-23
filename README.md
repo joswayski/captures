@@ -240,6 +240,10 @@ with source-relative scrubbing, draggable trim handles, numeric trim/crop contro
 and MP4/GIF **Save new copy**. Crop dimensions start aspect-locked; unlock to change
 width and height independently. Apply edits accepts the format, quality and edits
 together before saving; failed updates leave the last accepted frame intact.
+The shared recording editor now also supports same-format replacement of an
+existing permanent MP4/GIF when History retains identical recovery media. Native
+recording-editor hosts do not yet expose **Replace original**; their visible save
+action remains **Save new copy**.
 Trim handles stage changes without decoding on each pointer move; Apply updates
 the preview. Focused trim handles also accept arrow keys and Page Up/Page Down.
 **Adjust crop** shows an uncropped source frame with draggable edges/corners and

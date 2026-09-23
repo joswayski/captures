@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::{Seek, SeekFrom, Write},
     path::Path,
     process::Command,
     sync::Arc,
@@ -200,6 +201,389 @@ fn preview_spec(format: ExportFormat, quality: QualityPreset) -> ExportSpec {
         frames_per_second: None,
         gif_max_colors: None,
     }
+}
+
+#[test]
+fn replace_original_rebases_session_without_changing_identity_or_old_frame() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let original = fs::read(&permanent).unwrap();
+    let mut session = open(&data, &entry, tools);
+    let retained = session.frame();
+    let mut edit = EditSpec {
+        trim_start_ms: 1_000,
+        trim_end_ms: Some(2_000),
+        output_width: Some(32),
+        output_height: Some(16),
+        ..EditSpec::default()
+    };
+    edit.audio.source_has_system_audio = true;
+    session
+        .execute(RecordingEditorRequest::UpdateEdit { edit })
+        .unwrap();
+    let revision = session.snapshot().revision;
+    let replaced = session
+        .replace_original(&CancelToken::default(), |_| {})
+        .unwrap();
+    assert!(matches!(
+        replaced,
+        captures_app::recording_editor::ReplacedRecording::Replaced { .. }
+    ));
+    assert_ne!(fs::read(&permanent).unwrap(), original);
+    assert_eq!(
+        fs::read(
+            data.path()
+                .join("history")
+                .join(&entry.id)
+                .join("media.mp4")
+        )
+        .unwrap(),
+        fs::read(&permanent).unwrap()
+    );
+    let snapshot = session.snapshot_v2();
+    assert_eq!(snapshot.editor.artifact_id, entry.id);
+    assert_eq!(snapshot.editor.position_ms, 0);
+    assert_eq!(snapshot.editor.revision, revision + 1);
+    assert_eq!(
+        (snapshot.editor.source.width, snapshot.editor.source.height),
+        (32, 16)
+    );
+    assert_eq!(snapshot.editor.edit.trim_start_ms, 0);
+    assert_eq!(snapshot.save_export.max_size_bytes, None);
+    assert_eq!(retained.dimensions(), (32, 24));
+    assert_dominant(retained.get_pixel(8, 8).0, 0);
+    session
+        .execute(RecordingEditorRequest::Seek { position_ms: 500 })
+        .unwrap();
+    assert_dominant(pixel(&session), 1);
+    let mut playback = session.playback(0, &CancelToken::default()).unwrap();
+    assert!(playback.next_frame().unwrap().is_some());
+    let copy = data.path().join("copy.mp4");
+    session
+        .save_new(
+            RecordingSaveRequest {
+                destination: copy.clone(),
+                export: export_spec(),
+            },
+            &CancelToken::default(),
+            |_| {},
+        )
+        .unwrap();
+    assert!(copy.is_file());
+}
+
+#[test]
+fn replace_original_gif_preserves_format_and_disables_audio() {
+    let Some((data, source_entry, tools)) = setup(true) else {
+        return;
+    };
+    let permanent = data.path().join("source.gif");
+    let status = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .arg(data.path().join("source.mp4"))
+        .args(["-an", "-vf", "fps=10"])
+        .arg(&permanent)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let mut entry = entry(&uuid::Uuid::new_v4().to_string(), &permanent);
+    entry.kind = ArtifactKind::Gif;
+    entry.mime_type = Some("image/gif".into());
+    entry.has_system_audio = false;
+    entry.has_microphone_audio = false;
+    captures_history::save_recording(&data.path().join("history"), &entry, b"poster", &permanent)
+        .unwrap();
+    let mut session = open(&data, &entry, tools);
+    session
+        .execute(RecordingEditorRequest::UpdatePreview {
+            edit: EditSpec {
+                trim_start_ms: 1_000,
+                trim_end_ms: Some(2_000),
+                ..EditSpec::default()
+            },
+            export: preview_spec(ExportFormat::Gif, QualityPreset::Preserve),
+        })
+        .unwrap();
+    session
+        .replace_original(&CancelToken::default(), |_| {})
+        .unwrap();
+    assert_eq!(session.snapshot_v2().save_export.format, ExportFormat::Gif);
+    assert_eq!(session.snapshot().source.mime_type, "image/gif");
+    assert!(!session.snapshot().has_system_audio);
+    assert_eq!(session.snapshot().position_ms, 0);
+    assert_eq!(session.snapshot().revision, 2);
+    assert_eq!(
+        fs::read(&permanent).unwrap(),
+        fs::read(
+            data.path()
+                .join("history")
+                .join(&entry.id)
+                .join("media.gif")
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        fs::read(data.path().join("source.mp4")).unwrap().len() as u64,
+        source_entry.size_bytes
+    );
+}
+
+#[test]
+fn replace_original_rejects_reference_and_cancel_without_publication() {
+    let Some((data, entry, tools)) = setup(false) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let before = fs::read(&permanent).unwrap();
+    let mut session = open(&data, &entry, tools);
+    let error = session
+        .replace_original(&CancelToken::default(), |_| {})
+        .unwrap_err();
+    assert!(!error.requires_reopen);
+    assert_eq!(fs::read(&permanent).unwrap(), before);
+
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let before = fs::read(&permanent).unwrap();
+    let mut session = open(&data, &entry, tools);
+    let frame = session.frame();
+    let cancel = CancelToken::default();
+    cancel.cancel();
+    let error = session.replace_original(&cancel, |_| {}).unwrap_err();
+    assert!(!error.requires_reopen);
+    assert_eq!(fs::read(&permanent).unwrap(), before);
+    assert!(Arc::ptr_eq(&frame, &session.frame()));
+    assert_eq!(session.snapshot().revision, 0);
+    assert!(!session.requires_reopen());
+}
+
+#[test]
+fn replace_original_rejects_history_only_permanent_hint() {
+    let Some((data, mut entry, tools)) = setup(true) else {
+        return;
+    };
+    let original = data.path().join("source.mp4");
+    let before = fs::read(&original).unwrap();
+    let recovery = data
+        .path()
+        .join("history")
+        .join(&entry.id)
+        .join("media.mp4");
+    entry.saved_path = Some(recovery.to_string_lossy().into_owned());
+    captures_history::update_metadata(&data.path().join("history"), &entry).unwrap();
+    let mut session = open(&data, &entry, tools);
+    let error = session
+        .replace_original(&CancelToken::default(), |_| {})
+        .unwrap_err();
+    assert!(!error.requires_reopen);
+    assert_eq!(fs::read(&original).unwrap(), before);
+    assert_eq!(fs::read(&recovery).unwrap(), before);
+    assert_eq!(session.snapshot().revision, 0);
+}
+
+#[test]
+fn original_save_path_is_the_session_metadata_hint_not_a_replace_eligibility_claim() {
+    let Some((data, mut entry, tools)) = setup(true) else {
+        return;
+    };
+    let original = data.path().join("source.mp4");
+    let session = open(&data, &entry, tools.clone());
+    assert_eq!(session.original_save_path(), Some(original.as_path()));
+    let snapshot_keys = serde_json::to_value(session.snapshot())
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    entry.saved_path = None;
+    captures_history::update_metadata(&data.path().join("history"), &entry).unwrap();
+    let mut no_path = open(&data, &entry, tools);
+    assert_eq!(no_path.original_save_path(), None);
+    assert_eq!(
+        serde_json::to_value(no_path.snapshot())
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        snapshot_keys
+    );
+    assert!(
+        !no_path
+            .replace_original(&CancelToken::default(), |_| {})
+            .unwrap_err()
+            .requires_reopen
+    );
+}
+
+#[test]
+fn replace_original_rejects_changed_source_and_metadata_before_publication() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let mut session = open(&data, &entry, tools);
+    let metadata = data
+        .path()
+        .join("history")
+        .join(&entry.id)
+        .join("metadata.json");
+    let original_metadata = fs::read(&metadata).unwrap();
+    fs::write(&metadata, b"{}").unwrap();
+    let error = session
+        .replace_original(&CancelToken::default(), |_| {})
+        .unwrap_err();
+    assert!(!error.requires_reopen);
+    fs::write(&metadata, original_metadata).unwrap();
+    let old = fs::read(&permanent).unwrap();
+    fs::write(&permanent, b"different bytes").unwrap();
+    let error = session
+        .replace_original(&CancelToken::default(), |_| {})
+        .unwrap_err();
+    assert!(!error.requires_reopen);
+    fs::write(&permanent, old).unwrap();
+    assert!(!session.requires_reopen());
+}
+
+#[test]
+fn replace_original_cancellation_during_export_keeps_original_and_history() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let recovery = data
+        .path()
+        .join("history")
+        .join(&entry.id)
+        .join("media.mp4");
+    let old = fs::read(&permanent).unwrap();
+    let metadata = fs::read(
+        data.path()
+            .join("history")
+            .join(&entry.id)
+            .join("metadata.json"),
+    )
+    .unwrap();
+    let mut session = open(&data, &entry, tools);
+    let cancel = CancelToken::default();
+    let mut progress_count = 0;
+    let error = session
+        .replace_original(&cancel, |_| {
+            progress_count += 1;
+            cancel.cancel();
+        })
+        .unwrap_err();
+    assert!(progress_count > 0);
+    assert!(!error.requires_reopen);
+    assert_eq!(fs::read(&permanent).unwrap(), old);
+    assert_eq!(fs::read(&recovery).unwrap(), old);
+    assert_eq!(
+        fs::read(
+            data.path()
+                .join("history")
+                .join(&entry.id)
+                .join("metadata.json")
+        )
+        .unwrap(),
+        metadata
+    );
+    assert_eq!(session.snapshot().revision, 0);
+    assert!(fs::read_dir(data.path()).unwrap().all(|item| {
+        !item
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".captures-replace-")
+    }));
+}
+
+#[test]
+fn replace_original_detects_in_place_permanent_write_during_encode() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let recovery = data
+        .path()
+        .join("history")
+        .join(&entry.id)
+        .join("media.mp4");
+    let old = fs::read(&permanent).unwrap();
+    let metadata = fs::read(
+        data.path()
+            .join("history")
+            .join(&entry.id)
+            .join("metadata.json"),
+    )
+    .unwrap();
+    let mut session = open(&data, &entry, tools);
+    let frame = session.frame();
+    let mut mutated = false;
+    let error = session
+        .replace_original(&CancelToken::default(), |_| {
+            if !mutated {
+                let mut file = fs::OpenOptions::new().write(true).open(&permanent).unwrap();
+                file.seek(SeekFrom::Start(100)).unwrap();
+                file.write_all(&[old[100] ^ 0xff]).unwrap();
+                mutated = true;
+            }
+        })
+        .unwrap_err();
+    assert!(mutated);
+    assert!(!error.requires_reopen);
+    assert_eq!(fs::read(&permanent).unwrap()[100], old[100] ^ 0xff);
+    assert_eq!(fs::read(&recovery).unwrap(), old);
+    assert_eq!(
+        fs::read(
+            data.path()
+                .join("history")
+                .join(&entry.id)
+                .join("metadata.json")
+        )
+        .unwrap(),
+        metadata
+    );
+    assert_eq!(session.snapshot().revision, 0);
+    assert!(Arc::ptr_eq(&frame, &session.frame()));
+}
+
+#[test]
+fn replace_original_rejects_identical_rewrite_of_opened_source() {
+    let Some((data, entry, tools)) = setup(true) else {
+        return;
+    };
+    let permanent = data.path().join("source.mp4");
+    let recovery = data
+        .path()
+        .join("history")
+        .join(&entry.id)
+        .join("media.mp4");
+    let mut session = open(&data, &entry, tools);
+    let original = fs::read(&recovery).unwrap();
+    // Retains bytes and inode, but changes the source's modification/change
+    // metadata after the preview was accepted.
+    thread::sleep(Duration::from_millis(20));
+    let mut file = fs::OpenOptions::new().write(true).open(&recovery).unwrap();
+    file.seek(SeekFrom::Start(100)).unwrap();
+    file.write_all(&original[100..101]).unwrap();
+    file.sync_all().unwrap();
+    let mut file = fs::OpenOptions::new().write(true).open(&permanent).unwrap();
+    file.seek(SeekFrom::Start(100)).unwrap();
+    file.write_all(&original[100..101]).unwrap();
+    file.sync_all().unwrap();
+    let error = session
+        .replace_original(&CancelToken::default(), |_| {})
+        .unwrap_err();
+    assert!(!error.requires_reopen);
+    assert_eq!(fs::read(&permanent).unwrap(), original);
+    assert_eq!(fs::read(&recovery).unwrap(), original);
+    assert_eq!(session.snapshot().revision, 0);
 }
 
 #[test]

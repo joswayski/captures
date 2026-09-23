@@ -16,8 +16,10 @@ captures-settings = { path = "../captures-settings" }
 chrono.workspace = true
 global-hotkey = "0.8"
 image.workspace = true
+file-id = "0.2.3"
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 tempfile.workspace = true
 thiserror.workspace = true
 uuid.workspace = true

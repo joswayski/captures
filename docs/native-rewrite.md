@@ -612,6 +612,17 @@ files and the original History artifact are never replaced. Post-publication
 History failure reports the successfully saved path rather than inviting re-export.
 Close blocks accepted work; unsaved edits require explicit discard, and normal quit
 is refused until they are saved or closed. Recording drafts are not implemented.
+The shared editor now separately supports same-format Replace original only for a
+regular permanent MP4/GIF outside History with byte-identical private recovery.
+Hosts have not connected this action. It stages the edited media, publishes the
+permanent path atomically, then updates History; a History failure restores the
+permanent path from intact recovery or requires reopening an indeterminate session.
+The read-only original-save-path accessor supplies the accepted session's path
+for host confirmation; it does not claim replacement eligibility or alter v1/v2
+snapshots, and publication revalidates the opened metadata and file identity.
+The old recovery bytes remain available during publication, but the two directories
+are not crash/power-loss atomic: a process kill can leave new permanent media with
+old or hidden History. History-only and reference-only recordings are unsupported.
 
 Platform status: shared Rust/C ABI is connected to both hosts. The first AppKit
 slice opens recordings from History in a separate native window with retained
