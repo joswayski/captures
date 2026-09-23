@@ -541,8 +541,18 @@ AppKit's companion control and physical Windows/Wayland acceptance remain open.
 Unapplied format/quality gates save and seek alongside geometric edits; failed
 updates retain all accepted state and preserve staged values for correction.
 Save uses the accepted configuration, and format/quality-only changes require
-save or explicit discard. Size-budget previews are rejected rather than promising
-the dimensions of a later encoding retry; this host does not expose size budgets.
+save or explicit discard. The wgpu **Maximum file size** control accepts a decimal
+KB/MB/GB cap of at least 100000 bytes through the shared v2 `save_export` contract.
+Maximum mode uses Preserve quality, shows the accepted cap instead of sampling an
+estimate, and keeps the previous quality preference for leaving maximum mode.
+Changing units preserves whole bytes; invalid/partial input gates Apply, playback,
+seek and save. Budget-only changes participate in accepted/dirty identity.
+Still and motion previews use the budget-free `preview_export`; a visible warning
+explains that fitting retries may lower resolution, cadence or audio quality.
+Failed/cancelled/unattainable saves leave source, accepted state and History intact.
+Private X11 covers capped MP4, a real GIF retry with different saved dimensions,
+unattainable export and light/dark normal/minimum controls. AppKit's companion and
+physical Windows/Wayland acceptance remain open; no parity gate closes.
 **Estimate size** explicitly runs the shared Tauri estimator on the accepted
 edit/export configuration through the same serialized worker. Copied bytes and
 fully encoded short ranges report exact byte counts; longer sampled ranges and

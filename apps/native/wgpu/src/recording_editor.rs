@@ -11,8 +11,8 @@ use std::{
 };
 
 use captures_app::recording_editor::{
-    RecordingEditorOpenRequest, RecordingEditorRequest, RecordingEditorSession,
-    RecordingSaveRequest, RecordingTimelineThumbnails, SavedRecording,
+    RecordingEditorOpenRequest, RecordingEditorRequestV2 as RecordingEditorRequest,
+    RecordingEditorSession, RecordingSaveRequest, RecordingTimelineThumbnails, SavedRecording,
 };
 use captures_app::recording_timeline::{TimelineTrimDrag, TimelineTrimEdge, timeline_ratio};
 use captures_media::{
@@ -35,12 +35,12 @@ struct Presented {
 
 impl Presented {
     fn from_session(session: &RecordingEditorSession) -> Self {
-        let snapshot = session.snapshot();
+        let snapshot = session.snapshot_v2();
         Self {
-            source: snapshot.source.clone(),
-            edit: snapshot.edit.clone(),
-            export: snapshot.preview_export.clone(),
-            position_ms: snapshot.position_ms,
+            source: snapshot.editor.source.clone(),
+            edit: snapshot.editor.edit.clone(),
+            export: snapshot.save_export.clone(),
+            position_ms: snapshot.editor.position_ms,
             frame: session.frame(),
         }
     }
@@ -92,6 +92,72 @@ struct CropGesture {
     locked: bool,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum FileSizeUnit {
+    Kb,
+    #[default]
+    Mb,
+    Gb,
+}
+
+impl FileSizeUnit {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Kb => "KB",
+            Self::Mb => "MB",
+            Self::Gb => "GB",
+        }
+    }
+
+    fn digits(self) -> usize {
+        match self {
+            Self::Kb => 3,
+            Self::Mb => 6,
+            Self::Gb => 9,
+        }
+    }
+
+    fn bytes(self, value: &str) -> Option<u64> {
+        // Decimal units, floored to whole bytes without floating-point rounding
+        // at the 100 KB boundary or when switching units.
+        let value = value.trim();
+        let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+        if whole.is_empty() && fraction.is_empty()
+            || !whole
+                .bytes()
+                .chain(fraction.bytes())
+                .all(|c| c.is_ascii_digit())
+        {
+            return None;
+        }
+        let whole = if whole.is_empty() {
+            0
+        } else {
+            whole.parse::<u64>().ok()?
+        };
+        let fraction = &fraction[..fraction.len().min(self.digits())];
+        let part = if fraction.is_empty() {
+            0
+        } else {
+            fraction.parse::<u64>().ok()?
+        };
+        whole
+            .checked_mul(10_u64.pow(self.digits() as u32))?
+            .checked_add(part * 10_u64.pow((self.digits() - fraction.len()) as u32))
+    }
+
+    fn value(self, bytes: u64) -> String {
+        let factor = 10_u64.pow(self.digits() as u32);
+        let fraction = format!("{:0width$}", bytes % factor, width = self.digits());
+        let fraction = fraction.trim_end_matches('0');
+        if fraction.is_empty() {
+            (bytes / factor).to_string()
+        } else {
+            format!("{}.{}", bytes / factor, fraction)
+        }
+    }
+}
+
 #[derive(Default)]
 struct View {
     presented: Option<Presented>,
@@ -134,6 +200,9 @@ struct View {
     gif: bool,
     gif_frames_per_second: Option<u16>,
     quality: QualityPreset,
+    maximum_size: bool,
+    maximum_value: String,
+    maximum_unit: FileSizeUnit,
     progress: Option<ExportProgress>,
     status: Option<String>,
     error: Option<String>,
@@ -147,8 +216,14 @@ impl View {
             } else {
                 ExportFormat::Mp4
             },
-            quality: self.quality,
-            max_size_bytes: None,
+            quality: if self.maximum_size {
+                QualityPreset::Preserve
+            } else {
+                self.quality
+            },
+            // Invalid text must remain an unapplied, invalid cap, never silently
+            // turn maximum mode into an unbounded export. Apply is gated below.
+            max_size_bytes: self.maximum_size.then(|| self.maximum_bytes().unwrap_or(0)),
             frames_per_second: if self.gif {
                 self.gif_frames_per_second
             } else {
@@ -156,6 +231,19 @@ impl View {
             },
             gif_max_colors: None,
         }
+    }
+
+    fn maximum_bytes(&self) -> Option<u64> {
+        self.maximum_unit
+            .bytes(&self.maximum_value)
+            .filter(|bytes| *bytes >= 100_000)
+    }
+
+    fn set_maximum_unit(&mut self, unit: FileSizeUnit) {
+        if let Some(bytes) = self.maximum_unit.bytes(&self.maximum_value) {
+            self.maximum_value = unit.value(bytes);
+        }
+        self.maximum_unit = unit;
     }
 
     fn output_dimensions(&self, source_size: (u32, u32)) -> Option<(u32, u32)> {
@@ -200,6 +288,16 @@ impl View {
             "Estimating size…".into()
         } else if self.unapplied() {
             "Apply edits to estimate size".into()
+        } else if let Some(cap) = self
+            .presented
+            .as_ref()
+            .and_then(|p| p.export.max_size_bytes)
+        {
+            format!(
+                "≤ {} {}",
+                self.maximum_unit.value(cap),
+                self.maximum_unit.label()
+            )
         } else if let Some(estimate) = &self.estimate {
             format!(
                 "{}{} bytes{}",
@@ -218,6 +316,10 @@ impl View {
             || self.confirm_close
             || self.presented.is_none()
             || self.unapplied()
+            || self
+                .presented
+                .as_ref()
+                .is_some_and(|p| p.export.max_size_bytes.is_some())
         {
             return;
         }
@@ -395,9 +497,19 @@ impl View {
                         if self.gif {
                             self.gif_frames_per_second = p.export.frames_per_second;
                         }
-                        self.quality = p.export.quality;
+                        self.maximum_size = p.export.max_size_bytes.is_some();
+                        if let Some(cap) = p.export.max_size_bytes {
+                            if self.maximum_bytes() != Some(cap) {
+                                self.maximum_value = self.maximum_unit.value(cap);
+                            }
+                        } else {
+                            self.quality = p.export.quality;
+                        }
                         // The initial edit includes trusted audio flags.
                         if self.presented.is_none() {
+                            if !self.maximum_size {
+                                self.maximum_value = "10".into();
+                            }
                             self.saved_edit = p.edit.clone();
                             self.saved_export = Some(p.export.clone());
                         }
@@ -659,7 +771,7 @@ impl Editor {
                             .as_mut()
                             .ok_or_else(|| "Recording editor is unavailable.".to_owned())
                             .and_then(|s| {
-                                s.execute(request)?;
+                                s.execute_v2(request)?;
                                 Ok(Presented::from_session(s))
                             }),
                     ),
@@ -678,7 +790,7 @@ impl Editor {
                         session
                             .as_ref()
                             .ok_or_else(|| "Recording editor is unavailable.".to_owned())
-                            .and_then(|s| s.estimate_export(&cancel)),
+                            .and_then(|s| s.estimate_save_export(&cancel)),
                     ),
                     Job::Thumbnails(cancel) => Event::Thumbnails(
                         session
@@ -1484,7 +1596,7 @@ fn show(
                         .into_owned();
                 }
                 ui.label(view.estimate_label())
-                    .on_hover_text("File size for the accepted settings. Longer recordings use encoded samples and are approximate. Estimating creates no History entry or saved file.");
+                    .on_hover_text("Maximum mode shows the accepted byte limit, not an estimated size. Other modes estimate the accepted export; longer recordings use approximate encoded samples. No History entry or saved file is created.");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add_enabled(
@@ -1508,7 +1620,7 @@ fn show(
                         );
                     }
                     if ui
-                        .add_enabled(view.unapplied(), egui::Button::new("Apply edits"))
+                        .add_enabled(view.unapplied() && (!view.maximum_size || view.maximum_bytes().is_some()), egui::Button::new("Apply edits"))
                         .on_hover_text("Update the preview before scrubbing or saving")
                         .clicked()
                     {
@@ -1519,7 +1631,7 @@ fn show(
                             Job::Apply(RecordingEditorRequest::UpdatePreview { edit, export }),
                         );
                     }
-                    if ui.add_enabled(view.presented.is_some() && !view.unapplied(), egui::Button::new("Estimate size")).clicked() {
+                    if ui.add_enabled(view.presented.is_some() && !view.unapplied() && !view.maximum_size, egui::Button::new("Estimate size")).clicked() {
                         view.request_estimate(tx);
                     }
                 });
@@ -1657,6 +1769,9 @@ fn show(
                 view.texture.as_ref().map_or(p.frame.width() as usize, |t| t.size()[0]),
                 view.texture.as_ref().map_or(p.frame.height() as usize, |t| t.size()[1])
             ));
+            if p.export.max_size_bytes.is_some() {
+                ui.weak("First-attempt preview. Size-limited saves may reduce resolution, frame rate or audio quality.");
+            }
             }
             ui.add_enabled_ui(!view.busy && !view.picker && !view.confirm_close, |ui| {
                 ui.add_enabled_ui(!view.unapplied(), |ui| {
@@ -1887,10 +2002,10 @@ fn show(
                             });
                     });
                 }
-                ui.horizontal(|ui| {
+                ui.add_enabled_ui(!view.maximum_size, |ui| { ui.horizontal(|ui| {
                     ui.strong("Save quality");
                     egui::ComboBox::from_id_salt("recording-quality")
-                        .selected_text(format!("{:?}", view.quality))
+                        .selected_text(format!("{:?}", view.export_spec().quality))
                         .show_ui(ui, |ui| {
                             for quality in [
                                 QualityPreset::Preserve,
@@ -1907,7 +2022,27 @@ fn show(
                                 );
                             }
                         });
-                });
+                }); });
+                ui.checkbox(&mut view.maximum_size, "Maximum file size");
+                if view.maximum_size {
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut view.maximum_value)
+                            .desired_width(tokens.number("s-6") * 4.));
+                        let mut unit = view.maximum_unit;
+                        egui::ComboBox::from_id_salt("recording-size-unit")
+                            .selected_text(unit.label())
+                            .show_ui(ui, |ui| {
+                                for choice in [FileSizeUnit::Kb, FileSizeUnit::Mb, FileSizeUnit::Gb] {
+                                    ui.selectable_value(&mut unit, choice, choice.label());
+                                }
+                            });
+                        if unit != view.maximum_unit { view.set_maximum_unit(unit); }
+                    });
+                    if view.maximum_bytes().is_none() {
+                        ui.colored_label(tokens.color("danger-text"), "Enter at least 100 KB (decimal units).");
+                    }
+                    ui.weak("Preserve quality with a hard limit. Save fails if no retry fits; the original stays unchanged.");
+                }
             });
         });
     });
@@ -1937,6 +2072,122 @@ mod tests {
             })),
         );
         view
+    }
+
+    #[test]
+    fn decimal_size_units_floor_bytes_without_rounding_or_overflow() {
+        assert_eq!(FileSizeUnit::Kb.bytes("100.0199"), Some(100_019));
+        assert_eq!(FileSizeUnit::Mb.bytes(".1000199"), Some(100_019));
+        assert_eq!(FileSizeUnit::Gb.bytes("0.0001000199"), Some(100_019));
+        assert_eq!(FileSizeUnit::Mb.bytes("0.099999999"), Some(99_999));
+        assert_eq!(FileSizeUnit::Mb.bytes(".1"), Some(100_000));
+        assert_eq!(
+            FileSizeUnit::Kb.bytes("18446744073709551.615"),
+            Some(u64::MAX)
+        );
+        for invalid in [
+            "",
+            ".",
+            "-1",
+            "NaN",
+            "inf",
+            "1.2.3",
+            "1x",
+            "０.1",
+            "18446744073709551.616",
+        ] {
+            assert_eq!(FileSizeUnit::Kb.bytes(invalid), None, "{invalid}");
+        }
+        for unit in [FileSizeUnit::Kb, FileSizeUnit::Mb, FileSizeUnit::Gb] {
+            for bytes in [99_999, 100_000, 100_019, 10_123_456, u64::MAX] {
+                assert_eq!(unit.bytes(&unit.value(bytes)), Some(bytes));
+            }
+        }
+    }
+
+    #[test]
+    fn maximum_size_is_accepted_save_state_not_an_estimate_or_preview_mutation() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        view.quality = QualityPreset::Tiny;
+        view.maximum_size = true;
+        view.maximum_value = ".1000199".into();
+        let export = view.export_spec();
+        assert_eq!(export.max_size_bytes, Some(100_019));
+        assert_eq!(export.quality, QualityPreset::Preserve);
+        assert!(view.unapplied() && view.dirty());
+        let (tx, jobs) = mpsc::channel();
+        view.request_estimate(&tx);
+        view.request_playback(&tx);
+        assert!(jobs.try_recv().is_err());
+        let mut accepted = opened().presented.unwrap();
+        accepted.export = export.clone();
+        let image = accepted.frame.clone();
+        view.estimate = Some(ExportEstimate {
+            size_bytes: 999,
+            exact: true,
+        });
+        view.receive(&ctx, Event::Presented(Ok(accepted)));
+        assert!(!view.unapplied() && view.dirty() && view.estimate.is_none());
+        assert_eq!(view.estimate_label(), "≤ 0.100019 MB");
+        view.request_estimate(&tx);
+        assert!(
+            jobs.try_recv().is_err(),
+            "maximum mode displays its cap without encoding samples"
+        );
+        view.set_maximum_unit(FileSizeUnit::Kb);
+        assert_eq!(view.maximum_value, "100.019");
+        assert_eq!(view.export_spec(), export);
+        assert!(!view.unapplied());
+        view.receive(&ctx, Event::Saved(Err("cannot fit".into())));
+        assert!(view.dirty());
+        assert!(Arc::ptr_eq(&image, &view.presented.as_ref().unwrap().frame));
+        view.receive(
+            &ctx,
+            Event::Saved(Ok(SavedRecording::SavedWithoutHistory {
+                path: "limited.mp4".into(),
+                warning: "History unavailable".into(),
+            })),
+        );
+        assert!(!view.dirty());
+
+        view.maximum_value = "200".into();
+        assert!(view.unapplied() && view.dirty());
+        view.receive(&ctx, Event::Presented(Err("planner rejected".into())));
+        assert_eq!(view.maximum_value, "200");
+        assert_eq!(view.presented.as_ref().unwrap().export, export);
+        assert!(Arc::ptr_eq(&image, &view.presented.as_ref().unwrap().frame));
+        view.maximum_value = "100.019".into();
+        let mut seek = opened().presented.unwrap();
+        seek.export = export.clone();
+        seek.position_ms = 1377;
+        view.receive(&ctx, Event::Presented(Ok(seek)));
+        assert!(!view.dirty() && !view.unapplied());
+        assert_eq!(view.maximum_value, "100.019");
+        view.gif = true;
+        assert_eq!(view.export_spec().max_size_bytes, Some(100_019));
+        view.gif = false;
+
+        for invalid in ["", ".", "99.999", "-10", "NaN"] {
+            view.maximum_value = invalid.into();
+            assert!(view.maximum_bytes().is_none() && view.unapplied());
+            assert_eq!(
+                view.export_spec().max_size_bytes,
+                Some(0),
+                "invalid input never removes the limit"
+            );
+        }
+        view.maximum_size = false;
+        assert_eq!(view.export_spec().max_size_bytes, None);
+        assert_eq!(
+            view.export_spec().quality,
+            QualityPreset::Tiny,
+            "leaving maximum restores the selected quality"
+        );
+        let fresh = opened();
+        assert!(!fresh.maximum_size);
+        assert_eq!(fresh.maximum_value, "10");
+        assert_eq!(fresh.maximum_unit.label(), "MB");
     }
 
     #[test]

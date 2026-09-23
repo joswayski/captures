@@ -111,6 +111,12 @@ jobs:
           for appearance in dark light; do
             /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --gif-frame-rate --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-gif-frame-rate-$appearance"
           done
+      - name: Exercise accepted file-size limits and export retries on private X11
+        if: runner.os == 'Linux'
+        run: |
+          for appearance in dark light; do
+            /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --maximum-size --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-maximum-size-$appearance"
+          done
       - name: Exercise recording thumbnails, trim handles and exports on private X11
         if: runner.os == 'Linux'
         run: |
@@ -189,6 +195,8 @@ jobs:
             native-x11-recording-preview-scale-light
             native-x11-recording-gif-frame-rate-dark
             native-x11-recording-gif-frame-rate-light
+            native-x11-recording-maximum-size-dark
+            native-x11-recording-maximum-size-light
             native-x11-recording-timeline-dark
             native-x11-recording-timeline-light
             native-x11-recording-playback-dark

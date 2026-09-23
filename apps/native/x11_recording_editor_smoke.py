@@ -39,6 +39,7 @@ def main():
     parser.add_argument("--graphical-crop", action="store_true", help="Exercise source-view crop handles, cache, staging and export")
     parser.add_argument("--preview-scale", action="store_true", help="Exercise display-only Fit/100% and bounded preview scrolling")
     parser.add_argument("--gif-frame-rate", action="store_true", help="Exercise staged GIF cadence and real exported frame counts")
+    parser.add_argument("--maximum-size", action="store_true", help="Exercise accepted size caps, encoder retries and immutable publication")
     args = parser.parse_args()
     if args.sound:
         args.audio = True
@@ -163,7 +164,7 @@ def main():
         artifact = history / artifact_id
         artifact.mkdir(parents=True)
         source = output / "source.mp4"
-        source_width, source_height = (1600, 900) if args.preview_scale else (640, 1440) if args.presets else (320, 180)
+        source_width, source_height = (640, 360) if args.maximum_size else (1600, 900) if args.preview_scale else (640, 1440) if args.presets else (320, 180)
         source_size = f"{source_width}x{source_height}"
         segment_seconds = 2 if args.playback or args.sound else 1
         audio_inputs = []
@@ -180,19 +181,23 @@ def main():
             audio_filters = (";[3:a]asplit=2[system][s];[4:a]asplit=2[mic][m];"
                              "[s][m]amix=inputs=2:normalize=0[mixed]")
             audio_maps = ["-map", "[mixed]", "-map", "[system]", "-map", "[mic]", "-c:a", "aac", "-b:a", "256k"]
-        run("ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"color=red:s={source_size}:r=10:d={segment_seconds}",
-            "-f", "lavfi", "-i", f"color=green:s={source_size}:r=10:d={segment_seconds}",
-            "-f", "lavfi", "-i", f"color=blue:s={source_size}:r=10:d={segment_seconds}",
-            *audio_inputs, "-filter_complex",
-            "[0:v][1:v][2:v]concat=n=3:v=1:a=0,drawbox=x=15:y=10:w=45:h=25:color=white:t=fill[v]" + audio_filters,
-            "-map", "[v]", *audio_maps, "-c:v", "mpeg4", "-q:v", "2", str(source))
+        if args.maximum_size:
+            run("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=4",
+                "-c:v", "mpeg4", "-q:v", "2", "-an", str(source))
+        else:
+            run("ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"color=red:s={source_size}:r=10:d={segment_seconds}",
+                "-f", "lavfi", "-i", f"color=green:s={source_size}:r=10:d={segment_seconds}",
+                "-f", "lavfi", "-i", f"color=blue:s={source_size}:r=10:d={segment_seconds}",
+                *audio_inputs, "-filter_complex",
+                "[0:v][1:v][2:v]concat=n=3:v=1:a=0,drawbox=x=15:y=10:w=45:h=25:color=white:t=fill[v]" + audio_filters,
+                "-map", "[v]", *audio_maps, "-c:v", "mpeg4", "-q:v", "2", str(source))
         run("ffmpeg", "-v", "error", "-i", str(source), "-frames:v", "1", str(artifact / "preview.png"))
         metadata = artifact / "metadata.json"
         metadata.write_text(json.dumps({
             "id": artifact_id, "kind": "video", "preview_url": "", "full_url": "",
             "width": source_width, "height": source_height, "size_bytes": source.stat().st_size,
             "created_at": datetime.now(timezone.utc).isoformat(), "mode": None,
-            "saved_path": str(source), "mime_type": "video/mp4", "duration_ms": 3000 * segment_seconds,
+            "saved_path": str(source), "mime_type": "video/mp4", "duration_ms": 4000 if args.maximum_size else 3000 * segment_seconds,
             "target": {"type": "display", "display_id": "fixture"},
             "has_system_audio": args.audio, "has_microphone_audio": args.audio, "dropped_frames": 0,
         }))
@@ -205,15 +210,17 @@ def main():
             "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
             "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
             "auto_copy_to_clipboard": False, "show_mini_previews": False}))
-        if args.thumbnails or args.graphical_crop:
-            # Delay only the requested read-only frame command to exercise
+        if args.thumbnails or args.graphical_crop or args.maximum_size:
+            # Delay only the requested frame/export command to exercise
             # cancellation without racing a tiny fixture. Pixels still use FFmpeg.
             tools = output / "tools"
             tools.mkdir()
-            operation = "thumbnails" if args.thumbnails else "source-frame"
+            operation = "export" if args.maximum_size else "thumbnails" if args.thumbnails else "source-frame"
             started = output / f"{operation}-calls.txt"
             allowed = output / f"allow-{operation}"
-            predicate = "'tile=' in arg" if args.thumbnails else "'source-frame-' in arg"
+            predicate = "'-attempt-' in arg" if args.maximum_size else "'tile=' in arg" if args.thumbnails else "'source-frame-' in arg"
+            if args.maximum_size:
+                allowed.touch()
             ffmpeg = shutil.which("ffmpeg")
             assert ffmpeg
             wrapper = tools / "ffmpeg"
@@ -261,7 +268,8 @@ def main():
                 assert all(pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel), (x, pixel)
         wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(), "decode")
         shot(editor, "original")
-        dominant(output / "original.png", 0)
+        if not args.maximum_size:
+            dominant(output / "original.png", 0)
         run("xdotool", "windowminimize", root, "sleep", ".5")
         estimate_expectations = {}
         if args.sound:
@@ -424,7 +432,7 @@ def main():
             run("xdotool", "mousemove", "--window", editor, "450", "410",
                 "click", "--repeat", "25", "--delay", "40", "5", "sleep", ".5")
             shot(editor, "gif-frame-rate-minimum")
-            click(editor, 149, 431)
+            click(editor, 149, 387)
             shot(editor, "gif-frame-rate-minimum-menu")
             run("xdotool", "key", "Escape")
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
@@ -440,6 +448,94 @@ def main():
                     "duration-dimensions-colors", "mp4-switch-restores-gif-cadence", "minimum-controls",
                     "immutable-source-history", "distinct-saved-history", "clean-close"]}, indent=2) + "\n")
             print("PASS GIF frame rate: 24/72 frames over 3s, Apply/retry/save, MP4 roundtrip and immutable source")
+            return
+        if args.maximum_size:
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            click(editor, 22, 914)
+            shot(editor, "maximum-initial")
+            field(editor, 40, 961, ".0999999")
+            click(editor, 793, 1082)
+            shot(editor, "maximum-invalid")
+            assert not list(exports.iterdir())
+            field(editor, 40, 961, ".1")
+            field(editor, 211, 598, 800)
+            click(editor, 793, 1082)
+            shot(editor, "maximum-accepted")
+            limited = exports / "limited.mp4"
+            field(editor, 360, 1038, limited)
+            click(editor, 899, 1082)
+            wait(limited.exists, "capped MP4 export")
+            assert limited.stat().st_size <= 100_000
+            click(editor, 87, 1082)
+            shot(editor, "maximum-gif-staged")
+            click(editor, 149, 900)
+            click(editor, 149, 862)  # 30 FPS requested; budget retries can lower it.
+            click(editor, 793, 1082)
+            shot(editor, "maximum-gif-accepted")
+            click(editor, 899, 1082)
+            gif = limited.with_suffix(".gif")
+            wait(gif.exists, "capped GIF retry export")
+            assert gif.stat().st_size <= 100_000
+            info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(gif)))
+            assert (info["streams"][0]["width"], info["streams"][0]["height"]) == (320, 180), info
+            shot(editor, "maximum-gif-saved")
+            for name in ("maximum-gif-accepted", "maximum-gif-saved"):
+                pixels = run("convert", str(output / f"{name}.png"), "-crop", "960x380+0+85", "-depth", "8", "rgb:-")
+                if name == "maximum-gif-accepted":
+                    accepted_pixels = pixels
+                else:
+                    assert pixels == accepted_pixels, "saving retry output never replaces the accepted preview"
+            saved = next(json.loads(p.read_text()) for p in history.glob("*/metadata.json")
+                         if json.loads(p.read_text()).get("saved_path") == str(gif))
+            assert (saved["width"], saved["height"], saved["size_bytes"]) == (320, 180, gif.stat().st_size)
+
+            cancelled = exports / "cancelled.gif"
+            field(editor, 360, 1038, cancelled)
+            attempts_before = len(started.read_text().splitlines())
+            allowed.unlink()
+            click(editor, 899, 1082)
+            wait(lambda: len(started.read_text().splitlines()) > attempts_before, "blocked export attempt")
+            time.sleep(1)
+            run("import", "-window", editor, str(output / "maximum-cancelling.png"))
+            # Bypass idle while the worker is deliberately paused inside FFmpeg.
+            run("xdotool", "windowactivate", "--sync", editor, "windowfocus", "--sync", editor,
+                "mousemove", "--sync", "--window", editor, "60", "1011", "sleep", ".4",
+                "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
+            idle(editor)
+            allowed.touch()
+            shot(editor, "maximum-cancelled")
+            assert not cancelled.exists() and not list(exports.glob(".captures-*"))
+            field(editor, 211, 625, 4000)
+            click(editor, 793, 1082)
+            failed = exports / "unattainable.gif"
+            field(editor, 360, 1038, failed)
+            click(editor, 899, 1082)
+            idle(editor)
+            shot(editor, "maximum-unattainable")
+            assert not failed.exists()
+            assert len(list(history.glob("*/metadata.json"))) == 3
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            field(editor, 211, 625, 800)
+            click(editor, 793, 1082)
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            run("xdotool", "mousemove", "--window", editor, "450", "410",
+                "click", "--repeat", "25", "--delay", "40", "5", "sleep", ".5")
+            shot(editor, "maximum-minimum")
+            click(editor, 130, 448)
+            shot(editor, "maximum-minimum-units")
+            run("xdotool", "key", "Escape")
+            close(editor)
+            wait(lambda: not windows("Recording editor"), "restored saved limit closes cleanly")
+            close(root)
+            wait(lambda: app.poll() is not None, "maximum size quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "mp4_bytes": limited.stat().st_size, "gif_bytes": gif.stat().st_size,
+                "gif_saved_dimensions": [320, 180], "preview_dimensions": [640, 360],
+                "checks": ["minimum-cap-validation", "capped-mp4", "gif-retry-dimensions", "preview-retained-on-save",
+                    "history-actual-output-metadata", "in-flight-cancel-cleanup", "unattainable-no-publication",
+                    "immutable-source-history", "minimum-controls", "clean-restored-close"]}, indent=2) + "\n")
+            print("PASS maximum size: capped MP4/GIF, retry dimensions, cancel/unattainable cleanup, immutable source and History")
             return
         if args.preview_scale:
             def marker_size(name):
