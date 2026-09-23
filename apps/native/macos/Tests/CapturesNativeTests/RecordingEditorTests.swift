@@ -2279,6 +2279,8 @@ final class RecordingEditorTests: XCTestCase {
                                                      originalBytes: 1_000_000), "−60%")
         XCTAssertEqual(formatRecordingFileSizeDelta(estimatedBytes: 1_250_000,
                                                      originalBytes: 1_000_000), "+25%")
+        XCTAssertEqual(formatRecordingFileSizeDelta(estimatedBytes: 9, originalBytes: 8),
+                       "+13%", "positive half ties round up like Math.round")
         XCTAssertEqual(formatRecordingFileSizeDelta(estimatedBytes: 7, originalBytes: 8),
                        "−12%", "negative half ties round toward positive infinity like Math.round")
         XCTAssertEqual(formatRecordingFileSizeDelta(estimatedBytes: 3, originalBytes: 8),
@@ -2308,8 +2310,15 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertFalse(label.stringValue.contains("%"), "pending estimate has no delta")
         worker.completeEstimate(.success(RecordingEditorEstimate(sizeBytes: 400_000, exact: true)))
         XCTAssertTrue(label.stringValue.hasSuffix(" · −60%"))
+        XCTAssertEqual(label.toolTip,
+                       "Percentage change compares the estimated saved size with the original recording file size.")
+        XCTAssertEqual(label.accessibilityHelp(), label.toolTip)
 
         let seek = try slider("Recording frame position", in: controller.root)
+        worker.requestResult = .failure(AppBridgeError.backend("seek unavailable"))
+        seek.doubleValue = 500; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertTrue(label.stringValue.hasSuffix(" · −60%"),
+                      "a failed Seek does not invalidate the accepted estimate")
         worker.requestResult = .success(try presentation(position: 733, revision: 1,
                                                           sourceSizeBytes: 1_000_000))
         seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
