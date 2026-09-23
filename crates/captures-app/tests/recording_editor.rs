@@ -386,6 +386,43 @@ fn replace_original_rejects_history_only_permanent_hint() {
 }
 
 #[test]
+fn original_save_path_is_the_session_metadata_hint_not_a_replace_eligibility_claim() {
+    let Some((data, mut entry, tools)) = setup(true) else {
+        return;
+    };
+    let original = data.path().join("source.mp4");
+    let session = open(&data, &entry, tools.clone());
+    assert_eq!(session.original_save_path(), Some(original.as_path()));
+    let snapshot_keys = serde_json::to_value(session.snapshot())
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    entry.saved_path = None;
+    captures_history::update_metadata(&data.path().join("history"), &entry).unwrap();
+    let mut no_path = open(&data, &entry, tools);
+    assert_eq!(no_path.original_save_path(), None);
+    assert_eq!(
+        serde_json::to_value(no_path.snapshot())
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        snapshot_keys
+    );
+    assert!(
+        !no_path
+            .replace_original(&CancelToken::default(), |_| {})
+            .unwrap_err()
+            .requires_reopen
+    );
+}
+
+#[test]
 fn replace_original_rejects_changed_source_and_metadata_before_publication() {
     let Some((data, entry, tools)) = setup(true) else {
         return;
@@ -457,6 +494,13 @@ fn replace_original_cancellation_during_export_keeps_original_and_history() {
         metadata
     );
     assert_eq!(session.snapshot().revision, 0);
+    assert!(fs::read_dir(data.path()).unwrap().all(|item| {
+        !item
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".captures-replace-")
+    }));
 }
 
 #[test]

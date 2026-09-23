@@ -646,6 +646,7 @@ dependencies = [
  "chrono",
  "global-hotkey",
  "image",
+ "same-file",
  "serde",
  "serde_json",
  "sha2",

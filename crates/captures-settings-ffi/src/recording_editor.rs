@@ -74,6 +74,26 @@ pub unsafe extern "C" fn captures_recording_editor_open_v1(
     handle
 }
 
+/// Read-only accepted-session permanent path hint; no eligibility or file work.
+///
+/// # Safety
+/// Session is live and serialized for this call. Free returned owned JSON with
+/// captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_original_save_path_v1(
+    session: *const RecordingEditorSession,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let session = unsafe { session.as_ref() }.ok_or("recording editor handle is null")?;
+        Ok::<_, &str>(json!({"path":session.original_save_path().and_then(|path| path.to_str())}))
+    }))
+    .unwrap_or(Err("internal panic"));
+    response(match result {
+        Ok(value) => json!({"ok":true,"result":value}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
+}
+
 /// Execute one atomic edit/seek request and return the accepted snapshot.
 ///
 /// # Safety
@@ -1015,6 +1035,13 @@ mod tests {
         // SAFETY: open returned one owned response.
         let opened = unsafe { json(open_response) };
         assert_eq!(opened["ok"], true);
+        // SAFETY: read-only hint is owned JSON, not a v1/v2 snapshot field.
+        let path = unsafe { json(captures_recording_editor_original_save_path_v1(session)) };
+        assert_eq!(path["result"]["path"], source.to_str().unwrap());
+        assert_eq!(
+            unsafe { json(captures_recording_editor_original_save_path_v1(ptr::null())) }["ok"],
+            false
+        );
         let v1_keys = opened["result"]
             .as_object()
             .unwrap()
@@ -1352,5 +1379,21 @@ mod tests {
         assert_eq!(pixels.length, 1_920 * 90 * 4);
         // SAFETY: owner is released once after the final pixel borrow.
         unsafe { captures_recording_editor_thumbnails_free_v1(thumbnails) };
+
+        let mut no_path_entry = entry;
+        no_path_entry.saved_path = None;
+        captures_history::update_metadata(&history_root, &no_path_entry).unwrap();
+        let mut reopened_response = ptr::null_mut();
+        // SAFETY: same serialized request and fresh owned output.
+        let reopened = unsafe {
+            captures_recording_editor_open_v1(open_request.as_ptr(), &mut reopened_response)
+        };
+        assert!(!reopened.is_null());
+        assert_eq!(unsafe { json(reopened_response) }["ok"], true);
+        assert_eq!(
+            unsafe { json(captures_recording_editor_original_save_path_v1(reopened)) }["result"]["path"],
+            serde_json::Value::Null
+        );
+        unsafe { captures_recording_editor_free_v1(reopened) };
     }
 }
