@@ -908,16 +908,12 @@ impl RecordingEditorSession {
             format: self.save_export.format,
             ..default_preview_export()
         };
-        let new_frame = extract_preview(
-            &self.tools,
-            &stage,
-            &new_probe,
-            &new_edit,
-            &new_export,
-            0,
-            self.scratch.path(),
-        )
-        .map_err(unchanged)?;
+        // The staged file already contains the accepted visual edit. The
+        // rebased position-zero frame is a decoded source frame, not another
+        // export preview; keep its decoder cancellable before publication.
+        let new_frame =
+            extract_source_frame(&self.tools, &stage, &new_probe, 0, stage_dir.path(), cancel)
+                .map_err(unchanged)?;
         if cancel.is_cancelled() {
             return Err(unchanged(MediaToolError::Cancelled.to_string()));
         }
