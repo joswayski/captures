@@ -502,6 +502,15 @@ size-budget retries, instead of silently ignoring output height. Re-encoded MP4 
 Windows/Linux fits within 3840 × 2160 (portrait: 2160 × 3840); format-aware preview
 now reflects that cap without applying it to Preserve copy/remux or GIF paths.
 The accepted format/quality and frame dimensions appear beside the preview.
+The wgpu recording preview also has display-only **Fit / 100%**. Fit retains its
+existing scaling; 100% maps each decoded pixel to one logical screen point and
+scrolls overflowing pixels inside the preview. Smaller images stay centered.
+This applies to accepted, motion and crop-source frames without media I/O, edits,
+estimate invalidation or History changes. Apply/Seek retain the mode; another item
+defaults to Fit. Crop gestures use the scrolled image rectangle and end on scroll,
+scale or layout changes. Motion remains capped at 1280 × 720 regardless of display
+scale. AppKit's matching display control remains a separate host slice; physical
+Windows/Wayland/mixed-DPI acceptance is still open.
 Available system/microphone tracks have 0–200% volume, independent mute and mono
 output controls. Availability comes from the accepted session's trusted audio
 identity, not caller-provided track flags. Audio stages with geometry/format and

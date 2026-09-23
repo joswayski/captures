@@ -246,6 +246,9 @@ the preview. Focused trim handles also accept arrow keys and Page Up/Page Down.
 interior move. Crop handles follow the aspect lock; arrows move one source pixel,
 or ten with Shift. **Done cropping** restores the prior preview without accepting
 changes; Apply remains explicit. Loading this source frame can be canceled or retried.
+**Fit / 100%** changes only the displayed scale. At 100%, one decoded image pixel
+occupies one screen point; larger previews scroll within the preview area. Playback
+still uses its bounded decoded size, not full-source resolution.
 The trim track shows retained full-source thumbnails, independent of the edited
 preview. Thumbnail generation can be canceled or retried without losing edits;
 it does not change the source recording. **Play/Pause** offers silent motion within
