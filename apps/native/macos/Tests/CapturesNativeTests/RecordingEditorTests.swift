@@ -92,7 +92,7 @@ final class RecordingEditorTests: XCTestCase {
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
         let play = try button("Play", in: controller.root)
-        let loop = try checkbox("Loop silent recording preview", in: controller.root)
+        let loop = try checkbox("Loop recording preview", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
 
         XCTAssertEqual(loop.state, .off)
@@ -147,7 +147,7 @@ final class RecordingEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
-        let loop = try checkbox("Loop silent recording preview", in: controller.root)
+        let loop = try checkbox("Loop recording preview", in: controller.root)
         let play = try button("Play", in: controller.root)
         let estimate = try button("Estimate size", in: controller.root)
         let save = try button("Save new copy", in: controller.root)
@@ -202,7 +202,7 @@ final class RecordingEditorTests: XCTestCase {
         defer { cleanController.window.orderOut(nil) }
         cleanController.present(artifact: recordingArtifact(), historyRoot: "/History",
                                 outputDirectory: "/Exports")
-        let cleanLoop = try checkbox("Loop silent recording preview", in: cleanController.root)
+        let cleanLoop = try checkbox("Loop recording preview", in: cleanController.root)
         cleanLoop.performClick(nil)
         cleanController.present(artifact: recordingArtifact(id: "next-recording"),
                                 historyRoot: "/History", outputDirectory: "/Exports")
@@ -235,6 +235,127 @@ final class RecordingEditorTests: XCTestCase {
         })
         play.performClick(nil)
         XCTAssertEqual(worker.playbackStarts, [300, 300], "an error retries from accepted position")
+    }
+
+    func testSoundPreviewLifecycleMetadataFailureRetryAndIdentity() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            start: 200, end: 1_800, position: 400,
+            hasSystemAudio: true, hasMicrophoneAudio: true))
+        worker.deferPlayback = true
+        worker.playbackMetadata = RecordingPlaybackMetadata(startPositionMilliseconds: 400,
+            width: 640, height: 360, framesPerSecond: 24, audioEnabled: true)
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let sound = try checkbox("Preview accepted recording audio", in: controller.root)
+        let play = try button("Play", in: controller.root)
+        let seek = try slider("Recording frame position", in: controller.root)
+        XCTAssertEqual(sound.state, .off, "each item defaults Sound off")
+        let initialRequests = worker.requests.count
+        sound.performClick(nil)
+        XCTAssertEqual(sound.state, .on); XCTAssertFalse(controller.dirty)
+        XCTAssertEqual(worker.requests.count, initialRequests)
+        XCTAssertTrue(worker.saves.isEmpty,
+                      "Sound is transient and never enters editor or export identity")
+
+        play.performClick(nil)
+        XCTAssertEqual(worker.playbackSoundSelections, [true])
+        XCTAssertFalse(sound.isEnabled, "Sound cannot change while playback owns the worker")
+        XCTAssertTrue(labels(in: controller.root).contains("Sound active"))
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Sound playback · 640 × 360") })
+        play.performClick(nil)
+        XCTAssertFalse(sound.isEnabled, "Sound remains gated while Pause tears down the device")
+        worker.completePlayback(.success(.cancelled))
+        XCTAssertEqual(sound.state, .on); XCTAssertTrue(sound.isEnabled)
+        XCTAssertTrue(labels(in: controller.root).contains("Audio used"))
+
+        let trimEnd = try field("Trim end milliseconds", in: controller.root)
+        trimEnd.stringValue = "1600"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: trimEnd))
+        worker.requestResult = .success(try presentation(start: 200, end: 1_600,
+            position: 400, revision: 1, hasSystemAudio: true, hasMicrophoneAudio: true))
+        try button("Apply edits", in: controller.root).performClick(nil)
+        XCTAssertEqual(sound.state, .on, "Apply retains the item-local preference")
+        worker.requestResult = .success(try presentation(start: 200, end: 1_600,
+            position: 733, revision: 2, hasSystemAudio: true, hasMicrophoneAudio: true))
+        seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(sound.state, .on, "Seek retains the item-local preference")
+
+        play.performClick(nil)
+        worker.completePlayback(.failure(AppBridgeError.backend("default output device unavailable")))
+        XCTAssertEqual(sound.state, .on, "device errors retain the explicit Sound selection")
+        XCTAssertTrue(labels(in: controller.root).contains {
+            $0.contains("Sound playback failed") && $0.contains("default output device unavailable")
+        })
+        sound.performClick(nil); play.performClick(nil)
+        XCTAssertEqual(Array(worker.playbackSoundSelections.suffix(2)), [true, false],
+                       "the visible device error requires an explicit Sound-off retry")
+        worker.completePlayback(.success(.cancelled))
+
+        sound.performClick(nil)
+        controller.present(artifact: recordingArtifact(id: "next-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(worker.openCount, 1, "dirty accepted edits reject an item switch")
+        XCTAssertEqual(sound.state, .on, "a rejected switch retains the current item preference")
+        XCTAssertTrue(controller.dirty)
+        XCTAssertTrue(labels(in: controller.root).contains {
+            $0.contains("save, or discard the current recording edits")
+        })
+
+        let cleanWorker = FakeRecordingEditorWorker(presentation: try presentation())
+        let cleanController = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                        worker: cleanWorker, confirmDiscard: { false })
+        defer { cleanController.window.orderOut(nil) }
+        cleanController.present(artifact: recordingArtifact(id: "clean-recording"),
+                                historyRoot: "/History", outputDirectory: "/Exports")
+        let cleanSound = try checkbox("Preview accepted recording audio", in: cleanController.root)
+        cleanSound.performClick(nil)
+        XCTAssertEqual(cleanSound.state, .on); XCTAssertFalse(cleanController.dirty)
+        cleanController.present(artifact: recordingArtifact(id: "clean-next-recording"),
+                                historyRoot: "/History", outputDirectory: "/Exports")
+        XCTAssertEqual(cleanWorker.openCount, 2, "a clean item switch opens the new History item")
+        XCTAssertEqual(cleanSound.state, .off, "a successful new-item open resets Sound off")
+        XCTAssertFalse(cleanController.dirty)
+    }
+
+    func testSoundSelectedSilentMetadataExplainsNoTrackMutedMixAndGIF() throws {
+        _ = NSApplication.shared
+        for (name, value, expected) in [
+            ("no-track", try presentation(), "No audio tracks"),
+            ("muted", try presentation(hasSystemAudio: true, hasMicrophoneAudio: true,
+                                        muteSystem: true, muteMicrophone: true),
+             "Mix silent"),
+        ] {
+            let worker = FakeRecordingEditorWorker(presentation: value)
+            worker.deferPlayback = true
+            worker.playbackMetadata = RecordingPlaybackMetadata(startPositionMilliseconds: 0,
+                width: 320, height: 180, framesPerSecond: 30, audioEnabled: false)
+            let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                       worker: worker, confirmDiscard: { false })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(id: name), historyRoot: "/History",
+                               outputDirectory: "/Exports")
+            try checkbox("Preview accepted recording audio", in: controller.root).performClick(nil)
+            try button("Play", in: controller.root).performClick(nil)
+            XCTAssertTrue(labels(in: controller.root).contains(expected))
+            worker.completePlayback(.success(.cancelled))
+        }
+
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(
+            exportFormat: "gif", hasSystemAudio: true))
+        worker.deferPlayback = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(id: "gif"), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        try checkbox("Preview accepted recording audio", in: controller.root).performClick(nil)
+        try button("Play", in: controller.root).performClick(nil)
+        XCTAssertTrue(labels(in: controller.root).contains("GIF · no audio"))
     }
 
     func testSeekPreservesRequestedTargetAtIdleAndAfterTransientPlayback() throws {
@@ -274,7 +395,8 @@ final class RecordingEditorTests: XCTestCase {
         worker.deferPlaybackStarted = true
         worker.playbackMetadata = RecordingPlaybackMetadata(startPositionMilliseconds: 200,
                                                              width: 640, height: 360,
-                                                             framesPerSecond: 24)
+                                                             framesPerSecond: 24,
+                                                             audioEnabled: true)
         let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
                                                    worker: worker, confirmDiscard: { false })
         defer { controller.window.orderOut(nil) }
@@ -282,10 +404,12 @@ final class RecordingEditorTests: XCTestCase {
                            outputDirectory: "/Exports")
         let play = try button("Play", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
+        let sound = try checkbox("Preview accepted recording audio", in: controller.root)
         let preview = try XCTUnwrap(descendants(in: controller.root)
             .compactMap { $0 as? NSImageView }.first)
         let acceptedFrame = preview.image
 
+        sound.performClick(nil)
         play.performClick(nil)
         XCTAssertEqual(worker.playbackStarts, [1_937])
         play.performClick(nil)
@@ -294,7 +418,9 @@ final class RecordingEditorTests: XCTestCase {
 
         worker.completePlaybackStarted()
         XCTAssertEqual(play.title, "Pausing…", "late metadata cannot replace the Pausing state")
-        XCTAssertTrue(labels(in: controller.root).contains("Pausing silent playback…"))
+        XCTAssertTrue(labels(in: controller.root).contains("Pausing sound playback…"))
+        XCTAssertFalse(labels(in: controller.root).contains("Sound active"),
+                       "late metadata after cancellation cannot publish actual audio state")
         XCTAssertEqual(seek.doubleValue, 1_937,
                        "zero-frame Pause retains the accepted still that was actually displayed")
         XCTAssertTrue(preview.image === acceptedFrame)
@@ -316,7 +442,8 @@ final class RecordingEditorTests: XCTestCase {
                            outputDirectory: "/Exports")
         let play = try button("Play", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
-        let loop = try checkbox("Loop silent recording preview", in: controller.root)
+        let loop = try checkbox("Loop recording preview", in: controller.root)
+        let sound = try checkbox("Preview accepted recording audio", in: controller.root)
         let timestamp = try XCTUnwrap(descendants(in: controller.root)
             .compactMap { $0 as? NSTextField }
             .first { !$0.isEditable && $0.stringValue.contains(" / ") })
@@ -324,18 +451,21 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(seek.doubleValue, 0, "layout coverage keeps the playhead at source start")
         for size in [NSSize(width: 760, height: 540), NSSize(width: 960, height: 760)] {
             controller.window.setContentSize(size)
-            XCTAssertFalse(play.isHidden); XCTAssertFalse(loop.isHidden)
+            XCTAssertFalse(play.isHidden); XCTAssertFalse(loop.isHidden); XCTAssertFalse(sound.isHidden)
             XCTAssertFalse(seek.isHidden); XCTAssertFalse(timestamp.isHidden)
             XCTAssertGreaterThan(seek.frame.width, 0)
             XCTAssertTrue(controller.root.bounds.intersects(play.frame))
             XCTAssertTrue(controller.root.bounds.intersects(loop.frame))
+            XCTAssertTrue(controller.root.bounds.intersects(sound.frame))
             XCTAssertTrue(controller.root.bounds.intersects(seek.frame))
             XCTAssertTrue(controller.root.bounds.intersects(timestamp.frame))
             let gap = tokens.number("s-2")
             XCTAssertLessThanOrEqual(play.frame.maxX + gap, loop.frame.minX,
                                      "Play must not overlap Loop at width \(size.width)")
-            XCTAssertLessThanOrEqual(loop.frame.maxX + gap, seek.frame.minX,
-                                     "Loop must not overlap the seek slider at width \(size.width)")
+            XCTAssertLessThanOrEqual(loop.frame.maxX + gap, sound.frame.minX,
+                                     "Loop must not overlap Sound at width \(size.width)")
+            XCTAssertLessThanOrEqual(sound.frame.maxX + gap, seek.frame.minX,
+                                     "Sound must not overlap the seek slider at width \(size.width)")
             XCTAssertLessThanOrEqual(seek.frame.maxX + gap, timestamp.frame.minX,
                                      "the seek slider must not overlap its timestamp at width \(size.width)")
         }
@@ -578,7 +708,7 @@ final class RecordingEditorTests: XCTestCase {
                        "the retained controller and window reopen after actual close")
     }
 
-    func testSilentPlaybackRenderedStates() throws {
+    func testSoundPlaybackRenderedStates() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
             let worker = FakeRecordingEditorWorker(presentation: try presentation(
@@ -592,26 +722,42 @@ final class RecordingEditorTests: XCTestCase {
             controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                                outputDirectory: "/Exports")
             let play = try button("Play", in: controller.root)
-            let loop = try checkbox("Loop silent recording preview", in: controller.root)
+            let loop = try checkbox("Loop recording preview", in: controller.root)
+            let sound = try checkbox("Preview accepted recording audio", in: controller.root)
+            worker.playbackMetadata = RecordingPlaybackMetadata(startPositionMilliseconds: 400,
+                width: 640, height: 360, framesPerSecond: 24, audioEnabled: true)
+            sound.performClick(nil)
             loop.state = .on; _ = loop.sendAction(loop.action, to: loop.target)
             play.performClick(nil)
             worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 700,
                 image: try solidImage(red: 20, green: 210, blue: 30)))
-            try render(controller.root, name: "recording-editor-looping-\(appearance)")
+            try render(controller.root, name: "recording-editor-sound-looping-\(appearance)")
 
             play.performClick(nil); worker.completePlayback(.success(.cancelled))
-            try render(controller.root, name: "recording-editor-loop-paused-\(appearance)")
+            try render(controller.root, name: "recording-editor-sound-paused-\(appearance)")
 
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             play.performClick(nil)
             worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 1_100,
                 image: try solidImage(red: 30, green: 40, blue: 220)))
-            try render(controller.root, name: "recording-editor-looping-minimum-\(appearance)")
+            let activeNote = try XCTUnwrap(descendants(in: controller.root)
+                .compactMap { $0 as? NSTextField }.first { $0.stringValue == "Sound active" })
+            XCTAssertGreaterThanOrEqual(activeNote.frame.width, activeNote.intrinsicContentSize.width,
+                                        "minimum layout shows the full active Sound status")
+            try render(controller.root, name: "recording-editor-sound-looping-minimum-\(appearance)")
             play.performClick(nil); worker.completePlayback(.success(.cancelled))
-            try render(controller.root, name: "recording-editor-loop-paused-minimum-\(appearance)")
+            let pausedNote = try XCTUnwrap(descendants(in: controller.root)
+                .compactMap { $0 as? NSTextField }.first { $0.stringValue == "Audio used" })
+            XCTAssertGreaterThanOrEqual(pausedNote.frame.width, pausedNote.intrinsicContentSize.width,
+                                        "minimum layout shows the full prior-audio status")
+            try render(controller.root, name: "recording-editor-sound-paused-minimum-\(appearance)")
             play.performClick(nil)
             worker.completePlayback(.failure(AppBridgeError.backend("decoder stopped")))
-            try render(controller.root, name: "recording-editor-playback-error-minimum-\(appearance)")
+            let errorNote = try XCTUnwrap(descendants(in: controller.root)
+                .compactMap { $0 as? NSTextField }.first { $0.stringValue == "Uses accepted mix" })
+            XCTAssertGreaterThanOrEqual(errorNote.frame.width, errorNote.intrinsicContentSize.width,
+                                        "minimum layout shows the full selected-mix status")
+            try render(controller.root, name: "recording-editor-sound-error-minimum-\(appearance)")
         }
     }
 
@@ -699,7 +845,7 @@ final class RecordingEditorTests: XCTestCase {
         let timeline = try XCTUnwrap(descendants(in: controller.root)
             .compactMap { $0 as? RecordingTrimTimeline }.first)
         let retry = try button("Retry", in: controller.root)
-        let loop = try checkbox("Loop silent recording preview", in: controller.root)
+        let loop = try checkbox("Loop recording preview", in: controller.root)
         XCTAssertEqual(timeline.thumbnailStateDescription, "Source thumbnails unavailable")
         XCTAssertFalse(retry.isHiddenOrHasHiddenAncestor)
         XCTAssertTrue(loop.isEnabled)
@@ -1739,7 +1885,7 @@ final class RecordingEditorTests: XCTestCase {
         defer { silent.window.orderOut(nil) }
         silent.present(artifact: recordingArtifact(), historyRoot: "/History",
                        outputDirectory: "/Exports")
-        XCTAssertTrue(labels(in: silent.root).contains { $0 == "No audio tracks." })
+        XCTAssertTrue(labels(in: silent.root).contains { $0 == "No audio tracks" })
         XCTAssertTrue(try field("System audio volume percent", in: silent.root).isHiddenOrHasHiddenAncestor)
         XCTAssertTrue(try field("Microphone volume percent", in: silent.root).isHiddenOrHasHiddenAncestor)
 
@@ -2146,7 +2292,8 @@ final class RecordingEditorTests: XCTestCase {
                                                 "export": export])
             let before = try session.request(["operation": "snapshot"]).snapshot
             let cancel = try XCTUnwrap(NativeRecordingEditorCancel())
-            let playback = try session.playback(positionMilliseconds: 800, cancel: cancel)
+            let playback = try session.playback(positionMilliseconds: 800, soundEnabled: false,
+                                                cancel: cancel)
             XCTAssertEqual(playback.metadata.startPositionMilliseconds, 200,
                            "trim end normalizes to accepted trim start")
             XCTAssertEqual(playback.metadata.width, 80); XCTAssertEqual(playback.metadata.height, 40)
@@ -2172,9 +2319,17 @@ final class RecordingEditorTests: XCTestCase {
                            try JSONSerialization.data(withJSONObject: before.export, options: [.sortedKeys]))
             XCTAssertEqual(accepted.snapshot.revision, before.revision)
 
+            let soundCancel = try XCTUnwrap(NativeRecordingEditorCancel())
+            let soundPlayback = try session.playback(positionMilliseconds: 200,
+                                                      soundEnabled: true, cancel: soundCancel)
+            XCTAssertFalse(soundPlayback.metadata.audioEnabled,
+                           "Sound-selected media without a track does not open an audio device")
+            XCTAssertNotNil(try soundPlayback.nextFrame())
+            while try soundPlayback.nextFrame() != nil {}
+
             let cancelled = try XCTUnwrap(NativeRecordingEditorCancel())
             let cancelledPlayback = try session.playback(positionMilliseconds: 200,
-                                                          cancel: cancelled)
+                                                          soundEnabled: false, cancel: cancelled)
             cancelled.cancel()
             XCTAssertThrowsError(try cancelledPlayback.nextFrame())
         }
@@ -2216,9 +2371,13 @@ final class RecordingEditorTests: XCTestCase {
         let loopCancel = try XCTUnwrap(NativeRecordingEditorCancel())
         var firstPositions: [UInt64] = []
         var firstStartedCount = 0
+        var firstAudioEnabled: Bool?
         var firstResult: Result<RecordingPlaybackCompletion, Error>?
         worker.playback(positionMilliseconds: 701, loopStartMilliseconds: 233,
-            loop: loop, cancel: loopCancel, started: { _ in firstStartedCount += 1 }, frame: { value in
+            soundEnabled: true, loop: loop, cancel: loopCancel,
+            started: { metadata in
+                firstStartedCount += 1; firstAudioEnabled = metadata.audioEnabled
+            }, frame: { value in
                 if let previous = firstPositions.last, value.positionMilliseconds < previous {
                     loop.isEnabled = false
                 }
@@ -2230,6 +2389,8 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(firstResult).get(), .eof)
         XCTAssertEqual(firstStartedCount, 1,
                        "loop laps reuse one playback operation without queued metadata callbacks")
+        XCTAssertEqual(firstAudioEnabled, false,
+                       "each Sound-selected no-track lap reopens v2 without a device")
         XCTAssertTrue(firstPositions.allSatisfy { (233..<977).contains($0) },
                       "all presented positions remain inside the accepted half-open trim")
         XCTAssertTrue(zip(firstPositions, firstPositions.dropFirst()).contains { pair in
@@ -2244,7 +2405,8 @@ final class RecordingEditorTests: XCTestCase {
         var secondPositions: [UInt64] = []
         var secondResult: Result<RecordingPlaybackCompletion, Error>?
         worker.playback(positionMilliseconds: 701, loopStartMilliseconds: 233,
-            loop: secondLoop, cancel: secondCancel, started: { _ in }, frame: { value in
+            soundEnabled: false, loop: secondLoop, cancel: secondCancel,
+            started: { _ in }, frame: { value in
                 if let previous = secondPositions.last, value.positionMilliseconds < previous {
                     secondCancel.cancel()
                 }
@@ -2394,6 +2556,7 @@ final class RecordingEditorTests: XCTestCase {
                               previewWidth: Int = 16, previewHeight: Int = 9,
                               crop: NativeRecordingCropRect? = nil,
                               output: NativeRecordingDimensions? = nil,
+                              exportFormat: String = "mp4",
                               hasSystemAudio: Bool = false, hasMicrophoneAudio: Bool = false,
                               systemVolume: Double = 1, microphoneVolume: Double = 1,
                               muteSystem: Bool = false, muteMicrophone: Bool = false,
@@ -2413,7 +2576,7 @@ final class RecordingEditorTests: XCTestCase {
                           "mute_system_audio": muteSystem, "mute_microphone": muteMicrophone,
                           "mono_output": monoOutput, "source_has_system_audio": hasSystemAudio,
                           "source_has_microphone_audio": hasMicrophoneAudio]],
-            "preview_export": ["format": "mp4", "quality": "preserve",
+            "preview_export": ["format": exportFormat, "quality": "preserve",
                 "max_size_bytes": 4_000_000, "frames_per_second": NSNull(),
                 "gif_max_colors": NSNull()],
             "position_ms": position, "revision": revision,
@@ -2788,8 +2951,10 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var estimateResult: Result<RecordingEditorEstimate, Error> = .failure(AppBridgeError.backend("estimate unavailable"))
     var playbackMetadata = RecordingPlaybackMetadata(startPositionMilliseconds: 0,
                                                       width: 2, height: 1,
-                                                      framesPerSecond: 10)
+                                                      framesPerSecond: 10,
+                                                      audioEnabled: false)
     var playbackStarts: [UInt64] = []
+    var playbackSoundSelections: [Bool] = []
     var playbackFrames: [RecordingPlaybackImage] = []
     var playbackResult: Result<RecordingPlaybackCompletion, Error> = .success(.eof)
     var deferPlayback = false
@@ -2839,11 +3004,13 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
         completion(estimateResult)
     }
     func playback(positionMilliseconds: UInt64, loopStartMilliseconds: UInt64,
+                  soundEnabled: Bool,
                   loop: RecordingPlaybackLoopControl, cancel: NativeRecordingEditorCancel,
                   started: @escaping (RecordingPlaybackMetadata) -> Void,
                   frame: @escaping (RecordingPlaybackImage) -> Void,
                   completion: @escaping (Result<RecordingPlaybackCompletion, Error>) -> Void) {
-        playbackStarts.append(positionMilliseconds); observedPlaybackCancel = cancel
+        playbackStarts.append(positionMilliseconds); playbackSoundSelections.append(soundEnabled)
+        observedPlaybackCancel = cancel
         observedPlaybackLoop = loop; pendingPlaybackLoopStart = loopStartMilliseconds
         playbackLapFrameCount = 0
         if deferPlaybackStarted { pendingPlaybackStarted = started }

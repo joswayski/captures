@@ -61,6 +61,7 @@ struct RecordingPlaybackMetadata: Equatable {
     let width: UInt32
     let height: UInt32
     let framesPerSecond: UInt16
+    let audioEnabled: Bool
 }
 
 struct RecordingPlaybackImage {
@@ -286,7 +287,7 @@ final class NativeRecordingEditorPlayback {
     private let handle: OpaquePointer
     let metadata: RecordingPlaybackMetadata
 
-    init?(handle: OpaquePointer, metadata: [String: Any]) {
+    init?(handle: OpaquePointer, metadata: [String: Any], audioEnabled: Bool) {
         guard let start = (metadata["start_position_ms"] as? NSNumber)?.uint64Value,
               let width = (metadata["width"] as? NSNumber)?.uint32Value,
               let height = (metadata["height"] as? NSNumber)?.uint32Value,
@@ -295,7 +296,8 @@ final class NativeRecordingEditorPlayback {
         self.handle = handle
         self.metadata = RecordingPlaybackMetadata(startPositionMilliseconds: start,
                                                   width: width, height: height,
-                                                  framesPerSecond: framesPerSecond)
+                                                  framesPerSecond: framesPerSecond,
+                                                  audioEnabled: audioEnabled)
     }
 
     deinit { captures_recording_editor_playback_free_v1(handle) }
@@ -475,11 +477,14 @@ final class NativeRecordingEditorSession {
         return RecordingEditorEstimate(sizeBytes: bytes.uint64Value, exact: exact)
     }
 
-    func playback(positionMilliseconds: UInt64,
+    func playback(positionMilliseconds: UInt64, soundEnabled: Bool,
                   cancel: NativeRecordingEditorCancel) throws -> NativeRecordingEditorPlayback {
         var response: UnsafeMutablePointer<CChar>?
-        let handle = captures_recording_editor_playback_open_v1(
-            self.handle, positionMilliseconds, cancel.handle, &response)
+        let handle = soundEnabled
+            ? captures_recording_editor_playback_open_v2(
+                self.handle, positionMilliseconds, cancel.handle, &response)
+            : captures_recording_editor_playback_open_v1(
+                self.handle, positionMilliseconds, cancel.handle, &response)
         defer { captures_settings_free_v1(response) }
         guard let response else {
             captures_recording_editor_playback_free_v1(handle)
@@ -491,8 +496,19 @@ final class NativeRecordingEditorSession {
             captures_recording_editor_playback_free_v1(handle)
             throw error
         }
+        let audioEnabled: Bool
+        if soundEnabled {
+            guard let value = metadata["audio_enabled"] as? Bool else {
+                captures_recording_editor_playback_free_v1(handle)
+                throw AppBridgeError.invalidResponse
+            }
+            audioEnabled = value
+        } else {
+            audioEnabled = false
+        }
         guard let handle,
-              let playback = NativeRecordingEditorPlayback(handle: handle, metadata: metadata) else {
+              let playback = NativeRecordingEditorPlayback(handle: handle, metadata: metadata,
+                                                            audioEnabled: audioEnabled) else {
             captures_recording_editor_playback_free_v1(handle)
             throw AppBridgeError.invalidResponse
         }
@@ -595,6 +611,7 @@ protocol RecordingEditorWorking: AnyObject {
     func estimate(cancel: NativeRecordingEditorCancel,
                   completion: @escaping (Result<RecordingEditorEstimate, Error>) -> Void)
     func playback(positionMilliseconds: UInt64, loopStartMilliseconds: UInt64,
+                  soundEnabled: Bool,
                   loop: RecordingPlaybackLoopControl, cancel: NativeRecordingEditorCancel,
                   started: @escaping (RecordingPlaybackMetadata) -> Void,
                   frame: @escaping (RecordingPlaybackImage) -> Void,
@@ -658,6 +675,7 @@ final class RecordingEditorWorker: RecordingEditorWorking {
     }
 
     func playback(positionMilliseconds: UInt64, loopStartMilliseconds: UInt64,
+                  soundEnabled: Bool,
                   loop: RecordingPlaybackLoopControl, cancel: NativeRecordingEditorCancel,
                   started: @escaping (RecordingPlaybackMetadata) -> Void,
                   frame: @escaping (RecordingPlaybackImage) -> Void,
@@ -676,6 +694,7 @@ final class RecordingEditorWorker: RecordingEditorWorking {
                 var didStart = false
                 func runLap(from position: UInt64) throws -> Int {
                     let playback = try session.playback(positionMilliseconds: position,
+                                                        soundEnabled: soundEnabled,
                                                         cancel: cancel)
                     if !didStart {
                         didStart = true

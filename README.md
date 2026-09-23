@@ -295,10 +295,12 @@ volume and mute controls plus mono output; audio applies to MP4 while GIF disabl
 the controls without losing their MP4 values. Its graphical trim handles overlay an
 immutable 12-frame source-relative thumbnail strip and stage the same numeric values
 without seeking; loading can be canceled or retried without disabling editing, and
-Apply remains explicit. Silent Play/Pause presents bounded accepted-edit motion
-frames and a source-relative playhead without changing the accepted preview, edits,
-History or source. Optional Loop preview repeats the accepted trim without changing
-exports or dirty state; each silent lap reopens the decoder and is not gapless.
+Apply remains explicit. Play/Pause presents bounded accepted-edit motion frames and
+a source-relative playhead without changing the accepted preview, edits, History or
+source. It is silent by default, with optional Sound preview of the accepted MP4 mix
+on the default device; GIF and inaudible mixes stay silent without opening a device.
+Optional Loop preview repeats the accepted trim without changing
+exports or dirty state; each lap reopens the decoders and is not gapless.
 **Adjust crop** loads one immutable full-source frame at the accepted position, then
 stages source-pixel crop changes with eight resize handles or interior movement without
 decoding on each pointer event. **Done cropping** restores the prior accepted or motion
@@ -306,8 +308,8 @@ frame; only Apply publishes the staged values. Loading is cancellable and retrya
 Fit or 100% applies to the accepted, paused/playback or crop-source frame without
 decoding again or changing edits, estimates, exports or History; each item defaults to Fit.
 Windows/X11 provide the same full-source graphical adjustment alongside numeric crop
-and output sizing. Audio playback is not implemented, and this is not Tauri editor
-parity; physical macOS, Windows and Wayland acceptance remains open.
+and output sizing. This is not Tauri editor parity; physical audio routing, A/V sync,
+macOS, Windows and Wayland acceptance remain open.
 History displays recording posters and metadata; **Save file**
 copies the original media to the output folder without re-encoding, and
 **Show in Folder** reveals that saved copy. Both native

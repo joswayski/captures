@@ -623,6 +623,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var playbackReachedEOF = false
     private var playbackFramePresented = false
     private var playbackLoopEnabled = false
+    private var playbackSoundEnabled = false
+    private var playbackAudioEnabled: Bool?
     private var playbackLoopControl: RecordingPlaybackLoopControl?
     private var sourceFrameCache: RecordingSourceImage?
     private var sourceFrameCancel: NativeRecordingEditorCancel?
@@ -688,6 +690,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var previewFitButton: CaptureButton!
     private var previewActualButton: CaptureButton!
     private let playbackLoop = NSButton(checkboxWithTitle: "Loop", target: nil, action: nil)
+    private let playbackSound = NSButton(checkboxWithTitle: "Sound", target: nil, action: nil)
 
     init(tokens: Tokens, worker: RecordingEditorWorking = RecordingEditorWorker(),
          reportError: @escaping (String) -> Void = { _ in },
@@ -745,6 +748,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         estimate = nil; activeCancel = nil; thumbnailCancel = nil; busy = true; pickerOpen = false
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
+        playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
         sourceFrameCache = nil; sourceFrameCancel = nil
         cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
         previewActualSize = false
@@ -793,7 +797,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                     self.requestTermination()
                 }
             }
-            showError("Pausing silent playback before quitting…")
+            showError("Pausing recording playback before quitting…")
             window.makeKeyAndOrderFront(nil); return false
         }
         if busy || pickerOpen {
@@ -848,7 +852,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private func buildUI() {
         root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
         _ = label("Edit recording", size: 22, weight: .semibold)
-        let note = label("Silent playback · accepted recording edits only", muted: true)
+        let note = label("Playback uses accepted recording edits only", muted: true)
         note.identifier = NSUserInterfaceItemIdentifier("recording-editor-note")
         previewPanel.wantsLayer = true
         previewPanel.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
@@ -931,8 +935,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackButton = button("Play") { [weak self] in self?.togglePlayback() }
         playbackButton.setAccessibilityLabel("Play silent recording preview")
         playbackLoop.target = self; playbackLoop.action = #selector(playbackLoopChanged)
-        playbackLoop.setAccessibilityLabel("Loop silent recording preview")
+        playbackLoop.setAccessibilityLabel("Loop recording preview")
+        playbackSound.target = self; playbackSound.action = #selector(playbackSoundChanged)
+        playbackSound.setAccessibilityLabel("Preview accepted recording audio")
         root.addSubview(playbackLoop)
+        root.addSubview(playbackSound)
         trimPanel.wantsLayer = true; trimPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         trimPanel.layer?.cornerRadius = tokens.number("r-md")
         root.addSubview(trimPanel)
@@ -958,7 +965,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         audioPanel.layer?.cornerRadius = tokens.number("r-md")
         root.addSubview(audioPanel)
         audioPanel.addSubview(label("Audio", size: 14, weight: .semibold, parent: audioPanel))
-        audioNote = label("Playback is silent", muted: true, parent: audioPanel)
+        audioNote = label("Sound preview off", muted: true, parent: audioPanel)
         configureVolumeField(systemVolume, label: "System audio volume percent")
         configureVolumeField(microphoneVolume, label: "Microphone volume percent")
         systemAudioLabel = label("System", muted: true, parent: audioPanel)
@@ -1050,7 +1057,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let seekGap = tokens.number("s-2")
         playbackLoop.frame = NSRect(x: playbackButton.frame.maxX + seekGap, y: seekY - 2,
                                     width: 64, height: 24)
-        let seekX = playbackLoop.frame.maxX + seekGap
+        playbackSound.frame = NSRect(x: playbackLoop.frame.maxX + seekGap, y: seekY - 2,
+                                     width: 74, height: 24)
+        let seekX = playbackSound.frame.maxX + seekGap
         seekSlider.frame = NSRect(x: seekX, y: seekY,
                                   width: max(0, seekLabel.frame.minX - seekGap - seekX), height: 20)
         let controlGap: CGFloat = 12
@@ -1160,6 +1169,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
         presentation = value
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
+        playbackAudioEnabled = nil
         trimTimeline.setPlaybackPosition(nil)
         setPreviewImage(NSImage(cgImage: value.image,
                                 size: NSSize(width: CGFloat(value.image.width),
@@ -1333,6 +1343,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         updateControls()
     }
 
+    @objc private func playbackSoundChanged() {
+        guard presentation != nil, !busy, !pickerOpen, playbackState == .idle else {
+            playbackSound.state = playbackSoundEnabled ? .on : .off
+            return
+        }
+        playbackSoundEnabled = playbackSound.state == .on
+        playbackAudioEnabled = nil
+        updateControls()
+    }
+
     private func startPlayback() {
         guard !busy, !pickerOpen, playbackState == .idle,
               pendingCropInputValid, stagedEdit != nil, stagedExport != nil,
@@ -1344,20 +1364,25 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let position = playbackReachedEOF ? trimStart
             : playbackPositionMilliseconds ?? snapshot.positionMilliseconds
         let loop = RecordingPlaybackLoopControl(enabled: playbackLoopEnabled)
+        let soundEnabled = playbackSoundEnabled
         let current = generation
         playbackState = .playing; playbackCancel = cancel; playbackLoopControl = loop
-        playbackReachedEOF = false
+        playbackReachedEOF = false; playbackAudioEnabled = nil
         status.textColor = tokens.color("text-muted")
-        status.stringValue = "Starting silent playback…"
+        status.stringValue = soundEnabled ? "Starting playback with sound…"
+            : "Starting silent playback…"
         updateControls()
         worker.playback(positionMilliseconds: position, loopStartMilliseconds: trimStart,
-            loop: loop, cancel: cancel,
+            soundEnabled: soundEnabled, loop: loop, cancel: cancel,
             started: { [weak self] metadata in
                 guard let self, self.generation == current,
                       self.playbackCancel === cancel,
                       self.playbackState == .playing,
                       !cancel.isCancelled else { return }
-                self.status.stringValue = "Silent playback · \(metadata.width) × \(metadata.height) · \(metadata.framesPerSecond) fps"
+                self.playbackAudioEnabled = metadata.audioEnabled
+                let mode = metadata.audioEnabled ? "Sound playback" : "Silent playback"
+                self.status.stringValue = "\(mode) · \(metadata.width) × \(metadata.height) · \(metadata.framesPerSecond) fps"
+                self.updateControls()
             }, frame: { [weak self] value in
                 guard let self, self.generation == current,
                       self.playbackCancel === cancel,
@@ -1376,18 +1401,20 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 case .success(.eof):
                     self.playbackReachedEOF = true
                     self.status.textColor = self.tokens.color("text-muted")
-                    self.status.stringValue = "Silent playback ended. Play restarts at the accepted trim start."
+                    self.status.stringValue = "\(self.playbackStatusName) ended. Play restarts at the accepted trim start."
                 case .success(.empty):
                     self.playbackReachedEOF = true
                     self.status.textColor = self.tokens.color("text-muted")
-                    self.status.stringValue = "Silent playback ended without frames. Loop did not restart."
+                    self.status.stringValue = "\(self.playbackStatusName) ended without frames. Loop did not restart."
                 case .success(.cancelled):
                     self.playbackReachedEOF = false
                     self.status.textColor = self.tokens.color("text-muted")
-                    self.status.stringValue = "Silent playback paused."
+                    self.status.stringValue = "\(self.playbackStatusName) paused."
                 case .failure(let error):
                     self.restoreAcceptedPresentation()
-                    self.showError("Silent playback failed: \(error.localizedDescription). The accepted preview was restored.")
+                    self.playbackAudioEnabled = nil
+                    let mode = soundEnabled ? "Sound playback" : "Silent playback"
+                    self.showError("\(mode) failed: \(error.localizedDescription). The accepted preview was restored.")
                 }
                 self.updateControls()
                 let actions = self.playbackStopActions
@@ -1407,8 +1434,13 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackState = .pausing
         playbackCancel?.cancel()
         status.textColor = tokens.color("text-muted")
-        status.stringValue = "Pausing silent playback…"
+        status.stringValue = "Pausing \(playbackStatusName.lowercased())…"
         updateControls()
+    }
+
+    private var playbackStatusName: String {
+        playbackAudioEnabled == true || (playbackAudioEnabled == nil && playbackSoundEnabled)
+            ? "Sound playback" : "Silent playback"
     }
 
     private func updatePlaybackPosition(_ milliseconds: UInt64) {
@@ -1852,9 +1884,22 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         microphoneAudioLabel.isHidden = !hasMicrophone; microphoneVolume.isHidden = !hasMicrophone
         microphoneMute.isHidden = !hasMicrophone
         monoOutput.isHidden = !hasAudio
-        audioNote.stringValue = !hasAudio ? "No audio tracks."
-            : gif ? "GIF · MP4 kept"
-            : "Silent playback"
+        if !playbackSoundEnabled {
+            audioNote.stringValue = !hasAudio ? "No audio tracks"
+                : gif ? "GIF · MP4 kept · Sound off"
+                : "Sound preview off"
+        } else if playbackAudioEnabled == true {
+            audioNote.stringValue = playbackState == .playing ? "Sound active"
+                : "Audio used"
+        } else if gif {
+            audioNote.stringValue = "GIF · no audio"
+        } else if !hasAudio {
+            audioNote.stringValue = "No audio tracks"
+        } else if playbackAudioEnabled == false {
+            audioNote.stringValue = "Mix silent"
+        } else {
+            audioNote.stringValue = "Uses accepted mix"
+        }
         systemVolume.isEnabled = available && !gif && systemMute.state != .on
         microphoneVolume.isEnabled = available && !gif && microphoneMute.state != .on
         systemMute.isEnabled = available && !gif
@@ -1879,19 +1924,22 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         cropOverlay.setEditingEnabled(cropAdjustmentActive && available && !hasPendingCropInput)
         playbackLoop.isEnabled = presentation != nil && !busy && !pickerOpen
             && playbackState != .pausing
+        playbackSound.isEnabled = presentation != nil && !busy && !pickerOpen
+            && playbackState == .idle
         switch playbackState {
         case .idle:
             playbackButton?.title = "Play"
-            playbackButton?.setAccessibilityLabel("Play silent recording preview")
+            playbackButton?.setAccessibilityLabel(playbackSoundEnabled
+                ? "Play recording preview with sound" : "Play silent recording preview")
             playbackButton?.isEnabled = available && valid && !stagedDiffers
                 && !cropAdjustmentActive
         case .playing:
             playbackButton?.title = "Pause"
-            playbackButton?.setAccessibilityLabel("Pause silent recording preview")
+            playbackButton?.setAccessibilityLabel("Pause recording preview")
             playbackButton?.isEnabled = true
         case .pausing:
             playbackButton?.title = "Pausing…"
-            playbackButton?.setAccessibilityLabel("Pausing silent recording preview")
+            playbackButton?.setAccessibilityLabel("Pausing recording preview")
             playbackButton?.isEnabled = false
         }
         applyButton?.isEnabled = available && valid && stagedDiffers
@@ -1913,6 +1961,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackCancel = nil; playbackState = .idle
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
+        playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
         sourceFrameCache = nil; sourceFrameCancel = nil
         cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
         previewActualSize = false

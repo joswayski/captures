@@ -21,9 +21,9 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, Play/Pause (silent by default), opt-in Loop preview and MP4/GIF save-new-copy; wgpu adds opt-in accepted-mix Sound preview | AppKit audio playback, audio meter/device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, Play/Pause (silent by default), opt-in Loop and accepted-mix Sound preview, and MP4/GIF save-new-copy | Audio meter/device-change parity and physical recording/audio acceptance |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; AppKit recording audio playback and remaining controls |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; remaining recording controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -470,16 +470,17 @@ Enabled looping restarts at the accepted trim start only after a nonempty clean
 EOF and completed decoder teardown. Turning it off finishes the current lap;
 Pause, close and failure never restart. Each new editor defaults to one pass.
 AppKit implements its Loop control in the separate host slice described below.
-Sound defaults off per editor and can change only when the worker is idle, not
-during playback or Pause teardown. Opt-in Sound uses the shared accepted-mix audio
-API; silent v1 remains unchanged. One metadata event per operation reports whether
-audio is actually enabled. GIF/no-track/muted/zero-gain mixes use silent playback
+Both hosts implement Sound, which defaults off per editor and can change only when
+the worker is idle, not during playback or Pause teardown. Opt-in Sound uses the
+shared accepted-mix audio API; silent v1 remains unchanged. One metadata event per
+operation reports whether audio is actually enabled. GIF/no-track/muted/zero-gain mixes use silent playback
 without a device. Audible MP4 uses the default output device; device failures remain
 visible and require an explicit Sound-off retry to play silently. Loop reopens both
 decoders each lap and is not gapless. Sound survives Apply/Seek/Pause/errors but
 does not change edits, estimates, dirty identity, exports or History. Private-X11
 checks capture real CPAL output through an isolated PulseAudio sink, not physical
-speakers. AppKit audio playback and physical A/V-sync/device acceptance remain open.
+speakers. AppKit host tests exercise the same v2 metadata and lifecycle contract;
+physical A/V-sync/device acceptance remains open.
 Raw-input tests exercise multi-pass delivery, keyboard focus,
 thresholds, cancellation and busy gates; private-X11 tests cover staged values,
 thumbnail loading/cancel/failure/retry and temporal pixels, exported duration/colors
@@ -590,8 +591,9 @@ thumbnail strip. Generation runs once after open on the serialized worker, is re
 separately from accepted edited frames, and has independent loading, cancel, failure
 and retry states; failure leaves the rest of editing available, while accepted work
 keeps the existing close/quit gate. Seeking and applying edits do not regenerate the
-strip or turn thumbnail clicks into a new seek gesture. AppKit also provides silent
-Play/Pause of the accepted trim and spatial edits. A transient Loop control can
+strip or turn thumbnail clicks into a new seek gesture. AppKit also provides
+Play/Pause of the accepted trim and spatial edits, silent by default with optional
+accepted-mix Sound preview. A transient Loop control can
 repeat nonempty completed trims without changing accepted edits, exports or dirty
 identity; each lap reopens the decoder, so playback does not claim to be gapless.
 Persistent bounded FFmpeg playback delivers retained latest frames and a source-relative playhead without
@@ -604,7 +606,8 @@ stage the existing numeric fields without per-pointer decoding or publication. T
 overlay maps top-down source coordinates through letterboxing in AppKit's flipped view;
 Apply remains the only publication boundary, while Done restores the exact prior
 accepted or motion frame. Source loading has the existing serialized cancel, close,
-item-generation and retry guards. Audio playback is not implemented.
+item-generation and retry guards. Sound-selected GIF/no-track/inaudible mixes stay
+silent without opening a device; default-device failures remain visible for retry.
 Its display-only Fit/100% control uses the currently decoded accepted, motion or
 crop-source frame without a new decode. At 100%, one decoded pixel occupies one
 logical point inside a bounded two-axis native scroll view; smaller frames remain
