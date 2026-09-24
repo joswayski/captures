@@ -4080,8 +4080,8 @@ final class ScreenshotEditorTests: XCTestCase {
             worker.response = { request in
                 switch request["operation"] as? String {
                 case "begin_text_input":
-                    return self.snapshot(id: "shot", fonts: fonts,
-                        layers: [self.textLayer(id: "new", text: "")],
+                    return self.snapshot(id: "shot", layers: [self.textLayer(id: "new", text: "")],
+                        fonts: fonts,
                         activeTextInput: ["input_id": request["input_id"] as! String,
                                           "layer_id": "new", "is_new": true])
                 case "finish_text_input": return self.snapshot(id: "shot", unsaved: true,
