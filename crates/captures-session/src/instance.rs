@@ -621,6 +621,12 @@ mod tests {
         let server = primary(&root);
         let sender = dir.path().join("sender");
         fs::create_dir(&sender).unwrap();
+        // Unix getcwd resolves directory aliases (notably /var -> /private/var
+        // on macOS). The nonexistent leaf paths must still remain acceptable.
+        #[cfg(unix)]
+        let expected_sender = fs::canonicalize(&sender).unwrap();
+        #[cfg(not(unix))]
+        let expected_sender = sender.clone();
         assert!(
             child(&root)
                 .current_dir(&sender)
@@ -630,7 +636,10 @@ mod tests {
         );
         assert_eq!(
             server.next_request().unwrap().unwrap().paths,
-            vec![sender.join("relative space.png"), sender.join("later.webm")]
+            vec![
+                expected_sender.join("relative space.png"),
+                expected_sender.join("later.webm")
+            ]
         );
         drop(server);
 
