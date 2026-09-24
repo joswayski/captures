@@ -60,14 +60,12 @@ fn opens_asymmetric_png_jpeg_webp_as_owned_history_without_changing_source() {
         } else {
             pixels().save_with_format(&source, format).unwrap();
         }
+        let canonical = source.canonicalize().unwrap();
         let original = fs::read(&source).unwrap();
         let expected = captures_app::editor_image_decode::decode_opened_image(&source).unwrap();
         let (artifact, already_open) = open(&root, &source, vec![]).unwrap();
         assert!(!already_open);
-        assert_eq!(
-            artifact.entry.saved_path.as_deref(),
-            source.canonicalize().unwrap().to_str()
-        );
+        assert_eq!(artifact.entry.saved_path.as_deref(), canonical.to_str());
         assert_eq!((artifact.entry.width, artifact.entry.height), (80, 60));
         assert_eq!(artifact.entry.mime_type.as_deref(), Some("image/png"));
         assert_eq!(fs::read(&source).unwrap(), original);
@@ -80,7 +78,7 @@ fn opens_asymmetric_png_jpeg_webp_as_owned_history_without_changing_source() {
             editor(&root, &artifact.entry.id)
                 .snapshot()
                 .original_export_path,
-            Some(source.as_path())
+            Some(canonical.as_path())
         );
         assert_eq!(captures_app::list(&root).unwrap().len(), 1);
         if format == ImageFormat::Jpeg {
