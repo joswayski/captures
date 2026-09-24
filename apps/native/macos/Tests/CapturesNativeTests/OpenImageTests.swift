@@ -57,7 +57,14 @@ final class OpenImageTests: XCTestCase {
         try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
         try waitUntil { NSApp.windows.contains { $0.title.hasPrefix("Edit screenshot") && $0.isVisible } }
         let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
-        defer { editor.performClose(nil) }
+        defer {
+            editor.performClose(nil)
+            if let sheet = editor.attachedSheet {
+                editor.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+            editor.orderOut(nil)
+        }
         try waitUntil { editor.contentView.map { descendants($0).compactMap { $0 as? NSImageView }
             .contains { $0.image != nil && $0.accessibilityLabel() == "Edited screenshot preview" } } == true }
         if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"],
@@ -65,6 +72,15 @@ final class OpenImageTests: XCTestCase {
             try capture(content, to: URL(fileURLWithPath: output)
                 .appendingPathComponent("external-open-dark-editor-normal.png"))
         }
+        let controls = try XCTUnwrap(editor.contentView)
+        for (label, value) in [("Crop X", "7"), ("Crop Y", "11"),
+                               ("Crop width", "120"), ("Crop height", "80")] {
+            try XCTUnwrap(descendants(controls).compactMap { $0 as? NSTextField }
+                .first { $0.accessibilityLabel() == label }).stringValue = value
+        }
+        try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
+            .first { $0.title == "Apply crop" }).performClick(nil)
+        try waitUntil { editor.title.contains("Unsaved") }
         let artifacts = try XCTUnwrap(AppBridge().request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
         XCTAssertEqual(artifacts.count, 1)
@@ -84,8 +100,52 @@ final class OpenImageTests: XCTestCase {
         controller.openImages([source.path])
         try waitUntil { !controller.externalOpenPending }
         XCTAssertTrue(editor.isVisible)
+        XCTAssertTrue(editor.title.contains("Unsaved"), "duplicate focus must retain staged edits")
+        XCTAssertTrue(descendants(controls).compactMap { ($0 as? NSTextField)?.stringValue }
+            .contains { $0.contains("120 × 80") }, "duplicate focus must retain the accepted crop")
         XCTAssertEqual(try XCTUnwrap(AppBridge().request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]]).count, 1)
+    }
+
+    func testRealBatchWaitsForFirstEditorBeforeOpeningDistinctSecondImage() throws {
+        _ = NSApplication.shared
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let first = folder.appendingPathComponent("first.png")
+        let second = folder.appendingPathComponent("second.png")
+        try XCTUnwrap(NSBitmapImageRep(cgImage: PreviewView.fixtureImage(scale: 1))
+            .representation(using: .png, properties: [:])).write(to: first)
+        let secondImage = PreviewView.fixtureImage(scale: 2)
+        try XCTUnwrap(NSBitmapImageRep(cgImage: secondImage)
+            .representation(using: .png, properties: [:])).write(to: second)
+        let history = folder.appendingPathComponent("history")
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame); window.contentView = root
+        let controller = LiveCaptureController(root: root, window: window,
+            tokens: try XCTUnwrap(Tokens.variants["light-mustard"]),
+            historyRoot: history.path, settingsPath: folder.appendingPathComponent("settings.json").path,
+            showPreferences: {})
+        defer { withExtendedLifetime(controller) {} }
+        window.makeKeyAndOrderFront(nil)
+        controller.openImages([first.path, second.path])
+        let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
+            .first?.documentView as? NSTableView)
+        try waitUntil { table.numberOfRows == 2 && !controller.externalOpenPending }
+        let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
+        defer { editor.performClose(nil) }
+        let dimensions = try XCTUnwrap(descendants(try XCTUnwrap(editor.contentView))
+            .compactMap { $0 as? NSTextField }
+            .first { $0.accessibilityLabel() == "Edited canvas dimensions" })
+        XCTAssertTrue(dimensions.stringValue.contains("\(secondImage.width) × \(secondImage.height)"),
+                      "the second distinct source must open after the first editor settles")
+        let artifacts = try XCTUnwrap(AppBridge().request([
+            "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
+        XCTAssertEqual(artifacts.count, 2)
+        XCTAssertEqual(table.selectedRow, 0, "the last imported source is selected")
     }
 
     func testQueuedFilesRetainErrorsAndSerializeCanonicalOpens() throws {
@@ -102,24 +162,31 @@ final class OpenImageTests: XCTestCase {
             "operation": "load", "path": settingsPath])["settings"] as? [String: Any])
         settings["output_directory"] = folder.path
         _ = try settingsBridge.request(["operation": "save", "path": settingsPath, "settings": settings])
-        let transport = OpenImageTransport(image: png.path)
+        let transport = OpenImageTransport(image: png.path, withDisplay: true)
         let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
         let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
         let root = Surface(frame: frame); window.contentView = root
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        root.wantsLayer = true; root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
+        window.appearance = NSAppearance(named: .aqua)
         let controller = LiveCaptureController(root: root, window: window,
-            tokens: try XCTUnwrap(Tokens.variants["light-mustard"]),
+            tokens: tokens,
             historyRoot: folder.path, settingsPath: settingsPath, transport: transport,
             showPreferences: {})
         defer { withExtendedLifetime(controller) {} }
         defer { NSApp.windows.filter { $0.title.hasPrefix("Edit screenshot") }.forEach { $0.orderOut(nil) } }
         window.makeKeyAndOrderFront(nil)
+        try waitUntil { root.subviews.compactMap { $0 as? CaptureButton }
+            .first { $0.title == "Capture display" }?.isEnabled == true }
         controller.openImages(["/invalid.gif", png.path, png.path])
         XCTAssertFalse(controller.prepareEditorForTermination(), "queued startup opens block teardown")
         try waitUntil { transport.firstOpenStarted.wait(timeout: .now()) == .success }
         XCTAssertEqual(transport.requests.count, 1)
         XCTAssertTrue(controller.externalOpenPending)
+        XCTAssertFalse(controller.capture(.display), "a global capture shortcut must not race image open")
+        XCTAssertFalse(controller.newCapture(), "the global New Capture shortcut shares the gate")
         XCTAssertFalse(try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }
             .first { $0.title == "Edit recording" }).isEnabled,
             "the empty-History editor action stays disabled during the import")
@@ -247,6 +314,7 @@ private final class OpenImageTransport: AppTransport {
     private let lock = NSLock()
     private let image: String
     private let existing: Bool
+    private let withDisplay: Bool
     private var opened = false
     private var seen: [[String: Any]] = []
     private var calls: [String] = []
@@ -254,8 +322,8 @@ private final class OpenImageTransport: AppTransport {
     var requests: [[String: Any]] { lock.lock(); defer { lock.unlock() }; return seen }
     var operations: [String] { lock.lock(); defer { lock.unlock() }; return calls }
 
-    init(image: String, existing: Bool = false) {
-        self.image = image; self.existing = existing
+    init(image: String, existing: Bool = false, withDisplay: Bool = false) {
+        self.image = image; self.existing = existing; self.withDisplay = withDisplay
     }
 
     func blockNextHistory() -> DispatchSemaphore {
@@ -282,7 +350,10 @@ private final class OpenImageTransport: AppTransport {
             return ["artifacts": existing
                 ? [artifact, entry("original-id")]
                 : (isOpened ? [artifact] : [])]
-        case "displays": return ["displays": []]
+        case "displays": return ["displays": withDisplay ? [[
+            "id": "fixture", "name": "Fixture", "width": 1000, "height": 720,
+            "x": 0, "y": 0, "scale_factor": 1, "is_primary": true,
+        ]] : []]
         case "open_image":
             lock.lock(); seen.append(object); let count = seen.count; lock.unlock()
             if count == 1 {

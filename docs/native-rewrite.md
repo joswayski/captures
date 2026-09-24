@@ -1300,6 +1300,8 @@ inputs and serialize opens against editor focus and History refresh; unsupported
 paths do not block later ones. The request reuses the bounded, color-managed decoder
 above but rejects TIFF. Already-open canonical sources preserve active edits; a
 closed source reloads under the same History ID only if no saved editor draft exists.
+AppKit waits for its current editor open to settle before advancing the batch;
+pending text or unsaved edits block switching without losing the new History item.
 With a draft, the user must restore or discard it from History first so an interrupted
 reload cannot hide the only copy. Source bytes stay untouched and the source path
 remains available for explicit Replace original. Private X11 exercises bad-file

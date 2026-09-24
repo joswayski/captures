@@ -4535,6 +4535,56 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
+    func testExternalArtifactSwitchRefusesStagedAndInlineTextWithoutDroppingEither() throws {
+        _ = NSApplication.shared
+        let original = textLayer(id: "copy", text: "accepted")
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let staged = try textView("Text content", in: controller.root)
+        staged.string = "pending, not in the document"
+        var accepted: Bool?
+        controller.present(artifact: artifact(id: "other"), historyRoot: "/native/History") {
+            accepted = $0
+        }
+        XCTAssertEqual(accepted, false)
+        XCTAssertEqual(worker.openArtifactIDs, ["shot"])
+        XCTAssertEqual(controller.state.artifactID, "shot")
+        XCTAssertEqual(staged.string, "pending, not in the document")
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History") {
+            accepted = $0
+        }
+        XCTAssertEqual(accepted, true, "same-ID focus cannot discard staged input")
+        XCTAssertEqual(staged.string, "pending, not in the document")
+
+        let inlineWorker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let inline = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: inlineWorker)
+        defer { inline.window.orderOut(nil) }
+        inlineWorker.response = { request in
+            guard request["operation"] as? String == "begin_text_input" else { return nil }
+            return self.snapshot(id: "shot", layers: [self.textLayer(id: "new", text: "")],
+                activeTextInput: ["input_id": request["input_id"] as! String,
+                                  "layer_id": "new", "is_new": true])
+        }
+        inline.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: inline.root)
+        let tool = try popup("Drawing tool", in: inline.root)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        let point = NSPoint(x: inline.presentedImageRect.midX, y: inline.presentedImageRect.midY)
+        inline.drawOverlay.begin(at: point); inline.drawOverlay.end(at: point)
+        let input = try textView("Inline screenshot text", in: inline.root)
+        input.string = "in-progress input"
+        inline.present(artifact: artifact(id: "other"), historyRoot: "/native/History") {
+            accepted = $0
+        }
+        XCTAssertEqual(accepted, false)
+        XCTAssertEqual(inlineWorker.openArtifactIDs, ["shot"])
+        XCTAssertEqual(inline.state.artifactID, "shot")
+        XCTAssertEqual(input.string, "in-progress input")
+    }
+
     func testTextApplyCancelFailureAndUnsupportedFamilyRetention() throws {
         _ = NSApplication.shared
         var original = textLayer(id: "copy", text: "accepted", family: "draft-custom")

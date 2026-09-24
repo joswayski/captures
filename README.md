@@ -367,6 +367,8 @@ unsupported files report an error without stopping later paths. Reopening an
 already-open source focuses its editor without replacing unsaved edits. Reopening
 a closed source refreshes the same History ID without changing the source file;
 if it has a saved draft, restore or explicitly discard that draft from History first.
+AppKit switches its editor between sources only after opening settles and without
+dropping pending text or unsaved changes; a refused source remains in History.
 This is not a registered file association or an installed-app opening feature.
 Windows/Linux single-instance forwarding and GIF/video opening remain separate work;
 TIFF is supported by in-editor import, not this external-open path.
