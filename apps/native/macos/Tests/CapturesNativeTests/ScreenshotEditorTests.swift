@@ -4750,10 +4750,19 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(future.titleOfSelectedItem, "Outlined", "accepted edit must not reset future style")
             try button("Undo", in: controller.root).performClick(nil)
             XCTAssertEqual(future.titleOfSelectedItem, "Outlined", "undo must not restore prior creation defaults")
+            try button("Cancel", in: controller.root).performClick(nil)
+            XCTAssertEqual(future.titleOfSelectedItem, "Outlined")
 
-            let point = NSPoint(x: controller.presentedImageRect.maxX - 20,
-                                y: controller.presentedImageRect.midY)
-            controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+            let overlay = controller.drawOverlay
+            XCTAssertTrue(overlay.drawingEnabled)
+            XCTAssertEqual(overlay.shape, .text)
+            let visible = overlay.bounds.intersection(overlay.presentedImageRect)
+            let point = NSPoint(x: visible.minX + visible.width * 0.75, y: visible.midY)
+            XCTAssertTrue(overlay.bounds.contains(point))
+            XCTAssertTrue(overlay.presentedImageRect.contains(point))
+            overlay.begin(at: point)
+            XCTAssertNotNil(overlay.startPoint)
+            overlay.end(at: point)
             let begin = try XCTUnwrap(worker.requests.last)
             XCTAssertEqual(begin["operation"] as? String, "begin_text_input")
             let create = try XCTUnwrap((begin["target"] as? [String: Any])?["create"] as? [String: Any])
