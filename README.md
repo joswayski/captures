@@ -391,8 +391,9 @@ with an initial size scaled to the original capture (24–72). The bundle includ
 Nunito and Liberation Sans, Serif and Mono (OFL 1.1); exact font
 bytes and license notices stay with the draft. Older drafts offer only their saved
 fonts; adding new fonts to an existing draft is not implemented.
-Nunito covers fewer characters than Sans; for example, Greek λ requires explicitly
-choosing Sans. Missing glyphs produce an error rather than a substitute font.
+Nunito covers fewer characters than Sans; for characters such as Greek λ, choose a
+Sans-based style (Standard or Box) before typing. Missing glyphs produce an error
+rather than a substitute font.
 Selected-text named styles use those pinned fonts; Rounded and Rounded box are
 available in new sessions, but remain unavailable in older drafts without a
 saved rounded face.
