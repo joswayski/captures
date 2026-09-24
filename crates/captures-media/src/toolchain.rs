@@ -2983,18 +2983,75 @@ fn source_container(input: &Path, demuxer: Option<&str>) -> Result<&'static str,
     {
         return Ok("video/mp4");
     }
-    if demuxer.is_some_and(|name| name.split(',').any(|part| part == "webm"))
-        && header.starts_with(&[0x1a, 0x45, 0xdf, 0xa3])
-        && header
-            .windows(3)
-            .position(|bytes| bytes == [0x42, 0x82, 0x84])
-            .is_some_and(|at| header.get(at + 3..at + 7) == Some(b"webm".as_slice()))
+    if demuxer.is_some_and(|name| name.split(',').any(|part| part == "webm")) && webm_header(header)
     {
         return Ok("video/webm");
     }
     Err(MediaToolError::Process(
         "Only GIF, MP4 and WebM recording containers are supported".into(),
     ))
+}
+
+// Only walk the bounded EBML Header's direct children. Sizes may use any
+// legal 1–8-byte VINT encoding, including nonminimal encodings; unknown sizes,
+// truncated headers and repeated DocType elements are not accepted. Void and
+// unknown child payloads are skipped, never searched for a DocType signature.
+fn webm_header(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
+        return false;
+    }
+    let Some((header_size, size_width)) = ebml_size(&bytes[4..]) else {
+        return false;
+    };
+    let start = 4 + size_width;
+    let Some(end) = start
+        .checked_add(header_size)
+        .filter(|&end| end <= bytes.len())
+    else {
+        return false;
+    };
+    let mut at = start;
+    let mut document_type = None;
+    while at < end {
+        let id_width = bytes[at].leading_zeros() as usize + 1;
+        if id_width > 4 || at + id_width > end {
+            return false;
+        }
+        let id = &bytes[at..at + id_width];
+        at += id_width;
+        let Some((size, width)) = ebml_size(&bytes[at..end]) else {
+            return false;
+        };
+        let Some(next) = at
+            .checked_add(width)
+            .and_then(|value| value.checked_add(size))
+            .filter(|&next| next <= end)
+        else {
+            return false;
+        };
+        if id == [0x42, 0x82] && document_type.replace(&bytes[at + width..next]).is_some() {
+            return false;
+        }
+        at = next;
+    }
+    document_type == Some(b"webm".as_slice())
+}
+
+fn ebml_size(bytes: &[u8]) -> Option<(usize, usize)> {
+    let first = *bytes.first()?;
+    let width = first.leading_zeros() as usize + 1;
+    if width > 8 || bytes.len() < width {
+        return None;
+    }
+    let mut value = usize::from(first & (0xff >> width));
+    for &byte in &bytes[1..width] {
+        value = value.checked_mul(256)?.checked_add(usize::from(byte))?;
+    }
+    // All one-bits denotes an unknown-sized element, not a bounded Header.
+    if value == (1_usize.checked_shl((7 * width) as u32)? - 1) {
+        return None;
+    }
+    Some((value, width))
 }
 
 #[cfg(test)]
@@ -3015,7 +3072,7 @@ mod tests {
         export_attempts, export_preserves_source_bytes, fit_even, fit_playback_dimensions,
         gif_export_filter, gif_filter, preview_dimensions, preview_video_filter,
         read_bounded_diagnostics, read_complete_frame, recording_segment_audio_graph, seconds,
-        validate_edit_spec, visual_edit_is_identity,
+        validate_edit_spec, visual_edit_is_identity, webm_header,
     };
     use crate::{
         AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaMetadata,
@@ -3035,6 +3092,35 @@ mod tests {
             has_audio: true,
             audio_stream_count: 2,
         }
+    }
+
+    #[test]
+    fn webm_doctype_is_a_unique_direct_header_child_with_bounded_vint_sizes() {
+        let mut children = vec![0xec, 0x8a]; // Void, ten bytes of opaque payload.
+        children.extend_from_slice(b"\x42\x82\x84webm123");
+        children.extend_from_slice(&[0x42, 0x82, 0x40, 0x04]); // Nonminimal 2-byte size.
+        children.extend_from_slice(b"webm");
+        let mut header = vec![0x1a, 0x45, 0xdf, 0xa3, 0x40, children.len() as u8];
+        header.extend_from_slice(&children);
+        assert!(webm_header(&header));
+
+        let mut matroska = vec![0x1a, 0x45, 0xdf, 0xa3, 0x80 | (11 + 12)];
+        matroska.extend_from_slice(&[0x42, 0x82, 0x88]);
+        matroska.extend_from_slice(b"matroska");
+        matroska.extend_from_slice(&children[..12]);
+        assert!(
+            !webm_header(&matroska),
+            "Void payload must not impersonate DocType"
+        );
+
+        let mut duplicate = header.clone();
+        duplicate[5] += 7;
+        duplicate.extend_from_slice(b"\x42\x82\x84webm");
+        assert!(!webm_header(&duplicate));
+        assert!(!webm_header(&header[..header.len() - 1]));
+        header[4] = 0x7f; // Unknown-size VINT is not a bounded EBML Header.
+        header[5] = 0xff;
+        assert!(!webm_header(&header));
     }
 
     #[test]

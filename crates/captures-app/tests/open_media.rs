@@ -114,7 +114,9 @@ fn real_recordings_open_by_content_and_reopen_same_history_reference() {
         );
         assert_eq!(fs::read(source).unwrap(), bytes);
         assert!(first.preview_path.is_file());
-        let session = RecordingEditorSession::open(
+        let metadata_path = root.join(&first.entry.id).join("metadata.json");
+        let metadata = fs::read(&metadata_path).unwrap();
+        let mut session = RecordingEditorSession::open(
             RecordingEditorOpenRequest {
                 history_root: root.clone(),
                 artifact_id: first.entry.id.clone(),
@@ -122,6 +124,14 @@ fn real_recordings_open_by_content_and_reopen_same_history_reference() {
             MediaToolchain::new(tools.0.clone(), tools.1.clone()),
         )
         .unwrap();
+        assert_eq!(session.original_save_path(), None);
+        assert!(
+            session
+                .replace_original(&CancelToken::default(), |_| {})
+                .is_err()
+        );
+        assert_eq!(fs::read(source).unwrap(), bytes);
+        assert_eq!(fs::read(&metadata_path).unwrap(), metadata);
         drop(session);
         let invalid = (
             data.path().join("no-ffmpeg"),
@@ -177,6 +187,84 @@ fn still_images_need_no_tools_and_failed_media_preflight_leaves_history_empty() 
     fs::write(&broken, b"GIF89a").unwrap();
     assert!(open(&root, &broken, vec![], Some(&(ffmpeg, ffprobe))).is_err());
     assert_eq!(fs::read(video).unwrap(), original);
+    assert_eq!(
+        captures_history::load(&root, chrono::Utc::now())
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn unsupported_sibling_containers_and_failed_closed_reopen_preserve_history() {
+    let Some((ffmpeg, ffprobe)) = tools() else {
+        return;
+    };
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().join("capture-history");
+    let source = data.path().join("source.mp4");
+    fixture(&source, &ffmpeg);
+    let tool_paths = (ffmpeg.clone(), ffprobe.clone());
+    let (first, _) = open(&root, &source, vec![], Some(&tool_paths)).unwrap();
+    let metadata = fs::read(root.join(&first.entry.id).join("metadata.json")).unwrap();
+    let preview = fs::read(&first.preview_path).unwrap();
+    fs::write(&source, b"\0\0\0\x18ftypisom").unwrap();
+    assert!(open(&root, &source, vec![], Some(&tool_paths)).is_err());
+    assert_eq!(
+        fs::read(root.join(&first.entry.id).join("metadata.json")).unwrap(),
+        metadata
+    );
+    assert_eq!(fs::read(first.preview_path).unwrap(), preview);
+
+    let matroska = data.path().join("disguised.webm");
+    let output = Command::new(&ffmpeg)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:size=48x32:rate=10:duration=1",
+            "-c:v",
+            "libvpx-vp9",
+            "-f",
+            "matroska",
+        ])
+        .arg(&matroska)
+        .status()
+        .unwrap();
+    assert!(output.success());
+    let quicktime = data.path().join("disguised.mp4");
+    let output = Command::new(&ffmpeg)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:size=48x32:rate=10:duration=1",
+            "-c:v",
+            "mpeg4",
+            "-f",
+            "mov",
+        ])
+        .arg(&quicktime)
+        .status()
+        .unwrap();
+    assert!(output.success());
+    for unsupported in [&matroska, &quicktime] {
+        let before = fs::read(unsupported).unwrap();
+        assert!(
+            open(&root, unsupported, vec![], Some(&tool_paths))
+                .unwrap_err()
+                .contains("Only GIF, MP4 and WebM")
+        );
+        assert_eq!(fs::read(unsupported).unwrap(), before);
+    }
     assert_eq!(
         captures_history::load(&root, chrono::Utc::now())
             .unwrap()
