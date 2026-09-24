@@ -141,7 +141,14 @@ impl TextRenderer {
         if !run.line_w.is_finite() || run.line_w < 0. {
             return Err("Text line has an invalid advance.".into());
         }
-        if run.glyphs.iter().any(|glyph| glyph.glyph_id == 0) {
+        if run.glyphs.iter().any(|glyph| {
+            glyph.glyph_id == 0
+                || !self
+                    .fonts
+                    .db()
+                    .face(glyph.font_id)
+                    .is_some_and(|face| face.families.iter().any(|(name, _)| name == style.family))
+        }) {
             return Err("Supplied fonts cannot shape every text glyph.".into());
         }
         Ok(buffer)
