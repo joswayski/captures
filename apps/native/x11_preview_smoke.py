@@ -228,7 +228,8 @@ def main():
             time.sleep(1)
 
             def entries():
-                return set(history.glob("*/metadata.json"))
+                # History publishes by renaming hidden staging directories.
+                return {p for p in history.glob("*/metadata.json") if not p.parent.name.startswith(".")}
 
             def begin():
                 # Region is root-local x=575. Keep its desktop x=875 between
