@@ -2770,6 +2770,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         } else { textPlate.selectItem(at: 0) }
         textOutline.state = preset.outlined ? .on : .off
         textPresetRounded = preset.roundedBackground
+        if let choice = createTextPreset.itemArray.firstIndex(where: {
+            $0.representedObject as? String == preset.id
+        }) {
+            createTextPreset.selectItem(at: choice)
+        }
         textPreset.selectItem(at: 0)
     }
 
