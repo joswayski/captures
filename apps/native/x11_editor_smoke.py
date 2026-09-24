@@ -1066,7 +1066,7 @@ def main():
             inspector_move(60, 506,
                 "click", "--repeat", "5", "5", "sleep", ".2")
             shot(editor, "text-defaults-menu-scrolled")
-            inspector_click(60, 545)  # Last pinned preset: Mono box.
+            inspector_click(60, 499)  # Mono box, before Rounded box.
             field(381, 37.5, x=59)
             field(452, "#2367ab", x=105)
             shot(editor, "text-defaults-staged")
@@ -1138,7 +1138,7 @@ def main():
             # Text properties precede generic layer geometry in the sidebar.
             inspector_click(100, 431)
             shot(editor, f"text-font-menu-{args.appearance}")
-            inspector_click(100, 561)  # Liberation Serif.
+            inspector_click(100, 605)  # Liberation Serif, after Nunito.
             inspector_click(105, 505)
             run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--delay", "35",
                 "--", "Readable native text")
@@ -1228,7 +1228,7 @@ def main():
             save_layers(lambda values: values[-1]["background"] is not None, "redo shadowed plate")
             before_preset = draft.read_bytes()
             inspector_click(90, 357)
-            inspector_click(90, 577)  # Mono box, preserving the accepted plate color.
+            inspector_click(90, 622)  # Mono box, preserving the accepted plate color.
             shot(editor, "text-preset-staged")
             assert draft.read_bytes() == before_preset
             assert text_pixels("text-preset-staged") == text_pixels(f"text-edited-{args.appearance}")
@@ -1240,7 +1240,7 @@ def main():
             assert text_pixels("text-preset-cancelled", font_field) == text_pixels(
                 f"text-edited-{args.appearance}", font_field), "Cancel restores the font field"
             inspector_click(90, 357)
-            inspector_click(90, 577)
+            inspector_click(90, 622)
             inspector_click(74, 1231)
             preset = save_layers(lambda values: values[-1]["fontFamily"] == "mono"
                                  and not values[-1]["outlined"], "named style applied")[-1]
@@ -1275,7 +1275,8 @@ def main():
             assert reopened["id"] == created["id"] and reopened["text"] == "Readable native text"
             assert reopened["fontFamily"] == "serif"
             assert json.loads(draft.read_text())["fonts"]["families"] == {
-                "sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"}
+                "sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono",
+                "rounded": "Nunito"}
             assert reopened["bold"] and reopened["italic"] and reopened["background"] is not None
             assert reopened.get("dropShadow") is True
             assert reopened["dropShadowStyle"] == custom_shadow
