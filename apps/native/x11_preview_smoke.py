@@ -126,10 +126,19 @@ def main():
         wait(lambda: controls_pixels() != before, "selector consumes toolbar hover")
         run("xdotool", "mousemove", "--sync", "--window", selector, str(x), str(y))
         wait(lambda: controls_pixels() == before, "selector consumes pointer return before drag")
+
+        def selection_pixel():
+            return run("import", "-window", selector, "-crop",
+                       f"1x1+{x + width // 2}+{y + height // 2}", "-depth", "8", "rgb:-")
+
+        veiled_pixel = selection_pixel()
         run("xdotool", "mousedown", "1", "sleep", ".15", "mousemove", "--sync", "--window", selector,
-            str(x + width), str(y + height), "sleep", ".15", "mouseup", "1", "sleep", ".15")
-        # Do not confirm an unselected region if X11 dropped the drag. Pointer
-        # motion stays above this strip; its change is the painted selection UI.
+            str(x + width), str(y + height))
+        # Observe the held drag before releasing: XSync does not mean egui has
+        # consumed it. The selection unveils this interior pixel; the toolbar
+        # remains disabled until release. Final saved pixels still verify geometry.
+        wait(lambda: selection_pixel() != veiled_pixel, "painted region selection while dragging")
+        run("xdotool", "mouseup", "1", "sleep", ".15")
         wait(lambda: controls_pixels() != before, "painted region selection after drag")
         run("xdotool", "key", "Return")
 
