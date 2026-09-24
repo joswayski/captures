@@ -2082,10 +2082,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 self.run({ [transport = self.transport, historyRoot = self.historyRoot] in
                     var request: [String: Any] = ["operation": "open_media", "root": historyRoot,
                         "path": path, "open_artifact_ids": openIDs]
-                    // Tools are optional: still images and active duplicate focus do
-                    // not require them. The shared API decides when to invoke them.
-                    if ["gif", "mp4", "webm"].contains(URL(fileURLWithPath: path).pathExtension.lowercased()),
-                       let tools = try? NativeMediaTools.locate() {
+                    // Resolve paths independent of suffix: the shared API detects
+                    // content and invokes tools only for a new recording open.
+                    if let tools = try? NativeMediaTools.locate() {
                         request["ffmpeg"] = tools.ffmpeg
                         request["ffprobe"] = tools.ffprobe
                     }

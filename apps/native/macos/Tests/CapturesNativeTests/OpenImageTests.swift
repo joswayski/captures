@@ -124,9 +124,19 @@ final class OpenImageTests: XCTestCase {
         guard let tools = try? NativeMediaTools.locate() else {
             throw XCTSkip("ffmpeg and ffprobe are required")
         }
+        let originalPath = getenv("PATH").map { String(cString: $0) }
+        let originalFFmpeg = getenv("CAPTURES_FFMPEG").map { String(cString: $0) }
+        let originalFFprobe = getenv("CAPTURES_FFPROBE").map { String(cString: $0) }
+        defer {
+            for (key, value) in [("PATH", originalPath), ("CAPTURES_FFMPEG", originalFFmpeg),
+                                 ("CAPTURES_FFPROBE", originalFFprobe)] {
+                if let value { setenv(key, value, 1) } else { unsetenv(key) }
+            }
+        }
         for (container, suffix, appearance) in [("mp4", "mp4", "dark"),
                                                 ("gif", "gif", "light"),
-                                                ("webm", "mp4", "dark")] {
+                                                ("webm", "mp4", "dark"),
+                                                ("webm", "bin", "light")] {
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: folder) }
@@ -140,6 +150,17 @@ final class OpenImageTests: XCTestCase {
                     "-f", container]) + [source.path]
             try process.run(); process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0)
+            if suffix == "bin" {
+                setenv("CAPTURES_FFMPEG", tools.ffmpeg, 1)
+                setenv("CAPTURES_FFPROBE", tools.ffprobe, 1)
+                setenv("PATH", "", 1)
+                let configured = try NativeMediaTools.locate(environment: [
+                    "CAPTURES_FFMPEG": tools.ffmpeg, "CAPTURES_FFPROBE": tools.ffprobe,
+                    "PATH": "",
+                ])
+                XCTAssertEqual(configured.ffmpeg, tools.ffmpeg)
+                XCTAssertEqual(configured.ffprobe, tools.ffprobe)
+            }
             let original = try Data(contentsOf: source)
             let history = folder.appendingPathComponent("History")
             let settingsPath = folder.appendingPathComponent("settings.json").path
@@ -315,8 +336,6 @@ final class OpenImageTests: XCTestCase {
         XCTAssertEqual(requests.compactMap { $0["path"] as? String },
                        ["/invalid.tiff", png.path, png.path])
         XCTAssertTrue(requests.allSatisfy { ($0["root"] as? String) == folder.path })
-        XCTAssertTrue(requests.allSatisfy { $0["ffmpeg"] == nil && $0["ffprobe"] == nil },
-                      "still-image opens must not depend on recording tools")
         XCTAssertEqual(requests[0]["open_artifact_ids"] as? [String], [])
         XCTAssertEqual(requests[1]["open_artifact_ids"] as? [String], [])
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
