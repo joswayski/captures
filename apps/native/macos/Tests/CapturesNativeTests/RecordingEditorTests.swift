@@ -3127,6 +3127,40 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertFalse(controller.dirty)
     }
 
+    func testExternalOpenCompletionWaitsForRecordingThumbnailsAndRefusesDirtySwitch() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        worker.deferOpen = true; worker.deferThumbnails = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker)
+        defer { controller.window.orderOut(nil) }
+        var results: [Bool] = []
+        let original = recordingArtifact()
+        controller.present(artifact: original, historyRoot: "/History", outputDirectory: "/Exports") {
+            results.append($0)
+        }
+        XCTAssertTrue(results.isEmpty)
+        worker.completeOpen(.success(try presentation()))
+        XCTAssertTrue(results.isEmpty, "next queued file cannot overtake thumbnail generation")
+        worker.completeThumbnails(.success(fakeTimelineImage()))
+        XCTAssertEqual(results, [true])
+
+        let start = try field("Trim start milliseconds", in: controller.root)
+        start.stringValue = "100"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification, object: start))
+        controller.present(artifact: original, historyRoot: "/History", outputDirectory: "/Elsewhere") {
+            results.append($0)
+        }
+        controller.present(artifact: recordingArtifact(id: "different"),
+                           historyRoot: "/History", outputDirectory: "/Elsewhere") {
+            results.append($0)
+        }
+        XCTAssertEqual(results, [true, true, false])
+        XCTAssertEqual(worker.openCount, 1)
+        XCTAssertEqual(start.stringValue, "100", "refused switch must preserve staged recording input")
+        XCTAssertEqual(controller.activeArtifactID, original.id)
+    }
+
     func testNewOpenClearsPreviousFrameBeforeFailure() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation())

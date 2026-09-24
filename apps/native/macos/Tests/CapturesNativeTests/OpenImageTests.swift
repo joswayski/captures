@@ -22,7 +22,7 @@ final class OpenImageTests: XCTestCase {
         controller.openImages(["/first.png", "/second.png"])
         try waitUntil { !controller.externalOpenPending && root.subviews.compactMap {
             ($0 as? NSTextField)?.stringValue
-        }.contains { $0.contains("Couldn’t open 2 images") } }
+        }.contains { $0.contains("Couldn’t open 2 files") } }
         XCTAssertTrue(transport.requests.isEmpty, "settings failure cannot create History items")
     }
 
@@ -192,7 +192,7 @@ final class OpenImageTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         try waitUntil { root.subviews.compactMap { $0 as? CaptureButton }
             .first { $0.title == "Capture display" }?.isEnabled == true }
-        controller.openImages(["/invalid.gif", png.path, png.path])
+        controller.openImages(["/invalid.tiff", png.path, png.path])
         XCTAssertFalse(controller.prepareEditorForTermination(), "queued startup opens block teardown")
         try waitUntil { transport.firstOpenStarted.wait(timeout: .now()) == .success }
         XCTAssertEqual(transport.requests.count, 1)
@@ -207,7 +207,7 @@ final class OpenImageTests: XCTestCase {
         XCTAssertTrue(controller.prepareEditorForTermination())
         let requests = transport.requests
         XCTAssertEqual(requests.compactMap { $0["path"] as? String },
-                       ["/invalid.gif", png.path, png.path])
+                       ["/invalid.tiff", png.path, png.path])
         XCTAssertTrue(requests.allSatisfy { ($0["root"] as? String) == folder.path })
         XCTAssertEqual(requests[0]["open_artifact_ids"] as? [String], [])
         XCTAssertEqual(requests[1]["open_artifact_ids"] as? [String], [])
@@ -220,12 +220,12 @@ final class OpenImageTests: XCTestCase {
         let entry = try XCTUnwrap(artifacts.first?["entry"] as? [String: Any])
         XCTAssertEqual(requests[2]["open_artifact_ids"] as? [String], [try XCTUnwrap(entry["id"] as? String)])
         XCTAssertTrue(root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
-            .contains { $0.contains("/invalid.gif") && $0.contains("Unsupported") })
+            .contains { $0.contains("/invalid.tiff") && $0.contains("Unsupported") })
         if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
             try capture(root, to: URL(fileURLWithPath: output)
                 .appendingPathComponent("external-open-light-error-minimum.png"))
         }
-        XCTAssertEqual(transport.operations.filter { $0 == "open_image" }.count, 3)
+        XCTAssertEqual(transport.operations.filter { $0 == "open_media" }.count, 3)
         XCTAssertFalse(transport.operations.contains("request_permission"))
     }
 
@@ -373,13 +373,13 @@ private final class OpenImageTransport: AppTransport {
             "id": "fixture", "name": "Fixture", "width": 1000, "height": 720,
             "x": 0, "y": 0, "scale_factor": 1, "is_primary": true,
         ]] : []]
-        case "open_image":
+        case "open_media":
             lock.lock(); seen.append(object); let count = seen.count; lock.unlock()
             if count == 1 {
                 firstOpenStarted.signal()
                 _ = releaseFirstOpen.wait(timeout: .now() + 5)
             }
-            if object["path"] as? String == "/invalid.gif" {
+            if object["path"] as? String == "/invalid.tiff" {
                 throw AppBridgeError.backend("Unsupported image format")
             }
             if realHistory { return try AppBridge().request(object) }
