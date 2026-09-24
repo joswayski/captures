@@ -198,14 +198,14 @@ final class OpenImageTests: XCTestCase {
             XCTAssertNotNil(descendants(controls).compactMap { $0 as? NSImageView }
                 .first { $0.accessibilityLabel() == "Decoded recording frame" }?.image,
                 "the first source-relative frame must decode in the recording editor")
-            let artifacts = try XCTUnwrap(AppBridge().request([
-                "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
+            let artifacts = try XCTUnwrap(NativeRecordingInfo.request([
+                "operation": "history", "root": history.path])["recordings"] as? [[String: Any]])
             let entry = try XCTUnwrap(artifacts.first?["entry"] as? [String: Any])
             let id = try XCTUnwrap(entry["id"] as? String)
             XCTAssertEqual(entry["kind"] as? String, container == "gif" ? "gif" : "video")
             XCTAssertEqual(entry["mime_type"] as? String,
                            container == "gif" ? "image/gif" : "video/\(container)")
-            XCTAssertEqual(entry["saved_path"] as? String, source.path)
+            XCTAssertEqual(entry["saved_path"] as? String, source.resolvingSymlinksInPath().path)
             XCTAssertFalse(try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
                 .first { $0.title == "Replace original…" }).isEnabled,
                 "external references must not offer destructive replacement")
@@ -229,8 +229,8 @@ final class OpenImageTests: XCTestCase {
             try waitUntil { !controller.externalOpenPending }
             XCTAssertEqual(trim.stringValue, "200", "canonical focus preserves staged recording edits")
             XCTAssertTrue(editor.isVisible)
-            XCTAssertEqual(try XCTUnwrap(AppBridge().request([
-                "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]]).count, 1)
+            XCTAssertEqual(try XCTUnwrap(NativeRecordingInfo.request([
+                "operation": "history", "root": history.path])["recordings"] as? [[String: Any]]).count, 1)
             trim.stringValue = "0"
             recordingEditor.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                               object: trim))
@@ -238,8 +238,8 @@ final class OpenImageTests: XCTestCase {
             try waitUntil { !editor.isVisible }
             controller.openImages([source.path])
             try waitUntil { !controller.externalOpenPending && editor.isVisible }
-            let reopened = try XCTUnwrap(AppBridge().request([
-                "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
+            let reopened = try XCTUnwrap(NativeRecordingInfo.request([
+                "operation": "history", "root": history.path])["recordings"] as? [[String: Any]])
             XCTAssertEqual((reopened.first?["entry"] as? [String: Any])?["id"] as? String, id)
             XCTAssertEqual(try Data(contentsOf: source), original, "opening and refocusing must not rewrite source")
             editor.performClose(nil)
