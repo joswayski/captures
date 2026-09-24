@@ -57,7 +57,14 @@ final class OpenImageTests: XCTestCase {
         try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
         try waitUntil { NSApp.windows.contains { $0.title.hasPrefix("Edit screenshot") && $0.isVisible } }
         let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
-        defer { editor.performClose(nil) }
+        defer {
+            editor.performClose(nil)
+            if let sheet = editor.attachedSheet {
+                editor.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+            editor.orderOut(nil)
+        }
         try waitUntil { editor.contentView.map { descendants($0).compactMap { $0 as? NSImageView }
             .contains { $0.image != nil && $0.accessibilityLabel() == "Edited screenshot preview" } } == true }
         if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"],
@@ -65,6 +72,15 @@ final class OpenImageTests: XCTestCase {
             try capture(content, to: URL(fileURLWithPath: output)
                 .appendingPathComponent("external-open-dark-editor-normal.png"))
         }
+        let controls = try XCTUnwrap(editor.contentView)
+        for (label, value) in [("Crop X", "7"), ("Crop Y", "11"),
+                               ("Crop width", "120"), ("Crop height", "80")] {
+            try XCTUnwrap(descendants(controls).compactMap { $0 as? NSTextField }
+                .first { $0.accessibilityLabel() == label }).stringValue = value
+        }
+        try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
+            .first { $0.title == "Apply crop" }).performClick(nil)
+        try waitUntil { editor.title.contains("Unsaved") }
         let artifacts = try XCTUnwrap(AppBridge().request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
         XCTAssertEqual(artifacts.count, 1)
@@ -84,6 +100,9 @@ final class OpenImageTests: XCTestCase {
         controller.openImages([source.path])
         try waitUntil { !controller.externalOpenPending }
         XCTAssertTrue(editor.isVisible)
+        XCTAssertTrue(editor.title.contains("Unsaved"), "duplicate focus must retain staged edits")
+        XCTAssertTrue(descendants(controls).compactMap { ($0 as? NSTextField)?.stringValue }
+            .contains { $0.contains("120 × 80") }, "duplicate focus must retain the accepted crop")
         XCTAssertEqual(try XCTUnwrap(AppBridge().request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]]).count, 1)
     }
