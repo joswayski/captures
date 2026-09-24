@@ -1086,7 +1086,7 @@ def main():
             inspector_move(60, 506,
                 "click", "--repeat", "5", "5", "sleep", ".2")
             shot(editor, "text-defaults-menu-scrolled")
-            inspector_click(60, 499)  # Mono box, immediately before Rounded box.
+            inspector_click(60, 499)  # Mono box, before Rounded box.
             field(381, 37.5, x=59)
             field(452, "#2367ab", x=105)
             shot(editor, "text-defaults-staged")
@@ -1164,7 +1164,7 @@ def main():
             # Text properties precede generic layer geometry in the sidebar.
             inspector_click(100, 431)
             shot(editor, f"text-font-menu-{args.appearance}")
-            inspector_click(100, 605)  # Liberation Serif, after Mono/Nunito/Sans.
+            inspector_click(100, 605)  # Liberation Serif, after Nunito.
             inspector_click(105, 505)
             run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--delay", "35",
                 "--", "Readable native text")
