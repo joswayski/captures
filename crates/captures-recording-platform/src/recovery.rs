@@ -61,9 +61,17 @@ pub struct RecordingRecovery {
     tools: MediaToolchain,
 }
 
+pub(crate) struct RecoveryLease(File);
+
+impl Drop for RecoveryLease {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 /// The lockfile is never deleted: removing it could create independent locks
 /// on separate inodes. A live native session holds this until finish/discard.
-pub(crate) fn lease(root: &Path) -> Result<File, String> {
+pub(crate) fn lease(root: &Path) -> Result<RecoveryLease, String> {
     fs::create_dir_all(root).map_err(string)?;
     let metadata = fs::symlink_metadata(root).map_err(string)?;
     if !metadata.is_dir() || is_link(&metadata) {
@@ -84,7 +92,7 @@ pub(crate) fn lease(root: &Path) -> Result<File, String> {
         .map_err(string)?;
     file.try_lock()
         .map_err(|_| "A native recording or recovery operation is active".to_owned())?;
-    Ok(file)
+    Ok(RecoveryLease(file))
 }
 
 impl RecordingRecovery {
@@ -898,6 +906,31 @@ mod tests {
         live.discard().unwrap();
         assert!(recovery.list().unwrap().is_empty());
         assert!(recovery.root.join(".recording-recovery.lock").is_file());
+    }
+
+    #[test]
+    fn interrupted_recovery_operation_unlocks_on_unwind() {
+        let base = tempfile::tempdir().unwrap();
+        let recovery = RecordingRecovery::new(
+            base.path().join("history"),
+            MediaToolchain::from_command_names(),
+        );
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut manifest =
+            RecordingDraftManifest::new(id.clone(), options(RecordingKind::Video), 10);
+        manifest.state = RecordingState::Failed;
+        DraftStore::new(recovery.root.clone())
+            .create(&manifest)
+            .unwrap();
+        let identity = recovery.list().unwrap()[0].identity.clone().unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = recovery.recover(&id, &identity, &CancelToken::default(), |_| {
+                panic!("injected progress callback panic");
+            });
+        }));
+        assert!(result.is_err());
+        assert_eq!(recovery.list().unwrap()[0].session_id, id);
+        assert!(lease(&recovery.root).is_ok());
     }
 
     #[cfg(unix)] // set_len creates a sparse file here; Windows may allocate 8 GiB.
