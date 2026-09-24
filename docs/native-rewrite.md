@@ -1283,8 +1283,8 @@ rejects TIFF on this path. An already-open canonical source focuses its editor;
 a closed source reloads under the same History ID only if no saved editor draft
 exists. With a draft, the user must restore or discard it from History first so
 an interrupted reload cannot hide the only copy. Source bytes stay untouched and
-the original source path remains available for explicit Replace original. AppKit
-connects this shared backend below; no host registers an OS file association.
+the original source path remains available for explicit Replace original. Both
+native hosts connect this backend below; neither registers an OS file association.
 GIF/video and broader platform image formats remain separate work.
 RGB/grayscale ICC profiles convert to sRGB before publication, preserving straight
 alpha; untagged files assume sRGB. Unsupported or malformed ICC profiles, CMYK
@@ -1296,13 +1296,18 @@ The returned stable ID selects the new layer. Cancellation, decode failures and
 late results after close preserve the editor; a completed selection waits for
 already accepted edits before importing. Imports do not write a draft or History
 until explicitly saved, and saved assets survive deleting the external source.
-Separately, the AppKit live development host opens external PNG/JPEG/WebP paths
-through the shared History-backed `open_image` request using repeatable `--open-image`
-arguments or a running app's file-open callback. It queues startup inputs and
-serializes each open against editor focus and History refresh; unsupported paths
-do not block later ones. Already-open sources preserve active edits. The
-Windows/Linux native host does not yet connect this external-open entry point;
-neither host registers file associations or claims physical file-open acceptance.
+Separately, both live development hosts open external PNG/JPEG/WebP paths through
+the shared History-backed `open_image` request using repeatable `--open-image`
+arguments. AppKit also handles a running app's file-open callback. Both queue startup
+inputs and serialize opens against editor focus and History refresh; unsupported
+paths do not block later ones, and already-open sources preserve active edits.
+Private X11 exercises bad-file continuation, three editors, canonical aliases,
+decoded pixels, untouched sources, saved-draft refusal/History restoration and
+same-ID source reload after explicit discard in both appearances. Windows and
+Wayland use the same host code but this entry point remains presentation-unverified
+there; AppKit uses macOS CI bridge/window tests. Neither host registers file
+associations or claims physical file-open acceptance. Windows/Linux single-instance
+forwarding remains separate work.
 Private-X11 checks exercise the actual rfd D-Bus transport with a disposable file
 chooser fixture, asymmetric rendered pixels, cancellation/retry, undo/redo,
 reopen and stale-close handling in both appearances. That fixture does not verify
