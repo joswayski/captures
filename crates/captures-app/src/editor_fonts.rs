@@ -8,7 +8,11 @@ use std::{
 
 use captures_history::editor_draft::FontAssets;
 
-pub const NOTICE: &str = include_str!("../fonts/liberation/LICENSE");
+pub const NOTICE: &str = concat!(
+    include_str!("../fonts/liberation/LICENSE"),
+    "\n\n",
+    include_str!("../fonts/nunito/OFL.txt")
+);
 
 /// Reuse immutable bytes across workers. Each session owns its shaping state.
 pub fn bundled() -> FontAssets {
@@ -19,6 +23,7 @@ pub fn bundled() -> FontAssets {
                 ("sans".into(), "Liberation Sans".into()),
                 ("serif".into(), "Liberation Serif".into()),
                 ("mono".into(), "Liberation Mono".into()),
+                ("rounded".into(), "Nunito".into()),
             ]),
             files: [
                 (
@@ -81,11 +86,35 @@ pub fn bundled() -> FontAssets {
                     "bold-italic",
                     include_bytes!("../fonts/liberation/LiberationMono-BoldItalic.ttf").as_slice(),
                 ),
+                (
+                    "rounded",
+                    "regular",
+                    include_bytes!("../fonts/nunito/Nunito-Regular.ttf").as_slice(),
+                ),
+                (
+                    "rounded",
+                    "bold",
+                    include_bytes!("../fonts/nunito/Nunito-Bold.ttf").as_slice(),
+                ),
+                (
+                    "rounded",
+                    "italic",
+                    include_bytes!("../fonts/nunito/Nunito-Italic.ttf").as_slice(),
+                ),
+                (
+                    "rounded",
+                    "bold-italic",
+                    include_bytes!("../fonts/nunito/Nunito-BoldItalic.ttf").as_slice(),
+                ),
             ]
             .into_iter()
             .map(|(family, style, bytes)| {
                 (
-                    format!("liberation-{family}-2-1-5-{style}"),
+                    if family == "rounded" {
+                        format!("nunito-rounded-3-601-{style}")
+                    } else {
+                        format!("liberation-{family}-2-1-5-{style}")
+                    },
                     Arc::from(bytes),
                 )
             })

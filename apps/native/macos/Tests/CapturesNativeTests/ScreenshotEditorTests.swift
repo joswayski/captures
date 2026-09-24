@@ -5076,7 +5076,8 @@ final class ScreenshotEditorTests: XCTestCase {
         let sans = try request(["operation": "create_text", "point": ["x": 50, "y": 80],
             "text": "Native Ωé", "fontFamily": "sans", "fontSize": 64, "color": "#111111"])
         XCTAssertEqual(sans.snapshot.fontFamilies,
-            ["sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"])
+            ["sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono",
+             "rounded": "Nunito"])
         let id = try XCTUnwrap(sans.snapshot.layers.first?.id)
         let serif = try request(["operation": "edit_text", "id": id, "patch": ["fontFamily": "serif"]])
         let mono = try request(["operation": "edit_text", "id": id, "patch": ["fontFamily": "mono"]])
