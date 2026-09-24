@@ -174,8 +174,11 @@ final class OpenImageTests: XCTestCase {
             window.isReleasedWhenClosed = false
             defer { window.close() }
             let root = Surface(frame: frame); window.contentView = root
+            let tokens = try XCTUnwrap(Tokens.variants["\(appearance)-mustard"])
+            root.wantsLayer = true; root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
+            window.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
             let controller = LiveCaptureController(root: root, window: window,
-                tokens: try XCTUnwrap(Tokens.variants["\(appearance)-mustard"]),
+                tokens: tokens,
                 historyRoot: history.path, settingsPath: settingsPath, showPreferences: {})
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
@@ -205,7 +208,9 @@ final class OpenImageTests: XCTestCase {
             XCTAssertEqual(entry["kind"] as? String, container == "gif" ? "gif" : "video")
             XCTAssertEqual(entry["mime_type"] as? String,
                            container == "gif" ? "image/gif" : "video/\(container)")
-            XCTAssertEqual(entry["saved_path"] as? String, source.resolvingSymlinksInPath().path)
+            let canonical = try XCTUnwrap(source.path.withCString { realpath($0, nil) })
+            defer { free(canonical) }
+            XCTAssertEqual(entry["saved_path"] as? String, String(cString: canonical))
             XCTAssertFalse(try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
                 .first { $0.title == "Replace original…" }).isEnabled,
                 "external references must not offer destructive replacement")
