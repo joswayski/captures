@@ -571,6 +571,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 if paths.isEmpty {
                     _ = applicationShouldHandleReopen(NSApp,
                         hasVisibleWindows: NSApp.windows.contains(where: \.isVisible))
+                    Metrics.write(["event": "instance-relaunch"])
                 } else {
                     pendingOpenImages.append(contentsOf: paths)
                     drainOpenImages()

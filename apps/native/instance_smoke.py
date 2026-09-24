@@ -110,7 +110,8 @@ def main():
             assert (metadata.parent / "capture.png").is_file()
             forward("./" + source.name)  # canonical alias, no second History item
             forward()  # focus-only relaunch
-            time.sleep(1)
+            wait(lambda: any(event.get("event") == "instance-relaunch" for event in events()),
+                 "resident root handled relaunch after editor opened")
             assert len(list(history.glob("*/metadata.json"))) == 1
             assert source.read_bytes() == original
             assert primary.wait(timeout=35) == 0, log.read_text(encoding="utf-8", errors="replace")
@@ -128,7 +129,7 @@ def main():
                if line.startswith("{")), "restart did not become the primary"
     checks = ["secondary-exits-before-ui", "secondary-does-not-write-settings", "sender-relative-path",
               "resident-history-import", "canonical-alias-no-duplicate", "source-bytes-unchanged",
-              "focus-only-request-acknowledged", "normal-quit-and-primary-restart"]
+              "focus-only-request-handled-by-host", "normal-quit-and-primary-restart"]
     (output / "result.json").write_text(json.dumps({"passed": True, "checks": checks}, indent=2) + "\n")
     print(f"PASS native instance forwarding: {len(checks)} checks")
 
