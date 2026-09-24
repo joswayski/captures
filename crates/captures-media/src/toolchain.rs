@@ -682,19 +682,11 @@ impl MediaToolchain {
             .iter()
             .filter(|stream| stream.codec_type.as_deref() == Some("audio"))
             .count();
-        let extension = input
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or_default();
-        let kind = if extension.eq_ignore_ascii_case("gif") {
+        let mime_type = source_container(input, probe.format.format_name.as_deref())?;
+        let kind = if mime_type == "image/gif" {
             MediaKind::Gif
         } else {
             MediaKind::Video
-        };
-        let mime_type = match kind {
-            MediaKind::Gif => "image/gif",
-            MediaKind::Video => "video/mp4",
-            MediaKind::Screenshot => "image/png",
         };
         Ok(ProbeResult {
             metadata: MediaMetadata {
@@ -2188,6 +2180,7 @@ fn video_attempt(
 
 fn mp4_preserves_video_stream(probe: &ProbeResult, edit: &EditSpec, spec: &ExportSpec) -> bool {
     probe.metadata.kind == MediaKind::Video
+        && probe.metadata.mime_type == "video/mp4"
         && spec.format == ExportFormat::Mp4
         && spec.quality == QualityPreset::Preserve
         && visual_edit_is_identity(probe, edit)
@@ -2953,8 +2946,55 @@ struct FfprobeStream {
 
 #[derive(Debug, Default, Deserialize)]
 struct FfprobeFormat {
+    format_name: Option<String>,
     duration: Option<String>,
     size: Option<String>,
+}
+
+// FFprobe groups MOV with MP4 and Matroska with WebM. Require the matching
+// bounded container signature as well, rather than trusting an extension or
+// accepting an arbitrary sibling format as an MP4/WebM recording.
+fn source_container(input: &Path, demuxer: Option<&str>) -> Result<&'static str, MediaToolError> {
+    let mut header = [0_u8; 4096];
+    let len = fs::File::open(input)?.read(&mut header)?;
+    let header = &header[..len];
+    if demuxer == Some("gif") && (header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a")) {
+        return Ok("image/gif");
+    }
+    if demuxer.is_some_and(|name| name.split(',').any(|part| part == "mp4"))
+        && header.len() >= 12
+        && &header[4..8] == b"ftyp"
+        && matches!(
+            &header[8..12],
+            b"isom"
+                | b"iso2"
+                | b"iso3"
+                | b"iso4"
+                | b"iso5"
+                | b"iso6"
+                | b"mp41"
+                | b"mp42"
+                | b"mp71"
+                | b"avc1"
+                | b"M4V "
+                | b"dash"
+                | b"mp4v"
+        )
+    {
+        return Ok("video/mp4");
+    }
+    if demuxer.is_some_and(|name| name.split(',').any(|part| part == "webm"))
+        && header.starts_with(&[0x1a, 0x45, 0xdf, 0xa3])
+        && header
+            .windows(3)
+            .position(|bytes| bytes == [0x42, 0x82, 0x84])
+            .is_some_and(|at| header.get(at + 3..at + 7) == Some(b"webm".as_slice()))
+    {
+        return Ok("video/webm");
+    }
+    Err(MediaToolError::Process(
+        "Only GIF, MP4 and WebM recording containers are supported".into(),
+    ))
 }
 
 #[cfg(test)]

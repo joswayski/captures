@@ -337,6 +337,16 @@ mod tests {
                 ),
                 false,
             ),
+            (
+                Some(r#"{"operation":"open_media","root":"/tmp","path":"/tmp/source.png"}"#),
+                false,
+            ),
+            (
+                Some(
+                    r#"{"operation":"open_media","root":"/tmp","path":"/tmp/source.png","open_artifact_ids":"wrong"}"#,
+                ),
+                false,
+            ),
             (Some("not json"), false),
             (None, false),
         ] {
@@ -393,6 +403,37 @@ mod tests {
         assert_eq!(second["ok"], true);
         assert_eq!(second["result"]["already_open"], true);
         assert_eq!(second["result"]["artifact"]["entry"]["id"], id);
+    }
+
+    #[test]
+    fn application_abi_opens_still_media_without_tools_and_preserves_old_envelope() {
+        let data = tempfile::tempdir().unwrap();
+        let root = data.path().join("capture-history");
+        let source = data.path().join("source.webp");
+        image::RgbaImage::from_fn(7, 3, |x, y| {
+            image::Rgba([x as u8 * 28, y as u8 * 67, 9, 255])
+        })
+        .save(&source)
+        .unwrap();
+        for (operation, kind) in [
+            ("open_media", "opened_media"),
+            ("open_image", "opened_image"),
+        ] {
+            let mut request =
+                json!({"operation":operation,"root":root,"path":source,"open_artifact_ids":[]});
+            if operation == "open_media" {
+                request["ffmpeg"] = json!("/missing-ffmpeg");
+                request["ffprobe"] = json!("/missing-ffprobe");
+            }
+            let input = CString::new(request.to_string()).unwrap();
+            let ptr = unsafe { captures_app_request_v1(input.as_ptr()) };
+            let response: Value =
+                serde_json::from_slice(unsafe { CStr::from_ptr(ptr) }.to_bytes()).unwrap();
+            unsafe { captures_settings_free_v1(ptr) };
+            assert_eq!(response["ok"], true);
+            assert_eq!(response["result"]["kind"], kind);
+            assert_eq!(response["result"]["artifact"]["entry"]["width"], 7);
+        }
     }
 
     fn call(s: &str) -> Value {

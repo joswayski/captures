@@ -1312,6 +1312,15 @@ entry point remains presentation-unverified there; AppKit uses macOS CI bridge/w
 tests. Neither host registers file associations or claims physical file-open acceptance.
 Windows/Linux single-instance forwarding, GIF/video and broader platform image
 formats remain separate work.
+The additive shared `open_media` JSON request now delegates PNG/JPEG/WebP to that
+existing path and prepares GIF/MP4/WebM as external recording references without
+copying the source. It matches canonical active sources before requiring FFmpeg,
+validates a decoded editor frame and poster before History publication, and keeps
+the same ID on closed reopen. FFprobe's combined MOV/MP4 and Matroska/WebM
+demuxers are disambiguated with bounded container headers; MOV and MKV are not
+silently labeled as supported formats. WebM Preserve-to-MP4 transcodes instead of
+copying source bytes. This is shared backend support only: the above native hosts
+still open only PNG/JPEG/WebP until their separate file-open wiring lands.
 
 The wgpu Output panel now previews shared PNG/JPEG/WebP encoding with the shipping
 quality modes, palette controls and hard byte budget. Encoding and decoding run
