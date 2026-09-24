@@ -3,6 +3,48 @@ import XCTest
 @testable import CapturesNative
 
 final class OpenImageTests: XCTestCase {
+    func testRealBridgeOpensExternalPNGIntoHistoryAndDecodedEditor() throws {
+        _ = NSApplication.shared
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let source = folder.appendingPathComponent("outside.png")
+        try XCTUnwrap(NSBitmapImageRep(cgImage: PreviewView.fixtureImage(scale: 1))
+            .representation(using: .png, properties: [:])).write(to: source)
+        let history = folder.appendingPathComponent("history")
+        let settingsPath = folder.appendingPathComponent("settings.json").path
+        let settingsBridge = SettingsBridge()
+        var settings = try XCTUnwrap(settingsBridge.request([
+            "operation": "load", "path": settingsPath])["settings"] as? [String: Any])
+        settings["output_directory"] = folder.path
+        _ = try settingsBridge.request(["operation": "save", "path": settingsPath, "settings": settings])
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame); window.contentView = root
+        let controller = LiveCaptureController(root: root, window: window,
+            tokens: try XCTUnwrap(Tokens.variants["dark-mustard"]),
+            historyRoot: history.path, settingsPath: settingsPath, showPreferences: {})
+        defer { withExtendedLifetime(controller) {} }
+        window.makeKeyAndOrderFront(nil)
+        controller.openImages([source.path])
+        let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
+            .first?.documentView as? NSTableView)
+        try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
+        try waitUntil { NSApp.windows.contains { $0.title.hasPrefix("Edit screenshot") && $0.isVisible } }
+        let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
+        defer { editor.performClose(nil) }
+        try waitUntil { editor.contentView.map { descendants($0).compactMap { $0 as? NSImageView }
+            .contains { $0.image != nil && $0.accessibilityLabel() == "Edited screenshot preview" } } == true }
+        let artifacts = try XCTUnwrap(AppBridge().request([
+            "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
+        XCTAssertEqual(artifacts.count, 1)
+        XCTAssertEqual((artifacts[0]["entry"] as? [String: Any])?["kind"] as? String, "screenshot")
+        XCTAssertNotEqual(artifacts[0]["image_path"] as? String, source.path,
+                          "the external source is copied into owned History")
+    }
+
     func testQueuedFilesRetainErrorsAndSerializeCanonicalOpens() throws {
         _ = NSApplication.shared
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -97,6 +139,10 @@ final class OpenImageTests: XCTestCase {
         }
         XCTFail("external open did not settle")
         throw AppBridgeError.invalidResponse
+    }
+
+    private func descendants(_ view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap(descendants)
     }
 }
 

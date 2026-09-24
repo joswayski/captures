@@ -354,6 +354,13 @@ or letting it expire preserves History and exports; failed saves can be retried.
 The AppKit History view enables **Edit screenshot** for screenshots only. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
+The native AppKit live development host accepts repeatable `--open-image PATH`
+arguments only with `--live`, and handles macOS file-open requests while running.
+PNG, JPEG and WebP sources become local History-backed screenshot editor sessions;
+unsupported files report an error without stopping later paths. Reopening an
+already-open source focuses its editor without replacing unsaved edits. This is
+not a registered file association or an installed-app opening feature; the
+Windows/Linux native host has not connected this entry point yet.
 Its Layers panel connects shared visibility, lock, opacity, movement, image rename,
 duplicate, delete and adjacent ordering commands while preserving locked barriers;
 the original History image and its exports remain unchanged until explicit replacement. Recording completion

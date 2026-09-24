@@ -1286,6 +1286,13 @@ The returned stable ID selects the new layer. Cancellation, decode failures and
 late results after close preserve the editor; a completed selection waits for
 already accepted edits before importing. Imports do not write a draft or History
 until explicitly saved, and saved assets survive deleting the external source.
+Separately, the AppKit live development host opens external PNG/JPEG/WebP paths
+through the shared History-backed `open_image` request using repeatable `--open-image`
+arguments or a running app's file-open callback. It queues startup inputs and
+serializes each open against editor focus and History refresh; unsupported paths
+do not block later ones. Already-open sources preserve active edits. The
+Windows/Linux native host does not yet connect this external-open entry point;
+neither host registers file associations or claims physical file-open acceptance.
 Private-X11 checks exercise the actual rfd D-Bus transport with a disposable file
 chooser fixture, asymmetric rendered pixels, cancellation/retry, undo/redo,
 reopen and stale-close handling in both appearances. That fixture does not verify
