@@ -272,6 +272,8 @@ def main():
             tools.mkdir()
             started = output / "second-open-started"
             allowed = output / "allow-second-open"
+            webm_started = output / "webm-open-started"
+            webm_allowed = output / "allow-webm-open"
             ffprobe = shutil.which("ffprobe")
             assert ffprobe
             wrapper = tools / "ffprobe"
@@ -280,6 +282,9 @@ def main():
                 f"if {str(source)!r} in sys.argv[1:]:\n"
                 f"    Path({str(started)!r}).touch()\n"
                 f"    while not Path({str(allowed)!r}).exists(): time.sleep(.05)\n"
+                f"if {str(webm)!r} in sys.argv[1:]:\n"
+                f"    Path({str(webm_started)!r}).touch()\n"
+                f"    while not Path({str(webm_allowed)!r}).exists(): time.sleep(.05)\n"
                 f"os.execv({ffprobe!r}, [{ffprobe!r}, *sys.argv[1:]])\n")
             wrapper.chmod(0o755)
             env["PATH"] = str(tools) + os.pathsep + env["PATH"]
@@ -305,6 +310,16 @@ def main():
             field(editor, 98, 598, 1100)
             shot(editor, "external-gif-staged")
             allowed.touch()
+            wait(webm_started.exists, "WebM held while checking MP4 reference controls")
+            mp4_editor = wait(lambda: next((window for window in windows("Recording editor") if window != editor), None),
+                              "external MP4 editor")
+            run("xdotool", "windowmove", "--sync", mp4_editor, "80", "60",
+                "windowsize", "--sync", mp4_editor, "960", "900", "sleep", ".5")
+            shot(mp4_editor, "external-mp4-decoded")
+            dominant(output / "external-mp4-decoded.png", 0)
+            click(mp4_editor, 782, 838)
+            shot(mp4_editor, "external-mp4-replace-disabled")
+            webm_allowed.touch()
             entries = wait(lambda: values if len(values := opened_entries()) == 4 else None,
                            "four imported artifacts without alias duplicate")
             wait(lambda: len(windows("Recording editor")) == 3 and len(windows("Screenshot editor")) == 1,

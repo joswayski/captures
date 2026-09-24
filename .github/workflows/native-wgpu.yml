@@ -145,6 +145,9 @@ jobs:
       - name: Capture regions while a native recording continues on private X11
         if: matrix.suite == 'capture'
         run: /usr/bin/python3 apps/native/x11_recording_smoke.py --screenshot-only --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-screenshot
+      - name: Open external GIF MP4 WebM and images without replacing sources on private X11
+        if: matrix.suite == 'recording'
+        run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --external-media --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-external-media-$APPEARANCE"
       - name: Exercise recording editor frames, resolution, audio, estimates and exports on private X11
         if: matrix.suite == 'recording'
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --audio --presets --estimate --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-editor-$APPEARANCE"
