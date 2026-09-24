@@ -1300,7 +1300,9 @@ Separately, the AppKit live development host opens external PNG/JPEG/WebP paths
 through the shared History-backed `open_image` request using repeatable `--open-image`
 arguments or a running app's file-open callback. It queues startup inputs and
 serializes each open against editor focus and History refresh; unsupported paths
-do not block later ones. Already-open sources preserve active edits. The
+do not block later ones. Different sources wait for the previous editor open to
+settle, and pending text or unsaved edits block switching without losing the
+new History item. Already-open sources preserve active edits. The
 Windows/Linux native host does not yet connect this external-open entry point;
 neither host registers file associations or claims physical file-open acceptance.
 Private-X11 checks exercise the actual rfd D-Bus transport with a disposable file

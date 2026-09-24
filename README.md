@@ -364,7 +364,9 @@ The native AppKit live development host accepts repeatable `--open-image PATH`
 arguments only with `--live`, and handles macOS file-open requests while running.
 PNG, JPEG and WebP sources become local History-backed screenshot editor sessions;
 unsupported files report an error without stopping later paths. Reopening an
-already-open source focuses its editor without replacing unsaved edits. This is
+already-open source focuses its editor without replacing unsaved edits. Switching
+to another source waits for the first editor to open and refuses to drop pending
+text or unsaved changes; its new History item remains available. This is
 not a registered file association or an installed-app opening feature; the
 Windows/Linux native host has not connected this entry point yet.
 Native Preferences also includes an optional feedback form. Sending shares only

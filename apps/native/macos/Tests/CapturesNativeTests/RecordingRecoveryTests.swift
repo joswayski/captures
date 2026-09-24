@@ -12,6 +12,7 @@ final class RecordingRecoveryTests: XCTestCase {
         let unavailable = try draft("unavailable", identity: nil, kind: nil,
                                     reason: "Manifest is unavailable; inspect the bundle manually.")
         let worker = RecoveryFixtureWorker(drafts: [available, unavailable])
+        let transport = EmptyHistoryTransport()
         let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
         let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -19,7 +20,7 @@ final class RecordingRecoveryTests: XCTestCase {
         let root = Surface(frame: frame); window.contentView = root
         let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
         let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
-            historyRoot: folder.path, settingsPath: nil, transport: EmptyHistoryTransport(),
+            historyRoot: folder.path, settingsPath: nil, transport: transport,
             recoveryWorker: worker, showPreferences: {})
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
@@ -36,8 +37,11 @@ final class RecordingRecoveryTests: XCTestCase {
         buttons(content, title: "Discard…")[0].performClick(nil)
         try waitUntil { window.attachedSheet != nil }
         XCTAssertEqual(worker.discardCount, 0)
+        controller.openImages(["/unsupported-image.gif"])
+        XCTAssertEqual(transport.openImageCount, 0, "confirmation must keep the image queue parked")
         window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertSecondButtonReturn)
         try waitUntil { window.attachedSheet == nil }
+        try waitUntil { transport.openImageCount == 1 && !controller.externalOpenPending }
         XCTAssertEqual(worker.discardCount, 0)
         buttons(try XCTUnwrap(scroll.documentView), title: "Recover")[0].performClick(nil)
         XCTAssertEqual(worker.recoverCount, 1)
@@ -435,6 +439,9 @@ final class RecordingRecoveryTests: XCTestCase {
 
 private final class EmptyHistoryTransport: AppTransport {
     let artifacts: [[String: Any]]
+    private let lock = NSLock()
+    private var opens = 0
+    var openImageCount: Int { lock.lock(); defer { lock.unlock() }; return opens }
     private var initialHistoryGate: DispatchSemaphore?
     init(artifacts: [[String: Any]] = [], initialHistoryGate: DispatchSemaphore? = nil) {
         self.artifacts = artifacts; self.initialHistoryGate = initialHistoryGate
@@ -448,6 +455,9 @@ private final class EmptyHistoryTransport: AppTransport {
             }
             return ["artifacts": artifacts]
         case "displays": return ["displays": []]
+        case "open_image":
+            lock.lock(); opens += 1; lock.unlock()
+            throw AppBridgeError.backend("unsupported image fixture")
         default: throw AppBridgeError.invalidResponse
         }
     }

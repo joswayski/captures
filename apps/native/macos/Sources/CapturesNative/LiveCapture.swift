@@ -569,6 +569,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             self.recoveryConfirmation = false
             self.updateActions()
             guard response == .alertFirstButtonReturn, self.currentRecovery(draft) else {
+                self.processNextOpenImage()
                 return
             }
             self.recoveryActionGeneration += 1
@@ -628,6 +629,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         recordingSavedNotice.dismiss()
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
+              !externalOpenPending,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]; setBusy(true, message: "Preparing capture…")
@@ -672,6 +674,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         recordingSavedNotice.dismiss()
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
+              !externalOpenPending,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]
@@ -1928,7 +1931,6 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }) {
             [weak self] result in
             guard let self else { return }
-            defer { completion?() }
             guard completion != nil || !self.externalOpenPending else { return }
             guard completion != nil || self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
                 ? self.artifacts[$0].id : nil }) == artifact.id else { return }
@@ -1948,6 +1950,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     self.recordingEditor?.present(artifact: artifact,
                                                   historyRoot: self.historyRoot,
                                                   outputDirectory: outputDirectory)
+                    completion?()
                     return
                 }
                 if self.screenshotEditor == nil {
@@ -1961,9 +1964,17 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                         })
                 }
                 self.screenshotEditor?.present(artifact: artifact, historyRoot: self.historyRoot,
-                                               outputDirectory: outputDirectory)
+                    outputDirectory: outputDirectory, completion: completion.map { finished in
+                        { [weak self] accepted in
+                            if !accepted {
+                                self?.externalOpenErrors.append("\(artifact.id): screenshot editor could not open; the History item remains available.")
+                            }
+                            finished()
+                        }
+                    })
             case .failure(let error):
                 self.showError("Couldn’t load the screenshot save location", error)
+                completion?()
             }
         }
     }
@@ -2030,7 +2041,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func processNextOpenImage() {
         guard !externalOpenPending, !historyRoot.isEmpty, !capturing,
-              !clearingHistory, !recoveryBusy, !recordingRetiring else { return }
+              !clearingHistory, !recoveryBusy, !recoveryConfirmation,
+              !recordingRetiring else { return }
         guard !pendingOpenImages.isEmpty else {
             if !externalOpenErrors.isEmpty {
                 let message = externalOpenErrors.joined(separator: "\n")
