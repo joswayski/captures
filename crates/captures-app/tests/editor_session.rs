@@ -3776,16 +3776,30 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
     use captures_app::editor_fonts;
     let fonts = editor_fonts::bundled();
     let second = editor_fonts::bundled();
-    assert_eq!(fonts.files.len(), 12);
+    assert_eq!(fonts.files.len(), 16);
     assert_eq!(
         fonts.files.values().map(|b| b.len()).sum::<usize>(),
-        4_359_164
+        4_987_528
     );
+    assert_eq!(fonts.families["rounded"], "Nunito");
+    for style in ["regular", "bold", "italic", "bold-italic"] {
+        assert!(
+            fonts
+                .files
+                .contains_key(&format!("nunito-rounded-3-601-{style}"))
+        );
+    }
     for (id, bytes) in &fonts.files {
         assert!(Arc::ptr_eq(bytes, &second.files[id]));
     }
     assert_eq!(fonts.notices, editor_fonts::NOTICE);
     assert!(fonts.notices.contains("SIL OPEN FONT LICENSE Version 1.1"));
+    assert!(
+        fonts
+            .notices
+            .contains("Copyright 2014 The Nunito Project Authors")
+    );
+    assert!(fonts.notices.contains("Copyright (c) 2012 Red Hat, Inc."));
     let (data, id, _) = setup();
     let mut editor = open_text(data.path(), &id, fonts.clone()).unwrap();
     editor
@@ -3805,7 +3819,7 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
             height: 360.,
         })
         .unwrap();
-    editor.execute(create_text_request("Native Ωé")).unwrap();
+    editor.execute(create_text_request("Café Ω Ж")).unwrap();
     let text_id = editor
         .snapshot()
         .document
@@ -3823,10 +3837,18 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
             .iter()
             .map(|preset| preset.id)
             .collect::<Vec<_>>(),
-        ["standard", "outlined", "mono", "box", "mono-box"]
+        [
+            "standard",
+            "rounded",
+            "outlined",
+            "mono",
+            "box",
+            "mono-box",
+            "rounded-box"
+        ]
     );
     let mut frames = Vec::new();
-    for family in ["sans", "serif", "mono"] {
+    for family in ["sans", "serif", "mono", "rounded"] {
         for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
             editor
                 .execute(edit_text_request(
@@ -3844,12 +3866,38 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
         }
     }
     let accepted = editor.pixels();
+    let encoded = editor.encode_export(png_export_options()).unwrap();
+    assert_eq!(
+        image::load_from_memory(&encoded).unwrap().to_rgba8(),
+        *accepted
+    );
+    // Nunito's pinned revision covers representative Latin, Greek and Cyrillic,
+    // but unlike Liberation Sans it lacks Greek lambda. There is no fallback.
+    assert!(
+        editor
+            .execute(edit_text_request(&text_id, json!({"text":"λ"})))
+            .is_err()
+    );
+    assert!(Arc::ptr_eq(&accepted, &editor.pixels()));
+    editor
+        .execute(edit_text_request(
+            &text_id,
+            json!({"fontFamily":"sans","text":"λ"}),
+        ))
+        .unwrap();
+    editor
+        .execute(edit_text_request(
+            &text_id,
+            json!({"fontFamily":"rounded","text":"Café Ω Ж"}),
+        ))
+        .unwrap();
+    assert_eq!(editor.pixels(), accepted);
     assert!(
         editor
             .execute(edit_text_request(&text_id, json!({"text":"雪"})))
             .is_err()
     );
-    assert!(Arc::ptr_eq(&accepted, &editor.pixels()));
+    assert_eq!(editor.pixels(), accepted);
     editor
         .execute(Request::SaveDraft { updated_at_ms: 73 })
         .unwrap();
@@ -3860,9 +3908,11 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
     .unwrap();
     assert_eq!(saved.fonts, Some(fonts));
     // A different host's supplied defaults cannot change the persisted text.
+    let reopened = open_text(data.path(), &id, text_fonts()).unwrap();
+    assert_eq!(reopened.pixels(), accepted);
     assert_eq!(
-        open_text(data.path(), &id, text_fonts()).unwrap().pixels(),
-        accepted
+        reopened.encode_export(png_export_options()).unwrap(),
+        encoded
     );
 }
 
@@ -3909,4 +3959,45 @@ fn older_drafts_offer_only_their_persisted_fonts_without_implicit_font_migration
     );
     assert_eq!(reopened.pixels(), accepted);
     assert!(!reopened.snapshot().unsaved_changes);
+}
+
+#[test]
+fn prior_liberation_draft_keeps_its_font_map_notice_and_export_after_rounded_is_bundled() {
+    let mut prior = captures_app::editor_fonts::bundled();
+    prior.families.remove("rounded");
+    prior.files.retain(|id, _| id.starts_with("liberation-"));
+    prior.notices = include_str!("../fonts/liberation/LICENSE").into();
+    assert_eq!(prior.files.len(), 12);
+
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, prior.clone()).unwrap();
+    editor.execute(create_text_request("Pinned Ωé")).unwrap();
+    let pixels = editor.pixels();
+    let encoded = editor.encode_export(png_export_options()).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 77 })
+        .unwrap();
+    let saved = captures_history::editor_draft::load(&data.path().join("drafts"), &id, |_, id| {
+        format!("draft-asset:{id}")
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(saved.fonts, Some(prior.clone()));
+
+    let reopened = open_text(data.path(), &id, captures_app::editor_fonts::bundled()).unwrap();
+    assert_eq!(reopened.snapshot().font_families, Some(&prior.families));
+    assert_eq!(
+        reopened
+            .snapshot()
+            .text_style_presets
+            .iter()
+            .map(|preset| preset.id)
+            .collect::<Vec<_>>(),
+        ["standard", "outlined", "mono", "box", "mono-box"]
+    );
+    assert_eq!(reopened.pixels(), pixels);
+    assert_eq!(
+        reopened.encode_export(png_export_options()).unwrap(),
+        encoded
+    );
 }
