@@ -5140,7 +5140,7 @@ mod tests {
         assert_eq!(path, Path::new("alias.png"));
         assert_eq!(
             open_artifact_ids,
-            [id.clone()],
+            std::slice::from_ref(&id),
             "IDs are collected after the prior editor opened"
         );
         let artifact = captures_app::list(root.path()).unwrap().pop().unwrap();
