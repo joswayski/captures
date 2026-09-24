@@ -4672,6 +4672,8 @@ final class ScreenshotEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             try showDraw(in: controller.root)
+            let tool = try popup("Drawing tool", in: controller.root)
+            tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
             let future = try popup("New text style", in: controller.root)
             let futureSize = try field("New text size", in: controller.root)
             let futureColor = try field("New text color", in: controller.root)
@@ -4706,6 +4708,12 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             futureColor.scrollToVisible(futureColor.bounds)
             controller.root.layoutSubtreeIfNeeded()
+            let scroll = try XCTUnwrap(futureColor.enclosingScrollView)
+            for control in [future, futureSize, futureColor] as [NSView] {
+                XCTAssertFalse(control.isHiddenOrHasHiddenAncestor)
+                XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)),
+                              "carried style, size and color must all be visible at minimum size")
+            }
             try render(controller.root, name: "screenshot-editor-future-text-style-minimum-\(appearance)")
 
             worker.failOperation = "edit_text"
@@ -4743,8 +4751,6 @@ final class ScreenshotEditorTests: XCTestCase {
             try button("Undo", in: controller.root).performClick(nil)
             XCTAssertEqual(future.titleOfSelectedItem, "Outlined", "undo must not restore prior creation defaults")
 
-            let tool = try popup("Drawing tool", in: controller.root)
-            tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
             let point = NSPoint(x: controller.presentedImageRect.maxX - 20,
                                 y: controller.presentedImageRect.midY)
             controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
