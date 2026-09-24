@@ -483,6 +483,35 @@ def main():
             save_layers(lambda values: len(values) == 2, "external image edit is a real draft")
             preserved_draft = draft.read_bytes()
             assert all(path.read_bytes() == before for path, before in source_bytes.items())
+
+            # A second executable must forward, not initialize another renderer,
+            # settings writer or set of capture shortcuts. Sender CWD differs.
+            run("xdotool", "windowactivate", "--sync", root)
+            assert run("xdotool", "getactivewindow").decode().strip() == root
+            forwarded = subprocess.run(
+                [str(binary), "--live", "--history-root", str(history),
+                 "--settings-file", str(output / "unused-secondary-settings.json"),
+                 "--open-media", alias.name], cwd=output, env=env,
+                capture_output=True, text=True, timeout=10)
+            assert forwarded.returncode == 0, forwarded.stderr
+            assert '"event":"forwarded"' in forwarded.stdout
+            assert '"event":"ready"' not in forwarded.stdout
+            assert not (output / "unused-secondary-settings.json").exists()
+            wait(lambda: run("xdotool", "getactivewindow").decode().strip() == editor,
+                 "forwarded canonical alias focuses existing edited window")
+            assert len(windows("Screenshot editor")) == 3
+            assert len(opened_entries()) == 3
+            assert draft.read_bytes() == preserved_draft
+            assert len(layers()) == 2
+
+            run("xdotool", "windowminimize", root)
+            relaunched = subprocess.run(app_command, cwd=output, env=env,
+                                        capture_output=True, text=True, timeout=10)
+            assert relaunched.returncode == 0, relaunched.stderr
+            assert '"event":"forwarded"' in relaunched.stdout
+            wait(lambda: run("xdotool", "getactivewindow").decode().strip() == root,
+                 "empty relaunch restores and focuses Preferences")
+            assert app.poll() is None
             close(root)
             wait(lambda: app.poll() is not None, "external image batch quits")
             assert app.returncode == 0
@@ -530,7 +559,10 @@ def main():
                            "multiple-native-editors", "open-does-not-create-draft",
                            "edits-do-not-overwrite-source", "closed-draft-blocks-reload",
                            "history-restores-saved-draft", "explicit-discard-allows-source-reload",
-                           "reload-preserves-history-identity", "reloaded-source-pixels"],
+                           "reload-preserves-history-identity", "reloaded-source-pixels",
+                           "secondary-exits-before-renderer-and-settings",
+                           "forwarded-relative-alias-preserves-edits",
+                           "empty-relaunch-restores-preferences"],
             }, indent=2) + "\n")
             print("PASS native external images: batch, aliases, errors, pixels, drafts and safe reload")
             return

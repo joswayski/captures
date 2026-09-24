@@ -36,6 +36,22 @@ char *captures_feedback_request_v1(const char *request_json);
 typedef void (*CapturesShortcutWake)(void);
 char *captures_shortcuts_request_v1(const char *request_json, CapturesShortcutWake wake);
 
+/* Native-thread-only, live-mode single-instance owner. Call start before UI or
+ * capture initialization: {operation:"start", history_root:string|null, paths:[]}
+ * returns {primary:bool}; false means the running owner's queue acknowledged the
+ * request and this process must exit without UI. Canonical History root defines
+ * identity, independent of settings. Paths resolve against this sender's CWD.
+ * next returns {request:null|{paths:[absolute paths]}}; an empty paths array means
+ * relaunch/focus. stop joins the worker but retains election while host work
+ * drains; close releases election. Do neither when quit is cancelled.
+ * Startup paths stay with the primary's existing host queue.
+ * wake must remain callable for process lifetime and ONLY schedule host-thread
+ * work. Drain once after startup too; a wake may precede UI initialization.
+ * Ack is queue acceptance, not successful decoding or durable delivery on quit.
+ * No retries after sending if acknowledgement fails (outcome may be unknown).
+ * request_json and returned JSON ownership follow the shortcut ABI above. */
+char *captures_instance_request_v1(const char *request_json, CapturesShortcutWake wake);
+
 /* Allocation-free region geometry in display-local logical coordinates. These
  * field layouts are versioned alongside the function names. No pointers are
  * retained. False leaves output unchanged (including null output, invalid mode,

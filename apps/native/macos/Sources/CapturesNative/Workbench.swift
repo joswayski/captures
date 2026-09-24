@@ -406,6 +406,8 @@ func performTermination(flushPreferences: () -> Void, cancelCapture: () -> Void,
 
 final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate {
     let options: Options
+    private var nativeInstance: NativeInstance?
+    private var instanceWakeObserver: NSObjectProtocol?
     private var window: NSWindow!
     private var content: Surface!
     private var preview: PreviewView?
@@ -450,8 +452,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         return theme == "custom" ? base.applyingCustomTheme(customTheme, light: mode == "light") : base
     }
 
-    init(options: Options) {
+    init(options: Options, nativeInstance: NativeInstance? = nil) {
         self.options = options
+        self.nativeInstance = nativeInstance
         pendingOpenImages = options.openMedia
         scene = options.live ? "live" : options.scene
         appearance = options.appearance
@@ -461,6 +464,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if nativeInstance != nil {
+            instanceWakeObserver = NotificationCenter.default.addObserver(
+                forName: NativeInstance.wakeNotification, object: nil, queue: .main
+            ) { [weak self] _ in self?.drainInstanceRequests() }
+        }
         let menu = NSMenu()
         let item = NSMenuItem()
         menu.addItem(item)
@@ -529,6 +537,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         if let seconds = options.quitAfter {
             DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { NSApp.terminate(nil) }
         }
+        // Also drain once after the workspace is ready. A worker wake posted
+        // before the observer existed therefore cannot strand startup traffic.
+        drainInstanceRequests()
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
@@ -552,6 +563,24 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         pendingOpenImages.removeAll()
     }
 
+    private func drainInstanceRequests() {
+        guard let nativeInstance else { return }
+        do {
+            for _ in 0..<32 {
+                guard let paths = try nativeInstance.nextRequest() else { break }
+                if paths.isEmpty {
+                    _ = applicationShouldHandleReopen(NSApp,
+                        hasVisibleWindows: NSApp.windows.contains(where: \.isVisible))
+                } else {
+                    pendingOpenImages.append(contentsOf: paths)
+                    drainOpenImages()
+                }
+            }
+        } catch {
+            presentHostError(title: "Couldn’t Open Captures", message: error.localizedDescription)
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !options.live }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Drain the editor's dedicated worker before capture teardown. A failed
@@ -561,6 +590,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             return .terminateCancel
         }
         terminating = true
+        nativeInstance?.stopAccepting()
         performTermination(flushPreferences: { [weak self] in self?.preferencesController?.flush() },
             cancelCapture: { [weak self] in self?.liveController?.finishCapture(restoreWindow: false) },
             closeShortcuts: { [weak self] in self?.closeCaptureShortcuts() },
@@ -571,6 +601,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     try? FileManager.default.removeItem(at: directory)
                 }
             })
+        if let instanceWakeObserver {
+            NotificationCenter.default.removeObserver(instanceWakeObserver)
+            self.instanceWakeObserver = nil
+        }
+        nativeInstance?.close()
+        nativeInstance = nil
         return .terminateNow
     }
 

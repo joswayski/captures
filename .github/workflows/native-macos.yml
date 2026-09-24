@@ -51,6 +51,8 @@ jobs:
       - run: bash apps/native/macos/build.sh
         env:
           CAPTURES_TEST_ARTIFACTS: ${{ runner.temp }}/native-pixels
+      - name: Forward native media between AppKit processes
+        run: python3 apps/native/instance_smoke.py --binary apps/native/macos/.build/release/CapturesNative --output "$RUNNER_TEMP/native-preferences/instance"
       - name: Render native preferences
         run: |
           mkdir -p "$RUNNER_TEMP/native-preferences"

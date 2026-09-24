@@ -68,13 +68,23 @@ struct Options {
                 return
             }
             let options = try Options(Array(CommandLine.arguments.dropFirst()))
+            var nativeInstance: NativeInstance?
+            if options.live {
+                let result = try NativeInstance.start(historyRoot: options.historyRoot, paths: options.openMedia)
+                guard result.primary else { return }
+                nativeInstance = result.owner
+            }
+            defer { nativeInstance?.close() }
             let application = NSApplication.shared
             application.setActivationPolicy(options.scene == "idle" ? .accessory : .regular)
-            let delegate = Workbench(options: options)
+            let delegate = Workbench(options: options, nativeInstance: nativeInstance)
             application.delegate = delegate
             withExtendedLifetime(delegate) { application.run() }
-        } catch {
+        } catch Options.Usage.invalid {
             FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH] [--open-media PATH|--open-image PATH]...] [--scene preferences|history|hud|preview|region|window|idle] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--settings-file PATH] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS]\n".utf8))
+            exit(1)
+        } catch {
+            FileHandle.standardError.write(Data("Captures could not start: \(error.localizedDescription)\n".utf8))
             exit(1)
         }
     }

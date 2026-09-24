@@ -1,6 +1,7 @@
 //! Reports whether the current interactive desktop session is safe to capture.
 
 mod capture_escape;
+pub mod instance;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]

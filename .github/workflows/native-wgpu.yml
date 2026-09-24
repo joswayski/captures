@@ -61,6 +61,9 @@ jobs:
       - name: Exercise native Windows windows
         if: runner.os == 'Windows'
         run: python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke
+      - name: Forward native media between Windows processes
+        if: runner.os == 'Windows'
+        run: python apps/native/instance_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke/instance
       - uses: actions/upload-artifact@v4
         if: always() && runner.os == 'Windows'
         with:

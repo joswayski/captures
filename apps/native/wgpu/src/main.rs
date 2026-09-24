@@ -141,6 +141,33 @@ fn main() -> eframe::Result {
         eprintln!("{error}\n{}", options::USAGE);
         std::process::exit(2);
     });
+    // Election precedes the renderer, capture workers, tray and global keys.
+    // Fixtures never acquire ownership of a live development profile.
+    let instance = if options.live {
+        use captures_app::instance::{Instance, Launch, OpenRequest};
+        let result = OpenRequest::from_paths(options.open_media.clone()).and_then(|request| {
+            Instance::start(
+                &options
+                    .history_root
+                    .clone()
+                    .unwrap_or_else(captures_app::default_history_root),
+                request,
+            )
+        });
+        match result {
+            Ok(Launch::Primary(instance)) => Some(instance),
+            Ok(Launch::Forwarded) => {
+                emit("forwarded", json!({"paths": options.open_media.len()}));
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Captures could not start: {error}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
     let floating = options.floating;
     let idle = options.scene == Scene::Idle;
     let size = if floating && options.scene == Scene::Hud {
@@ -196,6 +223,7 @@ fn main() -> eframe::Result {
                 workbench_input,
                 workbench_shortcuts,
                 workbench_paste_input,
+                instance,
             )))
         }),
         &event_loop,
