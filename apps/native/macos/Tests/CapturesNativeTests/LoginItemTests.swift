@@ -86,7 +86,11 @@ final class LoginItemTests: XCTestCase {
                                              transport: transport)
         let failed = expectation(description: "failure")
         service.setEnabled(true) { result in
-            XCTAssertThrowsError(try result.get())
+            if case .failure(let error) = result {
+                XCTAssertEqual(error.localizedDescription, "profile collision")
+            } else {
+                XCTFail("Registration failure must reach the control")
+            }
             failed.fulfill()
         }
         wait(for: [failed], timeout: 1)
@@ -177,7 +181,7 @@ final class LoginItemTests: XCTestCase {
 
     private func find(_ view: NSView, identifier: String) -> NSView? {
         if view.identifier?.rawValue == identifier { return view }
-        return view.subviews.lazy.compactMap { find($0, identifier: identifier) }.first
+        return view.subviews.lazy.compactMap { self.find($0, identifier: identifier) }.first
     }
 
     private func labels(_ view: NSView) -> [String] {
