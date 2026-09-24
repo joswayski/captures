@@ -3364,7 +3364,7 @@ impl Live {
                 self.status = "Capture permission granted".into();
                 self.send(Request::Displays);
             }
-            Response::HistoryRoot { .. } => {}
+            Response::HistoryRoot { .. } | Response::OpenedImage { .. } => {}
         }
     }
 
