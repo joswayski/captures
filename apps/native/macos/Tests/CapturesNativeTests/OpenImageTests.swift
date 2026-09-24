@@ -174,8 +174,9 @@ final class OpenImageTests: XCTestCase {
             let editor = try XCTUnwrap(NSApp.windows.first { $0.title == "Recording editor" && $0.isVisible })
             defer { editor.orderOut(nil) }
             let controls = try XCTUnwrap(editor.contentView)
-            XCTAssertTrue(descendants(controls).compactMap { $0 as? NSImageView }.contains { $0.image != nil },
-                          "the first source-relative frame must decode in the recording editor")
+            XCTAssertNotNil(descendants(controls).compactMap { $0 as? NSImageView }
+                .first { $0.accessibilityLabel() == "Decoded recording frame" }?.image,
+                "the first source-relative frame must decode in the recording editor")
             let artifacts = try XCTUnwrap(AppBridge().request([
                 "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
             let entry = try XCTUnwrap(artifacts.first?["entry"] as? [String: Any])
@@ -314,6 +315,8 @@ final class OpenImageTests: XCTestCase {
         XCTAssertEqual(requests.compactMap { $0["path"] as? String },
                        ["/invalid.tiff", png.path, png.path])
         XCTAssertTrue(requests.allSatisfy { ($0["root"] as? String) == folder.path })
+        XCTAssertTrue(requests.allSatisfy { $0["ffmpeg"] == nil && $0["ffprobe"] == nil },
+                      "still-image opens must not depend on recording tools")
         XCTAssertEqual(requests[0]["open_artifact_ids"] as? [String], [])
         XCTAssertEqual(requests[1]["open_artifact_ids"] as? [String], [])
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
