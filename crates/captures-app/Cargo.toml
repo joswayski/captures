@@ -28,5 +28,8 @@ tempfile.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
 [lints]
 workspace = true

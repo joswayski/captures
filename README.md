@@ -383,6 +383,13 @@ a private recovery copy and a separate permanent save. Save new copy remains ava
 Live development hosts now forward subsequent launches to the process using the
 same History directory, preserving file order and sender-relative paths; a launch
 without files restores the native workspace/Preferences or recording controls.
+Native Preferences → About offers explicit **Launch native Captures at login**
+for macOS, Windows and X11 development profiles. It starts that profile hidden;
+relaunch or the tray/menu bar restores it. This uses a separate user-owned login
+entry, not Tauri's setting or registration. Disable it before moving/removing the
+development binary. Wayland hidden startup and physical sign-in acceptance remain
+open; [development setup/removal](DEVELOPMENT.md#native-development-login-items)
+documents the platform entries and conflict recovery.
 Fixture launches remain independent. Optional unsigned development packages provide
 Open With metadata for these six formats on macOS, Windows and Linux, under a separate
 **Captures Native Development** identity. Staging does not install them or change

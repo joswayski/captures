@@ -354,6 +354,18 @@ func liveReopenAction(hasVisibleWindows: Bool) -> LiveReopenAction {
     hasVisibleWindows ? .focusExisting : .showPreferences
 }
 
+struct StartupDecision: Equatable {
+    let scene: String
+    let showsWindow: Bool
+    let activatesApplication: Bool
+}
+
+func startupDecision(options: Options) -> StartupDecision {
+    let hiddenLive = options.live && options.scene == "idle"
+    return StartupDecision(scene: options.live ? "live" : options.scene,
+        showsWindow: options.scene != "idle", activatesApplication: !hiddenLive)
+}
+
 func captureShortcutSignature(_ settings: [String: Any]) -> [String] {
     let recording = settings["recording"] as? [String: Any] ?? [:]
     return [settings.string("new_capture_shortcut"), settings.string("region_shortcut"), settings.string("window_shortcut"),
@@ -456,7 +468,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         self.options = options
         self.nativeInstance = nativeInstance
         pendingOpenImages = options.openMedia
-        scene = options.live ? "live" : options.scene
+        scene = startupDecision(options: options).scene
         appearance = options.appearance
         theme = options.theme
         historyCount = options.historyCount
@@ -517,8 +529,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             installStatusItem()
             installCaptureShortcuts()
         }
-        if scene != "idle" { window.makeKeyAndOrderFront(nil) }
-        NSApp.activate(ignoringOtherApps: true)
+        let startup = startupDecision(options: options)
+        if startup.showsWindow { window.makeKeyAndOrderFront(nil) }
+        if startup.activatesApplication { NSApp.activate(ignoringOtherApps: true) }
         Metrics.write(["event": "ready", "scene": scene, "window": window.windowNumber,
             "scale": window.backingScaleFactor, "appearance": appearance, "theme": theme,
             "historyCount": historyCount, "referenceChips": options.referenceChips])
@@ -689,6 +702,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 }, showHistory: { [weak self] in self?.showHistory() },
                    liveCaptureAvailable: options.live,
                    showFeedback: { [weak self] in self?.showFeedback() },
+                   loginItemService: options.live && !options.exercise
+                    ? NativeLoginItemService(historyRoot: options.historyRoot,
+                                             settingsFile: options.settingsFile) : nil,
                    initialAppearance: options.appearanceOverride ? options.appearance : nil,
                    initialTheme: options.themeOverride ? options.theme : nil)
             } catch {

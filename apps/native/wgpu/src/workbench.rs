@@ -141,7 +141,8 @@ impl Workbench {
                 }
             }),
         );
-        let temporary_settings = (options.settings_file.is_none()
+        let temporary_settings = (!options.live
+            && options.settings_file.is_none()
             && (options.exercise
                 || options.screenshot.is_some()
                 || options.scene != Scene::Preferences))
@@ -152,7 +153,7 @@ impl Workbench {
                 .map(|dir| dir.path().join("settings.json"))
                 .unwrap_or_else(captures_settings::default_native_settings_path)
         });
-        let preferences_state = Preferences::new_with_shortcut_input(
+        let mut preferences_state = Preferences::new_with_shortcut_input(
             cc.egui_ctx.clone(),
             settings_path,
             options
@@ -161,6 +162,14 @@ impl Workbench {
             options.theme_override.then(|| options.theme.clone()),
             shortcut_input,
         );
+        if options.live && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            preferences_state.connect_login_item(
+                options
+                    .history_root
+                    .clone()
+                    .unwrap_or_else(captures_app::default_history_root),
+            );
+        }
         let live = options
             .live
             .then(|| Live::new(cc.egui_ctx.clone(), options.history_root.clone()));
@@ -193,6 +202,7 @@ impl Workbench {
         } else {
             crate::capture_controls::CaptureControls::fixture()
         };
+        let root_hidden = options.live && options.scene == Scene::Idle;
         let this = Self {
             options,
             variants: tokens::load(),
@@ -230,7 +240,7 @@ impl Workbench {
             live,
             instance,
             live_preferences: false,
-            root_hidden: false,
+            root_hidden,
             root_was_focused: false,
             tray,
             tray_error,
@@ -1051,12 +1061,18 @@ impl eframe::App for Workbench {
         if self.started.elapsed() >= Duration::from_secs(2) {
             self.settled_frames += 1;
         }
-        if self.options.scene == Scene::Idle {
+        if self.options.scene == Scene::Idle && (!self.options.live || self.frames == 0) {
             // eframe 0.36.2 auto-shows the root after its first paint, even if
             // the builder requested hidden. Viewport commands run after that
             // show, so hide once here; deadlines continue through logic().
             if self.frames == 0 {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                if self.options.live && self.tray.is_none() {
+                    // A login launch must not become unreachable when no tray
+                    // host is available; expose the existing recovery error.
+                    self.show_root(&ctx);
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                }
             }
             self.frames += 1;
             return;

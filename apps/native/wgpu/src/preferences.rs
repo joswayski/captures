@@ -112,12 +112,14 @@ impl ShortcutRecorder {
 enum Command {
     Save(u64, Box<AppSettings>),
     Load,
+    LoginItem(PathBuf, Option<bool>),
     Flush,
 }
 enum Message {
     Loaded(Result<AppSettings, String>),
     Saved(u64, Result<AppSettings, String>),
     Folder(Option<PathBuf>),
+    LoginItem(Result<bool, String>),
 }
 
 /// One owner serializes disk operations. Closing the window flushes the newest
@@ -136,10 +138,16 @@ impl SettingsIo {
                 ));
                 wake();
             };
+            let login_item = |root: PathBuf, enabled| {
+                let result = captures_app::login_item::configure(&root, &path, enabled);
+                let _ = out.send(Message::LoginItem(result));
+                wake();
+            };
             send_load();
             while let Ok(command) = rx.recv() {
                 match command {
                     Command::Load => send_load(),
+                    Command::LoginItem(root, enabled) => login_item(root, enabled),
                     Command::Flush => break,
                     Command::Save(mut revision, mut settings) => {
                         let mut finish = false;
@@ -154,6 +162,7 @@ impl SettingsIo {
                                     break;
                                 }
                                 Ok(Command::Load) => {}
+                                Ok(Command::LoginItem(root, enabled)) => login_item(root, enabled),
                                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                             }
                         }
@@ -213,6 +222,10 @@ pub struct Preferences {
     shortcut_input: shortcut_input::Bridge,
     suppress_shortcut_commands: bool,
     feedback: crate::feedback::Feedback,
+    login_root: Option<PathBuf>,
+    login_enabled: Option<bool>,
+    login_pending: bool,
+    login_error: Option<String>,
 }
 
 impl Preferences {
@@ -241,7 +254,9 @@ impl Preferences {
     ) -> Self {
         shortcut_input.attach(ctx.clone());
         let (out, rx) = mpsc::channel();
-        let io = SettingsIo::start(path, out.clone(), move || ctx.request_repaint());
+        let io = SettingsIo::start(path, out.clone(), move || {
+            ctx.request_repaint_of(egui::ViewportId::ROOT)
+        });
         Self {
             value: Value::Null,
             load_error: None,
@@ -269,6 +284,34 @@ impl Preferences {
             shortcut_input,
             suppress_shortcut_commands: false,
             feedback: crate::feedback::Feedback::default(),
+            login_root: None,
+            login_enabled: None,
+            login_pending: false,
+            login_error: None,
+        }
+    }
+
+    pub fn connect_login_item(&mut self, history_root: PathBuf) {
+        self.login_root = Some(history_root);
+        self.request_login_item(None);
+    }
+
+    fn request_login_item(&mut self, enabled: Option<bool>) {
+        let Some(root) = &self.login_root else { return };
+        if self.login_pending {
+            return;
+        }
+        self.login_pending = true;
+        self.login_error = None;
+        if self
+            .io
+            .tx
+            .send(Command::LoginItem(root.clone(), enabled))
+            .is_err()
+        {
+            self.login_pending = false;
+            self.login_error =
+                Some("Login item service is unavailable. Reopen Preferences to retry.".into());
         }
     }
 
@@ -354,6 +397,16 @@ impl Preferences {
                     self.folder_open = false;
                     if let Some(path) = path {
                         self.set(&["output_directory"], json!(path.to_string_lossy()));
+                    }
+                }
+                Message::LoginItem(result) => {
+                    self.login_pending = false;
+                    match result {
+                        Ok(enabled) => {
+                            self.login_enabled = Some(enabled);
+                            self.login_error = None;
+                        }
+                        Err(error) => self.login_error = Some(error),
                     }
                 }
             }
@@ -1107,7 +1160,20 @@ impl Preferences {
                 if ui.button("Open").clicked() { this.feedback.open(ui.ctx()); }
             });
             ui.separator();
-            this.toggle(ui,&["launch_at_login"],"Launch Captures when I sign in","Login-item integration is not connected yet.",false);
+            this.row(ui,"Launch native Captures at login","Start this development profile hidden when you sign in.",|this,ui| {
+                let label = if this.login_pending { "Checking…" } else if this.login_error.is_some() { "Retry" }
+                    else if this.login_enabled == Some(true) { "On" } else { "Off" };
+                let enabled = this.login_root.is_some() && !this.login_pending;
+                let response = ui.add_enabled(enabled,
+                    egui::Button::new(label).selected(this.login_enabled == Some(true)));
+                response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox,
+                    enabled, this.login_enabled == Some(true), "Launch native Captures at login"));
+                if response.clicked() {
+                    this.request_login_item(if this.login_error.is_some() { None } else { Some(this.login_enabled != Some(true)) });
+                }
+            });
+            if let Some(error) = &this.login_error { ui.colored_label(t.color("danger-text"), error); }
+            if this.login_root.is_none() { ui.small("Available in a live Windows or X11 development profile. Wayland hidden startup is not supported."); }
         });
     }
 }
@@ -1191,6 +1257,53 @@ fn set(v: &mut Value, path: &[&str], value: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_item_is_explicit_pending_guarded_and_os_authoritative() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), dir.path().join("settings.json"), None, None);
+        prefs.io.flush();
+        prefs.receive(&ctx);
+        let (tx, rx) = mpsc::channel();
+        prefs.io.tx = tx;
+        prefs.request_login_item(Some(true));
+        assert!(
+            rx.try_recv().is_err(),
+            "fixtures have no live login context"
+        );
+        prefs.connect_login_item(dir.path().to_owned());
+        assert!(matches!(rx.try_recv(), Ok(Command::LoginItem(root, None)) if root == dir.path()));
+        prefs.request_login_item(Some(true));
+        assert!(rx.try_recv().is_err(), "query is still pending");
+        prefs.out.send(Message::LoginItem(Ok(true))).unwrap();
+        prefs.receive(&ctx);
+        assert_eq!(prefs.login_enabled, Some(true));
+        prefs.request_login_item(Some(false));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Command::LoginItem(_, Some(false)))
+        ));
+        assert_eq!(
+            prefs.login_enabled,
+            Some(true),
+            "no optimistic registration state"
+        );
+        prefs
+            .out
+            .send(Message::LoginItem(Err("collision".into())))
+            .unwrap();
+        prefs.receive(&ctx);
+        assert_eq!(prefs.login_enabled, Some(true));
+        assert_eq!(prefs.login_error.as_deref(), Some("collision"));
+        assert!(!prefs.login_pending);
+        prefs.request_login_item(None);
+        assert!(matches!(rx.try_recv(), Ok(Command::LoginItem(_, None))));
+        prefs.out.send(Message::LoginItem(Ok(false))).unwrap();
+        prefs.receive(&ctx);
+        assert_eq!(prefs.login_enabled, Some(false));
+        assert!(prefs.login_error.is_none());
+    }
 
     fn render_shortcut_button(ctx: &egui::Context, show_error: bool, focus: bool) -> egui::Id {
         let mut button_id = None;

@@ -133,4 +133,16 @@ final class AppBridgeTests: XCTestCase {
         XCTAssertThrowsError(try Options(["--open-media", "/tmp/clip.mp4"]))
         XCTAssertThrowsError(try Options(["--live", "--open-media"]))
     }
+
+    func testIdleLiveStartupInitializesWorkspaceWithoutShowingOrActivating() throws {
+        let idle = startupDecision(options: try Options(["--live", "--scene", "idle"]))
+        XCTAssertEqual(idle, StartupDecision(scene: "live", showsWindow: false,
+                                              activatesApplication: false))
+        let ordinary = startupDecision(options: try Options(["--scene", "idle"]))
+        XCTAssertEqual(ordinary, StartupDecision(scene: "idle", showsWindow: false,
+                                                  activatesApplication: true))
+        let live = startupDecision(options: try Options(["--live"]))
+        XCTAssertEqual(live, StartupDecision(scene: "live", showsWindow: true,
+                                              activatesApplication: true))
+    }
 }

@@ -157,6 +157,41 @@ per-file errors remain in the resident host. Do not automatically retry a failed
 acknowledgement, whose delivery may be unknown. Accepted quit stops the listener
 before draining host workers and releases the election lock last.
 
+### Native development login items
+
+In a live native profile, Preferences → About → **Launch native Captures at login**
+queries and explicitly changes a per-user, per-History-root entry. A saved
+`launch_at_login` value does not enable it; fixture launches never register.
+The entry runs the current executable with `--live --scene idle`, the canonical
+`--history-root` and an absolute `--settings-file`. It starts hidden and preserves
+tray/menu-bar and relaunch recovery. On X11, a missing tray host exposes the root
+instead of leaving an unreachable process. Wayland hidden startup is unsupported
+and the toggle is unavailable there. Actual desktop sign-in remains unverified.
+
+The profile ID is the first 24 hexadecimal characters of the canonical History
+path's SHA-256. These development entries are separate from Tauri:
+
+- macOS: `~/Library/LaunchAgents/dev.captures.native.ID.plist` (`RunAtLoad`).
+- Windows: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value
+  `CapturesNative-ID`.
+- Linux/X11: `$XDG_CONFIG_HOME/autostart/captures-native-ID.desktop` (or
+  `~/.config/autostart/…` when XDG_CONFIG_HOME is not absolute/set).
+
+Turn the control Off **before moving or deleting the binary**. Query and removal
+require the exact owned contents; a moved executable, changed settings path,
+symlink or conflicting entry reports an error and leaves the existing entry alone.
+Inspect and remove only the named development entry manually if its old binary is
+gone, then select Retry and explicitly enable again. Do not remove Tauri entries.
+No admin/system-wide registration, login-agent reload, default handler change or
+installed-data migration occurs. On Linux, executable paths containing `%`, `=`,
+newlines or NUL are rejected because GIO validates them before Exec expansion;
+profile/settings arguments may contain spaces, percent and Unicode.
+
+Run `/usr/bin/python3 apps/native/x11_preview_smoke.py --lifecycle --login-item-only
+--binary PATH --output NEW_DIRECTORY` for disposable XDG registration, real GIO
+launch, hidden startup/focus, relaunch and disable in light/dark appearances.
+This is private-X11/software-rendering evidence, not physical logon acceptance.
+
 Run `python3 apps/native/instance_smoke.py --binary PATH --output NEW_DIRECTORY`
 in a graphical session for real-process forwarding, sender-relative Unicode paths,
 unchanged sources and normal-quit restart. Mac/Windows native CI runs this check;

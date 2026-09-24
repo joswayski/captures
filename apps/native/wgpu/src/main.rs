@@ -195,6 +195,7 @@ fn main() -> eframe::Result {
             .with_inner_size(size)
             .with_min_inner_size(minimum_size)
             .with_visible(!idle)
+            .with_active(!idle)
             // eframe's wgpu painter takes its alpha capability from the root,
             // including for the transparent countdown child viewport.
             .with_transparent(floating || options.live)

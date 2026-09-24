@@ -34,9 +34,12 @@ def main():
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
     parser.add_argument("--lifecycle", action="store_true", help="Exercise a real Xfce SNI tray and background shortcuts")
     parser.add_argument("--shortcut-editing", action="store_true", help="Also exercise live Preferences recording and persistence")
+    parser.add_argument("--login-item-only", action="store_true", help="Exercise explicit autostart and hidden launch recovery")
     args = parser.parse_args()
     if args.shortcut_editing and not args.lifecycle:
         parser.error("--shortcut-editing requires --lifecycle for real global registrations")
+    if args.login_item_only and not args.lifecycle:
+        parser.error("--login-item-only requires --lifecycle for a real tray and disposable configuration")
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -207,6 +210,106 @@ def main():
 </channel>''')
             panel = spawn("sni-panel", ["xfce4-panel", "--disable-wm-check", "--sm-client-disable"])
             wait(lambda: bus.name_has_owner("org.kde.StatusNotifierWatcher"), "real SNI watcher")
+
+        if args.login_item_only:
+            autostart = output / "config/autostart"
+            for appearance in ("dark", "light"):
+                history = output / f"login {appearance} % profile"
+                settings = output / f"login {appearance} % settings.json"
+                settings.write_text(json.dumps({"settings_schema_version": 5,
+                    "appearance": appearance, "theme": "mustard", "launch_at_login": True,
+                    "output_directory": str(output / "exports"),
+                    "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+                    "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10"}))
+                common = [str(binary), "--live", "--history-root", str(history),
+                          "--settings-file", str(settings)]
+                app = spawn(f"login-{appearance}", common)
+                root = wait(lambda: windows("Captures"), "login Preferences workspace")[0]
+                time.sleep(1)
+                click(root, 196, 18)
+                click(root, 75, 265)
+                time.sleep(1)
+                shot(root, f"login-{appearance}-off")
+                assert not list(autostart.glob("*.desktop")), "saved setting must not register a login item"
+                click(root, 829, 576)
+                entry = wait(lambda: next(autostart.glob("*.desktop"), None), "explicit login registration")
+                owned = entry.read_bytes()
+                shot(root, f"login-{appearance}-on")
+                # Exit normally, not close-to-background, then launch the real
+                # Desktop Entry through GIO to test its escaping and exact argv.
+                run("xdotool", "key", "ctrl+q")
+                assert app.wait(timeout=10) == 0
+                other_app = spawn(f"login-focus-{appearance}", ["xmessage", "-title", "Login focus fixture",
+                    "-geometry", "220x70+10+10", "Keep this application focused"])
+                other = wait(lambda: windows("Login focus fixture"), "login focus fixture")[0]
+                run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                # GIO returns immediately; its launcher PID is not the app PID.
+                # Use files rather than a stdout pipe inherited by the app.
+                launcher = spawn(f"gio-login-{appearance}", ["gio", "launch", str(entry)])
+                assert launcher.wait(timeout=10) == 0
+                hidden = wait(lambda: subprocess.run(["xdotool", "search", "--name", "^Captures$"],
+                    env=env, capture_output=True, text=True).stdout.split(), "hidden login window")[0]
+                pid = int(run("xdotool", "getwindowpid", hidden))
+                try:
+                    time.sleep(1)
+                    assert not windows("Captures"), "login launch showed the root"
+                    assert run("xdotool", "getwindowfocus").decode().strip() == other, "login launch stole focus"
+                    assert str(history).encode() in Path(f"/proc/{pid}/cmdline").read_bytes()
+                    assert str(settings).encode() in Path(f"/proc/{pid}/cmdline").read_bytes()
+                    result = subprocess.run(common, env=env, capture_output=True, timeout=10)
+                    assert result.returncode == 0, result.stderr
+                    root = wait(lambda: windows("Captures"), "relaunch restores live Preferences")[0]
+                    click(root, 75, 265)
+                    time.sleep(1)
+                    shot(root, f"login-{appearance}-restored")
+                    click(root, 829, 576)
+                    wait(lambda: not entry.exists(), "explicit disable after hidden launch")
+                    run("xdotool", "key", "ctrl+q")
+                    wait(lambda: not Path(f"/proc/{pid}").exists(), "normal exit after login launch")
+                finally:
+                    # Only the PID obtained from our private X server/profile.
+                    if Path(f"/proc/{pid}").exists():
+                        os.kill(pid, 15)
+                other_app.terminate()
+                other_app.wait(timeout=5)
+                assert owned.startswith(b"[Desktop Entry]\n")
+                # A changed/moved binary or foreign registration must stay
+                # untouched and surface a recoverable error, not a guessed Off.
+                conflict = b"[Desktop Entry]\nType=Application\nName=Another login item\n"
+                entry.write_bytes(conflict)
+                conflict_app = spawn(f"login-conflict-{appearance}", common)
+                root = wait(lambda: windows("Captures"), "conflicting login entry Preferences")[0]
+                time.sleep(1)
+                click(root, 196, 18)
+                click(root, 75, 265)
+                time.sleep(1)
+                shot(root, f"login-{appearance}-conflict")
+                assert entry.read_bytes() == conflict
+                run("xdotool", "key", "ctrl+q")
+                assert conflict_app.wait(timeout=10) == 0
+                assert entry.read_bytes() == conflict
+                entry.unlink()  # Remove only our deliberately foreign fixture.
+
+            panel.terminate()
+            panel.wait(timeout=5)
+            wait(lambda: not bus.name_has_owner("org.kde.StatusNotifierWatcher"), "tray host removed")
+            recovery = spawn("login-without-tray", common + ["--scene", "idle"])
+            root = wait(lambda: windows("Captures"), "missing tray exposes login recovery window")[0]
+            time.sleep(1)
+            click(root, 196, 18)
+            click(root, 75, 265)
+            time.sleep(1)
+            shot(root, "login-without-tray")
+            run("xdotool", "key", "ctrl+q")
+            assert recovery.wait(timeout=10) == 0
+            (output / "result.json").write_text(json.dumps({"passed": True,
+                "checks": ["saved setting does not register", "explicit enable/disable",
+                    "GIO argv preserves profile spaces and percent", "hidden nonactivating startup",
+                    "single-instance relaunch restores usable Preferences", "light/dark presentation",
+                    "conflicting entry preserved", "missing tray exposes recovery workspace"],
+                "scope": "Private X11/software GL; not physical sign-in or Wayland acceptance."}, indent=2))
+            print("PASS native login items: explicit registration, hidden startup and relaunch")
+            return
 
         cases = [(placement, True, False) for placement in ("bottom_left", "bottom_right", "top_left", "top_right")]
         cases += [("bottom_left", True, True), ("bottom_left", False, False)]

@@ -227,7 +227,7 @@ impl Options {
         if options.live
             && (options.exercise
                 || options.floating
-                || options.scene != Scene::Preferences
+                || !matches!(options.scene, Scene::Preferences | Scene::Idle)
                 || options.history_count != 1000
                 || options.reduced_motion)
         {
@@ -326,6 +326,11 @@ mod tests {
 
     #[test]
     fn validates_limits_and_incompatible_modes() {
+        assert_eq!(
+            parse(&["--live", "--scene", "idle"]).unwrap().scene,
+            Scene::Idle
+        );
+        assert!(parse(&["--live", "--scene", "idle", "--exercise"]).is_err());
         assert_eq!(parse(&["--history-count", "0"]).unwrap().history_count, 0);
         assert_eq!(
             parse(&["--history-count", "10000"]).unwrap().history_count,

@@ -11,6 +11,7 @@ pub mod editor_render;
 pub mod editor_session;
 pub mod editor_text;
 pub mod editor_viewport;
+pub mod login_item;
 pub mod preview;
 pub mod recording_editor;
 pub mod recording_timeline;

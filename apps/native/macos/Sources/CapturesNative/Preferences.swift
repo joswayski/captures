@@ -1,5 +1,52 @@
 import AppKit
 
+protocol LoginItemServicing {
+    func setEnabled(_ enabled: Bool?, completion: @escaping (Result<Bool, Error>) -> Void)
+}
+
+final class NativeLoginItemService: LoginItemServicing {
+    private let transport: SettingsTransport
+    private let appTransport: AppTransport
+    private let historyRoot: String?
+    private let settingsFile: String?
+    private let queue = DispatchQueue(label: "es.captures.native.login-item")
+
+    init(historyRoot: String?, settingsFile: String?, transport: SettingsTransport = SettingsBridge(),
+         appTransport: AppTransport = AppBridge()) {
+        self.historyRoot = historyRoot; self.settingsFile = settingsFile; self.transport = transport
+        self.appTransport = appTransport
+    }
+
+    func setEnabled(_ enabled: Bool?, completion: @escaping (Result<Bool, Error>) -> Void) {
+        queue.async {
+            let result = Result { () throws -> Bool in
+                let history: String
+                if let root = self.historyRoot { history = root }
+                else {
+                    guard let root = try self.appTransport.request(["operation": "default_history_root"])["path"] as? String,
+                          !root.isEmpty else { throw AppBridgeError.invalidResponse }
+                    history = root
+                }
+                let settings = try self.settingsFile ?? self.path(operation: "default_path")
+                var request: [String: Any] = ["operation": "login_item", "history_root": history,
+                                               "settings_file": settings]
+                if let enabled { request["enabled"] = enabled }
+                guard let actual = try self.transport.request(request)["enabled"] as? Bool else {
+                    throw SettingsStoreError.invalidResponse
+                }
+                return actual
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    private func path(operation: String) throws -> String {
+        guard let path = try transport.request(["operation": operation])["path"] as? String,
+              !path.isEmpty else { throw SettingsStoreError.invalidResponse }
+        return path
+    }
+}
+
 final class ClosurePopUpButton: NSPopUpButton {
     var tokens: Tokens!
     var change: ((Int) -> Void)?
@@ -155,6 +202,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private let showHistory: () -> Void
     private let showFeedback: () -> Void
     private let liveCaptureAvailable: Bool
+    private let loginItemService: LoginItemServicing?
     private var settings: [String: Any] = [:]
     private var scroll = NSScrollView()
     private var document = Surface()
@@ -179,6 +227,10 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
                             ("updates", "Updates"), ("about", "About")]
     private var sectionViews: [String: NSView] = [:]
     private var searchable: [(NSView, String)] = []
+    private var loginItemEnabled: Bool?
+    private var loginItemPending = false
+    private var loginItemError: String?
+    private var loginItemGeneration = 0
 
     init(root: Surface, store: SettingsStore, tokens: @escaping () -> Tokens,
          appearanceChanged: @escaping (String, String, [String: Any]) -> Void,
@@ -191,6 +243,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
          shortcutDisplay: @escaping ShortcutDisplay = { try NativeCaptureShortcuts.display($0) },
          showHistory: @escaping () -> Void, liveCaptureAvailable: Bool = false,
          showFeedback: @escaping () -> Void = {},
+         loginItemService: LoginItemServicing? = nil,
          initialAppearance: String? = nil, initialTheme: String? = nil) {
         self.root = root; self.store = store; tokensProvider = tokens
         self.appearanceChanged = appearanceChanged; self.showHistory = showHistory
@@ -199,6 +252,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         self.settingsPersisted = settingsPersisted
         self.shortcutPolicy = shortcutPolicy; self.shortcutDisplay = shortcutDisplay
         self.liveCaptureAvailable = liveCaptureAvailable
+        self.loginItemService = loginItemService
         super.init()
         buildShell()
         store.load { [weak self] result in
@@ -213,6 +267,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
                 self.settingsPersisted(self.settings)
                 self.restyle()
                 self.setStatus("", kind: "idle")
+                self.queryLoginItem()
             case .failure(let error):
                 self.setStatus("Couldn’t load preferences: \(error.localizedDescription)", kind: "error")
             }
@@ -581,10 +636,50 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         return y + card.frame.height + 22
     }
     private func aboutCard(_ y: CGFloat) -> CGFloat {
-        let card = card("about", title: "About", description: "Captures native development fixture.", y: y, height: 150)
+        let hasLoginItem = loginItemService != nil
+        let card = card("about", title: "About", description: "Captures native development fixture.", y: y,
+                        height: hasLoginItem ? 220 : 150)
         rowTitle("Send feedback", detail: "No captures or diagnostics are attached.", y: 88, parent: card)
         _ = actionButton("Open", x: 558, y: 95, width: 120, parent: card) { [weak self] in self?.showFeedback() }
+        if hasLoginItem {
+            let detail = loginItemError.map { "Couldn’t update the login item: \($0) Select Retry to try again." }
+                ?? "Start this native development profile hidden when you sign in."
+            rowTitle("Launch native Captures at login", detail: detail, y: 146, parent: card)
+            let title = loginItemPending ? "Checking…" : loginItemError != nil ? "Retry"
+                : loginItemEnabled == true ? "On" : "Off"
+            let button = actionButton(title, x: 558, y: 153, width: 120, parent: card) { [weak self] in
+                self?.toggleLoginItem()
+            }
+            button.identifier = NSUserInterfaceItemIdentifier("login-item")
+            button.setAccessibilityRole(.checkBox); button.setAccessibilityLabel("Launch native Captures at login")
+            button.setAccessibilityValue(loginItemEnabled == true)
+            button.selected = loginItemEnabled == true
+            button.isEnabled = !loginItemPending
+        }
         return y + card.frame.height + 22
+    }
+
+    private func queryLoginItem() { requestLoginItem(nil) }
+
+    private func toggleLoginItem() {
+        guard !loginItemPending else { return }
+        requestLoginItem(loginItemError != nil ? nil : !(loginItemEnabled ?? false))
+    }
+
+    private func requestLoginItem(_ enabled: Bool?) {
+        guard let loginItemService else { return }
+        loginItemGeneration += 1
+        let generation = loginItemGeneration
+        loginItemPending = true; loginItemError = nil; rebuildCards()
+        loginItemService.setEnabled(enabled) { [weak self] result in
+            guard let self, generation == self.loginItemGeneration else { return }
+            self.loginItemPending = false
+            switch result {
+            case .success(let actual): self.loginItemEnabled = actual; self.loginItemError = nil
+            case .failure(let error): self.loginItemError = error.localizedDescription
+            }
+            self.rebuildCards()
+        }
     }
 
     private func rowTitle(_ title: String, detail: String, y: CGFloat, parent: NSView) {
