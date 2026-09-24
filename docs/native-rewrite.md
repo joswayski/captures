@@ -1276,6 +1276,16 @@ are described below. Physical input/accessibility acceptance stays open.
 The wgpu Import image action now picks one PNG/JPEG/WebP/TIFF file independently
 of the session worker. The worker bounds encoded input and decoded dimensions,
 normalizes EXIF orientation and supplies owned RGBA to the shared import command.
+The shared app core also provides an additive `open_image` request for external
+PNG/JPEG/WebP sources as separate History-backed screenshot editor artifacts, not
+layers in an existing document. It reuses that bounded, color-managed decoder but
+rejects TIFF on this path. An already-open canonical source focuses its editor;
+a closed source reloads under the same History ID only if no saved editor draft
+exists. With a draft, the user must restore or discard it from History first so
+an interrupted reload cannot hide the only copy. Source bytes stay untouched and
+the original source path remains available for explicit Replace original. This is
+a shared backend prerequisite, not a connected native file-open UI or OS file
+association; GIF/video and broader platform image formats remain separate work.
 RGB/grayscale ICC profiles convert to sRGB before publication, preserving straight
 alpha; untagged files assume sRGB. Unsupported or malformed ICC profiles, CMYK
 profiles, and PNG gamma/chromaticity-only or CICP descriptions fail recoverably

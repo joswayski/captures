@@ -327,6 +327,16 @@ mod tests {
             (Some(r#"{"operation":"default_history_root"}"#), true),
             (Some(r#"{"operation":"unknown"}"#), false),
             (Some(r#"{"operation":"capture_display"}"#), false),
+            (
+                Some(r#"{"operation":"open_image","root":"/tmp","path":"/tmp/source.png"}"#),
+                false,
+            ),
+            (
+                Some(
+                    r#"{"operation":"open_image","root":"/tmp","path":"/tmp/source.png","open_artifact_ids":"wrong"}"#,
+                ),
+                false,
+            ),
             (Some("not json"), false),
             (None, false),
         ] {
@@ -347,6 +357,42 @@ mod tests {
                 assert!(!result["error"].as_str().unwrap().is_empty());
             }
         }
+    }
+
+    #[test]
+    fn application_abi_opens_image_with_owned_json_and_reports_already_open() {
+        let data = tempfile::tempdir().unwrap();
+        let root = data.path().join("capture-history");
+        let source = data.path().join("source.png");
+        image::RgbaImage::from_fn(9, 5, |x, y| {
+            image::Rgba([x as u8 * 23, y as u8 * 37, 3, 255])
+        })
+        .save(&source)
+        .unwrap();
+        let request =
+            json!({"operation":"open_image","root":root,"path":source,"open_artifact_ids":[]});
+        let input = CString::new(request.to_string()).unwrap();
+        let ptr = unsafe { captures_app_request_v1(input.as_ptr()) };
+        let first: Value =
+            serde_json::from_slice(unsafe { CStr::from_ptr(ptr) }.to_bytes()).unwrap();
+        unsafe { captures_settings_free_v1(ptr) };
+        assert_eq!(first["ok"], true);
+        assert_eq!(first["result"]["kind"], "opened_image");
+        assert_eq!(first["result"]["already_open"], false);
+        assert_eq!(first["result"]["artifact"]["entry"]["width"], 9);
+        let id = first["result"]["artifact"]["entry"]["id"].as_str().unwrap();
+        let input = CString::new(
+            json!({"operation":"open_image","root":root,"path":source,"open_artifact_ids":[id]})
+                .to_string(),
+        )
+        .unwrap();
+        let ptr = unsafe { captures_app_request_v1(input.as_ptr()) };
+        let second: Value =
+            serde_json::from_slice(unsafe { CStr::from_ptr(ptr) }.to_bytes()).unwrap();
+        unsafe { captures_settings_free_v1(ptr) };
+        assert_eq!(second["ok"], true);
+        assert_eq!(second["result"]["already_open"], true);
+        assert_eq!(second["result"]["artifact"]["entry"]["id"], id);
     }
 
     fn call(s: &str) -> Value {
