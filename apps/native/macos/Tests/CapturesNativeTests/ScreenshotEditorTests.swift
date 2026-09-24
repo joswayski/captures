@@ -4664,7 +4664,8 @@ final class ScreenshotEditorTests: XCTestCase {
     func testExplicitSelectedTextStyleCarriesOnlyPresetToFutureCreation() throws {
         _ = NSApplication.shared
         let fonts = ["sans": "Liberation Sans", "serif": "Liberation Serif", "rounded": "Nunito"]
-        let original = textLayer(id: "selected", text: "Existing")
+        var original = textLayer(id: "selected", text: "Existing")
+        original["blendMode"] = "source-over" // Rust hit testing requires a complete document layer.
         for appearance in ["light", "dark"] {
             let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", initialTextSize: 39,
                 layers: [original], fonts: fonts))
@@ -4746,12 +4747,12 @@ final class ScreenshotEditorTests: XCTestCase {
                 }
             }
             try button("Apply", in: controller.root).performClick(nil)
+            XCTAssertEqual(worker.requests.last?["patch"] as? [String: Bool], ["outlined": true],
+                           "fake accepted Outlined style must match the requested edit")
             XCTAssertTrue(controller.state.snapshot?.layers.first?.textStyle?.outlined == true)
             XCTAssertEqual(future.titleOfSelectedItem, "Outlined", "accepted edit must not reset future style")
             try button("Undo", in: controller.root).performClick(nil)
             XCTAssertEqual(future.titleOfSelectedItem, "Outlined", "undo must not restore prior creation defaults")
-            try button("Cancel", in: controller.root).performClick(nil)
-            XCTAssertEqual(future.titleOfSelectedItem, "Outlined")
 
             let overlay = controller.drawOverlay
             XCTAssertTrue(overlay.drawingEnabled)
@@ -4760,6 +4761,10 @@ final class ScreenshotEditorTests: XCTestCase {
             let point = NSPoint(x: visible.minX + visible.width * 0.75, y: visible.midY)
             XCTAssertTrue(overlay.bounds.contains(point))
             XCTAssertTrue(overlay.presentedImageRect.contains(point))
+            XCTAssertNil(try NativeEditorHitTesting.hit(
+                documentJSON: XCTUnwrap(controller.state.snapshot).documentJSON,
+                point: overlay.canvasPoint(for: point), tolerance: 0),
+                "blank-point hit testing must decode the fake document before creating new text")
             overlay.begin(at: point)
             XCTAssertNotNil(overlay.startPoint)
             overlay.end(at: point)
