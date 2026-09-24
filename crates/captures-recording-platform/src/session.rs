@@ -1,7 +1,6 @@
 //! Blocking recording lifecycle. Keep this owner on a worker, never the native
 //! event loop. The host owns selector/countdown presentation and start cancellation.
 use std::{
-    fs::File,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -15,7 +14,7 @@ use captures_recording::{
 };
 use serde::Serialize;
 
-use crate::{NativeRecordingSegment, start_native_segment};
+use crate::{NativeRecordingSegment, recovery::RecoveryLease, start_native_segment};
 
 #[derive(Debug, Serialize)]
 pub struct FinalizedRecording {
@@ -26,7 +25,7 @@ pub struct FinalizedRecording {
 }
 
 pub struct RecordingSession {
-    recovery_lease: Option<File>,
+    recovery_lease: Option<RecoveryLease>,
     coordinator: RecordingCoordinator,
     store: DraftStore,
     manifest: RecordingDraftManifest,
@@ -400,11 +399,8 @@ impl RecordingSession {
                 .map(|error| format!("Recording saved; could not remove source bundle: {error}")),
             Ok(()) => None, // GIF source media remains available for editing.
         };
-        if let Some(lease) = self.recovery_lease.take() {
-            // Release before returning to a host that may list the bundle on
-            // the next command, including on macOS.
-            let _ = lease.unlock();
-        }
+        // Release before returning to a host that may list the bundle.
+        drop(self.recovery_lease.take());
         Ok(FinalizedRecording {
             entry,
             path,
@@ -534,9 +530,7 @@ impl RecordingSession {
             .remove(&self.manifest.session_id)
             .map_err(string)?;
         self.started_at_ms = None;
-        if let Some(lease) = self.recovery_lease.take() {
-            let _ = lease.unlock();
-        }
+        drop(self.recovery_lease.take());
         Ok(self.snapshot())
     }
 
@@ -613,6 +607,14 @@ impl RecordingSession {
             Ok(()) => message,
             Err(error) => format!("{message}; could not save recording recovery state: {error}"),
         }
+    }
+}
+
+impl Drop for RecordingSession {
+    fn drop(&mut self) {
+        // A retained failed/abandoned owner must exclude recovery until its
+        // engine has finished tearing down. The lease guard then unlocks.
+        drop(self.active.take());
     }
 }
 
