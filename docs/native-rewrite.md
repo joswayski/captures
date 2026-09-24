@@ -410,11 +410,11 @@ Placement is one render-before-publish transaction with fresh selection and norm
 output invalidation; invalid/unavailable styles preserve pixels, redo and drafts.
 The initial style now matches shipping Rounded box where the saved font set permits
 it, but typography and inline composition do not reproduce the Tauri layout.
-In AppKit, an explicit selected-text named Style choice also sets that offered
+In both hosts, an explicit selected-text named Style choice also sets that offered
 preset for future new text in the same editor, even if Apply fails or the selected
 edit is cancelled. It does not copy selected size/color/traits or manual family,
 and a later new-text Style choice wins. Selection, snapshots, undo and reopening
-do not carry this choice. The Windows/Linux host still keeps the two pickers separate.
+do not carry this choice.
 AppKit now starts an on-canvas native multiline responder when Text places a new
 layer or hits an existing visible, unlocked text layer; double-clicking such a
 layer from Select starts the same transaction. The responder retains local typing,

@@ -1206,6 +1206,7 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Rounded Box" }));
     expect(screen.getByRole("button", { name: "New text style: Rounded Box" }))
       .toHaveAttribute("aria-expanded", "false");
+    const creationSize = Number((screen.getByLabelText("New text size") as HTMLInputElement).value);
 
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
     setCanvasBounds(canvas);
@@ -1246,6 +1247,22 @@ describe("ScreenshotEditor", () => {
     expect(inlineEditor.style.webkitTextStroke).toContain("#ff3b5c");
     expect(inlineEditor.style.getPropertyValue("--inline-text-selection-color"))
       .toBe("transparent");
+
+    // A named preset carries forward; manual label properties do not.
+    fireEvent.change(inlineEditor, { target: { value: "Keep this label" } });
+    fireEvent.change(screen.getByLabelText("Size"), { target: { value: "83" } });
+    fireEvent.change(screen.getByRole("group", { name: "Text color" }).querySelector("input")!, {
+      target: { value: "#2367ab" },
+    });
+    fireEvent.change(screen.getByLabelText("Font"), { target: { value: "serif" } });
+    fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
+    expect(screen.getByRole("button", { name: "New text style: Outlined" })).toBeInTheDocument();
+    expect(screen.getByLabelText("New text size")).toHaveValue(creationSize);
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 32, clientX: 520, clientY: 300 });
+    const next = await screen.findByRole("textbox", { name: "Edit text on canvas" });
+    expect(screen.getByRole("button", { name: "Text style: Outlined" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Size")).toHaveValue(creationSize);
+    expect(next.style.webkitTextStroke).toContain("#ff3b5c");
   });
 
   it("lets a selected text label toggle a drop shadow", async () => {
