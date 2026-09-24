@@ -1949,8 +1949,15 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     }
                     self.recordingEditor?.present(artifact: artifact,
                                                   historyRoot: self.historyRoot,
-                                                  outputDirectory: outputDirectory)
-                    completion?()
+                                                  outputDirectory: outputDirectory,
+                                                  completion: completion.map { finished in
+                        { [weak self] accepted in
+                            if !accepted {
+                                self?.externalOpenErrors.append("\(artifact.id): recording editor could not open; the History item remains available.")
+                            }
+                            finished()
+                        }
+                    })
                     return
                 }
                 if self.screenshotEditor == nil {
@@ -1973,7 +1980,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                         }
                     })
             case .failure(let error):
-                self.showError("Couldn’t load the screenshot save location", error)
+                self.showError("Couldn’t load the media save location", error)
                 completion?()
             }
         }
@@ -2047,10 +2054,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             if !externalOpenErrors.isEmpty {
                 let message = externalOpenErrors.joined(separator: "\n")
                 status.stringValue = externalOpenErrors.count == 1
-                    ? message : "Couldn’t open \(externalOpenErrors.count) images. See details."
+                    ? message : "Couldn’t open \(externalOpenErrors.count) files. See details."
                 status.toolTip = message
                 status.textColor = tokens.color("danger-text")
-                reportError("Couldn’t open external images: \(message)")
+                reportError("Couldn’t open external media: \(message)")
                 externalOpenErrors.removeAll()
             }
             return
@@ -2058,7 +2065,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         let path = pendingOpenImages.removeFirst()
         let selectedAtDispatch = userSelectionGeneration
         externalOpenPending = true; updateActions()
-        status.stringValue = "Opening image…"
+        status.stringValue = "Opening media…"
         // Resolve editor settings first: a successful import must be openable.
         run({ [settingsPath] in try CapturePreferences.load(path: settingsPath).directory }) {
             [weak self] settingsResult in
@@ -2070,14 +2077,20 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             case .success(let outputDirectory):
                 // Read active editors on the main thread immediately before
                 // dispatch, not before an asynchronous settings read.
-                let openIDs = self.screenshotEditor?.activeArtifactID.map { [$0] } ?? []
+                let openIDs = (self.screenshotEditor?.activeArtifactID.map { [$0] } ?? [])
+                    + (self.recordingEditor?.activeArtifactID.map { [$0] } ?? [])
                 self.run({ [transport = self.transport, historyRoot = self.historyRoot] in
-                    let response = try transport.request([
-                        "operation": "open_image", "root": historyRoot, "path": path,
-                        "open_artifact_ids": openIDs,
-                    ])
+                    var request: [String: Any] = ["operation": "open_media", "root": historyRoot,
+                        "path": path, "open_artifact_ids": openIDs]
+                    // Resolve paths independent of suffix: the shared API detects
+                    // content and invokes tools only for a new recording open.
+                    if let tools = try? NativeMediaTools.locate() {
+                        request["ffmpeg"] = tools.ffmpeg
+                        request["ffprobe"] = tools.ffprobe
+                    }
+                    let response = try transport.request(request)
                     guard let value = response["artifact"] as? [String: Any],
-                          let artifact = CaptureArtifact(value), !artifact.isRecording,
+                          let artifact = CaptureArtifact(value),
                           response["already_open"] is Bool else { throw AppBridgeError.invalidResponse }
                     return artifact
                 }) { [weak self] result in

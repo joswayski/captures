@@ -452,7 +452,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     init(options: Options) {
         self.options = options
-        pendingOpenImages = options.openImages
+        pendingOpenImages = options.openMedia
         scene = options.live ? "live" : options.scene
         appearance = options.appearance
         theme = options.theme
@@ -533,8 +533,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
         guard options.live else {
-            let message = "Opening external images requires --live; fixture mode cannot open files."
-            if window != nil { presentHostError(title: "Image Open Unavailable", message: message) }
+            let message = "Opening external media requires --live; fixture mode cannot open files."
+            if window != nil { presentHostError(title: "Media Open Unavailable", message: message) }
             else { FileHandle.standardError.write(Data("\(message)\n".utf8)) }
             sender.reply(toOpenOrPrint: .failure)
             return

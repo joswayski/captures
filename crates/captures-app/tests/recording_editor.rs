@@ -307,6 +307,7 @@ fn replace_original_gif_preserves_format_and_disables_audio() {
     captures_history::save_recording(&data.path().join("history"), &entry, b"poster", &permanent)
         .unwrap();
     let mut session = open(&data, &entry, tools);
+    assert_eq!(session.original_save_path(), Some(permanent.as_path()));
     session
         .execute(RecordingEditorRequest::UpdatePreview {
             edit: EditSpec {
@@ -349,11 +350,29 @@ fn replace_original_rejects_reference_and_cancel_without_publication() {
     let permanent = data.path().join("source.mp4");
     let before = fs::read(&permanent).unwrap();
     let mut session = open(&data, &entry, tools);
+    assert_eq!(session.original_save_path(), None);
+    let metadata = fs::read(
+        data.path()
+            .join("history")
+            .join(&entry.id)
+            .join("metadata.json"),
+    )
+    .unwrap();
     let error = session
         .replace_original(&CancelToken::default(), |_| {})
         .unwrap_err();
     assert!(!error.requires_reopen);
     assert_eq!(fs::read(&permanent).unwrap(), before);
+    assert_eq!(
+        fs::read(
+            data.path()
+                .join("history")
+                .join(&entry.id)
+                .join("metadata.json")
+        )
+        .unwrap(),
+        metadata
+    );
 
     let Some((data, entry, tools)) = setup(true) else {
         return;

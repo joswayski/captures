@@ -105,7 +105,7 @@ enum Job {
         root: PathBuf,
         open_recording: Option<(String, PathBuf, u64)>,
     },
-    OpenImage {
+    OpenMedia {
         root: PathBuf,
         path: PathBuf,
         open_artifact_ids: Vec<String>,
@@ -167,7 +167,7 @@ enum Reply {
         result: Result<Vec<Artifact>, String>,
         open_recording: Option<(String, PathBuf, u64)>,
     },
-    ImageOpened {
+    MediaOpened {
         path: PathBuf,
         result: Result<Box<Artifact>, String>,
         output_directory: PathBuf,
@@ -684,9 +684,9 @@ pub struct Live {
     status: String,
     error: Option<String>,
     pending: usize,
-    open_images: VecDeque<(PathBuf, PathBuf)>,
-    opening_image: bool,
-    image_open_errors: Vec<String>,
+    open_media: VecDeque<(PathBuf, PathBuf)>,
+    opening_media: bool,
+    media_open_errors: Vec<String>,
     capture_waiting_for_hide: bool,
     hide_started: Option<Instant>,
     hidden_since: Option<Instant>,
@@ -776,23 +776,25 @@ impl Live {
                         result: load_history(&root),
                         open_recording,
                     },
-                    Job::OpenImage {
+                    Job::OpenMedia {
                         root,
                         path,
                         open_artifact_ids,
                         output_directory,
                     } => {
-                        let result = captures_app::execute(Request::OpenImage {
+                        let result = captures_app::execute(Request::OpenMedia {
                             root,
                             path: path.clone(),
                             open_artifact_ids,
+                            ffmpeg: None,
+                            ffprobe: None,
                         })
                         .map(|response| match response {
-                            Response::OpenedImage { artifact, .. } => Box::new(artifact),
-                            _ => unreachable!("OpenImage returns OpenedImage"),
+                            Response::OpenedMedia { artifact, .. } => Box::new(artifact),
+                            _ => unreachable!("OpenMedia returns OpenedMedia"),
                         })
                         .map_err(|error| error.to_string());
-                        Reply::ImageOpened {
+                        Reply::MediaOpened {
                             path,
                             result,
                             output_directory,
@@ -926,9 +928,9 @@ impl Live {
             status: "Loading capture workspace…".into(),
             error: None,
             pending: 0,
-            open_images: VecDeque::new(),
-            opening_image: false,
-            image_open_errors: Vec::new(),
+            open_media: VecDeque::new(),
+            opening_media: false,
+            media_open_errors: Vec::new(),
             capture_waiting_for_hide: false,
             hide_started: None,
             hidden_since: None,
@@ -999,48 +1001,53 @@ impl Live {
         live
     }
 
-    pub fn queue_open_images(
+    pub fn queue_open_media(
         &mut self,
         paths: impl IntoIterator<Item = PathBuf>,
         output_directory: Result<PathBuf, String>,
     ) {
-        if self.open_images.is_empty() && !self.opening_image {
-            self.image_open_errors.clear();
+        if self.open_media.is_empty() && !self.opening_media {
+            self.media_open_errors.clear();
             self.error = None;
         }
         for path in paths {
             match &output_directory {
-                Ok(directory) => self.open_images.push_back((path, directory.clone())),
+                Ok(directory) => self.open_media.push_back((path, directory.clone())),
                 Err(error) => self
-                    .image_open_errors
+                    .media_open_errors
                     .push(format!("Could not open {}: {error}", path.display())),
             }
         }
-        if !self.image_open_errors.is_empty() {
-            self.error = Some(self.image_open_errors.join("\n"));
+        if !self.media_open_errors.is_empty() {
+            self.error = Some(self.media_open_errors.join("\n"));
         }
     }
 
-    fn start_next_image(&mut self) {
+    fn start_next_media(&mut self) {
         if self.pending != 0
-            || self.opening_image
+            || self.opening_media
             || self.is_capturing()
             || self.recovery.blocking()
         {
             return;
         }
-        let Some((path, output_directory)) = self.open_images.pop_front() else {
+        let Some((path, output_directory)) = self.open_media.pop_front() else {
             return;
         };
-        self.opening_image = true;
+        self.opening_media = true;
         self.pending += 1;
         self.status = format!("Opening {}…", path.display());
         // Snapshot active editors only when dispatching. The pending gate also
         // blocks History from opening a competing editor until this reply arrives.
-        let _ = self.tx.send(Job::OpenImage {
+        let _ = self.tx.send(Job::OpenMedia {
             root: self.root.clone(),
             path,
-            open_artifact_ids: self.editors.keys().cloned().collect(),
+            open_artifact_ids: self
+                .editors
+                .keys()
+                .chain(self.recording_editors.keys())
+                .cloned()
+                .collect(),
             output_directory,
         });
     }
@@ -1075,7 +1082,21 @@ impl Live {
             .focus(ctx);
     }
 
-    fn image_opened(
+    fn open_recording_editor(
+        &mut self,
+        ctx: &egui::Context,
+        id: String,
+        output_directory: PathBuf,
+    ) {
+        self.recording_editors
+            .entry(id.clone())
+            .or_insert_with(|| {
+                crate::recording_editor::Editor::open(ctx, self.root.clone(), id, output_directory)
+            })
+            .focus(ctx);
+    }
+
+    fn media_opened(
         &mut self,
         ctx: &egui::Context,
         path: &Path,
@@ -1083,10 +1104,11 @@ impl Live {
         output_directory: PathBuf,
     ) {
         self.pending = self.pending.saturating_sub(1);
-        self.opening_image = false;
+        self.opening_media = false;
         match result {
             Ok(artifact) => {
                 let id = artifact.entry.id.clone();
+                let recording = artifact.entry.kind.is_recording();
                 let mode = artifact
                     .entry
                     .mode
@@ -1094,13 +1116,17 @@ impl Live {
                 self.artifacts.retain(|item| item.entry.id != id);
                 self.artifacts.insert(0, *artifact);
                 self.select(id.clone());
-                self.open_screenshot_editor(ctx, id, output_directory, mode);
+                if recording {
+                    self.open_recording_editor(ctx, id, output_directory);
+                } else {
+                    self.open_screenshot_editor(ctx, id, output_directory, mode);
+                }
                 self.status = format!("Opened {}", path.display());
             }
             Err(error) => {
-                self.image_open_errors
+                self.media_open_errors
                     .push(format!("Could not open {}: {error}", path.display()));
-                self.error = Some(self.image_open_errors.join("\n"));
+                self.error = Some(self.media_open_errors.join("\n"));
             }
         }
     }
@@ -1347,7 +1373,7 @@ impl Live {
     }
 
     pub fn flush(&mut self) {
-        self.open_images.clear();
+        self.open_media.clear();
         self.editors.clear();
         self.recording_editors.clear();
         self.recording_notice = None;
@@ -2721,11 +2747,11 @@ impl Live {
         }
         while let Ok(reply) = self.rx.try_recv() {
             match reply {
-                Reply::ImageOpened {
+                Reply::MediaOpened {
                     path,
                     result,
                     output_directory,
-                } => self.image_opened(ctx, &path, result, output_directory),
+                } => self.media_opened(ctx, &path, result, output_directory),
                 Reply::HistoryLoaded {
                     result,
                     open_recording,
@@ -2743,16 +2769,7 @@ impl Live {
                                     .any(|artifact| artifact.entry.id == id)
                             {
                                 self.select(id.clone());
-                                let editor =
-                                    self.recording_editors.entry(id.clone()).or_insert_with(|| {
-                                        crate::recording_editor::Editor::open(
-                                            ctx,
-                                            self.root.clone(),
-                                            id,
-                                            directory,
-                                        )
-                                    });
-                                editor.focus(ctx);
+                                self.open_recording_editor(ctx, id, directory);
                             }
                         }
                         Err(error) => self.error = Some(error),
@@ -3162,7 +3179,7 @@ impl Live {
                 Reply::PreviewDecoded { .. } => {}
             }
         }
-        self.start_next_image();
+        self.start_next_media();
     }
 
     fn start_recording_screenshot(&mut self, ctx: &egui::Context) {
@@ -3364,7 +3381,9 @@ impl Live {
                 self.status = "Capture permission granted".into();
                 self.send(Request::Displays);
             }
-            Response::HistoryRoot { .. } | Response::OpenedImage { .. } => {}
+            Response::HistoryRoot { .. }
+            | Response::OpenedImage { .. }
+            | Response::OpenedMedia { .. } => {}
         }
     }
 
@@ -4603,10 +4622,7 @@ impl Live {
                 {
                     match settings() {
                         Ok(settings) if !selected_is_screenshot => {
-                            let editor = self.recording_editors.entry(id.clone()).or_insert_with(|| {
-                                crate::recording_editor::Editor::open(ui.ctx(), self.root.clone(), id, settings.output_directory.into())
-                            });
-                            editor.focus(ui.ctx());
+                            self.open_recording_editor(ui.ctx(), id, settings.output_directory.into());
                         }
                         Ok(settings) => {
                             let mode = selected_entry.as_ref().and_then(|entry| entry.mode).unwrap_or(captures_capture::CaptureMode::Region);
@@ -5057,7 +5073,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn external_images_serialize_after_startup_keep_errors_and_snapshot_active_editors() {
+    fn external_media_serialize_after_startup_keep_errors_and_snapshot_active_editors() {
         let root = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
         let mut live = Live::new(ctx.clone(), Some(root.path().into()));
@@ -5067,25 +5083,25 @@ mod tests {
         live.tx = tx;
         live.pending = 1;
         let output = root.path().join("exports");
-        live.queue_open_images(
+        live.queue_open_media(
             ["bad.png", "good.png", "alias.png", "closed.png"].map(PathBuf::from),
             Ok(output.clone()),
         );
-        live.start_next_image();
+        live.start_next_media();
         assert!(
             jobs.try_recv().is_err(),
             "initial History work must finish first"
         );
         live.pending = 0;
         live.capture_in_flight = true;
-        live.start_next_image();
+        live.start_next_media();
         assert!(
             jobs.try_recv().is_err(),
             "capture ownership wins over queued file opens"
         );
         live.capture_in_flight = false;
-        live.start_next_image();
-        let Job::OpenImage {
+        live.start_next_media();
+        let Job::OpenMedia {
             path,
             root: actual_root,
             open_artifact_ids,
@@ -5099,15 +5115,15 @@ mod tests {
         assert_eq!(output_directory, output);
         assert!(open_artifact_ids.is_empty());
         assert!(!live.can_launch_capture());
-        live.start_next_image();
+        live.start_next_media();
         assert!(
             jobs.try_recv().is_err(),
-            "only one image open may be in flight"
+            "only one media open may be in flight"
         );
-        live.image_opened(&ctx, &path, Err("corrupt image".into()), output.clone());
-        live.start_next_image();
+        live.media_opened(&ctx, &path, Err("corrupt image".into()), output.clone());
+        live.start_next_media();
         assert!(
-            matches!(jobs.try_recv().unwrap(), Job::OpenImage { path, .. } if path == Path::new("good.png"))
+            matches!(jobs.try_recv().unwrap(), Job::OpenMedia { path, .. } if path == Path::new("good.png"))
         );
         let artifact = captures_app::persist_screenshot(
             root.path(),
@@ -5116,7 +5132,7 @@ mod tests {
         )
         .unwrap();
         let id = artifact.entry.id.clone();
-        live.image_opened(
+        live.media_opened(
             &ctx,
             Path::new("good.png"),
             Ok(Box::new(artifact)),
@@ -5128,8 +5144,8 @@ mod tests {
             jobs.try_recv().unwrap(),
             Job::DecodeHistory { .. }
         ));
-        live.start_next_image();
-        let Job::OpenImage {
+        live.start_next_media();
+        let Job::OpenMedia {
             path,
             open_artifact_ids,
             ..
@@ -5144,7 +5160,7 @@ mod tests {
             "IDs are collected after the prior editor opened"
         );
         let artifact = captures_app::list(root.path()).unwrap().pop().unwrap();
-        live.image_opened(&ctx, &path, Ok(Box::new(artifact)), output.clone());
+        live.media_opened(&ctx, &path, Ok(Box::new(artifact)), output.clone());
         assert_eq!(live.editors.len(), 1);
         assert_eq!(
             live.artifacts.len(),
@@ -5163,8 +5179,8 @@ mod tests {
             Job::DecodeHistory { .. }
         ));
         live.editors.clear();
-        live.start_next_image();
-        let Job::OpenImage {
+        live.start_next_media();
+        let Job::OpenMedia {
             path,
             open_artifact_ids,
             ..
@@ -5177,13 +5193,13 @@ mod tests {
             open_artifact_ids.is_empty(),
             "closed editors must not suppress reload"
         );
-        live.image_opened(&ctx, &path, Err("source missing".into()), output.clone());
-        assert_eq!(live.image_open_errors.len(), 2);
-        live.queue_open_images(
+        live.media_opened(&ctx, &path, Err("source missing".into()), output.clone());
+        assert_eq!(live.media_open_errors.len(), 2);
+        live.queue_open_media(
             [PathBuf::from("settings.png")],
             Err("settings unreadable".into()),
         );
-        live.start_next_image();
+        live.start_next_media();
         assert!(
             jobs.try_recv().is_err(),
             "failed settings must not publish an image without an editor"
@@ -5192,10 +5208,10 @@ mod tests {
             live.error.as_deref(),
             Some("Could not open settings.png: settings unreadable")
         );
-        live.queue_open_images([PathBuf::from("never-started.png")], Ok(output));
+        live.queue_open_media([PathBuf::from("never-started.png")], Ok(output));
         live.flush();
         assert!(
-            live.open_images.is_empty(),
+            live.open_media.is_empty(),
             "quit drops unstarted file requests"
         );
     }

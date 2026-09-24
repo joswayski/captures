@@ -853,9 +853,9 @@ impl eframe::App for Workbench {
             }
         }
         if let Some(live) = &mut self.live {
-            if !self.options.open_images.is_empty() && !self.preferences_state.is_loading() {
-                live.queue_open_images(
-                    std::mem::take(&mut self.options.open_images),
+            if !self.options.open_media.is_empty() && !self.preferences_state.is_loading() {
+                live.queue_open_media(
+                    std::mem::take(&mut self.options.open_media),
                     self.preferences_state
                         .snapshot()
                         .map(|settings| settings.output_directory.into()),

@@ -378,11 +378,21 @@ impl RecordingEditorSession {
         self.invalidated
     }
 
-    /// The accepted session's permanent-save hint, without filesystem work or
-    /// any replacement eligibility guarantee. Hosts use this exact path in
-    /// confirmation UI instead of a potentially stale History-list artifact.
+    /// Offer the accepted permanent-save path only for a private recovery source.
+    /// The actual Replace original operation still verifies both files and their
+    /// identities before mutation; external references cannot be replaced.
     #[must_use]
     pub fn original_save_path(&self) -> Option<&Path> {
+        let extension = match self.source_entry.kind {
+            ArtifactKind::Video => "mp4",
+            ArtifactKind::Gif => "gif",
+            ArtifactKind::Screenshot => return None,
+        };
+        let directory =
+            captures_history::entry_directory(&self.history_root, &self.artifact_id).ok()?;
+        if self.source_path != directory.join(format!("media.{extension}")) {
+            return None;
+        }
         self.source_entry.saved_path.as_deref().map(Path::new)
     }
 
@@ -1148,6 +1158,17 @@ fn validate_source(entry: &HistoryEntry, probe: &ProbeResult) -> Result<(), Stri
         return Err("Recording duration is unavailable.".into());
     }
     Ok(())
+}
+
+/// Check the editor's source and default preview constraints before an external
+/// reference enters History. A successful poster alone does not establish that
+/// the recording editor can open the source.
+pub(crate) fn validate_opened_source(probe: &ProbeResult) -> Result<(), String> {
+    validate_output_probe(probe)?;
+    let mut edit = EditSpec::default();
+    set_source_audio(&mut edit, probe.has_audio, false);
+    validate_session_edit(probe, &edit)?;
+    validate_export_spec(probe, &edit, &default_preview_export()).map_err(|error| error.to_string())
 }
 
 fn validate_output_probe(probe: &ProbeResult) -> Result<(), String> {

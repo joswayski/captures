@@ -360,18 +360,25 @@ the original History image and its exports remain unchanged until explicit repla
 still presents its notice immediately; opening the recording editor is a separate History action. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.
-Both native development hosts accept repeatable `--open-image PATH` arguments
-only with `--live`. AppKit also handles macOS file-open requests while running.
-PNG, JPEG and WebP sources become local History-backed screenshot editor sessions;
-unsupported files report an error without stopping later paths. Reopening an
-already-open source focuses its editor without replacing unsaved edits. Reopening
-a closed source refreshes the same History ID without changing the source file;
-if it has a saved draft, restore or explicitly discard that draft from History first.
+Both native development hosts accept repeatable `--open-media PATH` arguments
+only with `--live`; `--open-image` remains an alias in the same ordered queue.
+AppKit also handles macOS file-open requests while running. PNG, JPEG and WebP
+become local History-backed screenshot editor sessions. GIF, MP4 and WebM open
+in the recording editor as external references, without copying or changing the
+source. Unsupported files report an error without stopping later paths.
+Reopening an already-open source focuses its editor without replacing unsaved
+edits. Closed sources reload under the same History ID; screenshot sources with
+a saved draft must first be restored or explicitly discarded from History.
 AppKit switches its editor between sources only after opening settles and without
-dropping pending text or unsaved changes; a refused source remains in History.
+dropping pending text or unsaved edits; a refused source remains in History.
+The shared backend validates the actual recording container, editor preview and
+poster before publication. WebM is an input format, not a WebM export;
+Preserve-to-MP4 transcodes it rather than copying WebM bytes into an MP4 file.
+External recording references cannot use Replace original; that action requires
+a private recovery copy and a separate permanent save. Save new copy remains available.
 This is not a registered file association or an installed-app opening feature.
-Windows/Linux single-instance forwarding and GIF/video opening remain separate work;
-TIFF is supported by in-editor import, not this external-open path.
+Windows/Linux single-instance forwarding and physical opening acceptance remain
+separate work. TIFF is supported by in-editor import, not this external-open path.
 Native Preferences also includes an optional feedback form. Sending shares only
 the message, optional contact, category, and displayed app/system details with
 captur.es; it never attaches captures, files, or diagnostics. Fixture mode cannot

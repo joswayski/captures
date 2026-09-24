@@ -682,19 +682,11 @@ impl MediaToolchain {
             .iter()
             .filter(|stream| stream.codec_type.as_deref() == Some("audio"))
             .count();
-        let extension = input
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or_default();
-        let kind = if extension.eq_ignore_ascii_case("gif") {
-            MediaKind::Gif
-        } else {
-            MediaKind::Video
-        };
-        let mime_type = match kind {
-            MediaKind::Gif => "image/gif",
-            MediaKind::Video => "video/mp4",
-            MediaKind::Screenshot => "image/png",
+        let mime_type = source_container(input, probe.format.format_name.as_deref())?;
+        let kind = match mime_type {
+            "image/gif" => MediaKind::Gif,
+            "image/png" => MediaKind::Screenshot,
+            _ => MediaKind::Video,
         };
         Ok(ProbeResult {
             metadata: MediaMetadata {
@@ -1480,11 +1472,7 @@ impl MediaToolchain {
                 exact: true,
             });
         }
-        if spec.format == ExportFormat::Mp4
-            && spec.quality == QualityPreset::Preserve
-            && spec.max_size_bytes.is_none()
-            && visual_edit_is_identity(&probe, edit)
-        {
+        if mp4_preserves_video_stream(&probe, edit, spec) && spec.max_size_bytes.is_none() {
             // Only audio is re-encoded. The copied video dominates the file,
             // so shipping behavior uses source size as an approximate result.
             return Ok(ExportEstimate {
@@ -2188,6 +2176,7 @@ fn video_attempt(
 
 fn mp4_preserves_video_stream(probe: &ProbeResult, edit: &EditSpec, spec: &ExportSpec) -> bool {
     probe.metadata.kind == MediaKind::Video
+        && probe.metadata.mime_type == "video/mp4"
         && spec.format == ExportFormat::Mp4
         && spec.quality == QualityPreset::Preserve
         && visual_edit_is_identity(probe, edit)
@@ -2953,8 +2942,116 @@ struct FfprobeStream {
 
 #[derive(Debug, Default, Deserialize)]
 struct FfprobeFormat {
+    format_name: Option<String>,
     duration: Option<String>,
     size: Option<String>,
+}
+
+// FFprobe groups MOV with MP4 and Matroska with WebM. Require the matching
+// bounded container signature as well, rather than trusting an extension or
+// accepting an arbitrary sibling format as an MP4/WebM recording.
+fn source_container(input: &Path, demuxer: Option<&str>) -> Result<&'static str, MediaToolError> {
+    let mut header = [0_u8; 4096];
+    let len = fs::File::open(input)?.read(&mut header)?;
+    let header = &header[..len];
+    // FFprobe is also used for extracted PNG frames by existing media callers.
+    if demuxer == Some("png_pipe") && header.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Ok("image/png");
+    }
+    if demuxer == Some("gif") && (header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a")) {
+        return Ok("image/gif");
+    }
+    if demuxer.is_some_and(|name| name.split(',').any(|part| part == "mp4"))
+        && header.len() >= 12
+        && &header[4..8] == b"ftyp"
+        && matches!(
+            &header[8..12],
+            b"isom"
+                | b"iso2"
+                | b"iso3"
+                | b"iso4"
+                | b"iso5"
+                | b"iso6"
+                | b"mp41"
+                | b"mp42"
+                | b"mp71"
+                | b"avc1"
+                | b"M4V "
+                | b"dash"
+                | b"mp4v"
+        )
+    {
+        return Ok("video/mp4");
+    }
+    if demuxer.is_some_and(|name| name.split(',').any(|part| part == "webm")) && webm_header(header)
+    {
+        return Ok("video/webm");
+    }
+    Err(MediaToolError::Process(
+        "Only GIF, MP4 and WebM recording containers are supported".into(),
+    ))
+}
+
+// Only walk the bounded EBML Header's direct children. Sizes may use any
+// legal 1–8-byte VINT encoding, including nonminimal encodings; unknown sizes,
+// truncated headers and repeated DocType elements are not accepted. Void and
+// unknown child payloads are skipped, never searched for a DocType signature.
+fn webm_header(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
+        return false;
+    }
+    let Some((header_size, size_width)) = ebml_size(&bytes[4..]) else {
+        return false;
+    };
+    let start = 4 + size_width;
+    let Some(end) = start
+        .checked_add(header_size)
+        .filter(|&end| end <= bytes.len())
+    else {
+        return false;
+    };
+    let mut at = start;
+    let mut document_type = None;
+    while at < end {
+        let id_width = bytes[at].leading_zeros() as usize + 1;
+        if id_width > 4 || at + id_width > end {
+            return false;
+        }
+        let id = &bytes[at..at + id_width];
+        at += id_width;
+        let Some((size, width)) = ebml_size(&bytes[at..end]) else {
+            return false;
+        };
+        let Some(next) = at
+            .checked_add(width)
+            .and_then(|value| value.checked_add(size))
+            .filter(|&next| next <= end)
+        else {
+            return false;
+        };
+        if id == [0x42, 0x82] && document_type.replace(&bytes[at + width..next]).is_some() {
+            return false;
+        }
+        at = next;
+    }
+    document_type == Some(b"webm".as_slice())
+}
+
+fn ebml_size(bytes: &[u8]) -> Option<(usize, usize)> {
+    let first = *bytes.first()?;
+    let width = first.leading_zeros() as usize + 1;
+    if width > 8 || bytes.len() < width {
+        return None;
+    }
+    let mut value = usize::from(first & (0x7f_u8 >> (width - 1)));
+    for &byte in &bytes[1..width] {
+        value = value.checked_mul(256)?.checked_add(usize::from(byte))?;
+    }
+    // All one-bits denotes an unknown-sized element, not a bounded Header.
+    if value == (1_usize.checked_shl((7 * width) as u32)? - 1) {
+        return None;
+    }
+    Some((value, width))
 }
 
 #[cfg(test)]
@@ -2975,7 +3072,7 @@ mod tests {
         export_attempts, export_preserves_source_bytes, fit_even, fit_playback_dimensions,
         gif_export_filter, gif_filter, preview_dimensions, preview_video_filter,
         read_bounded_diagnostics, read_complete_frame, recording_segment_audio_graph, seconds,
-        validate_edit_spec, visual_edit_is_identity,
+        validate_edit_spec, visual_edit_is_identity, webm_header,
     };
     use crate::{
         AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaMetadata,
@@ -2995,6 +3092,65 @@ mod tests {
             has_audio: true,
             audio_stream_count: 2,
         }
+    }
+
+    #[test]
+    fn webm_doctype_is_a_unique_direct_header_child_with_bounded_vint_sizes() {
+        let mut children = vec![0xec, 0x8a]; // Void, ten bytes of opaque payload.
+        children.extend_from_slice(b"\x42\x82\x84webm123");
+        children.extend_from_slice(&[0x42, 0x82, 0x40, 0x04]); // Nonminimal 2-byte size.
+        children.extend_from_slice(b"webm");
+        let mut header = vec![0x1a, 0x45, 0xdf, 0xa3, 0x40, children.len() as u8];
+        header.extend_from_slice(&children);
+        assert!(webm_header(&header));
+
+        let mut matroska = vec![0x1a, 0x45, 0xdf, 0xa3, 0x80 | (11 + 12)];
+        matroska.extend_from_slice(&[0x42, 0x82, 0x88]);
+        matroska.extend_from_slice(b"matroska");
+        matroska.extend_from_slice(&children[..12]);
+        assert!(
+            !webm_header(&matroska),
+            "Void payload must not impersonate DocType"
+        );
+
+        let mut duplicate = header.clone();
+        duplicate[5] += 7;
+        duplicate.extend_from_slice(b"\x42\x82\x84webm");
+        assert!(!webm_header(&duplicate));
+        assert!(!webm_header(&header[..header.len() - 1]));
+        header[4] = 0x7f; // Unknown-size VINT is not a bounded EBML Header.
+        header[5] = 0xff;
+        assert!(!webm_header(&header));
+    }
+
+    #[test]
+    fn webm_eight_byte_sizes_are_bounded_and_never_shift_out_of_range() {
+        let child = b"\x42\x82\x01\0\0\0\0\0\0\x04webm";
+        let mut header = vec![
+            0x1a,
+            0x45,
+            0xdf,
+            0xa3,
+            0x01,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            child.len() as u8,
+        ];
+        header.extend_from_slice(child);
+        assert!(webm_header(&header));
+        assert!(!webm_header(&header[..11])); // Truncated eight-byte Header size.
+        assert!(!webm_header(&header[..header.len() - 1])); // Truncated child.
+
+        let mut unknown_header = header.clone();
+        unknown_header[5..12].fill(0xff); // Unknown-sized 8-byte Header.
+        assert!(!webm_header(&unknown_header));
+        let mut unknown_child = header;
+        unknown_child[15..22].fill(0xff); // Unknown-sized 8-byte DocType.
+        assert!(!webm_header(&unknown_child));
     }
 
     #[test]
