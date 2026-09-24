@@ -1103,6 +1103,7 @@ impl Live {
         result: Result<Box<Artifact>, String>,
         output_directory: PathBuf,
     ) {
+        let _span = crate::diagnostics::span("media-opened");
         self.pending = self.pending.saturating_sub(1);
         self.opening_media = false;
         match result {

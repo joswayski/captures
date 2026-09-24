@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--positional", action="store_true", help="exercise Open With -- FILE syntax")
+    parser.add_argument("--trace", action="store_true", help="enable opt-in native scheduling diagnostics")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -49,6 +50,10 @@ def main():
     env = os.environ.copy()
     # The application's normal stdout logger must be visible before normal quit.
     env["NSUnbufferedIO"] = "YES"
+    if args.trace:
+        env["CAPTURES_NATIVE_TRACE"] = "1"
+    else:
+        env.pop("CAPTURES_NATIVE_TRACE", None)
 
     def wait(predicate, description, seconds=20):
         until = time.monotonic() + seconds

@@ -1,6 +1,7 @@
 mod capture_controls;
 mod clipboard_input;
 mod countdown;
+mod diagnostics;
 mod editor;
 mod feedback;
 mod live;
@@ -13,6 +14,8 @@ mod recording_hud;
 mod recording_recovery;
 mod recording_region;
 mod recording_saved_notice;
+#[cfg(any(target_os = "windows", test))]
+mod root_repaint;
 mod selector;
 mod shortcut_input;
 mod tokens;
@@ -24,6 +27,7 @@ mod workbench;
 use eframe::egui;
 use options::{Options, Scene};
 use serde_json::json;
+use std::{cell::RefCell, rc::Rc, sync::Weak, time::Instant};
 use winit::{
     application::ApplicationHandler,
     event::{DeviceEvent, DeviceId, StartCause, WindowEvent},
@@ -31,6 +35,13 @@ use winit::{
     keyboard::{ModifiersState, PhysicalKey},
     window::WindowId,
 };
+
+#[derive(Default)]
+struct RootState {
+    egui_ctx: Option<egui::Context>,
+    root_window_id: Option<WindowId>,
+    root_window: Option<Weak<winit::window::Window>>,
+}
 
 fn emit(event: &str, detail: serde_json::Value) {
     println!(
@@ -44,6 +55,11 @@ struct InputApplication<'a> {
     paste_input: clipboard_input::PasteInput,
     shortcut_input: shortcut_input::Bridge,
     shortcuts: workbench::ShortcutOwner,
+    root_state: Option<Rc<RefCell<RootState>>>,
+    #[cfg(target_os = "windows")]
+    root_repaints: root_repaint::Pending,
+    #[cfg(target_os = "windows")]
+    root_suspended: bool,
     root_window: Option<WindowId>,
     root_focused: bool,
     modifiers: ModifiersState,
@@ -51,6 +67,10 @@ struct InputApplication<'a> {
 
 impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "windows")]
+        {
+            self.root_suspended = false;
+        }
         self.inner.resumed(event_loop);
     }
 
@@ -60,6 +80,20 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        let _span = diagnostics::span("window-event");
+        diagnostics::event("window-event-kind", || {
+            let (kind, value) = match &event {
+                WindowEvent::RedrawRequested => ("RedrawRequested", json!(null)),
+                WindowEvent::Resized(size) => {
+                    ("Resized", json!({"width":size.width,"height":size.height}))
+                }
+                WindowEvent::Focused(focused) => ("Focused", json!(focused)),
+                WindowEvent::Occluded(occluded) => ("Occluded", json!(occluded)),
+                WindowEvent::Destroyed => ("Destroyed", json!(null)),
+                _ => ("Other", json!(null)),
+            };
+            json!({"window":format!("{window_id:?}"),"kind":kind,"value":value})
+        });
         let root_window = *self.root_window.get_or_insert(window_id);
         if window_id == root_window {
             match &event {
@@ -94,16 +128,62 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
             }
         }
         self.paste_input.begin_event(window_id, &event);
+        #[cfg(target_os = "windows")]
+        if matches!(event, WindowEvent::Destroyed)
+            && let Some(state) = &self.root_state
+            && state.borrow().root_window_id == Some(window_id)
+        {
+            state.borrow_mut().root_window = None;
+            self.root_repaints.clear();
+        }
         self.inner.window_event(event_loop, window_id, event);
         self.paste_input.end_event();
+        #[cfg(target_os = "windows")]
+        self.service_root_repaint(event_loop);
     }
 
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        let _span = diagnostics::span("new-events");
         self.inner.new_events(event_loop, cause);
+        #[cfg(target_os = "windows")]
+        self.service_root_repaint(event_loop);
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: eframe::UserEvent) {
+        let _span = diagnostics::span("user-event");
+        let root_repaint = match &event {
+            eframe::UserEvent::RequestRepaint {
+                when,
+                cumulative_pass_nr,
+                viewport_id: egui::ViewportId::ROOT,
+            } => Some((*when, *cumulative_pass_nr)),
+            _ => None,
+        };
+        if let eframe::UserEvent::RequestRepaint {
+            when,
+            cumulative_pass_nr,
+            viewport_id,
+        } = &event
+            && *viewport_id == egui::ViewportId::ROOT
+        {
+            self.trace_root_repaint("before", *when, *cumulative_pass_nr, event_loop);
+        }
+        #[cfg(target_os = "windows")]
+        if let Some((when, requested_pass)) = root_repaint
+            && let Some((ctx, _)) = self.visible_root(event_loop)
+        {
+            self.root_repaints.request(
+                ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT),
+                requested_pass,
+                when,
+            );
+        }
         self.inner.user_event(event_loop, event);
+        #[cfg(target_os = "windows")]
+        self.service_root_repaint(event_loop);
+        if let Some((when, cumulative_pass_nr)) = root_repaint {
+            self.trace_root_repaint("after", when, cumulative_pass_nr, event_loop);
+        }
     }
 
     fn device_event(
@@ -116,19 +196,123 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let _span = diagnostics::span("about-to-wait");
         self.inner.about_to_wait(event_loop);
+        #[cfg(target_os = "windows")]
+        {
+            self.service_root_repaint(event_loop);
+            if !event_loop.exiting()
+                && let Some(deadline) = self.root_repaints.next_deadline()
+            {
+                use winit::event_loop::ControlFlow;
+                event_loop.set_control_flow(match event_loop.control_flow() {
+                    ControlFlow::Wait => ControlFlow::WaitUntil(deadline),
+                    ControlFlow::WaitUntil(inner) => ControlFlow::WaitUntil(inner.min(deadline)),
+                    ControlFlow::Poll => ControlFlow::Poll,
+                });
+            }
+        }
+        diagnostics::event(
+            "control-flow",
+            || json!({"flow":format!("{:?}",event_loop.control_flow())}),
+        );
     }
 
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "windows")]
+        {
+            self.root_suspended = true;
+            self.root_repaints.clear();
+        }
         self.inner.suspended(event_loop);
     }
 
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "windows")]
+        self.root_repaints.clear();
         self.inner.exiting(event_loop);
     }
 
     fn memory_warning(&mut self, event_loop: &ActiveEventLoop) {
         self.inner.memory_warning(event_loop);
+    }
+}
+
+impl InputApplication<'_> {
+    #[cfg(target_os = "windows")]
+    fn visible_root(
+        &self,
+        event_loop: &ActiveEventLoop,
+    ) -> Option<(egui::Context, std::sync::Arc<winit::window::Window>)> {
+        if self.root_suspended || event_loop.exiting() {
+            return None;
+        }
+        let state = self.root_state.as_ref()?.borrow();
+        let window = state.root_window.as_ref()?.upgrade()?;
+        // Hidden/minimized roots already use eframe's throttled direct dispatch.
+        if window.is_visible() != Some(true) || window.is_minimized() == Some(true) {
+            return None;
+        }
+        Some((state.egui_ctx.clone()?, window))
+    }
+
+    #[cfg(target_os = "windows")]
+    fn service_root_repaint(&mut self, event_loop: &ActiveEventLoop) {
+        let Some((ctx, window)) = self.visible_root(event_loop) else {
+            self.root_repaints.clear();
+            return;
+        };
+        if self.root_repaints.take_due(
+            ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT),
+            Instant::now(),
+        ) {
+            // winit 0.30.13 can repeatedly deliver a continuously animating
+            // child's WM_PAINT while starving a visible ROOT. eframe 0.36.2
+            // already runs this same renderer synchronously on Windows resize.
+            // Dispatch one accepted, due ROOT pass after the inner handler has
+            // returned; never recurse or touch native WM_PAINT bookkeeping.
+            diagnostics::event(
+                "root-repaint-fallback",
+                || json!({"pass":ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT)}),
+            );
+            self.paste_input
+                .begin_event(window.id(), &WindowEvent::RedrawRequested);
+            self.inner
+                .window_event(event_loop, window.id(), WindowEvent::RedrawRequested);
+            self.paste_input.end_event();
+            self.root_repaints
+                .prune(ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT));
+        }
+    }
+
+    fn trace_root_repaint(
+        &self,
+        phase: &'static str,
+        when: Instant,
+        requested_pass: u64,
+        event_loop: &ActiveEventLoop,
+    ) {
+        let Some(state) = &self.root_state else {
+            return;
+        };
+        diagnostics::event("root-repaint-event", || {
+            let state = state.borrow();
+            let window = state.root_window.as_ref().and_then(Weak::upgrade);
+            let now = Instant::now();
+            json!({
+                "phase":phase,
+                "requestedRootPass":requested_pass,
+                "currentRootPass":state.egui_ctx.as_ref().map(|ctx| ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT)),
+                "due":when <= now,
+                "overdueUs":now.checked_duration_since(when).map(|duration| duration.as_micros()),
+                "rootWindowId":state.root_window_id.map(|id| format!("{id:?}")),
+                "weakUpgrade":window.is_some(),
+                "nativeVisible":window.as_ref().and_then(|window| window.is_visible()),
+                "nativeMinimized":window.as_ref().and_then(|window| window.is_minimized()),
+                "rootRepaintRequested":state.egui_ctx.as_ref().map(|ctx| ctx.has_requested_repaint_for(&egui::ViewportId::ROOT)),
+                "controlFlow":format!("{:?}", event_loop.control_flow()),
+            })
+        });
     }
 }
 
@@ -214,10 +398,21 @@ fn main() -> eframe::Result {
     let workbench_paste_input = paste_input.clone();
     let shortcuts = workbench::ShortcutOwner::default();
     let workbench_shortcuts = shortcuts.clone();
+    diagnostics::install_eframe_logger();
+    let native_state = Rc::new(RefCell::new(RootState::default()));
+    let create_native_state = native_state.clone();
     let inner = eframe::create_native(
         "Captures renderer experiment",
         native,
         Box::new(move |cc| {
+            let window = cc
+                .winit_window()
+                .expect("native creation context has a root window");
+            *create_native_state.borrow_mut() = RootState {
+                egui_ctx: Some(cc.egui_ctx.clone()),
+                root_window_id: Some(window.id()),
+                root_window: Some(std::sync::Arc::downgrade(window)),
+            };
             Ok(Box::new(workbench::Workbench::new(
                 cc,
                 options,
@@ -229,11 +424,18 @@ fn main() -> eframe::Result {
         }),
         &event_loop,
     );
+    let root_state =
+        (cfg!(target_os = "windows") || diagnostics::is_enabled()).then_some(native_state);
     let mut application = InputApplication {
         inner,
         paste_input,
         shortcut_input,
         shortcuts,
+        root_state,
+        #[cfg(target_os = "windows")]
+        root_repaints: root_repaint::Pending::default(),
+        #[cfg(target_os = "windows")]
+        root_suspended: false,
         root_window: None,
         root_focused: false,
         modifiers: ModifiersState::default(),
