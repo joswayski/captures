@@ -3,6 +3,29 @@ import XCTest
 @testable import CapturesNative
 
 final class OpenImageTests: XCTestCase {
+    func testSettingsFailureDoesNotImportBeforeEditorIsReady() throws {
+        _ = NSApplication.shared
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame); window.contentView = root
+        let transport = OpenImageTransport(image: folder.appendingPathComponent("source.png").path)
+        let controller = LiveCaptureController(root: root, window: window,
+            tokens: try XCTUnwrap(Tokens.variants["light-mustard"]),
+            historyRoot: folder.path, settingsPath: folder.path, transport: transport,
+            showPreferences: {})
+        defer { withExtendedLifetime(controller) {} }
+        controller.openImages(["/first.png", "/second.png"])
+        try waitUntil { !controller.externalOpenPending && root.subviews.compactMap {
+            ($0 as? NSTextField)?.stringValue
+        }.contains { $0.contains("Couldn’t open 2 images") } }
+        XCTAssertTrue(transport.requests.isEmpty, "settings failure cannot create History items")
+    }
+
     func testRealBridgeOpensExternalPNGIntoHistoryAndDecodedEditor() throws {
         _ = NSApplication.shared
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -18,7 +41,7 @@ final class OpenImageTests: XCTestCase {
             "operation": "load", "path": settingsPath])["settings"] as? [String: Any])
         settings["output_directory"] = folder.path
         _ = try settingsBridge.request(["operation": "save", "path": settingsPath, "settings": settings])
-        let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
+        let frame = NSRect(x: 0, y: 0, width: 1280, height: 800)
         let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
@@ -37,6 +60,11 @@ final class OpenImageTests: XCTestCase {
         defer { editor.performClose(nil) }
         try waitUntil { editor.contentView.map { descendants($0).compactMap { $0 as? NSImageView }
             .contains { $0.image != nil && $0.accessibilityLabel() == "Edited screenshot preview" } } == true }
+        if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"],
+           let content = editor.contentView {
+            try capture(content, to: URL(fileURLWithPath: output)
+                .appendingPathComponent("external-open-dark-editor-normal.png"))
+        }
         let artifacts = try XCTUnwrap(AppBridge().request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
         XCTAssertEqual(artifacts.count, 1)
@@ -95,6 +123,10 @@ final class OpenImageTests: XCTestCase {
         XCTAssertEqual(table.selectedRow, 0)
         XCTAssertTrue(root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
             .contains { $0.contains("/invalid.gif") && $0.contains("Unsupported") })
+        if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
+            try capture(root, to: URL(fileURLWithPath: output)
+                .appendingPathComponent("external-open-light-error-minimum.png"))
+        }
         XCTAssertEqual(transport.operations.filter { $0 == "open_image" }.count, 3)
         XCTAssertFalse(transport.operations.contains("request_permission"))
     }
@@ -131,6 +163,43 @@ final class OpenImageTests: XCTestCase {
         XCTAssertFalse(NSApp.windows.contains { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
     }
 
+    func testSupersedingHistoryDoesNotOpenStaleEditorOrKeepBusyLatch() throws {
+        _ = NSApplication.shared
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let source = folder.appendingPathComponent("source.png")
+        try XCTUnwrap(NSBitmapImageRep(cgImage: PreviewView.fixtureImage(scale: 1))
+            .representation(using: .png, properties: [:])).write(to: source)
+        let settingsPath = folder.appendingPathComponent("settings.json").path
+        let transport = OpenImageTransport(image: source.path)
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame); window.contentView = root
+        let controller = LiveCaptureController(root: root, window: window,
+            tokens: try XCTUnwrap(Tokens.variants["dark-mustard"]),
+            historyRoot: folder.path, settingsPath: settingsPath, transport: transport,
+            showPreferences: {})
+        defer { withExtendedLifetime(controller) {} }
+        let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
+            .first?.documentView as? NSTableView)
+        try waitUntil { transport.operations.contains("history") }
+        // Wait for the first History callback, not just its worker response.
+        try waitUntil { !controller.externalOpenPending && table.numberOfRows == 0 }
+        let gate = transport.blockNextHistory()
+        controller.openImages([source.path])
+        try waitUntil { transport.firstOpenStarted.wait(timeout: .now()) == .success }
+        transport.releaseFirstOpen.signal()
+        try waitUntil { transport.blockedHistoryStarted.wait(timeout: .now()) == .success }
+        controller.refreshHistory()
+        gate.signal()
+        try waitUntil { !controller.externalOpenPending && table.numberOfRows == 1 }
+        XCTAssertTrue(controller.prepareEditorForTermination())
+        XCTAssertFalse(NSApp.windows.contains { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
+    }
+
     private func waitUntil(_ condition: () -> Bool) throws {
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
@@ -144,17 +213,28 @@ final class OpenImageTests: XCTestCase {
     private func descendants(_ view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap(descendants)
     }
+
+    private func capture(_ view: NSView, to path: URL) throws {
+        view.window?.display(); view.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try FileManager.default.createDirectory(at: path.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: path)
+    }
 }
 
 private final class OpenImageTransport: AppTransport {
     let firstOpenStarted = DispatchSemaphore(value: 0)
     let releaseFirstOpen = DispatchSemaphore(value: 0)
+    let blockedHistoryStarted = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private let image: String
     private let existing: Bool
     private var opened = false
     private var seen: [[String: Any]] = []
     private var calls: [String] = []
+    private var blockedHistory: DispatchSemaphore?
     var requests: [[String: Any]] { lock.lock(); defer { lock.unlock() }; return seen }
     var operations: [String] { lock.lock(); defer { lock.unlock() }; return calls }
 
@@ -162,11 +242,25 @@ private final class OpenImageTransport: AppTransport {
         self.image = image; self.existing = existing
     }
 
+    func blockNextHistory() -> DispatchSemaphore {
+        let gate = DispatchSemaphore(value: 0)
+        lock.lock(); blockedHistory = gate; lock.unlock()
+        return gate
+    }
+
     func request(_ object: [String: Any]) throws -> [String: Any] {
         let operation = object["operation"] as? String ?? ""
         lock.lock(); calls.append(operation); lock.unlock()
         switch operation {
         case "history":
+            lock.lock()
+            let gate = blockedHistory
+            blockedHistory = nil
+            lock.unlock()
+            if let gate {
+                blockedHistoryStarted.signal()
+                _ = gate.wait(timeout: .now() + 5)
+            }
             lock.lock(); let isOpened = opened; lock.unlock()
             let artifact = entry("opened-id")
             return ["artifacts": existing

@@ -1921,8 +1921,11 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         presentEditor(artifact)
     }
 
-    private func presentEditor(_ artifact: CaptureArtifact, completion: (() -> Void)? = nil) {
-        run({ [settingsPath] in try CapturePreferences.load(path: settingsPath).directory }) {
+    private func presentEditor(_ artifact: CaptureArtifact, outputDirectory: String? = nil,
+                               completion: (() -> Void)? = nil) {
+        run({ [settingsPath] in
+            try outputDirectory ?? CapturePreferences.load(path: settingsPath).directory
+        }) {
             [weak self] result in
             guard let self else { return }
             defer { completion?() }
@@ -2044,7 +2047,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         let openIDs = screenshotEditor?.activeArtifactID.map { [$0] } ?? []
         externalOpenPending = true; updateActions()
         status.stringValue = "Opening image…"
-        run({ [transport, historyRoot] in
+        run({ [transport, historyRoot, settingsPath] in
+            // An open must not create a History item that the editor cannot
+            // present because its settings have not loaded (or are invalid).
+            let outputDirectory = try CapturePreferences.load(path: settingsPath).directory
             let response = try transport.request([
                 "operation": "open_image", "root": historyRoot, "path": path,
                 "open_artifact_ids": openIDs,
@@ -2052,14 +2058,14 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             guard let value = response["artifact"] as? [String: Any],
                   let artifact = CaptureArtifact(value), !artifact.isRecording,
                   response["already_open"] is Bool else { throw AppBridgeError.invalidResponse }
-            return artifact
+            return (artifact, outputDirectory)
         }) { [weak self] result in
             guard let self else { return }
             switch result {
             case .failure(let error):
                 self.externalOpenErrors.append("\(path): \(error.localizedDescription)")
                 self.externalOpenPending = false; self.updateActions(); self.processNextOpenImage()
-            case .success(let artifact):
+            case .success(let (artifact, outputDirectory)):
                 // Do not steal a newer user selection. Still refresh History so
                 // the imported item appears even when focus has changed.
                 let shouldOpen = self.userSelectionGeneration == selectedAtDispatch
@@ -2076,7 +2082,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     opened = true
                     self.window.makeKeyAndOrderFront(nil)
                     NSApp.activate(ignoringOtherApps: true)
-                    self.presentEditor(artifact) { [weak self] in
+                    self.presentEditor(artifact, outputDirectory: outputDirectory) { [weak self] in
                         guard let self else { return }
                         self.externalOpenPending = false; self.updateActions(); self.processNextOpenImage()
                     }
