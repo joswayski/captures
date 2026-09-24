@@ -370,7 +370,7 @@ Reopening an already-open source focuses its editor without replacing unsaved
 edits. Closed sources reload under the same History ID; screenshot sources with
 a saved draft must first be restored or explicitly discarded from History.
 AppKit switches its editor between sources only after opening settles and without
-dropping pending text or unsaved recording edits; a refused source remains in History.
+dropping pending text or unsaved edits; a refused source remains in History.
 The shared backend validates the actual recording container, editor preview and
 poster before publication. WebM is an input format, not a WebM export;
 Preserve-to-MP4 transcodes it rather than copying WebM bytes into an MP4 file.

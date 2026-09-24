@@ -1297,16 +1297,16 @@ Separately, both live development hosts open external PNG/JPEG/WebP/GIF/MP4/WebM
 paths through the shared History-backed `open_media` request using repeatable
 `--open-media` arguments (`--open-image` remains an ordered alias). The strict
 `open_image` API remains available. AppKit also handles a running app's file-open
-callback. Both queue startup
-inputs and serialize opens against editor focus and History refresh; unsupported
+callback. Both queue startup inputs and serialize opens against editor focus and
+History refresh; unsupported
 paths do not block later ones. Still images reuse the bounded, color-managed decoder
 above, excluding TIFF. Already-open canonical sources preserve active edits; a
 closed source reloads under the same History ID only if no saved editor draft exists.
 AppKit waits for its current editor open to settle before advancing the batch;
 pending text or unsaved edits block switching without losing the new History item.
 With a draft, the user must restore or discard it from History first so an interrupted
-reload cannot hide the only copy. Source bytes stay untouched and the source path
-remains available for explicit Replace original. Private X11 exercises bad-file
+reload cannot hide the only copy. Screenshot source bytes stay untouched and the
+source path remains available for explicit Replace original. Private X11 exercises bad-file
 continuation, three editors, canonical aliases, decoded pixels, untouched sources,
 saved-draft refusal/History restoration and same-ID source reload after explicit
 discard in both appearances. Windows and Wayland use the same host code but this

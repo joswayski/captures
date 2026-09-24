@@ -133,9 +133,12 @@ handoff and resource collection. Root `cargo test --workspace` does not include
 this experiment; run its manifest-specific checks too. It connects capture and
 recording engines for development but does not select a production renderer.
 
-Both native hosts accept `--live --open-image "/path/to/image.png"`; repeat
-`--open-image` for multiple PNG/JPEG/WebP paths. This imports owned History pixels
-without changing the source. An already-open source keeps its edits; a closed
+Both native hosts accept `--live --open-media "/path/to/file"`; repeat
+`--open-media` for PNG/JPEG/WebP/GIF/MP4/WebM paths. `--open-image` remains an alias
+in the same ordered queue. Stills import owned History pixels; GIF/video entries
+reference the external source and require FFmpeg/FFprobe as described below.
+Neither path changes source bytes. External recordings offer Save new copy, not
+Replace original. An already-open source keeps its edits; a closed screenshot
 source with a saved draft must be restored or explicitly discarded from History
 before source reload. AppKit also queues macOS file-open callbacks in live mode.
 These development binaries do not register Open With associations; Windows/Linux
@@ -162,6 +165,10 @@ stable History identity/date, retained draft and undo/redo, and minimum-size con
 Use `--external-image-only` for multi-file startup, canonical aliases, retained
 errors, exact imported pixels, source preservation, saved-draft refusal/restoration
 and same-ID source reload after explicit discard.
+Use `apps/native/x11_recording_editor_smoke.py --external-media` with `--binary`,
+`--output` and `--appearance` for a mixed still/GIF/MP4/WebM batch, staged edits
+through alias refocus, closed-source reopen, immutable sources and real WebM-to-MP4
+export. It uses a private X11 session and disposable data, not physical acceptance.
 Use `--history-shortcuts-only` for document Undo/Redo keys, exact restored layers,
 duplicate offsets/selection, Delete/Backspace, locked-layer protection,
 text-field and confirmation focus, and unchanged source bytes.
