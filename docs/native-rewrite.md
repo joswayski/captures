@@ -1283,9 +1283,9 @@ rejects TIFF on this path. An already-open canonical source focuses its editor;
 a closed source reloads under the same History ID only if no saved editor draft
 exists. With a draft, the user must restore or discard it from History first so
 an interrupted reload cannot hide the only copy. Source bytes stay untouched and
-the original source path remains available for explicit Replace original. This is
-a shared backend prerequisite, not a connected native file-open UI or OS file
-association; GIF/video and broader platform image formats remain separate work.
+the original source path remains available for explicit Replace original. AppKit
+connects this shared backend below; no host registers an OS file association.
+GIF/video and broader platform image formats remain separate work.
 RGB/grayscale ICC profiles convert to sRGB before publication, preserving straight
 alpha; untagged files assume sRGB. Unsupported or malformed ICC profiles, CMYK
 profiles, and PNG gamma/chromaticity-only or CICP descriptions fail recoverably

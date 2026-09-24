@@ -354,6 +354,12 @@ or letting it expire preserves History and exports; failed saves can be retried.
 The AppKit History view enables **Edit screenshot** for screenshots only. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
+Its Layers panel connects shared visibility, lock, opacity, movement, image rename,
+duplicate, delete and adjacent ordering commands while preserving locked barriers;
+the original History image and its exports remain unchanged until explicit replacement. Recording completion
+still presents its notice immediately; opening the recording editor is a separate History action. Real macOS and
+Windows recording, audio devices, multi-display and hardware acceptance remain open;
+Wayland recording is gated with the rest of native capture.
 The native AppKit live development host accepts repeatable `--open-image PATH`
 arguments only with `--live`, and handles macOS file-open requests while running.
 PNG, JPEG and WebP sources become local History-backed screenshot editor sessions;
@@ -361,12 +367,6 @@ unsupported files report an error without stopping later paths. Reopening an
 already-open source focuses its editor without replacing unsaved edits. This is
 not a registered file association or an installed-app opening feature; the
 Windows/Linux native host has not connected this entry point yet.
-Its Layers panel connects shared visibility, lock, opacity, movement, image rename,
-duplicate, delete and adjacent ordering commands while preserving locked barriers;
-the original History image and its exports remain unchanged until explicit replacement. Recording completion
-still presents its notice immediately; opening the recording editor is a separate History action. Real macOS and
-Windows recording, audio devices, multi-display and hardware acceptance remain open;
-Wayland recording is gated with the rest of native capture.
 Native Preferences also includes an optional feedback form. Sending shares only
 the message, optional contact, category, and displayed app/system details with
 captur.es; it never attaches captures, files, or diagnostics. Fixture mode cannot
@@ -492,7 +492,7 @@ as a separate History-backed screenshot editor item, without changing the source
 Opening an already-open source retains its editor; reopening a closed source
 refreshes its History image under the same ID. If that item has a saved draft,
 reopening refuses it until the draft is restored or explicitly discarded from
-History. This backend prerequisite is not yet a native file-open UI or OS file
+History. AppKit connects a live developer entry point; no host registers a file
 association. GIF, video and TIFF are not accepted by this external-open path.
 Its **Draw** view maps Rectangle, Ellipse, Line, Arrow and Pen gestures from the fitted
 edited preview into shared document coordinates, including reverse and off-canvas
