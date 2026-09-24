@@ -24,7 +24,7 @@ use captures_app::{
     },
     editor_image_background::BrushMode,
     editor_output::{SavedExport, save_new_export},
-    editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
+    editor_render::MAX_RENDER_DIMENSION,
     editor_session::{
         EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize, ImportImage,
         OpenRequest, PngOptions, Request, TextCreate, TextPatch,

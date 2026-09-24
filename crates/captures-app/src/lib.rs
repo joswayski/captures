@@ -277,6 +277,17 @@ fn open_image(root: &Path, path: &Path, open_artifact_ids: &[String]) -> Result<
             already_open: true,
         });
     }
+    if let Some(entry) = previous.as_ref() {
+        let draft =
+            captures_history::entry_directory(&root.with_file_name("editor-drafts"), &entry.id)?;
+        match fs::symlink_metadata(draft) {
+            Ok(_) => return Err(Error::Image(
+                "This image has a saved editor draft. Open it from History to restore or discard the draft before reopening the source.".into(),
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
 
     let pixels = editor_image_decode::decode_opened_image(&source).map_err(Error::Image)?;
     let png = captures_history::encode_png(&pixels)?;
@@ -305,42 +316,7 @@ fn open_image(root: &Path, path: &Path, open_artifact_ids: &[String]) -> Result<
     entry.saved_path = Some(source_path.into());
     entry.mime_type = Some("image/png".into());
 
-    // The editor's draft root is the sibling of this isolated History root.
-    // Hide the old draft only after all decoding/encoding has succeeded. On a
-    // publication error, restore it before reporting the failure.
-    let drafts = root.with_file_name("editor-drafts");
-    let draft = captures_history::entry_directory(&drafts, &entry.id)?;
-    let staged = drafts.join(format!(".{}.{}.reload", entry.id, uuid::Uuid::new_v4()));
-    let had_draft = match fs::symlink_metadata(&draft) {
-        Ok(metadata) => {
-            if !metadata.file_type().is_dir() {
-                return Err(Error::Image(
-                    "The saved editor draft is not a directory.".into(),
-                ));
-            }
-            fs::rename(&draft, &staged)?;
-            true
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error.into()),
-    };
-    if let Err(error) = captures_history::save_capture(root, &entry, &png, &preview) {
-        if had_draft {
-            fs::rename(&staged, &draft).map_err(|restore| {
-                Error::Image(format!(
-                    "History publication failed ({error}); draft restoration failed ({restore}); retained at {}",
-                    staged.display()
-                ))
-            })?;
-        }
-        return Err(error.into());
-    }
-    if had_draft && let Err(error) = fs::remove_dir_all(&staged) {
-        eprintln!(
-            "Opened image, but could not remove staged editor draft {}: {error}",
-            staged.display()
-        );
-    }
+    captures_history::save_capture(root, &entry, &png, &preview)?;
     Ok(Response::OpenedImage {
         artifact: artifact(root, entry)?,
         already_open: false,
