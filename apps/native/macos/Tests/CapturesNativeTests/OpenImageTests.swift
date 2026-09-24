@@ -205,7 +205,7 @@ final class OpenImageTests: XCTestCase {
             XCTAssertEqual(entry["kind"] as? String, container == "gif" ? "gif" : "video")
             XCTAssertEqual(entry["mime_type"] as? String,
                            container == "gif" ? "image/gif" : "video/\(container)")
-            XCTAssertEqual(entry["saved_path"] as? String, source.path)
+            XCTAssertEqual(entry["saved_path"] as? String, source.resolvingSymlinksInPath().path)
             XCTAssertFalse(try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
                 .first { $0.title == "Replace original…" }).isEnabled,
                 "external references must not offer destructive replacement")
