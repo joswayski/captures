@@ -683,10 +683,10 @@ impl MediaToolchain {
             .filter(|stream| stream.codec_type.as_deref() == Some("audio"))
             .count();
         let mime_type = source_container(input, probe.format.format_name.as_deref())?;
-        let kind = if mime_type == "image/gif" {
-            MediaKind::Gif
-        } else {
-            MediaKind::Video
+        let kind = match mime_type {
+            "image/gif" => MediaKind::Gif,
+            "image/png" => MediaKind::Screenshot,
+            _ => MediaKind::Video,
         };
         Ok(ProbeResult {
             metadata: MediaMetadata {
@@ -1472,11 +1472,7 @@ impl MediaToolchain {
                 exact: true,
             });
         }
-        if spec.format == ExportFormat::Mp4
-            && spec.quality == QualityPreset::Preserve
-            && spec.max_size_bytes.is_none()
-            && visual_edit_is_identity(&probe, edit)
-        {
+        if mp4_preserves_video_stream(&probe, edit, spec) && spec.max_size_bytes.is_none() {
             // Only audio is re-encoded. The copied video dominates the file,
             // so shipping behavior uses source size as an approximate result.
             return Ok(ExportEstimate {
@@ -2958,6 +2954,10 @@ fn source_container(input: &Path, demuxer: Option<&str>) -> Result<&'static str,
     let mut header = [0_u8; 4096];
     let len = fs::File::open(input)?.read(&mut header)?;
     let header = &header[..len];
+    // FFprobe is also used for extracted PNG frames by existing media callers.
+    if demuxer == Some("png_pipe") && header.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Ok("image/png");
+    }
     if demuxer == Some("gif") && (header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a")) {
         return Ok("image/gif");
     }
@@ -3043,7 +3043,7 @@ fn ebml_size(bytes: &[u8]) -> Option<(usize, usize)> {
     if width > 8 || bytes.len() < width {
         return None;
     }
-    let mut value = usize::from(first & (0xff >> width));
+    let mut value = usize::from(first & (0x7f_u8 >> (width - 1)));
     for &byte in &bytes[1..width] {
         value = value.checked_mul(256)?.checked_add(usize::from(byte))?;
     }
@@ -3121,6 +3121,36 @@ mod tests {
         header[4] = 0x7f; // Unknown-size VINT is not a bounded EBML Header.
         header[5] = 0xff;
         assert!(!webm_header(&header));
+    }
+
+    #[test]
+    fn webm_eight_byte_sizes_are_bounded_and_never_shift_out_of_range() {
+        let child = b"\x42\x82\x01\0\0\0\0\0\0\x04webm";
+        let mut header = vec![
+            0x1a,
+            0x45,
+            0xdf,
+            0xa3,
+            0x01,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            child.len() as u8,
+        ];
+        header.extend_from_slice(child);
+        assert!(webm_header(&header));
+        assert!(!webm_header(&header[..11])); // Truncated eight-byte Header size.
+        assert!(!webm_header(&header[..header.len() - 1])); // Truncated child.
+
+        let mut unknown_header = header.clone();
+        unknown_header[5..12].fill(0xff); // Unknown-sized 8-byte Header.
+        assert!(!webm_header(&unknown_header));
+        let mut unknown_child = header;
+        unknown_child[15..22].fill(0xff); // Unknown-sized 8-byte DocType.
+        assert!(!webm_header(&unknown_child));
     }
 
     #[test]
