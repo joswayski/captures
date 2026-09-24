@@ -397,9 +397,11 @@ per slice, not inferred from shared tests. Additional font import and OS acquisi
 inline input and physical input/IME/accessibility remain open.
 Both hosts now offer new-text style, size (8–512) and color before placement.
 Choices are per-editor UI state, not document/draft/undo; accepted responses and
-failed creation retain them. New editors start at Standard when available and
-annotation red. Shared Rust supplies Tauri's initial size: 5.5% of the original
-capture's shorter side, rounded and clamped to 24–72. It uses History dimensions,
+failed creation retain them. AppKit new editors start at Rounded box when the
+snapshot offers it, otherwise Standard, then Plain; the Windows/Linux host still
+starts at Standard when available. Both start at annotation red. Shared Rust
+supplies Tauri's initial size: 5.5% of the original capture's shorter side,
+rounded and clamped to 24–72. It uses History dimensions,
 not the resized/cropped canvas of a restored draft; later user choices remain
 unchanged across editing responses. Plain retains the explicit saved-family path for custom-font
 drafts. Presets come only from pinned fonts; Rounded is not substituted. Shared
