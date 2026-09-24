@@ -4135,6 +4135,7 @@ fn show_text(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
                 for preset in &presented.text_style_presets {
                     if ui.button(preset.label).clicked() {
                         fields.staged.apply_preset(preset);
+                        view.new_text_preset = Some(preset.id.into());
                         ui.close();
                     }
                 }
@@ -6031,6 +6032,105 @@ mod tests {
             }
         );
         assert_eq!(fields.accepted.background.as_deref(), Some("#123456"));
+    }
+
+    #[test]
+    fn named_text_preset_carries_forward_independently_of_staged_label_edits() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut initial = presented_text("old", "Label");
+        initial.initial_text_size = 39.;
+        view.receive(&ctx, Ok(initial));
+        view.new_text_color = "#2367ab".into();
+        let fields = view.text.as_mut().unwrap();
+        fields.accepted.font_size = 83.;
+        fields.accepted.color = "#abcdef".into();
+        fields.accepted.bold = true;
+        fields.staged = fields.accepted.clone();
+        let (tx, rx) = mpsc::channel();
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400., 1600.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| show_text(ui, view, &tx));
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let position = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing text: {label}"))
+        };
+        let click = |view: &mut View, pos| {
+            frame(view, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    view,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+        };
+        let choose_mono = |view: &mut View| {
+            let output = frame(view, vec![]);
+            click(view, position(&output, "Style…"));
+            let output = frame(view, vec![]);
+            click(view, position(&output, "Mono box"));
+        };
+        choose_mono(&mut view);
+        assert_eq!(view.new_text_preset.as_deref(), Some("mono-box"));
+        assert_eq!(view.new_text_size, 39.);
+        assert_eq!(view.new_text_color, "#2367ab");
+        assert_eq!(view.text.as_ref().unwrap().staged.font_size, 83.);
+        assert!(
+            rx.try_recv().is_err(),
+            "choosing a preset only stages the label"
+        );
+        let output = frame(&mut view, vec![]);
+        click(&mut view, position(&output, "Cancel changes"));
+        let fields = view.text.as_ref().unwrap();
+        assert_eq!(fields.staged, fields.accepted);
+        assert_eq!(view.new_text_preset.as_deref(), Some("mono-box"));
+        choose_mono(&mut view);
+        let output = frame(&mut view, vec![]);
+        click(&mut view, position(&output, "Apply text"));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Job::Apply(Request::EditText { .. }))
+        ));
+        view.receive(&ctx, Err("render rejected".into()));
+        assert_eq!(view.new_text_preset.as_deref(), Some("mono-box"));
+        // A no-op choice on this label still chooses the next label's preset.
+        view.text.as_mut().unwrap().accepted = view.text.as_ref().unwrap().staged.clone();
+        view.new_text_preset = Some("box".into());
+        choose_mono(&mut view);
+        assert_eq!(view.new_text_preset.as_deref(), Some("mono-box"));
+        // Later explicit creation choices win over unrelated worker snapshots.
+        view.new_text_preset = Some("outlined".into());
+        view.receive(&ctx, Ok(presented_text("other", "Other label")));
+        assert_eq!(view.new_text_preset.as_deref(), Some("outlined"));
+        assert_eq!(view.new_text_size, 39.);
+        assert_eq!(view.new_text_color, "#2367ab");
     }
 
     #[test]

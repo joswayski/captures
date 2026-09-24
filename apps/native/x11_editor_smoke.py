@@ -1271,6 +1271,24 @@ def main():
             shot(editor, "text-preset-cancelled")
             assert text_pixels("text-preset-cancelled", font_field) == text_pixels(
                 f"text-edited-{args.appearance}", font_field), "Cancel restores the font field"
+            # Cancel restores this label, not the independently chosen future preset.
+            click(editor, 736, 62)
+            inspector_click(34, 128)
+            shot(editor, "text-preset-carried-default")
+            fixture_click((488, 389))  # Document (480,300), away from the existing label.
+            type_text("Later")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            future = save_layers(lambda values: len(values) == 3, "carried preset creates later label")[-1]
+            assert future["fontFamily"] == "mono" and future["background"] == "#111318"
+            assert future["fontSize"] == 24 and future["color"] == "#ff3b5c"
+            assert not future["bold"] and not future["italic"] and not future["outlined"]
+            assert future["align"] == "center" and not future["roundedBackground"]
+            assert future["id"] != created["id"]
+            shot(editor, "text-preset-carried-created")
+            click(editor, 35, 62)
+            save_layers(lambda values: len(values) == 2, "future label is one undo step")
+            click(editor, 464, 62)
+            inspector_click(100, 153)  # Restore the original label's selected-text inspector.
             inspector_click(90, 357)
             inspector_click(90, 622)
             inspector_click(74, 1231)
@@ -1324,6 +1342,7 @@ def main():
                            "text-glyph-shadow-pixels", "text-shadow-stage-cancel",
                            "text-custom-shadow-settings-reopen",
                            "text-named-style-staging-cancel", "text-named-style-preserve-undo-redo",
+                           "text-preset-future-after-cancel", "text-preset-future-independent-traits",
                            "text-plate-shadow", "text-shadow-undo-redo-reopen",
                            "text-outline-pixels", "text-outline-stage-cancel", "text-outline-undo-redo-reopen",
                            "text-undo-redo", "text-draft-reopen",
