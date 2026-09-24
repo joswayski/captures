@@ -120,9 +120,9 @@ final class AppBridgeTests: XCTestCase {
     func testLiveOptionValidationAndExplicitRoot() throws {
         let options = try Options(["--live", "--history-root", "/tmp/native-history"])
         XCTAssertTrue(options.live); XCTAssertEqual(options.historyRoot, "/tmp/native-history")
-        let images = try Options(["--open-image", "/tmp/red.png", "--live",
-                                  "--open-image", "/tmp/blue.webp"])
-        XCTAssertEqual(images.openImages, ["/tmp/red.png", "/tmp/blue.webp"])
+        let media = try Options(["--open-image", "/tmp/red.png", "--live",
+                                 "--open-media", "/tmp/blue.webm", "--open-image", "/tmp/green.gif"])
+        XCTAssertEqual(media.openMedia, ["/tmp/red.png", "/tmp/blue.webm", "/tmp/green.gif"])
         XCTAssertEqual(try Options(["--scene", "window"]).scene, "window")
         XCTAssertThrowsError(try Options(["--live", "--exercise"]))
         XCTAssertThrowsError(try Options(["--live", "--reference-chips"]))
@@ -130,5 +130,7 @@ final class AppBridgeTests: XCTestCase {
         XCTAssertThrowsError(try Options(["--open-image", "/tmp/red.png"]))
         XCTAssertThrowsError(try Options(["--open-image"]))
         XCTAssertThrowsError(try Options(["--live", "--open-image", ""]))
+        XCTAssertThrowsError(try Options(["--open-media", "/tmp/clip.mp4"]))
+        XCTAssertThrowsError(try Options(["--live", "--open-media"]))
     }
 }

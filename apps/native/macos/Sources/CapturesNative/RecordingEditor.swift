@@ -864,26 +864,31 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         layout()
     }
 
-    func present(artifact: CaptureArtifact, historyRoot: String, outputDirectory: String) {
-        if artifactID == artifact.id {
+    func present(artifact: CaptureArtifact, historyRoot: String, outputDirectory: String,
+                 completion: ((Bool) -> Void)? = nil) {
+        if artifactID == artifact.id, presentation != nil {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            completion?(true)
             return
         }
         if playbackState != .idle {
-            guard switchAfterPlayback == nil else { return }
+            guard switchAfterPlayback == nil else { completion?(false); return }
             switchAfterPlayback = artifact.id
             pausePlayback { [weak self] in
-                guard let self else { return }
+                guard let self else { completion?(false); return }
                 self.switchAfterPlayback = nil
                 self.present(artifact: artifact, historyRoot: historyRoot,
-                             outputDirectory: outputDirectory)
+                             outputDirectory: outputDirectory, completion: completion)
             }
             return
         }
-        if artifactID != nil, busy || pickerOpen || awaitingReplaceConfirmation || dirty {
+        if artifactID != nil, busy || pickerOpen || awaitingReplaceConfirmation
+            || dirty || cropAdjustmentActive {
             showError("Finish, cancel, save, or discard the current recording edits first.")
-            window.makeKeyAndOrderFront(nil); return
+            window.makeKeyAndOrderFront(nil)
+            completion?(false)
+            return
         }
         generation += 1
         let current = generation
@@ -920,19 +925,25 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         window.center(); window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         worker.open(historyRoot: historyRoot, artifactID: artifact.id) { [weak self] result in
-            guard let self, self.generation == current, self.artifactID == artifact.id else { return }
+            guard let self, self.generation == current, self.artifactID == artifact.id else {
+                completion?(false); return
+            }
+            let accepted: Bool
             switch result {
             case .success(let value):
+                accepted = true
                 self.busy = false
                 self.originalPath = value.originalSavePath
                 self.publish(value, initialize: true)
                 self.status.stringValue = "Original remains unchanged. Save creates a new copy."
-                self.generateThumbnails()
+                self.generateThumbnails(completion: { completion?(true) })
             case .failure(let error):
+                accepted = false
                 self.busy = false
                 self.showError("Couldn’t open recording: \(error.localizedDescription)")
             }
             self.updateControls(); self.layout()
+            if !accepted { completion?(false) }
         }
     }
 
@@ -941,6 +952,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         return stagedDiffers || canonicalEdit(snapshot.edit) != savedEdit
             || canonical(snapshot.saveExport) != savedExport
     }
+
+    var activeArtifactID: String? { window.isVisible ? artifactID : nil }
 
     func prepareForTermination() -> Bool {
         if playbackState != .idle {
@@ -1887,9 +1900,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
     }
 
-    private func generateThumbnails() {
+    private func generateThumbnails(completion: (() -> Void)? = nil) {
         guard !busy, !pickerOpen, presentation != nil,
-              let cancel = NativeRecordingEditorCancel() else { return }
+              let cancel = NativeRecordingEditorCancel() else { completion?(); return }
         let current = generation
         busy = true; activeCancel = cancel; thumbnailCancel = cancel
         thumbnailRetryAvailable = false
@@ -1899,7 +1912,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         updateControls(); layout()
         worker.thumbnails(cancel: cancel) { [weak self] result in
             guard let self, self.generation == current,
-                  self.thumbnailCancel === cancel else { return }
+                  self.thumbnailCancel === cancel else { completion?(); return }
             self.busy = false; self.activeCancel = nil; self.thumbnailCancel = nil
             switch result {
             case .success(let image):
@@ -1919,6 +1932,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 }
             }
             self.updateControls(); self.layout()
+            completion?()
         }
     }
 

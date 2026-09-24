@@ -37,7 +37,7 @@ final class RecordingRecoveryTests: XCTestCase {
         buttons(content, title: "Discard…")[0].performClick(nil)
         try waitUntil { window.attachedSheet != nil }
         XCTAssertEqual(worker.discardCount, 0)
-        controller.openImages(["/unsupported-image.gif"])
+        controller.openImages(["/unsupported-image.tiff"])
         XCTAssertEqual(transport.openImageCount, 0, "confirmation must keep the image queue parked")
         window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertSecondButtonReturn)
         try waitUntil { window.attachedSheet == nil }
@@ -455,7 +455,7 @@ private final class EmptyHistoryTransport: AppTransport {
             }
             return ["artifacts": artifacts]
         case "displays": return ["displays": []]
-        case "open_image":
+        case "open_media":
             lock.lock(); opens += 1; lock.unlock()
             throw AppBridgeError.backend("unsupported image fixture")
         default: throw AppBridgeError.invalidResponse

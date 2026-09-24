@@ -22,7 +22,7 @@ final class OpenImageTests: XCTestCase {
         controller.openImages(["/first.png", "/second.png"])
         try waitUntil { !controller.externalOpenPending && root.subviews.compactMap {
             ($0 as? NSTextField)?.stringValue
-        }.contains { $0.contains("Couldn’t open 2 images") } }
+        }.contains { $0.contains("Couldn’t open 2 files") } }
         XCTAssertTrue(transport.requests.isEmpty, "settings failure cannot create History items")
     }
 
@@ -119,6 +119,111 @@ final class OpenImageTests: XCTestCase {
                        "closing without saving reloads the canonical source under the same History ID")
     }
 
+    func testRealExternalRecordingsOpenWithoutChangingSourceOrAllowingReplace() throws {
+        _ = NSApplication.shared
+        guard let tools = try? NativeMediaTools.locate() else {
+            throw XCTSkip("ffmpeg and ffprobe are required")
+        }
+        for (container, suffix, appearance) in [("mp4", "mp4", "dark"),
+                                                ("gif", "gif", "light"),
+                                                ("webm", "mp4", "dark")] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let source = folder.appendingPathComponent("outside.\(suffix)")
+            let process = Process(); process.executableURL = URL(fileURLWithPath: tools.ffmpeg)
+            process.arguments = ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                "-i", "color=c=red:size=160x90:rate=10:duration=1", "-f", "lavfi",
+                "-i", "color=c=blue:size=160x90:rate=10:duration=1", "-filter_complex",
+                "[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]"]
+                + (container == "gif" ? ["-f", "gif"] : ["-c:v", container == "webm" ? "libvpx-vp9" : "mpeg4",
+                    "-f", container]) + [source.path]
+            try process.run(); process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0)
+            let original = try Data(contentsOf: source)
+            let history = folder.appendingPathComponent("History")
+            let settingsPath = folder.appendingPathComponent("settings.json").path
+            let bridge = SettingsBridge()
+            var settings = try XCTUnwrap(bridge.request([
+                "operation": "load", "path": settingsPath])["settings"] as? [String: Any])
+            settings["output_directory"] = folder.path
+            _ = try bridge.request(["operation": "save", "path": settingsPath, "settings": settings])
+            let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
+            let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let root = Surface(frame: frame); window.contentView = root
+            let controller = LiveCaptureController(root: root, window: window,
+                tokens: try XCTUnwrap(Tokens.variants["\(appearance)-mustard"]),
+                historyRoot: history.path, settingsPath: settingsPath, showPreferences: {})
+            defer { withExtendedLifetime(controller) {} }
+            window.makeKeyAndOrderFront(nil)
+            controller.openImages(container == "gif" ? ["/unsupported.tiff", source.path] : [source.path])
+            let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
+                .first?.documentView as? NSTableView)
+            try waitUntil { table.numberOfRows == 1 && !controller.externalOpenPending }
+            if container == "gif" {
+                XCTAssertTrue(root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
+                    .contains { $0.contains("/unsupported.tiff") },
+                    "a failed file must remain visible while the later recording opens")
+                if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
+                    try capture(root, to: URL(fileURLWithPath: output)
+                        .appendingPathComponent("external-media-light-error-minimum.png"))
+                }
+            }
+            let editor = try XCTUnwrap(NSApp.windows.first { $0.title == "Recording editor" && $0.isVisible })
+            defer { editor.orderOut(nil) }
+            let controls = try XCTUnwrap(editor.contentView)
+            XCTAssertTrue(descendants(controls).compactMap { $0 as? NSImageView }.contains { $0.image != nil },
+                          "the first source-relative frame must decode in the recording editor")
+            let artifacts = try XCTUnwrap(AppBridge().request([
+                "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
+            let entry = try XCTUnwrap(artifacts.first?["entry"] as? [String: Any])
+            let id = try XCTUnwrap(entry["id"] as? String)
+            XCTAssertEqual(entry["kind"] as? String, container == "gif" ? "gif" : "video")
+            XCTAssertEqual(entry["mime_type"] as? String,
+                           container == "gif" ? "image/gif" : "video/\(container)")
+            XCTAssertEqual(entry["saved_path"] as? String, source.path)
+            XCTAssertFalse(try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
+                .first { $0.title == "Replace original…" }).isEnabled,
+                "external references must not offer destructive replacement")
+            if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"],
+               container != "webm" {
+                try capture(controls, to: URL(fileURLWithPath: output)
+                    .appendingPathComponent("external-media-\(appearance)-\(container)-normal.png"))
+                if container == "gif" {
+                    editor.setContentSize(NSSize(width: 760, height: 540))
+                    try capture(controls, to: URL(fileURLWithPath: output)
+                        .appendingPathComponent("external-media-light-gif-minimum.png"))
+                }
+            }
+            let trim = try XCTUnwrap(descendants(controls).compactMap { $0 as? NSTextField }
+                .first { $0.accessibilityLabel() == "Trim start milliseconds" })
+            let recordingEditor = try XCTUnwrap(editor.delegate as? RecordingEditorController)
+            trim.stringValue = "200"
+            recordingEditor.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                              object: trim))
+            controller.openImages([source.path])
+            try waitUntil { !controller.externalOpenPending }
+            XCTAssertEqual(trim.stringValue, "200", "canonical focus preserves staged recording edits")
+            XCTAssertTrue(editor.isVisible)
+            XCTAssertEqual(try XCTUnwrap(AppBridge().request([
+                "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]]).count, 1)
+            trim.stringValue = "0"
+            recordingEditor.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                              object: trim))
+            editor.performClose(nil)
+            try waitUntil { !editor.isVisible }
+            controller.openImages([source.path])
+            try waitUntil { !controller.externalOpenPending && editor.isVisible }
+            let reopened = try XCTUnwrap(AppBridge().request([
+                "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
+            XCTAssertEqual((reopened.first?["entry"] as? [String: Any])?["id"] as? String, id)
+            XCTAssertEqual(try Data(contentsOf: source), original, "opening and refocusing must not rewrite source")
+            editor.performClose(nil)
+        }
+    }
+
     func testRealBatchWaitsForFirstEditorBeforeOpeningDistinctSecondImage() throws {
         _ = NSApplication.shared
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -192,7 +297,7 @@ final class OpenImageTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         try waitUntil { root.subviews.compactMap { $0 as? CaptureButton }
             .first { $0.title == "Capture display" }?.isEnabled == true }
-        controller.openImages(["/invalid.gif", png.path, png.path])
+        controller.openImages(["/invalid.tiff", png.path, png.path])
         XCTAssertFalse(controller.prepareEditorForTermination(), "queued startup opens block teardown")
         try waitUntil { transport.firstOpenStarted.wait(timeout: .now()) == .success }
         XCTAssertEqual(transport.requests.count, 1)
@@ -207,7 +312,7 @@ final class OpenImageTests: XCTestCase {
         XCTAssertTrue(controller.prepareEditorForTermination())
         let requests = transport.requests
         XCTAssertEqual(requests.compactMap { $0["path"] as? String },
-                       ["/invalid.gif", png.path, png.path])
+                       ["/invalid.tiff", png.path, png.path])
         XCTAssertTrue(requests.allSatisfy { ($0["root"] as? String) == folder.path })
         XCTAssertEqual(requests[0]["open_artifact_ids"] as? [String], [])
         XCTAssertEqual(requests[1]["open_artifact_ids"] as? [String], [])
@@ -220,12 +325,12 @@ final class OpenImageTests: XCTestCase {
         let entry = try XCTUnwrap(artifacts.first?["entry"] as? [String: Any])
         XCTAssertEqual(requests[2]["open_artifact_ids"] as? [String], [try XCTUnwrap(entry["id"] as? String)])
         XCTAssertTrue(root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
-            .contains { $0.contains("/invalid.gif") && $0.contains("Unsupported") })
+            .contains { $0.contains("/invalid.tiff") && $0.contains("Unsupported") })
         if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
             try capture(root, to: URL(fileURLWithPath: output)
                 .appendingPathComponent("external-open-light-error-minimum.png"))
         }
-        XCTAssertEqual(transport.operations.filter { $0 == "open_image" }.count, 3)
+        XCTAssertEqual(transport.operations.filter { $0 == "open_media" }.count, 3)
         XCTAssertFalse(transport.operations.contains("request_permission"))
     }
 
@@ -373,13 +478,13 @@ private final class OpenImageTransport: AppTransport {
             "id": "fixture", "name": "Fixture", "width": 1000, "height": 720,
             "x": 0, "y": 0, "scale_factor": 1, "is_primary": true,
         ]] : []]
-        case "open_image":
+        case "open_media":
             lock.lock(); seen.append(object); let count = seen.count; lock.unlock()
             if count == 1 {
                 firstOpenStarted.signal()
                 _ = releaseFirstOpen.wait(timeout: .now() + 5)
             }
-            if object["path"] as? String == "/invalid.gif" {
+            if object["path"] as? String == "/invalid.tiff" {
                 throw AppBridgeError.backend("Unsupported image format")
             }
             if realHistory { return try AppBridge().request(object) }

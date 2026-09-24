@@ -1293,12 +1293,14 @@ physical file dialogs, input, accessibility or IME. Windows and Wayland share th
 implementation but remain presentation-unverified; AppKit import is described below.
 Batch import and drag-and-drop remain separate slices. Shipping Tauri import is unchanged.
 
-Separately, both live development hosts open external PNG/JPEG/WebP paths through
-the shared History-backed `open_image` request using repeatable `--open-image`
-arguments. AppKit also handles a running app's file-open callback. Both queue startup
+Separately, both live development hosts open external PNG/JPEG/WebP/GIF/MP4/WebM
+paths through the shared History-backed `open_media` request using repeatable
+`--open-media` arguments (`--open-image` remains an ordered alias). The strict
+`open_image` API remains available. AppKit also handles a running app's file-open
+callback. Both queue startup
 inputs and serialize opens against editor focus and History refresh; unsupported
-paths do not block later ones. The request reuses the bounded, color-managed decoder
-above but rejects TIFF. Already-open canonical sources preserve active edits; a
+paths do not block later ones. Still images reuse the bounded, color-managed decoder
+above, excluding TIFF. Already-open canonical sources preserve active edits; a
 closed source reloads under the same History ID only if no saved editor draft exists.
 AppKit waits for its current editor open to settle before advancing the batch;
 pending text or unsaved edits block switching without losing the new History item.
@@ -1310,19 +1312,24 @@ saved-draft refusal/History restoration and same-ID source reload after explicit
 discard in both appearances. Windows and Wayland use the same host code but this
 entry point remains presentation-unverified there; AppKit uses macOS CI bridge/window
 tests. Neither host registers file associations or claims physical file-open acceptance.
-Windows/Linux single-instance forwarding, GIF/video and broader platform image
-formats remain separate work.
-The additive shared `open_media` JSON request now delegates PNG/JPEG/WebP to that
-existing path and prepares GIF/MP4/WebM as external recording references without
-copying the source. It matches canonical active sources before requiring FFmpeg,
+Windows/Linux single-instance forwarding and broader platform image formats remain
+separate work. AppKit waits for recording frame and thumbnail settlement before
+advancing, focuses canonical active recordings without losing staged work, and
+refuses unsafe editor switches. wgpu keeps one editor per active artifact and
+includes recording IDs when requesting canonical-source focus.
+GIF/MP4/WebM enter History as external recording references without copying the
+source. The request matches canonical active sources before requiring FFmpeg,
 validates a decoded editor frame and poster before History publication, and keeps
 the same ID on closed reopen. FFprobe's combined MOV/MP4 and Matroska/WebM
 demuxers are disambiguated with bounded container headers; MOV and MKV are not
 silently labeled as supported formats. WebM Preserve-to-MP4 transcodes instead of
 copying source bytes. Reference-backed recordings suppress the Replace original
 hint; the existing private-recovery and permanent-save identity checks still guard
-the backend operation. This is shared backend support only: the above native hosts
-still open only PNG/JPEG/WebP until their separate file-open wiring lands.
+the backend operation. The private-X11 external-media fixture exercises a mixed
+batch, staged GIF trim through alias focus, real container metadata despite a
+misleading suffix, same-ID closed WebM reopen, H.264 MP4 export with decoded output
+pixels, source-byte identity and normal/minimum recording and error states.
+These checks do not close Windows, Wayland or physical-host acceptance gates.
 
 The wgpu Output panel now previews shared PNG/JPEG/WebP encoding with the shipping
 quality modes, palette controls and hard byte budget. Encoding and decoding run
