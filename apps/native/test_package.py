@@ -4,6 +4,7 @@ from pathlib import Path, PureWindowsPath
 import plistlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -59,7 +60,8 @@ class DevelopmentPackageTests(unittest.TestCase):
                 elif platform == "windows":
                     self.assertTrue(launcher.read_bytes().startswith(b"\xff\xfe"))
 
-    @unittest.skipUnless(os.name == "posix" and shutil.which("gio"), "requires gio desktop-entry parser")
+    @unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("gio"),
+                         "requires Linux GIO desktop-entry launch support")
     def test_gio_preserves_exec_quoting_and_multiple_paths_without_a_shell(self):
         # Exercise an independent desktop-entry parser, including shell syntax
         # in executable and media filenames and literal field codes in media.

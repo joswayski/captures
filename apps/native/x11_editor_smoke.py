@@ -147,6 +147,14 @@ def main():
         assert result.returncode in (0, 1), result.stderr
         return result.stdout.split()
 
+    def active_window():
+        result = subprocess.run(["xdotool", "getactivewindow"], env=env,
+                                capture_output=True, text=True, timeout=5)
+        # Openbox can temporarily unset _NET_ACTIVE_WINDOW while changing focus.
+        # Keep polling until the expected window actually owns focus.
+        assert result.returncode in (0, 1), result.stderr
+        return result.stdout.strip() if result.returncode == 0 else None
+
     shot_layouts = {}
 
     def shot(window, name):
@@ -390,7 +398,7 @@ def main():
             artifact_id = opened["id"]
             artifact = history / artifact_id
             wait(lambda: len(windows("Screenshot editor")) == 3, "three native image editors")
-            editor = wait(lambda: active if (active := run("xdotool", "getactivewindow").decode().strip())
+            editor = wait(lambda: active if (active := active_window())
                           in windows("Screenshot editor") else None, "last opened image focused")
             shot(root, "history")
         else:
@@ -489,7 +497,7 @@ def main():
             # A second executable must forward, not initialize another renderer,
             # settings writer or set of capture shortcuts. Sender CWD differs.
             run("xdotool", "windowactivate", "--sync", root)
-            assert run("xdotool", "getactivewindow").decode().strip() == root
+            assert active_window() == root
             forwarded = subprocess.run(
                 [str(binary), "--live", "--history-root", str(history),
                  "--settings-file", str(output / "unused-secondary-settings.json"),
@@ -499,7 +507,7 @@ def main():
             assert '"event":"forwarded"' in forwarded.stdout
             assert '"event":"ready"' not in forwarded.stdout
             assert not (output / "unused-secondary-settings.json").exists()
-            wait(lambda: run("xdotool", "getactivewindow").decode().strip() == editor,
+            wait(lambda: active_window() == editor,
                  "forwarded canonical alias focuses existing edited window")
             assert len(windows("Screenshot editor")) == 3
             assert len(opened_entries()) == 3
@@ -511,7 +519,7 @@ def main():
                                         capture_output=True, text=True, timeout=10)
             assert relaunched.returncode == 0, relaunched.stderr
             assert '"event":"forwarded"' in relaunched.stdout
-            wait(lambda: run("xdotool", "getactivewindow").decode().strip() == root,
+            wait(lambda: active_window() == root,
                  "empty relaunch restores and focuses Preferences")
             assert app.poll() is None
             close(root)
