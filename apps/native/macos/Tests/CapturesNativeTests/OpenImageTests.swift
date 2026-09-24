@@ -121,7 +121,8 @@ final class OpenImageTests: XCTestCase {
         XCTAssertEqual(transport.requests.count, 1)
         XCTAssertTrue(controller.externalOpenPending)
         XCTAssertFalse(try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }
-            .first { $0.title == "Edit screenshot" }).isEnabled)
+            .first { $0.title == "Edit recording" }).isEnabled,
+            "the empty-History editor action stays disabled during the import")
         transport.releaseFirstOpen.signal()
         try waitUntil { transport.requests.count == 3 && !controller.externalOpenPending }
         XCTAssertTrue(controller.prepareEditorForTermination())
