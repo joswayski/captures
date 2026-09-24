@@ -120,9 +120,15 @@ final class AppBridgeTests: XCTestCase {
     func testLiveOptionValidationAndExplicitRoot() throws {
         let options = try Options(["--live", "--history-root", "/tmp/native-history"])
         XCTAssertTrue(options.live); XCTAssertEqual(options.historyRoot, "/tmp/native-history")
+        let images = try Options(["--open-image", "/tmp/red.png", "--live",
+                                  "--open-image", "/tmp/blue.webp"])
+        XCTAssertEqual(images.openImages, ["/tmp/red.png", "/tmp/blue.webp"])
         XCTAssertEqual(try Options(["--scene", "window"]).scene, "window")
         XCTAssertThrowsError(try Options(["--live", "--exercise"]))
         XCTAssertThrowsError(try Options(["--live", "--reference-chips"]))
         XCTAssertThrowsError(try Options(["--history-root", "/tmp/not-live"]))
+        XCTAssertThrowsError(try Options(["--open-image", "/tmp/red.png"]))
+        XCTAssertThrowsError(try Options(["--open-image"]))
+        XCTAssertThrowsError(try Options(["--live", "--open-image", ""]))
     }
 }
