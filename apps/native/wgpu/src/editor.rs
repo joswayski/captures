@@ -591,7 +591,13 @@ impl View {
                     self.new_text_preset = presented
                         .text_style_presets
                         .iter()
-                        .find(|preset| preset.id == "standard")
+                        .find(|preset| preset.id == "rounded-box")
+                        .or_else(|| {
+                            presented
+                                .text_style_presets
+                                .iter()
+                                .find(|preset| preset.id == "standard")
+                        })
                         .map(|preset| preset.id.to_owned());
                 }
                 let text_apply_pending = self.text_apply_pending;
@@ -6140,7 +6146,7 @@ mod tests {
         let mut initial = presented_text("old", "accepted");
         initial.initial_text_size = 39.; // Original capture, not this tiny draft canvas.
         view.receive(&ctx, Ok(initial));
-        assert_eq!(view.new_text_preset.as_deref(), Some("standard"));
+        assert_eq!(view.new_text_preset.as_deref(), Some("rounded-box"));
         assert_eq!(view.new_text_size, 39.);
         assert_eq!(view.new_text_color, "#ff3b5c");
         view.new_text_preset = Some("mono-box".into());
@@ -6152,6 +6158,14 @@ mod tests {
         assert_eq!(view.new_text_size, 37.5);
         assert_eq!(view.new_text_color, "invalid input");
         assert_eq!(view.text.as_ref().unwrap().accepted.text, "accepted");
+        let mut legacy = presented_text("old", "accepted");
+        legacy.font_families.remove("rounded");
+        legacy
+            .text_style_presets
+            .retain(|preset| preset.font_family != "rounded");
+        let mut reopened = View::default();
+        reopened.receive(&ctx, Ok(legacy));
+        assert_eq!(reopened.new_text_preset.as_deref(), Some("standard"));
         let mut plain = presented_text("old", "accepted");
         plain.text_style_presets.clear();
         let mut reopened = View::default();
