@@ -4042,6 +4042,85 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try field("New text color", in: fresh.root).stringValue, "#ff3b5c")
     }
 
+    func testRoundedBoxCreationDefaultRequiresOfferedFontAndRetainsUserChoice() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let fonts = ["sans": "Liberation Sans", "rounded": "Nunito"]
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", initialTextSize: 39, fonts: fonts))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showDraw(in: controller.root)
+            let tool = try popup("Drawing tool", in: controller.root)
+            tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+            let preset = try popup("New text style", in: controller.root)
+            XCTAssertEqual(preset.itemTitles, ["Plain", "Standard", "Rounded", "Outlined", "Box", "Rounded box"])
+            XCTAssertEqual(preset.titleOfSelectedItem, "Rounded box")
+            let size = try field("New text size", in: controller.root)
+            let color = try field("New text color", in: controller.root)
+            XCTAssertEqual(size.stringValue, "39")
+            XCTAssertEqual(color.stringValue, "#ff3b5c")
+            controller.window.setContentSize(NSSize(width: 1200, height: 820))
+            try render(controller.root, name: "screenshot-editor-text-default-rounded-normal-\(appearance)")
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            color.scrollToVisible(color.bounds)
+            controller.root.layoutSubtreeIfNeeded()
+            let scroll = try XCTUnwrap(color.enclosingScrollView)
+            for control in [preset, size, color] {
+                XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)),
+                              "New text defaults must be reachable at minimum size")
+            }
+            try render(controller.root, name: "screenshot-editor-text-default-rounded-minimum-\(appearance)")
+
+            worker.failOperation = "begin_text_input"
+            let click = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+            controller.drawOverlay.begin(at: click); controller.drawOverlay.end(at: click)
+            let first = try XCTUnwrap((worker.requests.last?["target"] as? [String: Any])?["create"] as? [String: Any])
+            XCTAssertEqual(first["stylePreset"] as? String, "rounded-box")
+            XCTAssertEqual(first["fontSize"] as? Double, 39)
+            XCTAssertEqual(first["color"] as? String, "#ff3b5c")
+            XCTAssertEqual(preset.titleOfSelectedItem, "Rounded box", "failure must retain the creation default")
+
+            preset.selectItem(withTitle: "Standard")
+            size.stringValue = "52"; color.stringValue = "#12abef"
+            worker.failOperation = nil
+            worker.response = { request in
+                switch request["operation"] as? String {
+                case "begin_text_input":
+                    return self.snapshot(id: "shot", layers: [self.textLayer(id: "new", text: "")],
+                        fonts: fonts,
+                        activeTextInput: ["input_id": request["input_id"] as! String,
+                                          "layer_id": "new", "is_new": true])
+                case "finish_text_input": return self.snapshot(id: "shot", unsaved: true,
+                    layers: [self.textLayer(id: "new", text: "")], fonts: fonts)
+                default: return nil
+                }
+            }
+            try button("Done", in: controller.root).performClick(nil)
+            let retry = try XCTUnwrap(worker.requests.last { $0["operation"] as? String == "begin_text_input" })
+            let create = try XCTUnwrap((retry["target"] as? [String: Any])?["create"] as? [String: Any])
+            XCTAssertEqual(create["stylePreset"] as? String, "rounded-box",
+                           "retry keeps the pending creation target, not later picker changes")
+            XCTAssertEqual(create["fontSize"] as? Double, 39)
+            XCTAssertEqual(create["color"] as? String, "#ff3b5c")
+            XCTAssertEqual(preset.titleOfSelectedItem, "Standard", "accepted snapshot must not reset user choice")
+            XCTAssertEqual(size.stringValue, "52")
+            XCTAssertEqual(color.stringValue, "#12abef")
+        }
+
+        let sans = ["sans": "Liberation Sans"]
+        for includeStandard in [true, false] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "old", fonts: sans,
+                includeStandardPreset: includeStandard))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "old"), historyRoot: "/native/History")
+            let preset = try popup("New text style", in: controller.root)
+            XCTAssertFalse(preset.itemTitles.contains("Rounded box"), "missing rounded font is not substituted")
+            XCTAssertEqual(preset.titleOfSelectedItem, includeStandard ? "Standard" : "Plain")
+        }
+    }
+
     func testInlineTextCoalescesRapidUnicodeTypingAndFlushesBeforeOneCommit() throws {
         _ = NSApplication.shared
         let fresh = textLayer(id: "fresh", text: "")
@@ -5106,6 +5185,78 @@ final class ScreenshotEditorTests: XCTestCase {
         wait(for: [reopened], timeout: 5)
     }
 
+    func testRealBridgeRoundedBoxUsesPinnedFontAndReopensExactPixels() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker(); defer { worker.close(); EditorWorker.flush() }
+        let opened = expectation(description: "open rounded text fixture")
+        var original: EditorPresentation?
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+            result in original = try? result.get(); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        let fonts = try XCTUnwrap(original).snapshot.fontFamilies
+        XCTAssertEqual(fonts["rounded"], "Nunito")
+        XCTAssertTrue(try XCTUnwrap(original).snapshot.textStylePresets.contains { $0.id == "rounded-box" })
+        func request(_ object: [String: Any]) throws -> EditorPresentation {
+            let done = expectation(description: "rounded text request")
+            var response: Result<EditorPresentation, Error>?
+            worker.request(object) { response = $0; done.fulfill() }
+            wait(for: [done], timeout: 5)
+            return try XCTUnwrap(response).get()
+        }
+        _ = try request(["operation": "resize_canvas", "width": 640, "height": 360])
+        let create: [String: Any] = ["operation": "create_text", "point": ["x": 190, "y": 110],
+                                     "text": "Native Ωé", "fontSize": 48,
+                                     "fontFamily": "sans", "color": "#ff3b5c"]
+        let plain = try request(create)
+        _ = try request(["operation": "undo"])
+        var roundedCreate = create; roundedCreate["stylePreset"] = "rounded-box"
+        let rounded = try request(roundedCreate)
+        let style = try XCTUnwrap(rounded.snapshot.layers.first?.textStyle)
+        XCTAssertEqual(style.fontFamily, "rounded")
+        XCTAssertEqual(style.fontSize, 48)
+        XCTAssertEqual(style.color, "#ff3b5c")
+        XCTAssertEqual(style.background, "#111318")
+        XCTAssertTrue(style.roundedBackground)
+        XCTAssertFalse(style.bold); XCTAssertFalse(style.italic); XCTAssertFalse(style.outlined)
+        XCTAssertEqual(style.align, "center")
+        let pixels = try XCTUnwrap(rounded.image.dataProvider?.data) as Data
+        XCTAssertNotEqual(pixels, try XCTUnwrap(plain.image.dataProvider?.data) as Data)
+        _ = try request(["operation": "save_draft", "updated_at_ms": 9876])
+        worker.close(); EditorWorker.flush()
+
+        let verification = EditorWorker()
+        let reopenedDraft = expectation(description: "reopen rounded text bytes")
+        verification.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                          artifactID: fixture.id) { result in
+            do {
+                let value = try result.get()
+                XCTAssertEqual(value.snapshot.layers.first?.textStyle, style)
+                XCTAssertEqual(try XCTUnwrap(value.image.dataProvider?.data) as Data, pixels)
+            } catch { XCTFail("\(error)") }
+            reopenedDraft.fulfill()
+        }
+        wait(for: [reopenedDraft], timeout: 5)
+        verification.close(); EditorWorker.flush()
+
+        for appearance in ["light", "dark"] {
+            let reopened = EditorWorker()
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: reopened)
+            controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            waitUntil { controller.state.snapshot?.hasDraft == true && !controller.state.busy }
+            XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle, style)
+            XCTAssertEqual(try popup("New text style", in: controller.root).titleOfSelectedItem, "Rounded box")
+            try showDraw(in: controller.root)
+            controller.window.setContentSize(NSSize(width: 1200, height: 820))
+            try render(controller.root, name: "screenshot-editor-rounded-box-saved-normal-\(appearance)")
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            try render(controller.root, name: "screenshot-editor-rounded-box-saved-minimum-\(appearance)")
+            controller.window.orderOut(nil); reopened.close(); EditorWorker.flush()
+        }
+    }
+
     func testRealBridgeTextInputTransactionPreviewCancelBlankAndOneUndo() throws {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
@@ -5376,6 +5527,7 @@ final class ScreenshotEditorTests: XCTestCase {
                           annotations: [String: [String: Any]] = [:],
                           textShadows: [String: [String: Any]]? = nil,
                           fonts: [String: String] = [:],
+                          includeStandardPreset: Bool = true,
                           canPaste: Bool = false,
                           activeTextInput: [String: Any]? = nil) -> NativeEditorSnapshot {
         var value: [String: Any] = [
@@ -5385,11 +5537,16 @@ final class ScreenshotEditorTests: XCTestCase {
             "font_families": fonts,
             "text_style_presets": ([
                 ["id": "standard", "label": "Standard", "fontFamily": "sans", "background": NSNull(), "outlined": false, "roundedBackground": false],
+                ["id": "rounded", "label": "Rounded", "fontFamily": "rounded", "background": NSNull(), "outlined": false, "roundedBackground": false],
                 ["id": "outlined", "label": "Outlined", "fontFamily": "sans", "background": NSNull(), "outlined": true, "roundedBackground": false],
                 ["id": "mono", "label": "Mono", "fontFamily": "mono", "background": NSNull(), "outlined": false, "roundedBackground": false],
                 ["id": "box", "label": "Box", "fontFamily": "sans", "background": "#111318", "outlined": false, "roundedBackground": false],
                 ["id": "mono-box", "label": "Mono box", "fontFamily": "mono", "background": "#111318", "outlined": false, "roundedBackground": false],
-            ] as [[String: Any]]).filter { fonts[$0["fontFamily"] as! String] != nil },
+                ["id": "rounded-box", "label": "Rounded box", "fontFamily": "rounded", "background": "#111318", "outlined": false, "roundedBackground": true],
+            ] as [[String: Any]]).filter {
+                fonts[$0["fontFamily"] as! String] != nil
+                    && (includeStandardPreset || $0["id"] as? String != "standard")
+            },
             "annotation_controls": annotations,
             "text_shadow_styles": textShadows ?? Dictionary(uniqueKeysWithValues: layers.compactMap { layer in
                 guard layer["kind"] as? String == "text", let id = layer["id"] as? String else { return nil }
