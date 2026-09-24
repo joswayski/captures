@@ -558,8 +558,10 @@ snapshot, even after its source is changed or deleted. Repeated pastes offset by
 24 pixels and support undo/redo. This does not replace the system clipboard or
 import clipboard images; **Copy image** remains the separate pixel-copy action.
 Closing the editor or discarding its draft clears the internal layer clipboard.
-Right-click a layer for Copy layer, Paste layer, Duplicate and Delete. These actions
-target that row; empty list space offers Paste. Locked layers cannot be deleted.
+Right-click a layer for Copy layer, Paste layer, Duplicate, Delete and Merge down.
+These actions target that row; Merge visible and Flatten image affect the document.
+Empty list space offers Paste and the document-wide combine actions.
+Locked layers cannot be deleted or merged down.
 With canvas focus, V selects layers, C starts Crop, T selects Text, R Rectangle,
 O Ellipse, L Line, D Diamond, S Star, A Arrow, P Pen, and B the last-used
 Wand/Erase/Restore mode (initially Wand). Switching tools cancels unfinished
@@ -603,12 +605,11 @@ Apply changes the document in one undo step; Cancel restores accepted values.
 Custom shadows and pinned-font named styles are connected, including style/size/color
 choices for new text. Font import and physical input/IME/accessibility acceptance
 remain open.
-Other drawing tools, post-save source adoption, and recording editing remain
-unconnected. Shared editor support
-is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
-single-instance relaunch and updates
-are not connected to the native hosts yet. Windows/Linux renderer selection and full
-feature/design parity remain open. The
+Post-save source adoption, remaining editor layout/interaction parity, onboarding,
+login items and updates remain open. Shared editor support is prerequisite work,
+not native editor acceptance. Resident shortcuts and single-instance relaunch are
+connected, but physical cross-platform acceptance and full feature/design parity
+remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
 existing Preview features remain available during development. The wgpu candidate
 does not yet support hidden-window idle on Wayland; see its
