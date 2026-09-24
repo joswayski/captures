@@ -66,7 +66,7 @@ Preview builds automatically publish installed-app changes from `main`, and may 
 - Optional cursor in screenshots (on by default; freeze screen does not include the pointer by itself)
 - Optional countdown before screenshots and recordings
 - Region recordings keep the selected area highlighted on screen while recording
-- Record as H.264 MP4, with desktop audio and microphone. Save or export as MP4, GIF, or WebM
+- Record as H.264 MP4, with desktop audio and microphone. Save or export as MP4 or GIF; WebM export is not supported
 - Pause, resume, restart, and mute while recording
 - On macOS and Windows, recording controls stay out of screenshots and recordings by default (Preferences). On Linux, use Hide controls during a recording to keep the bar off-screen
 - Cursor and click highlights in recordings (where supported)
