@@ -53,6 +53,12 @@ jobs:
           CAPTURES_TEST_ARTIFACTS: ${{ runner.temp }}/native-pixels
       - name: Forward native media between AppKit processes
         run: python3 apps/native/instance_smoke.py --binary apps/native/macos/.build/release/CapturesNative --output "$RUNNER_TEMP/native-preferences/instance"
+      - name: Open media through a disposable native app bundle
+        run: |
+          python3 apps/native/macos_open_with_smoke.py \
+            --binary apps/native/macos/.build/release/CapturesNative \
+            --resources apps/native/macos/.build/release/CapturesNative_CapturesNative.bundle \
+            --output "$RUNNER_TEMP/native-preferences/open-with"
       - name: Render native preferences
         run: |
           mkdir -p "$RUNNER_TEMP/native-preferences"

@@ -376,12 +376,16 @@ poster before publication. WebM is an input format, not a WebM export;
 Preserve-to-MP4 transcodes it rather than copying WebM bytes into an MP4 file.
 External recording references cannot use Replace original; that action requires
 a private recovery copy and a separate permanent save. Save new copy remains available.
-This is not a registered file association or an installed-app opening feature.
 Live development hosts now forward subsequent launches to the process using the
 same History directory, preserving file order and sender-relative paths; a launch
 without files restores the native workspace/Preferences or recording controls.
-Fixture launches remain independent. Installed associations and physical opening
-acceptance remain separate work. TIFF is supported by in-editor import, not this external-open path.
+Fixture launches remain independent. Optional unsigned development packages provide
+Open With metadata for these six formats on macOS, Windows and Linux, under a separate
+**Captures Native Development** identity. Staging does not install them or change
+default handlers; [local opt-in instructions](DEVELOPMENT.md#native-development-open-with)
+include removal. Signing, distribution and physical file-manager acceptance remain
+open; these are not replacement downloads. TIFF is supported by in-editor import,
+not this external-open path.
 Native Preferences also includes an optional feedback form. Sending shares only
 the message, optional contact, category, and displayed app/system details with
 captur.es; it never attaches captures, files, or diagnostics. Fixture mode cannot

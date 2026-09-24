@@ -2,6 +2,7 @@ use std::{path::PathBuf, time::Duration};
 
 pub const USAGE: &str = "Captures wgpu native host\n\
   --live [--history-root PATH] [--open-media PATH (repeatable; --open-image alias)]\n\
+  --live -- FILE... (Open With; everything after -- is a local path)\n\
   --scene preferences|history|hud|preview|editor|capture-controls|region|window|countdown|idle\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
@@ -124,6 +125,14 @@ impl Options {
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                "--" => {
+                    for path in args.by_ref() {
+                        if path.is_empty() {
+                            return Err("Empty media path".into());
+                        }
+                        options.open_media.push(path.into());
+                    }
+                }
                 "--live" => options.live = true,
                 "--history-root" => {
                     options.history_root = Some(args.next().ok_or("Missing history root")?.into())
@@ -247,6 +256,37 @@ mod tests {
     use super::*;
     fn parse(args: &[&str]) -> Result<Options, String> {
         Options::parse(args.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn open_with_paths_cannot_be_interpreted_as_options() {
+        let options = parse(&[
+            "--live",
+            "--open-media",
+            "first.png",
+            "--",
+            "é space.png",
+            "--exercise",
+            "--",
+            "second.webm",
+        ])
+        .unwrap();
+        assert_eq!(
+            options.open_media,
+            [
+                "first.png",
+                "é space.png",
+                "--exercise",
+                "--",
+                "second.webm"
+            ]
+            .map(PathBuf::from)
+        );
+        assert!(!options.exercise);
+        assert!(parse(&["--", "file.png"]).is_err());
+        assert!(parse(&["--live", "--", ""]).is_err());
+        assert!(parse(&["--live", "--typo"]).is_err());
+        assert!(parse(&["--live", "--"]).unwrap().open_media.is_empty());
     }
 
     #[test]

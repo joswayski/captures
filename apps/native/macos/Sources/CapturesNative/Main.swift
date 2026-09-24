@@ -17,10 +17,16 @@ struct Options {
     var appearanceOverride = false
     var themeOverride = false
 
-    init(_ arguments: [String]) throws {
+    init(_ arguments: [String], bundled: Bool = false) throws {
+        live = bundled
         var iterator = arguments.makeIterator()
         while let argument = iterator.next() {
             switch argument {
+            case "--":
+                while let path = iterator.next() {
+                    guard !path.isEmpty else { throw Usage.invalid }
+                    openMedia.append(path)
+                }
             case "--scene": scene = iterator.next() ?? ""
             case "--appearance": appearance = iterator.next() ?? ""; appearanceOverride = true
             case "--theme": theme = iterator.next() ?? ""; themeOverride = true
@@ -62,12 +68,17 @@ struct Options {
     static func main() {
         do {
             if CommandLine.arguments.dropFirst().elementsEqual(["--font-license"]) {
-                guard let url = Bundle.module.url(forResource: "EDITOR-FONT-LICENSE", withExtension: "txt")
+                guard let url = NativeResources.bundle.url(forResource: "EDITOR-FONT-LICENSE", withExtension: "txt")
                 else { throw Options.Usage.invalid }
                 print(try String(contentsOf: url, encoding: .utf8), terminator: "")
                 return
             }
-            let options = try Options(Array(CommandLine.arguments.dropFirst()))
+            let bundled = Bundle.main.object(forInfoDictionaryKey: "CapturesNativeLive") as? Bool == true
+            let options = try Options(Array(CommandLine.arguments.dropFirst()), bundled: bundled)
+            if bundled {
+                runBundle(options)
+                return
+            }
             var nativeInstance: NativeInstance?
             if options.live {
                 let result = try NativeInstance.start(historyRoot: options.historyRoot, paths: options.openMedia)
@@ -81,11 +92,34 @@ struct Options {
             application.delegate = delegate
             withExtendedLifetime(delegate) { application.run() }
         } catch Options.Usage.invalid {
-            FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH] [--open-media PATH|--open-image PATH]...] [--scene preferences|history|hud|preview|region|window|idle] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--settings-file PATH] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS]\n".utf8))
+            FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH] [--open-media PATH|--open-image PATH]...] [--scene preferences|history|hud|preview|region|window|idle] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--settings-file PATH] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS] [-- FILE...]\n".utf8))
             exit(1)
         } catch {
             FileHandle.standardError.write(Data("Captures could not start: \(error.localizedDescription)\n".utf8))
             exit(1)
         }
+    }
+
+    private static func runBundle(_ options: Options) {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.regular)
+        var workbench: Workbench?
+        var nativeInstance: NativeInstance?
+        defer { nativeInstance?.close() }
+        // LaunchServices delivers cold-open Apple events before didFinishLaunching.
+        // Collect those before election so a secondary does not exit and lose them.
+        let launch = BundledLaunch(options: options) { options, notification in
+            let result = try NativeInstance.start(historyRoot: options.historyRoot, paths: options.openMedia)
+            guard result.primary else { return false }
+            nativeInstance = result.owner
+            let delegate = Workbench(options: options, nativeInstance: nativeInstance)
+            workbench = delegate
+            application.delegate = delegate
+            delegate.applicationDidFinishLaunching(notification)
+            return true
+        }
+        application.delegate = launch
+        withExtendedLifetime(launch) { application.run() }
+        withExtendedLifetime(workbench) {}
     }
 }

@@ -760,7 +760,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         sidebar.wantsLayer = true
         sidebar.layer!.backgroundColor = tokens.color("surface-sunken").cgColor
         content.addSubview(sidebar)
-        if let url = Bundle.module.url(forResource: "icon", withExtension: "svg"),
+        if let url = NativeResources.bundle.url(forResource: "icon", withExtension: "svg"),
            let image = NSImage(contentsOf: url) {
             let icon = NSImageView(frame: NSRect(x: 20, y: 20, width: 28, height: 28))
             icon.image = image
