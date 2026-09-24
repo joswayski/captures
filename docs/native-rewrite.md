@@ -356,17 +356,22 @@ frame; failed text renders preserve accepted pixels and history. Drafts store fa
 mappings plus immutable font sidecars, not raw bytes in JSON, within the existing
 80 MiB image-plus-font save budget (including bounded full license notices in the
 manifest). New native sessions use twelve unmodified Liberation Sans/Serif/Mono
-2.1.5 static faces (4,359,164 bytes, shared across workers), with complete OFL 1.1 notices in
+2.1.5 static faces plus four unmodified Nunito 3.601 rounded faces (4,987,528
+font bytes total, shared across workers), with complete OFL 1.1 notices in
 native resources, `--font-license` output and text-bearing saved drafts. Image-only
 drafts do not persist the worker's unused font set. No OS fonts are copied
 and no network fallback occurs. This Latin/Greek/Cyrillic-oriented default is not
 universal Unicode or Tauri system-font equivalence; missing glyphs are errors.
+Nunito's regular cmap is narrower than Liberation Sans's (938 versus 2,327
+code points): é, Ω and Ж render, but Greek λ is absent in Nunito despite being
+present in Sans. A rounded host default can therefore reject previously
+accepted text; it must not silently substitute Sans.
 Both hosts stage family changes with the other Text Apply/Cancel fields. Their
 family picker reads the session's actual pinned map, not host defaults. Older
 Sans-only drafts remain Sans-only; explicit font migration is still unimplemented.
 Both selected-text inspectors offer a Style menu staged with Apply/Cancel.
 Rust supplies the shipping seven-style catalog filtered by the session's pinned
-font families: the bundle offers Standard, Outlined, Mono, Box and Mono box;
+font families: the bundle offers all seven styles, including Rounded and Rounded box;
 Sans-only drafts offer Standard, Outlined and Box. Rounded/Rounded box require an
 actual pinned `rounded` face and are not substituted with Sans. Presets change only
 family, plate/outline flags and (when no plate existed) the default plate color.

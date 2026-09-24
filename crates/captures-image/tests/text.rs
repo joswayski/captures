@@ -22,6 +22,30 @@ fn style() -> TextStyle<'static> {
 }
 
 #[test]
+fn a_requested_family_does_not_substitute_another_supplied_family_for_missing_glyphs() {
+    let mut renderer = TextRenderer::new([
+        Arc::from(include_bytes!("../../captures-app/fonts/nunito/Nunito-Regular.ttf").as_slice()),
+        Arc::from(
+            include_bytes!("../../captures-app/fonts/liberation/LiberationSans-Regular.ttf")
+                .as_slice(),
+        ),
+    ])
+    .unwrap();
+    let rounded = TextStyle {
+        family: "Nunito",
+        ..style()
+    };
+    assert!(renderer.render_line("Café Ω Ж", &rounded).is_ok());
+    assert!(renderer.measure_line("λ", &rounded).is_err());
+    assert!(renderer.render_line("λ", &rounded).is_err());
+    let sans = TextStyle {
+        family: "Liberation Sans",
+        ..style()
+    };
+    assert!(renderer.render_line("λ", &sans).is_ok());
+}
+
+#[test]
 fn measurement_shares_shaping_validation_but_not_the_raster_extent_limit() {
     let mut engine = renderer();
     for text in ["fi", "f i", "A\u{301}", "אב", " ", ""] {

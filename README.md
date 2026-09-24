@@ -387,11 +387,12 @@ outlines and shadow color, opacity, blur and offsets. Before placement, choose a
 named style, size and color; boxed styles center on the click. These defaults last
 only for that editor. Standard starts in the annotation red, with an initial size
 scaled to the original capture (24–72), using
-bundled Liberation Sans, with Serif and Mono also available (OFL 1.1); exact font
+bundled Liberation Sans, with Serif, Mono and rounded Nunito also available (OFL 1.1); exact font
 bytes and license notices stay with the draft. Older drafts offer only their saved
 fonts; adding new fonts to an existing draft is not implemented.
-Selected-text named styles use those pinned fonts; Rounded styles are unavailable
-without a pinned rounded face, which the native bundle does not provide.
+Selected-text named styles use those pinned fonts; Rounded and Rounded box are
+available in new sessions, but remain unavailable in older drafts without a
+saved rounded face.
 The Windows/Linux candidate and AppKit host separately connect on-canvas native
 multiline composing fields to the same shared transaction. Typing previews text
 without saving or adding undo steps; finishing commits one edit, while Cancel
