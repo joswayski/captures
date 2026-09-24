@@ -1319,7 +1319,9 @@ validates a decoded editor frame and poster before History publication, and keep
 the same ID on closed reopen. FFprobe's combined MOV/MP4 and Matroska/WebM
 demuxers are disambiguated with bounded container headers; MOV and MKV are not
 silently labeled as supported formats. WebM Preserve-to-MP4 transcodes instead of
-copying source bytes. This is shared backend support only: the above native hosts
+copying source bytes. Reference-backed recordings suppress the Replace original
+hint; the existing private-recovery and permanent-save identity checks still guard
+the backend operation. This is shared backend support only: the above native hosts
 still open only PNG/JPEG/WebP until their separate file-open wiring lands.
 
 The wgpu Output panel now previews shared PNG/JPEG/WebP encoding with the shipping

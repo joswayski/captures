@@ -377,6 +377,8 @@ MP4 and WebM History references. It validates the actual container, editor previ
 and poster before publication, keeps the external source unchanged, and reloads
 closed references under the same ID. WebM is an input format, not a WebM export;
 Preserve-to-MP4 transcodes it rather than copying WebM bytes into an MP4 file.
+External recording references cannot use Replace original; that action requires
+a private recovery copy and a separate permanent save. Save new copy remains available.
 Native GIF/video file-open host controls are not connected by this backend slice.
 Native Preferences also includes an optional feedback form. Sending shares only
 the message, optional contact, category, and displayed app/system details with
