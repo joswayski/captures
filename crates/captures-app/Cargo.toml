@@ -16,6 +16,9 @@ captures-settings = { path = "../captures-settings" }
 chrono.workspace = true
 global-hotkey = "0.8"
 image.workspace = true
+moxcms = "0.8"
+png = "0.18"
+tiff = "0.11"
 file-id = "0.2.3"
 serde.workspace = true
 serde_json.workspace = true
