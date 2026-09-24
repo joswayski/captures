@@ -372,6 +372,12 @@ dropping pending text or unsaved changes; a refused source remains in History.
 This is not a registered file association or an installed-app opening feature.
 Windows/Linux single-instance forwarding and GIF/video opening remain separate work;
 TIFF is supported by in-editor import, not this external-open path.
+The shared backend separately supports an additive `open_media` request for GIF,
+MP4 and WebM History references. It validates the actual container, editor preview
+and poster before publication, keeps the external source unchanged, and reloads
+closed references under the same ID. WebM is an input format, not a WebM export;
+Preserve-to-MP4 transcodes it rather than copying WebM bytes into an MP4 file.
+Native GIF/video file-open host controls are not connected by this backend slice.
 Native Preferences also includes an optional feedback form. Sending shares only
 the message, optional contact, category, and displayed app/system details with
 captur.es; it never attaches captures, files, or diagnostics. Fixture mode cannot

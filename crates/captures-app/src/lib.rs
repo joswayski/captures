@@ -21,13 +21,17 @@ pub mod window;
 
 use captures_capture::{CaptureError, CaptureMode, DisplayDescriptor, XcapBackend};
 use captures_history::{ArtifactKind, HistoryEntry};
+use captures_media::{
+    CancelToken, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaToolchain, QualityPreset,
+};
+use captures_recording::RecordingTarget;
 use captures_settings::ScreenshotFormat;
 use chrono::{Local, Utc};
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -41,6 +45,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("image encoding failed: {0}")]
     Image(String),
+    #[error("media could not be opened: {0}")]
+    Media(String),
     #[error("capture is no longer available")]
     Missing,
     #[error("Capture cancelled")]
@@ -79,6 +85,13 @@ pub enum Request {
         root: PathBuf,
         path: PathBuf,
         open_artifact_ids: Vec<String>,
+    },
+    OpenMedia {
+        root: PathBuf,
+        path: PathBuf,
+        open_artifact_ids: Vec<String>,
+        ffmpeg: Option<PathBuf>,
+        ffprobe: Option<PathBuf>,
     },
     SaveScreenshot {
         root: PathBuf,
@@ -121,6 +134,10 @@ pub enum Response {
         artifact: Artifact,
     },
     OpenedImage {
+        artifact: Artifact,
+        already_open: bool,
+    },
+    OpenedMedia {
         artifact: Artifact,
         already_open: bool,
     },
@@ -200,6 +217,13 @@ pub fn execute(request: Request) -> Result<Response, Error> {
             path,
             open_artifact_ids,
         } => open_image(&root, &path, &open_artifact_ids),
+        Request::OpenMedia {
+            root,
+            path,
+            open_artifact_ids,
+            ffmpeg,
+            ffprobe,
+        } => open_media(&root, &path, &open_artifact_ids, ffmpeg, ffprobe),
         Request::SaveScreenshot {
             root,
             id,
@@ -318,6 +342,141 @@ fn open_image(root: &Path, path: &Path, open_artifact_ids: &[String]) -> Result<
 
     captures_history::save_capture(root, &entry, &png, &preview)?;
     Ok(Response::OpenedImage {
+        artifact: artifact(root, entry)?,
+        already_open: false,
+    })
+}
+
+fn open_media(
+    root: &Path,
+    path: &Path,
+    open_artifact_ids: &[String],
+    ffmpeg: Option<PathBuf>,
+    ffprobe: Option<PathBuf>,
+) -> Result<Response, Error> {
+    let source = path.canonicalize()?;
+    if !source.is_file() {
+        return Err(Error::Missing);
+    }
+    let previous = captures_history::load(root, Utc::now())?
+        .into_iter()
+        .find(|entry| {
+            entry
+                .saved_path
+                .as_deref()
+                .and_then(|saved| Path::new(saved).canonicalize().ok())
+                .is_some_and(|saved| saved == source)
+        });
+    if let Some(entry) = previous.as_ref()
+        && open_artifact_ids.contains(&entry.id)
+    {
+        return Ok(Response::OpenedMedia {
+            artifact: artifact(root, entry.clone())?,
+            already_open: true,
+        });
+    }
+    let mut header = [0; 12];
+    let size = fs::File::open(&source)?.read(&mut header)?;
+    let recording = header.starts_with(b"GIF87a")
+        || header.starts_with(b"GIF89a")
+        || header.starts_with(&[0x1a, 0x45, 0xdf, 0xa3])
+        || (size >= 12 && &header[4..8] == b"ftyp");
+    if !recording {
+        return match open_image(root, &source, open_artifact_ids)? {
+            Response::OpenedImage {
+                artifact,
+                already_open,
+            } => Ok(Response::OpenedMedia {
+                artifact,
+                already_open,
+            }),
+            _ => unreachable!("open_image returns OpenedImage"),
+        };
+    }
+    if previous
+        .as_ref()
+        .is_some_and(|entry| entry.kind == ArtifactKind::Screenshot)
+    {
+        return Err(Error::Media("The source is already a screenshot in History; restore or discard its draft there before reopening.".into()));
+    }
+    let tools = MediaToolchain::new(
+        ffmpeg.unwrap_or_else(|| "ffmpeg".into()),
+        ffprobe.unwrap_or_else(|| "ffprobe".into()),
+    );
+    tools
+        .verify()
+        .map_err(|error| Error::Media(error.to_string()))?;
+    let probe = tools
+        .probe(&source)
+        .map_err(|error| Error::Media(error.to_string()))?;
+    recording_editor::validate_opened_source(&probe).map_err(Error::Media)?;
+    let scratch = tempfile::tempdir()?;
+    let poster = scratch.path().join("poster.png");
+    let frame = scratch.path().join("editor-frame.png");
+    let cancel = CancelToken::default();
+    let mut edit = EditSpec::default();
+    edit.audio.source_has_system_audio = probe.has_audio;
+    tools
+        .extract_edited_frame(
+            &source,
+            &edit,
+            &ExportSpec {
+                format: ExportFormat::Mp4,
+                quality: QualityPreset::Preserve,
+                max_size_bytes: None,
+                frames_per_second: None,
+                gif_max_colors: None,
+            },
+            0,
+            &frame,
+            &cancel,
+        )
+        .map_err(|error| Error::Media(error.to_string()))?;
+    editor_image_decode::decode_opened_image(&frame).map_err(Error::Media)?;
+    tools
+        .create_poster(&source, &poster, &cancel)
+        .map_err(|error| Error::Media(error.to_string()))?;
+    editor_image_decode::decode_opened_image(&poster).map_err(Error::Media)?;
+    let preview = fs::read(&poster)?;
+    let source_path = source
+        .to_str()
+        .ok_or_else(|| Error::Media("The media path is not valid UTF-8.".into()))?;
+    let mut entry = previous.unwrap_or_else(|| HistoryEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        kind: ArtifactKind::Video,
+        preview_url: String::new(),
+        full_url: String::new(),
+        width: 0,
+        height: 0,
+        size_bytes: 0,
+        created_at: Utc::now().to_rfc3339(),
+        mode: None,
+        saved_path: None,
+        mime_type: None,
+        duration_ms: None,
+        target: None,
+        has_system_audio: false,
+        has_microphone_audio: false,
+        dropped_frames: 0,
+    });
+    entry.kind = if probe.metadata.kind == MediaKind::Gif {
+        ArtifactKind::Gif
+    } else {
+        ArtifactKind::Video
+    };
+    entry.width = probe.metadata.width;
+    entry.height = probe.metadata.height;
+    entry.size_bytes = probe.metadata.size_bytes;
+    entry.saved_path = Some(source_path.into());
+    entry.mime_type = Some(probe.metadata.mime_type);
+    entry.duration_ms = probe.metadata.duration_ms;
+    entry.target = Some(RecordingTarget::Display {
+        display_id: "opened-file".into(),
+    });
+    entry.has_system_audio = probe.has_audio;
+    entry.has_microphone_audio = false;
+    captures_history::save_recording_reference(root, &entry, &preview)?;
+    Ok(Response::OpenedMedia {
         artifact: artifact(root, entry)?,
         already_open: false,
     })

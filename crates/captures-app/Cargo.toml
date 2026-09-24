@@ -11,6 +11,7 @@ captures-capture = { path = "../captures-capture" }
 captures-history = { path = "../captures-history" }
 captures-image = { path = "../captures-image" }
 captures-media = { path = "../captures-media" }
+captures-recording = { path = "../captures-recording" }
 captures-session = { path = "../captures-session" }
 captures-settings = { path = "../captures-settings" }
 chrono.workspace = true
@@ -26,9 +27,6 @@ sha2 = "0.10"
 tempfile.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-captures-recording = { path = "../captures-recording" }
 
 [lints]
 workspace = true

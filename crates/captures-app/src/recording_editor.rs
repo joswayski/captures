@@ -1150,6 +1150,17 @@ fn validate_source(entry: &HistoryEntry, probe: &ProbeResult) -> Result<(), Stri
     Ok(())
 }
 
+/// Check the editor's source and default preview constraints before an external
+/// reference enters History. A successful poster alone does not establish that
+/// the recording editor can open the source.
+pub(crate) fn validate_opened_source(probe: &ProbeResult) -> Result<(), String> {
+    validate_output_probe(probe)?;
+    let mut edit = EditSpec::default();
+    set_source_audio(&mut edit, probe.has_audio, false);
+    validate_session_edit(probe, &edit)?;
+    validate_export_spec(probe, &edit, &default_preview_export()).map_err(|error| error.to_string())
+}
+
 fn validate_output_probe(probe: &ProbeResult) -> Result<(), String> {
     validate_dimensions(probe.metadata.width, probe.metadata.height)?;
     if probe
