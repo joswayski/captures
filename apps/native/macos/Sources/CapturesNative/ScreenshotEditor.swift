@@ -1086,6 +1086,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
     }
 
+    var activeArtifactID: String? { window.isVisible ? state.artifactID : nil }
+
     func prepareForTermination() -> Bool {
         guard inlineTextInput != nil || !hasStagedText else {
             showError("Apply or cancel pending text before quitting.")

@@ -169,6 +169,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }()
     private var screenshotEditor: ScreenshotEditorController?
     private var recordingEditor: RecordingEditorController?
+    private var pendingOpenImages: [String] = []
+    private(set) var externalOpenPending = false
+    private var externalOpenErrors: [String] = []
     private(set) var recordingControlsHidden = false
     private var recordingPollTimer: Timer?
     private var recordingPollPending = false
@@ -349,7 +352,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             guard let self else { return }
             switch result { case .success(let path):
                 self.historyRoot = path; self.miniPreviewActions?.configure(historyRoot: path)
-                self.loadHistory(select: self.initialSelectionID); self.loadDisplays()
+                self.loadHistory(select: self.initialSelectionID, cleanup: { [weak self] in
+                    self?.processNextOpenImage()
+                }); self.loadDisplays()
             case .failure(let error): self.showError("Couldn’t locate native history", error) }
         }
     }
@@ -372,8 +377,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
 
-    private func loadHistory(select id: String? = nil, cleanup: (() -> Void)? = nil,
-                             completion: (() -> Void)? = nil) {
+    private func loadHistory(select id: String? = nil, selectIfUserGeneration: Int? = nil,
+                             cleanup: (() -> Void)? = nil, completion: (() -> Void)? = nil) {
         historyGeneration += 1
         let generation = historyGeneration
         refreshRecovery()
@@ -393,8 +398,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             defer { cleanup?() }
             guard self.historyGeneration == generation else { return }
             switch result { case .success(let values):
-                let previousID = id ?? self.selectedIndex.flatMap { self.artifacts.indices.contains($0) ? self.artifacts[$0].id : nil }
-                if let id, let requested = values.first(where: { $0.id == id }),
+                let eligibleID = selectIfUserGeneration == nil || selectIfUserGeneration == self.userSelectionGeneration
+                    ? id : nil
+                let previousID = eligibleID ?? self.selectedIndex.flatMap { self.artifacts.indices.contains($0) ? self.artifacts[$0].id : nil }
+                if let eligibleID, let requested = values.first(where: { $0.id == eligibleID }),
                    !self.historyFilter.matches(requested) { self.historyFilter = .all }
                 self.artifacts = values; self.reloadHistorySelection(previousID)
                 self.miniPreviews?.reconcileHistory(ids: Set(values.map(\.id)))
@@ -498,6 +505,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func currentRecovery(_ draft: RecordingRecoveryDraft) -> Bool {
         !capturing && !clearingHistory && !recoveryBusy && !recoveryLoading && !recordingRetiring
+            && !externalOpenPending
             && recoveryDrafts.contains { $0.sessionID == draft.sessionID && $0.identity == draft.identity
                 && $0.status == "recoverable" && draft.identity != nil }
     }
@@ -530,6 +538,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                         cleanup: { [weak self] in
                             guard let self, self.recoveryActionGeneration == current else { return }
                             self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
+                            self.processNextOpenImage()
                         }) { [weak self] in
                         guard let self, self.recoveryActionGeneration == current else { return }
                         guard shouldOpen, self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
@@ -539,6 +548,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     }
                 case .failure(let error):
                     self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
+                    self.processNextOpenImage()
                     self.recoveryActionError = "Couldn’t recover recording: \(error.localizedDescription)"
                     self.renderRecovery()
                 }
@@ -569,6 +579,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             self.recoveryWorker.discard(historyRoot: self.historyRoot, draft: draft) { [weak self] result in
                 guard let self, self.recoveryActionGeneration == current else { return }
                 self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
+                self.processNextOpenImage()
                 if case .failure(let error) = result {
                     self.recoveryActionError = "Couldn’t discard recording: \(error.localizedDescription)"
                     self.renderRecovery()
@@ -1724,6 +1735,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.recordingRetiring = false; self.updateActions(); self.refreshRecovery()
+                self.processNextOpenImage()
             }
         }
     }
@@ -1801,6 +1813,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         captureStateChanged(busy)
         updateActions()
         if busy { status.stringValue = message }
+        else { processNextOpenImage() }
     }
     func showShortcutError(_ error: Error) {
         status.stringValue = "Capture shortcuts unavailable: \(error.localizedDescription)"
@@ -1815,7 +1828,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private func updateActions() {
         let selected = selectedIndex.map { artifacts.indices.contains($0) } == true
         let selectedScreenshot = selectedIndex.map { artifacts.indices.contains($0) && !artifacts[$0].isRecording } == true
-        let busy = capturing || clearingHistory || recoveryBusy || recoveryConfirmation || recordingRetiring
+        let busy = capturing || clearingHistory || recoveryBusy || recoveryConfirmation
+            || recordingRetiring || externalOpenPending
         refreshButton?.isEnabled = !busy
         table?.isEnabled = !busy
         for (filter, button) in historyFilterButtons {
@@ -1902,12 +1916,21 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
     private func editScreenshot() {
         guard let index = selectedIndex, artifacts.indices.contains(index),
-              !historyRoot.isEmpty else { return }
+              !historyRoot.isEmpty, !externalOpenPending else { return }
         let artifact = artifacts[index]
-        run({ [settingsPath] in try CapturePreferences.load(path: settingsPath).directory }) {
+        presentEditor(artifact)
+    }
+
+    private func presentEditor(_ artifact: CaptureArtifact, outputDirectory: String? = nil,
+                               completion: (() -> Void)? = nil) {
+        run({ [settingsPath] in
+            try outputDirectory ?? CapturePreferences.load(path: settingsPath).directory
+        }) {
             [weak self] result in
             guard let self else { return }
-            guard self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
+            defer { completion?() }
+            guard completion != nil || !self.externalOpenPending else { return }
+            guard completion != nil || self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
                 ? self.artifacts[$0].id : nil }) == artifact.id else { return }
             switch result {
             case .success(let outputDirectory):
@@ -1992,10 +2015,92 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
     func openPreview(_ artifact: CaptureArtifact) {
+        guard !externalOpenPending else { return }
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         loadHistory(select: artifact.id)
     }
     func refreshHistory() { loadHistory() }
+
+    func openImages(_ paths: [String]) {
+        pendingOpenImages.append(contentsOf: paths)
+        // loadInitial owns root discovery and the first History reload.
+        guard !historyRoot.isEmpty else { return }
+        processNextOpenImage()
+    }
+
+    private func processNextOpenImage() {
+        guard !externalOpenPending, !historyRoot.isEmpty, !capturing,
+              !clearingHistory, !recoveryBusy, !recordingRetiring else { return }
+        guard !pendingOpenImages.isEmpty else {
+            if !externalOpenErrors.isEmpty {
+                let message = externalOpenErrors.joined(separator: "\n")
+                status.stringValue = externalOpenErrors.count == 1
+                    ? message : "Couldn’t open \(externalOpenErrors.count) images. See details."
+                status.toolTip = message
+                status.textColor = tokens.color("danger-text")
+                reportError("Couldn’t open external images: \(message)")
+                externalOpenErrors.removeAll()
+            }
+            return
+        }
+        let path = pendingOpenImages.removeFirst()
+        let selectedAtDispatch = userSelectionGeneration
+        externalOpenPending = true; updateActions()
+        status.stringValue = "Opening image…"
+        // Resolve editor settings first: a successful import must be openable.
+        run({ [settingsPath] in try CapturePreferences.load(path: settingsPath).directory }) {
+            [weak self] settingsResult in
+            guard let self else { return }
+            switch settingsResult {
+            case .failure(let error):
+                self.externalOpenErrors.append("\(path): \(error.localizedDescription)")
+                self.externalOpenPending = false; self.updateActions(); self.processNextOpenImage()
+            case .success(let outputDirectory):
+                // Read active editors on the main thread immediately before
+                // dispatch, not before an asynchronous settings read.
+                let openIDs = self.screenshotEditor?.activeArtifactID.map { [$0] } ?? []
+                self.run({ [transport = self.transport, historyRoot = self.historyRoot] in
+                    let response = try transport.request([
+                        "operation": "open_image", "root": historyRoot, "path": path,
+                        "open_artifact_ids": openIDs,
+                    ])
+                    guard let value = response["artifact"] as? [String: Any],
+                          let artifact = CaptureArtifact(value), !artifact.isRecording,
+                          response["already_open"] is Bool else { throw AppBridgeError.invalidResponse }
+                    return artifact
+                }) { [weak self] result in
+                    guard let self else { return }
+                    switch result {
+                    case .failure(let error):
+                        self.externalOpenErrors.append("\(path): \(error.localizedDescription)")
+                        self.externalOpenPending = false; self.updateActions(); self.processNextOpenImage()
+                    case .success(let artifact):
+                        // Do not steal a newer user selection. Still refresh History so
+                        // the imported item appears even when focus has changed.
+                        let shouldOpen = self.userSelectionGeneration == selectedAtDispatch
+                        var opened = false
+                        self.loadHistory(select: shouldOpen ? artifact.id : nil,
+                            selectIfUserGeneration: selectedAtDispatch, cleanup: { [weak self] in
+                            guard let self, !opened else { return }
+                            self.externalOpenPending = false; self.updateActions(); self.processNextOpenImage()
+                        }) { [weak self] in
+                            guard let self, shouldOpen,
+                                  self.userSelectionGeneration == selectedAtDispatch,
+                                  self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
+                                      ? self.artifacts[$0].id : nil }) == artifact.id else { return }
+                            opened = true
+                            self.window.makeKeyAndOrderFront(nil)
+                            NSApp.activate(ignoringOtherApps: true)
+                            self.presentEditor(artifact, outputDirectory: outputDirectory) { [weak self] in
+                                guard let self else { return }
+                                self.externalOpenPending = false; self.updateActions(); self.processNextOpenImage()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     private func reveal() {
         guard let index = selectedIndex, artifacts.indices.contains(index),
               let path = artifacts[index].savedPath else { return }
@@ -2038,6 +2143,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     guard let self else { return }
                     self.clearingHistory = false; self.updateActions()
                     if case .failure(let error) = result { self.showError("Couldn’t clear history", error) }
+                    self.processNextOpenImage()
                 })
             }
         }
@@ -2050,6 +2156,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     // One process-wide queue also drains operations from a closed workspace view.
     func prepareEditorForTermination() -> Bool {
+        if externalOpenPending || !pendingOpenImages.isEmpty {
+            status.stringValue = "Wait for external images to finish opening before quitting."
+            return false
+        }
         if recoveryBusy || recoveryConfirmation || recordingRetiring {
             status.stringValue = recordingRetiring
                 ? "Wait for recording media to finish before quitting."
