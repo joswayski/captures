@@ -128,7 +128,13 @@ event loops drain actions on their UI thread. Active capture/preparation and
 focused Preferences suppress screenshot shortcuts; hidden or unfocused
 Preferences does not. Invalid/colliding shortcuts report errors. This does not
 implement OS shortcut takeover or recording actions,
-single-instance relaunch, launch at login, or complete lifecycle parity.
+launch at login, or complete lifecycle parity.
+
+Live hosts now elect one process per canonical History root. Subsequent launches
+forward media paths or request native reactivation without creating UI or capture
+workers. Fixtures remain independent. See [DEVELOPMENT.md](../../DEVELOPMENT.md#native-frontend-migration)
+for limits, acknowledgement semantics and cross-platform process tests. This does
+not register installed file associations or close physical lifecycle acceptance.
 
 Linux uses SNI/KSNI over session D-Bus, not XEmbed or GTK/AppIndicator. Building
 needs pkg-config and libdbus-1-dev; runtime needs a registered StatusNotifier host

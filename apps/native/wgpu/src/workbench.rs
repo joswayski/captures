@@ -91,6 +91,8 @@ pub struct Workbench {
     action_rx: Receiver<Result<(), String>>,
     action_error: Option<String>,
     quitting: bool,
+    // Keep election alive until every other host field has been destroyed.
+    instance: Option<captures_app::instance::Instance>,
 }
 
 impl Workbench {
@@ -100,7 +102,14 @@ impl Workbench {
         shortcut_input: shortcut_input::Bridge,
         shortcuts: ShortcutOwner,
         paste_input: crate::clipboard_input::PasteInput,
+        instance: Option<captures_app::instance::Instance>,
     ) -> Self {
+        if let Some(instance) = &instance {
+            let wake = cc.egui_ctx.clone();
+            // The socket worker can wake while an editor owns the current
+            // viewport. Only the root App::logic drains instance requests.
+            instance.set_wake(move || wake.request_repaint_of(egui::ViewportId::ROOT));
+        }
         if options.scene == Scene::Idle && cc.winit_window().and_then(|w| w.is_visible()).is_none()
         {
             // winit's Wayland root cannot be hidden with set_visible. Do not
@@ -219,6 +228,7 @@ impl Workbench {
             window_shell,
             _temporary_settings: temporary_settings,
             live,
+            instance,
             live_preferences: false,
             root_hidden: false,
             root_was_focused: false,
@@ -354,13 +364,50 @@ impl Workbench {
             return;
         }
         self.quitting = true;
+        if let Some(instance) = &mut self.instance {
+            instance.stop_accepting();
+        }
         self.preferences_state.flush();
         if let Some(live) = &mut self.live {
             live.flush();
         }
         self.shortcuts.0.borrow_mut().take();
         self.tray.take();
+        self.instance.take();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    fn receive_instance(&mut self, ctx: &egui::Context) {
+        // Preserve startup-file order and leave the transport queue bounded while
+        // settings are loading. Preferences' completion already wakes this pass.
+        if self.preferences_state.is_loading() {
+            return;
+        }
+        for _ in 0..32 {
+            let Some(instance) = &self.instance else {
+                break;
+            };
+            match instance.next_request() {
+                Ok(Some(request)) if request.paths.is_empty() => {
+                    let restored = self
+                        .live
+                        .as_mut()
+                        .is_some_and(|live| live.show_recording_controls(ctx));
+                    if !restored {
+                        self.live_preferences = true;
+                        self.show_root(ctx);
+                    }
+                    emit("instance-relaunch", json!({}));
+                }
+                Ok(Some(request)) => self.options.open_media.extend(request.paths),
+                Ok(None) => break,
+                Err(error) => {
+                    self.action_error = Some(format!("Native instance forwarding failed: {error}"));
+                    self.show_root(ctx);
+                    break;
+                }
+            }
+        }
     }
 
     fn sync_shortcuts(&mut self, ctx: &egui::Context) {
@@ -844,6 +891,7 @@ impl eframe::App for Workbench {
             self.options.scene == Scene::Preferences
         });
         self.preferences_state.receive(ctx);
+        self.receive_instance(ctx);
         while let Ok(result) = self.action_rx.try_recv() {
             self.action_error = result
                 .err()

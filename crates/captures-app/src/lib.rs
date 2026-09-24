@@ -19,6 +19,8 @@ pub mod selection;
 pub mod shortcuts;
 pub mod window;
 
+pub use captures_session::instance;
+
 use captures_capture::{CaptureError, CaptureMode, DisplayDescriptor, XcapBackend};
 use captures_history::{ArtifactKind, HistoryEntry};
 use captures_media::{

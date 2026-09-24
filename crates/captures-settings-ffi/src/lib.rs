@@ -1,5 +1,6 @@
 mod editor;
 mod feedback;
+mod instance;
 mod preview;
 mod recording;
 mod recording_editor;

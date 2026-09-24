@@ -141,9 +141,28 @@ Neither path changes source bytes. External recordings offer Save new copy, not
 Replace original. An already-open source keeps its edits; a closed screenshot
 source with a saved draft must be restored or explicitly discarded from History
 before source reload. AppKit also queues macOS file-open callbacks in live mode.
-These development binaries do not register Open With associations; Windows/Linux
-do not forward files to an existing process. Use disposable `--history-root` and
-`--settings-file` paths for testing.
+These development binaries do not register Open With associations. Subsequent
+`--live` launches using the same canonical History root forward files to the
+running host before initializing UI, settings or shortcuts; no files means
+relaunch/focus. Relative paths use the sender's working directory. A different
+`--settings-file` does not create a second owner of the same History root.
+Use disposable `--history-root` and `--settings-file` paths for testing; fixture
+scenes do not participate in single-instance election.
+
+Forwarding uses private Unix sockets / current-user-only Windows named pipes,
+not TCP. A request accepts up to 64 paths / 256 KiB; the transport retains at
+most 32 queued requests. Full queues and startup failures exit nonzero. The
+acknowledgement means queued, not successfully decoded or durably saved; normal
+per-file errors remain in the resident host. Do not automatically retry a failed
+acknowledgement, whose delivery may be unknown. Accepted quit stops the listener
+before draining host workers and releases the election lock last.
+
+Run `python3 apps/native/instance_smoke.py --binary PATH --output NEW_DIRECTORY`
+in a graphical session for real-process forwarding, sender-relative Unicode paths,
+unchanged sources and normal-quit restart. Mac/Windows native CI runs this check;
+Linux needs a private X11 session and window manager (as in the existing smoke
+harness). The X11 `--external-image-only` suite also verifies edited-source alias
+refocus, unchanged drafts and relaunch from a minimized root in both appearances.
 
 Both native executables accept `--font-license` to print the bundled editor-font
 copyright and full OFL notice without opening a window. Native resources and

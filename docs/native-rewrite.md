@@ -22,7 +22,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause (silent by default), opt-in Loop and accepted-mix Sound preview, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
-| Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
+| Supporting UI | Appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, login items, installed Open With, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; remaining recording controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
@@ -994,8 +994,29 @@ visible close-to-quit fallback. The private-X11 `--lifecycle` test uses real Xfc
 SNI/DBusMenu and global input, not fake tray dispatch. AppKit has native menu,
 focus, restoration and ordered-cleanup tests. Windows compilation/fixtures do
 not replace real tray/input testing; physical Mac, Windows, Wayland, mixed-DPI
-and accessibility acceptance remain open. Single-instance relaunch, login items,
-OS shortcut takeover and the other lifecycle checklist requirements remain open.
+and accessibility acceptance remain open. Login items, OS shortcut takeover and
+the other lifecycle checklist requirements remain open.
+
+The live single-instance slice elects one native process per canonical History
+root before starting UI, capture workers or global keys. Shared Rust uses an OS
+file lock plus private Unix sockets / current-user Windows named pipes; no TCP
+listener, fixture singleton or installed Tauri identity is added. Sender-relative
+paths become absolute without requiring files to exist; the existing host queues
+retain per-file errors, source deduplication and editor/draft safety. Empty
+requests restore native workspace/Preferences or hidden recording controls.
+Framing, queue length and whole-exchange deadlines are bounded; only a lock holder
+reclaims a stale Unix socket. Acknowledgement means queued, not successfully
+opened or durable across quit/crash. A lost acknowledgement is never retried
+automatically. Event-loop wakes replace idle polling. Accepted quit stops delivery,
+drains host workers, then releases the lock; cancelled quit retains the owner.
+Rust tests exercise concurrent election, cross-process sender CWD, killed-owner
+recovery, late wake registration, queue overflow, malformed/stalled peers and
+ordered delivery. AppKit and Windows include executable-level CI smoke coverage;
+until those jobs pass their runtime status is implemented / unverified. Linux X11
+has private software-rendered editor/forwarding tests, not physical acceptance.
+Wayland uses the same transport and host implementation but remains runtime/
+presentation-unverified. Installed associations, physical input/accessibility
+and full lifecycle/OS-integration acceptance remain open on all platforms.
 
 The shortcut-editor slice adds all seven Preferences recorder rows to both hosts.
 Rust owns modifier/key policy, cancellation, display tokens and persisted-field
@@ -1312,8 +1333,8 @@ saved-draft refusal/History restoration and same-ID source reload after explicit
 discard in both appearances. Windows and Wayland use the same host code but this
 entry point remains presentation-unverified there; AppKit uses macOS CI bridge/window
 tests. Neither host registers file associations or claims physical file-open acceptance.
-Windows/Linux single-instance forwarding and broader platform image formats remain
-separate work. AppKit waits for recording frame and thumbnail settlement before
+Broader platform image formats remain separate work; live single-instance
+forwarding is described above. AppKit waits for recording frame and thumbnail settlement before
 advancing, focuses canonical active recordings without losing staged work, and
 refuses unsafe editor switches. wgpu keeps one editor per active artifact and
 includes recording IDs when requesting canonical-source focus.

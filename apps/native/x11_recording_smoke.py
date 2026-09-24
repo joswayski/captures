@@ -701,6 +701,19 @@ pcm.!pulse {
             shot(hud, "recording-controls-restored-paused")
 
             click(hud, 398, 54)
+            wait(lambda: not windows("Captures Recording Controls"), "HUD hidden before relaunch")
+            assert not windows("Captures")
+            secondary = subprocess.run([str(binary), "--live", "--history-root", str(output / "history"),
+                                        "--settings-file", str(settings)], env=env,
+                                       capture_output=True, text=True, timeout=10)
+            assert secondary.returncode == 0, secondary.stderr
+            assert '"event":"forwarded"' in secondary.stdout
+            hud = wait(lambda: windows("Captures Recording Controls"), "relaunch restores same paused HUD")[0]
+            assert not windows("Captures"), "relaunch must not open Preferences over the take"
+            assert (manifest()["state"] == "paused"
+                    and manifest()["session_id"] == before["session_id"])
+
+            click(hud, 398, 54)
             wait(lambda: not windows("Captures Recording Controls"), "HUD hidden before tray loss")
             run("xfce4-panel", "--quit")
             panel.wait(timeout=10)
@@ -734,6 +747,7 @@ pcm.!pulse {
             acceptance = {
                 "running_hide": True, "paused_hide": True,
                 "new_capture_shortcut_restore": True, "real_sni_restore": True,
+                "single_instance_relaunch_restore": True,
                 "tray_host_loss_restore": True, "same_session": True,
                 "busy_shortcuts_suppressed": True, "history_publication": True,
                 "decoded_output": True, "source_cleanup": True,
