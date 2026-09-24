@@ -385,13 +385,14 @@ content, type, alignment, color and plates transactionally. Both native hosts no
 connect a basic **Draw → Text** tool with staged Apply/Cancel controls, including
 outlines and shadow color, opacity, blur and offsets. Before placement, choose a
 named style, size and color; boxed styles center on the click. These defaults last
-only for that editor. AppKit starts at Rounded box when its pinned font is offered,
-otherwise Standard, then Plain; the Windows/Linux candidate still starts at
-Standard. New text starts in the annotation red, with an initial size scaled to
-the original capture (24–72), using
-bundled Liberation Sans, with Serif, Mono and rounded Nunito also available (OFL 1.1); exact font
+only for that editor. Both hosts start at Rounded box when its pinned font is
+offered, otherwise Standard, then Plain. New text starts in the annotation red,
+with an initial size scaled to the original capture (24–72). The bundle includes
+Nunito and Liberation Sans, Serif and Mono (OFL 1.1); exact font
 bytes and license notices stay with the draft. Older drafts offer only their saved
 fonts; adding new fonts to an existing draft is not implemented.
+Nunito covers fewer characters than Sans; for example, Greek λ requires explicitly
+choosing Sans. Missing glyphs produce an error rather than a substitute font.
 Selected-text named styles use those pinned fonts; Rounded and Rounded box are
 available in new sessions, but remain unavailable in older drafts without a
 saved rounded face.

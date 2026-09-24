@@ -1057,22 +1057,43 @@ def main():
         if args.text_defaults_only:
             resize_editor(1000, 1001)
             save_layers(lambda values: len(values) == 1, "baseline draft before Text defaults")
-            before = draft.read_bytes()
             click(editor, 736, 62)
             inspector_click(34, 128)
             shot(editor, "text-defaults-initial")
+            fixture_click((488, 289))  # Default Rounded box centered at document (480,200).
+            type_text("Rounded")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            rounded = save_layers(lambda values: len(values) == 2, "default rounded Text placed")[-1]
+            assert (rounded["fontFamily"], rounded["fontSize"], rounded["color"]) == ("rounded", 24, "#ff3b5c")
+            assert rounded["background"] == "#111318" and rounded["roundedBackground"]
+            assert rounded["align"] == "center" and rounded["y"] == 200
+            assert math.isclose(rounded["x"] + rounded["width"] / 2, 480, abs_tol=1e-6)
+            assert json.loads(draft.read_text())["fonts"]["families"]["rounded"] == "Nunito"
+            fixture_click((28, 109))
+            shot(editor, "text-defaults-rounded")
+            document_pixel("text-defaults-rounded", 480, 196, (17, 19, 24))
+            click(editor, 736, 62)
+            resize_editor(760, 540)
+            shot(editor, "text-defaults-rounded-minimum")
+            resize_editor(1000, 1001)
+            click(editor, 35, 62)
+            save_layers(lambda values: len(values) == 1, "default rounded creation single undo")
+            before = draft.read_bytes()
+            click(editor, 736, 62)
+            inspector_click(34, 128)
             inspector_click(95, 337)
             shot(editor, "text-defaults-menu")
             inspector_move(60, 506,
                 "click", "--repeat", "5", "5", "sleep", ".2")
             shot(editor, "text-defaults-menu-scrolled")
-            inspector_click(60, 545)  # Last pinned preset: Mono box.
+            inspector_click(60, 499)  # Mono box, immediately before Rounded box.
             field(381, 37.5, x=59)
             field(452, "#2367ab", x=105)
             shot(editor, "text-defaults-staged")
             assert draft.read_bytes() == before, "defaults must not write a draft"
             fixture_click((208, 169))  # Document (200,80), at actual-size scale.
             type_text("Native")
+            shot(editor, "text-defaults-composing")
             run("xdotool", "key", "Escape", "sleep", ".3")
             text = save_layers(lambda values: len(values) == 2, "styled Text placed")[-1]
             assert text["kind"] == "text" and text["fontFamily"] == "mono"
@@ -1103,8 +1124,9 @@ def main():
             type_text("Fresh")
             run("xdotool", "key", "Escape", "sleep", ".3")
             reset = save_layers(lambda values: len(values) == 3, "fresh editor Text defaults")[-1]
-            assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("sans", 24, "#ff3b5c")
-            assert reset["align"] == "left" and reset["background"] is None
+            assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("rounded", 24, "#ff3b5c")
+            assert reset["align"] == "center" and reset["background"] == "#111318"
+            assert reset["roundedBackground"]
             assert reset["id"] != text["id"]
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
@@ -1112,7 +1134,8 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["defaults-no-draft-write", "chosen-preset-size-color", "centered-typed-placement",
+                "checks": ["default-rounded-font-plate-placement", "default-rounded-single-undo",
+                           "defaults-no-draft-write", "chosen-preset-size-color", "centered-typed-placement",
                            "plate-pixels", "single-undo-redo", "minimum-controls", "draft-style-reopen",
                            "new-editor-default-reset", "original-unchanged"],
             }, indent=2) + "\n")
@@ -1123,8 +1146,11 @@ def main():
             resize_editor(1000, 1501)
             click(editor, 736, 62)  # Draw.
             inspector_click(34, 128)  # Text is the first tool.
+            inspector_click(95, 337)
+            inspector_click(60, 419)  # Standard: test plain glyphs before adding a plate.
             fixture_click((200, 250))
             type_text("Text")
+            shot(editor, "text-composing")
             run("xdotool", "key", "Escape", "sleep", ".3")
             save_layers(lambda values: len(values) == 2 and values[-1]["kind"] == "text",
                         "text composed once")
@@ -1138,7 +1164,7 @@ def main():
             # Text properties precede generic layer geometry in the sidebar.
             inspector_click(100, 431)
             shot(editor, f"text-font-menu-{args.appearance}")
-            inspector_click(100, 561)  # Liberation Serif.
+            inspector_click(100, 605)  # Liberation Serif, after Mono/Nunito/Sans.
             inspector_click(105, 505)
             run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--delay", "35",
                 "--", "Readable native text")
@@ -1228,7 +1254,7 @@ def main():
             save_layers(lambda values: values[-1]["background"] is not None, "redo shadowed plate")
             before_preset = draft.read_bytes()
             inspector_click(90, 357)
-            inspector_click(90, 577)  # Mono box, preserving the accepted plate color.
+            inspector_click(90, 622)  # Mono box, preserving the accepted plate color.
             shot(editor, "text-preset-staged")
             assert draft.read_bytes() == before_preset
             assert text_pixels("text-preset-staged") == text_pixels(f"text-edited-{args.appearance}")
@@ -1240,7 +1266,7 @@ def main():
             assert text_pixels("text-preset-cancelled", font_field) == text_pixels(
                 f"text-edited-{args.appearance}", font_field), "Cancel restores the font field"
             inspector_click(90, 357)
-            inspector_click(90, 577)
+            inspector_click(90, 622)
             inspector_click(74, 1231)
             preset = save_layers(lambda values: values[-1]["fontFamily"] == "mono"
                                  and not values[-1]["outlined"], "named style applied")[-1]
@@ -1275,7 +1301,8 @@ def main():
             assert reopened["id"] == created["id"] and reopened["text"] == "Readable native text"
             assert reopened["fontFamily"] == "serif"
             assert json.loads(draft.read_text())["fonts"]["families"] == {
-                "sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"}
+                "sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono",
+                "rounded": "Nunito"}
             assert reopened["bold"] and reopened["italic"] and reopened["background"] is not None
             assert reopened.get("dropShadow") is True
             assert reopened["dropShadowStyle"] == custom_shadow
