@@ -4092,10 +4092,13 @@ final class ScreenshotEditorTests: XCTestCase {
             try button("Done", in: controller.root).performClick(nil)
             let retry = try XCTUnwrap(worker.requests.last { $0["operation"] as? String == "begin_text_input" })
             let create = try XCTUnwrap((retry["target"] as? [String: Any])?["create"] as? [String: Any])
-            XCTAssertEqual(create["stylePreset"] as? String, "standard")
-            XCTAssertEqual(create["fontSize"] as? Double, 52)
-            XCTAssertEqual(create["color"] as? String, "#12abef")
+            XCTAssertEqual(create["stylePreset"] as? String, "rounded-box",
+                           "retry keeps the pending creation target, not later picker changes")
+            XCTAssertEqual(create["fontSize"] as? Double, 39)
+            XCTAssertEqual(create["color"] as? String, "#ff3b5c")
             XCTAssertEqual(preset.titleOfSelectedItem, "Standard", "accepted snapshot must not reset user choice")
+            XCTAssertEqual(size.stringValue, "52")
+            XCTAssertEqual(color.stringValue, "#12abef")
         }
 
         let sans = ["sans": "Liberation Sans"]
@@ -5145,7 +5148,8 @@ final class ScreenshotEditorTests: XCTestCase {
         let sans = try request(["operation": "create_text", "point": ["x": 50, "y": 80],
             "text": "Native Ωé", "fontFamily": "sans", "fontSize": 64, "color": "#111111"])
         XCTAssertEqual(sans.snapshot.fontFamilies,
-            ["sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"])
+            ["sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono",
+             "rounded": "Nunito"])
         let id = try XCTUnwrap(sans.snapshot.layers.first?.id)
         let serif = try request(["operation": "edit_text", "id": id, "patch": ["fontFamily": "serif"]])
         let mono = try request(["operation": "edit_text", "id": id, "patch": ["fontFamily": "mono"]])
@@ -5195,6 +5199,7 @@ final class ScreenshotEditorTests: XCTestCase {
             wait(for: [done], timeout: 5)
             return try XCTUnwrap(response).get()
         }
+        _ = try request(["operation": "resize_canvas", "width": 640, "height": 360])
         let create: [String: Any] = ["operation": "create_text", "point": ["x": 190, "y": 110],
                                      "text": "Native Ωé", "fontSize": 48,
                                      "fontFamily": "sans", "color": "#ff3b5c"]
