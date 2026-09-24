@@ -908,6 +908,20 @@ mod tests {
         assert!(recovery.root.join(".recording-recovery.lock").is_file());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn lease_guard_explicitly_unlocks_while_a_duplicated_descriptor_is_open() {
+        let base = tempfile::tempdir().unwrap();
+        let guard = lease(base.path()).unwrap();
+        let duplicate = guard.0.try_clone().unwrap();
+        assert!(lease(base.path()).is_err());
+        drop(guard);
+        // Closing just the guard's fd would leave the duplicated open-file
+        // description locked. The guard must explicitly unlock it instead.
+        assert!(lease(base.path()).is_ok());
+        drop(duplicate);
+    }
+
     #[test]
     fn interrupted_recovery_operation_unlocks_on_unwind() {
         let base = tempfile::tempdir().unwrap();
