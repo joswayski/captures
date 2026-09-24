@@ -101,6 +101,8 @@ def main():
                         help="Exercise percentage/custom export dimensions without changing the document")
     parser.add_argument("--overwrite-only", action="store_true",
                         help="Exercise confirmed original replacement, History identity and retained drafts")
+    parser.add_argument("--external-image-only", action="store_true",
+                        help="Open external images, preserve per-file errors and safely reopen drafts/sources")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -346,14 +348,53 @@ def main():
             "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
             "auto_copy_to_clipboard": False, "show_mini_previews": False,
         }))
-        app = spawn("app", [str(binary), "--live", "--history-root", str(history),
-                    "--settings-file", str(settings), "--quit-after", "600"])
+        app_command = [str(binary), "--live", "--history-root", str(history),
+                       "--settings-file", str(settings), "--quit-after", "600"]
+        open_arguments = []
+        if args.external_image_only:
+            source_png = output / "External image é.png"
+            source_jpeg = output / "Second image.jpg"
+            source_webp = output / "Third image.webp"
+            source_png.write_bytes(original)
+            # Untagged sRGB fixture: ImageMagick otherwise emits unsupported
+            # gAMA/cHRM-only metadata rather than an actual sRGB chunk.
+            run("convert", str(source_png), "-strip", "PNG32:" + str(source_png))
+            run("convert", "-size", "73x41", "xc:#872d46", "-strip", str(source_jpeg))
+            run("convert", "-size", "81x53", "xc:#268752", "-strip",
+                "-define", "webp:lossless=true", str(source_webp))
+            source_bytes = {path: path.read_bytes() for path in [source_png, source_jpeg, source_webp]}
+            bad_source = output / "Broken image.png"
+            bad_source.write_bytes(b"not an image")
+            alias = output / "Same image alias.png"
+            alias.symlink_to(source_png)
+            for path in artifact.iterdir():
+                path.unlink()
+            artifact.rmdir()  # Opening must populate an initially empty History.
+            for path in [bad_source, source_jpeg, source_webp, source_png, alias]:
+                open_arguments.extend(["--open-image", str(path)])
+
+            def opened_entries():
+                return [json.loads(path.read_text()) for path in history.glob("*/metadata.json")
+                        if not path.parent.name.startswith(".")]
+
+        app = spawn("app", app_command + open_arguments)
         root = wait(lambda: windows("Captures"), "History workspace")[0]
         run("xdotool", "windowmove", "--sync", root, "0", "0")
         time.sleep(1)
-        shot(root, "history")
-        click(root, 810, 191)
-        editor = wait(lambda: windows("Screenshot editor"), "screenshot editor")[0]
+        if args.external_image_only:
+            entries = wait(lambda: values if len(values := opened_entries()) == 3 else None,
+                           "three imported History rows, not an alias duplicate")
+            opened = next(value for value in entries if value["saved_path"] == str(source_png))
+            artifact_id = opened["id"]
+            artifact = history / artifact_id
+            wait(lambda: len(windows("Screenshot editor")) == 3, "three native image editors")
+            editor = wait(lambda: active if (active := run("xdotool", "getactivewindow").decode().strip())
+                          in windows("Screenshot editor") else None, "last opened image focused")
+            shot(root, "history")
+        else:
+            shot(root, "history")
+            click(root, 810, 191)
+            editor = wait(lambda: windows("Screenshot editor"), "screenshot editor")[0]
         run("xdotool", "windowmove", "--sync", editor, "100", "80")
         time.sleep(1)
         shot(editor, "editor-original")
@@ -421,6 +462,78 @@ def main():
             if expected is not None:
                 assert actual == bytes(expected), (x, y, actual, expected)
             return actual
+
+        if args.external_image_only:
+            assert {item["saved_path"]: (item["width"], item["height"]) for item in entries} == {
+                str(source_png): (640, 360), str(source_jpeg): (73, 41), str(source_webp): (81, 53),
+            }
+            for item in entries:
+                saved = history / item["id"] / "capture.png"
+                assert run("convert", str(saved), "-depth", "8", "rgba:-") == run(
+                    "convert", item["saved_path"], "-depth", "8", "rgba:-"), "imported pixels match source decoding"
+            assert len(windows("Screenshot editor")) == 3
+            shot(editor, "external-image-opened")
+            document_pixel("external-image-opened", 130, 100, (229, 179, 68))
+            document_pixel("external-image-opened", 500, 250, (46, 158, 113))
+            document_pixel("external-image-opened", 20, 20, (40, 110, 166))
+            assert not draft.exists(), "opening/focusing must not create edit drafts"
+            click(editor, 736, 62)
+            inspector_click(105, 133)
+            drag((320, 250), (480, 370))
+            save_layers(lambda values: len(values) == 2, "external image edit is a real draft")
+            preserved_draft = draft.read_bytes()
+            assert all(path.read_bytes() == before for path, before in source_bytes.items())
+            close(root)
+            wait(lambda: app.poll() is not None, "external image batch quits")
+            assert app.returncode == 0
+
+            # A closed edited source must not silently discard its saved work.
+            app = spawn("app-draft", app_command + ["--open-image", str(source_png)])
+            root = wait(lambda: windows("Captures"), "draft guard History")[0]
+            time.sleep(2)
+            assert not windows("Screenshot editor"), "saved draft blocks source reload"
+            assert draft.read_bytes() == preserved_draft
+            shot(root, "external-draft-blocked")
+            editor = reopen()  # The existing History route still restores the saved edit.
+            shot(editor, "external-draft-restored")
+            assert len(layers()) == 2
+            click(editor, 270, 62)
+            click(editor, 55, 128)
+            wait(lambda: not draft.exists(), "explicitly discard the saved draft")
+            close(root)
+            wait(lambda: app.poll() is not None, "draft-resolution process quits")
+            assert app.returncode == 0
+
+            run("convert", str(source_png), "-fill", "#1234ab", "-draw", "rectangle 8,8 50,50",
+                "-strip", "PNG32:" + str(source_png))
+            changed_source = source_png.read_bytes()
+            app = spawn("app-reload", app_command + ["--open-image", str(source_png)])
+            root = wait(lambda: windows("Captures"), "reloaded source History")[0]
+            editor = wait(lambda: windows("Screenshot editor"), "reloaded external editor")[0]
+            run("xdotool", "windowmove", "--sync", editor, "100", "80")
+            time.sleep(1)
+            shot(editor, "external-source-reloaded")
+            document_pixel("external-source-reloaded", 20, 20, (18, 52, 171))
+            reloaded = next(item for item in opened_entries() if item["saved_path"] == str(source_png))
+            assert (reloaded["id"], reloaded["created_at"]) == (artifact_id, opened["created_at"])
+            assert len(opened_entries()) == 3
+            assert not draft.exists()
+            assert source_png.read_bytes() == changed_source
+            assert all(path.read_bytes() == before for path, before in source_bytes.items() if path != source_png)
+            close(root)
+            wait(lambda: app.poll() is not None, "external source suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["startup-files-with-spaces", "bad-file-does-not-stop-later-files",
+                           "png-jpeg-webp-owned-pixels", "canonical-alias-no-duplicate",
+                           "multiple-native-editors", "open-does-not-create-draft",
+                           "edits-do-not-overwrite-source", "closed-draft-blocks-reload",
+                           "history-restores-saved-draft", "explicit-discard-allows-source-reload",
+                           "reload-preserves-history-identity", "reloaded-source-pixels"],
+            }, indent=2) + "\n")
+            print("PASS native external images: batch, aliases, errors, pixels, drafts and safe reload")
+            return
 
         if args.history_shortcuts_only:
             resize_editor(1000, 901, "sleep", ".3")  # Integer-pixel Fit origin for exact movement.
