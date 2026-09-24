@@ -84,6 +84,9 @@ struct Presented {
     can_undo: bool,
     can_redo: bool,
     can_paste_layer: bool,
+    merge_down_ids: Vec<String>,
+    can_merge_visible: bool,
+    can_flatten: bool,
     active_text_input: Option<(String, String)>,
     unsaved: bool,
     has_draft: bool,
@@ -109,6 +112,13 @@ impl Presented {
             can_undo: snapshot.can_undo,
             can_redo: snapshot.can_redo,
             can_paste_layer: snapshot.can_paste_layer,
+            merge_down_ids: snapshot
+                .merge_down_ids
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            can_merge_visible: snapshot.can_merge_visible,
+            can_flatten: snapshot.can_flatten,
             active_text_input: snapshot
                 .active_text_input
                 .map(|input| (input.input_id.to_owned(), input.layer_id.to_owned())),
@@ -400,6 +410,7 @@ struct View {
     selected_layer: Option<String>,
     layer_gesture: Option<LayerGesture>,
     pending_layer_selection: Option<String>,
+    combine_pending: bool,
     layer_name: String,
     layer_opacity: f64,
     layer_position: [f64; 2],
@@ -470,6 +481,7 @@ impl Default for View {
             selected_layer: None,
             layer_gesture: None,
             pending_layer_selection: None,
+            combine_pending: false,
             layer_name: String::new(),
             layer_opacity: 100.,
             layer_position: [0., 0.],
@@ -667,6 +679,7 @@ impl View {
                 }
                 let copied_layer = presented.copied_layer;
                 let pasted_layer = presented.pasted_layer;
+                let combined_layers = std::mem::take(&mut self.combine_pending);
                 let selected = self.pending_layer_selection.take().or_else(|| {
                     presented
                         .created_layer
@@ -678,7 +691,7 @@ impl View {
                     self.select_layer(selected);
                 }
                 self.text_apply_pending = false;
-                if pasted_layer {
+                if pasted_layer || combined_layers {
                     self.activate_tool(Section::Layers, None);
                 } else if self.inline.is_none()
                     && !copied_layer
@@ -699,6 +712,7 @@ impl View {
             }
             Err(error) => {
                 self.pending_layer_selection = None;
+                self.combine_pending = false;
                 self.error = Some(error);
                 self.inline_failed();
                 // A rejected explicit text Apply keeps the user's staged composition.
@@ -3712,6 +3726,9 @@ enum LayerAction {
     Paste,
     Duplicate,
     Delete,
+    MergeDown,
+    MergeVisible,
+    Flatten,
 }
 
 fn layer_action_enabled(view: &View, action: LayerAction, target_id: Option<&str>) -> bool {
@@ -3736,6 +3753,15 @@ fn layer_action_enabled(view: &View, action: LayerAction, target_id: Option<&str
                     .iter()
                     .any(|element| element.base().id == id)
             });
+    }
+    if matches!(action, LayerAction::MergeVisible) {
+        return presented.can_merge_visible;
+    }
+    if matches!(action, LayerAction::Flatten) {
+        return presented.can_flatten;
+    }
+    if matches!(action, LayerAction::MergeDown) {
+        return target_id.is_some_and(|id| presented.merge_down_ids.iter().any(|item| item == id));
     }
     presented
         .document
@@ -3778,6 +3804,27 @@ fn dispatch_layer_action(
             id: target_id.expect("enabled delete has a target"),
             edit: LayerEdit::Delete,
         },
+        LayerAction::MergeDown => {
+            let new_id = uuid::Uuid::new_v4().to_string();
+            view.pending_layer_selection = Some(new_id.clone());
+            view.combine_pending = true;
+            Request::MergeDown {
+                id: target_id.expect("enabled merge down has a target"),
+                new_id,
+            }
+        }
+        LayerAction::MergeVisible => {
+            let new_id = uuid::Uuid::new_v4().to_string();
+            view.pending_layer_selection = Some(new_id.clone());
+            view.combine_pending = true;
+            Request::MergeVisible { new_id }
+        }
+        LayerAction::Flatten => {
+            let new_id = uuid::Uuid::new_v4().to_string();
+            view.pending_layer_selection = Some(new_id.clone());
+            view.combine_pending = true;
+            Request::Flatten { new_id }
+        }
     };
     view.cancel_edit_gestures();
     view.viewport_pan = None;
@@ -3795,8 +3842,16 @@ fn layer_context_menu(
         ("Paste layer", LayerAction::Paste),
         ("Duplicate", LayerAction::Duplicate),
         ("Delete", LayerAction::Delete),
+        ("Merge down", LayerAction::MergeDown),
+        ("Merge visible", LayerAction::MergeVisible),
+        ("Flatten image", LayerAction::Flatten),
     ] {
-        if target_id.is_none() && !matches!(action, LayerAction::Paste) {
+        if target_id.is_none()
+            && !matches!(
+                action,
+                LayerAction::Paste | LayerAction::MergeVisible | LayerAction::Flatten
+            )
+        {
             continue;
         }
         if ui
@@ -3818,7 +3873,28 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
     };
     let document = presented.document.clone();
     let elements = &document.elements;
-    ui.heading("Layers");
+    ui.horizontal(|ui| {
+        ui.heading("Layers");
+        ui.menu_button("Combine layers", |ui| {
+            for (label, action) in [
+                ("Merge down", LayerAction::MergeDown),
+                ("Merge visible", LayerAction::MergeVisible),
+                ("Flatten image", LayerAction::Flatten),
+            ] {
+                let target = view.selected_layer.clone();
+                if ui
+                    .add_enabled(
+                        layer_action_enabled(view, action, target.as_deref()),
+                        egui::Button::new(label),
+                    )
+                    .clicked()
+                {
+                    dispatch_layer_action(view, tx, action, target);
+                    ui.close();
+                }
+            }
+        });
+    });
     ui.small("Front to back");
     egui::ScrollArea::vertical()
         .id_salt("layer-list")
@@ -4268,6 +4344,85 @@ fn show_annotation(
 mod tests {
     use super::*;
     use std::{fs, time::Duration};
+
+    #[test]
+    fn combine_uses_shared_capabilities_and_selects_new_layer_only_on_success() {
+        let ctx = egui::Context::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        for action in [
+            LayerAction::MergeDown,
+            LayerAction::MergeVisible,
+            LayerAction::Flatten,
+        ] {
+            let mut view = View::default();
+            let mut initial = presented(false);
+            let target = initial.document.elements[0].base().id.clone();
+            initial.merge_down_ids = vec![target.clone()];
+            initial.can_merge_visible = true;
+            initial.can_flatten = true;
+            view.receive(&ctx, Ok(initial));
+            view.activate_tool(Section::Draw, Some(DrawShape::Freehand));
+            let selected = view.selected_layer.clone();
+            assert!(!layer_action_enabled(
+                &view,
+                LayerAction::MergeDown,
+                Some("removed")
+            ));
+            for blocked in 0..4 {
+                view.pending = blocked == 0;
+                view.confirm_discard = blocked == 1;
+                view.close_requested = blocked == 2;
+                view.closed = blocked == 3;
+                dispatch_layer_action(&mut view, &tx, action, Some(target.clone()));
+                assert!(rx.try_recv().is_err());
+            }
+            view.closed = false;
+            dispatch_layer_action(&mut view, &tx, action, Some(target.clone()));
+            assert!(matches!(rx.try_recv(), Ok(Job::Apply(_))));
+            view.receive(&ctx, Err("render failed".into()));
+            assert_eq!(view.selected_layer, selected);
+            assert!(view.pending_layer_selection.is_none() && !view.combine_pending);
+            assert_eq!(view.section, Section::Draw);
+            assert_eq!(view.draw_shape, DrawShape::Freehand);
+
+            dispatch_layer_action(&mut view, &tx, action, Some(target.clone()));
+            let new_id = match rx.try_recv().unwrap() {
+                Job::Apply(Request::MergeDown { id, new_id }) => {
+                    assert_eq!(id, target);
+                    new_id
+                }
+                Job::Apply(Request::MergeVisible { new_id } | Request::Flatten { new_id }) => {
+                    new_id
+                }
+                _ => panic!("unexpected combine request"),
+            };
+            assert_eq!(
+                view.pending_layer_selection.as_deref(),
+                Some(new_id.as_str())
+            );
+            assert_eq!(view.selected_layer, selected);
+            let mut result = presented(true);
+            let Element::Image(image) = &mut Arc::make_mut(&mut result.document).elements[0] else {
+                panic!()
+            };
+            image.base.id = new_id.clone();
+            view.receive(&ctx, Ok(result));
+            assert_eq!(view.selected_layer.as_deref(), Some(new_id.as_str()));
+            assert_eq!(view.section, Section::Layers);
+            assert!(!view.combine_pending);
+            for unavailable in [
+                LayerAction::MergeDown,
+                LayerAction::MergeVisible,
+                LayerAction::Flatten,
+            ] {
+                dispatch_layer_action(&mut view, &tx, unavailable, Some(new_id.clone()));
+            }
+            assert!(
+                rx.try_recv().is_err(),
+                "new snapshot capabilities replace the old ones"
+            );
+        }
+    }
 
     #[test]
     fn context_menu_targets_row_not_selection_and_keeps_output_until_acceptance() {
@@ -5780,6 +5935,9 @@ mod tests {
             can_undo: unsaved,
             can_redo: false,
             can_paste_layer: false,
+            merge_down_ids: Vec::new(),
+            can_merge_visible: false,
+            can_flatten: false,
             active_text_input: None,
             unsaved,
             has_draft: !unsaved,

@@ -1277,7 +1277,18 @@ are described below. Image layers expose a **Transform image** menu for lossless
 left/right rotation and horizontal/vertical flips through the shared worker commands.
 Hidden and locked images can transform, matching shipping policy; full-canvas
 photos rotate their canvas, and undo/draft restore retain the orientation.
-Merge/flatten remains unconnected.
+Both native hosts expose Merge down, Merge visible and Flatten image through the
+Layers heading menu and clicked-row context menus. The shared session publishes
+capabilities and commits each combination as one undo step only after rendering
+succeeds. Merge down paints the adjacent unlocked pair even when hidden; Merge
+visible keeps hidden slots and ignores locks; Flatten discards hidden layers and
+bakes the canvas background into a locked image. New owned assets retain draft
+and undo pixels without changing History originals. Aggregate image limits are
+checked before allocating the combined raster. Rust tests cover asymmetric alpha,
+ordering, atomic failure, undo/redo and reopen; X11 real-input coverage exercises
+both appearances, menus, hidden layers, draft reopen and clipboard pixels.
+AppKit has action and rendered-fixture coverage; macOS and Windows physical input,
+accessibility and Wayland presentation acceptance remain open.
 
 The wgpu Draw panel connects rectangle, ellipse, triangle, diamond, star, straight line, tapered arrow and freehand Pen
 gestures. Preview points remain host-local until release sends one shared creation

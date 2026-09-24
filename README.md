@@ -356,7 +356,11 @@ native editor slice restores and saves isolated drafts, previews shared-Rust cro
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
 Its Layers panel connects shared visibility, lock, opacity, movement, image rename,
 duplicate, delete and adjacent ordering commands while preserving locked barriers;
-the original History image and its exports remain unchanged until explicit replacement. Recording completion
+both native hosts also provide **Merge down**, **Merge visible**, and **Flatten image**
+with undo/redo and saved-draft restoration. Merge down requires adjacent unlocked
+layers; Merge visible retains hidden layers; Flatten removes hidden layers and
+bakes the canvas background into one locked image.
+The original History image and its exports remain unchanged until explicit replacement. Recording completion
 still presents its notice immediately; opening the recording editor is a separate History action. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.

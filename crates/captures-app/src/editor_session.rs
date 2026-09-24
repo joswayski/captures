@@ -227,6 +227,16 @@ pub enum Request {
         new_id: String,
         after_id: Option<String>,
     },
+    MergeDown {
+        id: String,
+        new_id: String,
+    },
+    MergeVisible {
+        new_id: String,
+    },
+    Flatten {
+        new_id: String,
+    },
     /// Asset references must already belong to this session. New image import
     /// will have a separate byte/file boundary, never pixels in command JSON.
     Commit {
@@ -278,6 +288,9 @@ pub struct Snapshot<'a> {
     pub can_undo: bool,
     pub can_redo: bool,
     pub can_paste_layer: bool,
+    pub merge_down_ids: Vec<&'a str>,
+    pub can_merge_visible: bool,
+    pub can_flatten: bool,
     /// Committed changes since the last successful draft save (or open), not
     /// transient text previews and not changes since capture.
     pub unsaved_changes: bool,
@@ -430,6 +443,17 @@ impl EditorSession {
     #[must_use]
     pub fn snapshot(&self) -> Snapshot<'_> {
         let document = self.visible_document();
+        let merge_down_ids = document
+            .elements
+            .windows(2)
+            .filter(|pair| !pair[0].base().locked && !pair[1].base().locked)
+            .map(|pair| pair[1].base().id.as_str())
+            .collect();
+        let visible_count = document
+            .elements
+            .iter()
+            .filter(|element| element.base().visible)
+            .count();
         Snapshot {
             artifact_id: &self.artifact_id,
             original_export_path: self.original_export_path.as_deref(),
@@ -507,6 +531,10 @@ impl EditorSession {
             can_undo: self.history.undo_len() > 0,
             can_redo: self.history.redo_len() > 0,
             can_paste_layer: self.layer_clipboard.is_some(),
+            merge_down_ids,
+            can_merge_visible: visible_count >= 2,
+            can_flatten: document.elements.len() >= 2
+                || (document.elements.len() == 1 && document.background.is_some()),
             unsaved_changes: self.history.current() != &self.persisted,
             has_draft: self.has_draft,
         }
@@ -795,6 +823,136 @@ impl EditorSession {
         }
     }
 
+    fn combine_layers(&mut self, request: Request) -> Result<(), String> {
+        let current = self.history.current();
+        let (new_id, raster_document, insertion, name, flatten, merge_down) = match request {
+            Request::MergeDown { id, new_id } => {
+                let index = current
+                    .elements
+                    .iter()
+                    .position(|element| element.base().id == id)
+                    .ok_or("The selected layer no longer exists.")?;
+                if index == 0
+                    || current.elements[index].base().locked
+                    || current.elements[index - 1].base().locked
+                {
+                    return Err("Merge Down requires two adjacent unlocked layers.".into());
+                }
+                let mut layers = current.elements[index - 1..=index].to_vec();
+                for layer in &mut layers {
+                    match layer {
+                        Element::Image(element) => &mut element.base,
+                        Element::Text(element) => &mut element.base,
+                        Element::Shape(element) => &mut element.base,
+                        Element::Path(element) => &mut element.base,
+                    }
+                    .visible = true;
+                }
+                let name = layers
+                    .iter()
+                    .find_map(|layer| match layer {
+                        Element::Image(image) => Some(image.name.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "Merged".into());
+                let mut raster = current.clone();
+                raster.background = None;
+                raster.elements = layers;
+                (new_id, raster, index - 1, name, false, true)
+            }
+            Request::MergeVisible { new_id } => {
+                let visible: Vec<_> = current
+                    .elements
+                    .iter()
+                    .filter(|element| element.base().visible)
+                    .cloned()
+                    .collect();
+                if visible.len() < 2 {
+                    return Err("Merge Visible requires at least two visible layers.".into());
+                }
+                let insertion = current
+                    .elements
+                    .iter()
+                    .position(|element| element.base().visible)
+                    .expect("two visible layers have a first index");
+                let mut raster = current.clone();
+                raster.background = None;
+                raster.elements = visible;
+                (new_id, raster, insertion, "Merged".into(), false, false)
+            }
+            Request::Flatten { new_id } => {
+                if current.elements.len() < 2
+                    && !(current.elements.len() == 1 && current.background.is_some())
+                {
+                    return Err("Flatten requires layers or a background to combine.".into());
+                }
+                (new_id, current.clone(), 0, "Flattened".into(), true, false)
+            }
+            _ => unreachable!(),
+        };
+        if new_id.is_empty()
+            || current
+                .elements
+                .iter()
+                .any(|element| element.base().id == new_id)
+        {
+            return Err("A combined layer needs a new nonempty identifier.".into());
+        }
+
+        // Combining keeps the canvas dimensions. Bound the newly retained
+        // asset before allocating a second full-canvas render.
+        validate_import_dimensions(
+            self.pixels.width(),
+            self.pixels.height(),
+            retained_asset_pixels(&self.assets)?,
+        )?;
+        let combined = render_frame(&raster_document, &self.assets, self.fonts.as_mut())?;
+        let asset_id = fresh_id(|id| self.assets.contains_key(&format!("{ASSET_PREFIX}{id}")));
+        let source = format!("{ASSET_PREFIX}{asset_id}");
+        let image = Element::Image(ImageElement {
+            base: ElementBase {
+                id: new_id,
+                x: 0.,
+                y: 0.,
+                rotation: None,
+                locked: flatten,
+                visible: true,
+                opacity: 100.,
+                blend_mode: "source-over".into(),
+            },
+            source: if flatten { "background" } else { "imported" }.into(),
+            src: source.clone(),
+            original_src: OptionalNullable::Null,
+            name,
+            source_artifact_id: None,
+            width: f64::from(combined.width()),
+            height: f64::from(combined.height()),
+            natural_width: f64::from(combined.width()),
+            natural_height: f64::from(combined.height()),
+            orientation: None,
+            extra: Default::default(),
+        });
+        let mut document = current.clone();
+        if flatten {
+            document.background = None;
+            document.elements = vec![image];
+        } else if merge_down {
+            document.elements.splice(insertion..insertion + 2, [image]);
+        } else {
+            document.elements.retain(|element| !element.base().visible);
+            document.elements.insert(insertion, image);
+        }
+        let mut assets = self.assets.clone();
+        assets.insert(source, Arc::new(combined));
+        let pixels = render_frame(&document, &assets, self.fonts.as_mut())?;
+        let mut history = self.history.clone();
+        history.commit(document);
+        self.assets = assets;
+        self.history = history;
+        self.pixels = Arc::new(pixels);
+        Ok(())
+    }
+
     fn begin_text_input(
         &mut self,
         input_id: String,
@@ -964,6 +1122,9 @@ impl EditorSession {
                 softness,
                 mode,
             } => return self.paint_image_background(points, size, softness, mode),
+            request @ (Request::MergeDown { .. }
+            | Request::MergeVisible { .. }
+            | Request::Flatten { .. }) => return self.combine_layers(request),
             edit => edit,
         };
         let is_paste = matches!(&request, Request::PasteLayer { .. });
@@ -1065,6 +1226,9 @@ impl EditorSession {
                 next.commit(document);
             }
             Request::CopyLayer { .. } => unreachable!(),
+            Request::MergeDown { .. } | Request::MergeVisible { .. } | Request::Flatten { .. } => {
+                unreachable!()
+            }
             Request::Crop { rect } => {
                 if ![rect.x, rect.y, rect.width, rect.height]
                     .into_iter()

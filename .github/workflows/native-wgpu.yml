@@ -233,6 +233,7 @@ jobs:
             /usr/bin/python3 apps/native/x11_editor_smoke.py --overwrite-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-overwrite-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --external-image-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-external-image-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --history-shortcuts-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-history-shortcuts-$appearance"
+            /usr/bin/python3 apps/native/x11_editor_smoke.py --combine-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-combine-$appearance"
           done
       - name: Exercise real native mini previews on private X11
         if: matrix.suite == 'capture'

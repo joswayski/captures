@@ -2206,7 +2206,9 @@ final class ScreenshotEditorTests: XCTestCase {
                       x: 43.5, y: -12.25, visible: false, locked: false, opacity: 57.5),
             ]
             let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true,
-                                                              draft: true, layers: layers))
+                                                              draft: true, layers: layers,
+                                                              mergeDownIDs: ["hidden-image"],
+                                                              canMergeVisible: true, canFlatten: true))
             let controller = ScreenshotEditorController(
                 tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
@@ -2238,6 +2240,14 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertLessThanOrEqual(table.rect(ofRow: 2).maxY, table.visibleRect.maxY,
                                      "the initial three-layer fixture does not expose a partial row")
             try render(controller.root, name: "screenshot-editor-layers-\(appearance)")
+            try render(controller.root, name: "screenshot-editor-combine-normal-\(appearance)")
+
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+            try scrollImageImportVisible(in: controller.root)
+            XCTAssertEqual(try popup("Combine layers", in: controller.root).itemTitles,
+                           ["Combine layers", "Merge down", "Merge visible", "Flatten image"])
+            try render(controller.root, name: "screenshot-editor-combine-minimum-\(appearance)")
 
             worker.failLayerAction = "duplicate"
             worker.failureMessage = "The selected layer could not be duplicated because its shared image asset is unavailable. The current draft remains open and recoverable."
@@ -3443,6 +3453,34 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(NativeEditorSnapshot(value)).canPasteLayer)
         value["can_paste_layer"] = "true"
         XCTAssertNil(NativeEditorSnapshot(value))
+    }
+
+    func testSnapshotCombineCapabilitiesDefaultParseAndRejectMalformedValues() throws {
+        var value: [String: Any] = [
+            "artifact_id": "shot", "document": ["width": 200, "height": 100, "elements": []],
+            "initial_text_size": 24, "can_undo": false, "can_redo": false,
+            "unsaved_changes": false, "has_draft": false,
+        ]
+        let legacy = try XCTUnwrap(NativeEditorSnapshot(value))
+        XCTAssertEqual(legacy.mergeDownIDs, [])
+        XCTAssertFalse(legacy.canMergeVisible)
+        XCTAssertFalse(legacy.canFlatten)
+        value["merge_down_ids"] = ["top", "middle"]
+        value["can_merge_visible"] = true
+        value["can_flatten"] = true
+        let parsed = try XCTUnwrap(NativeEditorSnapshot(value))
+        XCTAssertEqual(parsed.mergeDownIDs, ["top", "middle"])
+        XCTAssertTrue(parsed.canMergeVisible)
+        XCTAssertTrue(parsed.canFlatten)
+        let malformedValues: [(String, Any)] = [
+            ("merge_down_ids", "top"), ("can_merge_visible", "true"), ("can_flatten", 1),
+        ]
+        for (key, malformed) in malformedValues {
+            let accepted = value[key]
+            value[key] = malformed
+            XCTAssertNil(NativeEditorSnapshot(value), "\(key) must preserve its shared snapshot type")
+            value[key] = accepted
+        }
     }
 
     func testSnapshotParsesAndValidatesActiveTextInputToken() throws {
@@ -5148,7 +5186,9 @@ final class ScreenshotEditorTests: XCTestCase {
                           visible: true, locked: false, opacity: 100)
         let locked = layer(id: "locked", name: "Locked", x: 10, y: 10,
                            visible: false, locked: true, opacity: 80)
-        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [first, locked], canPaste: true))
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [first, locked], canPaste: true,
+                                                     mergeDownIDs: ["locked"], canMergeVisible: true,
+                                                     canFlatten: true))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
@@ -5171,7 +5211,8 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(output.selectedSegment, 1)
         XCTAssertTrue(worker.requests.isEmpty)
         XCTAssertEqual(menu.items.filter { !$0.isSeparatorItem }.map(\.title),
-                       ["Copy layer", "Paste layer", "Duplicate", "Delete"])
+                       ["Copy layer", "Paste layer", "Duplicate", "Delete", "Merge down",
+                        "Merge visible", "Flatten image"])
         XCTAssertTrue(menu.item(withTitle: "Copy layer")!.isEnabled, "hidden locked layers remain copyable")
         XCTAssertTrue(menu.item(withTitle: "Paste layer")!.isEnabled)
         XCTAssertTrue(menu.item(withTitle: "Duplicate")!.isEnabled)
@@ -5189,27 +5230,88 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNotNil(UUID(uuidString: try XCTUnwrap(worker.requests.last?["new_id"] as? String)))
 
         let blank = try XCTUnwrap(controller.layerContextMenu(row: -1))
-        XCTAssertEqual(blank.items.map(\.title), ["Paste layer"])
+        XCTAssertEqual(blank.items.map(\.title), ["Paste layer", "", "Merge visible", "Flatten image"])
         blank.performActionForItem(at: 0)
         XCTAssertNil(worker.requests.last?["after_id"])
+    }
+
+    func testCombineTargetsClickedRowSelectsReturnedIDAndPreservesStateOnFailure() throws {
+        _ = NSApplication.shared
+        let first = layer(id: "first", name: "First", x: 0, y: 0,
+                          visible: true, locked: false, opacity: 100)
+        let clicked = layer(id: "clicked", name: "Clicked", x: 10, y: 10,
+                            visible: true, locked: false, opacity: 100)
+        let initial = snapshot(id: "shot", layers: [first, clicked], mergeDownIDs: ["clicked"],
+                               canMergeVisible: true, canFlatten: true)
+        let worker = FakeEditorWorker(snapshot: initial)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showLayers(in: controller.root)
+        let table = try table("Screenshot layers", in: controller.root)
+        table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        controller.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification))
+        let menu = try XCTUnwrap(controller.layerContextMenu(row: 0))
+        worker.response = { request in
+            guard request["operation"] as? String == "merge_down",
+                  let newID = request["new_id"] as? String else { return nil }
+            return self.snapshot(id: "shot", layers: [self.layer(id: newID, name: "Merged", x: 0, y: 0,
+                visible: true, locked: false, opacity: 100)], canMergeVisible: true, canFlatten: true)
+        }
+        menu.performActionForItem(at: try XCTUnwrap(menu.items.firstIndex { $0.title == "Merge down" }))
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "merge_down")
+        XCTAssertEqual(worker.requests.last?["id"] as? String, "clicked", "the clicked row, not selection, is merged")
+        let newID = try XCTUnwrap(worker.requests.last?["new_id"] as? String)
+        XCTAssertNotNil(UUID(uuidString: newID))
+        XCTAssertEqual(controller.selectionOverlay.selectedLayerID, newID)
+        XCTAssertEqual(try segmented("Editor section", in: controller.root).selectedSegment, 1)
+
+        try showDraw(in: controller.root)
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(at: 4); _ = tool.sendAction(tool.action, to: tool.target)
+        let acceptedID = controller.selectionOverlay.selectedLayerID
+        worker.failOperation = "merge_visible"
+        worker.failureMessage = "fixture combine failed"
+        let combine = try popup("Combine layers", in: controller.root)
+        combine.selectItem(at: 2); _ = combine.sendAction(combine.action, to: combine.target)
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "merge_visible")
+        worker.failOperation = "flatten"
+        let flatten = try XCTUnwrap(controller.layerContextMenu(row: 0))
+        flatten.performActionForItem(at: try XCTUnwrap(flatten.items.firstIndex { $0.title == "Flatten image" }))
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "flatten")
+        XCTAssertEqual(controller.selectionOverlay.selectedLayerID, acceptedID)
+        XCTAssertEqual(controller.drawOverlay.shape, .pen)
+        XCTAssertEqual(try segmented("Editor section", in: controller.root).selectedSegment, 2)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("fixture combine failed") })
     }
 
     func testLayerContextMenuCapabilityBusyClosedAndStaleGuards() throws {
         _ = NSApplication.shared
         let target = layer(id: "target", name: "Target", x: 0, y: 0,
                            visible: true, locked: false, opacity: 100)
-        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [target], canPaste: false))
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [target], canPaste: false,
+                                                     mergeDownIDs: ["target"], canMergeVisible: false,
+                                                     canFlatten: false))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         let stale = try XCTUnwrap(controller.layerContextMenu(row: 0))
         XCTAssertFalse(stale.item(withTitle: "Paste layer")!.isEnabled)
+        XCTAssertTrue(stale.item(withTitle: "Merge down")!.isEnabled)
+        XCTAssertFalse(stale.item(withTitle: "Merge visible")!.isEnabled)
+        XCTAssertFalse(stale.item(withTitle: "Flatten image")!.isEnabled)
+        let combine = try popup("Combine layers", in: controller.root)
+        XCTAssertTrue(combine.isEnabled)
+        XCTAssertTrue(combine.item(at: 1)!.isEnabled)
+        XCTAssertFalse(combine.item(at: 2)!.isEnabled)
+        XCTAssertFalse(combine.item(at: 3)!.isEnabled)
 
         worker.deferRequests = true
         stale.performActionForItem(at: try XCTUnwrap(stale.items.firstIndex { $0.title == "Duplicate" }))
         XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["action"] as? String, "duplicate")
         let busy = try XCTUnwrap(controller.layerContextMenu(row: 0))
         XCTAssertTrue(busy.items.filter { !$0.isSeparatorItem }.allSatisfy { !$0.isEnabled })
+        XCTAssertFalse(combine.isEnabled)
         let count = worker.requests.count
         busy.performActionForItem(at: 0)
         XCTAssertEqual(worker.requests.count, count)
@@ -5217,8 +5319,10 @@ final class ScreenshotEditorTests: XCTestCase {
         worker.completePending(with: snapshot(id: "shot", layers: [], canPaste: true))
         stale.performActionForItem(at: 0)
         stale.performActionForItem(at: try XCTUnwrap(stale.items.firstIndex { $0.title == "Delete" }))
+        stale.performActionForItem(at: try XCTUnwrap(stale.items.firstIndex { $0.title == "Merge down" }))
         XCTAssertEqual(worker.requests.count, count, "stable menu IDs must reject removed targets")
-        XCTAssertEqual(controller.layerContextMenu(row: -1)?.items.map(\.title), ["Paste layer"])
+        XCTAssertEqual(controller.layerContextMenu(row: -1)?.items.map(\.title),
+                       ["Paste layer", "", "Merge visible", "Flatten image"])
 
         XCTAssertTrue(controller.prepareForTermination())
         XCTAssertNil(controller.layerContextMenu(row: -1), "closed editors expose no context actions")
@@ -5723,6 +5827,9 @@ final class ScreenshotEditorTests: XCTestCase {
                           fonts: [String: String] = [:],
                           includeStandardPreset: Bool = true,
                           canPaste: Bool = false,
+                          mergeDownIDs: [String] = [],
+                          canMergeVisible: Bool = false,
+                          canFlatten: Bool = false,
                           activeTextInput: [String: Any]? = nil) -> NativeEditorSnapshot {
         var value: [String: Any] = [
             "artifact_id": id, "document": ["width": width, "height": height,
@@ -5749,6 +5856,9 @@ final class ScreenshotEditorTests: XCTestCase {
             }),
             "can_undo": unsaved, "can_redo": canRedo,
             "can_paste_layer": canPaste,
+            "merge_down_ids": mergeDownIDs,
+            "can_merge_visible": canMergeVisible,
+            "can_flatten": canFlatten,
             "unsaved_changes": unsaved, "has_draft": draft,
             "active_text_input": activeTextInput ?? NSNull(),
         ]
