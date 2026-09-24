@@ -4063,6 +4063,13 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-text-default-rounded-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
+            color.scrollToVisible(color.bounds)
+            controller.root.layoutSubtreeIfNeeded()
+            let scroll = try XCTUnwrap(color.enclosingScrollView)
+            for control in [preset, size, color] {
+                XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)),
+                              "New text defaults must be reachable at minimum size")
+            }
             try render(controller.root, name: "screenshot-editor-text-default-rounded-minimum-\(appearance)")
 
             worker.failOperation = "begin_text_input"
