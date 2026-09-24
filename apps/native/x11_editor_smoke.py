@@ -1015,7 +1015,10 @@ def main():
                 lambda values: len(values) == 2 and values[-1]["text"] == "Double-clicked",
                 "Select double-click edits existing text")[-1]
             assert double_clicked["id"] == created["id"]
-            assert (double_clicked["x"], double_clicked["y"]) == (created["x"], created["y"])
+            assert double_clicked["align"] == created["align"] == "center"
+            assert double_clicked["y"] == created["y"]
+            assert math.isclose(double_clicked["x"] + double_clicked["width"] / 2,
+                                created["x"] + created["width"] / 2, abs_tol=1e-6)
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "double-click edit single undo")[-1] == created
 
@@ -1075,6 +1078,9 @@ def main():
             click(editor, 736, 62)
             resize_editor(760, 540)
             shot(editor, "text-defaults-rounded-minimum")
+            inspector_move(120, 430, "click", "--repeat", "3", "5", "sleep", ".3")
+            shot(editor, "text-defaults-rounded-minimum-controls")
+            inspector_move(120, 430, "click", "--repeat", "10", "4", "sleep", ".3")
             resize_editor(1000, 1001)
             click(editor, 35, 62)
             save_layers(lambda values: len(values) == 1, "default rounded creation single undo")
