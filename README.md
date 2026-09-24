@@ -397,6 +397,10 @@ rather than a substitute font.
 Selected-text named styles use those pinned fonts; Rounded and Rounded box are
 available in new sessions, but remain unavailable in older drafts without a
 saved rounded face.
+In AppKit, explicitly choosing a named style for selected text also makes that
+style the next new-text choice for this editor. Cancel or a failed Apply does not
+undo that future choice; size, color and manual font edits do not carry forward.
+The Windows/Linux candidate still keeps its selected-text and new-text choices separate.
 The Windows/Linux candidate and AppKit host separately connect on-canvas native
 multiline composing fields to the same shared transaction. Typing previews text
 without saving or adding undo steps; finishing commits one edit, while Cancel

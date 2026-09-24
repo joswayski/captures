@@ -4661,6 +4661,130 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controller.prepareForTermination())
     }
 
+    func testExplicitSelectedTextStyleCarriesOnlyPresetToFutureCreation() throws {
+        _ = NSApplication.shared
+        let fonts = ["sans": "Liberation Sans", "serif": "Liberation Serif", "rounded": "Nunito"]
+        let original = textLayer(id: "selected", text: "Existing")
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", initialTextSize: 39,
+                layers: [original], fonts: fonts))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showDraw(in: controller.root)
+            let future = try popup("New text style", in: controller.root)
+            let futureSize = try field("New text size", in: controller.root)
+            let futureColor = try field("New text color", in: controller.root)
+            let selected = try popup("Text style preset", in: controller.root)
+            let selectedSize = try field("Text size", in: controller.root)
+            let selectedColor = try field("Text color", in: controller.root)
+            let family = try popup("Text font", in: controller.root)
+            XCTAssertEqual(future.titleOfSelectedItem, "Rounded box",
+                           "merely selecting a Standard-styled label must not carry its style")
+            XCTAssertEqual(futureSize.stringValue, "39")
+            XCTAssertEqual(futureColor.stringValue, "#ff3b5c")
+            func choose(_ name: String) {
+                selected.selectItem(withTitle: name)
+                _ = selected.sendAction(selected.action, to: selected.target)
+            }
+
+            choose("Standard")
+            XCTAssertEqual(future.titleOfSelectedItem, "Standard",
+                           "an explicit same-label choice still changes the future style")
+            XCTAssertTrue(worker.requests.isEmpty)
+            selectedSize.stringValue = "71"; selectedColor.stringValue = "#21abcd"
+            family.selectItem(withTitle: "Liberation Serif")
+            XCTAssertEqual(future.titleOfSelectedItem, "Standard")
+            XCTAssertEqual(futureSize.stringValue, "39")
+            XCTAssertEqual(futureColor.stringValue, "#ff3b5c")
+            choose("Box")
+            XCTAssertEqual(future.titleOfSelectedItem, "Box")
+            XCTAssertEqual(selectedSize.stringValue, "71")
+            XCTAssertEqual(selectedColor.stringValue, "#21abcd")
+            controller.window.setContentSize(NSSize(width: 1200, height: 820))
+            try render(controller.root, name: "screenshot-editor-future-text-style-normal-\(appearance)")
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            futureColor.scrollToVisible(futureColor.bounds)
+            controller.root.layoutSubtreeIfNeeded()
+            try render(controller.root, name: "screenshot-editor-future-text-style-minimum-\(appearance)")
+
+            worker.failOperation = "edit_text"
+            try button("Apply", in: controller.root).performClick(nil)
+            XCTAssertEqual(worker.requests.last?["operation"] as? String, "edit_text")
+            XCTAssertEqual(future.titleOfSelectedItem, "Box")
+            XCTAssertEqual(selectedSize.stringValue, "71", "failed Apply retains selected-text staging")
+            try button("Cancel", in: controller.root).performClick(nil)
+            XCTAssertEqual(selectedSize.stringValue, "32")
+            XCTAssertEqual(selectedColor.stringValue, "#111111")
+            XCTAssertEqual(future.titleOfSelectedItem, "Box", "Cancel must not roll back future style")
+
+            choose("Outlined")
+            worker.failOperation = nil
+            worker.response = { request in
+                switch request["operation"] as? String {
+                case "edit_text":
+                    var accepted = original; accepted["outlined"] = true
+                    return self.snapshot(id: "shot", unsaved: true, initialTextSize: 39,
+                        layers: [accepted], fonts: fonts)
+                case "undo":
+                    return self.snapshot(id: "shot", initialTextSize: 39,
+                        layers: [original], fonts: fonts)
+                case "begin_text_input":
+                    let inputID = request["input_id"] as! String
+                    return self.snapshot(id: "shot", initialTextSize: 39,
+                        layers: [original, self.textLayer(id: "new", text: "")], fonts: fonts,
+                        activeTextInput: ["input_id": inputID, "layer_id": "new", "is_new": true])
+                default: return nil
+                }
+            }
+            try button("Apply", in: controller.root).performClick(nil)
+            XCTAssertTrue(controller.state.snapshot?.layers.first?.textStyle?.outlined == true)
+            XCTAssertEqual(future.titleOfSelectedItem, "Outlined", "accepted edit must not reset future style")
+            try button("Undo", in: controller.root).performClick(nil)
+            XCTAssertEqual(future.titleOfSelectedItem, "Outlined", "undo must not restore prior creation defaults")
+
+            let tool = try popup("Drawing tool", in: controller.root)
+            tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+            let point = NSPoint(x: controller.presentedImageRect.maxX - 20,
+                                y: controller.presentedImageRect.midY)
+            controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+            let begin = try XCTUnwrap(worker.requests.last)
+            XCTAssertEqual(begin["operation"] as? String, "begin_text_input")
+            let create = try XCTUnwrap((begin["target"] as? [String: Any])?["create"] as? [String: Any])
+            XCTAssertEqual(create["stylePreset"] as? String, "outlined")
+            XCTAssertEqual(create["fontSize"] as? Double, 39)
+            XCTAssertEqual(create["color"] as? String, "#ff3b5c")
+            XCTAssertNil(create["bold"], "selected-label traits do not carry into new text")
+            XCTAssertEqual(controller.state.snapshot?.activeTextInput?.layerID, "new")
+        }
+    }
+
+    func testExplicitCreationPresetWinsAfterSelectedStyleAndNewEditorResets() throws {
+        _ = NSApplication.shared
+        let fonts = ["sans": "Liberation Sans", "rounded": "Nunito"]
+        let original = textLayer(id: "selected", text: "Existing")
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original], fonts: fonts))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let future = try popup("New text style", in: controller.root)
+        let selected = try popup("Text style preset", in: controller.root)
+        selected.selectItem(withTitle: "Box"); _ = selected.sendAction(selected.action, to: selected.target)
+        XCTAssertEqual(future.titleOfSelectedItem, "Box")
+        future.selectItem(withTitle: "Plain")
+        XCTAssertEqual(future.titleOfSelectedItem, "Plain")
+        try button("Cancel", in: controller.root).performClick(nil)
+        XCTAssertEqual(future.titleOfSelectedItem, "Plain")
+        XCTAssertTrue(worker.requests.isEmpty)
+
+        let freshWorker = FakeEditorWorker(snapshot: snapshot(id: "fresh", fonts: fonts))
+        let fresh = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: freshWorker)
+        defer { fresh.window.orderOut(nil) }
+        fresh.present(artifact: artifact(id: "fresh"), historyRoot: "/native/History")
+        XCTAssertEqual(try popup("New text style", in: fresh.root).titleOfSelectedItem, "Rounded box")
+    }
+
     func testTextShadowIsStagedAndOnlyPatchesTheEnabledFlag() throws {
         _ = NSApplication.shared
         let original = textLayer(id: "copy", text: "accepted")
