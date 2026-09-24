@@ -174,7 +174,7 @@ final class OpenImageTests: XCTestCase {
             "operation": "load", "path": settingsPath])["settings"] as? [String: Any])
         settings["output_directory"] = folder.path
         _ = try settingsBridge.request(["operation": "save", "path": settingsPath, "settings": settings])
-        let transport = OpenImageTransport(image: png.path, withDisplay: true)
+        let transport = OpenImageTransport(image: png.path, withDisplay: true, realHistory: true)
         let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
         let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -211,11 +211,14 @@ final class OpenImageTests: XCTestCase {
         XCTAssertTrue(requests.allSatisfy { ($0["root"] as? String) == folder.path })
         XCTAssertEqual(requests[0]["open_artifact_ids"] as? [String], [])
         XCTAssertEqual(requests[1]["open_artifact_ids"] as? [String], [])
-        XCTAssertEqual(requests[2]["open_artifact_ids"] as? [String], ["opened-id"])
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
             .first?.documentView as? NSTableView)
         XCTAssertEqual(table.numberOfRows, 1)
         XCTAssertEqual(table.selectedRow, 0)
+        let artifacts = try XCTUnwrap(AppBridge().request([
+            "operation": "history", "root": folder.path])["artifacts"] as? [[String: Any]])
+        let entry = try XCTUnwrap(artifacts.first?["entry"] as? [String: Any])
+        XCTAssertEqual(requests[2]["open_artifact_ids"] as? [String], [try XCTUnwrap(entry["id"] as? String)])
         XCTAssertTrue(root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
             .contains { $0.contains("/invalid.gif") && $0.contains("Unsupported") })
         if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
@@ -327,6 +330,7 @@ private final class OpenImageTransport: AppTransport {
     private let image: String
     private let existing: Bool
     private let withDisplay: Bool
+    private let realHistory: Bool
     private var opened = false
     private var seen: [[String: Any]] = []
     private var calls: [String] = []
@@ -334,8 +338,10 @@ private final class OpenImageTransport: AppTransport {
     var requests: [[String: Any]] { lock.lock(); defer { lock.unlock() }; return seen }
     var operations: [String] { lock.lock(); defer { lock.unlock() }; return calls }
 
-    init(image: String, existing: Bool = false, withDisplay: Bool = false) {
+    init(image: String, existing: Bool = false, withDisplay: Bool = false,
+         realHistory: Bool = false) {
         self.image = image; self.existing = existing; self.withDisplay = withDisplay
+        self.realHistory = realHistory
     }
 
     func blockNextHistory() -> DispatchSemaphore {
@@ -357,6 +363,7 @@ private final class OpenImageTransport: AppTransport {
                 blockedHistoryStarted.signal()
                 _ = gate.wait(timeout: .now() + 5)
             }
+            if realHistory { return try AppBridge().request(object) }
             lock.lock(); let isOpened = opened; lock.unlock()
             let artifact = entry("opened-id")
             return ["artifacts": existing
@@ -375,6 +382,7 @@ private final class OpenImageTransport: AppTransport {
             if object["path"] as? String == "/invalid.gif" {
                 throw AppBridgeError.backend("Unsupported image format")
             }
+            if realHistory { return try AppBridge().request(object) }
             lock.lock(); opened = true; lock.unlock()
             return ["artifact": entry("opened-id"), "already_open": count > 2 || existing]
         default: throw AppBridgeError.invalidResponse
