@@ -49,6 +49,7 @@ def main():
     env = os.environ.copy()
     # The application's normal stdout logger must be visible before normal quit.
     env["NSUnbufferedIO"] = "YES"
+    env["CAPTURES_NATIVE_TRACE"] = "1"
 
     def wait(predicate, description, seconds=20):
         until = time.monotonic() + seconds

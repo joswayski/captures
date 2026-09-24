@@ -1,6 +1,7 @@
 mod capture_controls;
 mod clipboard_input;
 mod countdown;
+mod diagnostics;
 mod editor;
 mod feedback;
 mod live;
@@ -60,6 +61,11 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        let _span = diagnostics::span("window-event");
+        diagnostics::event(
+            "window-event-kind",
+            || json!({"window":format!("{window_id:?}"),"kind":format!("{:?}",std::mem::discriminant(&event))}),
+        );
         let root_window = *self.root_window.get_or_insert(window_id);
         if window_id == root_window {
             match &event {
@@ -99,10 +105,23 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
     }
 
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        let _span = diagnostics::span("new-events");
         self.inner.new_events(event_loop, cause);
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: eframe::UserEvent) {
+        let _span = diagnostics::span("user-event");
+        if let eframe::UserEvent::RequestRepaint {
+            when,
+            cumulative_pass_nr,
+            viewport_id,
+        } = &event
+        {
+            diagnostics::event(
+                "repaint-event",
+                || json!({"viewport":format!("{viewport_id:?}"),"pass":cumulative_pass_nr,"when":format!("{when:?}")}),
+            );
+        }
         self.inner.user_event(event_loop, event);
     }
 
@@ -116,7 +135,12 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let _span = diagnostics::span("about-to-wait");
         self.inner.about_to_wait(event_loop);
+        diagnostics::event(
+            "control-flow",
+            || json!({"flow":format!("{:?}",event_loop.control_flow())}),
+        );
     }
 
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {

@@ -108,7 +108,10 @@ impl Workbench {
             let wake = cc.egui_ctx.clone();
             // The socket worker can wake while an editor owns the current
             // viewport. Only the root App::logic drains instance requests.
-            instance.set_wake(move || wake.request_repaint_of(egui::ViewportId::ROOT));
+            instance.set_wake(move || {
+                let _span = crate::diagnostics::span("instance-wake");
+                wake.request_repaint_of(egui::ViewportId::ROOT);
+            });
         }
         if options.scene == Scene::Idle && cc.winit_window().and_then(|w| w.is_visible()).is_none()
         {
@@ -378,6 +381,7 @@ impl Workbench {
     }
 
     fn receive_instance(&mut self, ctx: &egui::Context) {
+        let _span = crate::diagnostics::span("instance-drain");
         // Preserve startup-file order and leave the transport queue bounded while
         // settings are loading. Preferences' completion already wakes this pass.
         if self.preferences_state.is_loading() {
@@ -389,6 +393,7 @@ impl Workbench {
             };
             match instance.next_request() {
                 Ok(Some(request)) if request.paths.is_empty() => {
+                    crate::diagnostics::event("instance-request", || json!({"paths":0}));
                     let restored = self
                         .live
                         .as_mut()
@@ -399,7 +404,13 @@ impl Workbench {
                     }
                     emit("instance-relaunch", json!({}));
                 }
-                Ok(Some(request)) => self.options.open_media.extend(request.paths),
+                Ok(Some(request)) => {
+                    crate::diagnostics::event(
+                        "instance-request",
+                        || json!({"paths":request.paths.len()}),
+                    );
+                    self.options.open_media.extend(request.paths);
+                }
                 Ok(None) => break,
                 Err(error) => {
                     self.action_error = Some(format!("Native instance forwarding failed: {error}"));
@@ -881,6 +892,11 @@ impl eframe::App for Workbench {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let _span = crate::diagnostics::span("root-logic");
+        crate::diagnostics::event(
+            "root-pass",
+            || json!({"pass":ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT)}),
+        );
         if self.quitting {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
@@ -1044,6 +1060,7 @@ impl eframe::App for Workbench {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let _span = crate::diagnostics::span("root-ui");
         let start = Instant::now();
         let ctx = ui.ctx().clone();
         // Font/layout initialization and the settings load can require several
