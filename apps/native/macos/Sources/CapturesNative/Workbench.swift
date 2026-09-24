@@ -413,6 +413,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var preferencesController: PreferencesController?
     private var feedbackController: FeedbackController?
     private var liveController: LiveCaptureController?
+    private var pendingOpenImages: [String] = []
     private var miniPreviews: MiniPreviewController?
     private var miniPreviewActions: MiniPreviewActions?
     private var rootWindowCloseHandler: RootWindowCloseHandler?
@@ -451,6 +452,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     init(options: Options) {
         self.options = options
+        pendingOpenImages = options.openImages
         scene = options.live ? "live" : options.scene
         appearance = options.appearance
         theme = options.theme
@@ -527,6 +529,27 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         if let seconds = options.quitAfter {
             DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { NSApp.terminate(nil) }
         }
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        guard options.live else {
+            let message = "Opening external images requires --live; fixture mode cannot open files."
+            if window != nil { presentHostError(title: "Image Open Unavailable", message: message) }
+            else { FileHandle.standardError.write(Data("\(message)\n".utf8)) }
+            sender.reply(toOpenOrPrint: .failure)
+            return
+        }
+        pendingOpenImages.append(contentsOf: filenames)
+        drainOpenImages()
+        sender.reply(toOpenOrPrint: .success)
+    }
+
+    private func drainOpenImages() {
+        guard options.live, !pendingOpenImages.isEmpty else { return }
+        if scene != "live" { scene = "live"; render() }
+        guard let liveController else { return }
+        liveController.openImages(pendingOpenImages)
+        pendingOpenImages.removeAll()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !options.live }
@@ -692,6 +715,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self?.showPreferences()
                 }
             renderedLiveStyleRevision = liveStyleRevision
+            drainOpenImages()
             previewSelectionID = nil
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
             return
@@ -733,6 +757,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func openPreview(_ artifact: CaptureArtifact) {
+        if liveController?.externalOpenPending == true { return }
         previewSelectionID = artifact.id
         if scene != "live" { scene = "live"; render() }
         liveController?.openPreview(artifact)

@@ -1029,23 +1029,29 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         build(); restyle(tokens); updateControls()
     }
 
-    func present(artifact: CaptureArtifact, historyRoot: String, outputDirectory: String? = nil) {
+    func present(artifact: CaptureArtifact, historyRoot: String, outputDirectory: String? = nil,
+                 completion: ((Bool) -> Void)? = nil) {
         guard !state.busy else {
             showError("Wait for the current editor action to finish before opening another screenshot.")
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            completion?(false)
             return
         }
         guard !artifact.isRecording else {
             showError("Recording editing is not available in this native editor.")
+            completion?(false)
             return
         }
-        if state.snapshot?.unsavedChanges == true, state.artifactID != artifact.id {
-            showError("Save or discard the open screenshot edits before editing another capture.")
+        if state.artifactID != artifact.id,
+           state.snapshot?.unsavedChanges == true || hasStagedText || inlineTextInput != nil {
+            showError("Apply or cancel pending text and save or discard screenshot edits before opening another capture.")
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            completion?(false)
             return
         }
         if state.artifactID == artifact.id, state.snapshot != nil {
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            completion?(true)
             return
         }
         cancelPendingImport()
@@ -1068,23 +1074,33 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             .appendingPathComponent("editor-drafts", isDirectory: true).path
         worker.open(historyRoot: historyRoot, draftsRoot: draftsRoot, artifactID: artifact.id) {
             [weak self] result in
-            guard let self else { return }
+            guard let self else { completion?(false); return }
+            let accepted: Bool
             switch result {
             case .success(let presentation):
-                guard self.state.complete(presentation.snapshot, generation: generation) else { return }
+                guard self.state.complete(presentation.snapshot, generation: generation) else {
+                    completion?(false); return
+                }
+                accepted = true
                 self.createTextSize.stringValue = self.format(presentation.snapshot.initialTextSize)
                 self.publish(presentation, resetCrop: true)
                 self.status.textColor = self.tokens.color("text-muted")
                 self.status.stringValue = presentation.snapshot.hasDraft
                     ? "Draft restored." : "Ready. Changes affect only the native editor draft."
             case .failure(let error):
-                guard self.state.fail(generation: generation) else { return }
+                guard self.state.fail(generation: generation) else {
+                    completion?(false); return
+                }
+                accepted = false
                 self.showError("Couldn’t open screenshot: \(error.localizedDescription)")
             }
             self.updateControls()
             self.submitPendingImportIfReady()
+            completion?(accepted)
         }
     }
+
+    var activeArtifactID: String? { window.isVisible ? state.artifactID : nil }
 
     func prepareForTermination() -> Bool {
         guard inlineTextInput != nil || !hasStagedText else {

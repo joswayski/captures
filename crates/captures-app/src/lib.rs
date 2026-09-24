@@ -5,6 +5,7 @@ pub mod capture_flow;
 pub mod editor;
 pub mod editor_fonts;
 pub mod editor_image_background;
+pub mod editor_image_decode;
 pub mod editor_output;
 pub mod editor_render;
 pub mod editor_session;
@@ -74,6 +75,11 @@ pub enum Request {
     History {
         root: PathBuf,
     },
+    OpenImage {
+        root: PathBuf,
+        path: PathBuf,
+        open_artifact_ids: Vec<String>,
+    },
     SaveScreenshot {
         root: PathBuf,
         id: String,
@@ -104,13 +110,30 @@ pub struct Artifact {
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Response {
-    HistoryRoot { path: PathBuf },
-    Displays { displays: Vec<DisplayDescriptor> },
+    HistoryRoot {
+        path: PathBuf,
+    },
+    Displays {
+        displays: Vec<DisplayDescriptor>,
+    },
     PermissionGranted,
-    Captured { artifact: Artifact },
-    History { artifacts: Vec<Artifact> },
-    Saved { artifact: Artifact, path: PathBuf },
-    Deleted { id: String },
+    Captured {
+        artifact: Artifact,
+    },
+    OpenedImage {
+        artifact: Artifact,
+        already_open: bool,
+    },
+    History {
+        artifacts: Vec<Artifact>,
+    },
+    Saved {
+        artifact: Artifact,
+        path: PathBuf,
+    },
+    Deleted {
+        id: String,
+    },
 }
 
 /// Permission prompting happens only in RequestPermission, an explicit user action.
@@ -172,6 +195,11 @@ pub fn execute(request: Request) -> Result<Response, Error> {
         Request::History { root } => Ok(Response::History {
             artifacts: list(&root)?,
         }),
+        Request::OpenImage {
+            root,
+            path,
+            open_artifact_ids,
+        } => open_image(&root, &path, &open_artifact_ids),
         Request::SaveScreenshot {
             root,
             id,
@@ -221,6 +249,78 @@ pub fn list(root: &Path) -> Result<Vec<Artifact>, Error> {
         .filter(|entry| entry.kind == ArtifactKind::Screenshot)
         .map(|entry| artifact(root, entry))
         .collect()
+}
+
+fn open_image(root: &Path, path: &Path, open_artifact_ids: &[String]) -> Result<Response, Error> {
+    let source = path.canonicalize()?;
+    if !source.is_file() {
+        return Err(Error::Missing);
+    }
+    let source_path = source
+        .to_str()
+        .ok_or_else(|| Error::Image("The image path is not valid UTF-8.".into()))?;
+    let previous = captures_history::load(root, Utc::now())?
+        .into_iter()
+        .find(|entry| {
+            entry.kind == ArtifactKind::Screenshot
+                && entry
+                    .saved_path
+                    .as_deref()
+                    .and_then(|saved| Path::new(saved).canonicalize().ok())
+                    .is_some_and(|saved| saved == source)
+        });
+    if let Some(entry) = previous.as_ref()
+        && open_artifact_ids.contains(&entry.id)
+    {
+        return Ok(Response::OpenedImage {
+            artifact: artifact(root, entry.clone())?,
+            already_open: true,
+        });
+    }
+    if let Some(entry) = previous.as_ref() {
+        let draft =
+            captures_history::entry_directory(&root.with_file_name("editor-drafts"), &entry.id)?;
+        match fs::symlink_metadata(draft) {
+            Ok(_) => return Err(Error::Image(
+                "This image has a saved editor draft. Open it from History to restore or discard the draft before reopening the source.".into(),
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    let pixels = editor_image_decode::decode_opened_image(&source).map_err(Error::Image)?;
+    let png = captures_history::encode_png(&pixels)?;
+    let preview = captures_history::encode_thumbnail_png(&pixels)?;
+    let mut entry = previous.unwrap_or_else(|| HistoryEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        kind: ArtifactKind::Screenshot,
+        preview_url: String::new(),
+        full_url: String::new(),
+        width: pixels.width(),
+        height: pixels.height(),
+        size_bytes: png.len() as u64,
+        created_at: Utc::now().to_rfc3339(),
+        mode: Some(CaptureMode::Display),
+        saved_path: None,
+        mime_type: Some("image/png".into()),
+        duration_ms: None,
+        target: None,
+        has_system_audio: false,
+        has_microphone_audio: false,
+        dropped_frames: 0,
+    });
+    entry.width = pixels.width();
+    entry.height = pixels.height();
+    entry.size_bytes = png.len() as u64;
+    entry.saved_path = Some(source_path.into());
+    entry.mime_type = Some("image/png".into());
+
+    captures_history::save_capture(root, &entry, &png, &preview)?;
+    Ok(Response::OpenedImage {
+        artifact: artifact(root, entry)?,
+        already_open: false,
+    })
 }
 
 /// Commit a captured, color-normalized buffer once. Reused by backend tests.

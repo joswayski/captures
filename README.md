@@ -360,6 +360,18 @@ the original History image and its exports remain unchanged until explicit repla
 still presents its notice immediately; opening the recording editor is a separate History action. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.
+Both native development hosts accept repeatable `--open-image PATH` arguments
+only with `--live`. AppKit also handles macOS file-open requests while running.
+PNG, JPEG and WebP sources become local History-backed screenshot editor sessions;
+unsupported files report an error without stopping later paths. Reopening an
+already-open source focuses its editor without replacing unsaved edits. Reopening
+a closed source refreshes the same History ID without changing the source file;
+if it has a saved draft, restore or explicitly discard that draft from History first.
+AppKit switches its editor between sources only after opening settles and without
+dropping pending text or unsaved changes; a refused source remains in History.
+This is not a registered file association or an installed-app opening feature.
+Windows/Linux single-instance forwarding and GIF/video opening remain separate work;
+TIFF is supported by in-editor import, not this external-open path.
 Native Preferences also includes an optional feedback form. Sending shares only
 the message, optional contact, category, and displayed app/system details with
 captur.es; it never attaches captures, files, or diagnostics. Fixture mode cannot
@@ -480,7 +492,8 @@ also imports one still image at a time as a new image layer using its color-mana
 system decoder. It normalizes imported pixels to straight-alpha sRGB RGBA8 and retains
 them in the draft without depending on the source file. ImageIO-supported sources use
 their first image; files without a usable color description are rejected rather than
-silently relabeled. Its **Draw** view maps Rectangle, Ellipse, Line, Arrow and Pen gestures from the fitted
+silently relabeled.
+Its **Draw** view maps Rectangle, Ellipse, Line, Arrow and Pen gestures from the fitted
 edited preview into shared document coordinates, including reverse and off-canvas
 gestures. Release creates one undoable layer; Escape, focus loss, close, or leaving Draw
 cancels transient geometry without editing the document. Arrow outlines and Pen

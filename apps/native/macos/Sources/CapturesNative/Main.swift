@@ -10,6 +10,7 @@ struct Options {
     var exercise = false
     var live = false
     var historyRoot: String?
+    var openImages: [String] = []
     var quitAfter: Double?
     var settingsFile: String?
     var screenshot: String?
@@ -32,6 +33,10 @@ struct Options {
             case "--history-root":
                 guard let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 historyRoot = value
+            case "--open-image":
+                guard let value = iterator.next(), !value.isEmpty,
+                      !value.hasPrefix("--") else { throw Usage.invalid }
+                openImages.append(value)
             case "--settings-file":
                 guard let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 settingsFile = value
@@ -46,7 +51,8 @@ struct Options {
         }
         guard ["preferences", "history", "hud", "preview", "region", "window", "idle"].contains(scene),
             ["light", "dark", "system"].contains(appearance), Self.themes.contains(theme),
-            !(live && (exercise || referenceChips)), historyRoot == nil || live
+            !(live && (exercise || referenceChips)), historyRoot == nil || live,
+            openImages.isEmpty || live
         else { throw Usage.invalid }
     }
     enum Usage: Error { case invalid }
@@ -68,7 +74,7 @@ struct Options {
             application.delegate = delegate
             withExtendedLifetime(delegate) { application.run() }
         } catch {
-            FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH]] [--scene preferences|history|hud|preview|region|window|idle] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--settings-file PATH] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS]\n".utf8))
+            FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH] [--open-image PATH]...] [--scene preferences|history|hud|preview|region|window|idle] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--settings-file PATH] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS]\n".utf8))
             exit(1)
         }
     }

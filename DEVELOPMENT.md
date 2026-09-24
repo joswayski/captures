@@ -133,6 +133,15 @@ handoff and resource collection. Root `cargo test --workspace` does not include
 this experiment; run its manifest-specific checks too. It connects capture and
 recording engines for development but does not select a production renderer.
 
+Both native hosts accept `--live --open-image "/path/to/image.png"`; repeat
+`--open-image` for multiple PNG/JPEG/WebP paths. This imports owned History pixels
+without changing the source. An already-open source keeps its edits; a closed
+source with a saved draft must be restored or explicitly discarded from History
+before source reload. AppKit also queues macOS file-open callbacks in live mode.
+These development binaries do not register Open With associations; Windows/Linux
+do not forward files to an existing process. Use disposable `--history-root` and
+`--settings-file` paths for testing.
+
 Both native executables accept `--font-license` to print the bundled editor-font
 copyright and full OFL notice without opening a window. Native resources and
 font-bearing draft manifests also retain it. Run `apps/native/x11_editor_smoke.py
@@ -150,6 +159,9 @@ Use `--rotation-snap-only` to exercise the per-editor custom increment, Shift pr
 and cancellation, committed angle/pixels, undo/redo and restored drafts.
 Use `--overwrite-only` for explicit confirmation/Cancel/Escape, exact replaced pixels,
 stable History identity/date, retained draft and undo/redo, and minimum-size controls.
+Use `--external-image-only` for multi-file startup, canonical aliases, retained
+errors, exact imported pixels, source preservation, saved-draft refusal/restoration
+and same-ID source reload after explicit discard.
 Use `--history-shortcuts-only` for document Undo/Redo keys, exact restored layers,
 duplicate offsets/selection, Delete/Backspace, locked-layer protection,
 text-field and confirmation focus, and unchanged source bytes.

@@ -740,11 +740,14 @@ dependencies = [
  "file-id",
  "global-hotkey",
  "image",
+ "moxcms",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "thiserror 2.0.20",
+ "tiff",
  "uuid",
 ]
 

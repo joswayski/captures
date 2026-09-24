@@ -278,6 +278,10 @@ impl Preferences {
             self.value.get("theme")?.as_str()?.into(),
         ))
     }
+    pub fn is_loading(&self) -> bool {
+        self.value.is_null() && self.load_error.is_none()
+    }
+
     pub fn snapshot(&self) -> Result<AppSettings, String> {
         if let Some(error) = &self.load_error {
             return Err(error.clone());
@@ -1387,6 +1391,25 @@ mod tests {
             9
         );
     }
+    #[test]
+    fn initial_settings_loading_is_distinct_from_ready_and_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), dir.path().join("settings.json"), None, None);
+        assert!(prefs.is_loading());
+        prefs.io.flush();
+        prefs.receive(&ctx);
+        assert!(!prefs.is_loading());
+        assert!(prefs.snapshot().is_ok());
+        prefs.value = Value::Null;
+        prefs.load_error = Some("unreadable settings".into());
+        assert!(
+            !prefs.is_loading(),
+            "a load failure must not leave file opens waiting forever"
+        );
+        assert_eq!(prefs.snapshot().unwrap_err(), "unreadable settings");
+    }
+
     #[test]
     fn stale_save_reply_does_not_replace_newer_edit() {
         let dir = tempfile::tempdir().unwrap();
