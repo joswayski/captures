@@ -1548,7 +1548,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             createTextPreset.lastItem?.representedObject = preset.id
         }
         let desiredID = createTextDefaultsPublished ? selectedID
-            : state.snapshot?.textStylePresets.first(where: { $0.id == "standard" })?.id
+            : (state.snapshot?.textStylePresets.first(where: { $0.id == "rounded-box" })?.id
+                ?? state.snapshot?.textStylePresets.first(where: { $0.id == "standard" })?.id)
         if let desiredID, let index = createTextPreset.itemArray.firstIndex(where: {
             $0.representedObject as? String == desiredID
         }) {
