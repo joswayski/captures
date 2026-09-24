@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--appearance", choices=("light", "dark"), default="dark")
+    parser.add_argument("--external-media", action="store_true", help="Open a mixed external batch, preserve staged alias edits and export WebM safely as MP4")
     parser.add_argument("--audio", action="store_true", help="Exercise separate system/microphone export controls")
     parser.add_argument("--presets", action="store_true", help="Exercise output presets on a portrait source")
     parser.add_argument("--crop-aspect", action="store_true", help="Exercise locked/unlocked numeric crop dimensions")
@@ -246,9 +247,144 @@ def main():
                 f"os.execv({ffmpeg!r}, [{ffmpeg!r}, *sys.argv[1:]])\n")
             wrapper.chmod(0o755)
             env["PATH"] = str(tools) + os.pathsep + env["PATH"]
-        app = spawn("app", [str(binary), "--live", "--history-root", str(history),
-                    "--settings-file", str(settings), "--quit-after", "900"])
+        app_command = [str(binary), "--live", "--history-root", str(history),
+                       "--settings-file", str(settings), "--quit-after", "900"]
+        open_arguments = []
+        if args.external_media:
+            animation = output / "Animation é.gif"
+            webm = output / "WebM source.mp4"  # Deliberately misleading suffix.
+            still = output / "Still.png"
+            alias = output / "Animation alias.gif"
+            broken = output / "Broken.png"
+            run("ffmpeg", "-v", "error", "-i", str(source), str(animation))
+            run("ffmpeg", "-v", "error", "-i", str(source), "-c:v", "libvpx-vp9",
+                "-an", "-f", "webm", str(webm))
+            shutil.copyfile(artifact / "preview.png", still)
+            alias.symlink_to(animation)
+            broken.write_bytes(b"not an image")
+            source_bytes = {path: path.read_bytes() for path in [source, animation, webm, still]}
+            shutil.rmtree(artifact)  # The app, not the fixture, must publish History.
+
+            # Hold the second external open while staging an edit in the first
+            # editor. All probes remain real. Releasing it lets the final alias
+            # refocus that editor, which must retain the unaccepted trim value.
+            tools = output / "open-tools"
+            tools.mkdir()
+            started = output / "second-open-started"
+            allowed = output / "allow-second-open"
+            ffprobe = shutil.which("ffprobe")
+            assert ffprobe
+            wrapper = tools / "ffprobe"
+            wrapper.write_text(
+                "#!/usr/bin/python3\nimport os, sys, time\nfrom pathlib import Path\n"
+                f"if {str(source)!r} in sys.argv[1:]:\n"
+                f"    Path({str(started)!r}).touch()\n"
+                f"    while not Path({str(allowed)!r}).exists(): time.sleep(.05)\n"
+                f"os.execv({ffprobe!r}, [{ffprobe!r}, *sys.argv[1:]])\n")
+            wrapper.chmod(0o755)
+            env["PATH"] = str(tools) + os.pathsep + env["PATH"]
+            for index, path in enumerate([animation, source, webm, still, broken, alias]):
+                open_arguments.extend(["--open-image" if index == 3 else "--open-media", str(path)])
+
+            def opened_entries():
+                return [json.loads(path.read_text()) for path in history.glob("*/metadata.json")
+                        if not path.parent.name.startswith(".")]
+
+        app = spawn("app", app_command + open_arguments)
         root = wait(lambda: windows("Captures"), "History")[0]
+        if args.external_media:
+            wait(started.exists, "second external open blocked after first dispatch")
+            editor = wait(lambda: windows("Recording editor"), "external GIF editor")[0]
+            run("xdotool", "windowmove", "--sync", editor, "80", "60",
+                "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
+            shot(editor, "external-gif-decoded")
+            dominant(output / "external-gif-decoded.png", 0)
+            gif_entry = next(value for value in opened_entries() if value["kind"] == "gif")
+            gif_metadata = history / gif_entry["id"] / "metadata.json"
+            gif_before_alias = gif_metadata.read_bytes()
+            field(editor, 98, 598, 1100)
+            shot(editor, "external-gif-staged")
+            allowed.touch()
+            entries = wait(lambda: values if len(values := opened_entries()) == 4 else None,
+                           "four imported artifacts without alias duplicate")
+            wait(lambda: len(windows("Recording editor")) == 3 and len(windows("Screenshot editor")) == 1,
+                 "mixed recording and screenshot editor routing")
+            wait(lambda: run("xdotool", "getactivewindow").decode().strip() == editor,
+                 "final canonical alias refocuses the original GIF editor")
+            shot(editor, "external-gif-alias-staged")
+            assert gif_metadata.read_bytes() == gif_before_alias, "alias must not republish History"
+            for path, kind, mime in [(animation, "gif", "image/gif"), (source, "video", "video/mp4"),
+                                     (webm, "video", "video/webm"), (still, "screenshot", "image/png")]:
+                entry = next(value for value in entries if value["saved_path"] == str(path))
+                assert (entry["kind"], entry["mime_type"], entry["width"], entry["height"]) == (kind, mime, 320, 180), entry
+                if kind != "screenshot":
+                    assert not list((history / entry["id"]).glob("media.*")), "reference must not own source bytes"
+
+            # Saving the carried trim gives independent evidence that alias
+            # focus preserved staging, rather than only reusing a window ID.
+            click(editor, 793, 882)
+            trimmed = exports / "external-gif-trim.mp4"
+            field(editor, 360, 838, trimmed)
+            click(editor, 899, 882)
+            wait(lambda: len(opened_entries()) == 5, "trimmed GIF source exported to new MP4")
+            probe = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(trimmed)))
+            assert abs(float(probe["format"]["duration"]) - 1.9) <= .15, probe
+            dominant(trimmed, 1, .2)
+            shot(editor, "external-gif-saved")
+            for window in windows("Recording editor") + windows("Screenshot editor"):
+                close(window)
+            wait(lambda: not windows("Recording editor") and not windows("Screenshot editor"), "clean editor close")
+            run("xdotool", "windowsize", "--sync", root, "760", "540", "sleep", ".5")
+            shot(root, "external-media-error-minimum")
+            close(root)
+            wait(lambda: app.poll() is not None, "mixed batch quit")
+            assert app.returncode == 0
+
+            # A closed canonical reference must reload the same ID. Its default
+            # Preserve MP4 export must encode MP4, not rename/copy WebM bytes.
+            webm_id = next(value["id"] for value in entries if value["saved_path"] == str(webm))
+            app = spawn("reopened", app_command + ["--open-media", str(webm)])
+            root = wait(lambda: windows("Captures"), "reopened History")[0]
+            editor = wait(lambda: windows("Recording editor"), "closed external WebM reopened")[0]
+            run("xdotool", "windowmove", "--sync", editor, "80", "60",
+                "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
+            shot(editor, "external-webm-decoded")
+            dominant(output / "external-webm-decoded.png", 0)
+            assert len(opened_entries()) == 5
+            assert next(value["id"] for value in opened_entries() if value["saved_path"] == str(webm)) == webm_id
+            # A reference has no retained recovery copy, so Replace original is
+            # disabled even though saved_path points to a writable external file.
+            click(editor, 782, 838)
+            shot(editor, "external-reference-replace-disabled")
+            destination = exports / "webm-as-mp4.mp4"
+            field(editor, 360, 838, destination)
+            click(editor, 899, 882)
+            wait(lambda: len(opened_entries()) == 6, "WebM exported to a distinct MP4 History artifact")
+            probe = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(destination)))
+            assert "mp4" in probe["format"]["format_name"].split(","), probe
+            assert next(stream for stream in probe["streams"] if stream["codec_type"] == "video")["codec_name"] == "h264", probe
+            assert abs(float(probe["format"]["duration"]) - 3) <= .15, probe
+            dominant(destination, 2, 2.4)
+            assert destination.read_bytes() != source_bytes[webm]
+            for path, content in source_bytes.items():
+                assert path.read_bytes() == content, f"source changed: {path}"
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            shot(editor, "external-webm-saved-minimum")
+            close(editor)
+            wait(lambda: not windows("Recording editor"), "saved WebM clean close")
+            close(root)
+            wait(lambda: app.poll() is not None, "external-media quit")
+            assert app.returncode == 0
+            checks = ["empty-history-mixed-batch", "gif-decoded", "canonical-alias-focus",
+                "staged-trim-survives-alias", "per-kind-editor-routing", "actual-container-not-suffix",
+                "reference-only-history", "alias-no-history-rewrite", "per-file-error-continuation",
+                "closed-reference-same-id", "webm-decoded", "reference-replace-disabled",
+                "webm-preserve-export-is-h264-mp4", "export-duration-pixels", "source-bytes-unchanged",
+                "minimum-error-and-saved", "clean-close-and-quit"]
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "checks": checks}, indent=2) + "\n")
+            print(f"PASS external media: {len(checks)} checks, GIF/MP4/WebM/still batch and safe MP4 export")
+            return
         time.sleep(1)
         shot(root, "history")
         click(root, 795, 191)

@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 pub const USAGE: &str = "Captures wgpu native host\n\
-  --live [--history-root PATH] [--open-image PATH (repeatable)]\n\
+  --live [--history-root PATH] [--open-media PATH (repeatable; --open-image alias)]\n\
   --scene preferences|history|hud|preview|editor|capture-controls|region|window|countdown|idle\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
@@ -81,7 +81,7 @@ impl Scene {
 pub struct Options {
     pub live: bool,
     pub history_root: Option<PathBuf>,
-    pub open_images: Vec<PathBuf>,
+    pub open_media: Vec<PathBuf>,
     pub scene: Scene,
     pub appearance: String,
     pub theme: String,
@@ -104,7 +104,7 @@ impl Options {
         let mut options = Self {
             live: false,
             history_root: None,
-            open_images: Vec::new(),
+            open_media: Vec::new(),
             scene: Scene::Preferences,
             appearance: "dark".into(),
             theme: "mustard".into(),
@@ -128,12 +128,12 @@ impl Options {
                 "--history-root" => {
                     options.history_root = Some(args.next().ok_or("Missing history root")?.into())
                 }
-                "--open-image" => {
+                "--open-media" | "--open-image" => {
                     let path = args
                         .next()
                         .filter(|path| !path.is_empty())
-                        .ok_or("Missing image path")?;
-                    options.open_images.push(path.into());
+                        .ok_or("Missing media path")?;
+                    options.open_media.push(path.into());
                 }
                 "--exercise" => options.exercise = true,
                 "--floating" => options.floating = true,
@@ -227,8 +227,8 @@ impl Options {
         if options.history_root.is_some() && !options.live {
             return Err("--history-root requires --live".into());
         }
-        if !options.open_images.is_empty() && !options.live {
-            return Err("--open-image requires --live".into());
+        if !options.open_media.is_empty() && !options.live {
+            return Err("--open-media/--open-image requires --live".into());
         }
         if options.screenshot.is_some() {
             let deadline = options
@@ -250,27 +250,31 @@ mod tests {
     }
 
     #[test]
-    fn external_image_paths_preserve_order_spaces_and_require_live_mode() {
+    fn external_media_paths_and_alias_preserve_order_spaces_and_require_live_mode() {
         let options = parse(&[
             "--open-image",
             "relative image.PNG",
             "--live",
-            "--open-image",
-            "/tmp/second.webp",
-            "--open-image",
+            "--open-media",
+            "/tmp/second.webm",
+            "--open-media",
             "relative image.PNG",
         ])
         .unwrap();
         assert_eq!(
-            options.open_images,
+            options.open_media,
             [
                 PathBuf::from("relative image.PNG"),
-                PathBuf::from("/tmp/second.webp"),
+                PathBuf::from("/tmp/second.webm"),
                 PathBuf::from("relative image.PNG"),
             ]
         );
-        assert!(parse(&[]).unwrap().open_images.is_empty());
+        assert!(parse(&[]).unwrap().open_media.is_empty());
         for args in [
+            vec!["--open-media", "movie.mp4"],
+            vec!["--live", "--open-media"],
+            vec!["--live", "--open-media", ""],
+            vec!["--live", "--scene", "history", "--open-media", "movie.gif"],
             vec!["--open-image", "image.png"],
             vec!["--live", "--open-image"],
             vec!["--live", "--open-image", ""],
