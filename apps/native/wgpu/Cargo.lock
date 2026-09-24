@@ -940,6 +940,7 @@ dependencies = [
  "earcutr",
  "eframe",
  "image",
+ "log",
  "moxcms",
  "png 0.18.1",
  "rfd",
