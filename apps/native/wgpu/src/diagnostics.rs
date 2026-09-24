@@ -13,6 +13,39 @@ fn enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("CAPTURES_NATIVE_TRACE").is_some())
 }
 
+struct EframeLogger;
+
+impl log::Log for EframeLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Trace && metadata.target() == "eframe::native::run"
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            event(
+                "eframe-run",
+                || serde_json::json!({"level":record.level().as_str(),"message":record.args().to_string()}),
+            );
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static EFRAME_LOGGER: EframeLogger = EframeLogger;
+
+/// Installs the narrow eframe scheduler sink when native tracing is requested.
+/// Call before `create_native`, which can emit scheduler diagnostics.
+pub fn install_eframe_logger() {
+    if enabled() && log::set_logger(&EFRAME_LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Trace);
+    }
+}
+
+pub fn is_enabled() -> bool {
+    enabled()
+}
+
 pub fn event(name: &str, detail: impl FnOnce() -> serde_json::Value) {
     if enabled() {
         crate::emit(

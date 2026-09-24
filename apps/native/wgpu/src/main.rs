@@ -25,6 +25,7 @@ mod workbench;
 use eframe::egui;
 use options::{Options, Scene};
 use serde_json::json;
+use std::{cell::RefCell, rc::Rc, sync::Weak, time::Instant};
 use winit::{
     application::ApplicationHandler,
     event::{DeviceEvent, DeviceId, StartCause, WindowEvent},
@@ -32,6 +33,13 @@ use winit::{
     keyboard::{ModifiersState, PhysicalKey},
     window::WindowId,
 };
+
+#[derive(Default)]
+struct NativeTraceState {
+    egui_ctx: Option<egui::Context>,
+    root_window_id: Option<WindowId>,
+    root_window: Option<Weak<winit::window::Window>>,
+}
 
 fn emit(event: &str, detail: serde_json::Value) {
     println!(
@@ -45,6 +53,7 @@ struct InputApplication<'a> {
     paste_input: clipboard_input::PasteInput,
     shortcut_input: shortcut_input::Bridge,
     shortcuts: workbench::ShortcutOwner,
+    trace_state: Option<Rc<RefCell<NativeTraceState>>>,
     root_window: Option<WindowId>,
     root_focused: bool,
     modifiers: ModifiersState,
@@ -62,10 +71,19 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         event: WindowEvent,
     ) {
         let _span = diagnostics::span("window-event");
-        diagnostics::event(
-            "window-event-kind",
-            || json!({"window":format!("{window_id:?}"),"kind":format!("{:?}",std::mem::discriminant(&event))}),
-        );
+        diagnostics::event("window-event-kind", || {
+            let (kind, value) = match &event {
+                WindowEvent::RedrawRequested => ("RedrawRequested", json!(null)),
+                WindowEvent::Resized(size) => {
+                    ("Resized", json!({"width":size.width,"height":size.height}))
+                }
+                WindowEvent::Focused(focused) => ("Focused", json!(focused)),
+                WindowEvent::Occluded(occluded) => ("Occluded", json!(occluded)),
+                WindowEvent::Destroyed => ("Destroyed", json!(null)),
+                _ => ("Other", json!(null)),
+            };
+            json!({"window":format!("{window_id:?}"),"kind":kind,"value":value})
+        });
         let root_window = *self.root_window.get_or_insert(window_id);
         if window_id == root_window {
             match &event {
@@ -111,18 +129,27 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: eframe::UserEvent) {
         let _span = diagnostics::span("user-event");
+        let root_repaint = match &event {
+            eframe::UserEvent::RequestRepaint {
+                when,
+                cumulative_pass_nr,
+                viewport_id: egui::ViewportId::ROOT,
+            } => Some((*when, *cumulative_pass_nr)),
+            _ => None,
+        };
         if let eframe::UserEvent::RequestRepaint {
             when,
             cumulative_pass_nr,
             viewport_id,
         } = &event
+            && *viewport_id == egui::ViewportId::ROOT
         {
-            diagnostics::event(
-                "repaint-event",
-                || json!({"viewport":format!("{viewport_id:?}"),"pass":cumulative_pass_nr,"when":format!("{when:?}")}),
-            );
+            self.trace_root_repaint("before", *when, *cumulative_pass_nr, event_loop);
         }
         self.inner.user_event(event_loop, event);
+        if let Some((when, cumulative_pass_nr)) = root_repaint {
+            self.trace_root_repaint("after", when, cumulative_pass_nr, event_loop);
+        }
     }
 
     fn device_event(
@@ -153,6 +180,38 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
 
     fn memory_warning(&mut self, event_loop: &ActiveEventLoop) {
         self.inner.memory_warning(event_loop);
+    }
+}
+
+impl InputApplication<'_> {
+    fn trace_root_repaint(
+        &self,
+        phase: &'static str,
+        when: Instant,
+        requested_pass: u64,
+        event_loop: &ActiveEventLoop,
+    ) {
+        let Some(state) = &self.trace_state else {
+            return;
+        };
+        diagnostics::event("root-repaint-event", || {
+            let state = state.borrow();
+            let window = state.root_window.as_ref().and_then(Weak::upgrade);
+            let now = Instant::now();
+            json!({
+                "phase":phase,
+                "requestedRootPass":requested_pass,
+                "currentRootPass":state.egui_ctx.as_ref().map(|ctx| ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT)),
+                "due":when <= now,
+                "overdueUs":now.checked_duration_since(when).map(|duration| duration.as_micros()),
+                "rootWindowId":state.root_window_id.map(|id| format!("{id:?}")),
+                "weakUpgrade":window.is_some(),
+                "nativeVisible":window.as_ref().and_then(|window| window.is_visible()),
+                "nativeMinimized":window.as_ref().and_then(|window| window.is_minimized()),
+                "rootRepaintRequested":state.egui_ctx.as_ref().map(|ctx| ctx.has_requested_repaint_for(&egui::ViewportId::ROOT)),
+                "controlFlow":format!("{:?}", event_loop.control_flow()),
+            })
+        });
     }
 }
 
@@ -237,10 +296,21 @@ fn main() -> eframe::Result {
     let workbench_paste_input = paste_input.clone();
     let shortcuts = workbench::ShortcutOwner::default();
     let workbench_shortcuts = shortcuts.clone();
+    diagnostics::install_eframe_logger();
+    let native_state = Rc::new(RefCell::new(NativeTraceState::default()));
+    let create_native_state = native_state.clone();
     let inner = eframe::create_native(
         "Captures renderer experiment",
         native,
         Box::new(move |cc| {
+            let window = cc
+                .winit_window()
+                .expect("native creation context has a root window");
+            *create_native_state.borrow_mut() = NativeTraceState {
+                egui_ctx: Some(cc.egui_ctx.clone()),
+                root_window_id: Some(window.id()),
+                root_window: Some(std::sync::Arc::downgrade(window)),
+            };
             Ok(Box::new(workbench::Workbench::new(
                 cc,
                 options,
@@ -252,11 +322,13 @@ fn main() -> eframe::Result {
         }),
         &event_loop,
     );
+    let trace_state = diagnostics::is_enabled().then_some(native_state);
     let mut application = InputApplication {
         inner,
         paste_input,
         shortcut_input,
         shortcuts,
+        trace_state,
         root_window: None,
         root_focused: false,
         modifiers: ModifiersState::default(),

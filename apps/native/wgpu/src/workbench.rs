@@ -884,6 +884,12 @@ impl Workbench {
 
 impl eframe::App for Workbench {
     fn raw_input_hook(&mut self, _: &egui::Context, input: &mut egui::RawInput) {
+        crate::diagnostics::event("raw-input", || {
+            json!({
+                "viewport":format!("{:?}", input.viewport_id),
+                "viewportIds":input.viewports.keys().map(|id| format!("{id:?}")).collect::<Vec<_>>(),
+            })
+        });
         self.paste_input.append(input);
     }
 
