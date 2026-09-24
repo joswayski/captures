@@ -487,7 +487,14 @@ also imports one still image at a time as a new image layer using its color-mana
 system decoder. It normalizes imported pixels to straight-alpha sRGB RGBA8 and retains
 them in the draft without depending on the source file. ImageIO-supported sources use
 their first image; files without a usable color description are rejected rather than
-silently relabeled. Its **Draw** view maps Rectangle, Ellipse, Line, Arrow and Pen gestures from the fitted
+silently relabeled. Shared native code can also open an external PNG, JPEG or WebP
+as a separate History-backed screenshot editor item, without changing the source.
+Opening an already-open source retains its editor; reopening a closed source
+refreshes its History image under the same ID. If that item has a saved draft,
+reopening refuses it until the draft is restored or explicitly discarded from
+History. This backend prerequisite is not yet a native file-open UI or OS file
+association. GIF, video and TIFF are not accepted by this external-open path.
+Its **Draw** view maps Rectangle, Ellipse, Line, Arrow and Pen gestures from the fitted
 edited preview into shared document coordinates, including reverse and off-canvas
 gestures. Release creates one undoable layer; Escape, focus loss, close, or leaving Draw
 cancels transient geometry without editing the document. Arrow outlines and Pen
