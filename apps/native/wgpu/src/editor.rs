@@ -2,8 +2,6 @@
 //! Only snapshots and retained pixels cross to the UI; disk/render work does not.
 use std::{
     collections::BTreeMap,
-    fs::File,
-    io::Cursor,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -24,7 +22,6 @@ use captures_app::{
     },
     editor_image_background::BrushMode,
     editor_output::{SavedExport, save_new_export},
-    editor_render::MAX_RENDER_DIMENSION,
     editor_session::{
         EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize, ImportImage,
         OpenRequest, PngOptions, Request, TextCreate, TextPatch,
@@ -34,7 +31,14 @@ use captures_app::{
 };
 use captures_capture::CaptureMode;
 use eframe::egui::{self, RichText};
-use image::{ImageFormat, RgbaImage};
+use image::RgbaImage;
+
+#[cfg(test)]
+use captures_app::editor_render::MAX_RENDER_DIMENSION;
+#[cfg(test)]
+use image::ImageFormat;
+#[cfg(test)]
+use std::{fs::File, io::Cursor};
 
 use crate::tokens::Tokens;
 
