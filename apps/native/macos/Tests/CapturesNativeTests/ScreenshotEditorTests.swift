@@ -4054,7 +4054,7 @@ final class ScreenshotEditorTests: XCTestCase {
             let tool = try popup("Drawing tool", in: controller.root)
             tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
             let preset = try popup("New text style", in: controller.root)
-            XCTAssertEqual(preset.itemTitles, ["Plain", "Standard", "Outlined", "Box", "Rounded box"])
+            XCTAssertEqual(preset.itemTitles, ["Plain", "Standard", "Rounded", "Outlined", "Box", "Rounded box"])
             XCTAssertEqual(preset.titleOfSelectedItem, "Rounded box")
             let size = try field("New text size", in: controller.root)
             let color = try field("New text color", in: controller.root)
@@ -5174,6 +5174,77 @@ final class ScreenshotEditorTests: XCTestCase {
         wait(for: [reopened], timeout: 5)
     }
 
+    func testRealBridgeRoundedBoxUsesPinnedFontAndReopensExactPixels() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker(); defer { worker.close(); EditorWorker.flush() }
+        let opened = expectation(description: "open rounded text fixture")
+        var original: EditorPresentation?
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+            result in original = try? result.get(); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        let fonts = try XCTUnwrap(original).snapshot.fontFamilies
+        XCTAssertEqual(fonts["rounded"], "Nunito")
+        XCTAssertTrue(try XCTUnwrap(original).snapshot.textStylePresets.contains { $0.id == "rounded-box" })
+        func request(_ object: [String: Any]) throws -> EditorPresentation {
+            let done = expectation(description: "rounded text request")
+            var response: Result<EditorPresentation, Error>?
+            worker.request(object) { response = $0; done.fulfill() }
+            wait(for: [done], timeout: 5)
+            return try XCTUnwrap(response).get()
+        }
+        let create: [String: Any] = ["operation": "create_text", "point": ["x": 190, "y": 110],
+                                     "text": "Native Ωé", "fontSize": 48,
+                                     "fontFamily": "sans", "color": "#ff3b5c"]
+        let plain = try request(create)
+        _ = try request(["operation": "undo"])
+        var roundedCreate = create; roundedCreate["stylePreset"] = "rounded-box"
+        let rounded = try request(roundedCreate)
+        let style = try XCTUnwrap(rounded.snapshot.layers.first?.textStyle)
+        XCTAssertEqual(style.fontFamily, "rounded")
+        XCTAssertEqual(style.fontSize, 48)
+        XCTAssertEqual(style.color, "#ff3b5c")
+        XCTAssertEqual(style.background, "#111318")
+        XCTAssertTrue(style.roundedBackground)
+        XCTAssertFalse(style.bold); XCTAssertFalse(style.italic); XCTAssertFalse(style.outlined)
+        XCTAssertEqual(style.align, "center")
+        let pixels = try XCTUnwrap(rounded.image.dataProvider?.data) as Data
+        XCTAssertNotEqual(pixels, try XCTUnwrap(plain.image.dataProvider?.data) as Data)
+        _ = try request(["operation": "save_draft", "updated_at_ms": 9876])
+        worker.close(); EditorWorker.flush()
+
+        let verification = EditorWorker()
+        let reopenedDraft = expectation(description: "reopen rounded text bytes")
+        verification.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                          artifactID: fixture.id) { result in
+            do {
+                let value = try result.get()
+                XCTAssertEqual(value.snapshot.layers.first?.textStyle, style)
+                XCTAssertEqual(try XCTUnwrap(value.image.dataProvider?.data) as Data, pixels)
+            } catch { XCTFail("\(error)") }
+            reopenedDraft.fulfill()
+        }
+        wait(for: [reopenedDraft], timeout: 5)
+        verification.close(); EditorWorker.flush()
+
+        for appearance in ["light", "dark"] {
+            let reopened = EditorWorker()
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: reopened)
+            controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            waitUntil { controller.state.snapshot?.hasDraft == true && !controller.state.busy }
+            XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle, style)
+            XCTAssertEqual(try popup("New text style", in: controller.root).titleOfSelectedItem, "Rounded box")
+            try showDraw(in: controller.root)
+            controller.window.setContentSize(NSSize(width: 1200, height: 820))
+            try render(controller.root, name: "screenshot-editor-rounded-box-saved-normal-\(appearance)")
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            try render(controller.root, name: "screenshot-editor-rounded-box-saved-minimum-\(appearance)")
+            controller.window.orderOut(nil); reopened.close(); EditorWorker.flush()
+        }
+    }
+
     func testRealBridgeTextInputTransactionPreviewCancelBlankAndOneUndo() throws {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
@@ -5454,6 +5525,7 @@ final class ScreenshotEditorTests: XCTestCase {
             "font_families": fonts,
             "text_style_presets": ([
                 ["id": "standard", "label": "Standard", "fontFamily": "sans", "background": NSNull(), "outlined": false, "roundedBackground": false],
+                ["id": "rounded", "label": "Rounded", "fontFamily": "rounded", "background": NSNull(), "outlined": false, "roundedBackground": false],
                 ["id": "outlined", "label": "Outlined", "fontFamily": "sans", "background": NSNull(), "outlined": true, "roundedBackground": false],
                 ["id": "mono", "label": "Mono", "fontFamily": "mono", "background": NSNull(), "outlined": false, "roundedBackground": false],
                 ["id": "box", "label": "Box", "fontFamily": "sans", "background": "#111318", "outlined": false, "roundedBackground": false],
