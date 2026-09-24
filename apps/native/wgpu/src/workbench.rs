@@ -106,7 +106,9 @@ impl Workbench {
     ) -> Self {
         if let Some(instance) = &instance {
             let wake = cc.egui_ctx.clone();
-            instance.set_wake(move || wake.request_repaint());
+            // The socket worker can wake while an editor owns the current
+            // viewport. Only the root App::logic drains instance requests.
+            instance.set_wake(move || wake.request_repaint_of(egui::ViewportId::ROOT));
         }
         if options.scene == Scene::Idle && cc.winit_window().and_then(|w| w.is_visible()).is_none()
         {
