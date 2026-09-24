@@ -105,6 +105,18 @@ final class OpenImageTests: XCTestCase {
             .contains { $0.contains("120 × 80") }, "duplicate focus must retain the accepted crop")
         XCTAssertEqual(try XCTUnwrap(AppBridge().request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]]).count, 1)
+
+        editor.performClose(nil)
+        editor.endSheet(try XCTUnwrap(editor.attachedSheet), returnCode: .alertSecondButtonReturn)
+        try waitUntil { !editor.isVisible }
+        controller.openImages([source.path])
+        try waitUntil { !controller.externalOpenPending && editor.isVisible
+            && !editor.title.contains("Unsaved") }
+        let reopened = try XCTUnwrap(AppBridge().request([
+            "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
+        XCTAssertEqual(reopened.count, 1)
+        XCTAssertEqual(((reopened[0]["entry"] as? [String: Any])?["id"] as? String), id,
+                       "closing without saving reloads the canonical source under the same History ID")
     }
 
     func testRealBatchWaitsForFirstEditorBeforeOpeningDistinctSecondImage() throws {
