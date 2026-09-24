@@ -71,6 +71,21 @@ final class OpenImageTests: XCTestCase {
         XCTAssertEqual((artifacts[0]["entry"] as? [String: Any])?["kind"] as? String, "screenshot")
         XCTAssertNotEqual(artifacts[0]["image_path"] as? String, source.path,
                           "the external source is copied into owned History")
+        let entry = try XCTUnwrap(artifacts[0]["entry"] as? [String: Any])
+        let id = try XCTUnwrap(entry["id"] as? String)
+        let media = try XCTUnwrap(artifacts[0]["image_path"] as? String)
+        let before = try Data(contentsOf: URL(fileURLWithPath: media))
+        let again = try AppBridge().request(["operation": "open_image", "root": history.path,
+                                             "path": source.path, "open_artifact_ids": [id]])
+        XCTAssertEqual(again["already_open"] as? Bool, true)
+        XCTAssertEqual(((again["artifact"] as? [String: Any])?["entry"] as? [String: Any])?["id"] as? String, id)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: media)), before,
+                       "a canonical already-open source cannot replace owned media")
+        controller.openImages([source.path])
+        try waitUntil { !controller.externalOpenPending }
+        XCTAssertTrue(editor.isVisible)
+        XCTAssertEqual(try XCTUnwrap(AppBridge().request([
+            "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]]).count, 1)
     }
 
     func testQueuedFilesRetainErrorsAndSerializeCanonicalOpens() throws {

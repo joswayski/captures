@@ -1929,6 +1929,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             [weak self] result in
             guard let self else { return }
             defer { completion?() }
+            guard completion != nil || !self.externalOpenPending else { return }
             guard completion != nil || self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
                 ? self.artifacts[$0].id : nil }) == artifact.id else { return }
             switch result {
@@ -2044,47 +2045,57 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
         let path = pendingOpenImages.removeFirst()
         let selectedAtDispatch = userSelectionGeneration
-        let openIDs = screenshotEditor?.activeArtifactID.map { [$0] } ?? []
         externalOpenPending = true; updateActions()
         status.stringValue = "Opening image…"
-        run({ [transport, historyRoot, settingsPath] in
-            // An open must not create a History item that the editor cannot
-            // present because its settings have not loaded (or are invalid).
-            let outputDirectory = try CapturePreferences.load(path: settingsPath).directory
-            let response = try transport.request([
-                "operation": "open_image", "root": historyRoot, "path": path,
-                "open_artifact_ids": openIDs,
-            ])
-            guard let value = response["artifact"] as? [String: Any],
-                  let artifact = CaptureArtifact(value), !artifact.isRecording,
-                  response["already_open"] is Bool else { throw AppBridgeError.invalidResponse }
-            return (artifact, outputDirectory)
-        }) { [weak self] result in
+        // Resolve editor settings first: a successful import must be openable.
+        run({ [settingsPath] in try CapturePreferences.load(path: settingsPath).directory }) {
+            [weak self] settingsResult in
             guard let self else { return }
-            switch result {
+            switch settingsResult {
             case .failure(let error):
                 self.externalOpenErrors.append("\(path): \(error.localizedDescription)")
                 self.externalOpenPending = false; self.updateActions(); self.processNextOpenImage()
-            case .success(let (artifact, outputDirectory)):
-                // Do not steal a newer user selection. Still refresh History so
-                // the imported item appears even when focus has changed.
-                let shouldOpen = self.userSelectionGeneration == selectedAtDispatch
-                var opened = false
-                self.loadHistory(select: shouldOpen ? artifact.id : nil,
-                    selectIfUserGeneration: selectedAtDispatch, cleanup: { [weak self] in
-                    guard let self, !opened else { return }
-                    self.externalOpenPending = false; self.updateActions(); self.processNextOpenImage()
-                }) { [weak self] in
-                    guard let self, shouldOpen,
-                          self.userSelectionGeneration == selectedAtDispatch,
-                          self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
-                              ? self.artifacts[$0].id : nil }) == artifact.id else { return }
-                    opened = true
-                    self.window.makeKeyAndOrderFront(nil)
-                    NSApp.activate(ignoringOtherApps: true)
-                    self.presentEditor(artifact, outputDirectory: outputDirectory) { [weak self] in
-                        guard let self else { return }
+            case .success(let outputDirectory):
+                // Read active editors on the main thread immediately before
+                // dispatch, not before an asynchronous settings read.
+                let openIDs = self.screenshotEditor?.activeArtifactID.map { [$0] } ?? []
+                self.run({ [transport = self.transport, historyRoot = self.historyRoot] in
+                    let response = try transport.request([
+                        "operation": "open_image", "root": historyRoot, "path": path,
+                        "open_artifact_ids": openIDs,
+                    ])
+                    guard let value = response["artifact"] as? [String: Any],
+                          let artifact = CaptureArtifact(value), !artifact.isRecording,
+                          response["already_open"] is Bool else { throw AppBridgeError.invalidResponse }
+                    return artifact
+                }) { [weak self] result in
+                    guard let self else { return }
+                    switch result {
+                    case .failure(let error):
+                        self.externalOpenErrors.append("\(path): \(error.localizedDescription)")
                         self.externalOpenPending = false; self.updateActions(); self.processNextOpenImage()
+                    case .success(let artifact):
+                        // Do not steal a newer user selection. Still refresh History so
+                        // the imported item appears even when focus has changed.
+                        let shouldOpen = self.userSelectionGeneration == selectedAtDispatch
+                        var opened = false
+                        self.loadHistory(select: shouldOpen ? artifact.id : nil,
+                            selectIfUserGeneration: selectedAtDispatch, cleanup: { [weak self] in
+                            guard let self, !opened else { return }
+                            self.externalOpenPending = false; self.updateActions(); self.processNextOpenImage()
+                        }) { [weak self] in
+                            guard let self, shouldOpen,
+                                  self.userSelectionGeneration == selectedAtDispatch,
+                                  self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
+                                      ? self.artifacts[$0].id : nil }) == artifact.id else { return }
+                            opened = true
+                            self.window.makeKeyAndOrderFront(nil)
+                            NSApp.activate(ignoringOtherApps: true)
+                            self.presentEditor(artifact, outputDirectory: outputDirectory) { [weak self] in
+                                guard let self else { return }
+                                self.externalOpenPending = false; self.updateActions(); self.processNextOpenImage()
+                            }
+                        }
                     }
                 }
             }
