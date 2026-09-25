@@ -1,4 +1,5 @@
 mod editor;
+mod editor_export;
 mod feedback;
 mod instance;
 mod preview;
