@@ -796,6 +796,8 @@ pub struct Live {
     confirm_clear_history: bool,
     requested_capture: Option<CaptureRequest>,
     restore_root_visible: bool,
+    permission_recovery_requested: bool,
+    permission_recovery_visible: bool,
 }
 
 impl Live {
@@ -1040,6 +1042,8 @@ impl Live {
             confirm_clear_history: false,
             requested_capture: None,
             restore_root_visible: true,
+            permission_recovery_requested: false,
+            permission_recovery_visible: false,
         };
         live.load_history();
         live.send(Request::Displays);
@@ -1073,6 +1077,7 @@ impl Live {
             || self.opening_media
             || self.is_capturing()
             || self.recovery.blocking()
+            || self.permission_recovery_visible
         {
             return;
         }
@@ -1184,8 +1189,17 @@ impl Live {
     pub fn can_launch_capture(&self) -> bool {
         self.pending == 0
             && !self.recovery.blocking()
+            && !self.permission_recovery_visible
             && !self.is_capturing()
             && self.requested_capture.is_none()
+    }
+
+    pub fn take_permission_recovery_requested(&mut self) -> bool {
+        std::mem::take(&mut self.permission_recovery_requested)
+    }
+
+    pub fn set_permission_recovery_visible(&mut self, visible: bool) {
+        self.permission_recovery_visible = visible;
     }
 
     pub fn recording_controls_hidden(&self) -> bool {
@@ -4503,7 +4517,7 @@ impl Live {
         frame: &eframe::Frame,
         settings: impl Fn() -> Result<AppSettings, String>,
     ) {
-        if self.flow.is_some() || self.capture_in_flight {
+        if self.flow.is_some() || self.capture_in_flight || self.permission_recovery_visible {
             ui.disable();
         }
         egui::Panel::top("live-header").show(ui, |ui| {
@@ -4538,7 +4552,9 @@ impl Live {
                     self.request_capture(CaptureRequest::Window);
                     self.launch_requested_capture(ui.ctx(), frame, settings());
                 }
-                if ui.button("Request permission").clicked() { self.send(Request::RequestPermission); }
+                if ui.button("Capture permissions…").clicked() {
+                    self.permission_recovery_requested = true;
+                }
             });
             if self.can_hide == Some(false) {
                 ui.colored_label(t.color("theme-signal"), "Display, region and window capture unavailable: this Wayland backend cannot hide and verify the root window.");
@@ -5214,6 +5230,17 @@ mod tests {
             "initial History work must finish first"
         );
         live.pending = 0;
+        live.permission_recovery_visible = true;
+        live.start_next_media();
+        assert!(
+            jobs.try_recv().is_err(),
+            "permission recovery must hold queued media"
+        );
+        assert!(
+            !live.can_launch_capture(),
+            "permission recovery must block capture and shortcut routing"
+        );
+        live.permission_recovery_visible = false;
         live.capture_in_flight = true;
         live.start_next_media();
         assert!(

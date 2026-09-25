@@ -83,6 +83,7 @@ final class OnboardingView: NSView {
     override var isFlipped: Bool { true }
     private let controller: OnboardingController
     private let tokens: Tokens
+    private let done: (() -> Void)?
     private let title = NSTextField(labelWithString: "Set up Captures")
     private let detail = NSTextField(wrappingLabelWithString: "Captures needs Screen Recording access to capture screenshots, GIFs, and video. Processing stays on your Mac unless you choose to share or save elsewhere.")
     private let screen = NSTextField(labelWithString: "Screen Recording — Checking…")
@@ -95,9 +96,14 @@ final class OnboardingView: NSView {
     private lazy var restartButton = button("Restart Captures", #selector(restart))
     var restartRequested: () -> Void = {}
 
-    init(frame: NSRect, tokens: Tokens, controller: OnboardingController) {
-        self.tokens = tokens; self.controller = controller
+    init(frame: NSRect, tokens: Tokens, controller: OnboardingController,
+         done: (() -> Void)? = nil) {
+        self.tokens = tokens; self.controller = controller; self.done = done
         super.init(frame: frame)
+        if done != nil {
+            title.stringValue = "Capture permissions"
+            continueButton.title = "Done"
+        }
         wantsLayer = true; layer?.backgroundColor = tokens.color("surface-canvas").cgColor
         title.font = .systemFont(ofSize: tokens.number("text-3xl"), weight: .semibold)
         detail.font = .systemFont(ofSize: tokens.number("text-md"))
@@ -140,17 +146,23 @@ final class OnboardingView: NSView {
         detail.stringValue = state?.screenRequestedThisLaunch == true && state?.screenGranted != true
             ? "Turn on this copy of Captures in Screen Recording settings, then restart Captures. A local build may have a different row from a downloaded app. Microphone access is optional."
             : "Captures needs Screen Recording access for screenshots, GIFs, and video. Nothing is uploaded unless you choose to share it. Microphone access is optional."
+        if done != nil {
+            detail.stringValue = "Your captures and editors stay open. Grant access, refresh status, then retry your capture. If macOS requires a restart, save your work before quitting and reopening Captures. Microphone access is optional."
+        }
         errorLabel.stringValue = controller.error ?? ""
         screenButton.isEnabled = !controller.busy && state != nil && state?.screenGranted != true
         microphoneButton.isEnabled = !controller.busy && state != nil && state?.microphoneGranted != true
         refreshButton.isEnabled = !controller.busy
-        continueButton.isEnabled = !controller.busy && (state?.screenRequired == false || state?.screenGranted == true)
-        restartButton.isHidden = state?.screenRequestedThisLaunch != true || state?.screenGranted == true
+        continueButton.isEnabled = !controller.busy && (done != nil || state?.screenRequired == false || state?.screenGranted == true)
+        restartButton.isHidden = done != nil || state?.screenRequestedThisLaunch != true || state?.screenGranted == true
         restartButton.isEnabled = !controller.busy
     }
     @objc private func requestScreen() { controller.requestScreen() }
     @objc private func requestMicrophone() { controller.requestMicrophone() }
     @objc private func refresh() { controller.check() }
-    @objc private func finish() { controller.complete() }
+    @objc private func finish() {
+        if let done { done() }
+        else { controller.complete() }
+    }
     @objc private func restart() { restartRequested() }
 }

@@ -622,8 +622,15 @@ Apply changes the document in one undo step; Cancel restores accepted values.
 Custom shadows and pinned-font named styles are connected, including style/size/color
 choices for new text. Font import and physical input/IME/accessibility acceptance
 remain open.
-Post-save source adoption, remaining editor layout/interaction parity, capture-time
-permission recovery, physical setup/login acceptance and updates remain open. Shared editor support is prerequisite work,
+The native capture workspace includes a **Capture permissions** recovery dialog
+(**Screen access** on macOS). Check or refresh without prompting; request macOS
+screen or optional microphone access explicitly. Done returns to the workspace
+even after denial or a check failure, without restarting or closing editors.
+Windows/X11 need no upfront screen grant; microphone status is not reported there.
+Wayland live capture remains gated. Physical permission-revocation/retry acceptance
+is still open.
+Post-save source adoption, remaining editor layout/interaction parity,
+physical setup/login acceptance and updates remain open. Shared editor support is prerequisite work,
 not native editor acceptance. Resident shortcuts and single-instance relaunch are
 connected, but physical cross-platform acceptance and full feature/design parity
 remain open. The

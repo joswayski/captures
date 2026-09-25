@@ -324,7 +324,13 @@ final class OpenImageTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         try waitUntil { root.subviews.compactMap { $0 as? CaptureButton }
             .first { $0.title == "Capture display" }?.isEnabled == true }
+        controller.setPermissionsVisible(true)
         controller.openImages(["/invalid.tiff", png.path, png.path])
+        LiveCaptureController.flush()
+        XCTAssertEqual(transport.requests.count, 0, "Permission recovery retains queued media")
+        XCTAssertFalse(controller.capture(.display))
+        XCTAssertFalse(controller.newCapture())
+        controller.setPermissionsVisible(false)
         XCTAssertFalse(controller.prepareEditorForTermination(), "queued startup opens block teardown")
         try waitUntil { transport.firstOpenStarted.wait(timeout: .now()) == .success }
         XCTAssertEqual(transport.requests.count, 1)
