@@ -730,6 +730,20 @@ private final class NativeEditorSession {
         return EditorPresentation(snapshot: snapshot, image: try frame.image())
     }
 
+    func previewDrawing(_ object: [String: Any]) throws -> CGImage {
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        var response: UnsafeMutablePointer<CChar>?
+        let handle = String(decoding: data, as: UTF8.self).withCString {
+            captures_editor_preview_drawing_v1(self.handle, $0, &response)
+        }
+        let frame = handle.map(NativeEditorFrame.init(handle:))
+        defer { captures_settings_free_v1(response) }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        _ = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let frame else { throw AppBridgeError.invalidResponse }
+        return try frame.image()
+    }
+
     func encode(_ options: [String: Any]) throws -> EditorOutputPresentation {
         let data = try JSONSerialization.data(withJSONObject: options, options: [.sortedKeys])
         var response: UnsafeMutablePointer<CChar>?
@@ -838,6 +852,8 @@ protocol EditorWorking: AnyObject {
               completion: @escaping (Result<EditorPresentation, Error>) -> Void)
     func request(_ object: [String: Any],
                  completion: @escaping (Result<EditorPresentation, Error>) -> Void)
+    func previewDrawing(_ object: [String: Any],
+                        completion: @escaping (Result<CGImage, Error>) -> Void)
     func encode(_ options: [String: Any],
                 completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void)
     func saveNew(_ request: [String: Any],
@@ -892,6 +908,20 @@ final class EditorWorker: EditorWorking {
                 let snapshot = try session.request(object)
                 storage.snapshot = snapshot
                 return try session.presentation(snapshot)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func previewDrawing(_ object: [String: Any],
+                        completion: @escaping (Result<CGImage, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> CGImage in
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The screenshot editor is closed.")
+                }
+                return try session.previewDrawing(object)
             }
             DispatchQueue.main.async { completion(result) }
         }

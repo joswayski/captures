@@ -281,6 +281,9 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         }
     }
     var onComplete: ((Shape, NSPoint, NSPoint, [NSPoint]) -> Void)?
+    var onPreview: ((Shape, NSPoint, NSPoint, [NSPoint]) -> Void)?
+    var onPreviewCancel: (() -> Void)?
+    var pixelPreviewVisible = false { didSet { needsDisplay = true } }
     var onWand: ((NSPoint) -> Void)?
     var onBackgroundBrush: ((Shape, [NSPoint]) -> Void)?
     var brushDiameter: CGFloat = 28 { didSet { needsDisplay = true } }
@@ -340,6 +343,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         } else if shape.isBackgroundBrush {
             brushPoints = [canvasPoint(for: point)]
         }
+        notifyPreview()
     }
 
     func drag(to point: NSPoint) {
@@ -352,6 +356,13 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         } else if shape.isBackgroundBrush {
             brushPoints.append(canvasPoint(for: point))
         }
+        notifyPreview()
+    }
+
+    private func notifyPreview() {
+        guard shape != .wand, shape != .text, !shape.isBackgroundBrush,
+              let startPoint, let currentPoint else { return }
+        onPreview?(shape, canvasPoint(for: startPoint), canvasPoint(for: currentPoint), penPoints)
     }
 
     func end(at point: NSPoint) {
@@ -397,6 +408,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
     }
 
     func cancelGesture() {
+        let active = startPoint != nil || pixelPreviewVisible
         startPoint = nil; currentPoint = nil; needsDisplay = true
         penPoints.removeAll(keepingCapacity: true)
         brushPoints.removeAll(keepingCapacity: true)
@@ -404,6 +416,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             NSEvent.isMouseCoalescingEnabled = previousMouseCoalescing
             self.previousMouseCoalescing = nil
         }
+        if active { onPreviewCancel?() }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -463,6 +476,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             ring.lineWidth = 1.5; ring.stroke()
             return
         }
+        if pixelPreviewVisible { return }
         // Composite the annotation once, including overlapping fill and stroke.
         // Erase/Restore guides above do not use annotation opacity.
         let context = NSGraphicsContext.current?.cgContext
@@ -988,6 +1002,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var preferredLayerID: String?
     private var reconcilingLayerSelection = false
     private var editedImage: NSImage?
+    private var drawingPreviewEpoch = 0
+    private var drawingPreviewInFlight = false
+    private var drawingPreviewPending: [String: Any]?
     private var encodedOutput: EditorOutputPresentation?
     private var historyRoot = ""
     private var captureMode = "region"
@@ -1273,6 +1290,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.onComplete = { [weak self] shape, start, end, points in
             self?.createDrawing(shape: shape, start: start, end: end, points: points)
         }
+        drawOverlay.onPreview = { [weak self] shape, start, end, points in
+            guard let self, !self.state.busy else { return }
+            self.drawingPreviewPending = self.drawingRequest(shape: shape, start: start, end: end,
+                                                            points: points, reportErrors: false)
+            if self.drawingPreviewPending == nil { self.cancelDrawingPreview() }
+            else { self.drainDrawingPreview() }
+        }
+        drawOverlay.onPreviewCancel = { [weak self] in self?.cancelDrawingPreview() }
         drawOverlay.onWand = { [weak self] point in self?.removeImageBackground(at: point) }
         drawOverlay.onBackgroundBrush = { [weak self] mode, points in
             self?.paintImageBackground(mode: mode, points: points)
@@ -2136,7 +2161,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 ? "The outline previews brush size and path only. Pixels apply on release."
                 : shape == .text
                     ? "Click once to create empty auto-width text. Edit it below, then Apply."
-                    : drawingShadowVisible ? "Shadow pixels appear on release, in one annotation layer."
+                    : drawingShadowVisible ? "Drawing pixels update in the background while dragging."
                     : "This tool creates one annotation layer on release."
         textControls.forEach { $0.isHidden = !textSelected }
         // Other tools need no Wand/brush/text-default fields. Collapse their
@@ -2626,39 +2651,73 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func createDrawing(shape: EditorDrawOverlay.Shape, start: NSPoint, end: NSPoint, points: [NSPoint]) {
         guard shape != .wand, let layers = state.snapshot?.layers else { return }
-        let request: [String: Any]
         if shape == .text {
             beginTextInput(at: start)
             return
-        } else {
-            guard let style = drawingRequestStyle(shape: shape) else { return }
-            guard let opacity = number(drawingOpacity), (0...100).contains(opacity) else {
-                showError("Drawing opacity must be between 0 and 100."); return
-            }
-            if shape == .pen {
-                request = ["operation": "create_freehand_path", "points": points.map { ["x": $0.x, "y": $0.y] },
-                           "style": style, "opacity": opacity]
-            } else {
-                request = ["operation": shape == .line || shape == .arrow ? "create_open_shape" : "create_closed_shape",
-                           "shape": shape.rawValue,
-                           "start": ["x": start.x, "y": start.y], "end": ["x": end.x, "y": end.y],
-                           "style": style, "opacity": opacity]
-            }
         }
+        guard let request = drawingRequest(shape: shape, start: start, end: end, points: points,
+                                           reportErrors: true) else { return }
         command(request, message: "Drawing \(shape.rawValue)…", createdLayerExistingIDs: Set(layers.map(\.id)))
     }
 
-    private func drawingRequestStyle(shape: EditorDrawOverlay.Shape) -> [String: Any]? {
+    private func drawingRequest(shape: EditorDrawOverlay.Shape, start: NSPoint, end: NSPoint,
+                                points: [NSPoint], reportErrors: Bool) -> [String: Any]? {
+        guard let style = drawingRequestStyle(shape: shape, reportErrors: reportErrors) else { return nil }
+        guard let opacity = number(drawingOpacity), (0...100).contains(opacity) else {
+            if reportErrors { showError("Drawing opacity must be between 0 and 100.") }
+            return nil
+        }
+        if shape == .pen {
+            return ["operation": "create_freehand_path", "points": points.map { ["x": $0.x, "y": $0.y] },
+                    "style": style, "opacity": opacity]
+        }
+        return ["operation": shape == .line || shape == .arrow ? "create_open_shape" : "create_closed_shape",
+                "shape": shape.rawValue, "start": ["x": start.x, "y": start.y],
+                "end": ["x": end.x, "y": end.y], "style": style, "opacity": opacity]
+    }
+
+    private func cancelDrawingPreview() {
+        drawingPreviewEpoch += 1
+        drawingPreviewPending = nil
+        if drawOverlay.pixelPreviewVisible { preview.image = editedImage }
+        drawOverlay.pixelPreviewVisible = false
+    }
+
+    private func drainDrawingPreview() {
+        guard !drawingPreviewInFlight, !state.busy, state.snapshot != nil,
+              let request = drawingPreviewPending else { return }
+        drawingPreviewPending = nil; drawingPreviewInFlight = true
+        let epoch = drawingPreviewEpoch, generation = state.generation
+        worker.previewDrawing(request) { [weak self] result in
+            guard let self else { return }
+            self.drawingPreviewInFlight = false
+            if self.drawingPreviewEpoch == epoch, self.state.generation == generation,
+               !self.state.busy, self.drawOverlay.startPoint != nil {
+                switch result {
+                case .success(let image):
+                    self.preview.image = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+                    self.drawOverlay.pixelPreviewVisible = true
+                case .failure:
+                    if self.drawOverlay.pixelPreviewVisible { self.preview.image = self.editedImage }
+                    self.drawOverlay.pixelPreviewVisible = false
+                }
+            }
+            self.drainDrawingPreview()
+        }
+    }
+
+    private func drawingRequestStyle(shape: EditorDrawOverlay.Shape, reportErrors: Bool) -> [String: Any]? {
         guard let color = PreferencesController.normalizeHex(drawingStrokeColor.stringValue),
               let width = number(drawingStrokeWidth), (2...40).contains(width) else {
-            showError("Enter drawing colors as #RGB or #RRGGBB and stroke width from 2 to 40.")
+            if reportErrors { showError("Enter drawing colors as #RGB or #RRGGBB and stroke width from 2 to 40.") }
             return nil
         }
         let closed = [.rectangle, .ellipse, .triangle, .diamond, .star].contains(shape)
         var fill: Any = NSNull()
         if closed && drawingFill.state == .on {
             guard let color = PreferencesController.normalizeHex(drawingFillColor.stringValue) else {
-                showError("Enter drawing fill color as #RGB or #RRGGBB."); return nil
+                if reportErrors { showError("Enter drawing fill color as #RGB or #RRGGBB.") }
+                return nil
             }
             fill = color
         }
@@ -2680,7 +2739,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             }
             if valid { style["dropShadowStyle"] = shadow }
             else if drawingDropShadow.state == .on {
-                showError("Enter a shadow color, opacity/blur from 0 to 100, and offsets from −500 to 500.")
+                if reportErrors { showError("Enter a shadow color, opacity/blur from 0 to 100, and offsets from −500 to 500.") }
                 return nil
             }
         }
@@ -3876,6 +3935,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             return
         }
         guard let generation = state.beginCommand() else { return }
+        cancelDrawingPreview()
         if !preserveOutputAndStatus { invalidateOutput() }
         preferredLayerID = preferredSelection
         if !preserveOutputAndStatus { status.stringValue = message }

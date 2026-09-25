@@ -3,6 +3,50 @@ import XCTest
 @testable import CapturesNative
 
 final class ScreenshotEditorTests: XCTestCase {
+    func testDrawingPixelsCoalesceAndRejectResultsAfterCancellationCommitAndClose() throws {
+        _ = NSApplication.shared
+        let original = snapshot(id: "shot")
+        let worker = FakeEditorWorker(snapshot: original)
+        worker.deferDrawingPreviews = true
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let overlay = controller.drawOverlay
+        let image = overlay.presentedImageRect
+        let start = NSPoint(x: image.minX + 40, y: image.minY + 30)
+        let middle = NSPoint(x: start.x + 70, y: start.y + 20)
+        let end = NSPoint(x: start.x + 110, y: start.y + 60)
+        overlay.begin(at: start); overlay.drag(to: middle); overlay.drag(to: end)
+        XCTAssertEqual(worker.drawingPreviews.count, 1, "one render in flight")
+        worker.completeDrawingPreview()
+        XCTAssertTrue(overlay.pixelPreviewVisible)
+        XCTAssertEqual(worker.drawingPreviews.count, 2, "replace intermediate pointer geometry")
+        let pendingEnd = try XCTUnwrap(worker.drawingPreviews.last?["end"] as? [String: CGFloat])
+        XCTAssertEqual(pendingEnd["x"], overlay.canvasPoint(for: end).x)
+        XCTAssertEqual(pendingEnd["y"], overlay.canvasPoint(for: end).y)
+        XCTAssertEqual(controller.state.snapshot, original)
+        XCTAssertTrue(worker.requests.isEmpty && worker.saves.isEmpty && worker.encodes.isEmpty)
+        overlay.cancelGesture(); overlay.begin(at: middle); overlay.drag(to: end)
+        worker.completeDrawingPreview()
+        XCTAssertFalse(overlay.pixelPreviewVisible, "old gesture cannot paint over a new one")
+        XCTAssertEqual(worker.drawingPreviews.count, 3)
+        worker.completeDrawingPreview()
+        XCTAssertTrue(overlay.pixelPreviewVisible)
+        XCTAssertEqual(worker.drawingPreviews.count, 3, "static gesture does not render repeatedly")
+        overlay.drag(to: NSPoint(x: end.x + 7, y: end.y - 9))
+        overlay.end(at: end)
+        XCTAssertFalse(overlay.pixelPreviewVisible)
+        XCTAssertEqual(worker.requests.count, 1, "only release commits")
+        worker.completeDrawingPreview()
+        XCTAssertFalse(overlay.pixelPreviewVisible, "late preview cannot replace committed pixels")
+        overlay.begin(at: start); overlay.drag(to: end)
+        XCTAssertTrue(controller.prepareForTermination())
+        worker.completeDrawingPreview()
+        XCTAssertFalse(overlay.pixelPreviewVisible, "closed editor rejects a late frame")
+        XCTAssertFalse(controller.window.isVisible)
+    }
+
     func testToolRailSelectionMenuFocusBusyGatesAndMinimumLayout() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
@@ -5549,6 +5593,75 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
+    func testRealDrawingPreviewPixelsAndHostCancellation() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker()
+        defer { worker.close(); EditorWorker.flush() }
+        let opened = expectation(description: "open preview fixture")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+            result in XCTAssertNotNil(try? result.get()); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        func request(_ object: [String: Any]) throws -> EditorPresentation {
+            let done = expectation(description: "preview fixture command")
+            var response: Result<EditorPresentation, Error>?
+            worker.request(object) { result in response = result; done.fulfill() }
+            wait(for: [done], timeout: 5)
+            return try XCTUnwrap(response).get()
+        }
+        _ = try request(["operation": "resize_canvas", "width": 64, "height": 48])
+        let saved = try request(["operation": "save_draft", "updated_at_ms": 1357])
+        let drawing: [String: Any] = ["operation": "create_open_shape", "shape": "line",
+            "start": ["x": 20, "y": 10], "end": ["x": 50, "y": 10],
+            "style": ["color": "#123456", "strokeWidth": 4, "dropShadow": true,
+                      "dropShadowStyle": ["color": "#f0c040", "opacity": 100, "blur": 0,
+                                          "offsetX": -3, "offsetY": 9]]]
+        let rendered = expectation(description: "uncommitted drawing frame")
+        var frame: CGImage?
+        worker.previewDrawing(drawing) { result in frame = try? result.get(); rendered.fulfill() }
+        wait(for: [rendered], timeout: 5)
+        XCTAssertEqual(rgba(try XCTUnwrap(frame), x: 35, y: 10), [18, 52, 86, 255])
+        XCTAssertEqual(rgba(try XCTUnwrap(frame), x: 32, y: 19), [240, 192, 64, 255])
+        XCTAssertEqual(try request(["operation": "snapshot"]).snapshot, saved.snapshot)
+        worker.close(); EditorWorker.flush()
+        XCTAssertEqual(rgba(try XCTUnwrap(frame), x: 32, y: 19), [240, 192, 64, 255])
+
+        for appearance in ["light", "dark"] {
+            let hostWorker = EditorWorker()
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: hostWorker)
+            defer { controller.window.orderOut(nil); hostWorker.close(); EditorWorker.flush() }
+            controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+            try showDraw(in: controller.root)
+            let tool = try popup("Drawing tool", in: controller.root)
+            tool.selectItem(withTitle: "Line"); _ = tool.sendAction(tool.action, to: tool.target)
+            (try field("New drawing stroke color", in: controller.root)).stringValue = "#123456"
+            let shadow = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
+                .first { $0.accessibilityLabel() == "New drawing drop shadow" })
+            shadow.state = .on; _ = shadow.sendAction(shadow.action, to: shadow.target)
+            for (key, value) in [("color", "#f0c040"), ("opacity", "100"), ("blur", "0"), ("offsetX", "-3"), ("offsetY", "9")] {
+                let input = try field("New drawing shadow \(key)", in: controller.root)
+                input.stringValue = value
+                controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: input))
+            }
+            let before = controller.state.snapshot
+            let image = controller.drawOverlay.presentedImageRect
+            controller.drawOverlay.begin(at: NSPoint(x: image.minX + image.width * 0.3, y: image.minY + image.height * 0.3))
+            controller.drawOverlay.drag(to: NSPoint(x: image.minX + image.width * 0.8, y: image.minY + image.height * 0.3))
+            waitUntil { controller.drawOverlay.pixelPreviewVisible }
+            // Drain the coalesced final geometry as well as the initial press.
+            EditorWorker.flush()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            try render(controller.root, name: "screenshot-editor-live-drawing-shadow-\(appearance)")
+            XCTAssertEqual(controller.state.snapshot, before)
+            controller.drawOverlay.cancelGesture()
+            XCTAssertFalse(controller.drawOverlay.pixelPreviewVisible)
+            try render(controller.root, name: "screenshot-editor-live-drawing-cancelled-\(appearance)")
+        }
+    }
+
     func testRealBridgeOpenDrawingPixelsUndoAndDraftReopen() throws {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
@@ -6267,6 +6380,9 @@ final class ScreenshotEditorTests: XCTestCase {
 private final class FakeEditorWorker: EditorWorking {
     var snapshot: NativeEditorSnapshot
     var requests: [[String: Any]] = []
+    var drawingPreviews: [[String: Any]] = []
+    var deferDrawingPreviews = false
+    private var pendingDrawingPreview: ((Result<CGImage, Error>) -> Void)?
     var encodes: [[String: Any]] = []
     var saves: [[String: Any]] = []
     var originalSaves: [[String: Any]] = []
@@ -6318,6 +6434,17 @@ private final class FakeEditorWorker: EditorWorking {
         if let returnedSnapshot = response?(object) { snapshot = returnedSnapshot }
         completion(.success(EditorPresentation(snapshot: snapshot,
             image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)))))
+    }
+
+    func previewDrawing(_ object: [String: Any], completion: @escaping (Result<CGImage, Error>) -> Void) {
+        drawingPreviews.append(object)
+        if deferDrawingPreviews { pendingDrawingPreview = completion }
+        else { completion(.failure(AppBridgeError.backend("Fixture has no drawing pixel renderer."))) }
+    }
+
+    func completeDrawingPreview() {
+        let completion = pendingDrawingPreview; pendingDrawingPreview = nil
+        completion?(.success(CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height))))
     }
 
     func completePending(with snapshot: NativeEditorSnapshot) {

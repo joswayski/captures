@@ -42,10 +42,16 @@ use std::{fs::File, io::Cursor};
 
 use crate::tokens::Tokens;
 
+mod drawing_preview;
 mod text_input;
 
 enum Job {
     Apply(Request),
+    DrawingPreview {
+        request: Request,
+        epoch: u64,
+        reply: Sender<drawing_preview::Reply>,
+    },
     Import {
         path: PathBuf,
         selected_id: Option<String>,
@@ -380,6 +386,7 @@ impl AnnotationFields {
 struct View {
     presented: Option<Presented>,
     texture: Option<egui::TextureHandle>,
+    drawing_preview: Option<drawing_preview::State>,
     crop: [f64; 4],
     crop_previous: Option<[f64; 4]>,
     crop_drag: Option<CropDrag>,
@@ -446,6 +453,7 @@ impl Default for View {
         Self {
             presented: None,
             texture: None,
+            drawing_preview: None,
             crop: [0., 0., 1., 1.],
             crop_previous: None,
             crop_drag: None,
@@ -551,6 +559,9 @@ impl View {
         self.shape_drag = None;
         self.freehand_points.clear();
         self.brush_points.clear();
+        if let Some(preview) = &mut self.drawing_preview {
+            preview.cancel();
+        }
     }
 
     fn cancel_layer_gesture(&mut self) {
@@ -934,6 +945,9 @@ impl View {
         }
         self.confirm_replace = None;
         self.cancel_layer_gesture();
+        if let Some(preview) = &mut self.drawing_preview {
+            preview.cancel();
+        }
         match tx.send(job) {
             Ok(()) => {
                 self.pending = true;
@@ -1120,6 +1134,19 @@ impl Editor {
             while let Ok(job) = jobs.recv() {
                 let result = match job {
                     Job::Shutdown => break,
+                    Job::DrawingPreview {
+                        request,
+                        epoch,
+                        reply,
+                    } => {
+                        let pixels = session
+                            .as_mut()
+                            .ok_or_else(|| "Editor is unavailable.".to_owned())
+                            .and_then(|session| session.preview_drawing(request));
+                        let _ = reply.send(drawing_preview::Reply { epoch, pixels });
+                        wake(&wake_ctx, viewport);
+                        continue;
+                    }
                     Job::Apply(request) => session
                         .as_mut()
                         .ok_or_else(|| "Editor is unavailable.".to_owned())
@@ -1263,6 +1290,7 @@ impl Editor {
             viewport,
             view: Arc::new(Mutex::new(View {
                 destination,
+                drawing_preview: Some(drawing_preview::State::new(ctx.clone(), viewport)),
                 ..View::default()
             })),
             tx,
@@ -1296,6 +1324,9 @@ impl Editor {
         while let Ok(result) = self.rx.try_recv() {
             self.view.lock().unwrap().receive(ctx, result);
             ctx.request_repaint_of(self.viewport);
+        }
+        if let Some(preview) = &mut self.view.lock().unwrap().drawing_preview {
+            preview.receive(&self.tx);
         }
         self.view.lock().unwrap().drain_inline(&self.tx);
         if self.view.lock().unwrap().receive_import(&self.tx) {
@@ -1673,7 +1704,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                         if shadow != before {
                             style.drop_shadow_style = Some(shadow);
                         }
-                        ui.small("Shadow pixels appear on release.");
+                        ui.small("Drawing pixels update in the background while dragging.");
                     }
                     ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
                     ui.small("These defaults apply to new shapes in this editor. Change position and ordering in Layers.");
@@ -1758,7 +1789,10 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         let texture = if view.show_output && view.section == Section::Output {
             view.output.as_ref().map(|(texture, _)| texture)
         } else {
-            view.texture.as_ref()
+            view.drawing_preview
+                .as_ref()
+                .and_then(|preview| preview.texture.as_ref())
+                .or(view.texture.as_ref())
         };
         if let Some(texture) = texture {
             let texture = texture.clone();
@@ -3201,6 +3235,7 @@ fn show_shape(
         }
         return;
     }
+    let previous_geometry = (view.shape_drag, view.freehand_points.len());
     let started = response.drag_started_by(egui::PointerButton::Primary);
     if first_pass
         && !viewport_intercepted
@@ -3259,7 +3294,42 @@ fn show_shape(
     }
     let style = view.new_annotation_style.clone();
     let opacity = view.new_annotation_opacity;
-    if let Some((start, end)) = view.shape_drag {
+    if first_pass
+        && !viewport_intercepted
+        && previous_geometry != (view.shape_drag, view.freehand_points.len())
+        && !response.drag_stopped_by(egui::PointerButton::Primary)
+        && let Some((start, end)) = view.shape_drag
+        && let Some(pixels) = &mut view.drawing_preview
+    {
+        let request = if view.draw_shape == DrawShape::Freehand {
+            Some(Request::CreateFreehandPath {
+                create: FreehandPathCreate {
+                    points: view.freehand_points.clone(),
+                    style: style.clone(),
+                    opacity,
+                },
+            })
+        } else {
+            view.draw_shape.request(
+                start,
+                end,
+                f64::from(preview.width()) / bounds.width,
+                &style,
+                opacity,
+            )
+        };
+        if let Some(request) = request {
+            pixels.request(tx, request);
+        } else {
+            pixels.cancel();
+        }
+    }
+    if let Some((start, end)) = view.shape_drag
+        && view
+            .drawing_preview
+            .as_ref()
+            .is_none_or(|preview| preview.texture.is_none())
+    {
         let position = |point: Point| {
             egui::pos2(
                 preview.left() + (point.x / bounds.width) as f32 * preview.width(),
@@ -3396,6 +3466,8 @@ fn show_shape(
         };
         if let Some(request) = request {
             view.submit(tx, request);
+        } else if let Some(preview) = &mut view.drawing_preview {
+            preview.cancel();
         }
     }
 }

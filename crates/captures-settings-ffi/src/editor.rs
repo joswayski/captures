@@ -1061,6 +1061,40 @@ pub unsafe extern "C" fn captures_editor_export_free_v1(export: *mut Vec<u8>) {
     }
 }
 
+/// Render drawing pixels without publishing an edit or writing a draft.
+/// # Safety
+/// Session is live and serialized, JSON is readable NUL-terminated UTF-8, and
+/// non-null output is writable pointer storage. Free its JSON with
+/// captures_settings_free_v1 and the independent frame with frame_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_preview_drawing_v1(
+    session: *mut EditorSession,
+    request_json: *const c_char,
+    output: *mut *mut c_char,
+) -> *mut Arc<RgbaImage> {
+    if output.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains a live serialized session and readable JSON.
+        let request = serde_json::from_str::<Request>(unsafe { text(request_json) }?)
+            .map_err(|error| error.to_string())?;
+        let session = unsafe { session.as_mut() }.ok_or("editor handle is null")?;
+        session.preview_drawing(request)
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    let (frame, value) = match result {
+        Ok(pixels) => (
+            Box::into_raw(Box::new(pixels)),
+            json!({"ok":true,"result":{}}),
+        ),
+        Err(error) => (ptr::null_mut(), json!({"ok":false,"error":error})),
+    };
+    // SAFETY: caller supplies writable pointer storage.
+    unsafe { output.write(response(value)) };
+    frame
+}
+
 /// Retain the current frame without copying pixels; null input returns null.
 ///
 /// # Safety
@@ -1983,6 +2017,55 @@ mod tests {
         assert!(!session.is_null());
         assert_eq!(unsafe { take_json(output) }["ok"], true);
         session
+    }
+
+    #[test]
+    fn drawing_preview_owns_pixels_and_errors_without_mutating_session() {
+        let (data, request, original) = editor_fixture();
+        // SAFETY: live serialized session and retained C strings; all returned
+        // owners are freed exactly once, after reading their borrowed pixels.
+        unsafe {
+            let session = open_editor(&request);
+            let before = (&*session).snapshot();
+            let drawing = c"{\"operation\":\"create_open_shape\",\"shape\":\"line\",\"start\":{\"x\":1,\"y\":1},\"end\":{\"x\":6,\"y\":1},\"style\":{\"color\":\"#123456\",\"strokeWidth\":2,\"dropShadow\":false}}";
+            assert!(
+                captures_editor_preview_drawing_v1(session, drawing.as_ptr(), ptr::null_mut())
+                    .is_null()
+            );
+            let mut output = ptr::null_mut();
+            for invalid in [
+                ptr::null(),
+                c"{broken".as_ptr(),
+                c"{\"operation\":\"undo\"}".as_ptr(),
+            ] {
+                assert!(
+                    captures_editor_preview_drawing_v1(session, invalid, &mut output).is_null()
+                );
+                assert_eq!(take_json(output)["ok"], false);
+            }
+            assert!(
+                captures_editor_preview_drawing_v1(ptr::null_mut(), drawing.as_ptr(), &mut output)
+                    .is_null()
+            );
+            assert_eq!(take_json(output)["ok"], false);
+            let frame = captures_editor_preview_drawing_v1(session, drawing.as_ptr(), &mut output);
+            assert!(!frame.is_null());
+            assert_eq!(take_json(output)["ok"], true);
+            assert_eq!(
+                serde_json::to_value((&*session).snapshot()).unwrap(),
+                serde_json::to_value(before).unwrap()
+            );
+            assert_eq!(*(&*session).pixels(), original);
+            assert!(!data.path().join("drafts").exists());
+            captures_editor_free_v1(session);
+            let mut pixels = MaybeUninit::uninit();
+            assert!(captures_editor_frame_pixels_v1(frame, pixels.as_mut_ptr()));
+            let pixels = pixels.assume_init();
+            assert_eq!((pixels.width, pixels.height), (7, 3));
+            let bytes = std::slice::from_raw_parts(pixels.data, pixels.length);
+            assert_eq!(&bytes[(7 + 3) * 4..(7 + 4) * 4], &[18, 52, 86, 255]);
+            captures_editor_frame_free_v1(frame);
+        }
     }
 
     unsafe fn import_response(

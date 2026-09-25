@@ -51,6 +51,67 @@ fn image_transform(id: &str, transform: &str) -> Request {
 }
 
 #[test]
+fn drawing_preview_renders_shadow_pixels_without_publishing_or_consuming_redo() {
+    let data = tempfile::tempdir().unwrap();
+    let source = RgbaImage::from_pixel(64, 48, Rgba([40, 110, 166, 255]));
+    let capture = captures_app::persist_screenshot(
+        &data.path().join("history"),
+        &source,
+        CaptureMode::Region,
+    )
+    .unwrap();
+    let mut editor = open(data.path(), &capture.entry.id).unwrap();
+    editor
+        .execute(Request::SetBackground {
+            color: Some("#d4e5f6".into()),
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    let snapshot = serde_json::to_value(editor.snapshot()).unwrap();
+    assert!(editor.snapshot().can_redo);
+    let pixels = editor.pixels();
+    let encoded = editor.encode_export(png_export_options()).unwrap();
+    let drawing = json!({"operation":"create_open_shape", "shape":"line",
+        "start":{"x":20,"y":10}, "end":{"x":50,"y":10}, "opacity":100,
+        "style":{"color":"#123456", "fill":null, "strokeWidth":4,
+            "dropShadow":true, "dropShadowStyle":{"color":"#f0c040", "opacity":100,
+                "blur":0,"offsetX":-3,"offsetY":9}}});
+    let preview = editor
+        .preview_drawing(serde_json::from_value(drawing.clone()).unwrap())
+        .unwrap();
+    assert_eq!(preview.get_pixel(35, 10).0, [18, 52, 86, 255]);
+    assert_eq!(preview.get_pixel(32, 19).0, [240, 192, 64, 255]);
+    assert_eq!(preview.get_pixel(1, 1).0, [40, 110, 166, 255]);
+    for rejected in [
+        Request::SaveDraft { updated_at_ms: 1 },
+        crop(),
+        Request::Undo,
+    ] {
+        assert!(editor.preview_drawing(rejected).is_err());
+    }
+    assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), snapshot);
+    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    assert_eq!(editor.encode_export(png_export_options()).unwrap(), encoded);
+    assert!(!data.path().join("drafts").exists());
+    editor
+        .execute(serde_json::from_value(drawing).unwrap())
+        .unwrap();
+    assert_eq!(*preview, *editor.pixels());
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(
+        *pixels,
+        *editor.pixels(),
+        "one commit, one undo despite preview renders"
+    );
+    drop(editor);
+    assert_eq!(
+        preview.get_pixel(32, 19).0,
+        [240, 192, 64, 255],
+        "preview owns its frame after close"
+    );
+}
+
+#[test]
 fn combine_commands_publish_owned_rasters_and_preserve_history_and_drafts() {
     let (data, artifact_id, _) = setup();
     let mut editor = open(data.path(), &artifact_id).unwrap();

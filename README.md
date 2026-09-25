@@ -547,7 +547,9 @@ smoothing come from shared Rust; Pen supports click-only dots and round caps.
 Both native editors offer stroke/fill colors, stroke width and opacity before
 drawing. These choices stay local to the editor; drawing creates one undoable
 layer. Pre-placement drop-shadow controls include color, opacity, blur and X/Y
-offsets; shadow pixels appear on release. Exact transient-render parity remains open.
+offsets. While dragging an annotation, both hosts update its pixels and shadow
+through the shared renderer in the background; Escape restores the unchanged image.
+An approximate vector guide appears until the first pixel frame is ready.
 Its Layers panel also edits annotation fill, stroke and shadow settings with an explicit
 Apply style action. Unapplied fields can be reset; shared Rust owns style defaults,
 rendering, undo and draft persistence.
