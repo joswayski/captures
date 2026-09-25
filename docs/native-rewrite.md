@@ -1084,9 +1084,8 @@ Close plus Delete; unsaved Delete only dismisses. Right placements mirror the
 corner controls; the stack toolbar uses adjacent Clear all/Show less icons.
 AppKit and wgpu use the same 12-point radius token and fixed-glass palette.
 X11 checks exercise four corners, overflow, exact pixels, nonactivating actions,
-idle/hover media contrast. The final outbound-drag rerun timed out after its first
-cancel/recovery cycle; resolve it before merging this chrome slice (see
-[handoff](native-preview-handoff.md)). AppKit fixture coverage
+idle/hover media contrast and repeat outbound drags that start right after a
+control click (see [handoff](native-preview-handoff.md)). AppKit fixture coverage
 checks mirrored geometry, hidden controls and in-place saved-state updates;
 macOS CI must verify it. Windows physical presentation and input, screen-reader
 and keyboard traversal on nonactivating panels, and Wayland live-host rendering
