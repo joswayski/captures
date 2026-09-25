@@ -1144,12 +1144,12 @@ cleanup. See `apps/native/wgpu/vendor/README.md` for provenance/update obligatio
 | macOS | AppKit source, async identity guards, COPY/landing policy | XCTest lifecycle cases added; physical Finder transfer still unverified |
 | Windows | GUI-thread OLE adapter, retained window, preloaded icon | Isolated adapter cross-compiled; real Explorer transfer and mixed-DPI own-window classification unverified |
 | X11 | wgpu bridge, same-connection XDND, Escape/timeout recovery | Real private-X11 original-byte and Unicode saved-path transfers, self-drop, reject/cancel/target loss/repeat; physical desktop acceptance open |
-| Wayland | Same-connection source and serial, own-offer completion | Headless Sway → independent GTK receiver verifies exact URI/bytes, reject/cancel/repeat/self-drop; full capture host and physical compositor acceptance open |
+| Wayland | Same-connection source and serial, own-offer completion, five-second post-drop deadline | Headless Sway → independent GTK receiver verifies exact URI/bytes, reject/cancel/repeat/self-drop, target loss and missing-Finished recovery; full capture host and physical compositor acceptance open |
 
 Windows classifies the final cursor against viewport rectangles conservatively;
-mixed-DPI/overlapping windows need physical verification. Wayland still lacks a
-source-side deadline for a receiver that never finishes, and this test does not
-close that lifecycle gate. No shipping Tauri behavior or parity gate changes.
+mixed-DPI/overlapping windows need physical verification. Wayland tests exercise
+protocol recovery on one disposable compositor, not a physical desktop or the
+full capture host. No shipping Tauri behavior or parity gate changes.
 
 The resident lifecycle slice adds live-only menu-bar/tray actions and three
 persisted screenshot shortcuts. One Rust dispatcher owns capture-launch and

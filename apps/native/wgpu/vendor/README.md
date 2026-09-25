@@ -18,7 +18,9 @@ queue: a second Wayland connection cannot use the original pointer serial.
 X11 takes over the client's XI2 implicit grab, handles selection requests,
 Escape, own-window drops and a five-second missing-Finished deadline. Wayland
 uses SCTK's data device/source/offer dispatch and held-button serial, retaining
-the drop destination before leave. Neither adds general Wayland file import.
+the drop destination before leave. Its one-shot five-second post-drop timer
+recovers missing completion; normal completion removes the timer. Neither adds
+general Wayland file import.
 
 Patch surface: `src/platform/{x11,wayland}.rs`, `platform_impl/linux/mod.rs`,
 the Linux backend module/event-loop initialization, X11 atoms/event processor,
@@ -40,6 +42,6 @@ not part of the published archive.
    Verify cancellation, repeated use, self-drop, Unicode URI bytes and pointer
    recovery. Run native macOS/Windows CI and physical host acceptance separately.
 
-Known open gate: a Wayland receiver that neither finishes nor disconnects lacks
-a source-side deadline. Headless Sway tests do not establish compositor parity.
+Headless Sway tests include a receiver that never finishes and one that exits
+after receiving bytes. These tests do not establish physical compositor parity.
 Do not mark the native drag or mini-preview parity gates complete from this patch.

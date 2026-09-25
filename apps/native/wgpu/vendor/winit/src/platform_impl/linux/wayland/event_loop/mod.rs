@@ -750,6 +750,7 @@ impl ActiveEventLoop {
             own_offer_copy: false,
             own_drop: false,
             same_source_drop: false,
+            deadline: None,
             finished: Some(finished),
         });
         Ok(())

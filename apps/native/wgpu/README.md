@@ -455,6 +455,7 @@ It records the self-drop animation for inspection.
 starts headless Sway with DISPLAY unset. It requires GTK3's system Python bindings
 (`gir1.2-gtk-3.0`, `python3-gi`) and verifies exact URI/file bytes against an
 independent GTK receiver, two transfers from the same source process, rejection,
-cancellation and self-drop classification. This is not full Wayland capture-host
+cancellation, self-drop classification, disappearing targets and missing-Finished
+timeout recovery. This is not full Wayland capture-host
 or physical-compositor acceptance. Windows OLE transfers, mixed-DPI destination
-classification and a non-finishing Wayland receiver remain open validation gates.
+classification and full physical-host interaction remain open validation gates.

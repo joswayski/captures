@@ -66,8 +66,9 @@ def ipc(env, command):
 
 
 def drag(env, binary, source_output, expected_uri, outcome):
+    options = ["--reject"] if outcome == "reject" else ["--no-finish"] if outcome in ("timeout", "disappear") else []
     receiver = subprocess.Popen(
-        ["/usr/bin/python3", str(RECEIVER), *(["--reject"] if outcome == "reject" else [])],
+        ["/usr/bin/python3", str(RECEIVER), *options],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     output = Output(receiver)
@@ -80,11 +81,13 @@ def drag(env, binary, source_output, expected_uri, outcome):
         injector = subprocess.Popen([binary, "inject", "reject" if outcome == "cancel" else "accept"], env=env)
         source_output.wait("STARTED")
         received = None if outcome == "cancel" else output.wait("RECEIVED")
-        finished = source_output.wait("FINISHED")
-        injector.wait(timeout=5)
         if received:
             assert json.loads(received.removeprefix("RECEIVED ")) == expected_uri, received
             assert output.wait("BYTES ") == "BYTES " + bytes(range(256)).hex()
+        if outcome == "disappear":
+            stop(receiver)
+        finished = source_output.wait("FINISHED")
+        injector.wait(timeout=5)
         return finished
     finally:
         stop(receiver)
@@ -130,6 +133,8 @@ def main():
             accepted1 = drag(env, binary, source_output, expected_uri, "accept")
             rejected = drag(env, binary, source_output, expected_uri, "reject")
             cancelled = drag(env, binary, source_output, expected_uri, "cancel")
+            timed_out = drag(env, binary, source_output, expected_uri, "timeout")
+            disappeared = drag(env, binary, source_output, expected_uri, "disappear")
             subprocess.run([binary, "inject", "self"], env=env, check=True, timeout=5)
             source_output.wait("STARTED")
             self_drop = source_output.wait("FINISHED")
@@ -137,7 +142,8 @@ def main():
             accepted2 = drag(env, binary, source_output, expected_uri, "accept")
             assert accepted1 == accepted2 == "FINISHED accepted=true own=false"
             assert rejected == cancelled == "FINISHED accepted=false own=false"
-            print(json.dumps({"independent_receiver": "GTK3", "same_source_process": True, "exact_payload_bytes": 256, "exact_uri": expected_uri, "accept_results": [accepted1, accepted2], "reject_result": rejected, "cancel_result": cancelled, "self_drop": self_drop}, indent=2))
+            assert timed_out == disappeared == "FINISHED accepted=false own=false"
+            print(json.dumps({"independent_receiver": "GTK3", "same_source_process": True, "exact_payload_bytes": 256, "exact_uri": expected_uri, "accept_results": [accepted1, accepted2], "reject_result": rejected, "cancel_result": cancelled, "timeout_result": timed_out, "disappeared_result": disappeared, "self_drop": self_drop}, indent=2))
         finally:
             stop(source)
             if sway.poll() is None:

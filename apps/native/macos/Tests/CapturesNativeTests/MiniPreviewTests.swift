@@ -131,6 +131,17 @@ final class MiniPreviewTests: XCTestCase {
             "compact cards remain move-only even after their files are prepared")
     }
 
+    func testWorkspaceReconfigurationDoesNotDeleteLiveDragExports() {
+        let transport = MiniPreviewActionTransport()
+        let actions = MiniPreviewActions(settingsPath: nil, transport: transport)
+        actions.configure(historyRoot: "/profile/history")
+        LiveCaptureController.queue.sync {}
+        XCTAssertEqual(transport.cleanupCount, 1)
+        actions.configure(historyRoot: "/profile/history")
+        LiveCaptureController.queue.sync {}
+        XCTAssertEqual(transport.cleanupCount, 1)
+    }
+
     func testStaleAsyncDragPreparationCannotAttachToReplacementIdentity() throws {
         _ = NSApplication.shared
         let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in self.solidImage(.blue) })
@@ -898,6 +909,7 @@ private final class MiniPreviewActionTransport: AppTransport {
     private var root: String?
     private var trashes = 0
     private var requests = 0
+    private var cleanups = 0
     private var recordedRequest: [String: Any]?
     var fail = false
     var malformed = false
@@ -907,12 +919,17 @@ private final class MiniPreviewActionTransport: AppTransport {
     var savedRoot: String? { lock.lock(); defer { lock.unlock() }; return root }
     var trashCount: Int { lock.lock(); defer { lock.unlock() }; return trashes }
     var requestCount: Int { lock.lock(); defer { lock.unlock() }; return requests }
+    var cleanupCount: Int { lock.lock(); defer { lock.unlock() }; return cleanups }
     var lastRequest: [String: Any]? { lock.lock(); defer { lock.unlock() }; return recordedRequest }
 
     func request(_ object: [String: Any]) throws -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
-        requests += 1; recordedRequest = object
         let operation = object["operation"] as? String
+        if operation == "clear_previous_preview_drags" {
+            cleanups += 1
+            return ["kind": "previous_preview_drags_cleared"]
+        }
+        requests += 1; recordedRequest = object
         guard operation == "save_screenshot" || operation == "trash_preview" else {
             throw AppBridgeError.invalidResponse
         }

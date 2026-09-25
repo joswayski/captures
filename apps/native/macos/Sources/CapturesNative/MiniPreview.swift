@@ -845,6 +845,9 @@ final class MiniPreviewActions {
         self.previews = previews; boundToPreviews = true
     }
     func configure(historyRoot: String) {
+        // Style changes reconstruct LiveCaptureController, but retained exports
+        // must survive for the whole process, not just one workspace render.
+        guard self.historyRoot != historyRoot else { return }
         self.historyRoot = historyRoot
         LiveCaptureController.queue.async { [transport] in
             // Serialized ahead of preparation; never clear a live OS drag.

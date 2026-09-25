@@ -30,6 +30,7 @@ pub struct OutboundDrag {
     pub own_offer_copy: bool,
     pub own_drop: bool,
     pub same_source_drop: bool,
+    pub deadline: Option<calloop::RegistrationToken>,
     pub finished: Option<Box<dyn FnOnce(bool, bool, bool) + Send>>,
 }
 
@@ -57,6 +58,9 @@ impl WinitState {
             return;
         }
         if let Some(mut drag) = self.outbound_drag.take() {
+            if let Some(token) = drag.deadline.take() {
+                self.loop_handle.remove(token);
+            }
             let own = drag.own_drop;
             let same_source = drag.same_source_drop;
             if let Some(finished) = drag.finished.take() {
@@ -117,6 +121,25 @@ impl DataSourceHandler for WinitState {
             drag.dropped = true;
             drag.own_drop = drag.over_own_window;
             drag.same_source_drop = drag.over_source_window;
+            let source = source.clone();
+            drag.deadline = self
+                .loop_handle
+                .insert_source(
+                    calloop::timer::Timer::from_duration(std::time::Duration::from_secs(5)),
+                    move |_, _, state| {
+                        if let Some(drag) = state
+                            .outbound_drag
+                            .as_mut()
+                            .filter(|drag| drag.source.inner() == &source)
+                        {
+                            drag.deadline = None;
+                            state.finish_outbound_drag(&source, false);
+                            state.dispatched_events = true;
+                        }
+                        calloop::timer::TimeoutAction::Drop
+                    },
+                )
+                .ok();
         }
     }
 
