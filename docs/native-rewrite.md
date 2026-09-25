@@ -119,6 +119,19 @@ The AppKit drawing slice passed 136 Swift tests in macOS CI;
 its light/dark transient, committed, dot and minimum-size error fixtures were inspected.
 These are development implementations, not completed platform acceptance gates.
 
+Both hosts now expose pre-placement annotation stroke/fill colors, stroke and fill
+toggles for closed shapes, 2–40 px width and 0–100% opacity. Shared Rust supplies
+initial style values; subsequent choices are editor-local, survive tool switches
+and worker responses, and do not alter documents, output or drafts until drawing.
+Closed shapes, Line/Arrow and Pen submit those values through the existing single
+undo transaction. Open strokes ignore the retained closed-shape stroke/fill toggles.
+AppKit's allocation-owned geometry ABI accepts explicit arrow width while retaining
+the original v1 default contract; its opacity composite does not affect brush guides.
+Transient previews remain host vector approximations: polygon joins and overlapping
+wgpu fill/stroke or Pen caps are not final-render pixel parity. Accepted pixels use
+the shared renderer. Pre-placement shadow controls, physical platform input,
+accessibility and Wayland live acceptance remain open.
+
 Both hosts now connect canvas click-selection and transactional drag-move in Layers.
 Shared `Element::selection_bounds`, `selection_outline` and `Document::hit_test` match
 the shipping rotated local-box picking rules, including stroke/shadow padding,

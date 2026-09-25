@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     editor::{
         AnnotationStylePatch, ClosedShapeCreate, Document, DocumentHistory, DropShadowStyle,
-        DropShadowStylePatch, Element, ElementBase, FreehandPathCreate, ImageElement, LayerEdit,
-        OpenShapeCreate, OptionalNullable, Point, Rect, TextElement, image_bounds,
+        DropShadowStylePatch, Element, ElementBase, ElementStyle, FreehandPathCreate, ImageElement,
+        LayerEdit, OpenShapeCreate, OptionalNullable, Point, Rect, TextElement, image_bounds,
     },
     editor_image_background::{BrushMode, paint_stroke},
     editor_render::{
@@ -271,6 +271,9 @@ pub struct Snapshot<'a> {
     /// Shipping's initial placement size, pinned to the capture rather than the
     /// editable canvas. Hosts adopt it once and retain subsequent user choices.
     pub initial_text_size: f64,
+    /// Initial local drawing controls, not document or draft state. Hosts adopt
+    /// these once; selection, undo and later snapshots retain the user's choices.
+    pub initial_annotation_style: ElementStyle,
     /// Present while a host-owned inline input is active. Hosts must use this
     /// lifecycle marker rather than committed history or unsaved flags.
     pub active_text_input: Option<ActiveTextInput<'a>>,
@@ -458,6 +461,7 @@ impl EditorSession {
             artifact_id: &self.artifact_id,
             original_export_path: self.original_export_path.as_deref(),
             initial_text_size: self.initial_text_size,
+            initial_annotation_style: ElementStyle::default(),
             active_text_input: self.text_input.as_ref().map(|input| ActiveTextInput {
                 input_id: &input.input_id,
                 layer_id: &input.layer_id,

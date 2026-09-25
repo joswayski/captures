@@ -338,6 +338,11 @@ typedef struct {
 } CapturesEditorDrawPoints;
 CapturesEditorDrawGeometry *captures_editor_draw_geometry_v1(uint32_t kind,
     const CapturesSelectionPoint *input, size_t length, CapturesEditorDrawPoints *output);
+/* Same ownership/validation contract; stroke_width must be finite and positive.
+ * Shapes and the returned width use this explicit value instead of the v1 default. */
+CapturesEditorDrawGeometry *captures_editor_draw_geometry_v2(uint32_t kind,
+    const CapturesSelectionPoint *input, size_t length, double stroke_width,
+    CapturesEditorDrawPoints *output);
 void captures_editor_draw_geometry_free_v1(CapturesEditorDrawGeometry *handle);
 /* Import one host-decoded image on the serialized session worker. request_json is
  * {name,selected_id?,point?:{x,y}} and never contains pixels or asset URLs.
