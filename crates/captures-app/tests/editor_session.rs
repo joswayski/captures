@@ -51,6 +51,273 @@ fn image_transform(id: &str, transform: &str) -> Request {
 }
 
 #[test]
+fn combine_commands_publish_owned_rasters_and_preserve_history_and_drafts() {
+    let (data, artifact_id, _) = setup();
+    let mut editor = open(data.path(), &artifact_id).unwrap();
+    let original_id = editor.snapshot().document.elements[0].base().id.clone();
+    editor
+        .execute(Request::Layer {
+            id: original_id.clone(),
+            edit: LayerEdit::Lock { locked: false },
+        })
+        .unwrap();
+    let red = editor
+        .import_image(ImportImage {
+            pixels: RgbaImage::from_pixel(7, 3, Rgba([255, 0, 0, 128])),
+            name: "red.png".into(),
+            selected_id: None,
+            point: None,
+        })
+        .unwrap();
+    let blue = editor
+        .import_image(ImportImage {
+            pixels: RgbaImage::from_pixel(7, 3, Rgba([0, 0, 255, 128])),
+            name: "blue.png".into(),
+            selected_id: None,
+            point: None,
+        })
+        .unwrap();
+    let snapshot = editor.snapshot();
+    assert!(snapshot.merge_down_ids.contains(&blue.as_str()));
+    assert!(snapshot.can_merge_visible);
+    assert!(snapshot.can_flatten);
+
+    editor
+        .execute(Request::Layer {
+            id: original_id.clone(),
+            edit: LayerEdit::Visibility { visible: false },
+        })
+        .unwrap();
+    let expected = editor.pixels();
+    editor
+        .execute(Request::MergeVisible {
+            new_id: "visible-raster".into(),
+        })
+        .unwrap();
+    assert_eq!(&*editor.pixels(), &*expected);
+    let document = editor.snapshot().document;
+    assert_eq!(document.elements.len(), 2);
+    assert_eq!(document.elements[0].base().id, original_id);
+    assert_eq!(document.elements[1].base().id, "visible-raster");
+    let Element::Image(merged) = &document.elements[1] else {
+        panic!("merge output must be an image")
+    };
+    assert_eq!(merged.name, "Merged");
+    assert_eq!(
+        (merged.natural_width, merged.natural_height),
+        (document.width, document.height)
+    );
+
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(&*editor.pixels(), &*expected);
+    assert!(editor.snapshot().can_redo);
+    let before = editor.snapshot().document.clone();
+    let frame = editor.pixels();
+    assert!(
+        editor
+            .execute(Request::MergeDown {
+                id: "stale".into(),
+                new_id: red.clone(),
+            })
+            .is_err()
+    );
+    assert_eq!(editor.snapshot().document, &before);
+    assert!(editor.snapshot().can_redo);
+    assert!(Arc::ptr_eq(&frame, &editor.pixels()));
+
+    editor.execute(Request::Redo).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 41 })
+        .unwrap();
+    let reopened = open(data.path(), &artifact_id).unwrap();
+    assert_eq!(reopened.snapshot().document, editor.snapshot().document);
+    assert_eq!(reopened.pixels(), editor.pixels());
+}
+
+#[test]
+fn merge_down_forces_hidden_pair_and_flatten_bakes_background() {
+    let (data, artifact_id, _) = setup();
+    let mut editor = open(data.path(), &artifact_id).unwrap();
+    let bottom = editor.snapshot().document.elements[0].base().id.clone();
+    editor
+        .execute(Request::Layer {
+            id: bottom.clone(),
+            edit: LayerEdit::Lock { locked: false },
+        })
+        .unwrap();
+    let top = editor
+        .import_image(ImportImage {
+            pixels: RgbaImage::from_pixel(7, 3, Rgba([255, 255, 0, 255])),
+            name: "top.png".into(),
+            selected_id: None,
+            point: None,
+        })
+        .unwrap();
+    let visible_pair = editor.pixels();
+    let bottom_name = match &editor.snapshot().document.elements[0] {
+        Element::Image(image) => image.name.clone(),
+        _ => unreachable!(),
+    };
+    editor
+        .execute(Request::Layer {
+            id: top.clone(),
+            edit: LayerEdit::Visibility { visible: false },
+        })
+        .unwrap();
+    editor
+        .execute(Request::MergeDown {
+            id: top,
+            new_id: "pair".into(),
+        })
+        .unwrap();
+    let Element::Image(pair) = &editor.snapshot().document.elements[0] else {
+        panic!("merge output must be an image")
+    };
+    assert_eq!(pair.name, bottom_name);
+    assert_eq!(editor.pixels(), visible_pair);
+
+    editor
+        .execute(Request::SetBackground {
+            color: Some("#123456".into()),
+        })
+        .unwrap();
+    editor
+        .execute(Request::Flatten {
+            new_id: "flat".into(),
+        })
+        .unwrap();
+    let document = editor.snapshot().document;
+    assert!(document.background.is_none());
+    assert_eq!(document.elements.len(), 1);
+    let Element::Image(flattened) = &document.elements[0] else {
+        panic!("flatten output must be an image")
+    };
+    assert!(flattened.base.locked);
+    assert_eq!(flattened.source, "background");
+    assert_eq!(flattened.name, "Flattened");
+}
+
+#[test]
+fn combining_partial_alpha_retains_hidden_slots_and_flattens_only_visible_pixels() {
+    let (data, artifact_id, _) = setup();
+    let mut editor = open(data.path(), &artifact_id).unwrap();
+    for (name, pixel) in [("red", [255, 0, 0, 128]), ("blue", [0, 0, 255, 128])] {
+        editor
+            .import_image(ImportImage {
+                pixels: RgbaImage::from_pixel(2, 1, Rgba(pixel)),
+                name: name.into(),
+                selected_id: None,
+                point: None,
+            })
+            .unwrap();
+    }
+    let mut document = editor.snapshot().document.clone();
+    document.width = 7.;
+    document.height = 3.;
+    document.background = None;
+    document
+        .extra
+        .insert("futureDocument".into(), json!({"keep": 17}));
+    for (index, element) in document.elements.iter_mut().enumerate() {
+        let Element::Image(image) = element else {
+            unreachable!()
+        };
+        image.base.id = ["hidden-bottom", "red", "blue"][index].into();
+        image.base.visible = index != 0;
+        image.base.locked = index != 2; // Visible ignores locks; Down must not.
+        image.base.x = index as f64;
+        image.base.y = 1.;
+        image.width = 2.;
+        image.height = 1.;
+    }
+    let mut middle = document.elements[0].clone();
+    let Element::Image(image) = &mut middle else {
+        unreachable!()
+    };
+    image.base.id = "hidden-middle".into();
+    document.elements.insert(2, middle);
+    editor
+        .execute(Request::Commit {
+            document: document.clone(),
+        })
+        .unwrap();
+    assert!(editor.snapshot().merge_down_ids.is_empty());
+    editor
+        .execute(Request::MergeVisible {
+            new_id: "merged".into(),
+        })
+        .unwrap();
+    let merged = editor.snapshot().document;
+    assert_eq!(merged.extra, document.extra);
+    assert_eq!(
+        merged
+            .elements
+            .iter()
+            .map(|e| e.base().id.as_str())
+            .collect::<Vec<_>>(),
+        ["hidden-bottom", "merged", "hidden-middle"]
+    );
+    // Known source-over pixels, not an expectation copied from render_frame.
+    assert_eq!(editor.pixels().get_pixel(0, 0).0, [0, 0, 0, 0]);
+    assert_eq!(editor.pixels().get_pixel(1, 1).0, [255, 0, 0, 128]);
+    assert_eq!(editor.pixels().get_pixel(2, 1).0, [85, 0, 170, 192]);
+    assert_eq!(editor.pixels().get_pixel(3, 1).0, [0, 0, 255, 128]);
+    editor
+        .execute(Request::SetBackground {
+            color: Some("#123456".into()),
+        })
+        .unwrap();
+    let before_flatten = editor.pixels();
+    // The existing compositor truncates floating-point source-over channels
+    // by up to one byte. Bound it against the independent ideal pixel, then
+    // require flatten itself to preserve the complete rendered frame exactly.
+    for (actual, ideal) in before_flatten
+        .get_pixel(1, 1)
+        .0
+        .into_iter()
+        .zip([137, 26, 43, 255])
+    {
+        assert!(actual.abs_diff(ideal) <= 1);
+    }
+    editor
+        .execute(Request::Flatten {
+            new_id: "flat".into(),
+        })
+        .unwrap();
+    assert_eq!(editor.pixels(), before_flatten);
+    assert_eq!(editor.snapshot().document.elements.len(), 1);
+    assert_eq!(editor.snapshot().document.extra, document.extra);
+    assert_eq!(editor.pixels().get_pixel(0, 0).0, [18, 52, 86, 255]);
+    assert!(!editor.snapshot().can_flatten);
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document.elements.len(), 3);
+    let before = editor.snapshot().document.clone();
+    let frame = editor.pixels();
+    for request in [
+        Request::MergeDown {
+            id: "hidden-bottom".into(),
+            new_id: "no-bottom".into(),
+        },
+        Request::MergeDown {
+            id: "merged".into(),
+            new_id: "locked-below".into(),
+        },
+        Request::MergeVisible {
+            new_id: "only-one-visible".into(),
+        },
+        Request::Flatten {
+            new_id: "merged".into(),
+        },
+        Request::Flatten { new_id: "".into() },
+    ] {
+        assert!(editor.execute(request).is_err());
+        assert_eq!(editor.snapshot().document, &before);
+        assert!(editor.snapshot().can_redo);
+        assert!(Arc::ptr_eq(&frame, &editor.pixels()));
+    }
+}
+
+#[test]
 fn layer_clipboard_is_a_stable_session_snapshot_with_transactional_offsets() {
     let (data, artifact_id, _) = setup();
     let mut editor = open(data.path(), &artifact_id).unwrap();

@@ -449,6 +449,9 @@ struct NativeEditorSnapshot: Equatable {
     let canUndo: Bool
     let canRedo: Bool
     let canPasteLayer: Bool
+    let mergeDownIDs: [String]
+    let canMergeVisible: Bool
+    let canFlatten: Bool
     let unsavedChanges: Bool
     let hasDraft: Bool
     let activeTextInput: NativeActiveTextInput?
@@ -515,6 +518,24 @@ struct NativeEditorSnapshot: Equatable {
         self.background = document["background"] as? String
         self.canUndo = canUndo; self.canRedo = canRedo
         self.canPasteLayer = canPasteLayer
+        let mergeDownIDs: [String]
+        if let raw = value["merge_down_ids"] {
+            guard let parsed = raw as? [String] else { return nil }
+            mergeDownIDs = parsed
+        } else { mergeDownIDs = [] }
+        let canMergeVisible: Bool
+        if let raw = value["can_merge_visible"] {
+            guard let parsed = raw as? Bool else { return nil }
+            canMergeVisible = parsed
+        } else { canMergeVisible = false }
+        let canFlatten: Bool
+        if let raw = value["can_flatten"] {
+            guard let parsed = raw as? Bool else { return nil }
+            canFlatten = parsed
+        } else { canFlatten = false }
+        self.mergeDownIDs = mergeDownIDs
+        self.canMergeVisible = canMergeVisible
+        self.canFlatten = canFlatten
         self.unsavedChanges = unsavedChanges; self.hasDraft = hasDraft
         self.activeTextInput = activeTextInput
         let fontFamilies = value["font_families"] as? [String: String] ?? [:]

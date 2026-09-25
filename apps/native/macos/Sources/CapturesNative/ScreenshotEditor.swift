@@ -930,6 +930,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var deleteButton: CaptureButton!
     private var moveUpButton: CaptureButton!
     private var moveDownButton: CaptureButton!
+    private var combineLayers: NSPopUpButton!
     private var rotateLeftButton: CaptureButton!
     private var rotateRightButton: CaptureButton!
     private var flipHorizontalButton: CaptureButton!
@@ -1847,7 +1848,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                               parent: layerContent) { [weak self] in self?.reorderLayer(up: true) }
         moveDownButton = button("Move down", frame: NSRect(x: 144, y: 448, width: 128, height: 30),
                                 parent: layerContent) { [weak self] in self?.reorderLayer(up: false) }
-        importImageButton = button("Add image…", frame: NSRect(x: 0, y: 494, width: 272, height: 34),
+        combineLayers = NSPopUpButton(frame: NSRect(x: 136, y: 494, width: 136, height: 34), pullsDown: true)
+        combineLayers.autoenablesItems = false
+        combineLayers.addItem(withTitle: "Combine layers")
+        for title in ["Merge down", "Merge visible", "Flatten image"] { combineLayers.addItem(withTitle: title) }
+        combineLayers.target = self; combineLayers.action = #selector(combineLayersSelected(_:))
+        combineLayers.setAccessibilityLabel("Combine layers")
+        layerContent.addSubview(combineLayers)
+        importImageButton = button("Add image…", frame: NSRect(x: 0, y: 494, width: 128, height: 34),
                                    parent: layerContent) { [weak self] in self?.chooseImage() }
         importImageButton.primary = true
         rotationSnapLabel = panelFieldLabel("Shift rotation snap (1–180°)", x: 0, y: 550, parent: layerContent)
@@ -3438,7 +3446,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private var layerActionsReady: Bool {
         state.snapshot != nil && !state.busy && !importLoading
-            && !awaitingReplaceConfirmation && window.attachedSheet == nil
+            && inlineTextInput == nil && !awaitingReplaceConfirmation && window.attachedSheet == nil
     }
 
     private func duplicateLayer() {
@@ -3487,6 +3495,33 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 selectToolOnSuccess: true)
     }
 
+    private func combine(_ operation: String, id: String? = nil) {
+        guard layerActionsReady, let snapshot = state.snapshot else { return }
+        if operation == "merge_down" {
+            guard let id, snapshot.mergeDownIDs.contains(id) else { return }
+        } else if operation == "merge_visible" {
+            guard snapshot.canMergeVisible else { return }
+        } else {
+            guard operation == "flatten", snapshot.canFlatten else { return }
+        }
+        let newID = UUID().uuidString.lowercased()
+        var request: [String: Any] = ["operation": operation, "new_id": newID]
+        if let id { request["id"] = id }
+        cancelDrawing(); cancelViewportPan()
+        command(request, message: "Combining layers…", preferredSelection: newID,
+                selectToolOnSuccess: true)
+    }
+
+    @objc private func combineLayersSelected(_ sender: NSPopUpButton) {
+        defer { sender.selectItem(at: 0) }
+        switch sender.indexOfSelectedItem {
+        case 1: combine("merge_down", id: selectedLayer?.id)
+        case 2: combine("merge_visible")
+        case 3: combine("flatten")
+        default: break
+        }
+    }
+
     func layerContextMenu(row: Int) -> NSMenu? {
         guard !awaitingReplaceConfirmation, window.attachedSheet == nil,
               let snapshot = state.snapshot else { return nil }
@@ -3509,7 +3544,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             menu.addItem(.separator())
             add("Duplicate", #selector(duplicateLayerFromMenu(_:)), enabled: ready, id: target.id)
             add("Delete", #selector(deleteLayerFromMenu(_:)), enabled: ready && !target.locked, id: target.id)
+            add("Merge down", #selector(mergeDownFromMenu(_:)),
+                enabled: ready && snapshot.mergeDownIDs.contains(target.id), id: target.id)
         }
+        menu.addItem(.separator())
+        add("Merge visible", #selector(mergeVisibleFromMenu(_:)), enabled: ready && snapshot.canMergeVisible)
+        add("Flatten image", #selector(flattenFromMenu(_:)), enabled: ready && snapshot.canFlatten)
         return menu
     }
 
@@ -3530,6 +3570,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard let id = sender.representedObject as? String else { return }
         deleteLayer(id: id)
     }
+
+    @objc private func mergeDownFromMenu(_ sender: NSMenuItem) {
+        combine("merge_down", id: sender.representedObject as? String)
+    }
+
+    @objc private func mergeVisibleFromMenu(_ sender: NSMenuItem) { combine("merge_visible") }
+    @objc private func flattenFromMenu(_ sender: NSMenuItem) { combine("flatten") }
 
     private func reorderLayer(up: Bool) {
         guard let snapshot = state.snapshot, let layer = selectedLayer,
@@ -3762,6 +3809,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateDrawing()
         layerTable?.isEnabled = ready
         importImageButton?.isEnabled = ready && !importLoading
+        let combineReady = layerActionsReady
+        combineLayers?.isEnabled = combineReady && (state.snapshot?.canMergeVisible == true
+            || state.snapshot?.canFlatten == true || !(state.snapshot?.mergeDownIDs.isEmpty ?? true))
+        combineLayers?.item(at: 1)?.isEnabled = combineReady && selectedLayer.map {
+            state.snapshot?.mergeDownIDs.contains($0.id) == true
+        } == true
+        combineLayers?.item(at: 2)?.isEnabled = combineReady && state.snapshot?.canMergeVisible == true
+        combineLayers?.item(at: 3)?.isEnabled = combineReady && state.snapshot?.canFlatten == true
         annotationControls?.setReady(ready)
         let layer = ready ? selectedLayer : nil
         let image = layer?.kind == .image

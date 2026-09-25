@@ -1888,6 +1888,50 @@ mod tests {
     }
 
     #[test]
+    fn combine_request_uses_shared_snapshot_capabilities_and_dispatch() {
+        let (_data, open_request, _) = editor_fixture();
+        unsafe {
+            let session = open_editor(&open_request);
+            let snapshot = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"snapshot\"}".as_ptr(),
+            ));
+            let id = snapshot["result"]["document"]["elements"][0]["id"]
+                .as_str()
+                .unwrap();
+            let unlock = CString::new(
+                json!({"operation":"layer","id":id,"edit":{"action":"lock","locked":false}})
+                    .to_string(),
+            )
+            .unwrap();
+            assert_eq!(
+                take_json(captures_editor_request_v1(session, unlock.as_ptr()))["ok"],
+                true
+            );
+            let duplicate = CString::new(
+                json!({
+                    "operation":"layer","id":id,
+                    "edit":{"action":"duplicate","new_id":"copy"}
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let duplicated = take_json(captures_editor_request_v1(session, duplicate.as_ptr()));
+            assert_eq!(duplicated["result"]["merge_down_ids"], json!(["copy"]));
+            assert_eq!(duplicated["result"]["can_merge_visible"], true);
+            assert_eq!(duplicated["result"]["can_flatten"], true);
+            let merged = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"merge_down\",\"id\":\"copy\",\"new_id\":\"merged\"}".as_ptr(),
+            ));
+            assert_eq!(merged["ok"], true);
+            assert_eq!(merged["result"]["document"]["elements"][0]["id"], "merged");
+            assert_eq!(merged["result"]["can_undo"], true);
+            captures_editor_free_v1(session);
+        }
+    }
+
+    #[test]
     fn import_copies_padded_pixels_and_round_trips_undo_redo_and_draft() {
         let (data, open_request, original) = editor_fixture();
         let imported = RgbaImage::from_raw(

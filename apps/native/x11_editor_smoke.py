@@ -83,6 +83,8 @@ def main():
                         help="Exercise viewport gestures, toolbar and keyboard zoom without editing")
     parser.add_argument("--history-shortcuts-only", action="store_true",
                         help="Exercise tool and document keys without stealing text input")
+    parser.add_argument("--combine-only", action="store_true",
+                        help="Exercise real-input layer merging, flattening, history and output pixels")
     parser.add_argument("--text-draft-only", action="store_true",
                         help="Restore explicit-font text, save/reopen and copy pixels (no Text input UI)")
     parser.add_argument("--text-only", action="store_true",
@@ -573,6 +575,133 @@ def main():
                            "empty-relaunch-restores-preferences"],
             }, indent=2) + "\n")
             print("PASS native external images: batch, aliases, errors, pixels, drafts and safe reload")
+            return
+
+        if args.combine_only:
+            resize_editor(1000, 801, "sleep", ".3")
+
+            # Build an asymmetric document through the same tool shortcuts and
+            # canvas input a person uses. Keep the first annotation hidden so
+            # Merge visible has a slot it must retain and Flatten must remove.
+            run("xdotool", "key", "r", "sleep", ".2")
+            drag((300, 220), (380, 300))
+            first = save_layers(lambda values: len(values) == 2, "first combine layer")[-1]
+            click(editor, 463, 62)
+            inspector_click(15, 300)
+            save_layers(lambda values: len(values) == 2 and not values[-1]["visible"],
+                        "hidden combine fixture")
+            run("xdotool", "key", "r", "sleep", ".2")
+            drag((420, 250), (500, 330))
+            second = save_layers(lambda values: len(values) == 3, "second combine layer")[-1]
+            run("xdotool", "key", "r", "sleep", ".2")
+            drag((540, 280), (620, 360))
+            third = save_layers(lambda values: len(values) == 4, "third combine layer")[-1]
+            fixture_ids = [value["id"] for value in layers()]
+            shot(editor, "combine-asymmetric-fixture")
+
+            # A context action belongs to its clicked row, not to the previous
+            # selection. Select the second row, then merge the top row downward.
+            click(editor, 463, 62)
+            inspector_click(100, 202)
+            inspector_move(100, 158, "sleep", ".2", "mousedown", "3",
+                           "sleep", ".15", "mouseup", "3", "sleep", ".3")
+            shot(editor, "combine-row-context-menu")
+            inspector_click(130, 358)  # Fifth context item: Merge down.
+            merged_down = save_layers(lambda values: len(values) == 3, "clicked-row merge down")
+            assert [value["id"] for value in merged_down[:2]] == fixture_ids[:2]
+            assert merged_down[-1]["id"] not in fixture_ids
+            assert not merged_down[1]["visible"] and merged_down[1]["id"] == first["id"]
+            assert second["id"] not in {value["id"] for value in merged_down}
+            assert third["id"] not in {value["id"] for value in merged_down}
+            merged_down_snapshot = merged_down
+            shot(editor, "combine-merge-down")
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert [value["id"] for value in save_layers(
+                lambda values: len(values) == 4, "undo merge down")] == fixture_ids
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 3, "redo merge down") == merged_down_snapshot
+
+            # Exercise the shared heading menu. Merge visible replaces only
+            # visible layers and leaves the hidden annotation in its old slot.
+            inspector_click(115, 104)
+            shot(editor, "combine-heading-menu")
+            inspector_click(120, 170)  # Merge visible.
+            merged_visible = save_layers(
+                lambda values: len(values) == 2, "heading menu merge visible")
+            hidden = [value for value in merged_visible if not value["visible"]]
+            assert len(hidden) == 1 and hidden[0]["id"] == first["id"]
+            assert any(value["visible"] and value["id"] not in fixture_ids
+                       for value in merged_visible)
+            shot(editor, "combine-merge-visible-hidden-retained")
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 3,
+                               "undo merge visible") == merged_down_snapshot
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 2,
+                               "redo merge visible") == merged_visible
+
+            # Set a real canvas background, then flatten from the same Combine
+            # menu. Flatten bakes it, removes hidden slots and locks one image.
+            click(editor, 396, 62)
+            field(633, "#214365", x=95)
+            inspector_click(75, 670)
+            save_until(lambda: json.loads(draft.read_text())["document"]["background"] == "#214365",
+                       "combine fixture background")
+            click(editor, 463, 62)
+            inspector_click(115, 104)
+            inspector_click(120, 214)  # Flatten image.
+            flattened = save_layers(lambda values: len(values) == 1, "flatten image")
+            flattened_document = json.loads(draft.read_text())["document"]
+            assert flattened_document["background"] is None
+            assert flattened[0]["locked"] and flattened[0]["name"] == "Flattened"
+            assert flattened[0]["id"] not in fixture_ids
+            shot(editor, "combine-flattened")
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 2, "undo flatten") == merged_visible
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            flattened = save_layers(lambda values: len(values) == 1, "redo flatten")
+
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "combined draft closes")
+            editor = reopen()
+            reopened = layers()
+            assert len(reopened) == 1 and reopened[0] == flattened[0]
+            assert json.loads(draft.read_text())["document"]["background"] is None
+            click(editor, 463, 62)
+            shot(editor, "combine-flattened-reopened")
+
+            resize_editor(760, 540, "sleep", ".3")
+            inspector_click(115, 148)
+            shot(editor, "combine-minimum-disabled-menu")
+            run("xdotool", "key", "Escape", "sleep", ".2")
+            resize_editor(1000, 801, "sleep", ".3")
+            click(editor, 535, 62)
+            inspector_click(65, 463)
+            export_click("copy")
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "flattened clipboard copy completes")
+            copied = output / "clipboard-combined.png"
+            copied.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
+            assert run("identify", "-format", "%wx%h", str(copied)) == b"640x360"
+            assert run("convert", str(copied), "-crop", "1x1+350+230", "-depth", "8",
+                       "rgb:-") == bytes((255, 59, 92))
+            assert run("convert", str(copied), "-crop", "1x1+20+20", "-depth", "8",
+                       "rgb:-") == bytes((40, 110, 166))
+            shot(editor, "combine-output-copied")
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "combine suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["asymmetric-real-input-fixture", "clicked-row-merge-down",
+                           "merge-down-undo-redo", "heading-combine-menu",
+                           "merge-visible-hidden-retained", "merge-visible-undo-redo",
+                           "flatten-removes-hidden-and-background", "flatten-undo-redo",
+                           "saved-draft-reopen", "clipboard-output-pixels",
+                           "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native combine: menus, clicked row, undo/redo, hidden layers, flatten, reopen and pixels")
             return
 
         if args.history_shortcuts_only:
