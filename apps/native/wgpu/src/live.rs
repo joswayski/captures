@@ -101,6 +101,8 @@ impl HistoryFilter {
 }
 
 enum Job {
+    #[cfg(test)]
+    Barrier(Sender<()>),
     LoadHistory {
         root: PathBuf,
         open_recording: Option<(String, PathBuf, u64)>,
@@ -816,6 +818,11 @@ impl Live {
             while let Ok(job) = jobs.recv() {
                 let reply = match job {
                     Job::Shutdown => break,
+                    #[cfg(test)]
+                    Job::Barrier(done) => {
+                        let _ = done.send(());
+                        continue;
+                    }
                     Job::LoadHistory {
                         root,
                         open_recording,
@@ -952,7 +959,9 @@ impl Live {
                 if out.send(reply).is_err() {
                     break;
                 }
-                capture_ctx.request_repaint();
+                // Only the root drains replies and advances queued media imports.
+                // A child editor may be the active viewport when this finishes.
+                capture_ctx.request_repaint_of(egui::ViewportId::ROOT);
             }
         });
         let mut live = Self {
@@ -5210,6 +5219,55 @@ fn reveal(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_worker_wakes_root_while_an_editor_viewport_is_active() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        // Finish startup replies AND their wake calls, then consume the initial
+        // root paints. Startup must not satisfy the later wake assertion.
+        let (done, completed) = mpsc::channel();
+        live.tx.send(Job::Barrier(done)).unwrap();
+        completed.recv_timeout(Duration::from_secs(5)).unwrap();
+        while live.rx.try_recv().is_ok() {}
+        for _ in 0..3 {
+            ctx.begin_pass(Default::default());
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+        }
+
+        let child = egui::ViewportId::from_hash_of("recording-editor");
+        let mut input = egui::RawInput {
+            viewport_id: child,
+            ..Default::default()
+        };
+        input.viewports.insert(
+            child,
+            egui::ViewportInfo {
+                parent: Some(egui::ViewportId::ROOT),
+                ..Default::default()
+            },
+        );
+        ctx.begin_pass(input);
+        let (wakes, wake_receiver) = mpsc::channel();
+        ctx.set_request_repaint_callback(move |info| {
+            let _ = wakes.send(info.viewport_id);
+        });
+
+        live.load_history();
+        let (done, completed) = mpsc::channel();
+        live.tx.send(Job::Barrier(done)).unwrap();
+        completed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            live.rx.try_recv().unwrap(),
+            Reply::HistoryLoaded { result: Ok(_), .. }
+        ));
+        assert_eq!(wake_receiver.try_recv().unwrap(), egui::ViewportId::ROOT);
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        live.flush();
+    }
 
     #[test]
     fn external_media_serialize_after_startup_keep_errors_and_snapshot_active_editors() {
