@@ -205,7 +205,11 @@ simulated session cancellation. Both native hosts connect screenshot mini previe
 with Copy, Save/Reveal, Edit and nondestructive Dismiss, respecting the four
 corner placements and capture-inclusion preference. Multiple captures remain in
 a stack with expand/collapse, scrolling and Clear all; dismissing previews leaves
-history and exports intact. After export, Reveal shows the saved file's folder
+history and exports intact. Expanded cards now use the Tauri layout: full-bleed
+images and idle dimensions, hover-only corner icons and centered Copy/Save actions,
+with controls mirrored for right-side placement. Hover dims the image; blur,
+editor-presence pills, clipboard badges and animated transitions remain open.
+After export, Show in Folder shows the saved file's folder
 instead of saving another copy; a missing export leaves the capture available.
 Edit opens that screenshot directly without reopening a hidden workspace or
 changing the selected History item; opening it again preserves its pending edits.
@@ -229,7 +233,7 @@ the isolated Wayland protocol are tested on disposable desktops. Physical macOS,
 Windows OLE, mixed-DPI and full Wayland capture-host acceptance remain open.
 Cross-display movement, automatic top/bottom anchor changes,
 3D fan styling, stagger and the remaining preview effects are still unconnected.
-Rear cards use fixed-glass depth shading; front and expanded images stay unshaded.
+Rear cards use fixed-glass depth shading; front and idle expanded images stay unshaded.
 Live native hosts expose menu-bar/tray New Capture,
 screenshot, History, Preferences, output-folder and Quit actions, plus configured
 New Capture and region/window/display screenshot and recording global shortcuts. New Capture opens shared
