@@ -267,6 +267,12 @@ def main():
     def inspector_move(x, y, *tail):
         run("xdotool", "mousemove", "--window", editor, str(inspector_x(x)), str(y), *tail)
 
+    def bottom(y):
+        # Rows authored against an inspector scrolled until it clamps at its end.
+        # Its content used to end with a 125px development footer; without it,
+        # a bottom-clamped scroll leaves every row 125px lower in the window.
+        return y + 125
+
     def canvas_point(point):
         # Existing authored gestures describe points in the fixture screenshot.
         # Convert to document space first, then use the independently specified Fit.
@@ -2387,17 +2393,17 @@ def main():
         inspector_move(180, 400, "click", "--repeat", "20", "5")
         shot(editor, "annotation-fields")
         unchanged = draft.read_bytes()
-        inspector_click(50, 503)  # Unchanged Apply is disabled.
-        field(415, "#23b5a9")
+        inspector_click(50, bottom(503))  # Unchanged Apply is disabled.
+        field(bottom(415), "#23b5a9")
         assert draft.read_bytes() == unchanged
         shot(editor, "annotation-unapplied")
         fixture_pixel("annotation-unapplied", 170, 310, (255, 59, 92))
-        inspector_click(150, 503)  # Reset does not mutate the document.
+        inspector_click(150, bottom(503))  # Reset does not mutate the document.
         assert draft.read_bytes() == unchanged
-        inspector_click(50, 503)  # A broken Reset would apply the staged cyan here.
+        inspector_click(50, bottom(503))  # A broken Reset would apply the staged cyan here.
         save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "reset cleared staged fill")
-        field(415, "#23b5a9")
-        inspector_click(50, 503)
+        field(bottom(415), "#23b5a9")
+        inspector_click(50, bottom(503))
         save_layers(lambda values: values[-1]["style"]["fill"] == "#23b5a9", "annotation fill")
         shot(editor, "annotation-fill")
         fixture_pixel("annotation-fill", 170, 310, (35, 181, 169))
@@ -2405,47 +2411,47 @@ def main():
         save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "one-step style undo")
         click(editor, 98, 62)
         save_layers(lambda values: values[-1]["style"]["fill"] == "#23b5a9", "style redo")
-        inspector_click(15, 300)  # Enable stroke, then keep the final controls in view.
+        inspector_click(15, bottom(300))  # Enable stroke, then keep the final controls in view.
         inspector_move(180, 400, "click", "--repeat", "20", "5")
-        field(256, "#3269d6")
-        field(300, 12, 130)
-        inspector_click(15, 344)  # Clear fill.
+        field(bottom(256), "#3269d6")
+        field(bottom(300), 12, 130)
+        inspector_click(15, bottom(344))  # Clear fill.
         inspector_move(180, 400, "click", "--repeat", "20", "5")
-        inspector_click(50, 503)
+        inspector_click(50, bottom(503))
         save_layers(lambda values: values[-1]["style"]["fill"] is None and values[-1]["style"]["strokeWidth"] == 12, "annotation outline")
         shot(editor, "annotation-outline")
         fixture_pixel("annotation-outline", 170, 310, (40, 110, 166))
         fixture_pixel("annotation-outline", 93, 310, (50, 105, 214))
-        inspector_click(15, 415)  # Restore fill; enter a different color from the stroke.
+        inspector_click(15, bottom(415))  # Restore fill; enter a different color from the stroke.
         inspector_move(180, 400, "click", "--repeat", "20", "5")
-        field(415, "#23b5a9")
-        inspector_click(15, 459)  # Enable custom shadow controls.
+        field(bottom(415), "#23b5a9")
+        inspector_click(15, bottom(459))  # Enable custom shadow controls.
         inspector_move(180, 400, "click", "--repeat", "25", "5")
         shot(editor, "annotation-shadow-fields")
-        field(283, "#ff8800")
-        field(327, 80, 125)
-        field(371, 0)
-        field(415, 25, 90)
-        field(459, -12, 90)
-        inspector_click(50, 503)
+        field(bottom(283), "#ff8800")
+        field(bottom(327), 80, 125)
+        field(bottom(371), 0)
+        field(bottom(415), 25, 90)
+        field(bottom(459), -12, 90)
+        inspector_click(50, bottom(503))
         styled = save_layers(lambda values: values[-1]["style"].get("dropShadowStyle", {}).get("offsetX") == 25, "custom annotation shadow")[-1]
         assert styled["id"] == annotation["id"] and styled["locked"]
         assert styled["style"]["dropShadowStyle"] == {"color": "#ff8800", "opacity": 80, "blur": 0, "offsetX": 25, "offsetY": -12}
         shot(editor, "annotation-shadow")
         fixture_pixel("annotation-shadow", 279, 310, (212, 131, 33), tolerance=1)
-        inspector_click(28, 283)
+        inspector_click(28, bottom(283))
         shot(editor, "annotation-color-picker")
         run("xdotool", "key", "Escape", "sleep", ".2")
-        inspector_click(15, 212)  # Disable shadow without losing custom knobs.
+        inspector_click(15, bottom(212))  # Disable shadow without losing custom knobs.
         inspector_move(180, 400, "click", "--repeat", "20", "5")
-        inspector_click(50, 503)
+        inspector_click(50, bottom(503))
         disabled = save_layers(lambda values: values[-1]["style"]["dropShadow"] is False, "shadow off")[-1]
         assert disabled["style"]["dropShadowStyle"] == styled["style"]["dropShadowStyle"]
         shot(editor, "annotation-shadow-off")
         fixture_pixel("annotation-shadow-off", 279, 310, (40, 110, 166))
-        inspector_click(15, 459)
+        inspector_click(15, bottom(459))
         inspector_move(180, 400, "click", "--repeat", "25", "5")
-        inspector_click(50, 503)
+        inspector_click(50, bottom(503))
         save_layers(lambda values: values[-1]["style"] == styled["style"], "shadow settings restored")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         inspector_move(180, 400, "click", "--repeat", "25", "5")

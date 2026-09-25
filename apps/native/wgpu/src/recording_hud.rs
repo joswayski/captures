@@ -68,13 +68,10 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                 ui.set_width(394.);
                 ui.spacing_mut().item_spacing = Vec2::new(4., 6.);
                 ui.with_layout(Layout::top_down(Align::Center), |ui| {
-                    ui.label(RichText::new(view.notice).small().color(tokens.color(
-                        if view.warning {
-                            "theme-signal"
-                        } else {
-                            "glass-text-muted"
-                        },
-                    )));
+                    ui.add(
+                        egui::Label::new(notice_job(tokens, view.notice, view.warning))
+                            .wrap_mode(egui::TextWrapMode::Truncate),
+                    );
                     ui.horizontal(|ui| {
                         ui.allocate_ui_with_layout(
                             Vec2::new(103., 32.),
@@ -88,15 +85,16 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                                     tokens.color("theme-signal"),
                                 );
                                 ui.vertical_centered_justified(|ui| {
-                                    ui.monospace(format_duration(view.elapsed_ms));
+                                    ui.monospace(
+                                        captures_app::recording_timeline::format_recording_time(
+                                            view.elapsed_ms,
+                                        ),
+                                    );
+                                    // Shipping CSS uppercases the status label.
                                     ui.label(
-                                        RichText::new(if view.paused {
-                                            "PAUSED"
-                                        } else {
-                                            "RECORDING"
-                                        })
-                                        .small()
-                                        .color(tokens.color("glass-text-muted")),
+                                        RichText::new(status_label(view.paused).to_uppercase())
+                                            .small()
+                                            .color(tokens.color("glass-text-muted")),
                                     );
                                 });
                             },
@@ -151,7 +149,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                         if control(
                             ui,
                             Icon::Screenshot,
-                            "Take region screenshot",
+                            "Take a region screenshot",
                             false,
                             !view.busy,
                             false,
@@ -192,7 +190,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                         if control(
                             ui,
                             Icon::Discard,
-                            "Discard recording",
+                            "Delete recording",
                             false,
                             !view.busy,
                             false,
@@ -442,9 +440,37 @@ fn paint_icon(ui: &egui::Ui, rect: Rect, icon: Icon, color: egui::Color32) {
     }
 }
 
-fn format_duration(elapsed_ms: u64) -> String {
-    let elapsed_seconds = elapsed_ms / 1_000;
-    format!("{}:{:02}", elapsed_seconds / 60, elapsed_seconds % 60)
+/// Shipping `.recording-hud-privacy`: one subtle 2xs line with **will**/**won’t** emphasized.
+fn notice_job(tokens: &Tokens, notice: &str, warning: bool) -> egui::text::LayoutJob {
+    let font = egui::FontId::proportional(tokens.number("text-2xs"));
+    let format = |token| egui::TextFormat::simple(font.clone(), tokens.color(token));
+    let mut job = egui::text::LayoutJob {
+        halign: Align::Center,
+        ..Default::default()
+    };
+    if warning {
+        job.append(notice, 0., format("theme-signal"));
+        return job;
+    }
+    let emphasis = ["won’t", "will"].iter().find_map(|word| {
+        notice
+            .find(&format!(" {word} "))
+            .map(|at| (at + 1, word.len()))
+    });
+    match emphasis {
+        Some((start, len)) => {
+            job.append(&notice[..start], 0., format("glass-text-subtle"));
+            job.append(&notice[start..start + len], 0., format("glass-text"));
+            job.append(&notice[start + len..], 0., format("glass-text-subtle"));
+        }
+        None => job.append(notice, 0., format("glass-text-subtle")),
+    }
+    job
+}
+
+/// Shipping `recordingStatusLabel` copy for the states this HUD renders.
+fn status_label(paused: bool) -> &'static str {
+    if paused { "Paused" } else { "Recording" }
 }
 
 #[cfg(test)]
@@ -452,9 +478,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn duration_uses_unpadded_minutes_and_padded_seconds() {
-        assert_eq!(format_duration(0), "0:00");
-        assert_eq!(format_duration(94_000), "1:34");
+    fn notice_emphasizes_will_and_wont_like_shipping() {
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let job = notice_job(
+            &tokens,
+            "These controls will show in recordings · Use Hide controls to keep them out",
+            false,
+        );
+        let colors = |job: &egui::text::LayoutJob| -> Vec<egui::Color32> {
+            job.sections
+                .iter()
+                .map(|section| section.format.color)
+                .collect()
+        };
+        let (subtle, text) = (
+            tokens.color("glass-text-subtle"),
+            tokens.color("glass-text"),
+        );
+        assert_eq!(colors(&job), [subtle, text, subtle]);
+        let job = notice_job(&tokens, "These controls won’t show in recordings", false);
+        assert_eq!(colors(&job), [subtle, text, subtle]);
+        assert_eq!(job.text, "These controls won’t show in recordings");
+        let job = notice_job(&tokens, "Microphone disconnected", true);
+        assert_eq!(job.sections.len(), 1);
+    }
+
+    #[test]
+    fn status_label_uses_shipping_copy() {
+        assert_eq!(status_label(false), "Recording");
+        assert_eq!(status_label(true), "Paused");
     }
 
     #[test]

@@ -93,7 +93,7 @@ final class RecordingHUDTests: XCTestCase {
             XCTAssertTrue(restarted)
             var screenshot = false
             hud.screenshot = { screenshot = true }
-            try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Take region screenshot" })
+            try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Take a region screenshot" })
                 .performClick(nil)
             XCTAssertTrue(screenshot)
             hud.setPaused(false, elapsedMilliseconds: 94_000)
@@ -167,13 +167,38 @@ final class RecordingHUDTests: XCTestCase {
             "Stop retains its signal surface without a hover")
     }
 
+    func testRecordingTimeAndStatusMatchShippingCopy() throws {
+        // Same cases as captures_app::recording_timeline::format_recording_time.
+        let cases: [(UInt64, String)] = [(0, "0:00"), (999, "0:00"), (94_000, "1:34"),
+            (3_599_999, "59:59"), (3_600_000, "1:00:00"), (3_725_000, "1:02:05"),
+            (36_059_000, "10:00:59")]
+        for (milliseconds, expected) in cases {
+            XCTAssertEqual(formatRecordingTime(milliseconds: milliseconds), expected)
+        }
+        XCTAssertEqual(recordingStatusLabel(paused: false), "Recording")
+        XCTAssertEqual(recordingStatusLabel(paused: true), "Paused")
+
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let hud = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102), tokens: tokens)
+        hud.setPaused(true, elapsedMilliseconds: 3_725_000)
+        let fields = hud.subviews.compactMap { $0 as? NSTextField }
+        XCTAssertTrue(fields.contains { $0.stringValue == "1:02:05" })
+        let status = try XCTUnwrap(fields.first { $0.stringValue == "PAUSED" })
+        XCTAssertEqual(status.accessibilityLabel(), "Paused")
+        let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
+        let delete = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Delete recording" })
+        XCTAssertEqual(delete.toolTip, "Delete recording")
+        XCTAssertFalse(buttons.contains { $0.accessibilityLabel() == "Discard recording" })
+    }
+
     func testPrivacyNoticeReflectsCaptureInclusionSetting() throws {
         _ = NSApplication.shared
         let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
         let included = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102),
             tokens: tokens, excludedFromCapture: false)
         XCTAssertTrue(included.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
-            .contains("These controls will appear in recordings"))
+            .contains("These controls will show in recordings · Use Hide controls to keep them out"))
     }
 
     func testHiddenNoticeIsFixedGlassNoninteractiveAndExplainsRestoration() throws {

@@ -106,6 +106,9 @@ final class WindowSelectionTests: XCTestCase {
             try render(view, window: window, name: "window-\(appearance)-target")
             view.hover(NSPoint(x: 900, y: 650))
             XCTAssertEqual(view.activeChoice, .display)
+            XCTAssertEqual(view.accessibilityValue() as? String, "Entire display")
+            XCTAssertTrue(view.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
+                .contains("Select a window to continue · Esc to cancel · Press Enter to confirm"))
             try render(view, window: window, name: "window-\(appearance)-display")
 
             let controls = view.subviews.flatMap(\.subviews).compactMap { $0 as? CaptureButton }
@@ -122,7 +125,7 @@ final class WindowSelectionTests: XCTestCase {
             hitTest: { _ in 0 }, confirm: { _ in }, cancel: {})
         window.contentView = view; view.hover(NSPoint(x: 100, y: 100))
         XCTAssertTrue(view.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
-            .contains("Point at a window · Click to capture · Esc to cancel"))
+            .contains("Select a window to continue · Esc to cancel"))
         try render(view, window: window, name: "window-dark-auto-start")
     }
 

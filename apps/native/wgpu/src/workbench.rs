@@ -1611,18 +1611,6 @@ impl eframe::App for Workbench {
                             }
                         }
                     }
-                    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                        ui.label(
-                            RichText::new("Capture engine not connected")
-                                .small()
-                                .color(t.color("text-muted")),
-                        );
-                        ui.label(
-                            RichText::new("Native development build")
-                                .small()
-                                .color(t.color("text-muted")),
-                        );
-                    });
                 });
         }
         let frame = egui::Frame::new()
@@ -1757,7 +1745,9 @@ impl eframe::App for Workbench {
                         }
                     }
                 }
-                Scene::Countdown => crate::countdown::show(ui, &t, 3),
+                Scene::Countdown => {
+                    crate::countdown::show(ui, &t, 3, crate::countdown::Kind::Screenshot, false)
+                }
                 Scene::Idle => {}
             }
         });

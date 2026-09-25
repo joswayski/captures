@@ -217,6 +217,22 @@ double captures_preview_dim_opacity_v1(size_t depth);
  * shipping card. Returns owned UTF-8; free with captures_settings_free_v1. */
 char *captures_preview_card_metadata_v1(uint32_t width, uint32_t height, uint64_t size_bytes);
 
+/* Expanded-stack overflow cue edges, with the shipping 1 px tolerance. Bit 1:
+ * cards hidden above the viewport; bit 2: cards hidden below. */
+#define CAPTURES_PREVIEW_OVERFLOW_ABOVE 1u
+#define CAPTURES_PREVIEW_OVERFLOW_BELOW 2u
+uint32_t captures_preview_overflow_v1(double scroll_top, double content_height,
+    double viewport_height);
+
+/* Scroll offset after an overflow cue moves `slots` whole card slots
+ * (card + gap; negative scrolls up), clamped to the scrollable range. */
+double captures_preview_scroll_target_v1(double scroll_top, double content_height,
+    double viewport_height, int32_t slots);
+
+/* Shipping overflow cue name: "Show older captures" or "Show newer captures".
+ * Top-anchored stacks show newest first. Returns static UTF-8; never free. */
+const char *captures_preview_overflow_label_v1(bool above, bool top_anchor);
+
 /* Owned immutable region session. Prepare/capture may block; use a worker after
  * hiding capture windows. Begin/retain a capture-flow guard on the event-loop
  * thread first. Freeze and cursor settings are fixed at prepare. No pixel data

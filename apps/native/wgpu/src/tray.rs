@@ -27,6 +27,21 @@ pub enum Action {
     Quit,
 }
 
+/// Shipping tray labels and order (`build_tray_menu`), plus the native-only
+/// Show Recording Controls item. Separators are deferred: the X11 smokes
+/// address rows by equal-height index.
+const MENU_ITEMS: [(&str, &str); 9] = [
+    ("new-capture", "New Capture…"),
+    ("show-recording-controls", "Show Recording Controls"),
+    ("capture-region", "Screenshot Region"),
+    ("capture-window", "Screenshot Window"),
+    ("capture-display", "Screenshot Display"),
+    ("history", "Capture History…"),
+    ("output", "Open Save Location"),
+    ("preferences", "Preferences"),
+    ("quit", "Quit Captures"),
+];
+
 pub struct Tray {
     _icon: TrayIcon,
     actions: Receiver<Action>,
@@ -34,33 +49,10 @@ pub struct Tray {
 
 impl Tray {
     pub fn new(ctx: egui::Context) -> Result<Self, String> {
-        let new_capture = MenuItem::with_id("new-capture", "New Capture", true, None);
-        let show_recording_controls = MenuItem::with_id(
-            "show-recording-controls",
-            "Show recording controls",
-            true,
-            None,
-        );
-        let capture_display = MenuItem::with_id("capture-display", "Capture display", true, None);
-        let capture_region = MenuItem::with_id("capture-region", "Capture region", true, None);
-        let capture_window = MenuItem::with_id("capture-window", "Capture window", true, None);
-        let history = MenuItem::with_id("history", "History", true, None);
-        let preferences = MenuItem::with_id("preferences", "Preferences", true, None);
-        let output = MenuItem::with_id("output", "Open output folder", true, None);
-        let quit = MenuItem::with_id("quit", "Quit Captures", true, None);
         let menu = Menu::new();
-        for item in [
-            &new_capture,
-            &show_recording_controls,
-            &capture_display,
-            &capture_region,
-            &capture_window,
-            &history,
-            &preferences,
-            &output,
-            &quit,
-        ] {
-            menu.append(item).map_err(|error| error.to_string())?;
+        for (id, label) in MENU_ITEMS {
+            menu.append(&MenuItem::with_id(id, label, true, None))
+                .map_err(|error| error.to_string())?;
         }
 
         let image =
@@ -292,6 +284,24 @@ pub fn open_directory(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn tray_labels_match_shipping_menu_order() {
+        assert_eq!(
+            MENU_ITEMS.map(|(_, label)| label),
+            [
+                "New Capture…",
+                "Show Recording Controls",
+                "Screenshot Region",
+                "Screenshot Window",
+                "Screenshot Display",
+                "Capture History…",
+                "Open Save Location",
+                "Preferences",
+                "Quit Captures",
+            ]
+        );
+    }
 
     #[test]
     fn tray_actions_wake_root_even_during_a_preview_pass() {

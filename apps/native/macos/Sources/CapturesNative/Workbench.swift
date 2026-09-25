@@ -340,7 +340,7 @@ final class LiveStatusActions: NSObject {
         menu.addItem(.separator())
         add("Capture History…", action: #selector(showHistory), to: menu)
         add("Open Save Location", action: #selector(openOutputFolder), to: menu)
-        add("Preferences…", action: #selector(showPreferences), to: menu)
+        add("Preferences", action: #selector(showPreferences), to: menu)
         menu.addItem(.separator())
         add("Quit Captures", action: #selector(quit), to: menu)
         return menu
