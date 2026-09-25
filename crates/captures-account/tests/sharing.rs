@@ -66,6 +66,8 @@ impl Server {
                     thread::sleep(Duration::from_millis(2));
                     continue;
                 };
+                // Windows inherits the listener's nonblocking mode.
+                socket.set_nonblocking(false).unwrap();
                 socket
                     .set_read_timeout(Some(Duration::from_secs(3)))
                     .unwrap();
