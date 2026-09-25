@@ -6045,6 +6045,17 @@ mod tests {
         live.selection.begin(other_id.clone());
         ctx.begin_pass(Default::default());
         live.logic(&ctx, &mut frame);
+        // flush joins the History worker, not the independent recovery scan.
+        // Editing is intentionally blocked until that startup scan completes.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live.recovery.blocking() {
+            live.recovery.receive();
+            assert!(
+                Instant::now() < deadline,
+                "initial recovery list did not settle"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
         for busy in [true, false] {
             live.previews.cards.get_mut(&id).unwrap().busy =
                 busy.then_some(crate::mini_preview::Busy::Save);
