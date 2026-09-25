@@ -12,6 +12,7 @@ import select
 import subprocess
 import threading
 import time
+from urllib.parse import unquote
 import xml.etree.ElementTree as ET
 
 import dbus
@@ -47,6 +48,12 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     env = {**os.environ, "WGPU_BACKEND": "gl", "WINIT_X11_SCALE_FACTOR": "1", "XDG_SESSION_TYPE": "x11"}
     env.pop("WAYLAND_DISPLAY", None)
+    # Every process in this private desktop must use the disposable trash on
+    # the same filesystem as exports. Never allow a smoke run to reach the
+    # invoking user's real XDG trash.
+    data_home = output / "data"
+    data_home.mkdir()
+    env["XDG_DATA_HOME"] = str(data_home)
     # Observe OS command delivery without launching the orb's file manager.
     # Physical file-manager selection/focus remains a separate acceptance gate.
     reveal_log = output / "revealed-folders.jsonl"
@@ -425,8 +432,10 @@ def main():
                 # Region is root-local x=575. Keep its desktop x=875 between
                 # the always-on-top preview windows at x=0..340 and 940..1280,
                 # including their transparent margins and expanded stacks.
+                run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
+                wait(lambda: windows("Captures"), "workspace restored before positioning")
                 run("xdotool", "windowmove", "--sync", root, "300", "280")
-                click(root, 575, 141)
+                click(root, 575, 126)
                 selector = wait(lambda: windows(SELECTOR), "region selector")[0]
                 wait(lambda: int(run("import", "-window", selector, "-crop", "1280x96+0+804",
                     "-format", "%k", "info:")) > 16, "painted region controls")
@@ -519,13 +528,99 @@ def main():
                     time.sleep(.3)
                     assert entries() == preserved and exported.read_bytes() == export_bytes, "Dismiss deleted history or export"
                     assert not windows(PREVIEW), "dismissed card reappeared"
-                    other_app.terminate()
-                    other_app.wait(timeout=5)
-                    stack_entries = [capture((140, 180, 310, 170))]
+
+                    def private_files(entry):
+                        return {path.relative_to(entry.parent): path.read_bytes()
+                                for path in entry.parent.rglob("*") if path.is_file()}
+
+                    def settled_preview(window):
+                        samples = []
+
+                        def settled():
+                            samples.append(run("import", "-window", window, "-depth", "8", "rgb:-"))
+                            return samples[-1] if len(samples) >= 3 and len(set(samples[-3:])) == 1 else None
+
+                        return wait(settled, "preview reaches a stable painted state")
+
+                    # Trash on an unsaved card is preview-only: retain exact
+                    # private capture/preview bytes and metadata.
+                    unsaved = capture((140, 180, 310, 170))
+                    stack_entries = [unsaved]
                     preview = wait(lambda: windows(PREVIEW), "new capture after dismissal")[0]
                     wait(lambda: int(run("import", "-window", preview, "-format", "%k", "info:")) > 16,
                          "replacement paints after dismissal")
-                    print("PASS preview actions: full-pixel Copy/Save without activation, History restores, Dismiss preserves files", flush=True)
+                    run("xdotool", "windowminimize", root,
+                        "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                    unsaved_private = private_files(unsaved)
+                    unsaved_entries = entries()
+                    shot(preview, f"{prefix}-trash-unsaved")
+                    click(preview, 246, 169, activate=False)  # Padded card Trash center.
+                    wait(lambda: not windows(PREVIEW), "unsaved Trash dismisses preview")
+                    assert entries() == unsaved_entries, "unsaved Trash removed history"
+                    assert private_files(unsaved) == unsaved_private, "unsaved Trash changed private files or metadata"
+                    assert run("xdotool", "getwindowfocus").decode().strip() == other, "unsaved Trash activated Captures"
+                    assert not windows("Captures"), "unsaved Trash restored workspace"
+
+                    # A missing saved export must be retryable and must not
+                    # create a replacement or mutate private history.
+                    trashed = capture((140, 180, 310, 170))
+                    stack_entries = [trashed]
+                    preview = wait(lambda: windows(PREVIEW), "saved Trash preview")[0]
+                    run("xdotool", "windowminimize", root,
+                        "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "122", "169")
+                    before_save = settled_preview(preview)
+                    click(preview, 122, 169, activate=False)
+                    trash_export = Path(wait(lambda: json.loads(trashed.read_text()).get("saved_path"),
+                                             "Trash fixture saved export metadata"))
+                    wait(lambda: settled_preview(preview) != before_save, "saved preview state paints")
+                    trash_export_bytes = trash_export.read_bytes()
+                    other_exports = {path: path.read_bytes() for path in trash_export.parent.iterdir()
+                                     if path != trash_export}
+                    trash_private = private_files(trashed)
+                    trash_entries = entries()
+                    shot(preview, f"{prefix}-trash-saved")
+                    held = trash_export.with_suffix(".held")
+                    trash_export.rename(held)
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "246", "169")
+                    before_error = settled_preview(preview)
+                    click(preview, 246, 169, activate=False)
+                    wait(lambda: windows(PREVIEW) and settled_preview(preview) != before_error,
+                         "missing export Trash error paints")
+                    shot(preview, f"{prefix}-trash-error")
+                    assert {path: path.read_bytes() for path in trash_export.parent.iterdir()} == (
+                        other_exports | {held: trash_export_bytes}), "failed Trash replaced or changed an export"
+                    assert held.read_bytes() == trash_export_bytes, "failed Trash changed held export"
+                    assert entries() == trash_entries and private_files(trashed) == trash_private, (
+                        "failed Trash changed private files or metadata")
+                    assert run("xdotool", "getwindowfocus").decode().strip() == other, "failed Trash activated Captures"
+                    assert not windows("Captures"), "failed Trash restored workspace"
+
+                    held.rename(trash_export)
+                    click(preview, 246, 169, activate=False)
+                    wait(lambda: not trash_export.exists() and not windows(PREVIEW),
+                         "restored export moves to trash and closes preview")
+                    assert {path: path.read_bytes() for path in trash_export.parent.iterdir()} == other_exports, (
+                        "successful Trash replaced its export or changed another export")
+                    assert entries() == trash_entries and private_files(trashed) == trash_private, (
+                        "successful Trash changed private files or metadata")
+                    trash_files = list((data_home / "Trash/files").iterdir())
+                    trash_info = list((data_home / "Trash/info").glob("*.trashinfo"))
+                    assert len(trash_files) == len(trash_info) == 1, "private OS trash has unexpected contents"
+                    assert trash_files[0].read_bytes() == trash_export_bytes, "OS trash changed export bytes"
+                    info_lines = trash_info[0].read_text().splitlines()
+                    encoded_path = next(line.removeprefix("Path=") for line in info_lines if line.startswith("Path="))
+                    assert unquote(encoded_path) == str(trash_export), "trashinfo Path does not name original export"
+                    assert run("xdotool", "getwindowfocus").decode().strip() == other, "Trash activated Captures"
+                    assert not windows("Captures"), "Trash restored workspace"
+
+                    other_app.terminate()
+                    other_app.wait(timeout=5)
+                    stack_entries = [capture((140, 180, 310, 170))]
+                    preview = wait(lambda: windows(PREVIEW), "fresh preview after Trash checks")[0]
+                    wait(lambda: int(run("import", "-window", preview, "-format", "%k", "info:")) > 16,
+                         "fresh preview paints after Trash checks")
+                    print("PASS preview actions: Copy/Save/Reveal, Dismiss, and disposable OS Trash", flush=True)
                 if placement == "bottom_left":
                     # Frozen capture must exactly include the prior composited
                     # card, or exactly omit it, depending on the stored setting.

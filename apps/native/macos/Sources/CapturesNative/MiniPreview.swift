@@ -24,7 +24,8 @@ final class MiniPreviewCardView: NSView {
 
     init(frame: NSRect, artifactID: String, image: NSImage, tokens: Tokens,
          saved: Bool, copy: @escaping () -> Void, save: @escaping () -> Void,
-         open: @escaping () -> Void, dismiss: @escaping () -> Void) {
+         open: @escaping () -> Void, trash: @escaping () -> Void,
+         dismiss: @escaping () -> Void) {
         self.artifactID = artifactID; self.tokens = tokens
         super.init(frame: frame)
         wantsLayer = true
@@ -55,9 +56,9 @@ final class MiniPreviewCardView: NSView {
         status.isHidden = true; addSubview(status)
 
         let actions: [(String, () -> Void)] = [("Copy", copy), (saved ? "Reveal" : "Save", save),
-            ("Open", open), ("Dismiss", dismiss)]
+            ("Open", open), ("Trash", trash), ("×", dismiss)]
         let buttonHeight = tokens.number("h-md"), gap = tokens.number("s-2")
-        let actionWidth = (bounds.width - inset * 2 - gap * 3) / 4
+        let actionWidth = (bounds.width - inset * 2 - gap * 4) / 5
         for (index, action) in actions.enumerated() {
             let button = CaptureButton(action.0,
                 frame: NSRect(x: inset + CGFloat(index) * (actionWidth + gap),
@@ -66,15 +67,24 @@ final class MiniPreviewCardView: NSView {
             addSubview(button)
             actionButtons.append(button)
             if index == 1 { saveButton = button; updateSaveButton(saved: saved) }
+            if index == 3 {
+                button.signal = true
+                button.toolTip = "Move saved export to Trash and dismiss preview; keep private History"
+            }
+            if index == 4 {
+                button.setAccessibilityLabel("Dismiss preview")
+                button.toolTip = "Dismiss preview"
+            }
         }
         setAccessibilityRole(.group); setAccessibilityLabel("Screenshot mini preview")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func setStatus(_ value: String) {
+    func setStatus(_ value: String, detail: String? = nil) {
         status.stringValue = value
         status.isHidden = compact || value.isEmpty
         status.setAccessibilityLabel(value.isEmpty ? nil : value)
+        status.toolTip = detail
     }
 
     func updateSaveButton(saved: Bool) {
@@ -201,7 +211,8 @@ final class MiniPreviewView: NSView {
          hoverLayouts: [String: CapturesPreviewCardLayout] = [:], collapsed: Bool,
          topAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
-         dismiss: @escaping (String) -> Void, setCollapsed: @escaping (Bool) -> Void,
+         trash: @escaping (String) -> Void, dismiss: @escaping (String) -> Void,
+         setCollapsed: @escaping (Bool) -> Void,
          clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
         self.geometry = geometry; self.tokens = tokens; self.restLayouts = layouts
         self.hoverLayouts = hoverLayouts
@@ -229,7 +240,7 @@ final class MiniPreviewView: NSView {
                 image: resource.image, tokens: tokens,
                 saved: resource.artifact.savedPath != nil,
                 copy: { copy(id) }, save: { save(id) }, open: { open(id) },
-                dismiss: { dismiss(id) })
+                trash: { trash(id) }, dismiss: { dismiss(id) })
             card.isHidden = false
             card.setCompact(collapsed, depth: layout.depth)
             card.setAccessibilityElement(layout.interactive)
@@ -269,8 +280,8 @@ final class MiniPreviewView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func setStatus(_ value: String, for artifactID: String) {
-        cards[artifactID]?.setStatus(value)
+    func setStatus(_ value: String, detail: String? = nil, for artifactID: String) {
+        cards[artifactID]?.setStatus(value, detail: detail)
     }
 
     func updateSavedState(_ saved: Bool, for artifactID: String) {
@@ -309,13 +320,14 @@ final class MiniPreviewPanel: NSPanel {
          hoverLayouts: [String: CapturesPreviewCardLayout] = [:], collapsed: Bool,
          topAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
-         dismiss: @escaping (String) -> Void, setCollapsed: @escaping (Bool) -> Void,
+         trash: @escaping (String) -> Void, dismiss: @escaping (String) -> Void,
+         setCollapsed: @escaping (Bool) -> Void,
          clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
         previewView = MiniPreviewView(geometry: geometry, contentHeight: contentHeight,
             resources: resources, ids: ids,
             layouts: layouts, hoverLayouts: hoverLayouts, collapsed: collapsed,
             topAnchor: topAnchor, tokens: tokens,
-            copy: copy, save: save, open: open, dismiss: dismiss,
+            copy: copy, save: save, open: open, trash: trash, dismiss: dismiss,
             setCollapsed: setCollapsed, clearAll: clearAll, move: move)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
@@ -349,6 +361,7 @@ final class MiniPreviewController {
     var copyArtifact: ArtifactAction = { _ in }
     var saveArtifact: ArtifactAction = { _ in }
     var openArtifact: ArtifactAction = { _ in }
+    var trashArtifact: ArtifactAction = { _ in }
     var presentedArtifactID: String? { stack.ids.last }
     var presentedArtifactIDs: [String] { stack.ids }
     var decodedArtifactIDs: [String] { stack.ids.filter { resources[$0] != nil } }
@@ -456,9 +469,9 @@ final class MiniPreviewController {
         if changed || !removed.isEmpty { makePanel(); updateVisibility() }
     }
 
-    func setStatus(_ value: String, for artifactID: String) {
+    func setStatus(_ value: String, detail: String? = nil, for artifactID: String) {
         guard resources[artifactID] != nil else { return }
-        panel?.previewView.setStatus(value, for: artifactID)
+        panel?.previewView.setStatus(value, detail: detail, for: artifactID)
     }
 
     @discardableResult
@@ -492,6 +505,10 @@ final class MiniPreviewController {
         guard let current = resources[artifact.id]?.artifact else { return false }
         return stack.ids.contains(artifact.id) && current.imagePath == artifact.imagePath
             && current.previewPath == artifact.previewPath
+    }
+
+    func contains(_ artifact: CaptureArtifact, savedPath: String?) -> Bool {
+        contains(artifact) && resources[artifact.id]?.artifact.savedPath == savedPath
     }
 
     func dismiss(_ artifactID: String) {
@@ -561,6 +578,7 @@ final class MiniPreviewController {
             copy: { [weak self] in self?.perform(\.copyArtifact, artifactID: $0) },
             save: { [weak self] in self?.perform(\.saveArtifact, artifactID: $0) },
             open: { [weak self] in self?.perform(\.openArtifact, artifactID: $0) },
+            trash: { [weak self] in self?.perform(\.trashArtifact, artifactID: $0) },
             dismiss: { [weak self] in self?.dismiss($0) },
             setCollapsed: { [weak self] in self?.setCollapsed($0) },
             clearAll: { [weak self] in self?.clearAll() },
@@ -657,7 +675,7 @@ final class MiniPreviewController {
     }
 }
 
-/// Copy/save jobs outlive the workspace scene so the nonactivating preview
+/// Copy/save/trash jobs outlive the workspace scene so the nonactivating preview
 /// remains useful while Preferences owns the root window.
 final class MiniPreviewActions {
     private let transport: AppTransport
@@ -759,6 +777,43 @@ final class MiniPreviewActions {
                             || self.previews?.updateSavedPath(path, for: artifact) == true else { return }
                     self.previews?.setStatus("Saved", for: artifact.id)
                 case .failure: self.previews?.setStatus("Save failed", for: artifact.id)
+                }
+            }
+        }
+    }
+
+    func trash(_ artifact: CaptureArtifact) {
+        let savedPath = artifact.savedPath
+        guard (!boundToPreviews || previews?.contains(artifact, savedPath: savedPath) == true),
+              !inFlight.contains(artifact.id) else { return }
+        inFlight.insert(artifact.id)
+        guard let historyRoot else {
+            inFlight.remove(artifact.id)
+            previews?.setStatus("Trash unavailable", for: artifact.id)
+            return
+        }
+        previews?.setStatus("Moving to Trash…", for: artifact.id)
+        LiveCaptureController.queue.async { [weak self] in
+            guard let self else { return }
+            let result = Result { () throws -> Void in
+                let response = try self.transport.request(["operation": "trash_preview",
+                    "root": historyRoot, "id": artifact.id,
+                    "saved_path": savedPath.map { $0 as Any } ?? NSNull()])
+                guard response["kind"] as? String == "preview_trashed",
+                      response["id"] as? String == artifact.id else {
+                    throw AppBridgeError.invalidResponse
+                }
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.inFlight.remove(artifact.id)
+                guard !self.boundToPreviews
+                        || self.previews?.contains(artifact, savedPath: savedPath) == true else { return }
+                switch result {
+                case .success: self.previews?.dismiss(artifact.id)
+                case .failure(let error):
+                    self.previews?.setStatus("Trash failed", detail: error.localizedDescription,
+                                             for: artifact.id)
                 }
             }
         }

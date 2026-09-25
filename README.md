@@ -207,6 +207,10 @@ corner placements and capture-inclusion preference. Multiple captures remain in
 a stack with expand/collapse, scrolling and Clear all; dismissing previews leaves
 history and exports intact. After export, Reveal shows the saved file's folder
 instead of saving another copy; a missing export leaves the capture available.
+Trash moves only the saved export to the OS trash, then dismisses its preview;
+an unsaved preview is only dismissed. Private History stays intact. Failed Trash
+keeps the preview available for retry. macOS may request Finder automation permission;
+physical Finder/Recycle Bin acceptance remains open.
 Drag a collapsed pile within its capture display;
 its session position survives expansion and new captures without activating the
 workspace. Hovering the collapsed front card fans the rear cards outward; pressing

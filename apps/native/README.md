@@ -290,7 +290,13 @@ behavior and exported pixels on each OS before accepting the slice.
 ## Screenshot mini-preview stack
 
 Both live workbenches retain recent screenshots in fixed-glass native cards.
-Copy uses full-resolution pixels, Save uses current screenshot preferences,
+Copy uses full-resolution pixels, Save uses current screenshot preferences and
+becomes Reveal after export. Trash moves only that export to the OS trash,
+then dismisses the card; an unsaved card only dismisses. Errors keep the card
+available for retry. Private History files and metadata remain untouched.
+macOS uses Finder (which may request automation permission), Windows uses the
+Recycle Bin, and Linux uses its desktop trash specification. Actual Finder and
+Recycle Bin behavior still needs physical-host acceptance.
 History/Open selects the capture in the workspace, and Dismiss closes only the
 targeted card. Clear all dismisses a snapshot of the stack, preserving history,
 exports and any later capture. There is no automatic dismissal timer or count cap.
@@ -298,8 +304,9 @@ exports and any later capture. There is no automatic dismissal timer or count ca
 Stacks start expanded, with newest cards nearest the configured top/bottom edge.
 Overflow scrolls without dropping captures. Show less parks a compact pile with
 the newest card in front; clicking it expands the stack. Incoming captures and
-capture cancellation preserve the parked state. Dragging, native file drag,
-hover-fan/transition animation, trash/reveal and dust are not connected.
+capture cancellation preserve the parked state. Collapsed piles drag within
+their capture display and fan on hover, respecting reduced motion. Native file
+drag, the remaining 3D/exit effects and dust are not connected.
 
 Show mini previews, all four placement corners and Include mini previews in
 captures use the shared settings. Turning previews off hides retained cards and

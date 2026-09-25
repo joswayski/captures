@@ -523,6 +523,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         miniPreviews.copyArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.copy(artifact) }
         miniPreviews.saveArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.save(artifact) }
         miniPreviews.openArtifact = { [weak self] artifact in self?.openPreview(artifact) }
+        miniPreviews.trashArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.trash(artifact) }
         self.miniPreviews = miniPreviews
         self.miniPreviewActions = miniPreviewActions
         let rootWindowCloseHandler = RootWindowCloseHandler(rootWindow: window,

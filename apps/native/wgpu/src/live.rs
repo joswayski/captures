@@ -408,6 +408,11 @@ enum PreviewMessage {
         generation: u64,
         path: PathBuf,
     },
+    Trash {
+        artifact_id: String,
+        generation: u64,
+        saved_path: Option<PathBuf>,
+    },
     OpenHistory {
         artifact_id: String,
         generation: u64,
@@ -2146,6 +2151,33 @@ impl Live {
                         },
                     });
                 }
+                PreviewMessage::Trash {
+                    artifact_id,
+                    generation,
+                    saved_path,
+                } if self.previews.accepts(&artifact_id, generation) => {
+                    let card = self
+                        .previews
+                        .cards
+                        .get_mut(&artifact_id)
+                        .expect("accepted preview exists");
+                    if card.busy.is_some() || card.saved_path != saved_path {
+                        continue;
+                    }
+                    card.busy = Some(crate::mini_preview::Busy::Trash);
+                    card.message = Some("Moving saved export to Trash…".into());
+                    self.send_preview(
+                        Request::TrashPreview {
+                            root: self.root.clone(),
+                            id: artifact_id.clone(),
+                            saved_path,
+                        },
+                        PreviewGuard {
+                            artifact_id,
+                            generation,
+                        },
+                    );
+                }
                 PreviewMessage::OpenHistory {
                     artifact_id,
                     generation,
@@ -2190,6 +2222,7 @@ impl Live {
                 PreviewMessage::Copy { .. }
                 | PreviewMessage::Save { .. }
                 | PreviewMessage::Reveal { .. }
+                | PreviewMessage::Trash { .. }
                 | PreviewMessage::MoveStack { .. }
                 | PreviewMessage::OpenHistory { .. } => {}
             }
@@ -2981,8 +3014,14 @@ impl Live {
                                     .get_mut(&preview.artifact_id)
                                     .filter(|card| card.generation == preview.generation)
                                 {
+                                    let action =
+                                        if card.busy == Some(crate::mini_preview::Busy::Trash) {
+                                            "Trash"
+                                        } else {
+                                            "Save"
+                                        };
                                     card.busy = None;
-                                    card.message = Some(format!("Save failed: {error}"));
+                                    card.message = Some(format!("{action} failed: {error}"));
                                 }
                             } else {
                                 self.error = Some(error);
@@ -3004,6 +3043,15 @@ impl Live {
                                         current.save_result(&guard, Ok(path), Instant::now())
                                     })
                                 {
+                                    request_hidden_root_paint(ctx);
+                                }
+                                continue;
+                            }
+                            if let Some(guard) = &preview
+                                && let Response::PreviewTrashed { id } = response.as_ref()
+                            {
+                                if *id == guard.artifact_id {
+                                    self.previews.dismiss(id, guard.generation);
                                     request_hidden_root_paint(ctx);
                                 }
                                 continue;
@@ -3526,6 +3574,12 @@ impl Live {
                     self.status = format!("Saved {}", path.display());
                 }
             }
+            Response::PreviewTrashed { id } => {
+                self.previews.remove(&id);
+                if announce {
+                    self.status = "Preview removed; the private History copy was kept".into();
+                }
+            }
             Response::Deleted { id } => {
                 self.previews.remove(&id);
                 self.artifacts.retain(|item| item.entry.id != id);
@@ -3817,6 +3871,11 @@ impl Live {
                                 path: path.clone(),
                             })
                         }
+                        Some(crate::mini_preview::Action::Trash) => Some(PreviewMessage::Trash {
+                            artifact_id: card.artifact_id.clone(),
+                            generation: card.generation,
+                            saved_path: card.saved_path.clone(),
+                        }),
                         Some(crate::mini_preview::Action::OpenHistory) => {
                             restore_root_for_history(ui.ctx());
                             Some(PreviewMessage::OpenHistory {
@@ -5804,6 +5863,117 @@ mod tests {
             }
             assert_eq!(live.artifacts.len(), 1);
             assert!(original.exists());
+        }
+        ctx.end_pass().textures_delta.clear();
+    }
+
+    #[test]
+    fn trash_dispatch_retries_preserves_history_and_rejects_stale_callbacks() {
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [65, 43, 21, 255]);
+        let original = artifact.image_path.clone();
+        let saved_path = root.path().join("Café export.png");
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.flush();
+        let (jobs, requests) = mpsc::channel();
+        live.tx = jobs;
+        let (results, replies) = mpsc::channel();
+        live.rx = replies;
+        live.pending = 0;
+        live.previews
+            .begin_capture(&AppSettings::default(), Some(preview_target()), 1)
+            .unwrap();
+        let (guard, _) = live.previews.start_artifact(&artifact).unwrap().unwrap();
+        live.previews
+            .cards
+            .get_mut(&guard.artifact_id)
+            .unwrap()
+            .saved_path = Some(saved_path.clone());
+        live.artifacts.push(artifact);
+        ctx.begin_pass(Default::default());
+        for (generation, path) in [
+            (guard.generation + 1, Some(saved_path.clone())),
+            (guard.generation, None),
+        ] {
+            live.preview_tx
+                .send(PreviewMessage::Trash {
+                    artifact_id: guard.artifact_id.clone(),
+                    generation,
+                    saved_path: path,
+                })
+                .unwrap();
+        }
+        live.logic(&ctx, &mut frame);
+        assert!(requests.try_recv().is_err());
+        for attempt in 0..3 {
+            let generation = live.previews.cards[&guard.artifact_id].generation;
+            for _ in 0..2 {
+                live.preview_tx
+                    .send(PreviewMessage::Trash {
+                        artifact_id: guard.artifact_id.clone(),
+                        generation,
+                        saved_path: Some(saved_path.clone()),
+                    })
+                    .unwrap();
+            }
+            live.logic(&ctx, &mut frame);
+            let Job::Execute {
+                request:
+                    Request::TrashPreview {
+                        root: actual_root,
+                        id,
+                        saved_path: path,
+                    },
+                preview,
+                notice,
+            } = requests.try_recv().unwrap()
+            else {
+                panic!("not preview Trash")
+            };
+            assert_eq!(actual_root, root.path());
+            assert_eq!(id, guard.artifact_id);
+            assert_eq!(path, Some(saved_path.clone()));
+            assert!(notice.is_none());
+            assert!(
+                requests.try_recv().is_err(),
+                "busy Trash dispatches only once"
+            );
+            assert_eq!(live.pending, 1);
+            if attempt == 1 {
+                // Same ID, different presentation: a late reply cannot remove it.
+                let card = live.previews.cards.get_mut(&id).unwrap();
+                card.generation += 1;
+                card.busy = None;
+            }
+            results
+                .send(Reply::Executed {
+                    preview,
+                    notice: None,
+                    result: if attempt == 0 {
+                        Err("fixture denied".into())
+                    } else {
+                        Ok(Box::new(Response::PreviewTrashed { id }))
+                    },
+                })
+                .unwrap();
+            live.logic(&ctx, &mut frame);
+            assert_eq!(live.pending, 0);
+            assert_eq!(live.artifacts.len(), 1);
+            assert!(original.exists());
+            if attempt == 0 {
+                let card = &live.previews.cards[&guard.artifact_id];
+                assert!(card.busy.is_none());
+                assert_eq!(
+                    card.message.as_deref(),
+                    Some("Trash failed: fixture denied")
+                );
+            } else if attempt == 1 {
+                assert!(live.previews.cards.contains_key(&guard.artifact_id));
+            } else {
+                assert!(live.previews.cards.is_empty());
+            }
         }
         ctx.end_pass().textures_delta.clear();
     }
