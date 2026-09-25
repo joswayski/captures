@@ -1935,6 +1935,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func presentEditor(_ artifact: CaptureArtifact, outputDirectory: String? = nil,
+                               requiresCurrentSelection: Bool = true,
                                completion: (() -> Void)? = nil) {
         run({ [settingsPath] in
             try outputDirectory ?? CapturePreferences.load(path: settingsPath).directory
@@ -1942,7 +1943,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             [weak self] result in
             guard let self else { return }
             guard completion != nil || !self.externalOpenPending else { return }
-            guard completion != nil || self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
+            guard completion != nil || !requiresCurrentSelection
+                || self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
                 ? self.artifacts[$0].id : nil }) == artifact.id else { return }
             switch result {
             case .success(let outputDirectory):
@@ -2044,9 +2046,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
     func openPreview(_ artifact: CaptureArtifact) {
-        guard !externalOpenPending, !permissionsVisible else { return }
-        window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-        loadHistory(select: artifact.id)
+        guard !externalOpenPending, !permissionsVisible, !capturing, !clearingHistory,
+              !recoveryBusy, !recoveryConfirmation, !recordingRetiring else { return }
+        presentEditor(artifact, requiresCurrentSelection: false)
     }
     func refreshHistory() { loadHistory() }
 

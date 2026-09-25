@@ -450,7 +450,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var liveContent: Surface?
     private var liveStyleRevision = 0
     private var renderedLiveStyleRevision = -1
-    private var previewSelectionID: String?
     private var regionSelector: RegionSelectionView?
     private var windowSelector: WindowSelectionView?
     private var scene: String
@@ -921,7 +920,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             liveController = LiveCaptureController(root: content, window: window, tokens: tokens,
                 historyRoot: options.historyRoot, settingsPath: options.settingsFile,
                 miniPreviews: miniPreviews, miniPreviewActions: miniPreviewActions,
-                initialSelectionID: previewSelectionID,
                 captureStateChanged: { [weak self] busy in
                     self?.captureBusy = busy
                     self?.updateShortcutState()
@@ -942,7 +940,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 }
             renderedLiveStyleRevision = liveStyleRevision
             drainOpenImages()
-            previewSelectionID = nil
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
             return
         }
@@ -984,10 +981,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     private func openPreview(_ artifact: CaptureArtifact) {
         if permissionSheet != nil || liveController?.externalOpenPending == true { return }
-        previewSelectionID = artifact.id
-        if scene != "live" { scene = "live"; render() }
         liveController?.openPreview(artifact)
-        previewSelectionID = nil
     }
 
     private func installStatusItem() {

@@ -56,7 +56,7 @@ final class MiniPreviewCardView: NSView {
         status.isHidden = true; addSubview(status)
 
         let actions: [(String, () -> Void)] = [("Copy", copy), (saved ? "Reveal" : "Save", save),
-            ("Open", open), ("Trash", trash), ("×", dismiss)]
+            ("Edit", open), ("Trash", trash), ("×", dismiss)]
         let buttonHeight = tokens.number("h-md"), gap = tokens.number("s-2")
         let actionWidth = (bounds.width - inset * 2 - gap * 4) / 5
         for (index, action) in actions.enumerated() {

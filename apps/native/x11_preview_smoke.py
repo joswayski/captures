@@ -520,18 +520,48 @@ def main():
                     click(preview, 122, 169, activate=False)
                     wait(lambda: len(reveals()) == 2, "Reveal retries after export is restored")
                     assert reveals() == [[str(exported.parent)]] * 2
-                    click(preview, 189, 169, activate=False)  # Padded card History center.
-                    wait(lambda: windows("Captures"), "History restores workspace")
+
+                    def private_files(entry):
+                        return {path.relative_to(entry.parent): path.read_bytes()
+                                for path in entry.parent.rglob("*") if path.is_file()}
+
+                    def draft_files():
+                        drafts = output / "editor-drafts"
+                        return {path.relative_to(drafts): path.read_bytes()
+                                for path in drafts.rglob("*") if path.is_file()}
+
+                    preserved_private = private_files(first)
                     preserved = entries()
+                    preserved_drafts = draft_files()
+                    click(preview, 175, 169, activate=False)  # Padded card Edit center.
+                    editor = wait(lambda: windows("Screenshot editor — Captures"),
+                                  "Edit opens the screenshot editor")[0]
+                    wait(lambda: run("xdotool", "getactivewindow").decode().strip() == editor,
+                         "Edit focuses the screenshot editor")
+                    assert not windows("Captures"), "Edit restored minimized workspace"
+                    assert entries() == preserved and private_files(first) == preserved_private, (
+                        "Edit changed the artifact or History")
+                    shot("root", f"{prefix}-edit-with-preview")
+                    click(preview, 175, 169, activate=False)
+                    wait(lambda: run("xdotool", "getactivewindow").decode().strip() == editor,
+                         "repeated Edit focuses the existing screenshot editor")
+                    assert windows("Screenshot editor — Captures") == [editor], (
+                        "repeated Edit opened a duplicate screenshot editor")
+                    assert not windows("Captures"), "repeated Edit restored minimized workspace"
+                    assert entries() == preserved and private_files(first) == preserved_private, (
+                        "repeated Edit changed the artifact or History")
+                    run("xdotool", "keydown", "Alt_L", "sleep", ".1", "key", "F4",
+                        "sleep", ".1", "keyup", "Alt_L", "sleep", ".4")
+                    wait(lambda: not windows("Screenshot editor — Captures"),
+                         "unmodified screenshot editor closes cleanly")
+                    assert draft_files() == preserved_drafts, "unmodified Edit changed saved drafts"
+                    assert windows(PREVIEW) and not windows("Captures"), (
+                        "closing Edit removed the preview or restored workspace")
                     click(preview, 288, 169, activate=False)  # Padded card Dismiss center.
                     wait(lambda: not windows(PREVIEW), "Dismiss closes only the card")
                     time.sleep(.3)
                     assert entries() == preserved and exported.read_bytes() == export_bytes, "Dismiss deleted history or export"
                     assert not windows(PREVIEW), "dismissed card reappeared"
-
-                    def private_files(entry):
-                        return {path.relative_to(entry.parent): path.read_bytes()
-                                for path in entry.parent.rglob("*") if path.is_file()}
 
                     def settled_preview(window):
                         samples = []
@@ -554,7 +584,7 @@ def main():
                     unsaved_private = private_files(unsaved)
                     unsaved_entries = entries()
                     shot(preview, f"{prefix}-trash-unsaved")
-                    click(preview, 246, 169, activate=False)  # Padded card Trash center.
+                    click(preview, 220, 169, activate=False)  # Padded card Trash center.
                     wait(lambda: not windows(PREVIEW), "unsaved Trash dismisses preview")
                     assert entries() == unsaved_entries, "unsaved Trash removed history"
                     assert private_files(unsaved) == unsaved_private, "unsaved Trash changed private files or metadata"
@@ -582,9 +612,9 @@ def main():
                     shot(preview, f"{prefix}-trash-saved")
                     held = trash_export.with_suffix(".held")
                     trash_export.rename(held)
-                    run("xdotool", "mousemove", "--sync", "--window", preview, "246", "169")
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "220", "169")
                     before_error = settled_preview(preview)
-                    click(preview, 246, 169, activate=False)
+                    click(preview, 220, 169, activate=False)
                     wait(lambda: windows(PREVIEW) and settled_preview(preview) != before_error,
                          "missing export Trash error paints")
                     shot(preview, f"{prefix}-trash-error")
@@ -597,7 +627,7 @@ def main():
                     assert not windows("Captures"), "failed Trash restored workspace"
 
                     held.rename(trash_export)
-                    click(preview, 246, 169, activate=False)
+                    click(preview, 220, 169, activate=False)
                     wait(lambda: not trash_export.exists() and not windows(PREVIEW),
                          "restored export moves to trash and closes preview")
                     assert {path: path.read_bytes() for path in trash_export.parent.iterdir()} == other_exports, (
@@ -620,7 +650,7 @@ def main():
                     preview = wait(lambda: windows(PREVIEW), "fresh preview after Trash checks")[0]
                     wait(lambda: int(run("import", "-window", preview, "-format", "%k", "info:")) > 16,
                          "fresh preview paints after Trash checks")
-                    print("PASS preview actions: Copy/Save/Reveal, Dismiss, and disposable OS Trash", flush=True)
+                    print("PASS preview actions: Copy/Save/Reveal/Edit, Dismiss, and disposable OS Trash", flush=True)
                 if placement == "bottom_left":
                     # Frozen capture must exactly include the prior composited
                     # card, or exactly omit it, depending on the stored setting.
@@ -1137,7 +1167,8 @@ def main():
             "checks": ["selected corner positions and dimensions", "nonactivating map",
                 "minimized-root full-pixel Copy and Save without activation",
                 "Save becomes Reveal; exact Unicode folder delivery, missing export and retry preserve files",
-                "History restores minimized workspace", "Dismiss preserves history and export",
+                "Edit opens and refocuses one editor without restoring root or changing artifact, History or drafts",
+                "Dismiss preserves history and export",
                 "new capture after dismissal", "exact inclusion and exclusion pixels",
                 "Escape and simulated-lock restoration", "clean exit"] +
                 ([] if args.lifecycle else ["disabled previews"]) +
