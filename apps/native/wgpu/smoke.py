@@ -11,6 +11,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from history_fixture import write_completed_settings
+
 
 def run(binary, output, name, arguments, allow_unsupported_hidden=False):
     try:
@@ -64,9 +67,16 @@ def main():
 
     populated = args.output / "populated-history"
     subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "history_fixture.py"), str(populated)], check=True)
+    completed = args.output / "completed-settings.json"
+    write_completed_settings(completed)
+    broken = args.output / "onboarding-error.json"
+    broken.write_text("invalid-json")
     shots = {
-        "live-empty": ["--live", "--history-root", str(args.output / "empty-history"), "--appearance", "light"],
-        "live-populated": ["--live", "--history-root", str(populated)],
+        "live-empty": ["--live", "--settings-file", str(completed), "--history-root", str(args.output / "empty-history"), "--appearance", "light"],
+        "live-populated": ["--live", "--settings-file", str(completed), "--history-root", str(populated)],
+        "onboarding-light": ["--live", "--history-root", str(args.output / "onboarding-history"), "--settings-file", str(args.output / "fresh-light.json"), "--appearance", "light"],
+        "onboarding-dark": ["--live", "--history-root", str(args.output / "onboarding-history"), "--settings-file", str(args.output / "fresh-dark.json")],
+        "onboarding-error": ["--live", "--history-root", str(args.output / "onboarding-history"), "--settings-file", str(broken)],
         "countdown-light": ["--scene", "countdown", "--appearance", "light"],
         "countdown-dark": ["--scene", "countdown", "--appearance", "dark"],
         "preferences-dark": ["--scene", "preferences"],
@@ -111,6 +121,11 @@ def main():
         if data[:8] != b"\x89PNG\r\n\x1a\n" or min(struct.unpack(">II", data[16:24])) < 400:
             raise RuntimeError(f"{name}: invalid or undersized viewport capture")
 
+    assert not (args.output / "fresh-light.json").exists(), "rendering completed first-run setup"
+    assert not (args.output / "fresh-dark.json").exists(), "rendering completed first-run setup"
+    assert broken.read_text() == "invalid-json", "setup replaced malformed settings"
+    assert not list((args.output / "onboarding-history").glob("*/metadata.json")), "setup captured media"
+
     # Verify all six scheduled actions, not only that the process survived.
     for scene in ["preferences", "history", "hud", "preview", "editor", "region", "window"]:
         events = run(binary, args.output, f"{scene}-exercise", ["--scene", scene, "--exercise", "--quit-after", "24"])
@@ -141,7 +156,7 @@ def main():
             targets = [e["windowSelection"] for e in actions]
             if targets != ["project", "export", "display", "display", "terminal", None]:
                 raise RuntimeError(f"Window fixture did not exercise frontmost/window/display/cancel: {targets}")
-    print("PASS: static redraw guard, 32 viewport captures, 42 scripted actions; "
+    print(f"PASS: static redraw guard, {len(shots)} viewport captures, 42 scripted actions; "
           + ("hidden visibility verified" if hidden_supported else "hidden idle UNSUPPORTED, not accepted"))
 
 
