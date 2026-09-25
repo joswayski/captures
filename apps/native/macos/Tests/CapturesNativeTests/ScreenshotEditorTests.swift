@@ -5342,12 +5342,20 @@ final class ScreenshotEditorTests: XCTestCase {
         overlay.imageRect = { NSRect(x: 20, y: 10, width: 160, height: 90) }
         overlay.shape = .erase
         var strokes: [[NSPoint]] = []
+        var previews: [[NSPoint]] = []
+        overlay.onPreview = { mode, _, _, points in
+            XCTAssertEqual(mode, .erase); previews.append(points)
+        }
         overlay.onBackgroundBrush = { mode, points in
             XCTAssertEqual(mode, .erase); strokes.append(points)
         }
         overlay.begin(at: NSPoint(x: 60, y: 77.5))
         overlay.drag(to: NSPoint(x: 190, y: 55)) // outside the image; Rust filters this sample.
         overlay.drag(to: NSPoint(x: 140, y: 32.5))
+        XCTAssertTrue(strokes.isEmpty, "preview must not commit before release")
+        XCTAssertEqual(previews.map(\.count), [1, 2, 3])
+        XCTAssertEqual(previews.last, [NSPoint(x: 160, y: 270), NSPoint(x: 680, y: 180),
+                                       NSPoint(x: 480, y: 90)])
         overlay.end(at: NSPoint(x: 100, y: 55))
         XCTAssertEqual(strokes.count, 1)
         XCTAssertEqual(strokes[0], [NSPoint(x: 160, y: 270), NSPoint(x: 680, y: 180),
@@ -6075,10 +6083,21 @@ final class ScreenshotEditorTests: XCTestCase {
         let stroke: [String: Any] = ["operation": "paint_image_background",
                                      "points": [["x": 2.5, "y": 1.5]],
                                      "size": 4, "softness": 0]
+        func preview(_ object: [String: Any], alpha: UInt8) throws {
+            let before = try request(["operation": "snapshot"]).snapshot
+            let done = expectation(description: "brush pixels before publication")
+            var response: Result<CGImage, Error>?
+            worker.previewDrawing(object) { response = $0; done.fulfill() }
+            wait(for: [done], timeout: 5)
+            XCTAssertEqual(rgba(try XCTUnwrap(response).get(), x: 2, y: 1)[3], alpha)
+            XCTAssertEqual(try request(["operation": "snapshot"]).snapshot, before)
+        }
         var erase = stroke; erase["mode"] = "erase"
+        try preview(erase, alpha: 0)
         let erased = try request(erase)
         XCTAssertEqual(rgba(erased.image, x: 2, y: 1)[3], 0)
         var restore = stroke; restore["mode"] = "restore"
+        try preview(restore, alpha: 255)
         let restored = try request(restore)
         XCTAssertEqual(rgba(restored.image, x: 2, y: 1)[3], 255)
         let undone = try request(["operation": "undo"])

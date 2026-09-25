@@ -718,6 +718,19 @@ impl EditorSession {
         softness: f64,
         mode: BrushMode,
     ) -> Result<(), String> {
+        if let Some((index, edited)) = self.background_brush_edit(points, size, softness, mode)? {
+            self.publish_image_background_edit(index, edited)?;
+        }
+        Ok(())
+    }
+
+    fn background_brush_edit(
+        &self,
+        points: Vec<Point>,
+        size: f64,
+        softness: f64,
+        mode: BrushMode,
+    ) -> Result<Option<(usize, RgbaImage)>, String> {
         if points.is_empty()
             || points
                 .iter()
@@ -780,16 +793,16 @@ impl EditorSession {
         let mut edited = (**current).clone();
         let changed = paint_stroke(&mut edited, original, &samples, radius, hardness, mode)?;
         if changed == 0 {
-            return Ok(());
+            return Ok(None);
         }
-        self.publish_image_background_edit(index, edited)
+        Ok(Some((index, edited)))
     }
 
-    fn publish_image_background_edit(
-        &mut self,
+    fn image_background_candidate(
+        &self,
         index: usize,
         edited: RgbaImage,
-    ) -> Result<(), String> {
+    ) -> Result<(Document, BTreeMap<String, Arc<RgbaImage>>), String> {
         validate_import_dimensions(
             edited.width(),
             edited.height(),
@@ -808,6 +821,15 @@ impl EditorSession {
         document.background = None;
         let mut assets = self.assets.clone();
         assets.insert(source, Arc::new(edited));
+        Ok((document, assets))
+    }
+
+    fn publish_image_background_edit(
+        &mut self,
+        index: usize,
+        edited: RgbaImage,
+    ) -> Result<(), String> {
+        let (document, assets) = self.image_background_candidate(index, edited)?;
         let pixels = render_frame(&document, &assets, self.fonts.as_mut())?;
         // Assets, rendered frame and history change together. Failed/no-op
         // requests keep redo and the pre-edit source for a later restore brush.
@@ -1073,11 +1095,26 @@ impl EditorSession {
         Ok(())
     }
 
-    /// Render an uncommitted drawing on the serialized worker. Only renderer
+    /// Render an uncommitted drawing or complete background-brush gesture on the
+    /// serialized worker, starting from published assets. Only renderer
     /// caches may change: document, history, assets, published pixels and drafts
     /// remain untouched. The returned frame owns its pixels independently.
     pub fn preview_drawing(&mut self, request: Request) -> Result<Arc<RgbaImage>, String> {
         self.require_finished_text_input()?;
+        if let Request::PaintImageBackground {
+            points,
+            size,
+            softness,
+            mode,
+        } = request
+        {
+            let Some((index, edited)) = self.background_brush_edit(points, size, softness, mode)?
+            else {
+                return Ok(self.pixels());
+            };
+            let (document, assets) = self.image_background_candidate(index, edited)?;
+            return render_frame(&document, &assets, self.fonts.as_mut()).map(Arc::new);
+        }
         let mut document = self.history.current().clone();
         match request {
             Request::CreateClosedShape { create } => {
@@ -1089,7 +1126,11 @@ impl EditorSession {
             Request::CreateFreehandPath { create } => {
                 document.create_freehand_path(create)?;
             }
-            _ => return Err("Only drawing creation requests can be previewed.".into()),
+            _ => {
+                return Err(
+                    "Only drawing creation and background brush requests can be previewed.".into(),
+                );
+            }
         }
         render_frame(&document, &self.assets, self.fonts.as_mut()).map(Arc::new)
     }
