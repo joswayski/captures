@@ -156,7 +156,10 @@ enum Job {
     Copy {
         path: PathBuf,
         preview: Option<PreviewGuard>,
+        /// Artifact that owns the clipboard after a successful copy.
+        owner: Option<String>,
     },
+    VerifyClipboard(captures_app::clipboard::ClipboardVerification),
     Reveal {
         path: PathBuf,
         preview: PreviewGuard,
@@ -202,7 +205,12 @@ enum Reply {
     },
     Copied {
         preview: Option<PreviewGuard>,
-        result: Result<(), String>,
+        owner: Option<String>,
+        result: Result<ClipboardWrite, String>,
+    },
+    ClipboardVerified {
+        verification: captures_app::clipboard::ClipboardVerification,
+        result: Result<bool, String>,
     },
     Revealed {
         preview: PreviewGuard,
@@ -457,9 +465,12 @@ struct PreviewCard {
     width: u32,
     height: u32,
     texture: Option<egui::TextureHandle>,
+    size_bytes: u64,
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
     saved_path: Option<PathBuf>,
+    /// Start of the brief "Saved" confirmation after an explicit save.
+    saved_at: Option<Instant>,
     rejected_at: Option<Instant>,
 }
 
@@ -470,9 +481,12 @@ struct PreviewRenderCard {
     width: u32,
     height: u32,
     texture: egui::TextureHandle,
+    size_bytes: u64,
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
     saved_path: Option<PathBuf>,
+    saved_at: Option<Instant>,
+    clipboard_current: bool,
     rejected_at: Option<Instant>,
     layout: captures_app::preview::PreviewCardLayout,
     hover_y: f64,
@@ -584,9 +598,11 @@ impl MiniPreviews {
                 width: artifact.entry.width,
                 height: artifact.entry.height,
                 texture: None,
+                size_bytes: artifact.entry.size_bytes,
                 busy: None,
                 message: None,
                 saved_path: artifact.entry.saved_path.as_deref().map(PathBuf::from),
+                saved_at: None,
                 rejected_at: None,
             },
         );
@@ -713,6 +729,11 @@ enum SelectorKind {
     Controls,
 }
 
+/// How often Linux checks that the clipboard still holds a preview's pixels.
+const CLIPBOARD_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+/// Shipping `THUMBNAIL_SAVED_FEEDBACK_MS`.
+const SAVED_FEEDBACK: Duration = Duration::from_millis(1_000);
+
 pub(crate) fn request_hidden_root_paint(ctx: &egui::Context) {
     ctx.send_viewport_cmd_to(
         egui::ViewportId::ROOT,
@@ -789,7 +810,14 @@ pub struct Live {
     recording_notice: Option<crate::recording_saved_notice::Notice>,
     recording_notice_generation: u64,
     recording_notice_target: Option<CaptureTarget>,
+    /// Output folder when `open_editor_after_recording` applies to this take.
+    open_editor_after_recording: Option<PathBuf>,
+    /// Where the saved notice appears when each recording editor closes.
+    recording_editor_notice_targets: HashMap<String, Option<CaptureTarget>>,
+    /// Most recent capture display, for editors opened outside a capture.
+    last_capture_target: Option<CaptureTarget>,
     previews: MiniPreviews,
+    clipboard: captures_app::clipboard::ClipboardOwnership,
     root_hide_deferred: bool,
     region_freeze: bool,
     region_auto_start: bool,
@@ -981,9 +1009,18 @@ impl Live {
                         artifact_id,
                         result: decode(&path),
                     },
-                    Job::Copy { path, preview } => Reply::Copied {
+                    Job::Copy {
+                        path,
                         preview,
+                        owner,
+                    } => Reply::Copied {
+                        preview,
+                        owner,
                         result: copy_image(&path, &mut clipboard),
+                    },
+                    Job::VerifyClipboard(verification) => Reply::ClipboardVerified {
+                        verification,
+                        result: clipboard_matches(verification.fingerprint, &mut clipboard),
                     },
                     Job::Reveal { path, preview } => Reply::Revealed {
                         preview,
@@ -991,7 +1028,7 @@ impl Live {
                     },
                     Job::CopyPixels { pixels, reply } => {
                         // The workspace owns X11 clipboard data beyond any editor's lifetime.
-                        let _ = reply.send(copy_pixels(&pixels, &mut clipboard));
+                        let _ = reply.send(copy_pixels(&pixels, &mut clipboard).map(|_| ()));
                         continue;
                     }
                 };
@@ -1047,7 +1084,11 @@ impl Live {
             recording_notice: None,
             recording_notice_generation: 0,
             recording_notice_target: None,
+            open_editor_after_recording: None,
+            recording_editor_notice_targets: HashMap::new(),
+            last_capture_target: None,
             previews: MiniPreviews::default(),
+            clipboard: Default::default(),
             root_hide_deferred: false,
             region_freeze: false,
             region_auto_start: false,
@@ -1349,6 +1390,9 @@ impl Live {
         };
         let target = capture_target(frame, &self.displays, self.display_id.as_deref());
         self.countdown_target = target;
+        if target.is_some() {
+            self.last_capture_target = target;
+        }
         let countdown = matches!(request, CaptureRequest::Display)
             .then_some(settings.screenshot_countdown_seconds)
             .unwrap_or(0);
@@ -1393,6 +1437,10 @@ impl Live {
             .unwrap_or(true);
         self.flow = Some(flow);
         self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
+        self.open_editor_after_recording = settings
+            .recording
+            .open_editor_after_recording
+            .then(|| PathBuf::from(&settings.output_directory));
         self.include_cursor = settings.show_cursor_in_screenshots;
         self.recording_screenshot_settings = matches!(
             request,
@@ -1661,6 +1709,28 @@ impl Live {
             if editor.take_original_replaced() {
                 self.previews.remove(id);
             }
+        }
+        let closed = self
+            .recording_editors
+            .iter()
+            .filter(|(_, editor)| editor.closed())
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in closed {
+            // Shipping shows the saved notice whenever a recording editor closes.
+            let target = self
+                .recording_editor_notice_targets
+                .remove(&id)
+                .flatten()
+                .or(self.last_capture_target);
+            self.recording_notice_generation = self.recording_notice_generation.wrapping_add(1);
+            self.recording_notice = Some(crate::recording_saved_notice::Notice::new(
+                id,
+                self.recording_notice_generation,
+                Instant::now(),
+            ));
+            self.recording_notice_target = target;
+            request_hidden_root_paint(ctx);
         }
         self.recording_editors.retain(|_, editor| !editor.closed());
         for (id, editor) in &self.editors {
@@ -2087,7 +2157,7 @@ impl Live {
                 } if self.previews.accepts(&artifact_id, generation) => {
                     let card = self.previews.cards.get_mut(&artifact_id).unwrap();
                     card.busy = Some(crate::mini_preview::Busy::Drag);
-                    card.message = Some("Dragging original file…".into());
+                    card.message = None;
                 }
                 PreviewMessage::DragFinished {
                     artifact_id,
@@ -2122,12 +2192,13 @@ impl Live {
                             .get_mut(&artifact_id)
                             .expect("accepted preview exists");
                         card.busy = Some(crate::mini_preview::Busy::Copy);
-                        card.message = Some("Copying full-resolution pixels…".into());
+                        card.message = None;
                         card.image_path.clone()
                     };
                     self.pending += 1;
                     let _ = self.tx.send(Job::Copy {
                         path,
+                        owner: Some(artifact_id.clone()),
                         preview: Some(PreviewGuard {
                             artifact_id,
                             generation,
@@ -2150,7 +2221,7 @@ impl Live {
                             continue;
                         }
                         card.busy = Some(crate::mini_preview::Busy::Save);
-                        card.message = Some("Saving with current preferences…".into());
+                        card.message = None;
                         card.artifact_id.clone()
                     };
                     self.send_preview(
@@ -2554,15 +2625,8 @@ impl Live {
                 {
                     match result {
                         Ok(finalized) => {
-                            self.recording_notice_generation =
-                                self.recording_notice_generation.wrapping_add(1);
-                            self.recording_notice =
-                                Some(crate::recording_saved_notice::Notice::new(
-                                    finalized.entry.id.clone(),
-                                    self.recording_notice_generation,
-                                    Instant::now(),
-                                ));
-                            self.recording_notice_target = self.countdown_target;
+                            let id = finalized.entry.id.clone();
+                            let target = self.countdown_target;
                             self.status = finalized.warning.map_or_else(
                                 || format!("Recording saved to {}", finalized.path.display()),
                                 |warning| {
@@ -2575,6 +2639,13 @@ impl Live {
                             self.history_refresh_status = Some(self.status.clone());
                             self.finish_capture(ctx, false);
                             self.load_history();
+                            // Shipping opens the recording editor when the
+                            // preference is on; the saved notice follows its close.
+                            if let Some(directory) = self.open_editor_after_recording.take() {
+                                self.recording_editor_notice_targets
+                                    .insert(id.clone(), target);
+                                self.open_recording_editor(ctx, id, directory);
+                            }
                             request_hidden_root_paint(ctx);
                         }
                         Err(error) => {
@@ -3007,8 +3078,17 @@ impl Live {
                         }
                     }
                 }
-                Reply::Copied { preview, result } => {
+                Reply::Copied {
+                    preview,
+                    owner,
+                    result,
+                } => {
                     self.pending = self.pending.saturating_sub(1);
+                    if let (Ok(write), Some(owner)) = (&result, owner) {
+                        self.clipboard
+                            .record(write.revision, owner, write.fingerprint);
+                        request_hidden_root_paint(ctx);
+                    }
                     if let Some(preview) = preview {
                         if let Some(card) = self
                             .previews
@@ -3017,18 +3097,33 @@ impl Live {
                             .filter(|card| card.generation == preview.generation)
                         {
                             card.busy = None;
-                            card.message = Some(match result {
-                                Ok(()) => "Copied full-resolution pixels".into(),
-                                Err(error) => format!("Copy failed: {error}"),
-                            });
+                            // Success shows the shipping clipboard confirmation chip.
+                            card.message = result
+                                .as_ref()
+                                .err()
+                                .map(|error| format!("Copy failed: {error}"));
                         }
                     } else {
                         match result {
-                            Ok(()) => self.status = "Copied actual capture pixels".into(),
+                            Ok(_) => self.status = "Copied actual capture pixels".into(),
                             Err(error) => self.error = Some(error),
                         }
                     }
                 }
+                Reply::ClipboardVerified {
+                    verification,
+                    result,
+                } => match result {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if crate::clipboard_revision::invalidate(verification.revision)
+                            && self.clipboard.clear_if_revision(verification.revision)
+                        {
+                            request_hidden_root_paint(ctx);
+                        }
+                    }
+                    Err(error) => eprintln!("Could not verify the clipboard owner: {error}"),
+                },
                 Reply::Revealed { preview, result } => {
                     self.pending = self.pending.saturating_sub(1);
                     if let Some(card) = self
@@ -3038,10 +3133,7 @@ impl Live {
                         .filter(|card| card.generation == preview.generation)
                     {
                         card.busy = None;
-                        card.message = Some(match result {
-                            Ok(()) => "Shown in folder".into(),
-                            Err(error) => format!("Reveal failed: {error}"),
-                        });
+                        card.message = result.err().map(|error| format!("Reveal failed: {error}"));
                     }
                 }
                 Reply::Executed {
@@ -3127,7 +3219,8 @@ impl Live {
                                     .filter(|card| card.generation == preview.generation)
                             {
                                 card.busy = None;
-                                card.message = Some("Saved with current preferences".into());
+                                card.message = None;
+                                card.saved_at = Some(Instant::now());
                             }
                         }
                     }
@@ -3540,7 +3633,7 @@ impl Live {
         let path = artifact.image_path.clone();
         let preview = self.previews.start_artifact(&artifact);
         self.artifacts.insert(0, artifact);
-        self.select(id);
+        self.select(id.clone());
         self.status = status.into();
         match preview {
             Ok(Some((preview, path))) => {
@@ -3558,6 +3651,7 @@ impl Live {
             let _ = self.tx.send(Job::Copy {
                 path,
                 preview: None,
+                owner: Some(id),
             });
         }
     }
@@ -3768,6 +3862,25 @@ impl Live {
         let collapsed = self.previews.stack.is_collapsed();
         let placement = self.previews.placement;
         let top_anchor = placement.is_top();
+        let clipboard_owner = self
+            .clipboard
+            .current_artifact(crate::clipboard_revision::current());
+        if clipboard_owner
+            .as_ref()
+            .is_some_and(|owner| self.previews.cards.contains_key(owner))
+        {
+            // Notice other apps replacing the clipboard while the chip shows.
+            if crate::clipboard_revision::NEEDS_PIXEL_CHECK
+                && let Some(verification) = self
+                    .clipboard
+                    .verification(Instant::now(), CLIPBOARD_CHECK_INTERVAL)
+            {
+                let _ = self.tx.send(Job::VerifyClipboard(verification));
+            }
+            request_hidden_root_paint(ctx);
+            ctx.request_repaint_after(CLIPBOARD_CHECK_INTERVAL);
+        }
+        let now = Instant::now();
         let cards = self
             .previews
             .stack
@@ -3782,9 +3895,14 @@ impl Live {
                     width: card.width,
                     height: card.height,
                     texture: card.texture.clone()?,
+                    size_bytes: card.size_bytes,
                     busy: card.busy,
                     message: card.message.clone(),
                     saved_path: card.saved_path.clone(),
+                    saved_at: card
+                        .saved_at
+                        .filter(|at| now.saturating_duration_since(*at) < SAVED_FEEDBACK),
+                    clipboard_current: clipboard_owner.as_deref() == Some(artifact_id.as_str()),
                     rejected_at: card.rejected_at,
                     layout: self.previews.stack.card_layout(index, top_anchor)?,
                     hover_y: self
@@ -3890,6 +4008,13 @@ impl Live {
                         }
                         crate::mini_preview::reject_offset(elapsed, reduced_motion)
                     });
+                    if let Some(saved_at) = card.saved_at {
+                        // Clear "Saved" when the shipping confirmation window ends.
+                        request_hidden_root_paint(ui.ctx());
+                        ui.ctx().request_repaint_after(
+                            SAVED_FEEDBACK.saturating_sub(saved_at.elapsed()),
+                        );
+                    }
                     let action = crate::mini_preview::show(
                         ui,
                         &tokens,
@@ -3898,8 +4023,11 @@ impl Live {
                             texture: &card.texture,
                             width: card.width,
                             height: card.height,
+                            size_bytes: card.size_bytes,
                             busy: card.busy,
                             message: card.message.as_deref(),
+                            clipboard_current: card.clipboard_current,
+                            saved_feedback: card.saved_at.is_some(),
                             can_save: save.is_some(),
                             saved: card.saved_path.is_some(),
                             interactive: card.layout.interactive,
@@ -3908,6 +4036,7 @@ impl Live {
                             depth: card.layout.depth,
                             desktop_pointer,
                             reject_offset,
+                            right_anchor: placement.is_right(),
                         },
                     );
                     let next_message = match action {
@@ -4120,7 +4249,11 @@ impl Live {
                     );
                     ui.scope_builder(egui::UiBuilder::new().max_rect(controls), |ui| {
                         match crate::mini_preview::show_stack_controls(
-                            ui, &tokens, count, collapsed,
+                            ui,
+                            &tokens,
+                            count,
+                            collapsed,
+                            placement.is_right(),
                         ) {
                             Some(crate::mini_preview::StackAction::ToggleCollapsed) => {
                                 message = Some(PreviewMessage::ToggleCollapsed);
@@ -5079,9 +5212,15 @@ impl Live {
         if let Some(path) = &self.decoded_path {
             self.pending += 1;
             self.error = None;
+            let owner = self
+                .artifacts
+                .iter()
+                .find(|artifact| &artifact.image_path == path)
+                .map(|artifact| artifact.entry.id.clone());
             let _ = self.tx.send(Job::Copy {
                 path: path.clone(),
                 preview: None,
+                owner,
             });
         }
     }
@@ -5408,7 +5547,16 @@ fn decode(path: &Path) -> Result<Decoded, String> {
     })
 }
 
-fn copy_image(path: &Path, clipboard: &mut Option<arboard::Clipboard>) -> Result<(), String> {
+#[derive(Clone, Copy)]
+struct ClipboardWrite {
+    revision: i64,
+    fingerprint: captures_app::clipboard::ClipboardFingerprint,
+}
+
+fn copy_image(
+    path: &Path,
+    clipboard: &mut Option<arboard::Clipboard>,
+) -> Result<ClipboardWrite, String> {
     let image = image::open(path).map_err(|e| e.to_string())?.into_rgba8();
     copy_pixels(&image, clipboard)
 }
@@ -5416,7 +5564,7 @@ fn copy_image(path: &Path, clipboard: &mut Option<arboard::Clipboard>) -> Result
 fn copy_pixels(
     image: &image::RgbaImage,
     clipboard: &mut Option<arboard::Clipboard>,
-) -> Result<(), String> {
+) -> Result<ClipboardWrite, String> {
     if clipboard.is_none() {
         *clipboard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
     }
@@ -5428,7 +5576,46 @@ fn copy_pixels(
             height: image.height() as usize,
             bytes: Cow::Borrowed(image.as_raw()),
         })
-        .map_err(|e| format!("Could not copy image: {e}"))
+        .map_err(|e| format!("Could not copy image: {e}"))?;
+    Ok(ClipboardWrite {
+        revision: crate::clipboard_revision::after_write(),
+        fingerprint: captures_app::clipboard::ClipboardFingerprint::of_rgba(
+            image.width(),
+            image.height(),
+            image.as_raw(),
+        ),
+    })
+}
+
+/// Whether the clipboard still holds exactly the recorded pixels.
+fn clipboard_matches(
+    expected: captures_app::clipboard::ClipboardFingerprint,
+    clipboard: &mut Option<arboard::Clipboard>,
+) -> Result<bool, String> {
+    if clipboard.is_none() {
+        *clipboard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
+    }
+    match clipboard
+        .as_mut()
+        .expect("clipboard initialized")
+        .get_image()
+    {
+        Ok(image) => {
+            let width = u32::try_from(image.width).unwrap_or(u32::MAX);
+            let height = u32::try_from(image.height).unwrap_or(u32::MAX);
+            Ok(
+                captures_app::clipboard::ClipboardFingerprint::of_rgba(width, height, &image.bytes)
+                    == expected,
+            )
+        }
+        // Retry later when another app briefly holds the clipboard.
+        Err(arboard::Error::ClipboardOccupied) => {
+            Err(arboard::Error::ClipboardOccupied.to_string())
+        }
+        // No image, or contents that are not a decodable image (for example
+        // text offered for an image type), cannot be this capture.
+        Err(_) => Ok(false),
+    }
 }
 
 fn reveal(path: &Path) -> std::io::Result<()> {

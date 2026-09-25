@@ -1095,6 +1095,27 @@ pending crop edits; wgpu tests exercise the dispatcher, stale/busy guards, targe
 identity and root visibility commands. Private-X11 checks direct editor focus,
 repeat activation, unchanged History and clean close. Physical-platform focus,
 accessibility and Wayland live acceptance remain open.
+The native chrome now follows the shipping Tauri card rather than a permanent
+button footer: full-bleed cover images, idle dimensions, hover-revealed corner
+icons and centered Copy/Save file/Show in Folder controls. Saved cards expose
+Close plus Delete; unsaved Delete only dismisses. Right placements mirror the
+corner controls; the stack toolbar uses adjacent Clear all/Show less icons.
+AppKit and wgpu use the same 12-point radius token and fixed-glass palette.
+X11 checks exercise four corners, overflow, exact pixels, nonactivating actions,
+idle/hover media contrast and repeat outbound drags that start right after a
+control click (see [handoff](native-preview-handoff.md)). AppKit fixture coverage
+checks mirrored geometry, hidden controls and in-place saved-state updates;
+macOS CI must verify it. Windows physical presentation and input, screen-reader
+and keyboard traversal on nonactivating panels, and Wayland live-host rendering
+remain unverified. Cards now show shared `W × H · size` metadata, the shipping
+"Copied to clipboard" chip with Copy hidden while the clipboard still holds that
+capture, and a one-second ✓ Saved confirmation. Ownership follows the shared
+`captures_app::clipboard` model: the macOS pasteboard change count, the Windows
+clipboard sequence number, or on Linux a host write counter plus a throttled
+pixel comparison that notices other apps replacing the clipboard. Hover blur,
+the editor-presence pill, stale-pointer hover suppression, toolbar morphing and
+animated transitions remain follow-up work; this does not close the visual parity gate. Share/sign-in
+UI is deliberately outside this slice.
 Show less/expand preserves capture order, overflow scrolls without a
 count cap, and Clear all dismisses only snapshotted IDs, not later captures.
 Reveal uses the current exported path, with file checks off the UI thread and
@@ -1246,8 +1267,10 @@ nonactivating top-right notice in both native hosts. Save file reuses the shared
 original-recording export operation; saved state offers Show in Folder. Pending
 saves pause the 15.2-second expiry; failure keeps retry available. Dismiss, expiry
 and new capture only remove presentation, and stale callbacks cannot revive it.
-The recording editor is a separate History action, so the trigger remains finalization, not the
-shipping editor-close event. Private-X11 input tests exercise export byte equality,
+Both hosts now honour `open_editor_after_recording` like the shipping app: a
+finished take opens the recording editor, and the notice appears when a recording
+editor closes (including editors opened from History). With the preference off,
+no editor or notice appears. Private-X11 input tests exercise export byte equality,
 failure/retry, missing exports, intercepted OS-reveal arguments, hidden-root expiry,
 dismissal and capture cleanup; AppKit provides state and render fixtures. Physical
 macOS/Windows, Wayland, accessibility and motion parity remain open.
