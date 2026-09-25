@@ -147,9 +147,16 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             if !ui.input(|input| input.pointer.primary_down()) {
                 ui.data_mut(|data| data.remove::<(egui::Pos2, Option<egui::Pos2>)>(drag_id));
             }
+            // Wrap to the card so the tooltip fits beside the pile. A wider
+            // single line no longer fits the small window and lands on top
+            // of the rear cards that this hover fans out.
+            let tooltip_width = card.width() - ui.spacing().menu_margin.sum().x;
             response
                 .on_hover_cursor(egui::CursorIcon::Grab)
-                .on_hover_text("Click to expand; drag to move the preview pile");
+                .on_hover_ui(|ui| {
+                    ui.set_max_width(tooltip_width);
+                    ui.label("Click to expand; drag to move the preview pile");
+                });
         }
         return action;
     }
