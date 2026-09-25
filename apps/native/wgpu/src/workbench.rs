@@ -80,6 +80,7 @@ pub struct Workbench {
     live_preferences: bool,
     root_hidden: bool,
     onboarding_presented: bool,
+    permission_dialog_presented: bool,
     root_was_focused: bool,
     tray: Option<Tray>,
     tray_error: Option<String>,
@@ -246,6 +247,7 @@ impl Workbench {
             live_preferences: false,
             root_hidden,
             onboarding_presented: false,
+            permission_dialog_presented: false,
             root_was_focused: false,
             tray,
             tray_error,
@@ -286,6 +288,10 @@ impl Workbench {
     }
 
     fn handle_tray_action(&mut self, action: TrayAction, ctx: &egui::Context) {
+        if self.preferences_state.permission_recovery_open() && action != TrayAction::Quit {
+            self.show_root(ctx);
+            return;
+        }
         let restored_controls = self
             .live
             .as_mut()
@@ -482,7 +488,9 @@ impl Workbench {
     }
 
     fn sync_shortcut_routing(&self) {
-        if !self.preferences_state.onboarding_complete() {
+        if !self.preferences_state.onboarding_complete()
+            || self.preferences_state.permission_recovery_open()
+        {
             if let Some(shortcuts) = self.shortcuts.0.borrow().as_ref() {
                 shortcuts.set_enabled(false);
             }
@@ -904,6 +912,60 @@ impl Workbench {
     }
 }
 
+fn permission_recovery_ui(preferences: &mut Preferences, ctx: &egui::Context, t: &Tokens) {
+    egui::Window::new("Capture permissions")
+        .id(egui::Id::unique("permission-recovery-dialog"))
+        .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.set_width(480.);
+            ui.label("Review access used for screenshots, GIFs, and video. Captures only asks the operating system after you choose a request button.");
+            ui.add_space(t.number("s-4"));
+            if preferences.permission_recovery_busy() {
+                ui.spinner();
+                ui.label("Checking permissions…");
+            } else if let Some(error) = preferences.permission_recovery_error() {
+                ui.colored_label(t.color("danger-text"), format!("Permissions could not be checked: {error}"));
+                ui.label("Your completed setup and settings are unchanged.");
+            } else if let Some(state) = preferences.permission_recovery_state() {
+                let values = (state.screen_recording_required, state.screen_recording_granted,
+                    state.screen_recording_can_request, state.microphone_granted,
+                    state.microphone_can_request);
+                if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some() {
+                    ui.colored_label(t.color("theme-signal"), "Wayland live capture remains unavailable in this build.");
+                } else if values.0 {
+                    ui.label(if values.1 { "Screen recording: allowed" } else { "Screen recording: not allowed" });
+                    if !values.1 {
+                        let label = if values.2 { "Request screen access" } else { "Open Screen Settings" };
+                        if ui.button(label).clicked() { preferences.request_screen_permission(); }
+                    }
+                } else {
+                    ui.label(if cfg!(target_os = "windows") { "Windows does not require upfront screen access." } else { "X11 does not require upfront screen access." });
+                }
+                if !cfg!(target_os = "macos") {
+                    ui.label("Microphone: status is not reported on this platform. Choose an audio source when recording.");
+                } else if values.3 {
+                    ui.label("Microphone: allowed");
+                } else if values.4 {
+                    ui.label("Microphone: not allowed");
+                    if ui.button("Request microphone access").clicked() { preferences.request_microphone_permission(); }
+                } else {
+                    ui.label("Microphone: not allowed");
+                    if ui.button("Open Mic Settings").clicked() { preferences.request_microphone_permission(); }
+                }
+            }
+            ui.add_space(t.number("s-4"));
+            ui.label("Your captures and editors stay open. Refresh status after granting access, then retry your capture. Save your work before manually restarting if your OS requires it.");
+            if ui.add_enabled(!preferences.permission_recovery_busy(), egui::Button::new("Refresh status")).clicked() {
+                preferences.open_permission_recovery();
+            }
+            if ui.add_enabled(!preferences.permission_recovery_busy(), egui::Button::new("Done")).clicked() {
+                preferences.close_permission_recovery();
+            }
+        });
+}
+
 impl eframe::App for Workbench {
     fn raw_input_hook(&mut self, _: &egui::Context, input: &mut egui::RawInput) {
         crate::diagnostics::event("raw-input", || {
@@ -936,6 +998,18 @@ impl eframe::App for Workbench {
         });
         self.preferences_state.receive(ctx);
         let onboarding_complete = self.preferences_state.onboarding_complete();
+        if onboarding_complete
+            && !self.permission_dialog_presented
+            && let Some(fixture) = self.options.permission_dialog.as_deref()
+        {
+            self.permission_dialog_presented = true;
+            if fixture == "error" {
+                self.preferences_state
+                    .show_permission_recovery_error_fixture();
+            } else {
+                self.preferences_state.open_permission_recovery();
+            }
+        }
         if self.options.live
             && !self.onboarding_presented
             && !self.preferences_state.onboarding_pending()
@@ -955,6 +1029,10 @@ impl eframe::App for Workbench {
             }
         }
         if let Some(live) = &mut self.live {
+            if live.take_permission_recovery_requested() {
+                self.preferences_state.open_permission_recovery();
+            }
+            live.set_permission_recovery_visible(self.preferences_state.permission_recovery_open());
             if onboarding_complete
                 && !self.options.open_media.is_empty()
                 && !self.preferences_state.is_loading()
@@ -996,6 +1074,13 @@ impl eframe::App for Workbench {
         let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(false));
         if root_focused
             && !self.root_was_focused
+            && self.preferences_state.permission_recovery_open()
+            && self.options.permission_dialog.is_none()
+        {
+            self.preferences_state.open_permission_recovery();
+        }
+        if root_focused
+            && !self.root_was_focused
             && let Some(live) = &mut self.live
         {
             live.show_recording_controls(ctx);
@@ -1012,6 +1097,7 @@ impl eframe::App for Workbench {
             .as_ref()
             .and_then(CaptureShortcuts::next_action);
         if onboarding_complete
+            && !self.preferences_state.permission_recovery_open()
             && let (Some(action), Some(live)) = (shortcut_action, &mut self.live)
             && !live.apply_selector_shortcut(action, ctx)
         {
@@ -1191,6 +1277,9 @@ impl eframe::App for Workbench {
         }
         if let Some(live) = &mut self.live {
             live.viewports(&ctx, &t, self.preferences_state.snapshot());
+            if self.preferences_state.permission_recovery_open() {
+                ui.disable();
+            }
             if live.take_open_history_requested() {
                 self.live_preferences = false;
             }
@@ -1237,6 +1326,13 @@ impl eframe::App for Workbench {
             } else {
                 live.ui(ui, &t, frame, || self.preferences_state.snapshot());
             }
+            if live.take_permission_recovery_requested() {
+                self.preferences_state.open_permission_recovery();
+            }
+            if self.preferences_state.permission_recovery_open() {
+                permission_recovery_ui(&mut self.preferences_state, &ctx, &t);
+            }
+            live.set_permission_recovery_visible(self.preferences_state.permission_recovery_open());
             // Navigation can change presentation after logic() has run. Apply
             // that event's focus boundary before returning to the native loop
             // so the next physical key sees the correct OS registration state.

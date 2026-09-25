@@ -67,6 +67,16 @@ checks are diagnostics; physical TCC/signature changes, OS microphone prompts,
 Windows presentation, accessibility and capture-time permission revocation/retry
 remain open. This slice does not close the onboarding acceptance gate.
 
+Completed native profiles now have an explicit permission-recovery dialog from
+the capture workspace. It shares prompt-free checks and explicit macOS screen/mic
+requests with setup, but never calls completion or exposes first-run restart.
+Done remains available after denial/check errors, retaining the workspace and
+editors; queued external media waits until dismissal. Capture and shortcut actions
+are blocked while it is open. Foreground return and Refresh recheck access without
+prompting. Windows/X11 report no upfront screen grant and unknown microphone status;
+Wayland capture remains gated. Physical revocation/retry, OS prompts and accessibility
+acceptance remain open. No permission or onboarding acceptance gate closes here.
+
 Both native hosts now connect pointer dragging on the collapsed preview front
 card, separately from click-to-expand. Desktop-coordinate tracking compensates
 for the native window moving under the pointer. Shared geometry clamps the pile

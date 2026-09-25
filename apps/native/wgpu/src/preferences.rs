@@ -113,6 +113,7 @@ enum Command {
     Save(u64, Box<AppSettings>),
     Load,
     Onboarding(captures_app::onboarding::Action),
+    PermissionRecovery(captures_app::onboarding::Action),
     LoginItem(PathBuf, Option<bool>),
     Flush,
 }
@@ -122,6 +123,7 @@ enum Message {
     Folder(Option<PathBuf>),
     LoginItem(Result<bool, String>),
     Onboarding(Result<captures_app::onboarding::State, String>),
+    PermissionRecovery(Result<captures_app::onboarding::State, String>),
 }
 
 /// One owner serializes disk operations. Closing the window flushes the newest
@@ -158,11 +160,18 @@ impl SettingsIo {
                         let _ = out.send(Message::Onboarding(onboarding.execute(&path, action)));
                         wake();
                     }
+                    Command::PermissionRecovery(action) => {
+                        let _ = out.send(Message::PermissionRecovery(
+                            onboarding.execute(&path, action),
+                        ));
+                        wake();
+                    }
                     Command::LoginItem(root, enabled) => login_item(root, enabled),
                     Command::Flush => break,
                     Command::Save(mut revision, mut settings) => {
                         let mut finish = false;
                         let mut after_save = None;
+                        let mut recovery_after_save = None;
                         loop {
                             match rx.recv_timeout(Duration::from_millis(250)) {
                                 Ok(Command::Save(next_revision, next)) => {
@@ -178,6 +187,10 @@ impl SettingsIo {
                                     after_save = Some(action);
                                     break;
                                 }
+                                Ok(Command::PermissionRecovery(action)) => {
+                                    recovery_after_save = Some(action);
+                                    break;
+                                }
                                 Ok(Command::LoginItem(root, enabled)) => login_item(root, enabled),
                                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                             }
@@ -189,6 +202,12 @@ impl SettingsIo {
                         if let Some(action) = after_save {
                             let _ =
                                 out.send(Message::Onboarding(onboarding.execute(&path, action)));
+                            wake();
+                        }
+                        if let Some(action) = recovery_after_save {
+                            let _ = out.send(Message::PermissionRecovery(
+                                onboarding.execute(&path, action),
+                            ));
                             wake();
                         }
                         if finish {
@@ -250,6 +269,10 @@ pub struct Preferences {
     onboarding: Option<captures_app::onboarding::State>,
     onboarding_error: Option<String>,
     onboarding_busy: bool,
+    permission_recovery_open: bool,
+    permission_recovery: Option<captures_app::onboarding::State>,
+    permission_recovery_error: Option<String>,
+    permission_recovery_busy: bool,
 }
 
 impl Preferences {
@@ -315,6 +338,10 @@ impl Preferences {
             onboarding: None,
             onboarding_error: None,
             onboarding_busy: true,
+            permission_recovery_open: false,
+            permission_recovery: None,
+            permission_recovery_error: None,
+            permission_recovery_busy: false,
         }
     }
 
@@ -388,6 +415,69 @@ impl Preferences {
             self.onboarding_busy = false;
             self.onboarding_error =
                 Some("Setup service is unavailable. Restart Captures to retry.".into());
+        }
+    }
+
+    pub fn open_permission_recovery(&mut self) {
+        self.permission_recovery_open = true;
+        self.send_permission_recovery(captures_app::onboarding::Action::Check);
+    }
+
+    pub fn show_permission_recovery_error_fixture(&mut self) {
+        self.permission_recovery_open = true;
+        self.permission_recovery_busy = false;
+        self.permission_recovery = None;
+        self.permission_recovery_error = Some("Permission check fixture failed.".into());
+    }
+
+    pub fn permission_recovery_open(&self) -> bool {
+        self.permission_recovery_open
+    }
+
+    pub fn permission_recovery_state(&self) -> Option<&captures_app::onboarding::State> {
+        self.permission_recovery.as_ref()
+    }
+
+    pub fn permission_recovery_error(&self) -> Option<&str> {
+        self.permission_recovery_error.as_deref()
+    }
+
+    pub fn permission_recovery_busy(&self) -> bool {
+        self.permission_recovery_busy
+    }
+
+    pub fn request_screen_permission(&mut self) {
+        self.send_permission_recovery(captures_app::onboarding::Action::RequestScreen);
+    }
+
+    pub fn request_microphone_permission(&mut self) {
+        self.send_permission_recovery(captures_app::onboarding::Action::RequestMicrophone);
+    }
+
+    pub fn close_permission_recovery(&mut self) {
+        if !self.permission_recovery_busy {
+            self.permission_recovery_open = false;
+            self.permission_recovery = None;
+            self.permission_recovery_error = None;
+        }
+    }
+
+    fn send_permission_recovery(&mut self, action: captures_app::onboarding::Action) {
+        if self.permission_recovery_busy {
+            return;
+        }
+        debug_assert_ne!(action, captures_app::onboarding::Action::Complete);
+        self.permission_recovery_busy = true;
+        self.permission_recovery_error = None;
+        if self
+            .io
+            .tx
+            .send(Command::PermissionRecovery(action))
+            .is_err()
+        {
+            self.permission_recovery_busy = false;
+            self.permission_recovery_error =
+                Some("Permission service is unavailable. Reopen Captures to retry.".into());
         }
     }
 
@@ -483,6 +573,16 @@ impl Preferences {
                             self.onboarding_error = None;
                         }
                         Err(error) => self.onboarding_error = Some(error),
+                    }
+                }
+                Message::PermissionRecovery(result) => {
+                    self.permission_recovery_busy = false;
+                    match result {
+                        Ok(state) => {
+                            self.permission_recovery = Some(state);
+                            self.permission_recovery_error = None;
+                        }
+                        Err(error) => self.permission_recovery_error = Some(error),
                     }
                 }
             }
@@ -1724,5 +1824,57 @@ mod tests {
         prefs.receive(&ctx);
         assert!(!prefs.onboarding_complete());
         assert_eq!(prefs.onboarding_error(), Some("malformed settings"));
+    }
+
+    #[test]
+    fn permission_recovery_error_preserves_completed_setup_and_done_never_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), dir.path().join("settings.json"), None, None);
+        prefs.io.flush();
+        prefs.receive(&ctx);
+        prefs.onboarding.as_mut().unwrap().onboarding_completed = true;
+
+        let (tx, rx) = mpsc::channel();
+        prefs.io.tx = tx;
+        prefs.open_permission_recovery();
+        prefs.close_permission_recovery();
+        assert!(
+            prefs.permission_recovery_open(),
+            "In-flight checks retain the dialog"
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Command::PermissionRecovery(
+                captures_app::onboarding::Action::Check
+            ))
+        ));
+        prefs
+            .out
+            .send(Message::PermissionRecovery(Err("check failed".into())))
+            .unwrap();
+        prefs.receive(&ctx);
+        assert!(prefs.onboarding_complete());
+        assert_eq!(prefs.permission_recovery_error(), Some("check failed"));
+        assert!(!prefs.permission_recovery_busy());
+
+        prefs.close_permission_recovery();
+        assert!(!prefs.permission_recovery_open());
+        assert!(rx.try_recv().is_err(), "Done must not enqueue Complete");
+
+        prefs.permission_recovery_open = true;
+        prefs.permission_recovery = Some(captures_app::onboarding::State {
+            platform: "test",
+            onboarding_completed: true,
+            screen_recording_required: true,
+            screen_recording_granted: false,
+            screen_recording_can_request: false,
+            screen_recording_requested_this_launch: true,
+            microphone_granted: false,
+            microphone_can_request: false,
+        });
+        prefs.close_permission_recovery();
+        assert!(!prefs.permission_recovery_open(), "Done works while denied");
+        assert!(rx.try_recv().is_err(), "Done must remain a local close");
     }
 }

@@ -90,6 +90,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private let historyRootOverride: String?
     private let settingsPath: String?
     private let showPreferences: () -> Void
+    private let showPermissions: () -> Void
+    private var permissionsVisible = false
     private let captureStateChanged: (Bool) -> Void
     private let selectorGenerationChanged: (UInt64?) -> Void
     private let recordingControlsVisibilityChanged: (Bool) -> Void
@@ -228,10 +230,12 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
          selectorGenerationChanged: @escaping (UInt64?) -> Void = { _ in },
          recordingControlsVisibilityChanged: @escaping (Bool) -> Void = { _ in },
          reportError: @escaping (String) -> Void = { _ in },
+         showPermissions: @escaping () -> Void = {},
          showPreferences: @escaping () -> Void) {
         self.root = root; self.window = window; self.tokens = tokens
         historyRootOverride = historyRoot; self.transport = transport
         self.recoveryWorker = recoveryWorker; self.showPreferences = showPreferences
+        self.showPermissions = showPermissions
         self.settingsPath = settingsPath; self.miniPreviews = miniPreviews
         self.miniPreviewActions = miniPreviewActions
         self.initialSelectionID = initialSelectionID
@@ -618,18 +622,23 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         return "\(historyRows.count) of \(artifacts.count) captures · \(historyFilter.title)"
     }
     private func requestPermission() {
-        status.stringValue = "Requesting screen access…"
-        run({ [transport] in _ = try transport.request(["operation": "request_permission"]) }) { [weak self] result in
-            switch result { case .success: self?.status.stringValue = "Screen access granted."; self?.loadDisplays()
-            case .failure(let error): self?.showError("Screen access wasn’t granted", error) }
-        }
+        guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
+              !clearingHistory, !externalOpenPending, !permissionsVisible else { return }
+        showPermissions()
+    }
+
+    func setPermissionsVisible(_ visible: Bool) {
+        permissionsVisible = visible
+        captureStateChanged(capturing || visible)
+        updateActions()
+        if !visible { loadDisplays(); processNextOpenImage() }
     }
 
     @discardableResult func capture(_ kind: StillCaptureKind) -> Bool {
         recordingSavedNotice.dismiss()
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
-              !externalOpenPending,
+              !externalOpenPending, !permissionsVisible,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]; setBusy(true, message: "Preparing capture…")
@@ -674,7 +683,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         recordingSavedNotice.dismiss()
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
-              !externalOpenPending,
+              !externalOpenPending, !permissionsVisible,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]
@@ -1813,7 +1822,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func setBusy(_ busy: Bool, message: String = "") {
         capturing = busy
-        captureStateChanged(busy)
+        captureStateChanged(busy || permissionsVisible)
         updateActions()
         if busy { status.stringValue = message }
         else { processNextOpenImage() }
@@ -1832,7 +1841,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         let selected = selectedIndex.map { artifacts.indices.contains($0) } == true
         let selectedScreenshot = selectedIndex.map { artifacts.indices.contains($0) && !artifacts[$0].isRecording } == true
         let busy = capturing || clearingHistory || recoveryBusy || recoveryConfirmation
-            || recordingRetiring || externalOpenPending
+            || recordingRetiring || externalOpenPending || permissionsVisible
         refreshButton?.isEnabled = !busy
         table?.isEnabled = !busy
         for (filter, button) in historyFilterButtons {
@@ -2033,7 +2042,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
     func openPreview(_ artifact: CaptureArtifact) {
-        guard !externalOpenPending else { return }
+        guard !externalOpenPending, !permissionsVisible else { return }
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         loadHistory(select: artifact.id)
     }
@@ -2049,7 +2058,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private func processNextOpenImage() {
         guard !externalOpenPending, !historyRoot.isEmpty, !capturing,
               !clearingHistory, !recoveryBusy, !recoveryConfirmation,
-              !recordingRetiring else { return }
+              !recordingRetiring, !permissionsVisible else { return }
         guard !pendingOpenImages.isEmpty else {
             if !externalOpenErrors.isEmpty {
                 let message = externalOpenErrors.joined(separator: "\n")

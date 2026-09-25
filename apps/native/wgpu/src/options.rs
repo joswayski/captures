@@ -98,6 +98,7 @@ pub struct Options {
     pub settings_file: Option<PathBuf>,
     pub appearance_override: bool,
     pub theme_override: bool,
+    pub permission_dialog: Option<String>,
 }
 
 impl Options {
@@ -121,6 +122,7 @@ impl Options {
             settings_file: None,
             appearance_override: false,
             theme_override: false,
+            permission_dialog: None,
         };
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
@@ -134,6 +136,13 @@ impl Options {
                     }
                 }
                 "--live" => options.live = true,
+                "--permission-dialog" => {
+                    let value = args.next().ok_or("Missing permission dialog state")?;
+                    if !matches!(value.as_str(), "ready" | "error") {
+                        return Err("Permission dialog state must be ready or error".into());
+                    }
+                    options.permission_dialog = Some(value);
+                }
                 "--history-root" => {
                     options.history_root = Some(args.next().ok_or("Missing history root")?.into())
                 }
@@ -238,6 +247,11 @@ impl Options {
         }
         if !options.open_media.is_empty() && !options.live {
             return Err("--open-media/--open-image requires --live".into());
+        }
+        if options.permission_dialog.is_some() && (!options.live || options.screenshot.is_none()) {
+            return Err(
+                "--permission-dialog requires a --live --screenshot rendering probe".into(),
+            );
         }
         if options.screenshot.is_some() {
             let deadline = options
