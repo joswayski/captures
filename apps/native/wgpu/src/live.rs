@@ -1420,6 +1420,15 @@ impl Live {
                 return;
             }
         };
+        // Shipping shortcut, tray and New Capture flows start on the display
+        // under the pointer. Keep the current display when it is unknown
+        // (for example Wayland, where the pointer position is unavailable).
+        if let Some(id) = captures_capture::pointer_position()
+            .and_then(|point| captures_capture::XcapBackend.display_id_at_point(point))
+            .filter(|id| self.displays.iter().any(|display| &display.id == id))
+        {
+            self.display_id = Some(id);
+        }
         let target = capture_target(frame, &self.displays, self.display_id.as_deref());
         self.countdown_target = target;
         if target.is_some() {

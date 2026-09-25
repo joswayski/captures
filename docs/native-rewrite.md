@@ -40,6 +40,13 @@ Explorer, physical Finder/Linux file-manager acceptance, accessibility, Wayland
 live capture, signing/notarization, redistributable dependency bundling and update
 installation remain open. No parity gate closes from this development package.
 
+Shortcut, tray and New Capture flows now start on the display under the pointer,
+like the shipping `capture_display_at_point`: wgpu resolves it through the shared
+`XcapBackend::display_id_at_point` and AppKit through `NSEvent.mouseLocation`, and
+the workspace display picker follows. When the pointer position is unavailable
+(Wayland) the current display is kept. Multi-monitor and mixed-DPI physical
+acceptance remains open.
+
 Development login items are now explicit, OS-authoritative Preferences controls:
 per-profile macOS LaunchAgents, Windows HKCU Run values and Linux XDG autostart
 files. They use the current executable and exact development settings/History

@@ -442,7 +442,25 @@ def main():
             root = wait(lambda: windows("Captures"), "root workspace")[0]
             # Leave the left-hand preview/capture area unobstructed. Both root
             # capture buttons still fit on this desktop after moving the window.
-            run("xdotool", "windowmove", "--sync", root, "620", "20")
+            def move_root(x, y):
+                # windowmove --sync returns on any location change. After a
+                # remap Openbox may still be placing the workspace, so that
+                # change can be its intermediate placement and our move lands
+                # later, under a pointer already positioned for the old origin.
+                # Wait for the client origin our frame position implies.
+                run("xdotool", "windowmove", "--sync", root, str(x), str(y))
+
+                def placed():
+                    extents = run("xprop", "-id", root, "_NET_FRAME_EXTENTS").decode()
+                    left, _, top, _ = map(int, extents.split("=", 1)[1].split(","))
+                    info = run("xwininfo", "-id", root).decode()
+                    origin = tuple(int(line.split(":", 1)[1]) for line in info.splitlines()
+                                   if "Absolute upper-left" in line)
+                    return origin == (x + left, y + top)
+
+                wait(placed, f"root workspace moved to {x},{y}")
+
+            move_root(620, 20)
             time.sleep(1)
 
             def entries():
@@ -455,7 +473,7 @@ def main():
                 # including their transparent margins and expanded stacks.
                 run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
                 wait(lambda: windows("Captures"), "workspace restored before positioning")
-                run("xdotool", "windowmove", "--sync", root, "300", "280")
+                move_root(300, 280)
                 click(root, 575, 126)
                 selector = wait(lambda: windows(SELECTOR), "region selector")[0]
                 wait(lambda: int(run("import", "-window", selector, "-crop", "1280x96+0+804",
@@ -471,7 +489,7 @@ def main():
                 # Openbox may reposition an off-screen workspace when remapping.
                 # Keep it out of the pixel oracle crop again before comparing a
                 # composited card with the following screenshot (which hides it).
-                run("xdotool", "windowmove", "--sync", root, "620", "20")
+                move_root(620, 20)
                 return entry
 
             first = capture((140, 180, 310, 170))
