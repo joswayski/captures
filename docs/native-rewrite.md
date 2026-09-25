@@ -40,6 +40,13 @@ Explorer, physical Finder/Linux file-manager acceptance, accessibility, Wayland
 live capture, signing/notarization, redistributable dependency bundling and update
 installation remain open. No parity gate closes from this development package.
 
+Direct region and window overlays (shortcut, tray and screenshot-during-recording)
+now follow the shipping `CaptureOverlay`: no toolbar, a completed region drag
+commits on release, a window/desktop click commits that window or the display,
+and a click without a region shows "Click and drag to select a region" for 1.8
+seconds. "Automatically start on selection" applies only to the New Capture
+controls, which keep aspect presets and Enter confirmation.
+
 Development login items are now explicit, OS-authoritative Preferences controls:
 per-profile macOS LaunchAgents, Windows HKCU Run values and Linux XDG autostart
 files. They use the current executable and exact development settings/History

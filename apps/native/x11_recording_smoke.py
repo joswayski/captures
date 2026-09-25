@@ -488,7 +488,7 @@ pcm.!pulse {
                     time.sleep(.2)
                     if screenshot and attempt == 0:
                         shot("root", screenshot)
-                    run("xdotool", "key", "Return")
+                    # Shipping direct overlays commit on release; no Enter.
                     time.sleep(.2)
                     countdown = windows("Captures Screenshot Countdown")
                     if countdown:
