@@ -341,8 +341,8 @@ impl<'a, V: Vault> SharingCoordinator<'a, V> {
             let created: Created = match response {
                 Ok(response) => match self.decode_api(response, 201) {
                     Ok(created) => created,
-                    Err(Error::Account(error)) => return Err(Error::Account(error)),
-                    Err(_) => return Err(Error::CreateUncertain),
+                    Err(Error::Protocol) => return Err(Error::CreateUncertain),
+                    Err(error) => return Err(error),
                 },
                 Err(_) => return Err(Error::CreateUncertain),
             };
@@ -656,8 +656,11 @@ impl<'a, V: Vault> SharingCoordinator<'a, V> {
         if status == 503 {
             return Err(Error::Unavailable);
         }
-        if status == 404 {
+        if status == 404 || status == 410 {
             return Err(Error::NotFound);
+        }
+        if status == 409 {
+            return Err(Error::InvalidInput);
         }
         if status != expected {
             return Err(Error::Protocol);

@@ -42,6 +42,7 @@ struct State {
     deny_share: bool,
     other_account: bool,
     ambiguous_create: bool,
+    create_status: Option<&'static str>,
     deleted: bool,
     share_id: usize,
 }
@@ -115,7 +116,7 @@ impl Server {
                         continue;
                     } // Server may have committed; no response.
                     (
-                        "201 Created",
+                        state.create_status.unwrap_or("201 Created"),
                         r#"{"id":"asset1","partSize":3,"partCount":2}"#.to_owned(),
                         "",
                     )
@@ -494,6 +495,51 @@ fn ambiguous_create_reuses_durable_key_after_restart_and_missing_file_never_crea
         Some(Error::CreateUncertain)
     );
     assert_eq!(server.state.lock().unwrap().create, 3);
+}
+
+#[test]
+fn rejected_create_keeps_its_key_and_never_falls_back_to_post() {
+    let server = Server::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("original.png");
+    fs::write(&path, b"ABCDE").unwrap();
+    let mut account = client(&server.url);
+    for (status, expected) in [
+        ("404 Not Found", Error::NotFound),
+        ("409 Conflict", Error::InvalidInput),
+        ("410 Gone", Error::NotFound),
+        ("503 Service Unavailable", Error::Unavailable),
+    ] {
+        server.state.lock().unwrap().create_status = Some(status);
+        let mut flow =
+            SharingCoordinator::new(&mut account, AssociationStore::new(dir.path())).unwrap();
+        assert_eq!(
+            flow.upload(
+                "artifact1",
+                &path,
+                "original.png",
+                "image/png",
+                cancelled(),
+                progress()
+            )
+            .err(),
+            Some(expected)
+        );
+        assert!(matches!(flow.open("artifact1").unwrap(), Opened::Pending));
+    }
+    let state = server.state.lock().unwrap();
+    let creates: Vec<_> = state
+        .requests
+        .iter()
+        .filter(|(line, _, _)| line.starts_with("PUT /api/asset-uploads/"))
+        .collect();
+    assert_eq!(creates.len(), 4);
+    assert!(
+        creates
+            .iter()
+            .all(|(line, _, body)| line == &creates[0].0 && body == &creates[0].2)
+    );
+    assert!(state.parts.is_empty());
 }
 
 #[test]
