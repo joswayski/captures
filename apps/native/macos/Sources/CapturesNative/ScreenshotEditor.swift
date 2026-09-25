@@ -900,7 +900,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var drawingDefaultControls: [NSView] = []
     private var drawingFillControls: [NSView] = []
     private var drawingDefaultsArtifactID: String?
-    private var drawingDropShadow = false
+    private let drawingDropShadow = NSButton(checkboxWithTitle: "Drop shadow", target: nil, action: nil)
+    private var drawingShadowControls: [NSView] = []
+    private var drawingShadowFields: [String: NSTextField] = [:]
+    private var drawingShadowCustomized = false
     private let textEditor = NSTextView()
     private let textSize = NSTextField()
     private let textColor = NSTextField()
@@ -1591,6 +1594,24 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                   widthLabel, opacityLabel, drawingStrokeWidth, drawingOpacity,
                                   drawingStroke, drawingFill]
         drawingFillControls = [fillColorLabel, drawingFillColor, drawingFill]
+        drawingDropShadow.frame = NSRect(x: 0, y: 302, width: 252, height: 24)
+        drawingDropShadow.setAccessibilityLabel("New drawing drop shadow")
+        drawingDropShadow.target = self; drawingDropShadow.action = #selector(drawingDefaultsChanged(_:))
+        content.addSubview(drawingDropShadow)
+        drawingDefaultControls.append(drawingDropShadow)
+        for (index, item) in [("color", "Shadow color"), ("opacity", "Shadow opacity"),
+                              ("blur", "Blur (0–100)"), ("offsetX", "X offset"),
+                              ("offsetY", "Y offset")].enumerated() {
+            let x = CGFloat(index % 2) * 132
+            let y = CGFloat(index / 2) * 62 + 336
+            let label = panelFieldLabel(item.1, x: x, y: y, parent: content)
+            let field = NSTextField()
+            configure(field, frame: NSRect(x: x, y: y + 22, width: 120, height: 30),
+                      label: "New drawing shadow \(item.0)", parent: content)
+            field.formatter = nil; field.delegate = self
+            drawingShadowFields[item.0] = field
+            drawingShadowControls.append(contentsOf: [label, field])
+        }
     }
 
     private func publishInitialDrawingDefaults(_ snapshot: NativeEditorSnapshot) {
@@ -1602,7 +1623,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawingOpacity.stringValue = "100"
         drawingStroke.state = style.strokeEnabled ? .on : .off
         drawingFill.state = style.fill == nil ? .off : .on
-        drawingDropShadow = style.dropShadow
+        drawingDropShadow.state = style.dropShadow ? .on : .off
+        drawingShadowCustomized = false
         drawingDefaultsChanged()
     }
 
@@ -1611,6 +1633,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             drawingFillColor.stringValue = drawingStrokeColor.stringValue
         }
         updateDrawingPreviewStyle()
+        publishDrawToolControls()
     }
 
     private func updateDrawingPreviewStyle() {
@@ -1618,6 +1641,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if let color = NSColor(hex: drawingFillColor.stringValue) { drawOverlay.fillColor = color }
         if let width = number(drawingStrokeWidth), (2...40).contains(width) {
             drawOverlay.annotationStrokeWidth = CGFloat(width)
+            if !drawingShadowCustomized, let shadow = try? NativeDrawingStyle.defaultShadow(strokeWidth: width) {
+                drawingShadowFields["color"]?.stringValue = shadow.color
+                for (key, path) in textShadowNumbers {
+                    drawingShadowFields[key]?.stringValue = format(shadow[keyPath: path])
+                }
+            }
         }
         if let opacity = number(drawingOpacity), (0...100).contains(opacity) {
             drawOverlay.annotationOpacity = CGFloat(opacity / 100)
@@ -2099,18 +2128,21 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let closed = [.rectangle, .ellipse, .triangle, .diamond, .star].contains(shape)
         drawingStroke.isHidden = !creatingDrawing || !closed
         drawingFillControls.forEach { $0.isHidden = !creatingDrawing || !closed }
+        let drawingShadowVisible = creatingDrawing && drawingDropShadow.state == .on
+        drawingShadowControls.forEach { $0.isHidden = !drawingShadowVisible }
         drawHelper.stringValue = wand
             ? "Wand removes matching pixels from the frontmost visible image."
             : brush
                 ? "The outline previews brush size and path only. Pixels apply on release."
                 : shape == .text
                     ? "Click once to create empty auto-width text. Edit it below, then Apply."
+                    : drawingShadowVisible ? "Shadow pixels appear on release, in one annotation layer."
                     : "This tool creates one annotation layer on release."
         textControls.forEach { $0.isHidden = !textSelected }
         // Other tools need no Wand/brush/text-default fields. Collapse their
         // reserved space without overlapping Text's creation controls.
         let compact = textSelected && !wand && !brush && !creatingText
-        drawHelper.frame.origin.y = compact ? 148 : creatingDrawing ? 308 : 278
+        drawHelper.frame.origin.y = compact ? 148 : drawingShadowVisible ? 526 : creatingDrawing ? 338 : 278
         if let heading = textControls.first, let content = heading.superview {
             let offset = (compact ? 196.0 : creatingDrawing ? 358.0 : 326.0) - heading.frame.minY
             for control in textControls { control.frame.origin.y += offset }
@@ -2158,6 +2190,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSTextField else { return }
+        if drawingShadowFields.values.contains(where: { $0 === field }) {
+            drawingShadowCustomized = true
+            return
+        }
         if [drawingStrokeColor, drawingFillColor, drawingStrokeWidth, drawingOpacity]
             .contains(where: { $0 === field }) {
             updateDrawingPreviewStyle()
@@ -2627,9 +2663,28 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             fill = color
         }
         updateDrawingPreviewStyle()
-        return ["color": color, "fill": fill,
-                "strokeWidth": width, "strokeEnabled": drawingStroke.state == .on,
-                "dropShadow": drawingDropShadow]
+        var style: [String: Any] = ["color": color, "fill": fill,
+            "strokeWidth": width, "strokeEnabled": drawingStroke.state == .on,
+            "dropShadow": drawingDropShadow.state == .on]
+        if drawingShadowCustomized {
+            var shadow: [String: Any] = [:]
+            var valid = true
+            if let color = drawingShadowFields["color"].flatMap({ PreferencesController.normalizeHex($0.stringValue) }) {
+                shadow["color"] = color
+            } else { valid = false }
+            for (key, _) in textShadowNumbers {
+                let range: ClosedRange<Double> = key.hasPrefix("offset") ? -500...500 : 0...100
+                if let field = drawingShadowFields[key], let value = number(field), range.contains(value) {
+                    shadow[key] = value
+                } else { valid = false }
+            }
+            if valid { style["dropShadowStyle"] = shadow }
+            else if drawingDropShadow.state == .on {
+                showError("Enter a shadow color, opacity/blur from 0 to 100, and offsets from −500 to 500.")
+                return nil
+            }
+        }
+        return style
     }
 
     private func beginTextInput(at point: NSPoint) {
