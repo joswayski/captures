@@ -401,6 +401,11 @@ enum PreviewMessage {
         artifact_id: String,
         generation: u64,
     },
+    MoveStack {
+        artifact_id: String,
+        generation: u64,
+        position: egui::Pos2,
+    },
     ToggleCollapsed,
     ClearAll {
         artifact_ids: Vec<String>,
@@ -488,6 +493,9 @@ impl MiniPreviews {
         self.capture_target = target;
         self.show = settings.show_mini_previews;
         self.include_in_captures = settings.include_mini_previews_in_captures;
+        if !self.show || self.placement != settings.mini_preview_placement {
+            self.visibility.clear_stack_origin();
+        }
         self.placement = settings.mini_preview_placement;
         self.omission_frame =
             (was_visible && self.show && !self.include_in_captures).then_some(frame);
@@ -582,6 +590,7 @@ impl MiniPreviews {
         }
         if self.stack.ids().is_empty() {
             self.stack_target = None;
+            self.visibility.clear_stack_origin();
         }
         true
     }
@@ -601,8 +610,43 @@ impl MiniPreviews {
         }
         if self.stack.ids().is_empty() {
             self.stack_target = None;
+            self.visibility.clear_stack_origin();
         }
         removed
+    }
+
+    fn move_stack(&mut self, position: egui::Pos2) {
+        use captures_app::preview::{self, ThumbnailStackOrigin};
+        if !self.stack.is_collapsed() || !self.is_visible() {
+            return;
+        }
+        let Some(bounds) = self.stack_target.and_then(|target| target.preview_bounds) else {
+            return;
+        };
+        let count = self.stack.ids().len();
+        let anchor = self.placement.into();
+        let edge_offset = preview::collapsed_padding(count)
+            + if self.placement.is_top() {
+                -preview::THUMBNAIL_CONTROL_GUTTER
+            } else {
+                preview::THUMBNAIL_CARD_HEIGHT + preview::THUMBNAIL_CONTROL_GUTTER
+            };
+        let geometry = preview::thumbnail_geometry(
+            bounds,
+            count,
+            true,
+            Some(ThumbnailStackOrigin {
+                x: position.x as f64,
+                edge: position.y as f64 + edge_offset,
+                anchor,
+            }),
+            self.placement,
+        );
+        self.visibility.set_stack_origin(ThumbnailStackOrigin {
+            x: geometry.x,
+            edge: geometry.y + edge_offset,
+            anchor,
+        });
     }
 
     fn mark_ready(&mut self, artifact_id: &str) {
@@ -2055,6 +2099,17 @@ impl Live {
                         .set_collapsed(!self.previews.stack.is_collapsed());
                     ctx.request_repaint();
                 }
+                PreviewMessage::MoveStack {
+                    artifact_id,
+                    generation,
+                    position,
+                } if self.previews.accepts(&artifact_id, generation)
+                    && self.previews.stack.ids().last() == Some(&artifact_id) =>
+                {
+                    self.previews.move_stack(position);
+                    request_hidden_root_paint(ctx);
+                    ctx.request_repaint();
+                }
                 PreviewMessage::ClearAll { artifact_ids } => {
                     if self.previews.clear(&artifact_ids) > 0 {
                         request_hidden_root_paint(ctx);
@@ -2063,6 +2118,7 @@ impl Live {
                 }
                 PreviewMessage::Copy { .. }
                 | PreviewMessage::Save { .. }
+                | PreviewMessage::MoveStack { .. }
                 | PreviewMessage::OpenHistory { .. } => {}
             }
         }
@@ -3478,6 +3534,9 @@ impl Live {
                 self.previews.stack.set_collapsed(false);
                 self.previews.visibility.reset_session_placement();
             }
+            if self.previews.placement != settings.mini_preview_placement {
+                self.previews.visibility.clear_stack_origin();
+            }
             self.previews.show = settings.show_mini_previews;
             self.previews.include_in_captures = settings.include_mini_previews_in_captures;
             self.previews.placement = settings.mini_preview_placement;
@@ -3523,7 +3582,7 @@ impl Live {
             preview_bounds,
             count,
             collapsed,
-            None,
+            self.previews.visibility.stack_origin(),
             placement,
         );
         let sender = self.preview_tx.clone();
@@ -3590,6 +3649,17 @@ impl Live {
                     return;
                 }
                 let mut message = None;
+                // No idle polling. Only sample while a compact pile has an
+                // active pointer gesture; local winit positions can lag a move.
+                let desktop_pointer = if collapsed && ui.input(|input| input.pointer.primary_down())
+                {
+                    captures_capture::pointer_position().map(|(x, y)| {
+                        let scale = preview_bounds.scale_factor.max(1.) as f32;
+                        egui::pos2(x as f32 / scale, y as f32 / scale)
+                    })
+                } else {
+                    None
+                };
                 let mut show_card = |ui: &mut egui::Ui, card: &PreviewRenderCard| {
                     let action = crate::mini_preview::show(
                         ui,
@@ -3605,11 +3675,19 @@ impl Live {
                             interactive: card.layout.interactive,
                             collapsed,
                             stack_count: count,
+                            desktop_pointer,
                         },
                     );
                     let next_message = match action {
                         Some(crate::mini_preview::Action::ExpandStack) => {
                             Some(PreviewMessage::ToggleCollapsed)
+                        }
+                        Some(crate::mini_preview::Action::MoveStack(position)) => {
+                            Some(PreviewMessage::MoveStack {
+                                artifact_id: card.artifact_id.clone(),
+                                generation: card.generation,
+                                position,
+                            })
                         }
                         Some(crate::mini_preview::Action::Copy) => Some(PreviewMessage::Copy {
                             artifact_id: card.artifact_id.clone(),
@@ -5744,6 +5822,57 @@ mod tests {
         assert!(previews.cards.is_empty());
         assert_eq!(captures_app::list(root.path()).unwrap().len(), 1);
         assert!(artifact.image_path.exists());
+    }
+
+    #[test]
+    fn compact_drag_stores_clamped_edge_and_clears_only_on_session_reset() {
+        use captures_settings::MiniPreviewPlacement;
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [31, 59, 127, 255]);
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "drag",
+            egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        for (placement, edge) in [
+            (MiniPreviewPlacement::TopLeft, 170.),
+            (MiniPreviewPlacement::BottomRight, 434.),
+        ] {
+            let settings = AppSettings {
+                mini_preview_placement: placement,
+                ..Default::default()
+            };
+            let mut previews = MiniPreviews::default();
+            previews
+                .begin_capture(&settings, Some(preview_target()), 1)
+                .unwrap();
+            let (guard, _) = previews.start_artifact(&artifact).unwrap().unwrap();
+            previews.cards.get_mut(&guard.artifact_id).unwrap().texture = Some(texture.clone());
+            previews.mark_ready(&guard.artifact_id);
+            previews.stack.set_collapsed(true);
+            previews.move_stack(egui::pos2(240., 170.));
+            let origin = previews.visibility.stack_origin().unwrap();
+            assert_eq!((origin.x, origin.edge), (240., edge));
+            previews.stack.set_collapsed(false);
+            previews.move_stack(egui::pos2(100., 100.));
+            assert_eq!(previews.visibility.stack_origin().unwrap().edge, edge);
+            previews
+                .begin_capture(&settings, Some(preview_target()), 2)
+                .unwrap();
+            previews.restore_capture();
+            assert_eq!(previews.visibility.stack_origin().unwrap().edge, edge);
+            previews.stack.set_collapsed(true);
+            previews.move_stack(egui::pos2(9999., 9999.));
+            let clamped = previews.visibility.stack_origin().unwrap();
+            assert_eq!(clamped.x, 940.);
+            assert!(
+                clamped.edge <= 660.,
+                "keep auto-hide taskbar and chrome gap"
+            );
+            previews.clear(&[guard.artifact_id]);
+            assert!(previews.visibility.stack_origin().is_none());
+        }
     }
 
     #[test]

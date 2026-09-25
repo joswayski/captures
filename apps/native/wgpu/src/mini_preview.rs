@@ -2,9 +2,10 @@ use eframe::egui::{self, Align, Layout, RichText, Stroke};
 
 use crate::tokens::Tokens;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
     ExpandStack,
+    MoveStack(egui::Pos2),
     Copy,
     Save,
     OpenHistory,
@@ -38,6 +39,7 @@ pub struct View<'a> {
     pub interactive: bool,
     pub collapsed: bool,
     pub stack_count: usize,
+    pub desktop_pointer: Option<egui::Pos2>,
 }
 
 pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action> {
@@ -67,7 +69,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                 card,
                 ui.scope_id()
                     .with(("expand-preview-stack", view.artifact_id)),
-                egui::Sense::click(),
+                egui::Sense::click_and_drag(),
             );
             response.widget_info(|| {
                 egui::WidgetInfo::labeled(
@@ -79,6 +81,37 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             if response.clicked() {
                 action = Some(Action::ExpandStack);
             }
+            let drag_id = response.id.with("desktop-drag");
+            // winit can retain old local coordinates after moving the window.
+            // Keep the original grab offset and use an OS desktop pointer sample.
+            if response.is_pointer_button_down_on() {
+                if ui.input(|input| input.pointer.primary_pressed()) {
+                    ui.data_mut(|data| data.remove::<(egui::Pos2, Option<egui::Pos2>)>(drag_id));
+                }
+                let press = ui.input(|input| input.pointer.press_origin());
+                if let Some(press) = press {
+                    ui.data_mut(|data| {
+                        data.get_temp_mut_or_insert_with(drag_id, || (press, None::<egui::Pos2>));
+                    });
+                }
+            }
+            if response.dragged_by(egui::PointerButton::Primary)
+                && let Some(pointer) = view.desktop_pointer
+                && let Some((press, previous)) =
+                    ui.data(|data| data.get_temp::<(egui::Pos2, Option<egui::Pos2>)>(drag_id))
+            {
+                let position = pointer - press.to_vec2();
+                if previous != Some(position) {
+                    ui.data_mut(|data| data.insert_temp(drag_id, (press, Some(position))));
+                    action = Some(Action::MoveStack(position));
+                }
+            }
+            if !ui.input(|input| input.pointer.primary_down()) {
+                ui.data_mut(|data| data.remove::<(egui::Pos2, Option<egui::Pos2>)>(drag_id));
+            }
+            response
+                .on_hover_cursor(egui::CursorIcon::Grab)
+                .on_hover_text("Click to expand; drag to move the preview pile");
         }
         return action;
     }
@@ -238,6 +271,30 @@ mod tests {
         collapsed: bool,
         interactive: bool,
     ) -> Option<Action> {
+        let pointer = events.iter().rev().find_map(|event| match event {
+            egui::Event::PointerMoved(pos) => Some(*pos),
+            _ => None,
+        });
+        run_card_on_desktop(
+            ctx,
+            texture,
+            events,
+            collapsed,
+            interactive,
+            egui::Pos2::ZERO,
+            pointer,
+        )
+    }
+
+    fn run_card_on_desktop(
+        ctx: &egui::Context,
+        texture: &egui::TextureHandle,
+        events: Vec<egui::Event>,
+        collapsed: bool,
+        interactive: bool,
+        origin: egui::Pos2,
+        desktop_pointer: Option<egui::Pos2>,
+    ) -> Option<Action> {
         let screen = egui::Rect::from_min_size(
             egui::Pos2::ZERO,
             egui::vec2(
@@ -246,7 +303,13 @@ mod tests {
             ),
         );
         let tokens = crate::tokens::load()["dark-mustard"].clone();
-        ctx.begin_pass(raw(screen, events));
+        let mut input = raw(screen, events);
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .outer_rect = Some(egui::Rect::from_min_size(origin, screen.size()));
+        ctx.begin_pass(input);
         let mut ui = egui::Ui::new(
             ctx.clone(),
             egui::Id::unique(("preview-card-input-test", interactive)),
@@ -266,6 +329,7 @@ mod tests {
                 interactive,
                 collapsed,
                 stack_count: 3,
+                desktop_pointer,
             },
         );
         let mut output = ctx.end_pass();
@@ -311,6 +375,64 @@ mod tests {
         assert!(!stack_controls_visible(1, false));
         assert!(stack_controls_visible(2, false));
         assert!(!stack_controls_visible(2, true));
+    }
+
+    #[test]
+    fn compact_drag_moves_without_expanding_and_next_click_still_expands() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "drag",
+            egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        let press = egui::pos2(100., 80.);
+        run_card(&ctx, &texture, moved(press), true, true);
+        run_card(&ctx, &texture, pointer(press, true), true, true);
+        assert_eq!(
+            run_card(&ctx, &texture, moved(egui::pos2(142., 53.)), true, true),
+            Some(Action::MoveStack(egui::pos2(42., -27.)))
+        );
+        // The window moved but winit still reports the old local pointer. A
+        // fresh desktop sample stays put; do not drift or repaint in a loop.
+        assert_eq!(
+            run_card_on_desktop(
+                &ctx,
+                &texture,
+                vec![],
+                true,
+                true,
+                egui::pos2(42., -27.),
+                Some(egui::pos2(142., 53.))
+            ),
+            None
+        );
+        assert_eq!(
+            run_card_on_desktop(
+                &ctx,
+                &texture,
+                moved(egui::pos2(110., 90.)),
+                true,
+                true,
+                egui::pos2(42., -27.),
+                Some(egui::pos2(152., 63.))
+            ),
+            Some(Action::MoveStack(egui::pos2(52., -17.)))
+        );
+        assert_eq!(
+            run_card(
+                &ctx,
+                &texture,
+                pointer(egui::pos2(142., 53.), false),
+                true,
+                true
+            ),
+            None
+        );
+        run_card(&ctx, &texture, pointer(press, true), true, true);
+        assert_eq!(
+            run_card(&ctx, &texture, pointer(press, false), true, true),
+            Some(Action::ExpandStack)
+        );
     }
 
     #[test]
