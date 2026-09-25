@@ -84,6 +84,12 @@ pub struct Workbench {
     root_was_focused: bool,
     tray: Option<Tray>,
     tray_error: Option<String>,
+    startup_notice: Option<crate::startup_notice::Notice>,
+    startup_notice_generation: u64,
+    startup_notice_decided: bool,
+    startup_notice_tx: Sender<u64>,
+    startup_notice_rx: Receiver<u64>,
+    launched_with_media: bool,
     shortcuts: ShortcutOwner,
     shortcuts_generation: u64,
     shortcut_error: Option<String>,
@@ -211,6 +217,8 @@ impl Workbench {
             crate::capture_controls::CaptureControls::fixture()
         };
         let root_hidden = options.live && options.scene == Scene::Idle;
+        let launched_with_media = !options.open_media.is_empty();
+        let (startup_notice_tx, startup_notice_rx) = mpsc::channel();
         let this = Self {
             options,
             variants: tokens::load(),
@@ -254,6 +262,12 @@ impl Workbench {
             root_was_focused: false,
             tray,
             tray_error,
+            startup_notice: None,
+            startup_notice_generation: 0,
+            startup_notice_decided: false,
+            startup_notice_tx,
+            startup_notice_rx,
+            launched_with_media,
             shortcuts,
             shortcuts_generation: 0,
             shortcut_error: None,
@@ -372,6 +386,144 @@ impl Workbench {
             }
             TrayAction::Quit => self.quit(ctx),
         }
+    }
+
+    /// Shipping launch notice: 15 s after first-run setup completes, 5 s on a
+    /// quiet (hidden, tray-resident) launch. Never on a visible launch or when
+    /// the launch opens media.
+    fn update_startup_notice(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &eframe::Frame,
+        onboarding_complete: bool,
+    ) {
+        use captures_app::tray_notice::{
+            STARTUP_NOTICE_AFTER_SETUP_VISIBLE, STARTUP_NOTICE_AUTOSTART_VISIBLE,
+            STARTUP_NOTICE_TRAY_RETRY_DELAY,
+        };
+        while let Ok(generation) = self.startup_notice_rx.try_recv() {
+            if self
+                .startup_notice
+                .as_ref()
+                .is_some_and(|notice| notice.generation == generation)
+            {
+                self.startup_notice = None;
+            }
+        }
+        let now = Instant::now();
+        if self
+            .startup_notice
+            .as_ref()
+            .is_some_and(|notice| notice.expired(now))
+        {
+            self.startup_notice = None;
+        }
+        if !self.startup_notice_decided
+            && self.options.live
+            && onboarding_complete
+            && self.options.screenshot.is_none()
+        {
+            self.startup_notice_decided = true;
+            let visible_for = if self.onboarding_presented {
+                Some(STARTUP_NOTICE_AFTER_SETUP_VISIBLE)
+            } else if self.root_hidden && self.tray.is_some() && !self.launched_with_media {
+                Some(STARTUP_NOTICE_AUTOSTART_VISIBLE)
+            } else {
+                None
+            };
+            if let Some(visible_for) = visible_for {
+                let shortcut = self
+                    .preferences_state
+                    .snapshot()
+                    .map(|settings| settings.new_capture_shortcut)
+                    .ok()
+                    .filter(|shortcut| !shortcut.trim().is_empty())
+                    .unwrap_or_else(captures_settings::default_new_capture_shortcut);
+                self.startup_notice_generation = self.startup_notice_generation.wrapping_add(1);
+                self.startup_notice = Some(crate::startup_notice::Notice::new(
+                    crate::startup_notice::placement(
+                        frame.winit_window().map(AsRef::as_ref),
+                        self.tray.as_ref().and_then(Tray::rect),
+                    ),
+                    captures_app::shortcuts::shortcut_display_tokens(
+                        &shortcut,
+                        crate::preferences::shortcut_platform(),
+                    ),
+                    self.startup_notice_generation,
+                    visible_for,
+                    now,
+                ));
+                crate::live::request_hidden_root_paint(ctx);
+                ctx.request_repaint();
+            }
+        }
+        // The tray icon can report its rect a moment after the event loop
+        // starts (Windows); re-anchor once it does, like the shipping app.
+        if let Some(notice) = &mut self.startup_notice
+            && notice.wants_tray_retry(now)
+        {
+            if let Some(tray) = self.tray.as_ref().and_then(Tray::rect) {
+                let placement = crate::startup_notice::placement(
+                    frame.winit_window().map(AsRef::as_ref),
+                    Some(tray),
+                );
+                if placement != notice.placement {
+                    notice.placement = placement;
+                    crate::live::request_hidden_root_paint(ctx);
+                }
+            }
+            ctx.request_repaint_after(STARTUP_NOTICE_TRAY_RETRY_DELAY);
+        }
+    }
+
+    fn startup_notice_viewport(
+        ctx: &egui::Context,
+        tokens: &Tokens,
+        notice: Option<&crate::startup_notice::Notice>,
+        sender: &Sender<u64>,
+    ) {
+        let Some(notice) = notice.cloned() else {
+            return;
+        };
+        let size = crate::startup_notice::size(&notice.placement);
+        let builder = egui::ViewportBuilder::default()
+            .with_title(captures_app::tray_notice::STARTUP_NOTICE_WINDOW_TITLE)
+            .with_position(egui::pos2(
+                notice.placement.x as f32,
+                notice.placement.y as f32,
+            ))
+            .with_inner_size(size)
+            .with_min_inner_size(size)
+            .with_max_inner_size(size)
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_transparent(true)
+            .with_has_shadow(false)
+            .with_always_on_top()
+            .with_taskbar(false)
+            .with_active(false);
+        #[cfg(target_os = "linux")]
+        let builder = builder
+            .with_window_type(egui::X11WindowType::Notification)
+            .with_override_redirect(true);
+        let sender = sender.clone();
+        let tokens = tokens.clone();
+        let viewport = egui::ViewportId::from_hash_of(("startup-notice", notice.generation));
+        ctx.show_viewport_deferred(viewport, builder, move |ui, _| {
+            let now = Instant::now();
+            let dismissed = crate::startup_notice::show(ui, &tokens, &notice);
+            if dismissed
+                || notice.expired(now)
+                || ui.input(|input| input.viewport().close_requested())
+            {
+                let _ = sender.send(notice.generation);
+                crate::live::request_hidden_root_paint(ui.ctx());
+                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            } else {
+                ui.ctx().request_repaint_after(notice.remaining(now));
+            }
+        });
+        ctx.request_repaint_of(viewport);
     }
 
     fn quit(&mut self, ctx: &egui::Context) {
@@ -1024,6 +1176,7 @@ impl eframe::App for Workbench {
             self.onboarding_presented = true;
             self.show_root(ctx);
         }
+        self.update_startup_notice(ctx, frame, onboarding_complete);
         self.receive_instance(ctx);
         while let Ok(result) = self.action_rx.try_recv() {
             self.action_error = result
@@ -1294,6 +1447,12 @@ impl eframe::App for Workbench {
                 self.preferences_state.snapshot(),
                 self.preferences_state
                     .reduced_motion(self.options.reduced_motion),
+            );
+            Self::startup_notice_viewport(
+                &ctx,
+                &t,
+                self.startup_notice.as_ref(),
+                &self.startup_notice_tx,
             );
             if self.preferences_state.permission_recovery_open() {
                 ui.disable();

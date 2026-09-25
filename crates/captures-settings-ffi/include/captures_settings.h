@@ -132,6 +132,27 @@ bool captures_preview_geometry_v1(CapturesPreviewMonitor monitor, size_t count,
     bool collapsed, const CapturesPreviewOrigin *origin, uint32_t placement,
     CapturesPreviewGeometry *output);
 
+/* Shipping "Captures is ready to use" launch-notice placement. Every rect is
+ * LOGICAL points in one top-left desktop space (y grows downward; negative
+ * origins allowed). AppKit converts its bottom-left screen coordinates at this
+ * boundary. monitor/work_area must be finite with positive size. tray may be
+ * NULL; an empty, non-finite or off-edge tray rect uses the fallback.
+ * menu_bar_at_top: true on macOS (rejects the unlaid-out Cocoa-origin item).
+ * fallback_edge: 0 top (macOS), 1 bottom (Windows), 2 work-area insets (Linux).
+ * Output: window frame (top-left logical), caret 0 none/1 top/2 bottom, caret_x
+ * and card in window-local top-left coordinates. No allocation or OS access.
+ * False leaves output unchanged (null output, bad enum, invalid bounds). */
+typedef struct { double x, y, width, height; } CapturesTrayNoticeRect;
+typedef struct {
+    double x, y, width, height, caret_x;
+    CapturesTrayNoticeRect card;
+    uint32_t caret;
+} CapturesTrayNoticePlacement;
+bool captures_startup_notice_placement_v1(CapturesTrayNoticeRect monitor,
+    CapturesTrayNoticeRect work_area, const CapturesTrayNoticeRect *tray,
+    bool menu_bar_at_top, uint32_t fallback_edge,
+    CapturesTrayNoticePlacement *output);
+
 /* Owned shared visibility state, not a native window. Serialize all calls on
  * one handle (normally the UI thread). Free exactly once after callers stop;
  * NULL is permitted by free and returns false from every other handle call.
@@ -202,6 +223,22 @@ char *captures_icon_polylines_v1(const char *name);
 /* Idle mini-preview metadata, e.g. "1440 × 900 · 246 KB", matching the
  * shipping card. Returns owned UTF-8; free with captures_settings_free_v1. */
 char *captures_preview_card_metadata_v1(uint32_t width, uint32_t height, uint64_t size_bytes);
+
+/* Expanded-stack overflow cue edges, with the shipping 1 px tolerance. Bit 1:
+ * cards hidden above the viewport; bit 2: cards hidden below. */
+#define CAPTURES_PREVIEW_OVERFLOW_ABOVE 1u
+#define CAPTURES_PREVIEW_OVERFLOW_BELOW 2u
+uint32_t captures_preview_overflow_v1(double scroll_top, double content_height,
+    double viewport_height);
+
+/* Scroll offset after an overflow cue moves `slots` whole card slots
+ * (card + gap; negative scrolls up), clamped to the scrollable range. */
+double captures_preview_scroll_target_v1(double scroll_top, double content_height,
+    double viewport_height, int32_t slots);
+
+/* Shipping overflow cue name: "Show older captures" or "Show newer captures".
+ * Top-anchored stacks show newest first. Returns static UTF-8; never free. */
+const char *captures_preview_overflow_label_v1(bool above, bool top_anchor);
 
 /* Owned immutable region session. Prepare/capture may block; use a worker after
  * hiding capture windows. Begin/retain a capture-flow guard on the event-loop

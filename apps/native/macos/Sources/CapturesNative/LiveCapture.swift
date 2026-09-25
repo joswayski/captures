@@ -638,8 +638,19 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         if !visible { loadDisplays(); processNextOpenImage() }
     }
 
+    /// Shipping shortcut, tray and New Capture flows start on the display under
+    /// the pointer. The picker follows so the workspace shows the same display.
+    private func selectDisplayUnderPointer() {
+        let location = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(location, $0.frame, false) }),
+              let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue,
+              let index = displays.firstIndex(where: { $0.id == id }) else { return }
+        displayMenu.selectItem(at: index)
+    }
+
     @discardableResult func capture(_ kind: StillCaptureKind) -> Bool {
         recordingSavedNotice.dismiss()
+        if !capturing { selectDisplayUnderPointer() }
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
               !externalOpenPending, !permissionsVisible,
@@ -685,6 +696,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     @discardableResult func newCapture(recordingTarget: UnifiedCaptureTarget? = nil) -> Bool {
         recordingSavedNotice.dismiss()
+        if !capturing { selectDisplayUnderPointer() }
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
               !externalOpenPending, !permissionsVisible,
