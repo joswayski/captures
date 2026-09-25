@@ -1063,7 +1063,9 @@ hosts; native countdown windows use the fixed media palette. Both hosts use the
 shipping "Screenshot in" / "Recording starts in" headings and hold "Cancelling…"
 for the shipping 180 ms exit window after Escape; the fade animations remain open.
 HUD, tray, guidance and Preferences copy follow the shipping strings, and recording
-times use the shared `h:mm:ss` formatter. Real mixed-DPI,
+times use the shared `h:mm:ss` formatter. The HUD's Delete recording asks the
+shipping "Delete recording?" question before discarding a take (AppKit alert,
+wgpu confirmation window). Real mixed-DPI,
 focus, compositor, accessibility, and animation acceptance remains open.
 Cursor inclusion now shares sampling/compositing with the shipping host (macOS
 system pixels, Windows/X11 synthetic arrow). Full region/window parity, recording, editor,
