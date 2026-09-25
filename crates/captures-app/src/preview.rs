@@ -91,10 +91,21 @@ impl PreviewStack {
     /// newest first; collapsed piles draw oldest first and newest on top.
     /// Hosts clip/scroll expanded content rather than capping membership.
     pub fn card_layout(&self, index: usize, top_anchor: bool) -> Option<PreviewCardLayout> {
+        self.card_layout_hovered(index, top_anchor, false)
+    }
+
+    /// Collapsed hover uses the shipping fan spacing while keeping depth zero
+    /// fixed. Expanded layout is independent of hover.
+    pub fn card_layout_hovered(
+        &self,
+        index: usize,
+        top_anchor: bool,
+        hovered: bool,
+    ) -> Option<PreviewCardLayout> {
         let depth = self.ids.len().checked_sub(index.checked_add(1)?)?;
         let y = if self.collapsed {
             let direction = if top_anchor { 1.0 } else { -1.0 };
-            collapsed_padding(self.ids.len()) + direction * collapsed_peek(depth + 1, false)
+            collapsed_padding(self.ids.len()) + direction * collapsed_peek(depth + 1, hovered)
         } else {
             let (padding, slot) = if top_anchor {
                 (THUMBNAIL_CONTROL_GUTTER, depth)
@@ -605,6 +616,43 @@ mod tests {
         }
         assert_eq!(stack.ids().len(), 40);
         assert_eq!(stack.card_layout(39, true).unwrap().depth, 0);
+    }
+
+    #[test]
+    fn collapsed_hover_fans_rear_cards_without_moving_front() {
+        let mut stack = PreviewStack::default();
+        for id in ["one", "two", "three", "four", "five", "six"] {
+            assert!(stack.insert(id.into()));
+        }
+        stack.set_collapsed(true);
+        for top_anchor in [false, true] {
+            assert_eq!(
+                stack.card_layout(5, top_anchor),
+                stack.card_layout_hovered(5, top_anchor, true)
+            );
+            let rear = stack.card_layout(0, top_anchor).unwrap();
+            let hovered = stack.card_layout_hovered(0, top_anchor, true).unwrap();
+            // (16 - 13) * 5 * (24 + .55 * 5) / (24 + 5),
+            // derived from the shipping pose rather than this implementation.
+            let delta = if top_anchor {
+                13.836206896551724
+            } else {
+                -13.836206896551724
+            };
+            assert!((hovered.y - rear.y - delta).abs() < 1e-9);
+            assert!(hovered.y >= THUMBNAIL_PADDING);
+            assert!(
+                hovered.y + THUMBNAIL_CARD_HEIGHT <= stack.content_height() - THUMBNAIL_PADDING
+            );
+            assert!(!hovered.interactive);
+        }
+        stack.set_collapsed(false);
+        for top_anchor in [false, true] {
+            assert_eq!(
+                stack.card_layout(0, top_anchor),
+                stack.card_layout_hovered(0, top_anchor, true)
+            );
+        }
     }
 
     fn bounds(

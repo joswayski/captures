@@ -207,8 +207,11 @@ corner placements and capture-inclusion preference. Multiple captures remain in
 a stack with expand/collapse, scrolling and Clear all; dismissing previews leaves
 history and exports intact. Drag a collapsed pile within its capture display;
 its session position survives expansion and new captures without activating the
-workspace. Cross-display movement, automatic top/bottom anchor changes, native
-file dragging, hover-fan animation and effects remain unconnected.
+workspace. Hovering the collapsed front card fans the rear cards outward; pressing
+and dragging keeps the fan open. macOS follows Reduce Motion; the Windows/Linux
+candidate offers `--reduced-motion` but does not yet follow the OS motion setting.
+Cross-display movement, automatic top/bottom anchor changes, native file dragging,
+3D fan styling, stagger and the remaining preview effects are still unconnected.
 Live native hosts expose menu-bar/tray New Capture,
 screenshot, History, Preferences, output-folder and Quit actions, plus configured
 New Capture and region/window/display screenshot and recording global shortcuts. New Capture opens shared

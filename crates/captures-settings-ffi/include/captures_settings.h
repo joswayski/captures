@@ -183,6 +183,10 @@ bool captures_preview_stack_set_collapsed_v1(CapturesPreviewStack *handle, bool 
 bool captures_preview_stack_collapsed_v1(const CapturesPreviewStack *handle);
 bool captures_preview_stack_card_v1(const CapturesPreviewStack *handle, size_t index,
     bool top_anchor, CapturesPreviewCardLayout *output);
+/* Hover fan pose; v1 remains the rest pose. Front-card position and interaction
+ * are unchanged. Expanded stacks ignore hovered. */
+bool captures_preview_stack_card_v2(const CapturesPreviewStack *handle, size_t index,
+    bool top_anchor, bool hovered, CapturesPreviewCardLayout *output);
 
 /* Owned immutable region session. Prepare/capture may block; use a worker after
  * hiding capture windows. Begin/retain a capture-flow guard on the event-loop

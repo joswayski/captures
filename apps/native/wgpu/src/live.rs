@@ -441,6 +441,7 @@ struct PreviewRenderCard {
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
     layout: captures_app::preview::PreviewCardLayout,
+    hover_y: f64,
 }
 
 struct MiniPreviews {
@@ -3449,6 +3450,7 @@ impl Live {
         ctx: &egui::Context,
         tokens: &Tokens,
         settings: Result<AppSettings, String>,
+        reduced_motion: bool,
     ) {
         for editor in self.editors.values() {
             editor.show(ctx, tokens);
@@ -3571,6 +3573,11 @@ impl Live {
                     busy: card.busy,
                     message: card.message.clone(),
                     layout: self.previews.stack.card_layout(index, top_anchor)?,
+                    hover_y: self
+                        .previews
+                        .stack
+                        .card_layout_hovered(index, top_anchor, true)?
+                        .y,
                 })
             })
             .collect::<Vec<_>>();
@@ -3722,12 +3729,47 @@ impl Live {
                     }
                 };
                 if collapsed {
-                    for card in &cards {
-                        let rect = egui::Rect::from_min_size(
+                    let front = cards.iter().find(|card| card.layout.interactive);
+                    let front_rect = front.map(|card| {
+                        egui::Rect::from_min_size(
                             egui::pos2(
                                 captures_app::preview::THUMBNAIL_PADDING as f32,
                                 card.layout.y as f32,
                             ),
+                            egui::vec2(
+                                (captures_app::preview::THUMBNAIL_WIDTH
+                                    - captures_app::preview::THUMBNAIL_PADDING * 2.)
+                                    as f32,
+                                captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
+                            ),
+                        )
+                    });
+                    let fan_open = front_rect.is_some_and(|rect| {
+                        ui.input(|input| {
+                            input
+                                .pointer
+                                .hover_pos()
+                                .is_some_and(|point| rect.contains(point))
+                                || (input.pointer.primary_down()
+                                    && input
+                                        .pointer
+                                        .press_origin()
+                                        .is_some_and(|point| rect.contains(point)))
+                        })
+                    });
+                    let fan = if reduced_motion {
+                        f32::from(fan_open)
+                    } else {
+                        ui.ctx().animate_bool_with_time(
+                            egui::Id::unique("mini-preview-hover-fan"),
+                            fan_open,
+                            tokens.number("dur-3") / 1000.,
+                        )
+                    };
+                    for card in &cards {
+                        let y = egui::lerp(card.layout.y as f32..=card.hover_y as f32, fan);
+                        let rect = egui::Rect::from_min_size(
+                            egui::pos2(captures_app::preview::THUMBNAIL_PADDING as f32, y),
                             egui::vec2(
                                 (captures_app::preview::THUMBNAIL_WIDTH
                                     - captures_app::preview::THUMBNAIL_PADDING * 2.)
@@ -5775,7 +5817,7 @@ mod tests {
         let tokens = crate::tokens::load()["dark-mustard"].clone();
 
         ctx.begin_pass(Default::default());
-        live.viewports(&ctx, &tokens, Ok(AppSettings::default()));
+        live.viewports(&ctx, &tokens, Ok(AppSettings::default()), false);
         let mut output = ctx.end_pass();
 
         let declared = output

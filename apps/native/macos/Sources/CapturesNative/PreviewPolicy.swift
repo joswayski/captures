@@ -60,10 +60,14 @@ final class NativePreviewStack {
     }
 
     func cardLayout(index: Int, topAnchor: Bool) -> CapturesPreviewCardLayout? {
+        cardLayout(index: index, topAnchor: topAnchor, hovered: false)
+    }
+
+    func cardLayout(index: Int, topAnchor: Bool, hovered: Bool) -> CapturesPreviewCardLayout? {
         precondition(Thread.isMainThread)
         guard index >= 0 else { return nil }
         var output = CapturesPreviewCardLayout()
-        return captures_preview_stack_card_v1(handle, index, topAnchor, &output) ? output : nil
+        return captures_preview_stack_card_v2(handle, index, topAnchor, hovered, &output) ? output : nil
     }
 }
 

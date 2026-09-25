@@ -54,7 +54,19 @@ final class MiniPreviewTests: XCTestCase {
                 timestamp: 1, windowNumber: panel.windowNumber, context: nil,
                 eventNumber: 0, clickCount: 1, pressure: 1))
         }
+        let rear = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewCardView }
+            .first { $0.artifactID == "one" })
+        let front = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewCardView }
+            .first { $0.artifactID == "two" })
+        let restY = rear.frame.minY, frontFrame = front.frame, windowFrame = panel.frame
+        button.mouseEntered(with: try event(.leftMouseDown, point))
+        try waitUntil { abs(rear.frame.minY - (restY - 2.946)) < 0.001 }
+        XCTAssertEqual(front.frame, frontFrame)
+        XCTAssertEqual(panel.frame, windowFrame)
+        try write(render(panel), name: "mini-preview-stack-hovered.png")
         button.mouseDown(with: try event(.leftMouseDown, point))
+        button.mouseExited(with: try event(.leftMouseDragged, point))
+        XCTAssertTrue(panel.previewView.pileHovered, "Press retains hover outside the front card")
         button.mouseDragged(with: try event(.leftMouseDragged, NSPoint(x: point.x + 2, y: point.y - 1)))
         XCTAssertTrue(moves.isEmpty)
         button.mouseDragged(with: try event(.leftMouseDragged, NSPoint(x: point.x + 40, y: point.y - 25)))
@@ -70,6 +82,9 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(expanded, 1)
         button.performClick(nil)
         XCTAssertEqual(expanded, 2, "Accessibility activation must remain a click")
+        button.mouseExited(with: try event(.leftMouseDragged, point))
+        try waitUntil { abs(rear.frame.minY - restY) < 0.001 }
+        XCTAssertFalse(panel.previewView.pileHovered)
         XCTAssertFalse(panel.canBecomeKey)
     }
 
@@ -421,10 +436,13 @@ final class MiniPreviewTests: XCTestCase {
         let layouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
             stack.cardLayout(index: index, topAnchor: topAnchor).map { (id, $0) }
         })
+        let hoverLayouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
+            stack.cardLayout(index: index, topAnchor: topAnchor, hovered: true).map { (id, $0) }
+        })
         return MiniPreviewPanel(frame: NSRect(x: 0, y: 0,
             width: geometry.width, height: geometry.height), geometry: geometry,
             contentHeight: stack.contentHeight,
-            resources: resources, ids: ids, layouts: layouts, collapsed: collapsed,
+            resources: resources, ids: ids, layouts: layouts, hoverLayouts: hoverLayouts, collapsed: collapsed,
             topAnchor: topAnchor, tokens: tokens, copy: copy, save: save, open: open,
             dismiss: dismiss, setCollapsed: setCollapsed, clearAll: {}, move: move)
     }

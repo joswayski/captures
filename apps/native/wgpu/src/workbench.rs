@@ -1190,7 +1190,12 @@ impl eframe::App for Workbench {
             return;
         }
         if let Some(live) = &mut self.live {
-            live.viewports(&ctx, &t, self.preferences_state.snapshot());
+            live.viewports(
+                &ctx,
+                &t,
+                self.preferences_state.snapshot(),
+                self.options.reduced_motion,
+            );
             if live.take_open_history_requested() {
                 self.live_preferences = false;
             }

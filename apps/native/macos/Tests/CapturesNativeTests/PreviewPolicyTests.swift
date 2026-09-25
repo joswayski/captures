@@ -20,6 +20,13 @@ final class PreviewPolicyTests: XCTestCase {
         stack.setCollapsed(true)
         XCTAssertFalse(try XCTUnwrap(stack.cardLayout(index: 0, topAnchor: false)).interactive)
         XCTAssertTrue(try XCTUnwrap(stack.cardLayout(index: 2, topAnchor: false)).interactive)
+        let rest = try XCTUnwrap(stack.cardLayout(index: 0, topAnchor: false))
+        let hover = try XCTUnwrap(stack.cardLayout(index: 0, topAnchor: false, hovered: true))
+        XCTAssertLessThan(hover.y, rest.y)
+        XCTAssertFalse(hover.interactive)
+        XCTAssertEqual(stack.cardLayout(index: 2, topAnchor: false, hovered: true)?.y,
+                       stack.cardLayout(index: 2, topAnchor: false)?.y,
+                       "hover must not move the front card")
         XCTAssertTrue(stack.insert("incoming"))
         XCTAssertTrue(stack.isCollapsed)
         XCTAssertEqual(stack.removeAll(snapshot), 3)
