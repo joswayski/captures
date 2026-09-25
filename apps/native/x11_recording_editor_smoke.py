@@ -528,7 +528,7 @@ def main():
             print("PASS replacement: confirmation, cancel, source/History rebase, real edited pixels and same-session save")
             return
         if args.comparison:
-            click(editor, 390, 57)
+            click(editor, 466, 57)
             shot(editor, "comparison-mp4")
             assert started.exists(), "Compare must invoke the real media tool"
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
@@ -537,17 +537,17 @@ def main():
             missing = output / "temporarily-moved.mp4"
             source.rename(missing)
             try:
-                click(editor, 390, 57)
+                click(editor, 466, 57)
                 shot(editor, "comparison-error-minimum")
             finally:
                 missing.rename(source)
-            click(editor, 390, 57)
+            click(editor, 466, 57)
             shot(editor, "comparison-retry-minimum")
             click(editor, 478, 57)
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
             calls = len(started.read_text().splitlines())
             allowed.unlink()
-            click(editor, 390, 57)
+            click(editor, 466, 57)
             wait(lambda: len(started.read_text().splitlines()) > calls, "comparison child starts")
             run("import", "-window", editor, str(output / "comparison-pending.png"))
             # Bypass idle: cancellation interrupts the running tool process.
@@ -558,7 +558,7 @@ def main():
             shot(editor, "comparison-cancelled")
             click(editor, 87, 882)
             click(editor, 793, 882)
-            click(editor, 390, 57)
+            click(editor, 466, 57)
             shot(editor, "comparison-gif")
             click(editor, 923, 57)  # 100% avoids interpolation in the pixel oracle.
             click(editor, 161, 200)
@@ -582,7 +582,7 @@ def main():
             click(editor, 793, 1082)
             click(editor, 22, 914)
             click(editor, 793, 1082)
-            click(editor, 390, 57)
+            click(editor, 466, 57)
             shot(editor, "comparison-maximum")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "comparison-maximum-minimum")
@@ -635,7 +635,7 @@ def main():
 
             silent = capture_playback("sound-default-off")
             assert silent and max(abs(v) for v in silent) < .00001, "Sound defaults off"
-            click(editor, 322, 57)
+            click(editor, 384, 57)
             audible = capture_playback("sound-on")
             assert max(abs(v) for v in audible) > .05, "Sound reaches the default virtual sink"
             # Independently measure both asymmetric source tones, rather than accepting noise.
@@ -680,7 +680,7 @@ def main():
             idle(editor)
             shot(editor, "sound-device-error")
             dominant(output / "sound-device-error.png", 0)
-            click(editor, 322, 57)
+            click(editor, 384, 57)
             motion_click()
             wait(playing, "explicit Sound-off retry works without an audio server")
             time.sleep(.7)
@@ -689,7 +689,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "sound-minimum-paused")
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
-            click(editor, 322, 57)  # Request Sound again, but GIF must not open a device.
+            click(editor, 384, 57)  # Request Sound again, but GIF must not open a device.
             click(editor, 87, 882)
             click(editor, 793, 882)
             idle(editor)  # Apply and Play share the Working title; finish Apply first.
