@@ -115,6 +115,7 @@ enum Command {
     Onboarding(captures_app::onboarding::Action),
     PermissionRecovery(captures_app::onboarding::Action),
     LoginItem(PathBuf, Option<bool>),
+    MotionPreference,
     Flush,
 }
 enum Message {
@@ -124,6 +125,7 @@ enum Message {
     LoginItem(Result<bool, String>),
     Onboarding(Result<captures_app::onboarding::State, String>),
     PermissionRecovery(Result<captures_app::onboarding::State, String>),
+    MotionPreference(Option<bool>),
 }
 
 /// One owner serializes disk operations. Closing the window flushes the newest
@@ -148,6 +150,12 @@ impl SettingsIo {
                 let _ = out.send(Message::LoginItem(result));
                 wake();
             };
+            let motion_preference = || {
+                let _ = out.send(Message::MotionPreference(
+                    captures_session::prefers_reduced_motion(),
+                ));
+                wake();
+            };
             send_load();
             let _ = out.send(Message::Onboarding(
                 onboarding.execute(&path, captures_app::onboarding::Action::Check),
@@ -167,6 +175,7 @@ impl SettingsIo {
                         wake();
                     }
                     Command::LoginItem(root, enabled) => login_item(root, enabled),
+                    Command::MotionPreference => motion_preference(),
                     Command::Flush => break,
                     Command::Save(mut revision, mut settings) => {
                         let mut finish = false;
@@ -192,6 +201,7 @@ impl SettingsIo {
                                     break;
                                 }
                                 Ok(Command::LoginItem(root, enabled)) => login_item(root, enabled),
+                                Ok(Command::MotionPreference) => motion_preference(),
                                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                             }
                         }
@@ -273,6 +283,8 @@ pub struct Preferences {
     permission_recovery: Option<captures_app::onboarding::State>,
     permission_recovery_error: Option<String>,
     permission_recovery_busy: bool,
+    system_reduced_motion: bool,
+    motion_pending: bool,
 }
 
 impl Preferences {
@@ -342,7 +354,19 @@ impl Preferences {
             permission_recovery: None,
             permission_recovery_error: None,
             permission_recovery_busy: false,
+            system_reduced_motion: false,
+            motion_pending: false,
         }
+    }
+
+    pub fn refresh_motion_preference(&mut self) {
+        if !self.motion_pending {
+            self.motion_pending = self.io.tx.send(Command::MotionPreference).is_ok();
+        }
+    }
+
+    pub fn reduced_motion(&self, force: bool) -> bool {
+        force || self.system_reduced_motion
     }
 
     pub fn connect_login_item(&mut self, history_root: PathBuf) {
@@ -584,6 +608,20 @@ impl Preferences {
                         }
                         Err(error) => self.permission_recovery_error = Some(error),
                     }
+                }
+                Message::MotionPreference(value) => {
+                    self.motion_pending = false;
+                    // A temporarily missing portal must not turn motion back on
+                    // after the desktop explicitly requested it be reduced.
+                    if let Some(value) = value {
+                        self.system_reduced_motion = value;
+                    }
+                    crate::emit(
+                        "motion-preference",
+                        json!({
+                            "available": value.is_some(), "reduced": self.system_reduced_motion
+                        }),
+                    );
                 }
             }
         }
@@ -1750,6 +1788,40 @@ mod tests {
                 .screenshot_countdown_seconds,
             7
         );
+    }
+
+    #[test]
+    fn motion_refresh_coalesces_and_retains_reduction_when_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), path.clone(), None, None);
+        prefs.io.flush();
+        prefs.receive(&ctx);
+        let (tx, rx) = mpsc::channel();
+        prefs.io.tx = tx;
+        assert!(!prefs.reduced_motion(false));
+        assert!(
+            prefs.reduced_motion(true),
+            "explicit override wins over default"
+        );
+        prefs.refresh_motion_preference();
+        prefs.refresh_motion_preference();
+        assert!(matches!(rx.try_recv(), Ok(Command::MotionPreference)));
+        assert!(rx.try_recv().is_err(), "only one request may be pending");
+        for (reported, expected) in [(Some(true), true), (None, true), (Some(false), false)] {
+            prefs.out.send(Message::MotionPreference(reported)).unwrap();
+            prefs.receive(&ctx);
+            assert!(!prefs.motion_pending);
+            assert_eq!(prefs.reduced_motion(false), expected);
+            assert!(
+                prefs.reduced_motion(true),
+                "OS response cannot clear explicit override"
+            );
+            prefs.refresh_motion_preference();
+            assert!(matches!(rx.try_recv(), Ok(Command::MotionPreference)));
+        }
+        assert!(!path.exists(), "OS reads cannot save application settings");
     }
 
     #[test]

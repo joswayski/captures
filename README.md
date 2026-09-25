@@ -209,7 +209,9 @@ history and exports intact. Drag a collapsed pile within its capture display;
 its session position survives expansion and new captures without activating the
 workspace. Hovering the collapsed front card fans the rear cards outward; pressing
 and dragging keeps the fan open. macOS follows Reduce Motion; the Windows/Linux
-candidate offers `--reduced-motion` but does not yet follow the OS motion setting.
+candidate reads the desktop animation preference at startup and when the workspace
+regains focus. Linux requires a portal exposing the reduced-motion setting;
+`--reduced-motion` can force it when that setting is unavailable.
 Cross-display movement, automatic top/bottom anchor changes, native file dragging,
 3D fan styling, stagger and the remaining preview effects are still unconnected.
 Rear cards use fixed-glass depth shading; front and expanded images stay unshaded.

@@ -167,6 +167,9 @@ impl Workbench {
             options.theme_override.then(|| options.theme.clone()),
             shortcut_input,
         );
+        if options.live && options.screenshot.is_none() {
+            preferences_state.refresh_motion_preference();
+        }
         if options.live && std::env::var_os("WAYLAND_DISPLAY").is_none() {
             preferences_state.connect_login_item(
                 options
@@ -1074,6 +1077,13 @@ impl eframe::App for Workbench {
         let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(false));
         if root_focused
             && !self.root_was_focused
+            && self.options.live
+            && self.options.screenshot.is_none()
+        {
+            self.preferences_state.refresh_motion_preference();
+        }
+        if root_focused
+            && !self.root_was_focused
             && self.preferences_state.permission_recovery_open()
             && self.options.permission_dialog.is_none()
         {
@@ -1280,7 +1290,8 @@ impl eframe::App for Workbench {
                 &ctx,
                 &t,
                 self.preferences_state.snapshot(),
-                self.options.reduced_motion,
+                self.preferences_state
+                    .reduced_motion(self.options.reduced_motion),
             );
             if self.preferences_state.permission_recovery_open() {
                 ui.disable();
