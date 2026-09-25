@@ -190,6 +190,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var recordingPendingStart = false
     private var activeRecordingGeneration: UInt64?
     private var recordingDisplay: DisplayItem?
+    /// Saved-notice screens for recording editors opened after a take.
+    private var recordingEditorNoticeScreens: [String: NSScreen] = [:]
+    private var lastRecordingNoticeScreen: NSScreen?
     private var recordingPreferences: CapturePreferences?
     private var selectorShortcutGeneration: UInt64? {
         didSet {
@@ -333,7 +336,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         deleteButton = button("Delete from history", frame: NSRect(x: 836, y: 594, width: 136, height: 34)) { [weak self] in self?.confirmDelete() }
         clearHistoryButton = button("Clear history…", frame: NSRect(x: 28, y: 594, width: 180, height: 34)) { [weak self] in self?.confirmClearHistory() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
-        let limits = title("Screenshots support native crop, canvas resize and recoverable editor drafts. Recordings support native trim, audio adjustments and save-new-copy editing; playback remains unavailable.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
+        let limits = title("Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here for 30 days.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
     }
 
@@ -459,8 +462,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             let date = draft.createdAtMilliseconds.map {
                 Date(timeIntervalSince1970: Double($0) / 1_000).formatted(date: .abbreviated, time: .shortened)
             } ?? "Unknown date"
-            let seconds = draft.completedDurationMilliseconds / 1_000
-            let details = NSTextField(labelWithString: "\(date) · \(seconds)s playable")
+            let details = NSTextField(labelWithString:
+                "\(date) · \(formatRecordingTime(milliseconds: draft.completedDurationMilliseconds)) recovered so far")
             details.frame = NSRect(x: 2, y: y + 20, width: 278, height: 17)
             details.font = .systemFont(ofSize: 10); details.textColor = tokens.color("text-muted")
             content.addSubview(details)
@@ -913,7 +916,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     }
                     if preferences.recording.countdown > 0 {
                         let countdown = ScreenshotCountdownPanel(screen: screen, tokens: self.tokens,
-                            remaining: preferences.recording.countdown)
+                            remaining: preferences.recording.countdown, kind: .recording)
                         self.countdownPanel = countdown; countdown.orderFrontRegardless()
                     }
                     self.preparingRecording = false
@@ -1035,6 +1038,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         do {
             let state = try AppBridge.flow(["operation": "poll", "generation": generation])
             guard state["current"] as? Bool == true else {
+                if let panel = countdownPanel { countdownPanel = nil; panel.closeAfterCancelling() }
                 finishCapture(); status.stringValue = "Capture cancelled (Escape or desktop session unavailable)."; return
             }
             guard !preparingRegion, !preparingWindow, !preparingUnified, !preparingRecording,
@@ -1080,7 +1084,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                             settings: preferences.miniPreviewSettings,
                             generation: previewGeneration)
                         self.loadHistory(select: artifact.id)
-                        if preferences.autoCopy { self.copyImage(at: artifact.imagePath) }
+                        if preferences.autoCopy { self.copyImage(at: artifact.imagePath, artifactID: artifact.id) }
                     case .failure(let error):
                         self.finishCapture(); self.showError("Capture failed", error)
                     }
@@ -1269,6 +1273,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         do {
             let state = try AppBridge.flow(["operation": "poll", "generation": generation])
             guard state["current"] as? Bool == true else {
+                if let panel = recordingScreenshotCountdownPanel {
+                    recordingScreenshotCountdownPanel = nil; panel.closeAfterCancelling()
+                }
                 finishRecordingScreenshot()
                 status.stringValue = "Screenshot cancelled; recording continues."
                 return
@@ -1299,7 +1306,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                             settings: preferences.miniPreviewSettings,
                             generation: previewGeneration)
                         self.loadHistory(select: artifact.id)
-                        if preferences.autoCopy { self.copyImage(at: artifact.imagePath) }
+                        if preferences.autoCopy { self.copyImage(at: artifact.imagePath, artifactID: artifact.id) }
                     case .failure(let error):
                         self.finishRecordingScreenshot()
                         self.showError("Screenshot failed", error)
@@ -1568,7 +1575,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 if preferences.recording.countdown > 0,
                    let screen = self.screen(for: display) {
                     let countdown = ScreenshotCountdownPanel(screen: screen, tokens: self.tokens,
-                        remaining: preferences.recording.countdown)
+                        remaining: preferences.recording.countdown, kind: .recording)
                     self.countdownPanel = countdown; countdown.orderFrontRegardless()
                 }
                 let tick: () -> Void = { [weak self] in
@@ -1661,6 +1668,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         guard let session = recordingSession, recordingLifecycle.begin() else { return }
         recordingMeter?.setActive(false); recordingMeter = nil
         let noticeScreen = recordingHUD?.screen ?? recordingDisplay.flatMap(screen(for:))
+        let openEditor = recordingPreferences?.recording.openEditorAfterRecording ?? true
         clearRecordingControlsHiddenState()
         recordingHUD?.hud.setLifecycleActionsEnabled(false)
         recordingPollTimer?.invalidate(); recordingPollTimer = nil
@@ -1688,9 +1696,16 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                           !self.capturing,
                           self.artifacts.contains(where: { $0.id == finalized.id }) else { return }
                     self.status.stringValue = finalStatus
+                    // Shipping opens the recording editor when the preference is
+                    // on; the saved notice follows that editor's close.
+                    guard openEditor,
+                          let artifact = self.artifacts.first(where: { $0.id == finalized.id })
+                    else { return }
                     if let noticeScreen {
-                        self.recordingSavedNotice.present(artifactID: finalized.id, screen: noticeScreen)
+                        self.recordingEditorNoticeScreens[finalized.id] = noticeScreen
+                        self.lastRecordingNoticeScreen = noticeScreen
                     }
+                    self.presentEditor(artifact, requiresCurrentSelection: false)
                 }
             case .failure(let error):
                 self.preserveFailedRecording(session, warning: error.localizedDescription)
@@ -1927,6 +1942,16 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]
         save(artifact)
     }
+    /// Shipping shows the saved notice whenever a recording editor closes and
+    /// the recording is still in History.
+    private func recordingEditorClosed(_ artifactID: String) {
+        let screen = recordingEditorNoticeScreens.removeValue(forKey: artifactID)
+            ?? lastRecordingNoticeScreen ?? NSScreen.main
+        guard !capturing, artifacts.contains(where: { $0.id == artifactID }),
+              let screen else { return }
+        recordingSavedNotice.present(artifactID: artifactID, screen: screen)
+    }
+
     private func editScreenshot() {
         guard let index = selectedIndex, artifacts.indices.contains(index),
               !historyRoot.isEmpty, !externalOpenPending else { return }
@@ -1958,6 +1983,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                                 self?.miniPreviews?.dismiss(artifactID)
                                 self?.loadHistory(select: artifactID)
                             })
+                        self.recordingEditor?.didClose = { [weak self] artifactID in
+                            self?.recordingEditorClosed(artifactID)
+                        }
                     }
                     self.recordingEditor?.present(artifact: artifact,
                                                   historyRoot: self.historyRoot,
@@ -2001,7 +2029,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                       completion: ((Result<String, Error>) -> Void)? = nil) {
         let noun = artifact.isRecording ? "recording" : "image"
         status.stringValue = "Saving \(noun)…"
-        miniPreviews?.setStatus("Saving…", for: artifact.id)
+        miniPreviews?.setStatus("", for: artifact.id)
         run({ [transport, historyRoot, settingsPath] in
             let preferences = try CapturePreferences.load(path: settingsPath)
             let result = try transport.request(["operation": artifact.isRecording ? "save_recording" : "save_screenshot", "root": historyRoot, "id": artifact.id,
@@ -2017,7 +2045,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 if let current = self.artifacts.firstIndex(where: { $0.id == artifact.id }) { self.artifacts[current] = value.0 }
                 self.status.stringValue = "Saved \(noun) to \(value.1)"
                 _ = self.miniPreviews?.updateSavedPath(value.1, for: artifact)
-                self.miniPreviews?.setStatus("Saved", for: artifact.id)
+                self.miniPreviews?.setStatus("", for: artifact.id)
+                self.miniPreviews?.showSavedFeedback(for: artifact.id)
                 completion?(.success(value.1))
                 if completion == nil {
                     self.recordingSavedNotice.savedFromHistory(artifactID: artifact.id, path: value.1)
@@ -2031,16 +2060,20 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
     private func copyImage() {
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }
-        copyImage(at: artifacts[index].imagePath)
+        copyImage(at: artifacts[index].imagePath, artifactID: artifacts[index].id)
     }
-    private func copyImage(at path: String) {
+    private func copyImage(at path: String, artifactID: String) {
         run({ try Data(contentsOf: URL(fileURLWithPath: path)) }) { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let png):
                 let pasteboard = NSPasteboard.general; pasteboard.clearContents()
-                self.status.stringValue = pasteboard.setData(png, forType: .png)
+                let copied = pasteboard.setData(png, forType: .png)
+                self.status.stringValue = copied
                     ? "Copied the selected image." : "Couldn’t copy the selected image."
+                if copied {
+                    self.miniPreviews?.recordClipboardCopy(artifactID: artifactID, pasteboard: pasteboard)
+                }
             case .failure(let error): self.showError("Couldn’t copy image", error)
             }
         }

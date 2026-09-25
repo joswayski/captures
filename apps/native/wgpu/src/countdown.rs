@@ -2,9 +2,36 @@ use eframe::egui::{self, RichText};
 
 use crate::tokens::Tokens;
 
+/// Shipping `RECORDING_COUNTDOWN_FADE_OUT_MS`: how long "Cancelling…" stays up.
+pub const CANCEL_LINGER_MS: u64 = 180;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Kind {
+    Screenshot,
+    Recording,
+}
+
+impl Kind {
+    /// Shipping sentence-case copy; the shipping CSS uppercases it on screen.
+    pub fn heading(self) -> &'static str {
+        match self {
+            Self::Screenshot => "Screenshot in",
+            Self::Recording => "Recording starts in",
+        }
+    }
+}
+
+pub fn hint(cancelling: bool) -> &'static str {
+    if cancelling {
+        "Cancelling…"
+    } else {
+        "Press Esc to cancel"
+    }
+}
+
 /// Shared by the live secondary viewport and the screenshot-only CI probe.
 /// The caller owns timing; a static countdown schedules no recurring redraw.
-pub fn show(ui: &mut egui::Ui, t: &Tokens, remaining: u8) {
+pub fn show(ui: &mut egui::Ui, t: &Tokens, remaining: u8, kind: Kind, cancelling: bool) {
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.fill(t.color("glass-countdown-scrim")))
         .show(ui, |ui| {
@@ -20,14 +47,14 @@ pub fn show(ui: &mut egui::Ui, t: &Tokens, remaining: u8) {
             // Labels, not paint-only text: expose the content to AccessKit.
             for (text, offset, size, color) in [
                 (
-                    "SCREENSHOT IN".into(),
+                    kind.heading().to_uppercase(),
                     -number_size * 0.65,
                     label_size,
                     "glass-text-muted",
                 ),
                 (remaining.to_string(), 0., number_size, "glass-text"),
                 (
-                    "Press Esc to cancel".into(),
+                    hint(cancelling).into(),
                     number_size * 0.65 + t.number("s-7"),
                     t.number("text-md"),
                     "glass-text-muted",
@@ -42,4 +69,17 @@ pub fn show(ui: &mut egui::Ui, t: &Tokens, remaining: u8) {
                 );
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn countdown_copy_matches_shipping_strings() {
+        assert_eq!(Kind::Screenshot.heading(), "Screenshot in");
+        assert_eq!(Kind::Recording.heading(), "Recording starts in");
+        assert_eq!(hint(false), "Press Esc to cancel");
+        assert_eq!(hint(true), "Cancelling…");
+    }
 }

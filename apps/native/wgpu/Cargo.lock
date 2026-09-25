@@ -987,6 +987,7 @@ dependencies = [
  "captures-session",
  "captures-settings",
  "chrono",
+ "clipboard-win",
  "dbus",
  "drag",
  "earcutr",

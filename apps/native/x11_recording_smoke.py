@@ -97,7 +97,7 @@ def main():
 
     def meter_pixels(window):
         # The fixed-size live HUD's meter track only; exclude adjacent buttons.
-        pixels = run("import", "-window", window, "-crop", "28x4+272+51", "-depth", "8", "rgb:-")
+        pixels = run("import", "-window", window, "-crop", "28x10+272+45", "-depth", "8", "rgb:-")
         return sum(min(pixels[index:index + 3]) > 220 for index in range(0, len(pixels), 3))
 
     def wait(predicate, description):
@@ -124,9 +124,9 @@ def main():
         return values
 
     def menu_action(label):
-        labels = ["New Capture", "Show recording controls", "Capture display",
-                  "Capture region", "Capture window", "History", "Preferences",
-                  "Open output folder", "Quit Captures"]
+        labels = ["New Capture…", "Show Recording Controls", "Screenshot Region",
+                  "Screenshot Window", "Screenshot Display", "Capture History…",
+                  "Open Save Location", "Preferences", "Quit Captures"]
         panel_ids = run("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel").decode().split()
         tray = next(window for window in panel_ids if int(window_geometry(window)["WIDTH"]) >= 24)
         geometry = window_geometry(tray)
@@ -313,7 +313,9 @@ pcm.!pulse {
                           "highlight_clicks": False, "capture_system_audio": False,
                           "microphone_device_id": "microphone:pulse" if args.device_change == "explicit"
                               else "default" if args.virtual_microphone else None,
-                          "open_editor_after_recording": False},
+                          # Shipping shows the saved notice only when the
+                          # recording editor opened after recording closes.
+                          "open_editor_after_recording": bool(args.ready_notice_only)},
         }))
         if args.ready_notice_only:
             # Observe the exact OS-launch argument without opening a file manager.
@@ -577,6 +579,18 @@ pcm.!pulse {
             def stop_with_notice(hud, count):
                 click(hud, 142, 54)
                 wait(lambda: len(history()) == count, "recording publication")
+                editor = wait(lambda: windows("Recording editor"), "recording editor after recording")[0]
+                assert not windows("Recording ready"), "notice must wait for the editor to close"
+                connection = display.Display(env["DISPLAY"])
+                try:
+                    window = connection.create_resource_object("window", int(editor))
+                    window.send_event(protocol.event.ClientMessage(
+                        window=window, client_type=connection.intern_atom("WM_PROTOCOLS"),
+                        data=(32, [connection.intern_atom("WM_DELETE_WINDOW"), X.CurrentTime, 0, 0, 0])))
+                    connection.sync()
+                finally:
+                    connection.close()
+                wait(lambda: not windows("Recording editor"), "recording editor closed")
                 notice = wait(lambda: windows("Recording ready"), "recording-ready notice")[0]
                 wait(lambda: manifest() is None, "finalization cleanup")
                 assert not windows("Captures Recording Controls")
@@ -695,7 +709,7 @@ pcm.!pulse {
             hud = wait(lambda: windows("Captures Recording Controls"), "paused HUD")[0]
             click(hud, 398, 54)
             wait(lambda: not windows("Captures Recording Controls"), "paused HUD hidden")
-            menu_action("Show recording controls")
+            menu_action("Show Recording Controls")
             hud = wait(lambda: windows("Captures Recording Controls"),
                        "real tray action restores paused HUD")[0]
             assert (manifest()["state"] == "paused"
@@ -840,6 +854,9 @@ pcm.!pulse {
         click(hud, 142, 54)
         metadata = wait(lambda: list((output / "history").glob("*/metadata.json")), "History publication")
         assert len(metadata) == 1
+        time.sleep(.5)
+        assert not windows("Recording ready") and not windows("Recording editor"), (
+            "with the editor preference off, shipping shows neither the editor nor a notice")
         entry = json.loads(metadata[0].read_text())
         assert entry["kind"] == "video" and entry["mime_type"] == "video/mp4", entry
         assert (entry["width"], entry["height"]) == (310, 170), entry

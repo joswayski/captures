@@ -379,21 +379,20 @@ impl CaptureControls {
                                 } else if self.mode == TargetMode::Display {
                                     ui.separator();
                                     let mut display_id = view.display.id.clone();
-                                    let mut selected = display_label(view.display, view.displays);
+                                    let mut selected = display_label(view.display).to_owned();
                                     if content_rect.width() <= 800. {
                                         selected = truncate_label(&selected, 14);
                                     }
                                     egui::ComboBox::from_id_salt("capture-controls-display")
                                         .selected_text(selected)
                                         .show_ui(ui, |ui| {
-                                            for (index, display) in view.displays.iter().enumerate()
-                                            {
+                                            for display in view.displays {
                                                 ui.selectable_value(
                                                     &mut display_id,
                                                     display.id.clone(),
                                                     format!(
                                                         "{} — {}×{}{}",
-                                                        display.name,
+                                                        display_label(display),
                                                         display.width,
                                                         display.height,
                                                         if display.is_primary {
@@ -402,8 +401,7 @@ impl CaptureControls {
                                                             ""
                                                         }
                                                     ),
-                                                )
-                                                .on_hover_text(format!("Display {}", index + 1));
+                                                );
                                             }
                                         });
                                     if display_id != view.display.id {
@@ -456,14 +454,14 @@ impl CaptureControls {
                                             "These controls will show in recordings"
                                         }
                                     } else {
-                                        "Capture controls are excluded from screenshots"
+                                        "These controls won’t show in screenshots"
                                     })
                                         .small()
                                         .color(tokens.color("glass-text-muted")),
                                 );
                                 ui.label(
                                     RichText::new(if view.auto_start {
-                                        "· Auto-capture is on"
+                                        "· Auto-capture is on. Selecting a target starts immediately."
                                     } else {
                                         "· Press Enter to confirm"
                                     })
@@ -655,18 +653,10 @@ fn segment(ui: &mut egui::Ui, tokens: &Tokens, selected: bool, label: &str) -> e
     )
 }
 
-fn display_label(display: &DisplayDescriptor, displays: &[DisplayDescriptor]) -> String {
-    if display.name.trim().is_empty() {
-        displays
-            .iter()
-            .position(|candidate| candidate.id == display.id)
-            .map_or_else(
-                || "Display".into(),
-                |index| format!("Display {}", index + 1),
-            )
-    } else {
-        display.name.clone()
-    }
+/// The OS display name, with the shipping `session.display.name || "Display"` fallback.
+fn display_label(display: &DisplayDescriptor) -> &str {
+    let name = display.name.trim();
+    if name.is_empty() { "Display" } else { name }
 }
 
 fn truncate_label(label: &str, maximum_characters: usize) -> String {
@@ -1099,5 +1089,14 @@ mod tests {
     fn narrow_display_label_is_unicode_safe() {
         assert_eq!(truncate_label("Built-in display", 8), "Built-i…");
         assert_eq!(truncate_label("主ディスプレイ", 8), "主ディスプレイ");
+    }
+
+    #[test]
+    fn display_label_uses_os_name_then_shipping_fallback() {
+        let mut named = display();
+        named.name = "  Built-in Retina Display ".into();
+        assert_eq!(display_label(&named), "Built-in Retina Display");
+        named.name = " ".into();
+        assert_eq!(display_label(&named), "Display");
     }
 }

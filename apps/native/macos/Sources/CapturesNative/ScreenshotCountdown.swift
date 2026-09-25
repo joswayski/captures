@@ -1,19 +1,37 @@
 import AppKit
 
+/// Shipping countdown headings. The shipping CSS uppercases the heading; the
+/// source copy stays sentence case for assistive technology.
+enum CountdownKind {
+    case screenshot, recording
+
+    var heading: String {
+        switch self {
+        case .screenshot: return "Screenshot in"
+        case .recording: return "Recording starts in"
+        }
+    }
+}
+
 /// AppKit text over a fixed media palette, matching the shipping countdown.
 /// Only the numeral changes each second; no per-frame view/layer construction.
 final class ScreenshotCountdownContent: NSView {
     private let tokens: Tokens
-    private let heading = NSTextField(labelWithString: "SCREENSHOT IN")
+    private let kind: CountdownKind
+    private let heading: NSTextField
     private let number = NSTextField(labelWithString: "")
     private let hint = NSTextField(labelWithString: "Press Esc to cancel")
+    private(set) var cancelling = false
     override var isFlipped: Bool { true }
 
-    init(frame: NSRect, tokens: Tokens, remaining: Int) {
+    init(frame: NSRect, tokens: Tokens, remaining: Int, kind: CountdownKind = .screenshot) {
         self.tokens = tokens
+        self.kind = kind
+        heading = NSTextField(labelWithString: kind.heading.uppercased())
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color("glass-countdown-scrim").cgColor
+        heading.setAccessibilityLabel(kind.heading)
         for field in [heading, number, hint] {
             field.alignment = .center
             field.textColor = tokens.color(field === number ? "glass-text" : "glass-text-muted")
@@ -27,8 +45,16 @@ final class ScreenshotCountdownContent: NSView {
     func setRemaining(_ value: Int) {
         guard number.stringValue != String(value) else { return }
         number.stringValue = String(value)
-        number.setAccessibilityLabel("Screenshot in \(value) seconds")
+        number.setAccessibilityLabel("\(kind.heading) \(value) seconds")
     }
+
+    /// Shipping copy while Esc is being honoured, before the overlay closes.
+    func setCancelling() {
+        guard !cancelling else { return }
+        cancelling = true
+        hint.stringValue = "Cancelling…"
+    }
+
     override func layout() {
         super.layout()
         let labelSize = min(tokens.number("countdown-label-max"), max(tokens.number("countdown-label-min"), bounds.width * 0.016))
@@ -45,14 +71,25 @@ final class ScreenshotCountdownContent: NSView {
 }
 
 final class ScreenshotCountdownPanel: NSPanel {
+    /// Shipping `RECORDING_COUNTDOWN_FADE_OUT_MS`: how long "Cancelling…" stays up.
+    static let cancelLinger: TimeInterval = 0.18
     let countdownContent: ScreenshotCountdownContent
     override var canBecomeKey: Bool { true }
 
-    init(screen: NSScreen, tokens: Tokens, remaining: Int) {
-        countdownContent = ScreenshotCountdownContent(frame: NSRect(origin: .zero, size: screen.frame.size), tokens: tokens, remaining: remaining)
+    init(screen: NSScreen, tokens: Tokens, remaining: Int, kind: CountdownKind = .screenshot) {
+        countdownContent = ScreenshotCountdownContent(frame: NSRect(origin: .zero, size: screen.frame.size),
+            tokens: tokens, remaining: remaining, kind: kind)
         super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear; hasShadow = false
         level = .screenSaver; collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         sharingType = .none; contentView = countdownContent
+    }
+
+    /// Shows "Cancelling…" briefly, then closes. The panel ignores input while
+    /// it lingers so the restored desktop is immediately usable.
+    func closeAfterCancelling() {
+        countdownContent.setCancelling()
+        ignoresMouseEvents = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.cancelLinger) { [self] in close() }
     }
 }

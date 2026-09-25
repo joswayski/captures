@@ -243,8 +243,10 @@ impl View {
                             .and_then(chrono::DateTime::from_timestamp_millis)
                             .map(|date| date.with_timezone(&chrono::Local).format("%b %d, %H:%M").to_string())
                             .unwrap_or_else(|| "Unknown time".into());
-                        let seconds = draft.completed_duration_ms / 1000;
-                        ui.label(format!("{date} · {}:{:02} completed", seconds / 60, seconds % 60));
+                        ui.label(format!(
+                            "{date} · {} recovered so far",
+                            captures_app::recording_timeline::format_recording_time(draft.completed_duration_ms)
+                        ));
                         if let Some(reason) = &draft.reason {
                             ui.label(reason);
                         }
