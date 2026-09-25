@@ -2295,8 +2295,12 @@ def main():
         click(editor, 98, 62)
         assert save_layers(lambda values: len(values) == 3, "cancel preserves freehand redo")[-1]["id"] == dot["id"]
         drag((320, 500), (420, 560))
-        save_layers(lambda values: len(values) == 4, "outside freehand stroke")
-        assert saved(640, 479, 0, 0)  # authored sample max y=471 plus shipping 8px padding
+        outside = save_layers(lambda values: len(values) == 4, "outside freehand stroke")[-1]
+        outside_y = max(point["y"] for point in outside["points"])
+        # The canvas can grow while X11 delivers this drag, changing the Fit transform
+        # before the final pointer event. Check the authored geometry rather than the
+        # nominal pre-growth coordinate: shipping adds 8px beyond its furthest sample.
+        assert outside_y > 360 and saved(640, math.ceil(outside_y) + 8, 0, 0)
         shot(editor, "freehand-outside")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "freehand-minimum")
