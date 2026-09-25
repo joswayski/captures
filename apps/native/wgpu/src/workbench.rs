@@ -698,6 +698,7 @@ impl Workbench {
                 notice: "These controls won’t show in recordings",
                 warning: false,
                 hide_available: false,
+                reduced_motion: self.options.reduced_motion,
             },
         ) {
             match action {

@@ -1,5 +1,6 @@
 mod editor;
 mod feedback;
+mod icons;
 mod instance;
 mod preview;
 mod recording;

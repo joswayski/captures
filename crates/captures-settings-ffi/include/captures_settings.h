@@ -192,6 +192,13 @@ bool captures_preview_stack_card_v2(const CapturesPreviewStack *handle, size_t i
  * Depth zero is undimmed. Expanded cards never use this overlay. */
 double captures_preview_dim_opacity_v1(size_t depth);
 
+/* Shipping vector icon ("pause", "resume", "restart", "capture", "microphone",
+ * "microphone-muted", "trash", "hide-controls", "close", "check", "copy",
+ * "save", "folder", "edit") as owned JSON {ok,result:[[[x,y],...],...]} in its
+ * 24-unit viewBox with y down. Stroke each polyline with round caps/joins at
+ * 1.8 units. Free with captures_settings_free_v1. */
+char *captures_icon_polylines_v1(const char *name);
+
 /* Owned immutable region session. Prepare/capture may block; use a worker after
  * hiding capture windows. Begin/retain a capture-flow guard on the event-loop
  * thread first. Freeze and cursor settings are fixed at prepare. No pixel data

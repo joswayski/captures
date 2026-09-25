@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import CCapturesSettings
 
 enum Metrics {
     static func emit(_ event: String, milliseconds: Double, detail: String = "") {
@@ -27,11 +28,57 @@ enum CaptureButtonIcon {
     case display
     case microphone(muted: Bool)
     case editorSelect, editorCrop, editorText, editorShapes, editorArrow, editorPen, editorBackground
+    /// A named icon from the shared shipping set (`captures_icon_polylines_v1`).
+    case shipping(String)
+    /// The shipping HUD stop control: an 11-point rounded signal square.
+    case stopSquare
 
     var isEditorTool: Bool {
         switch self {
-        case .capture, .record, .window, .display, .microphone: return false
+        case .capture, .record, .window, .display, .microphone, .shipping, .stopSquare: return false
         default: return true
+        }
+    }
+
+    var isShipping: Bool {
+        switch self {
+        case .shipping, .stopSquare: return true
+        default: return false
+        }
+    }
+}
+
+/// Polylines for the shared shipping icon set, in 24-unit y-down space.
+enum ShippingIcons {
+    private static var cache: [String: [[NSPoint]]] = [:]
+
+    static func polylines(_ name: String) -> [[NSPoint]] {
+        if let cached = cache[name] { return cached }
+        guard let response = captures_icon_polylines_v1(name) else { return [] }
+        defer { captures_settings_free_v1(response) }
+        guard let object = try? JSONSerialization.jsonObject(with: Data(String(cString: response).utf8))
+                as? [String: Any],
+              object["ok"] as? Bool == true,
+              let lines = object["result"] as? [[[NSNumber]]] else { return [] }
+        let result = lines.map { line in
+            line.compactMap { $0.count == 2 ? NSPoint(x: $0[0].doubleValue, y: $0[1].doubleValue) : nil }
+        }
+        cache[name] = result
+        return result
+    }
+
+    /// Stroke a named icon into `rect` (flipped view coordinates), 1.8-unit round strokes.
+    static func stroke(_ name: String, in rect: NSRect) {
+        for line in polylines(name) where line.count > 1 {
+            let path = NSBezierPath()
+            path.lineWidth = 1.8 * rect.width / 24
+            path.lineCapStyle = .round; path.lineJoinStyle = .round
+            for (index, point) in line.enumerated() {
+                let mapped = NSPoint(x: rect.minX + point.x * rect.width / 24,
+                                     y: rect.minY + point.y * rect.height / 24)
+                if index == 0 { path.move(to: mapped) } else { path.line(to: mapped) }
+            }
+            path.stroke()
         }
     }
 }
@@ -157,7 +204,8 @@ final class CaptureButton: NSButton {
             .font: font, .foregroundColor: foreground,
         ]
         let size = (title as NSString).size(withAttributes: attributes)
-        let iconSide: CGFloat = icon?.isEditorTool == true ? tokens.number("s-6") + tokens.number("s-1") : 14
+        let iconSide: CGFloat = icon?.isEditorTool == true ? tokens.number("s-6") + tokens.number("s-1")
+            : icon?.isShipping == true ? 16 : 14
         let iconWidth: CGFloat = icon == nil ? 0 : (title.isEmpty ? iconSide : iconSide + 6)
         let startX = (bounds.width - size.width - iconWidth) / 2
         if let icon { draw(icon, in: NSRect(x: startX, y: (bounds.height - iconSide) / 2,
@@ -174,6 +222,12 @@ final class CaptureButton: NSButton {
     private func draw(_ icon: CaptureButtonIcon, in rect: NSRect, color: NSColor) {
         color.setStroke(); color.setFill()
         switch icon {
+        case .shipping(let name):
+            ShippingIcons.stroke(name, in: rect)
+        case .stopSquare:
+            tokens.color(isEnabled ? "theme-signal" : "glass-text-subtle").setFill()
+            NSBezierPath(roundedRect: NSRect(x: rect.midX - 5.5, y: rect.midY - 5.5, width: 11, height: 11),
+                         xRadius: 2, yRadius: 2).fill()
         case .editorSelect, .editorCrop, .editorText, .editorShapes, .editorArrow, .editorPen, .editorBackground:
             // The shipping EditorIcon silhouettes, in their 24-unit coordinate space.
             func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
