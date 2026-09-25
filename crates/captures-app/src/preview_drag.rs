@@ -120,7 +120,12 @@ mod tests {
             Some(saved.to_string_lossy().into_owned()),
         );
         captures_history::save_entry(root.path(), &item, None, b"poster PNG", None).unwrap();
-        assert_eq!(prepare(root.path(), &id).unwrap(), saved);
+        // Windows resolves the temporary directory's short name and adds the
+        // verbatim prefix. Compare file identity in the same canonical form.
+        assert_eq!(
+            prepare(root.path(), &id).unwrap(),
+            fs::canonicalize(&saved).unwrap()
+        );
         clear_previous_exports(root.path()).unwrap();
         assert_eq!(fs::read(saved).unwrap(), b"moving GIF");
     }

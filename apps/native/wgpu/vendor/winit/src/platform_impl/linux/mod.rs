@@ -871,6 +871,7 @@ pub enum ActiveEventLoop {
 }
 
 impl ActiveEventLoop {
+    #[cfg(wayland_platform)]
     pub fn start_wayland_file_drag(
         &self,
         source: crate::window::WindowId,
@@ -885,6 +886,7 @@ impl ActiveEventLoop {
         }
     }
 
+    #[cfg(x11_platform)]
     pub fn start_x11_file_drag(
         &self,
         source: crate::window::WindowId,
