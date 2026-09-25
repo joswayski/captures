@@ -180,7 +180,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
 
     ui.scope_builder(egui::UiBuilder::new().max_rect(footer.shrink(8.)), |ui| {
         tokens.glass_controls(ui);
-        ui.spacing_mut().button_padding.x = tokens.number("s-2");
+        ui.spacing_mut().button_padding.x = tokens.number("s-4");
         ui.horizontal(|ui| {
             let enabled = view.interactive && view.busy.is_none();
             let copy = ui
