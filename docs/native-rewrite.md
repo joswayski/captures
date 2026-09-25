@@ -1077,6 +1077,23 @@ pending crop edits; wgpu tests exercise the dispatcher, stale/busy guards, targe
 identity and root visibility commands. Private-X11 checks direct editor focus,
 repeat activation, unchanged History and clean close. Physical-platform focus,
 accessibility and Wayland live acceptance remain open.
+The native chrome now follows the shipping Tauri card rather than a permanent
+button footer: full-bleed cover images, idle dimensions, hover-revealed corner
+icons and centered Copy/Save file/Show in Folder controls. Saved cards expose
+Close plus Delete; unsaved Delete only dismisses. Right placements mirror the
+corner controls; the stack toolbar uses adjacent Clear all/Show less icons.
+AppKit and wgpu use the same 12-point radius token and fixed-glass palette.
+X11 checks exercise four corners, overflow, exact pixels, nonactivating actions,
+idle/hover media contrast. The final outbound-drag rerun timed out after its first
+cancel/recovery cycle; resolve it before merging this chrome slice (see
+[handoff](native-preview-handoff.md)). AppKit fixture coverage
+checks mirrored geometry, hidden controls and in-place saved-state updates;
+macOS CI must verify it. Windows physical presentation and input, screen-reader
+and keyboard traversal on nonactivating panels, and Wayland live-host rendering
+remain unverified. Hover blur, metadata byte sizes, clipboard/editor-presence
+badges, stale-pointer hover suppression, toolbar morphing and animated transitions
+remain follow-up work; this does not close the visual parity gate. Share/sign-in
+UI is deliberately outside this slice.
 Show less/expand preserves capture order, overflow scrolls without a
 count cap, and Clear all dismisses only snapshotted IDs, not later captures.
 Reveal uses the current exported path, with file checks off the UI thread and

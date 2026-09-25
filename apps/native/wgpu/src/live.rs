@@ -3908,6 +3908,7 @@ impl Live {
                             depth: card.layout.depth,
                             desktop_pointer,
                             reject_offset,
+                            right_anchor: placement.is_right(),
                         },
                     );
                     let next_message = match action {
@@ -4120,7 +4121,11 @@ impl Live {
                     );
                     ui.scope_builder(egui::UiBuilder::new().max_rect(controls), |ui| {
                         match crate::mini_preview::show_stack_controls(
-                            ui, &tokens, count, collapsed,
+                            ui,
+                            &tokens,
+                            count,
+                            collapsed,
+                            placement.is_right(),
                         ) {
                             Some(crate::mini_preview::StackAction::ToggleCollapsed) => {
                                 message = Some(PreviewMessage::ToggleCollapsed);

@@ -9,82 +9,174 @@ struct MiniPreviewSettings: Equatable {
     let includeInCaptures: Bool
 }
 
+private final class MiniPreviewImageView: NSView {
+    let image: NSImage
+    init(frame: NSRect, image: NSImage) { self.image = image; super.init(frame: frame) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func draw(_ dirtyRect: NSRect) {
+        let scale = max(bounds.width / image.size.width, bounds.height / image.size.height)
+        let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+        let destination = NSRect(x: (bounds.width - size.width) / 2,
+                                 y: (bounds.height - size.height) / 2,
+                                 width: size.width, height: size.height)
+        image.draw(in: destination, from: .zero, operation: .sourceOver, fraction: 1,
+                   respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+    }
+}
+
+enum MiniPreviewButtonKind { case close, trash, edit, copy, save, folder, collapse, clear }
+
+/// Preview-only control so this floating chrome does not inherit Workbench button styling.
+final class MiniPreviewButton: NSButton {
+    var kind: MiniPreviewButtonKind
+    private let tokens: Tokens
+    private let primary: Bool
+    private var tracking: NSTrackingArea?
+    private var hovered = false
+    private let actionBlock: () -> Void
+
+    init(_ title: String, kind: MiniPreviewButtonKind, frame: NSRect, tokens: Tokens,
+         primary: Bool = false, action: @escaping () -> Void) {
+        self.kind = kind; self.tokens = tokens; self.primary = primary; self.actionBlock = action
+        super.init(frame: frame)
+        self.title = title; isBordered = false; setButtonType(.momentaryPushIn)
+        target = self; self.action = #selector(activate)
+        setAccessibilityLabel(title); toolTip = title
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    @objc private func activate() { actionBlock() }
+    override func updateTrackingAreas() {
+        if let tracking { removeTrackingArea(tracking) }
+        tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(tracking!); super.updateTrackingAreas()
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+    override func becomeFirstResponder() -> Bool { let result = super.becomeFirstResponder(); needsDisplay = true; return result }
+    override func resignFirstResponder() -> Bool { let result = super.resignFirstResponder(); needsDisplay = true; return result }
+    override func draw(_ dirtyRect: NSRect) {
+        let active = cell?.isHighlighted == true
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                                xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
+        (primary ? tokens.color("theme-accent") : tokens.color(hovered || active ? "glass-raised" : "glass-strong")).setFill()
+        path.fill(); (primary ? NSColor.clear : tokens.color("glass-border")).setStroke(); path.stroke()
+        let color = primary ? tokens.color("theme-accent-ink")
+            : kind == .trash ? tokens.color("theme-signal-text") : tokens.color("glass-text")
+        color.setStroke(); color.setFill()
+        var iconX: CGFloat = 6
+        if !title.isEmpty && bounds.width > 40 {
+            let text = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .semibold), .foregroundColor: color])
+            let size = text.size()
+            let gap = tokens.number("s-3")
+            iconX = (bounds.width - size.width - gap - 16) / 2
+            text.draw(at: NSPoint(x: iconX + 16 + gap, y: (bounds.height - size.height) / 2))
+        }
+        drawIcon(in: NSRect(x: iconX, y: (bounds.height - 16) / 2, width: 16, height: 16))
+        if window?.firstResponder === self {
+            tokens.color("theme-accent").setStroke(); let focus = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5); focus.lineWidth = 2; focus.stroke()
+        }
+    }
+    private func drawIcon(in r: NSRect) {
+        let p = NSBezierPath(); p.lineWidth = 1.8; p.lineCapStyle = .round; p.lineJoinStyle = .round
+        func line(_ a: NSPoint, _ b: NSPoint) { p.move(to: a); p.line(to: b) }
+        switch kind {
+        case .close, .clear: line(NSPoint(x:r.minX+3,y:r.minY+3), NSPoint(x:r.maxX-3,y:r.maxY-3)); line(NSPoint(x:r.maxX-3,y:r.minY+3), NSPoint(x:r.minX+3,y:r.maxY-3))
+        case .trash: p.appendRoundedRect(NSRect(x:r.minX+4,y:r.minY+2,width:8,height:10), xRadius: 1, yRadius: 1); line(NSPoint(x:r.minX+2,y:r.maxY-3),NSPoint(x:r.maxX-2,y:r.maxY-3)); line(NSPoint(x:r.minX+6,y:r.maxY-1),NSPoint(x:r.minX+10,y:r.maxY-1))
+        case .edit: line(NSPoint(x:r.minX+3,y:r.minY+3),NSPoint(x:r.maxX-3,y:r.maxY-3)); line(NSPoint(x:r.minX+2,y:r.minY+2),NSPoint(x:r.minX+6,y:r.minY+3))
+        case .copy: p.appendRoundedRect(NSRect(x:r.minX+2,y:r.minY+2,width:9,height:10),xRadius:1,yRadius:1); p.appendRoundedRect(NSRect(x:r.minX+5,y:r.minY+5,width:9,height:9),xRadius:1,yRadius:1)
+        case .save: p.appendRoundedRect(r.insetBy(dx:2,dy:2),xRadius:1,yRadius:1); line(NSPoint(x:r.midX,y:r.maxY-3),NSPoint(x:r.midX,y:r.minY+5)); line(NSPoint(x:r.midX-3,y:r.minY+8),NSPoint(x:r.midX,y:r.minY+5)); line(NSPoint(x:r.midX+3,y:r.minY+8),NSPoint(x:r.midX,y:r.minY+5))
+        case .folder: p.appendRoundedRect(NSRect(x:r.minX+1,y:r.minY+3,width:14,height:10),xRadius:2,yRadius:2); line(NSPoint(x:r.minX+2,y:r.maxY-3),NSPoint(x:r.minX+7,y:r.maxY-3))
+        case .collapse:
+            p.move(to: NSPoint(x: r.minX + 2, y: r.maxY - 5))
+            for point in [NSPoint(x: r.midX, y: r.maxY - 1), NSPoint(x: r.maxX - 2, y: r.maxY - 5),
+                          NSPoint(x: r.midX, y: r.maxY - 9), NSPoint(x: r.minX + 2, y: r.maxY - 5)] { p.line(to: point) }
+            for y in [r.minY + 6, r.minY + 3] {
+                line(NSPoint(x: r.minX + 2, y: y), NSPoint(x: r.midX, y: y - 4))
+                line(NSPoint(x: r.midX, y: y - 4), NSPoint(x: r.maxX - 2, y: y))
+            }
+        }
+        p.stroke()
+    }
+}
+
 final class MiniPreviewCardView: NSView, NSDraggingSource {
     private let tokens: Tokens
-    private let imageView = NSImageView()
+    private let rightAnchor: Bool
+    private let imageView: MiniPreviewImageView
     private let depthShade = NSView()
-    private let title = NSTextField(labelWithString: "Screenshot")
+    private let dimensions: NSTextField
     private let status = NSTextField(labelWithString: "")
-    private var actionButtons: [CaptureButton] = []
-    private var saveButton: CaptureButton?
+    private var actionButtons: [MiniPreviewButton] = []
+    private var saveButton: MiniPreviewButton?
+    private var closeButton: MiniPreviewButton?
+    private var saved = false
+    private var tracking: NSTrackingArea?
     private var compact = false
+    private var chromeVisible = false
     private var press: NSPoint?
     private var fileDragStarted = false
     var preparedDragPath: String?
     var dragEnded: ((NSPoint, NSDragOperation) -> Void)?
     var isOutboundFileDragEnabled: Bool { !compact && preparedDragPath != nil }
     private(set) var artifactID: String
-    var hasVisibleLabels: Bool { !title.isHidden || !status.isHidden }
+    var hasVisibleLabels: Bool { !dimensions.isHidden || !status.isHidden }
     override var isFlipped: Bool { true }
 
     init(frame: NSRect, artifactID: String, image: NSImage, tokens: Tokens,
-         saved: Bool, copy: @escaping () -> Void, save: @escaping () -> Void,
+         width: Int, height: Int, saved: Bool, rightAnchor: Bool,
+         copy: @escaping () -> Void, save: @escaping () -> Void,
          open: @escaping () -> Void, trash: @escaping () -> Void,
          dismiss: @escaping () -> Void) {
         self.artifactID = artifactID; self.tokens = tokens
+        self.rightAnchor = rightAnchor
+        self.saved = saved
+        imageView = MiniPreviewImageView(frame: frame, image: image)
+        dimensions = NSTextField(labelWithString: "\(width) × \(height)")
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color("glass-strong").cgColor
-        layer?.cornerRadius = tokens.number("r-lg")
+        layer?.cornerRadius = tokens.number("thumbnail-card-radius")
         layer?.borderWidth = 1; layer?.borderColor = tokens.color("glass-border").cgColor
 
         imageView.frame = bounds
-        imageView.image = image; imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.wantsLayer = true; imageView.layer?.cornerRadius = tokens.number("r-lg")
+        imageView.wantsLayer = true; imageView.layer?.cornerRadius = tokens.number("thumbnail-card-radius")
         imageView.layer?.masksToBounds = true
         imageView.setAccessibilityLabel("Screenshot thumbnail")
         addSubview(imageView)
 
         depthShade.frame = bounds; depthShade.wantsLayer = true
-        depthShade.layer?.cornerRadius = tokens.number("r-lg")
+        depthShade.layer?.cornerRadius = tokens.number("thumbnail-card-radius")
         depthShade.isHidden = true; depthShade.setAccessibilityElement(false)
         addSubview(depthShade)
 
-        let inset = tokens.number("s-2")
-        title.frame = NSRect(x: inset, y: inset, width: 150, height: 19)
-        title.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
-        title.textColor = tokens.color("glass-text"); styleLabelBacking(title); addSubview(title)
-        status.frame = NSRect(x: bounds.width - 126, y: inset, width: 118, height: 19)
+        let inset: CGFloat = 8
+        dimensions.frame = NSRect(x: inset, y: bounds.height - 25, width: 110, height: 17)
+        dimensions.font = .systemFont(ofSize: tokens.number("text-2xs")); dimensions.textColor = tokens.color("glass-text")
+        styleLabelBacking(dimensions); addSubview(dimensions)
+        status.frame = NSRect(x: bounds.width - 126, y: bounds.height - 25, width: 118, height: 17)
         status.alignment = .right; status.lineBreakMode = .byTruncatingTail
         status.font = .systemFont(ofSize: tokens.number("text-sm"))
         status.textColor = tokens.color("glass-text-muted"); styleLabelBacking(status)
         status.isHidden = true; addSubview(status)
 
-        let actions: [(String, () -> Void)] = [("Copy", copy), (saved ? "Reveal" : "Save", save),
-            ("Edit", open), ("Trash", trash), ("×", dismiss)]
-        let buttonHeight = tokens.number("h-md"), gap = tokens.number("s-2")
-        let actionWidth = (bounds.width - inset * 2 - gap * 4) / 5
-        for (index, action) in actions.enumerated() {
-            let button = CaptureButton(action.0,
-                frame: NSRect(x: inset + CGFloat(index) * (actionWidth + gap),
-                    y: bounds.height - buttonHeight - inset, width: actionWidth, height: buttonHeight),
-                tokens: tokens, glass: true, action: action.1)
-            addSubview(button)
-            actionButtons.append(button)
-            if index == 1 { saveButton = button; updateSaveButton(saved: saved) }
-            if index == 2 {
-                button.setAccessibilityLabel("Edit screenshot")
-                button.toolTip = "Edit screenshot"
-            }
-            if index == 3 {
-                button.signal = true
-                button.toolTip = "Move saved export to Trash and dismiss preview; keep private History"
-            }
-            if index == 4 {
-                button.setAccessibilityLabel("Dismiss preview")
-                button.toolTip = "Dismiss preview"
-            }
+        let gap = tokens.number("s-3")
+        let outerX = rightAnchor ? bounds.width - inset - 28 : inset
+        let groupStart = rightAnchor && saved ? outerX - 28 - gap : outerX
+        let close = addButton("Close", .close, x: groupStart, y: inset, action: dismiss)
+        closeButton = close
+        let delete = addButton("Delete", .trash, x: groupStart + (saved ? 28 + gap : 0), y: inset) { [weak self] in
+            self?.saved == true ? trash() : dismiss()
         }
+        delete.toolTip = saved ? "Move saved export to Trash and dismiss preview; keep private History" : "Dismiss preview; keep private History"
+        _ = addButton("Edit", .edit, x: rightAnchor ? inset : bounds.width - 36, y: inset, action: open)
+        let centerX = (bounds.width - 140) / 2
+        let centerTop = (bounds.height - 64 - gap) / 2
+        _ = addButton("Copy", .copy, x: centerX, y: centerTop, width: 140, action: copy)
+        let saveControl = addButton(saved ? "Show in Folder" : "Save file", saved ? .folder : .save,
+                                    x: centerX, y: centerTop + 32 + gap, width: 140, primary: true, action: save)
+        saveButton = saveControl
+        setChromeVisible(false)
         setAccessibilityRole(.group); setAccessibilityLabel("Screenshot mini preview")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -97,9 +189,19 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     }
 
     func updateSaveButton(saved: Bool) {
-        saveButton?.title = saved ? "Reveal" : "Save"
-        saveButton?.setAccessibilityLabel(saved ? "Show in Folder" : "Save")
-        saveButton?.toolTip = saved ? "Show in Folder" : "Save"
+        saveButton?.title = saved ? "Show in Folder" : "Save file"
+        saveButton?.kind = saved ? .folder : .save
+        saveButton?.setAccessibilityLabel(saved ? "Show in Folder" : "Save file")
+        saveButton?.toolTip = saved ? "Show in Folder" : "Save file"
+        self.saved = saved
+        let step = 28 + tokens.number("s-3")
+        let start = rightAnchor ? bounds.width - 36 - (saved ? step : 0) : 8
+        closeButton?.frame.origin.x = start
+        let delete = actionButtons.first(where: { $0.kind == .trash })
+        delete?.frame.origin.x = start + (saved ? step : 0)
+        delete?.toolTip = saved ? "Move saved export to Trash and dismiss preview; keep private History" : "Dismiss preview; keep private History"
+        setChromeVisible(chromeVisible)
+        saveButton?.needsDisplay = true
     }
 
     var statusText: String { status.stringValue }
@@ -109,9 +211,37 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         depthShade.isHidden = !compact || depth == 0
         depthShade.layer?.backgroundColor = tokens.color("glass-strong-solid")
             .withAlphaComponent(CGFloat(captures_preview_dim_opacity_v1(depth))).cgColor
-        title.isHidden = compact
+        dimensions.isHidden = compact || chromeVisible
         status.isHidden = compact || status.stringValue.isEmpty
-        actionButtons.forEach { $0.isHidden = compact }
+        actionButtons.forEach { $0.isHidden = compact || !chromeVisible }
+        closeButton?.isHidden = compact || !chromeVisible || !saved
+        imageView.layer?.opacity = !compact && chromeVisible ? 0.5 : 1
+    }
+
+    @discardableResult private func addButton(_ title: String, _ kind: MiniPreviewButtonKind, x: CGFloat,
+        y: CGFloat, width: CGFloat = 28, primary: Bool = false, action: @escaping () -> Void) -> MiniPreviewButton {
+        let button = MiniPreviewButton(title, kind: kind, frame: NSRect(x: x, y: y, width: width, height: kind == .copy || kind == .save || kind == .folder ? 32 : 28), tokens: tokens, primary: primary, action: action)
+        addSubview(button); actionButtons.append(button); return button
+    }
+
+    private func setChromeVisible(_ visible: Bool) {
+        guard !compact else { return }
+        chromeVisible = visible
+        actionButtons.forEach { $0.isHidden = !visible }
+        closeButton?.isHidden = !visible || !saved
+        dimensions.isHidden = visible
+        imageView.layer?.opacity = visible ? 0.5 : 1
+    }
+    override var acceptsFirstResponder: Bool { !compact }
+    override func becomeFirstResponder() -> Bool { let result = super.becomeFirstResponder(); if result { setChromeVisible(true) }; return result }
+    override func updateTrackingAreas() {
+        if let tracking { removeTrackingArea(tracking) }
+        tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(tracking!); super.updateTrackingAreas()
+    }
+    override func mouseEntered(with event: NSEvent) { setChromeVisible(true) }
+    override func mouseExited(with event: NSEvent) {
+        if !actionButtons.contains(where: { $0.window?.firstResponder === $0 }) { setChromeVisible(false) }
     }
 
     private func styleLabelBacking(_ label: NSTextField) {
@@ -125,7 +255,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         guard let hit = super.hitTest(point) else { return nil }
         // The image and labels are decorative; receive their gestures on the
         // card. Buttons retain their own click handling.
-        return actionButtons.contains(where: { hit === $0 }) ? hit : self
+        return actionButtons.contains(where: { hit === $0 && !$0.isHidden }) ? hit : self
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -136,10 +266,10 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     override func mouseDragged(with event: NSEvent) {
         guard isOutboundFileDragEnabled, !fileDragStarted, let press, let path = preparedDragPath,
               hypot(event.locationInWindow.x - press.x, event.locationInWindow.y - press.y) >= 4,
-              let image = imageView.image else { return }
+              imageView.image.size.width > 0, imageView.image.size.height > 0 else { return }
         fileDragStarted = true
         let item = NSDraggingItem(pasteboardWriter: NSURL(fileURLWithPath: path))
-        item.setDraggingFrame(imageView.frame, contents: image)
+        item.setDraggingFrame(imageView.frame, contents: imageView.image)
         beginDraggingSession(with: [item], event: event, source: self)
     }
 
@@ -247,8 +377,8 @@ final class MiniPreviewView: NSView {
     private let hoverLayouts: [String: CapturesPreviewCardLayout]
     private(set) var pileHovered = false
     private var pileExpandButton: MiniPreviewExpandButton?
-    private var collapseButton: CaptureButton?
-    private var clearButton: CaptureButton?
+    private var collapseButton: MiniPreviewButton?
+    private var clearButton: MiniPreviewButton?
     private(set) var artifactIDs: [String] = []
     var renderedArtifactIDs: [String] { artifactIDs.filter { cards[$0] != nil } }
     var cardPaintOrder: [String] {
@@ -256,7 +386,7 @@ final class MiniPreviewView: NSView {
     }
     var visibleCardActionTitles: [String] {
         cards.values.flatMap { card in
-            card.subviews.compactMap { $0 as? CaptureButton }
+            card.subviews.compactMap { $0 as? MiniPreviewButton }
                 .filter { !$0.isHidden }.map(\.title)
         }
     }
@@ -271,7 +401,7 @@ final class MiniPreviewView: NSView {
          resources: [String: MiniPreviewResource],
          ids: [String], layouts: [String: CapturesPreviewCardLayout],
          hoverLayouts: [String: CapturesPreviewCardLayout] = [:], collapsed: Bool,
-         topAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
+         topAnchor: Bool, rightAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          trash: @escaping (String) -> Void, dismiss: @escaping (String) -> Void,
          setCollapsed: @escaping (Bool) -> Void,
@@ -300,7 +430,8 @@ final class MiniPreviewView: NSView {
             let card = MiniPreviewCardView(frame: NSRect(x: padding, y: CGFloat(layout.y),
                 width: cardWidth, height: cardHeight), artifactID: id,
                 image: resource.image, tokens: tokens,
-                saved: resource.artifact.savedPath != nil,
+                width: resource.artifact.width, height: resource.artifact.height,
+                saved: resource.artifact.savedPath != nil, rightAnchor: rightAnchor,
                 copy: { copy(id) }, save: { save(id) }, open: { open(id) },
                 trash: { trash(id) }, dismiss: { dismiss(id) })
             card.isHidden = false
@@ -321,12 +452,16 @@ final class MiniPreviewView: NSView {
 
         let controlY = topAnchor ? 16 : bounds.height - 44
         if !collapsed && ids.count >= 2 {
-            let collapse = CaptureButton("Show less",
-                frame: NSRect(x: padding, y: controlY, width: 92, height: 28),
-                tokens: tokens, glass: true) { setCollapsed(true) }
-            let clear = CaptureButton("Clear all",
-                frame: NSRect(x: padding + 100, y: controlY, width: 82, height: 28),
-                tokens: tokens, glass: true, action: clearAll)
+            let outerX = rightAnchor ? bounds.width - padding - 28 : padding
+            let step = 28 + tokens.number("s-1")
+            let adjacentX = rightAnchor ? outerX - step : outerX + step
+            let clear = MiniPreviewButton("Clear all", kind: .clear,
+                frame: NSRect(x: outerX, y: controlY, width: 28, height: 28), tokens: tokens,
+                action: clearAll)
+            let collapse = MiniPreviewButton("Show less", kind: .collapse,
+                frame: NSRect(x: adjacentX, y: controlY, width: 28, height: 28), tokens: tokens) {
+                setCollapsed(true)
+            }
             addSubview(collapse); addSubview(clear)
             collapseButton = collapse; clearButton = clear
         }
@@ -396,7 +531,7 @@ final class MiniPreviewPanel: NSPanel {
          resources: [String: MiniPreviewResource], ids: [String],
          layouts: [String: CapturesPreviewCardLayout],
          hoverLayouts: [String: CapturesPreviewCardLayout] = [:], collapsed: Bool,
-         topAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
+         topAnchor: Bool, rightAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          trash: @escaping (String) -> Void, dismiss: @escaping (String) -> Void,
          setCollapsed: @escaping (Bool) -> Void,
@@ -404,7 +539,7 @@ final class MiniPreviewPanel: NSPanel {
         previewView = MiniPreviewView(geometry: geometry, contentHeight: contentHeight,
             resources: resources, ids: ids,
             layouts: layouts, hoverLayouts: hoverLayouts, collapsed: collapsed,
-            topAnchor: topAnchor, tokens: tokens,
+            topAnchor: topAnchor, rightAnchor: rightAnchor, tokens: tokens,
             copy: copy, save: save, open: open, trash: trash, dismiss: dismiss,
             setCollapsed: setCollapsed, clearAll: clearAll, move: move)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
@@ -682,6 +817,7 @@ final class MiniPreviewController {
                   collapsed: stack.isCollapsed, origin: stackOrigin,
                   placement: settings.placement) else { return }
         let topAnchor = settings.placement.hasPrefix("top_")
+        let rightAnchor = settings.placement.hasSuffix("_right")
         let layouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
             stack.cardLayout(index: index, topAnchor: topAnchor).map { (id, $0) }
         })
@@ -693,7 +829,7 @@ final class MiniPreviewController {
         let next = MiniPreviewPanel(frame: frame, geometry: geometry,
             contentHeight: stack.contentHeight,
             resources: resources, ids: ids, layouts: layouts, hoverLayouts: hoverLayouts,
-            collapsed: stack.isCollapsed, topAnchor: topAnchor, tokens: tokens,
+            collapsed: stack.isCollapsed, topAnchor: topAnchor, rightAnchor: rightAnchor, tokens: tokens,
             copy: { [weak self] in self?.perform(\.copyArtifact, artifactID: $0) },
             save: { [weak self] in self?.perform(\.saveArtifact, artifactID: $0) },
             open: { [weak self] in self?.perform(\.openArtifact, artifactID: $0) },
