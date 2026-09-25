@@ -25,6 +25,20 @@ use std::{
 
 pub struct DrawGeometry(Vec<AbiPoint>);
 
+/// Resolve new-annotation shadow defaults without a document, rendering or I/O.
+/// Returns owned JSON; free with captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_editor_default_shadow_v1(stroke_width: f64) -> *mut c_char {
+    if !stroke_width.is_finite() || !(2. ..=40.).contains(&stroke_width) {
+        return response(json!({"ok":false,"error":"Stroke width must be from 2 to 40."}));
+    }
+    let style = ElementStyle {
+        stroke_width,
+        ..ElementStyle::default()
+    };
+    response(json!({"ok":true,"result":style.resolved_drop_shadow_style()}))
+}
+
 /// Owns crop preview geometry on the UI thread, independent of any document.
 /// Aspect zero means freeform; Shift latches the shared live aspect.
 #[unsafe(no_mangle)]
@@ -1642,6 +1656,28 @@ mod tests {
                 false,
                 ptr::null_mut()
             ));
+        }
+    }
+
+    #[test]
+    fn drawing_shadow_defaults_follow_width_and_reject_invalid_input() {
+        // SAFETY: each returned allocation is consumed/freed exactly once.
+        unsafe {
+            for (width, blur, y) in [(2., 6., 2.), (13., 11.05, 4.), (40., 34., 13.)] {
+                let result = take_json(captures_editor_default_shadow_v1(width));
+                assert_eq!(result["ok"], true);
+                assert_eq!(
+                    result["result"],
+                    json!({"color":"#000000", "opacity":45.,
+                    "blur":blur, "offsetX":0., "offsetY":y})
+                );
+            }
+            for width in [1.99, 40.01, f64::NAN, f64::INFINITY] {
+                assert_eq!(
+                    take_json(captures_editor_default_shadow_v1(width))["ok"],
+                    false
+                );
+            }
         }
     }
 

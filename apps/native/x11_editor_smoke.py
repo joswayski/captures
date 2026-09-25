@@ -1078,6 +1078,47 @@ def main():
             assert invisible["opacity"] == 0, invisible
             shot(editor, "drawing-zero-opacity")
             document_pixel("drawing-zero-opacity", 300, 70, (40, 110, 166))
+
+            click(editor, 35, 62)
+            save_layers(lambda values: len(values) == 1, "undo invisible line")
+            click(editor, 736, 62)
+            before = draft.read_bytes()
+            field(426, "100", 87)
+            inspector_click(16, 467)  # Line's pre-placement Drop shadow.
+            shot(editor, "drawing-shadow-controls")
+            field(538, "#f0c040", 145)
+            field(582, "100", 145)
+            field(626, "0", 70)
+            field(670, "-23", 100)
+            field(714, "31", 100)
+            shot(editor, "drawing-shadow-custom-controls")
+            assert draft.read_bytes() == before, "shadow defaults alone wrote a draft"
+            start, end = document_point((250, 70)), document_point((370, 70))
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
+            shadowed = save_layers(lambda values: len(values) == 2, "shadowed line created")[-1]
+            assert shadowed["style"]["dropShadow"] is True, shadowed
+            custom = {"color": "#f0c040", "opacity": 100, "blur": 0, "offsetX": -23, "offsetY": 31}
+            assert shadowed["style"]["dropShadowStyle"] == custom, shadowed
+            shot(editor, "drawing-shadow-committed")
+            document_pixel("drawing-shadow-committed", 300, 70, (18, 52, 86), 1)
+            document_pixel("drawing-shadow-committed", 277, 101, (240, 192, 64), 1)
+            click(editor, 35, 62)
+            save_layers(lambda values: len(values) == 1, "one undo removes drawing and shadow")
+            click(editor, 736, 62)
+            inspector_click(16, 467)
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
+            unshadowed = save_layers(lambda values: len(values) == 2, "disabled shadow line")[-1]
+            assert unshadowed["style"]["dropShadow"] is False, unshadowed
+            assert unshadowed["style"]["dropShadowStyle"] == custom, unshadowed
+            shot(editor, "drawing-shadow-disabled")
+            document_pixel("drawing-shadow-disabled", 277, 101, (40, 110, 166), 1)
+            click(editor, 736, 62)
+            inspector_click(16, 467)
+            shot(editor, "drawing-shadow-retained")
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "drawing defaults suite quits")
@@ -1086,9 +1127,11 @@ def main():
                 "passed": True, "appearance": args.appearance,
                 "checks": ["default-fields-no-write", "asymmetric-stroke-fill", "custom-width-opacity",
                            "independent-composited-pixels", "single-undo", "open-stroke-ignores-closed-toggle",
-                           "tool-and-response-retention", "zero-opacity-layer", "original-unchanged"],
+                           "tool-and-response-retention", "zero-opacity-layer", "original-unchanged",
+                           "shadow-defaults-no-write", "asymmetric-shadow-offset-pixels",
+                           "disabled-shadow-pixels", "retained-shadow-style"],
             }, indent=2) + "\n")
-            print("PASS native drawing defaults: style, opacity, preview, pixels, undo and retained local choices")
+            print("PASS native drawing defaults: style, opacity, shadow pixels, undo and retained local choices")
             return
 
         if args.polygon_only:

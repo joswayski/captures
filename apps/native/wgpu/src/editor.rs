@@ -1661,8 +1661,22 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                             annotation_color(ui, "Fill color", fill);
                         }
                     }
+                    let mut enabled = style.has_drop_shadow();
+                    if ui.checkbox(&mut enabled, "Drop shadow").changed() {
+                        style.drop_shadow = Some(enabled);
+                    }
+                    if enabled {
+                        let mut shadow = style.drop_shadow_style.clone()
+                            .unwrap_or_else(|| style.resolved_drop_shadow_style());
+                        let before = shadow.clone();
+                        shadow_fields(ui, &mut shadow);
+                        if shadow != before {
+                            style.drop_shadow_style = Some(shadow);
+                        }
+                        ui.small("Shadow pixels appear on release.");
+                    }
                     ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
-                    ui.small("These defaults apply to new shapes in this editor. Change shadow, position and ordering in Layers.");
+                    ui.small("These defaults apply to new shapes in this editor. Change position and ordering in Layers.");
                 }
                 return;
             }
@@ -7422,6 +7436,15 @@ mod tests {
             fill: None,
             stroke_width: 13.,
             stroke_enabled: Some(true),
+            drop_shadow: Some(true),
+            drop_shadow_style: Some(DropShadowStyle {
+                color: "#2468ac".into(),
+                opacity: 61.,
+                blur: 9.,
+                offset_x: -23.,
+                offset_y: 17.,
+                extra: Default::default(),
+            }),
             ..ElementStyle::default()
         };
         view.new_annotation_opacity = 37.;
@@ -7461,6 +7484,15 @@ mod tests {
         };
         assert_eq!(create.style.fill, None);
         assert_eq!(create.style.stroke_enabled, Some(true));
+        assert_eq!(create.style.drop_shadow, Some(true));
+        assert_eq!(
+            create.style.drop_shadow_style.as_ref().unwrap().offset_x,
+            -23.
+        );
+        assert_eq!(
+            create.style.drop_shadow_style.as_ref().unwrap().offset_y,
+            17.
+        );
         assert_eq!(create.opacity, 37.);
         drop(tx);
     }

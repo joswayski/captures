@@ -252,6 +252,10 @@ char *captures_editor_request_v1(CapturesEditorSession *session, const char *req
  * document-space corners; unsupported layers omit their outline. */
 char *captures_editor_hit_test_document_v1(const char *document_json,
     double x, double y, double tolerance);
+/* New-annotation shadow defaults resolved by Rust for finite stroke width 2–40.
+ * No session/render/I/O. Returns owned success/error JSON; free with
+ * captures_settings_free_v1. */
+char *captures_editor_default_shadow_v1(double stroke_width);
 /* Allocation-free rotation chrome/preview. Outline is four original published
  * world-space corners in local TL,TR,BR,BL order; angles are radians. All pointer
  * inputs are aligned/readable for four points, outputs writable for one struct.

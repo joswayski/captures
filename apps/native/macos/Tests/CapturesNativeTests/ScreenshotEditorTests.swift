@@ -1998,7 +1998,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(end["x"]), 142.222, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(end["y"]), -99.556, accuracy: 0.001,
                        "preview whitespace maps to off-canvas document coordinates")
-        XCTAssertEqual((request["style"] as? [String: Any])?["color"] as? String, "#ff3b5c")
+        XCTAssertEqual((request["style"] as? [String: Any])?["color"] as? String, "#FF3B5C")
         XCTAssertEqual(request["opacity"] as? Double, 100)
         XCTAssertEqual(outputMode.selectedSegment, 0)
         XCTAssertFalse(outputMode.isEnabled, "accepted creation invalidates encoded output")
@@ -3160,6 +3160,18 @@ final class ScreenshotEditorTests: XCTestCase {
         let stroke = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing stroke" })
         stroke.state = .on; _ = stroke.sendAction(stroke.action, to: stroke.target)
         XCTAssertTrue(worker.requests.isEmpty, "changing creation defaults is not a document command")
+        let shadow = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing drop shadow" })
+        shadow.state = .on; _ = shadow.sendAction(shadow.action, to: shadow.target)
+        XCTAssertEqual(Double(try field("New drawing shadow blur", in: controller.root).stringValue)!, 11.05, accuracy: 0.001)
+        for (key, value) in [("color", "#2468ac"), ("opacity", "61"), ("blur", "9"),
+                             ("offsetX", "-23"), ("offsetY", "17")] {
+            let input = try field("New drawing shadow \(key)", in: controller.root)
+            input.stringValue = value
+            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: input))
+        }
+        let expectedShadow: NSDictionary = ["color": "#2468AC", "opacity": 61.0, "blur": 9.0,
+                                            "offsetX": -23.0, "offsetY": 17.0]
+        XCTAssertTrue(worker.requests.isEmpty, "shadow controls do not send a document command")
 
         let overlay = controller.drawOverlay
         let imageRect = overlay.presentedImageRect
@@ -3174,9 +3186,11 @@ final class ScreenshotEditorTests: XCTestCase {
         var style = try XCTUnwrap(request["style"] as? [String: Any])
         XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
         XCTAssertEqual(style["color"] as? String, "#123456")
-        XCTAssertEqual(style["fill"] as? String, "#abcdef")
+        XCTAssertEqual(style["fill"] as? String, "#ABCDEF")
         XCTAssertEqual(style["strokeWidth"] as? Double, 13)
         XCTAssertEqual(style["strokeEnabled"] as? Bool, true)
+        XCTAssertEqual(style["dropShadow"] as? Bool, true)
+        XCTAssertEqual(style["dropShadowStyle"] as? NSDictionary, expectedShadow)
         XCTAssertEqual(request["opacity"] as? Double, 37)
 
         let tool = try popup("Drawing tool", in: controller.root)
@@ -3191,6 +3205,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(request["operation"] as? String, "create_open_shape")
         XCTAssertTrue(style["fill"] is NSNull,
                       "hidden fill input cannot block a line or enter its request")
+        XCTAssertEqual(style["dropShadowStyle"] as? NSDictionary, expectedShadow)
 
         (try field("New drawing opacity", in: controller.root)).stringValue = "0"
         tool.selectItem(at: 4); _ = tool.sendAction(tool.action, to: tool.target)
@@ -3200,6 +3215,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(request["opacity"] as? Double, 0)
         XCTAssertEqual((request["style"] as? [String: Any])?["strokeWidth"] as? Double, 13,
                        "worker responses and tool switches do not reset host-local defaults")
+        XCTAssertEqual((request["style"] as? [String: Any])?["dropShadowStyle"] as? NSDictionary, expectedShadow)
         let count = worker.requests.count
         tool.selectItem(at: 0); _ = tool.sendAction(tool.action, to: tool.target)
         let fill = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing fill" })
@@ -3208,6 +3224,33 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try field("New drawing fill color", in: controller.root).stringValue, "#123456",
                        "reenabling fill adopts current stroke color, matching shipping")
         XCTAssertEqual(worker.requests.count, count)
+        shadow.state = .off; _ = shadow.sendAction(shadow.action, to: shadow.target)
+        let shadowColor = try field("New drawing shadow color", in: controller.root)
+        XCTAssertTrue(shadowColor.isHidden)
+        shadowColor.stringValue = "unfinished"
+        overlay.begin(at: start); overlay.end(at: end)
+        XCTAssertEqual(worker.requests.count, count + 1, "hidden invalid shadow input does not block drawing")
+        XCTAssertEqual((worker.requests.last?["style"] as? [String: Any])?["dropShadow"] as? Bool, false)
+        shadow.state = .on; _ = shadow.sendAction(shadow.action, to: shadow.target)
+        XCTAssertEqual(shadowColor.stringValue, "unfinished", "reenabling preserves local edits")
+        overlay.begin(at: start); overlay.end(at: end)
+        XCTAssertEqual(worker.requests.count, count + 1, "enabled invalid shadow cannot commit")
+        shadowColor.stringValue = "#2468ac"
+        (try field("New drawing stroke width", in: controller.root)).stringValue = "29"
+        _ = shadow.sendAction(shadow.action, to: shadow.target)
+        XCTAssertEqual(try field("New drawing shadow blur", in: controller.root).stringValue, "9",
+                       "custom shadow stops following stroke width")
+        try render(controller.root, name: "screenshot-editor-new-drawing-shadow-retained-light")
+    }
+
+    func testDrawingShadowDefaultsComeFromRustWithoutFreezingToInitialWidth() throws {
+        let narrow = try NativeDrawingStyle.defaultShadow(strokeWidth: 2)
+        XCTAssertEqual(narrow.blur, 6); XCTAssertEqual(narrow.offsetY, 2)
+        let wide = try NativeDrawingStyle.defaultShadow(strokeWidth: 40)
+        XCTAssertEqual(wide.blur, 34); XCTAssertEqual(wide.offsetY, 13)
+        XCTAssertEqual(wide.color, "#000000"); XCTAssertEqual(wide.opacity, 45)
+        XCTAssertThrowsError(try NativeDrawingStyle.defaultShadow(strokeWidth: 40.01))
+        XCTAssertThrowsError(try NativeDrawingStyle.defaultShadow(strokeWidth: .nan))
     }
 
     func testDrawingPreviewCompositesOpacityOnceAndKeepsBrushGuidesVisible() throws {

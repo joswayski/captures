@@ -129,7 +129,14 @@ AppKit's allocation-owned geometry ABI accepts explicit arrow width while retain
 the original v1 default contract; its opacity composite does not affect brush guides.
 Transient previews remain host vector approximations: polygon joins and overlapping
 wgpu fill/stroke or Pen caps are not final-render pixel parity. Accepted pixels use
-the shared renderer. Pre-placement shadow controls, physical platform input,
+the shared renderer. Both hosts also expose pre-placement drop-shadow enable,
+color, opacity, blur and X/Y offsets for closed shapes, Line/Arrow and Pen.
+Untouched shadow defaults follow stroke width through Rust's resolver; editing a
+shadow field retains a custom style through tool switches, disabled/enabled toggles
+and worker responses. These settings do not edit the document until drawing.
+AppKit's pure C default resolver does not touch a session, filesystem or renderer.
+Transient drag previews still omit shadow pixels, explicitly noted in both panels;
+the committed shared-renderer frame includes them. Physical platform input,
 accessibility and Wayland live acceptance remain open.
 
 Both hosts now connect canvas click-selection and transactional drag-move in Layers.

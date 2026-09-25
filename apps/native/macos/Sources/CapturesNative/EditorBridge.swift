@@ -581,6 +581,15 @@ struct NativeDrawingStyle: Equatable {
         dropShadow = shadow
     }
 
+    static func defaultShadow(strokeWidth: Double) throws -> NativeTextShadowStyle {
+        guard let response = captures_editor_default_shadow_v1(strokeWidth) else {
+            throw AppBridgeError.invalidResponse
+        }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let shadow = NativeTextShadowStyle(result) else { throw AppBridgeError.invalidResponse }
+        return shadow
+    }
 }
 
 enum NativeEditorHitTesting {
