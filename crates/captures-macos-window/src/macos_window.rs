@@ -90,6 +90,28 @@ mod thumbnail_panel {
     }
 }
 
+mod capture_overlay_panel {
+    use tauri::Manager;
+    use tauri_nspanel::tauri_panel;
+
+    tauri_panel! {
+        panel!(CaptureOverlayPanel {
+            config: {
+                // Keep the selector interactive while another app has a modal
+                // Keychain or permission dialog open; do not raise it above
+                // macOS's screen-saver or shield window levels.
+                can_become_key_window: true,
+                can_become_main_window: true,
+                is_floating_panel: true,
+                becomes_key_only_if_needed: false,
+                hides_on_deactivate: false,
+                works_when_modal: true,
+            }
+        })
+    }
+}
+
+use capture_overlay_panel::CaptureOverlayPanel;
 use interactive_hud_panel::InteractiveHudPanel;
 use thumbnail_panel::ThumbnailPanel;
 
@@ -1654,6 +1676,10 @@ pub fn configure_capture_overlay(window: &WebviewWindow) -> Result<(), &'static 
         return run_on_main(move || configure_capture_overlay(&window))
             .ok_or("capture overlay setup did not run on the main thread")?;
     }
+    let panel = window
+        .to_panel::<CaptureOverlayPanel>()
+        .map_err(|_| "failed to convert the capture overlay to an NSPanel")?;
+    panel.set_works_when_modal(true);
     let native = native_window(window)?;
     remember_overlay_window(native);
     elevate_fullscreen_capture_window(native);
@@ -3224,7 +3250,7 @@ mod tests {
     use objc2::sel;
     use objc2_app_kit::{
         NSBezierPath, NSEventModifierFlags, NSEventType, NSMainMenuWindowLevel,
-        NSTrackingAreaOptions, NSWindowStyleMask,
+        NSScreenSaverWindowLevel, NSTrackingAreaOptions, NSWindowStyleMask,
     };
     use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize};
 
@@ -3306,6 +3332,7 @@ mod tests {
     #[test]
     fn capture_surfaces_sit_above_the_menu_bar() {
         assert!(capture_surface_window_level() > NSMainMenuWindowLevel);
+        assert!(capture_surface_window_level() < NSScreenSaverWindowLevel);
     }
 
     #[test]

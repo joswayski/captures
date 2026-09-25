@@ -360,9 +360,10 @@ final class EditorDrawOverlay: EditorViewportGestureView {
     }
 
     private func notifyPreview() {
-        guard shape != .wand, shape != .text, !shape.isBackgroundBrush,
+        guard shape != .wand, shape != .text,
               let startPoint, let currentPoint else { return }
-        onPreview?(shape, canvasPoint(for: startPoint), canvasPoint(for: currentPoint), penPoints)
+        onPreview?(shape, canvasPoint(for: startPoint), canvasPoint(for: currentPoint),
+                   shape.isBackgroundBrush ? brushPoints : penPoints)
     }
 
     func end(at point: NSPoint) {
@@ -469,7 +470,8 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             displayPoints.dropFirst().forEach { path.line(to: $0) }
             brushOutlineColor.setStroke()
             path.lineWidth = 1.5; path.lineCapStyle = .round
-            path.lineJoinStyle = .round; path.stroke()
+            path.lineJoinStyle = .round
+            if !pixelPreviewVisible { path.stroke() }
             let radius = max(2, brushDiameter * scale / 2)
             let ring = NSBezierPath(ovalIn: NSRect(x: currentPoint.x - radius, y: currentPoint.y - radius,
                                                   width: radius * 2, height: radius * 2))
@@ -2158,7 +2160,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawHelper.stringValue = wand
             ? "Wand removes matching pixels from the frontmost visible image."
             : brush
-                ? "The outline previews brush size and path only. Pixels apply on release."
+                ? "Pixels preview while dragging. Release commits one undo step; Escape cancels."
                 : shape == .text
                     ? "Click once to create empty auto-width text. Edit it below, then Apply."
                     : drawingShadowVisible ? "Drawing pixels update in the background while dragging."
@@ -2662,6 +2664,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func drawingRequest(shape: EditorDrawOverlay.Shape, start: NSPoint, end: NSPoint,
                                 points: [NSPoint], reportErrors: Bool) -> [String: Any]? {
+        if shape.isBackgroundBrush {
+            return backgroundBrushRequest(mode: shape, points: points, reportErrors: reportErrors)
+        }
         guard let style = drawingRequestStyle(shape: shape, reportErrors: reportErrors) else { return nil }
         guard let opacity = number(drawingOpacity), (0...100).contains(opacity) else {
             if reportErrors { showError("Drawing opacity must be between 0 and 100.") }
@@ -3172,20 +3177,28 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func paintImageBackground(mode: EditorDrawOverlay.Shape, points: [NSPoint]) {
         guard mode.isBackgroundBrush, !state.busy else { return }
+        guard let request = backgroundBrushRequest(mode: mode, points: points, reportErrors: true) else { return }
+        command(request, message: mode == .erase ? "Erasing image background…" : "Restoring image background…")
+    }
+
+    private func backgroundBrushRequest(mode: EditorDrawOverlay.Shape, points: [NSPoint],
+                                        reportErrors: Bool) -> [String: Any]? {
         guard let size = Double(brushSize.stringValue), size >= 4, size <= 120,
               size == size.rounded() else {
-            showError("Brush diameter must be a whole number from 4 to 120."); return
+            if reportErrors { showError("Brush diameter must be a whole number from 4 to 120.") }
+            return nil
         }
         guard let softness = Double(brushSoftness.stringValue), softness >= 0, softness <= 100,
               softness == softness.rounded() else {
-            showError("Brush softness must be a whole number from 0 to 100."); return
+            if reportErrors { showError("Brush softness must be a whole number from 0 to 100.") }
+            return nil
         }
-        brushSize.stringValue = String(Int(size)); brushSoftness.stringValue = String(Int(softness))
+        if reportErrors {
+            brushSize.stringValue = String(Int(size)); brushSoftness.stringValue = String(Int(softness))
+        }
         drawOverlay.brushDiameter = CGFloat(size)
-        command(["operation": "paint_image_background",
-                 "points": points.map { ["x": $0.x, "y": $0.y] },
-                 "size": size, "softness": softness, "mode": mode.rawValue],
-                message: mode == .erase ? "Erasing image background…" : "Restoring image background…")
+        return ["operation": "paint_image_background", "points": points.map { ["x": $0.x, "y": $0.y] },
+                "size": size, "softness": softness, "mode": mode.rawValue]
     }
 
     private func cancelDrawing() {
