@@ -70,6 +70,7 @@ impl SharingState {
 pub fn router(s: SharingState) -> Router {
     Router::new()
         .route("/api/assets", get(list).post(create))
+        .route("/api/asset-uploads/{request_id}", put(create_upload))
         .route("/api/assets/{id}", delete(remove))
         .route("/api/assets/{id}/restore", post(restore))
         .route("/api/assets/{id}/parts", post(part))
@@ -189,6 +190,24 @@ async fn create(
     h: HeaderMap,
     Json(b): Json<NewAsset>,
 ) -> Result<impl IntoResponse, ShareError> {
+    create_asset(s, h, b, None).await
+}
+
+async fn create_upload(
+    State(s): State<SharingState>,
+    Path(request_id): Path<uuid::Uuid>,
+    h: HeaderMap,
+    Json(b): Json<NewAsset>,
+) -> Result<impl IntoResponse, ShareError> {
+    create_asset(s, h, b, Some(request_id)).await
+}
+
+async fn create_asset(
+    s: SharingState,
+    h: HeaderMap,
+    b: NewAsset,
+    request_id: Option<uuid::Uuid>,
+) -> Result<impl IntoResponse, ShareError> {
     s.auth.check_mutation(&h)?;
     let u = s.auth.authenticate(&h).await?;
     if b.name.trim().is_empty() || b.name.len() > 1024 || b.content_type.len() > 255 {
@@ -201,7 +220,36 @@ async fn create(
         let id = (s.new_id)();
         let storage_key = key(&u.external_id, &id);
         let mut tx = s.auth.pool.begin().await?;
-        let result=sqlx::query("INSERT INTO assets(external_id,user_id,storage_key,name,content_type,byte_size,state) VALUES($1,$2,$3,$4,$5,$6,'pending') ON CONFLICT(external_id) DO NOTHING").bind(&id).bind(u.internal_id).bind(&storage_key).bind(&b.name).bind(&b.content_type).bind(b.byte_size).execute(&mut *tx).await?;
+        if let Some(request_id) = request_id {
+            // Serialize keyed creation per owner, including before a row exists.
+            // The unique index remains the durable identity; locks die on crash.
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind(u.internal_id)
+                .execute(&mut *tx)
+                .await?;
+            let prior: Option<(String, String, String, i64, String, bool)> = sqlx::query_as(
+                "SELECT external_id,name,content_type,byte_size,state,deleted_at IS NOT NULL FROM assets WHERE user_id=$1 AND create_request_id=$2",
+            ).bind(u.internal_id).bind(request_id).fetch_optional(&mut *tx).await?;
+            if let Some((id, name, content_type, bytes, state, deleted)) = prior {
+                if name != b.name || content_type != b.content_type || bytes != b.byte_size {
+                    return Err(ShareError(
+                        StatusCode::CONFLICT,
+                        "Upload key metadata mismatch",
+                    ));
+                }
+                if state == "cancelled" || deleted {
+                    return Err(ShareError(
+                        StatusCode::GONE,
+                        "Upload is no longer available",
+                    ));
+                }
+                return Ok((
+                    StatusCode::CREATED,
+                    Json(json!({"id":id,"partSize":size,"partCount":count})),
+                ));
+            }
+        }
+        let result=sqlx::query("INSERT INTO assets(external_id,user_id,storage_key,name,content_type,byte_size,state,create_request_id) VALUES($1,$2,$3,$4,$5,$6,'pending',$7) ON CONFLICT(external_id) DO NOTHING").bind(&id).bind(u.internal_id).bind(&storage_key).bind(&b.name).bind(&b.content_type).bind(b.byte_size).bind(request_id).execute(&mut *tx).await?;
         if result.rows_affected() == 0 {
             tracing::warn!(kind = "asset_id", "public id collision; regenerating");
             continue;
