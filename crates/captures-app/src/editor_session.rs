@@ -1100,6 +1100,20 @@ impl EditorSession {
     /// remain untouched. The returned frame owns its pixels independently.
     pub fn preview_drawing(&mut self, request: Request) -> Result<Arc<RgbaImage>, String> {
         self.require_finished_text_input()?;
+        if let Request::PaintImageBackground {
+            points,
+            size,
+            softness,
+            mode,
+        } = request
+        {
+            let Some((index, edited)) = self.background_brush_edit(points, size, softness, mode)?
+            else {
+                return Ok(self.pixels());
+            };
+            let (document, assets) = self.image_background_candidate(index, edited)?;
+            return render_frame(&document, &assets, self.fonts.as_mut()).map(Arc::new);
+        }
         let mut document = self.history.current().clone();
         match request {
             Request::CreateClosedShape { create } => {
@@ -1111,7 +1125,11 @@ impl EditorSession {
             Request::CreateFreehandPath { create } => {
                 document.create_freehand_path(create)?;
             }
-            _ => return Err("Only drawing creation requests can be previewed.".into()),
+            _ => {
+                return Err(
+                    "Only drawing creation and background brush requests can be previewed.".into(),
+                );
+            }
         }
         render_frame(&document, &self.assets, self.fonts.as_mut()).map(Arc::new)
     }
