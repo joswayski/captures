@@ -31,18 +31,12 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertFalse(panel.canBecomeKey); XCTAssertFalse(panel.canBecomeMain)
         XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
         XCTAssertEqual(panel.previewView.artifactIDs, ["latest"])
-        let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
-        XCTAssertEqual(buttons.map(\.title), ["Copy", "Save", "Edit", "Trash", "×"])
-        XCTAssertEqual(buttons.first { $0.title == "Edit" }?.accessibilityLabel(), "Edit screenshot")
-        XCTAssertTrue(buttons.allSatisfy(\.glass))
-        XCTAssertTrue(try XCTUnwrap(buttons.first { $0.title == "Trash" }).signal)
-        XCTAssertEqual(buttons.last?.accessibilityLabel(), "Dismiss preview")
-        XCTAssertEqual(Set(buttons.map(\.frame.width)).count, 1)
-        XCTAssertTrue(buttons.allSatisfy { ($0.title as NSString).size(withAttributes: [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium),
-        ]).width < $0.bounds.width })
+        let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewButton }
+        XCTAssertEqual(buttons.map(\.title), ["Close", "Delete", "Edit", "Copy", "Save file"])
+        XCTAssertEqual(buttons.first { $0.title == "Edit" }?.accessibilityLabel(), "Edit")
+        XCTAssertTrue(buttons.allSatisfy(\.isHidden), "idle chrome must not leave click traps")
         buttons.forEach { $0.performClick(nil) }
-        XCTAssertEqual(actions, ["copy", "save", "open", "trash", "dismiss"])
+        XCTAssertEqual(actions, ["dismiss", "dismiss", "open", "copy", "save"])
         try write(render(panel), name: "mini-preview-single-unsaved-edit-trash.png")
     }
 
@@ -51,12 +45,47 @@ final class MiniPreviewTests: XCTestCase {
         let panel = fixturePanel(ids: ["saved"], images: ["saved": solidImage(.systemBlue)],
                                  savedPaths: ["saved": "/Exports/Café image.png"])
         defer { panel.close() }
-        let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
-        let reveal = try XCTUnwrap(buttons.first { $0.title == "Reveal" })
-        XCTAssertEqual(buttons.map(\.title), ["Copy", "Reveal", "Edit", "Trash", "×"])
+        let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewButton }
+        let reveal = try XCTUnwrap(buttons.first { $0.title == "Show in Folder" })
+        XCTAssertEqual(buttons.map(\.title), ["Close", "Delete", "Edit", "Copy", "Show in Folder"])
         XCTAssertEqual(reveal.accessibilityLabel(), "Show in Folder")
         XCTAssertEqual(reveal.toolTip, "Show in Folder")
         try write(render(panel), name: "mini-preview-single-saved-reveal.png")
+    }
+
+    func testHoverChromeMirrorsAndSaveUpdatesWithoutMovingCenterActions() throws {
+        _ = NSApplication.shared
+        for right in [false, true] {
+            let panel = fixturePanel(ids: ["card"], images: ["card": solidImage(.white)],
+                                     rightAnchor: right)
+            defer { panel.close() }
+            let card = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewCardView }.first)
+            let controls = card.subviews.compactMap { $0 as? MiniPreviewButton }
+            func button(_ name: String) throws -> MiniPreviewButton {
+                try XCTUnwrap(controls.first { $0.title == name })
+            }
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: .zero,
+                modifierFlags: [], timestamp: 1, windowNumber: panel.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 0, pressure: 0))
+            XCTAssertTrue(controls.allSatisfy(\.isHidden))
+            card.mouseEntered(with: event)
+            XCTAssertEqual(controls.filter { !$0.isHidden }.map(\.title), ["Delete", "Edit", "Copy", "Save file"])
+            XCTAssertEqual(try button("Delete").frame, NSRect(x: right ? 248 : 8, y: 8, width: 28, height: 28))
+            XCTAssertEqual(try button("Edit").frame.minX, right ? 8 : 248)
+            XCTAssertEqual(try button("Copy").frame, NSRect(x: 72, y: 45, width: 140, height: 32))
+            let saveFrame = try button("Save file").frame
+            XCTAssertEqual(saveFrame, NSRect(x: 72, y: 83, width: 140, height: 32))
+            XCTAssertFalse(card.hasVisibleLabels)
+            try write(render(panel), name: "mini-preview-hover-\(right ? "right" : "left")")
+            card.updateSaveButton(saved: true)
+            XCTAssertEqual(try button("Show in Folder").frame, saveFrame)
+            XCTAssertFalse(try button("Close").isHidden)
+            XCTAssertEqual(try button("Close").frame.minX, right ? 214 : 8)
+            XCTAssertEqual(try button("Delete").frame.minX, right ? 248 : 42)
+            card.mouseExited(with: event)
+            XCTAssertTrue(controls.allSatisfy(\.isHidden))
+            XCTAssertTrue(card.hasVisibleLabels)
+        }
     }
 
     func testCollapsedPointerDragTracksDesktopWithoutExpandingAndClickStillExpands() throws {
@@ -288,6 +317,38 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(transport.saveCount, 0, "Reveal must not create another export")
     }
 
+    func testClipboardOwnerShowsChipHidesCopyAndReleasesOnExternalWrite() throws {
+        _ = NSApplication.shared
+        let controller = try presentedController(artifact(id: "owned", previewPath: "/owned.png"))
+        defer { controller.close() }
+        XCTAssertEqual(controller.metadataText(for: "owned"), "800 × 600 · 0 B")
+        let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+            .first { $0.isVisible && $0.previewView.artifactIDs == ["owned"] })
+        let card = try XCTUnwrap(panel.previewView.subviewsRecursive
+            .compactMap { $0 as? MiniPreviewCardView }.first)
+        let chip = try XCTUnwrap(card.subviews.compactMap { $0 as? MiniPreviewClipboardChip }.first)
+        let buttons = card.subviews.compactMap { $0 as? MiniPreviewButton }
+        let copy = try XCTUnwrap(buttons.first { $0.title == "Copy" })
+        let save = try XCTUnwrap(buttons.first { $0.title == "Save file" })
+        let pairedSaveY = save.frame.minY
+        XCTAssertTrue(chip.isHidden)
+
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        pasteboard.clearContents(); pasteboard.setString("capture", forType: .string)
+        controller.recordClipboardCopy(artifactID: "owned", pasteboard: pasteboard)
+        XCTAssertTrue(controller.isClipboardCurrent(for: "owned"))
+        XCTAssertFalse(chip.isHidden)
+        XCTAssertTrue(copy.isHidden)
+        XCTAssertEqual(save.frame.minY, (card.bounds.height - 32) / 2,
+            "the remaining action centers when Copy hides")
+
+        pasteboard.clearContents(); pasteboard.setString("another app", forType: .string)
+        controller.refreshClipboardOwner()
+        XCTAssertFalse(controller.isClipboardCurrent(for: "owned"))
+        XCTAssertTrue(chip.isHidden)
+        XCTAssertEqual(save.frame.minY, pairedSaveY)
+    }
+
     func testSaveUpdatesExistingCardThenRevealAndMissingExportNeverSaveAgain() throws {
         _ = NSApplication.shared
         let image = solidImage(.systemBlue)
@@ -301,8 +362,8 @@ final class MiniPreviewTests: XCTestCase {
         try waitUntil { controller.isPanelVisible }
         let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
             .first { $0.previewView.artifactIDs == [captured.id] })
-        let button = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
-            .first { $0.title == "Save" })
+        let button = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewButton }
+            .first { $0.title == "Save file" })
         let originalFrame = panel.frame
         let transport = MiniPreviewActionTransport()
         transport.gate = DispatchSemaphore(value: 0)
@@ -324,12 +385,12 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(transport.trashCount, 0, "Trash must not race an accepted Save")
         transport.gate?.signal()
         LiveCaptureController.flush()
-        try waitUntil { button.title == "Reveal" }
+        try waitUntil { button.title == "Show in Folder" }
         XCTAssertEqual(panel.frame, originalFrame)
         XCTAssertTrue(panel.isVisible, "Save updates the existing panel")
         XCTAssertEqual(button.accessibilityLabel(), "Show in Folder")
         controller.refreshArtifacts([captured])
-        XCTAssertEqual(button.title, "Reveal", "an older unsaved snapshot cannot erase export state")
+        XCTAssertEqual(button.title, "Show in Folder", "an older unsaved snapshot cannot erase export state")
         button.performClick(nil)
         try waitUntil { revealed.count == 1 }
         XCTAssertEqual(revealed, [URL(fileURLWithPath: "/exports/latest.png")])
@@ -342,7 +403,7 @@ final class MiniPreviewTests: XCTestCase {
                                  "the missing-export status must fit without truncation")
         XCTAssertEqual(revealed.count, 1)
         XCTAssertEqual(transport.saveCount, 1)
-        XCTAssertEqual(button.title, "Reveal")
+        XCTAssertEqual(button.title, "Show in Folder")
         XCTAssertEqual(controller.presentedArtifactIDs, [captured.id])
         try write(render(panel), name: "mini-preview-reveal-missing-export.png")
     }
@@ -712,10 +773,7 @@ final class MiniPreviewTests: XCTestCase {
         defer { white.close() }
         let whiteBitmap = try render(white)
         let whiteImagePixel = try XCTUnwrap(whiteBitmap.colorAt(x: 170, y: 90))
-        let titleBackingPixel = try XCTUnwrap(whiteBitmap.colorAt(x: 150, y: 41))
         XCTAssertGreaterThan(whiteImagePixel.brightnessComponent, 0.9)
-        XCTAssertLessThan(titleBackingPixel.brightnessComponent, 0.5,
-            "fixed dark-glass backing keeps title legible on white captures")
         try write(whiteBitmap, name: "mini-preview-single-white.png")
     }
 
@@ -733,7 +791,7 @@ final class MiniPreviewTests: XCTestCase {
         panel.previewView.setStatus("Copied", for: "newer")
         XCTAssertEqual(panel.previewView.visibleCardLabelCount, 0,
             "late action feedback cannot restore compact labels")
-        XCTAssertTrue(panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
+        XCTAssertTrue(panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewButton }
             .filter { !$0.isHidden }.isEmpty)
         XCTAssertEqual(panel.previewView.pileExpandAccessibilityLabel, "Expand 2 previews")
         panel.previewView.activatePileExpand()
@@ -743,7 +801,7 @@ final class MiniPreviewTests: XCTestCase {
             images: Dictionary(uniqueKeysWithValues: ids.map { ($0, image) }))
         defer { expandedPanel.close() }
         XCTAssertEqual(expandedPanel.previewView.visibleCardLabelCount, ids.count,
-            "expanded cards retain readable title chrome")
+            "expanded cards retain the dimensions badge")
     }
 
     func testOverflowUsesSharedLayoutsAndReservesBottomControlGutter() throws {
@@ -808,6 +866,7 @@ final class MiniPreviewTests: XCTestCase {
 
     private func fixturePanel(ids: [String], images: [String: NSImage],
                               collapsed: Bool = false, topAnchor: Bool = false,
+                              rightAnchor: Bool = false,
                               savedPaths: [String: String] = [:],
                               copy: @escaping (String) -> Void = { _ in },
                               save: @escaping (String) -> Void = { _ in },
@@ -819,7 +878,7 @@ final class MiniPreviewTests: XCTestCase {
         let stack = NativePreviewStack()
         ids.forEach { XCTAssertTrue(stack.insert($0)) }
         if collapsed { stack.setCollapsed(true) }
-        let placement = topAnchor ? "top_left" : "bottom_left"
+        let placement = (topAnchor ? "top_" : "bottom_") + (rightAnchor ? "right" : "left")
         let monitor = CapturesPreviewMonitor(work_x: 0, work_y: 0,
             work_width: 800, work_height: 700, full_x: 0, full_y: 0,
             full_width: 800, full_height: 700, scale_factor: 1)
@@ -839,7 +898,8 @@ final class MiniPreviewTests: XCTestCase {
             width: geometry.width, height: geometry.height), geometry: geometry,
             contentHeight: stack.contentHeight,
             resources: resources, ids: ids, layouts: layouts, hoverLayouts: hoverLayouts, collapsed: collapsed,
-            topAnchor: topAnchor, tokens: tokens, copy: copy, save: save, open: open,
+            topAnchor: topAnchor, rightAnchor: placement.hasSuffix("_right"), tokens: tokens,
+            copy: copy, save: save, open: open,
             trash: trash, dismiss: dismiss, setCollapsed: setCollapsed, clearAll: {}, move: move)
     }
 

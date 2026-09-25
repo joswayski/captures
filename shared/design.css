@@ -68,6 +68,7 @@
   --r-2xl: 18px;
   --r-3xl: 24px;
   --r-pill: 999px;
+  --thumbnail-card-radius: 12px;
 
   /* Control heights */
   --h-xs: 24px;

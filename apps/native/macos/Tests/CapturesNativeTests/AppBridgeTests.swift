@@ -91,6 +91,13 @@ final class AppBridgeTests: XCTestCase {
             "the picker must pass the actual selected device ID")
     }
 
+    func testRecordingPreferencesReadOpenEditorAfterRecording() throws {
+        XCTAssertTrue(try RecordingPreferences([:]).openEditorAfterRecording,
+            "the shipping default opens the editor after recording")
+        XCTAssertFalse(try RecordingPreferences(["open_editor_after_recording": false])
+            .openEditorAfterRecording)
+    }
+
     func testBackendErrorIsPreserved() {
         XCTAssertThrowsError(try AppBridge.decode(Data(#"{"ok":false,"error":"screen access denied"}"#.utf8))) { error in
             XCTAssertEqual(error as? AppBridgeError, .backend("screen access denied"))

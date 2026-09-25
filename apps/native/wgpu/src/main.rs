@@ -1,5 +1,6 @@
 mod capture_controls;
 mod clipboard_input;
+mod clipboard_revision;
 mod countdown;
 mod diagnostics;
 mod editor;
