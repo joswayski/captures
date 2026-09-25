@@ -10,6 +10,7 @@ pub enum Action {
     Save,
     Reveal,
     OpenHistory,
+    Trash,
     Dismiss,
 }
 
@@ -24,6 +25,7 @@ pub enum Busy {
     Copy,
     Save,
     Reveal,
+    Trash,
 }
 
 pub fn stack_controls_visible(count: usize, collapsed: bool) -> bool {
@@ -178,6 +180,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
 
     ui.scope_builder(egui::UiBuilder::new().max_rect(footer.shrink(8.)), |ui| {
         tokens.glass_controls(ui);
+        ui.spacing_mut().button_padding.x = tokens.number("s-2");
         ui.horizontal(|ui| {
             let enabled = view.interactive && view.busy.is_none();
             let copy = ui
@@ -207,6 +210,18 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                 .clicked()
             {
                 action = Some(Action::OpenHistory);
+            }
+            if ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(RichText::new("Trash").color(tokens.color("theme-signal"))),
+                )
+                .on_hover_text(
+                    "Move saved export to Trash and dismiss preview; keep private History",
+                )
+                .clicked()
+            {
+                action = Some(Action::Trash);
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
@@ -394,6 +409,84 @@ mod tests {
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         action
+    }
+
+    #[test]
+    fn all_action_labels_fit_real_card_width_with_runtime_spacing() {
+        for saved in [false, true] {
+            let ctx = egui::Context::default();
+            let tokens = crate::tokens::load()["dark-mustard"].clone();
+            tokens.apply(&ctx, false);
+            let texture = ctx.load_texture(
+                "actions",
+                egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+                Default::default(),
+            );
+            let rect = egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(
+                    (captures_app::preview::THUMBNAIL_WIDTH
+                        - 2. * captures_app::preview::THUMBNAIL_PADDING) as f32,
+                    captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
+                ),
+            );
+            ctx.begin_pass(raw(rect, vec![]));
+            let mut ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::new("action-layout"),
+                egui::UiBuilder::new().max_rect(rect),
+            );
+            show(
+                &mut ui,
+                &tokens,
+                View {
+                    artifact_id: "saved",
+                    texture: &texture,
+                    width: 310,
+                    height: 170,
+                    busy: None,
+                    message: None,
+                    can_save: true,
+                    saved,
+                    interactive: true,
+                    collapsed: false,
+                    stack_count: 1,
+                    depth: 0,
+                    desktop_pointer: None,
+                },
+            );
+            let mut output = ctx.end_pass();
+            let labels = [
+                "Copy",
+                if saved { "Reveal" } else { "Save" },
+                "History",
+                "Trash",
+                "×",
+            ];
+            let bounds: Vec<_> = labels
+                .iter()
+                .map(|label| {
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == *label => {
+                                Some(text.galley.rect.translate(text.pos.to_vec2()))
+                            }
+                            _ => None,
+                        })
+                        .expect("every action must be painted")
+                })
+                .collect();
+            for pair in bounds.windows(2) {
+                assert!(
+                    pair[0].max.x + tokens.number("s-2") <= pair[1].min.x,
+                    "action labels overlap: {bounds:?}"
+                );
+            }
+            assert!(bounds.iter().all(|bounds| rect.contains_rect(*bounds)));
+            output.textures_delta.clear();
+        }
     }
 
     #[test]

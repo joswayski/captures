@@ -1043,6 +1043,17 @@ guarded async completion. A missing export reports an error without another save
 or removal of the capture. Saves through History also update the preview action.
 AppKit selects the export in Finder; Windows uses Explorer selection; Linux opens
 its parent directory. File-manager behavior on physical desktops remains unverified.
+Trash uses the shared `trash_preview` operation: move the explicit saved export
+to OS trash, then dismiss that card; unsaved cards only dismiss. Private History
+bytes and metadata remain untouched, matching shipping screenshot Trash rather
+than Delete from History. Saved-path snapshots and in-flight/presentation guards
+reject stale actions and callbacks. Missing exports and OS errors keep the card
+available for retry; directories, symlinks and private History paths are rejected.
+The existing trash backend may request Finder automation permission on macOS;
+Windows isolates its COM initialization on a fresh worker thread. Private-X11
+smoke uses disposable XDG Trash and checks exact bytes and `.trashinfo` paths,
+failure/retry, focus and History preservation. Actual Finder/Recycle Bin behavior
+and Wayland desktop interaction remain unverified, not completed parity gates.
 The four corner placements use actual monitor work areas. Private-X11
 tests exercise placement, focus, minimized-root actions, exact capture inclusion/
 exclusion and cancellation. AppKit tests cover panel/decode/action

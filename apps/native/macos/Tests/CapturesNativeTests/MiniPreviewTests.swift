@@ -24,17 +24,25 @@ final class MiniPreviewTests: XCTestCase {
                             size: NSSize(width: 284, height: 160))
         let panel = fixturePanel(ids: ["latest"], images: ["latest": image],
             copy: { _ in actions.append("copy") }, save: { _ in actions.append("save") },
-            open: { _ in actions.append("open") }, dismiss: { _ in actions.append("dismiss") })
+            open: { _ in actions.append("open") }, trash: { _ in actions.append("trash") },
+            dismiss: { _ in actions.append("dismiss") })
         defer { panel.close() }
 
         XCTAssertFalse(panel.canBecomeKey); XCTAssertFalse(panel.canBecomeMain)
         XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
         XCTAssertEqual(panel.previewView.artifactIDs, ["latest"])
         let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
-        XCTAssertEqual(buttons.map(\.title), ["Copy", "Save", "Open", "Dismiss"])
+        XCTAssertEqual(buttons.map(\.title), ["Copy", "Save", "Open", "Trash", "×"])
         XCTAssertTrue(buttons.allSatisfy(\.glass))
+        XCTAssertTrue(try XCTUnwrap(buttons.first { $0.title == "Trash" }).signal)
+        XCTAssertEqual(buttons.last?.accessibilityLabel(), "Dismiss preview")
+        XCTAssertEqual(Set(buttons.map(\.frame.width)).count, 1)
+        XCTAssertTrue(buttons.allSatisfy { ($0.title as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium),
+        ]).width < $0.bounds.width })
         buttons.forEach { $0.performClick(nil) }
-        XCTAssertEqual(actions, ["copy", "save", "open", "dismiss"])
+        XCTAssertEqual(actions, ["copy", "save", "open", "trash", "dismiss"])
+        try write(render(panel), name: "mini-preview-single-unsaved-trash.png")
     }
 
     func testSavedCardUsesRevealWithShowInFolderAccessibility() throws {
@@ -44,7 +52,7 @@ final class MiniPreviewTests: XCTestCase {
         defer { panel.close() }
         let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
         let reveal = try XCTUnwrap(buttons.first { $0.title == "Reveal" })
-        XCTAssertEqual(buttons.map(\.title), ["Copy", "Reveal", "Open", "Dismiss"])
+        XCTAssertEqual(buttons.map(\.title), ["Copy", "Reveal", "Open", "Trash", "×"])
         XCTAssertEqual(reveal.accessibilityLabel(), "Show in Folder")
         XCTAssertEqual(reveal.toolTip, "Show in Folder")
         try write(render(panel), name: "mini-preview-single-saved-reveal.png")
@@ -203,7 +211,9 @@ final class MiniPreviewTests: XCTestCase {
         button.performClick(nil)
         XCTAssertEqual(transport.started.wait(timeout: .now() + 5), .success)
         button.performClick(nil)
+        actions.trash(captured)
         XCTAssertEqual(transport.saveCount, 1, "in-flight Save must not dispatch twice")
+        XCTAssertEqual(transport.trashCount, 0, "Trash must not race an accepted Save")
         transport.gate?.signal()
         LiveCaptureController.flush()
         try waitUntil { button.title == "Reveal" }
@@ -261,6 +271,130 @@ final class MiniPreviewTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(controller.presentedArtifactIDs, [],
             "a dismissed card must not be recreated by a late save completion")
+    }
+
+    func testTrashSendsExactUnicodeSnapshotAndSerializesWithSave() throws {
+        _ = NSApplication.shared
+        let savedPath = "/Exports/客户/Café 東京.png"
+        let captured = artifact(id: "截图-id", previewPath: "/preview.png", savedPath: savedPath)
+        let controller = try presentedController(captured)
+        defer { controller.close() }
+        let transport = MiniPreviewActionTransport()
+        transport.gate = DispatchSemaphore(value: 0)
+        let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
+            loadPreferences: { try self.preferences() })
+        actions.bind(previews: controller); actions.configure(historyRoot: "/历史/History")
+
+        actions.trash(captured)
+        XCTAssertEqual(transport.started.wait(timeout: .now() + 5), .success)
+        actions.save(captured)
+        XCTAssertEqual(transport.saveCount, 0, "Save and Trash share the artifact busy guard")
+        XCTAssertEqual(transport.lastRequest?["operation"] as? String, "trash_preview")
+        XCTAssertEqual(transport.lastRequest?["root"] as? String, "/历史/History")
+        XCTAssertEqual(transport.lastRequest?["id"] as? String, "截图-id")
+        XCTAssertEqual(transport.lastRequest?["saved_path"] as? String, savedPath)
+        transport.gate?.signal(); LiveCaptureController.flush()
+        try waitUntil { controller.presentedArtifactIDs.isEmpty }
+        XCTAssertEqual(transport.trashCount, 1)
+    }
+
+    func testTrashFailureCanRetryAndKeepsReadableErrorDetail() throws {
+        _ = NSApplication.shared
+        let captured = artifact(id: "retry", previewPath: "/preview.png",
+                                savedPath: "/Exports/retry.png")
+        let controller = try presentedController(captured)
+        defer { controller.close() }
+        let transport = MiniPreviewActionTransport(); transport.fail = true
+        let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
+            loadPreferences: { try self.preferences() })
+        actions.bind(previews: controller); actions.configure(historyRoot: "/History")
+        actions.trash(captured); LiveCaptureController.flush()
+        try waitUntil { controller.statusText(for: captured.id) == "Trash failed" }
+        let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+            .first { $0.previewView.artifactIDs == [captured.id] })
+        let status = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == "Trash failed" })
+        XCTAssertFalse(try XCTUnwrap(status.toolTip).isEmpty)
+        XCTAssertTrue(panel.isVisible)
+        try write(render(panel), name: "mini-preview-trash-error.png")
+        transport.fail = false
+        actions.trash(captured); LiveCaptureController.flush()
+        try waitUntil { controller.presentedArtifactIDs.isEmpty }
+        XCTAssertEqual(transport.trashCount, 2)
+    }
+
+    func testTrashRejectsStaleSavedPathAndMalformedResponse() throws {
+        _ = NSApplication.shared
+        let original = artifact(id: "snapshot", previewPath: "/preview.png", savedPath: "/old.png")
+        let controller = try presentedController(original)
+        defer { controller.close() }
+        let transport = MiniPreviewActionTransport()
+        let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
+            loadPreferences: { try self.preferences() })
+        actions.bind(previews: controller); actions.configure(historyRoot: "/History")
+        controller.refreshArtifacts([
+            artifact(id: "snapshot", previewPath: "/preview.png", savedPath: "/new.png"),
+        ])
+        actions.trash(original)
+        XCTAssertEqual(transport.requestCount, 0, "stale saved-path snapshots cannot dispatch")
+
+        transport.malformed = true
+        let current = artifact(id: "snapshot", previewPath: "/preview.png", savedPath: "/new.png")
+        actions.trash(current); LiveCaptureController.flush()
+        try waitUntil { controller.statusText(for: current.id) == "Trash failed" }
+        XCTAssertEqual(controller.presentedArtifactIDs, [current.id],
+            "malformed success responses must never dismiss")
+    }
+
+    func testUnsavedTrashOnlyDismissesAndLateSavedCompletionCannotRemoveReplacement() throws {
+        _ = NSApplication.shared
+        let unsaved = artifact(id: "draft", previewPath: "/draft-preview.png")
+        let unsavedController = try presentedController(unsaved)
+        let unsavedTransport = MiniPreviewActionTransport()
+        let unsavedActions = MiniPreviewActions(settingsPath: nil, transport: unsavedTransport,
+            loadPreferences: { try self.preferences() })
+        unsavedActions.bind(previews: unsavedController); unsavedActions.configure(historyRoot: "/History")
+        unsavedActions.trash(unsaved)
+        LiveCaptureController.flush()
+        try waitUntil { unsavedController.presentedArtifactIDs.isEmpty }
+        XCTAssertEqual(unsavedTransport.requestCount, 1)
+        XCTAssertEqual(unsavedTransport.lastRequest?["operation"] as? String, "trash_preview")
+        XCTAssertTrue(unsavedTransport.lastRequest?["saved_path"] is NSNull,
+            "unsaved Trash must never send a private file as the exported path")
+        unsavedController.close()
+
+        let saved = artifact(id: "same", previewPath: "/old-preview.png", savedPath: "/old.png")
+        let controller = try presentedController(saved)
+        defer { controller.close() }
+        let transport = MiniPreviewActionTransport(); transport.gate = DispatchSemaphore(value: 0)
+        let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
+            loadPreferences: { try self.preferences() })
+        actions.bind(previews: controller); actions.configure(historyRoot: "/History")
+        actions.trash(saved)
+        XCTAssertEqual(transport.started.wait(timeout: .now() + 5), .success)
+        let changed = artifact(id: "same", previewPath: "/old-preview.png", savedPath: "/changed.png")
+        controller.refreshArtifacts([changed])
+        transport.gate?.signal(); LiveCaptureController.flush()
+        var completionDrained = false
+        DispatchQueue.main.async { completionDrained = true }
+        try waitUntil { completionDrained }
+        XCTAssertEqual(controller.presentedArtifactIDs, ["same"],
+            "a changed saved-path snapshot must reject late completion")
+
+        transport.gate = DispatchSemaphore(value: 0)
+        actions.trash(changed)
+        XCTAssertEqual(transport.started.wait(timeout: .now() + 5), .success)
+        controller.dismiss(saved.id)
+        let replacement = artifact(id: "same", previewPath: "/replacement-preview.png")
+        let generation = try XCTUnwrap(controller.beginCapture(settings: previewSettings()))
+        controller.present(replacement, on: screenID(), settings: previewSettings(), generation: generation)
+        try waitUntil { controller.decodedArtifactIDs == ["same"] }
+        transport.gate?.signal(); LiveCaptureController.flush()
+        completionDrained = false
+        DispatchQueue.main.async { completionDrained = true }
+        try waitUntil { completionDrained }
+        XCTAssertEqual(controller.presentedArtifactIDs, ["same"],
+            "late Trash completion must not remove an identity/path replacement")
     }
 
     func testOutOfOrderDecodesPreserveCaptureOrderAndCaptureCancellationRestoresPanel() throws {
@@ -570,6 +704,7 @@ final class MiniPreviewTests: XCTestCase {
                               copy: @escaping (String) -> Void = { _ in },
                               save: @escaping (String) -> Void = { _ in },
                               open: @escaping (String) -> Void = { _ in },
+                              trash: @escaping (String) -> Void = { _ in },
                               dismiss: @escaping (String) -> Void = { _ in },
                               setCollapsed: @escaping (Bool) -> Void = { _ in },
                               move: @escaping (NSPoint) -> Void = { _ in }) -> MiniPreviewPanel {
@@ -597,7 +732,20 @@ final class MiniPreviewTests: XCTestCase {
             contentHeight: stack.contentHeight,
             resources: resources, ids: ids, layouts: layouts, hoverLayouts: hoverLayouts, collapsed: collapsed,
             topAnchor: topAnchor, tokens: tokens, copy: copy, save: save, open: open,
-            dismiss: dismiss, setCollapsed: setCollapsed, clearAll: {}, move: move)
+            trash: trash, dismiss: dismiss, setCollapsed: setCollapsed, clearAll: {}, move: move)
+    }
+
+    private func previewSettings() -> MiniPreviewSettings {
+        MiniPreviewSettings(enabled: true, placement: "bottom_right", includeInCaptures: false)
+    }
+
+    private func presentedController(_ captured: CaptureArtifact) throws -> MiniPreviewController {
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in self.solidImage(.systemBlue) })
+        let settings = previewSettings()
+        let generation = try XCTUnwrap(controller.beginCapture(settings: settings))
+        controller.present(captured, on: screenID(), settings: settings, generation: generation)
+        try waitUntil { controller.isPanelVisible }
+        return controller
     }
 
     private func solidImage(_ color: NSColor) -> NSImage {
@@ -653,21 +801,35 @@ private final class MiniPreviewActionTransport: AppTransport {
     private let lock = NSLock()
     private var saves = 0
     private var root: String?
+    private var trashes = 0
+    private var requests = 0
+    private var recordedRequest: [String: Any]?
     var fail = false
+    var malformed = false
     var gate: DispatchSemaphore?
     let started = DispatchSemaphore(value: 0)
     var saveCount: Int { lock.lock(); defer { lock.unlock() }; return saves }
     var savedRoot: String? { lock.lock(); defer { lock.unlock() }; return root }
+    var trashCount: Int { lock.lock(); defer { lock.unlock() }; return trashes }
+    var requestCount: Int { lock.lock(); defer { lock.unlock() }; return requests }
+    var lastRequest: [String: Any]? { lock.lock(); defer { lock.unlock() }; return recordedRequest }
 
     func request(_ object: [String: Any]) throws -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
-        guard object["operation"] as? String == "save_screenshot" else {
+        requests += 1; recordedRequest = object
+        let operation = object["operation"] as? String
+        guard operation == "save_screenshot" || operation == "trash_preview" else {
             throw AppBridgeError.invalidResponse
         }
-        saves += 1; root = object["root"] as? String; started.signal()
+        if operation == "save_screenshot" { saves += 1 } else { trashes += 1 }
+        root = object["root"] as? String; started.signal()
         let gate = self.gate
         lock.unlock(); gate?.wait(); lock.lock()
         if fail { throw AppBridgeError.invalidResponse }
+        if operation == "trash_preview" {
+            if malformed { return ["kind": "wrong", "id": object["id"] as Any] }
+            return ["kind": "preview_trashed", "id": object["id"] as Any]
+        }
         return ["path": "/exports/latest.png"]
     }
 }
