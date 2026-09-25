@@ -1073,6 +1073,27 @@ impl EditorSession {
         Ok(())
     }
 
+    /// Render an uncommitted drawing on the serialized worker. Only renderer
+    /// caches may change: document, history, assets, published pixels and drafts
+    /// remain untouched. The returned frame owns its pixels independently.
+    pub fn preview_drawing(&mut self, request: Request) -> Result<Arc<RgbaImage>, String> {
+        self.require_finished_text_input()?;
+        let mut document = self.history.current().clone();
+        match request {
+            Request::CreateClosedShape { create } => {
+                document.create_closed_shape(create)?;
+            }
+            Request::CreateOpenShape { create } => {
+                document.create_open_shape(create)?;
+            }
+            Request::CreateFreehandPath { create } => {
+                document.create_freehand_path(create)?;
+            }
+            _ => return Err("Only drawing creation requests can be previewed.".into()),
+        }
+        render_frame(&document, &self.assets, self.fonts.as_mut()).map(Arc::new)
+    }
+
     pub fn execute(&mut self, request: Request) -> Result<(), String> {
         if self.text_input.is_some() {
             match request {

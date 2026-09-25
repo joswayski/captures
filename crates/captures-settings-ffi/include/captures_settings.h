@@ -371,6 +371,15 @@ CapturesEditorFrame *captures_editor_frame_v1(const CapturesEditorSession *sessi
 bool captures_editor_frame_pixels_v1(const CapturesEditorFrame *frame, CapturesRegionPixels *output);
 void captures_editor_frame_free_v1(CapturesEditorFrame *frame);
 
+/* Worker-only uncommitted drawing render. Accepts create_closed_shape,
+ * create_open_shape or create_freehand_path requests. Never changes document,
+ * undo/redo, assets, published frame or drafts; no I/O. Retains independent
+ * pixels freed with frame_free_v1. Session access must remain serialized.
+ * NULL output refuses the operation; otherwise writes owned success/error JSON
+ * freed with captures_settings_free_v1. Failure returns NULL. */
+CapturesEditorFrame *captures_editor_preview_drawing_v1(CapturesEditorSession *session,
+    const char *request_json, char **output);
+
 /* Encode the current edited frame on the serialized session worker. No file or
  * clipboard I/O, no draft save, and no change to document/undo/redo/dirty state.
  * Options JSON: {format:"png"|"jpeg"|"webp", quality:"preserve"|"compress"|"maximum",

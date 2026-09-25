@@ -1096,7 +1096,19 @@ def main():
             start, end = document_point((250, 70)), document_point((370, 70))
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
-                *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
+                *map(str, end), "sleep", ".5")
+            shot(editor, "drawing-shadow-transient")
+            document_pixel("drawing-shadow-transient", 300, 70, (18, 52, 86), 1)
+            document_pixel("drawing-shadow-transient", 277, 101, (240, 192, 64), 1)
+            assert draft.read_bytes() == before, "pixel preview wrote a draft"
+            run("xdotool", "key", "Escape", "mouseup", "1", "sleep", ".3")
+            shot(editor, "drawing-shadow-cancelled")
+            document_pixel("drawing-shadow-cancelled", 300, 70, (40, 110, 166), 1)
+            document_pixel("drawing-shadow-cancelled", 277, 101, (40, 110, 166), 1)
+            assert draft.read_bytes() == before, "cancelled preview wrote a draft"
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                *map(str, end), "sleep", ".5", "mouseup", "1", "sleep", ".3")
             shadowed = save_layers(lambda values: len(values) == 2, "shadowed line created")[-1]
             assert shadowed["style"]["dropShadow"] is True, shadowed
             custom = {"color": "#f0c040", "opacity": 100, "blur": 0, "offsetX": -23, "offsetY": 31}
@@ -1129,6 +1141,7 @@ def main():
                            "independent-composited-pixels", "single-undo", "open-stroke-ignores-closed-toggle",
                            "tool-and-response-retention", "zero-opacity-layer", "original-unchanged",
                            "shadow-defaults-no-write", "asymmetric-shadow-offset-pixels",
+                           "transient-shadow-pixels", "cancel-restores-pixels-without-write",
                            "disabled-shadow-pixels", "retained-shadow-style"],
             }, indent=2) + "\n")
             print("PASS native drawing defaults: style, opacity, shadow pixels, undo and retained local choices")
