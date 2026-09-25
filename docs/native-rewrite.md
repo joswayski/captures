@@ -40,6 +40,12 @@ Explorer, physical Finder/Linux file-manager acceptance, accessibility, Wayland
 live capture, signing/notarization, redistributable dependency bundling and update
 installation remain open. No parity gate closes from this development package.
 
+The wgpu host now renders UI text in the token font stack instead of egui's bundled
+faces: Segoe UI Variable Text / Segoe UI on Windows, and on Linux the first
+fontconfig match for Inter, Roboto, Helvetica Neue, Arial, then `sans-serif` (as
+WebKitGTK resolves it). A named `semibold` family backs `--weight-semibold`; egui's
+faces remain glyph fallbacks.
+
 Development login items are now explicit, OS-authoritative Preferences controls:
 per-profile macOS LaunchAgents, Windows HKCU Run values and Linux XDG autostart
 files. They use the current executable and exact development settings/History

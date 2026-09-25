@@ -21,6 +21,7 @@ mod selector;
 mod shortcut_input;
 mod tokens;
 mod tray;
+mod ui_fonts;
 mod window_selector;
 #[cfg(target_os = "windows")]
 mod windows_drag;
