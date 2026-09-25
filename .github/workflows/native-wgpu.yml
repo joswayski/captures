@@ -241,6 +241,9 @@ jobs:
       - name: Exercise resident tray, shortcut editing and global shortcuts with a real SNI host
         if: matrix.suite == 'capture'
         run: /usr/bin/python3 apps/native/x11_preview_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-lifecycle --lifecycle --shortcut-editing
+      - name: Exercise explicit native login registration and hidden launch recovery
+        if: matrix.suite == 'capture'
+        run: /usr/bin/python3 apps/native/x11_preview_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-login --lifecycle --login-item-only
       - uses: actions/upload-artifact@v4
         if: always()
         with:

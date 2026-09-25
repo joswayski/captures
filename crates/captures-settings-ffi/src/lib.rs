@@ -189,6 +189,11 @@ enum Request {
         light: bool,
     },
     DefaultPath,
+    LoginItem {
+        history_root: String,
+        settings_file: String,
+        enabled: Option<bool>,
+    },
 }
 
 fn response(request: *const c_char) -> Value {
@@ -215,6 +220,17 @@ fn response(request: *const c_char) -> Value {
         Ok(Request::DefaultPath) => {
             json!({"ok":true,"path":captures_settings::default_native_settings_path()})
         }
+        Ok(Request::LoginItem {
+            history_root,
+            settings_file,
+            enabled,
+        }) => captures_app::login_item::configure(
+            Path::new(&history_root),
+            Path::new(&settings_file),
+            enabled,
+        )
+        .map(|enabled| json!({"ok":true,"enabled":enabled}))
+        .unwrap_or_else(|error| json!({"ok":false,"error":error})),
         Ok(Request::Theme {
             accent,
             signal,
