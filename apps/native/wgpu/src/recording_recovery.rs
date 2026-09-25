@@ -320,7 +320,7 @@ impl Recovery {
                         service
                             .recover(&target.session_id, &target.identity, &cancel, |stage| {
                                 let _ = out.send(Reply::Progress(stage));
-                                ctx.request_repaint();
+                                ctx.request_repaint_of(egui::ViewportId::ROOT);
                             })
                             .map(Box::new),
                     ),
@@ -330,7 +330,7 @@ impl Recovery {
                     Job::Shutdown => break,
                 };
                 let _ = out.send(reply);
-                ctx.request_repaint();
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
             }
         });
         Self {
@@ -395,6 +395,26 @@ impl Drop for Recovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_wakes_root_while_an_editor_is_active() {
+        let ctx = egui::Context::default();
+        let wakes = crate::root_repaint::observe_from_child(&ctx);
+        let root = tempfile::tempdir().unwrap();
+        let mut recovery = Recovery::new(ctx.clone(), root.path().into());
+        recovery.refresh();
+        assert_eq!(
+            wakes
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            egui::ViewportId::ROOT
+        );
+        recovery.receive();
+        assert!(recovery.view.pending.is_none());
+        assert!(recovery.view.list_error.is_none());
+        assert!(recovery.view.drafts.is_empty());
+        ctx.end_pass().textures_delta.clear();
+    }
 
     fn draft(identity: &str) -> RecoveryDraft {
         RecoveryDraft {

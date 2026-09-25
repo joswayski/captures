@@ -351,7 +351,7 @@ impl Workbench {
                             .map_err(|error| error.to_string())
                             .and_then(|()| tray::open_directory(path));
                         let _ = output.send(result);
-                        wake.request_repaint();
+                        wake.request_repaint_of(egui::ViewportId::ROOT);
                     });
                 }
                 Err(error) => {
