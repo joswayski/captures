@@ -3150,6 +3150,8 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "styled"), historyRoot: "/native/History")
+        controller.window.setContentSize(NSSize(width: 1000, height: 1000))
+        controller.root.layoutSubtreeIfNeeded()
         try showDraw(in: controller.root)
 
         (try field("New drawing stroke color", in: controller.root)).stringValue = "#123456"
@@ -3240,7 +3242,22 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = shadow.sendAction(shadow.action, to: shadow.target)
         XCTAssertEqual(try field("New drawing shadow blur", in: controller.root).stringValue, "9",
                        "custom shadow stops following stroke width")
+        overlay.begin(at: start); overlay.end(at: end)
+        XCTAssertEqual(worker.requests.count, count + 2)
+        XCTAssertEqual((worker.requests.last?["style"] as? [String: Any])?["dropShadowStyle"] as? NSDictionary, expectedShadow)
+        for key in ["color", "opacity", "blur", "offsetX", "offsetY"] {
+            let input = try field("New drawing shadow \(key)", in: controller.root)
+            XCTAssertTrue(input.visibleRect.contains(input.bounds), "expanded shadow \(key) is fully visible")
+        }
         try render(controller.root, name: "screenshot-editor-new-drawing-shadow-retained-light")
+        controller.window.setContentSize(NSSize(width: 760, height: 540))
+        controller.root.layoutSubtreeIfNeeded()
+        for key in ["color", "opacity", "blur", "offsetX", "offsetY"] {
+            let input = try field("New drawing shadow \(key)", in: controller.root)
+            input.scrollToVisible(input.bounds)
+            XCTAssertTrue(input.visibleRect.contains(input.bounds), "compact shadow \(key) remains reachable by scrolling")
+        }
+        try render(controller.root, name: "screenshot-editor-new-drawing-shadow-compact-light")
     }
 
     func testDrawingShadowDefaultsComeFromRustWithoutFreezingToInitialWidth() throws {
