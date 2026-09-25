@@ -146,6 +146,27 @@ bool captures_preview_geometry_v1(CapturesPreviewMonitor monitor, size_t count,
     bool collapsed, const CapturesPreviewOrigin *origin, uint32_t placement,
     CapturesPreviewGeometry *output);
 
+/* Shipping "Captures is ready to use" launch-notice placement. Every rect is
+ * LOGICAL points in one top-left desktop space (y grows downward; negative
+ * origins allowed). AppKit converts its bottom-left screen coordinates at this
+ * boundary. monitor/work_area must be finite with positive size. tray may be
+ * NULL; an empty, non-finite or off-edge tray rect uses the fallback.
+ * menu_bar_at_top: true on macOS (rejects the unlaid-out Cocoa-origin item).
+ * fallback_edge: 0 top (macOS), 1 bottom (Windows), 2 work-area insets (Linux).
+ * Output: window frame (top-left logical), caret 0 none/1 top/2 bottom, caret_x
+ * and card in window-local top-left coordinates. No allocation or OS access.
+ * False leaves output unchanged (null output, bad enum, invalid bounds). */
+typedef struct { double x, y, width, height; } CapturesTrayNoticeRect;
+typedef struct {
+    double x, y, width, height, caret_x;
+    CapturesTrayNoticeRect card;
+    uint32_t caret;
+} CapturesTrayNoticePlacement;
+bool captures_startup_notice_placement_v1(CapturesTrayNoticeRect monitor,
+    CapturesTrayNoticeRect work_area, const CapturesTrayNoticeRect *tray,
+    bool menu_bar_at_top, uint32_t fallback_edge,
+    CapturesTrayNoticePlacement *output);
+
 /* Owned shared visibility state, not a native window. Serialize all calls on
  * one handle (normally the UI thread). Free exactly once after callers stop;
  * NULL is permitted by free and returns false from every other handle call.

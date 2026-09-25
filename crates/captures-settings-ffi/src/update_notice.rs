@@ -3,7 +3,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use captures_app::{
-    tray_notice::{self, LogicalRect},
+    tray_notice::LogicalRect,
     update_notice::{self, StubEvent, UpdateStatus, ViewState},
 };
 use serde::Deserialize;
@@ -71,7 +71,7 @@ fn respond(bytes: &[u8]) -> Result<Value, String> {
             {
                 return Err("Notice placement needs finite, positive geometry".into());
             }
-            let placement = tray_notice::placement(
+            let placement = captures_app::update_notice::placement(
                 monitor,
                 work_area,
                 tray,
@@ -79,7 +79,7 @@ fn respond(bytes: &[u8]) -> Result<Value, String> {
                 card_width,
                 card_height,
             );
-            Ok(json!({"placement": placement, "card": placement.card()}))
+            Ok(json!({"placement": placement, "card": placement.card_rect()}))
         }
     }
 }

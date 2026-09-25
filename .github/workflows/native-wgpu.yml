@@ -132,7 +132,7 @@ jobs:
         run: xvfb-run -a python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-smoke
       - name: Exercise native first-run gating and queued media on private X11
         if: matrix.suite == 'capture'
-        run: python apps/native/x11_onboarding_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-onboarding
+        run: /usr/bin/python3 apps/native/x11_onboarding_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-onboarding
       - name: Render and drive the stub-backed update notice on private X11
         if: matrix.suite == 'capture'
         run: python apps/native/x11_update_notice_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-update-notice

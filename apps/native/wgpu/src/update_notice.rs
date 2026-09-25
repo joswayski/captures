@@ -5,7 +5,8 @@
 use std::f32::consts::TAU;
 
 use captures_app::{
-    tray_notice::{CARET_SIZE, CARET_SPAN, Caret, LogicalRect, Placement},
+    tray_notice::{Caret, LogicalRect, Placement, TRAY_NOTICE_CARET_SIZE as CARET_SIZE},
+    update_notice::CARET_SPAN,
     update_notice::{Action, Icon, IconTone, Presentation},
 };
 use eframe::egui::{self, Color32, CornerRadius, FontId, RichText, Stroke};
@@ -163,7 +164,7 @@ pub fn show(
     placement: &Placement,
 ) -> Option<Action> {
     let mut action = None;
-    let card = rect(placement.card());
+    let card = rect(placement.card_rect());
     let radius = corner(tokens, "r-xl");
     let painter = ui.painter().clone();
     painter.add(
@@ -739,7 +740,7 @@ impl FixtureHost {
             width: f64::from(size.x),
             height: f64::from(size.y),
         };
-        let placement = captures_app::tray_notice::placement(
+        let placement = captures_app::update_notice::placement(
             monitor,
             monitor,
             self.tray.rect(monitor),

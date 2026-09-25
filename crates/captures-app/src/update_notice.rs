@@ -1172,6 +1172,30 @@ pub fn stub_tick_interval_ms(status: &UpdateStatus) -> Option<u64> {
     }
 }
 
+/// Width of the update notice caret's base (shipping `--tray-caret-span`).
+pub const CARET_SPAN: f64 = 14.0;
+
+/// Places an update notice card at the tray icon when its rect is usable, or
+/// in this platform's tray corner otherwise, using the shared tray-notice policy.
+pub fn placement(
+    monitor: crate::tray_notice::LogicalRect,
+    work_area: crate::tray_notice::LogicalRect,
+    tray: Option<crate::tray_notice::LogicalRect>,
+    menu_bar_at_top: bool,
+    card_width: f64,
+    card_height: f64,
+) -> crate::tray_notice::Placement {
+    crate::tray_notice::resolve_tray_notice_placement(
+        monitor,
+        work_area,
+        tray,
+        menu_bar_at_top,
+        crate::tray_notice::FallbackEdge::for_current_platform(),
+        card_width,
+        card_height,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
