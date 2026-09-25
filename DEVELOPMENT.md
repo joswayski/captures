@@ -20,7 +20,7 @@ for the account placeholder. Sign-in is unavailable. `npm run check` verifies
 that account requests fail closed and the built public website still works.
 
 `captures-account` is a native-host prerequisite, not connected to either host.
-On a serialized worker, construct `AccountClient::new(DEFAULT_API, OsVault)` without
+On a serialized worker, construct `AccountClient::production()` without
 side effects; only after the user opens Share, explicitly call `load`, `request_code`,
 `verify`, `me`, `retry_save`, or `logout`. The host owns email/code controls and
 selected artifact state; the client owns only the bearer session. If `verify`
@@ -31,6 +31,8 @@ remotely before deleting locally; if revocation fails, retry logout. There is no
 refresh flow. The account API is still disabled by default, and no native UI is
 connected. Run `cargo test -p captures-account` for the disposable loopback HTTP
 and injected-vault contract tests; never use staging Compose (real SES/R2).
+Custom origins require an injected vault via `AccountClient::new`; the real OS
+vault is bound to the canonical API and cannot be paired with a mock/staging URL.
 
 `OsVault` uses a separate `es.captur.native.account` credential in macOS Keychain,
 Windows Credential Manager, or Linux Secret Service (with encrypted D-Bus transport),

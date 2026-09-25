@@ -84,6 +84,14 @@ pub struct AccountClient<V: Vault> {
     saved: bool,
 }
 
+impl AccountClient<OsVault> {
+    /// Bind the real OS credential vault to the canonical API origin. This
+    /// creates neither a network request nor a vault operation/prompt.
+    pub fn production() -> Result<Self, Error> {
+        Self::new(DEFAULT_API, OsVault::new())
+    }
+}
+
 impl<V: Vault> AccountClient<V> {
     /// Only HTTPS origins (or loopback HTTP for disposable tests) are accepted.
     /// No HTTP or vault operation occurs until a method is explicitly called.

@@ -49,16 +49,30 @@ struct Request {
     headers: String,
     body: String,
 }
-fn server(
-    replies: Vec<(&'static str, &'static str)>,
-) -> (String, thread::JoinHandle<Vec<Request>>) {
+fn server(replies: Vec<(&str, &str)>) -> (String, thread::JoinHandle<Vec<Request>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let replies: Vec<_> = replies
+        .into_iter()
+        .map(|(status, body)| (status.to_owned(), body.to_owned()))
+        .collect();
     let handle = thread::spawn(move || {
         replies
             .into_iter()
             .map(|(status, body)| {
-                let (mut stream, _) = listener.accept().unwrap();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(std::time::Instant::now() < deadline, "expected HTTP request did not arrive");
+                            thread::sleep(std::time::Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("accept: {error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(3)))
                     .unwrap();
@@ -69,7 +83,7 @@ fn server(
                 let mut length = 0;
                 loop {
                     let mut header = String::new();
-                    reader.read_line(&mut header).unwrap();
+                    assert!(reader.read_line(&mut header).unwrap() > 0, "request ended before headers");
                     if header == "\r\n" {
                         break;
                     }
@@ -256,4 +270,27 @@ fn invalid_email_is_input_error() {
         Err(Error::InvalidInput)
     );
     assert_eq!(handle.join().unwrap().len(), 1);
+}
+
+#[test]
+fn malformed_responses_do_not_expose_tokens_or_follow_redirects() {
+    let oversized = format!(r#"{{"challengeId":"{}"}}"#, "x".repeat(8192));
+    let (url, handle) = server(vec![
+        ("200 OK", r#"{"token":"secret-response-value","user":null}"#),
+        ("202 Accepted", &oversized),
+        ("302 Found\r\nLocation: /unexpected-route", ""),
+    ]);
+    let mut client = AccountClient::new(&url, Fake::default()).unwrap();
+    let error = client.verify("id", "AB12CD").unwrap_err();
+    assert_eq!(error, Error::MalformedResponse);
+    assert!(!format!("{error:?}").contains("secret-response-value"));
+    assert_eq!(
+        client.request_code("a@example.com"),
+        Err(Error::MalformedResponse)
+    );
+    assert_eq!(
+        client.request_code("a@example.com"),
+        Err(Error::MalformedResponse)
+    );
+    assert_eq!(handle.join().unwrap().len(), 3);
 }
