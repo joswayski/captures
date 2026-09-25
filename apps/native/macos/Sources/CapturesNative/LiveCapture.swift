@@ -408,6 +408,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 if let eligibleID, let requested = values.first(where: { $0.id == eligibleID }),
                    !self.historyFilter.matches(requested) { self.historyFilter = .all }
                 self.artifacts = values; self.reloadHistorySelection(previousID)
+                self.miniPreviews?.refreshArtifacts(values)
                 self.miniPreviews?.reconcileHistory(ids: Set(values.map(\.id)))
             case .failure(let error): self.artifacts = []; self.reloadHistorySelection(nil); self.showError("Couldn’t load capture history", error) }
             self.updateActions(); completion?()
@@ -2013,6 +2014,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             switch result { case .success(let value):
                 if let current = self.artifacts.firstIndex(where: { $0.id == artifact.id }) { self.artifacts[current] = value.0 }
                 self.status.stringValue = "Saved \(noun) to \(value.1)"
+                _ = self.miniPreviews?.updateSavedPath(value.1, for: artifact)
                 self.miniPreviews?.setStatus("Saved", for: artifact.id)
                 completion?(.success(value.1))
                 if completion == nil {

@@ -8,6 +8,7 @@ pub enum Action {
     MoveStack(egui::Pos2),
     Copy,
     Save,
+    Reveal,
     OpenHistory,
     Dismiss,
 }
@@ -22,6 +23,7 @@ pub enum StackAction {
 pub enum Busy {
     Copy,
     Save,
+    Reveal,
 }
 
 pub fn stack_controls_visible(count: usize, collapsed: bool) -> bool {
@@ -36,6 +38,7 @@ pub struct View<'a> {
     pub busy: Option<Busy>,
     pub message: Option<&'a str>,
     pub can_save: bool,
+    pub saved: bool,
     pub interactive: bool,
     pub collapsed: bool,
     pub stack_count: usize,
@@ -134,11 +137,14 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         .map(str::to_owned)
         .unwrap_or_else(|| format!("{} × {}", view.width, view.height));
     let label_position = card.left_top() + egui::vec2(tokens.number("s-3"), tokens.number("s-3"));
-    let galley = ui.painter().layout_no_wrap(
-        label,
+    let mut label_job = egui::text::LayoutJob::simple(
+        label.clone(),
         egui::FontId::proportional(tokens.number("text-xs")),
         tokens.color("glass-text"),
+        card.width() - tokens.number("s-3") * 4.,
     );
+    label_job.wrap.max_rows = 3;
+    let galley = ui.painter().layout_job(label_job);
     let label_rect = egui::Rect::from_min_size(
         label_position,
         galley.size() + egui::vec2(tokens.number("s-3") * 2., tokens.number("s-2") * 2.),
@@ -153,6 +159,12 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         galley,
         tokens.color("glass-text"),
     );
+    ui.interact(
+        label_rect,
+        ui.scope_id().with("preview-status"),
+        egui::Sense::hover(),
+    )
+    .on_hover_text(label);
 
     ui.scope_builder(egui::UiBuilder::new().max_rect(footer.shrink(8.)), |ui| {
         tokens.glass_controls(ui);
@@ -164,7 +176,15 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             if copy.clicked() {
                 action = Some(Action::Copy);
             }
-            if ui
+            if view.saved {
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Reveal"))
+                    .on_hover_text("Show in Folder")
+                    .clicked()
+                {
+                    action = Some(Action::Reveal);
+                }
+            } else if ui
                 .add_enabled(enabled && view.can_save, egui::Button::new("Save"))
                 .on_hover_text("Save with current screenshot preferences")
                 .clicked()
@@ -295,6 +315,33 @@ mod tests {
         origin: egui::Pos2,
         desktop_pointer: Option<egui::Pos2>,
     ) -> Option<Action> {
+        run_card_state(
+            ctx,
+            texture,
+            events,
+            collapsed,
+            interactive,
+            origin,
+            desktop_pointer,
+            None,
+            true,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_card_state(
+        ctx: &egui::Context,
+        texture: &egui::TextureHandle,
+        events: Vec<egui::Event>,
+        collapsed: bool,
+        interactive: bool,
+        origin: egui::Pos2,
+        desktop_pointer: Option<egui::Pos2>,
+        busy: Option<Busy>,
+        can_save: bool,
+        saved: bool,
+    ) -> Option<Action> {
         let screen = egui::Rect::from_min_size(
             egui::Pos2::ZERO,
             egui::vec2(
@@ -323,9 +370,10 @@ mod tests {
                 texture,
                 width: 320,
                 height: 180,
-                busy: None,
+                busy,
                 message: None,
-                can_save: true,
+                can_save,
+                saved,
                 interactive,
                 collapsed,
                 stack_count: 3,
@@ -335,6 +383,63 @@ mod tests {
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         action
+    }
+
+    #[test]
+    fn second_button_saves_unsaved_reveals_saved_and_is_guarded_while_busy() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "save-reveal",
+            egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        let click = egui::pos2(75., 138.);
+        for (saved, busy, can_save, expected) in [
+            (false, None, true, Some(Action::Save)),
+            (true, None, false, Some(Action::Reveal)),
+            (false, None, false, None),
+            (true, Some(Busy::Reveal), false, None),
+        ] {
+            run_card_state(
+                &ctx,
+                &texture,
+                moved(click),
+                false,
+                true,
+                egui::Pos2::ZERO,
+                Some(click),
+                busy,
+                can_save,
+                saved,
+            );
+            run_card_state(
+                &ctx,
+                &texture,
+                pointer(click, true),
+                false,
+                true,
+                egui::Pos2::ZERO,
+                Some(click),
+                busy,
+                can_save,
+                saved,
+            );
+            assert_eq!(
+                run_card_state(
+                    &ctx,
+                    &texture,
+                    pointer(click, false),
+                    false,
+                    true,
+                    egui::Pos2::ZERO,
+                    Some(click),
+                    busy,
+                    can_save,
+                    saved,
+                ),
+                expected
+            );
+        }
     }
 
     fn run_controls(ctx: &egui::Context, events: Vec<egui::Event>) -> Option<StackAction> {

@@ -157,6 +157,10 @@ enum Job {
         path: PathBuf,
         preview: Option<PreviewGuard>,
     },
+    Reveal {
+        path: PathBuf,
+        preview: PreviewGuard,
+    },
     CopyPixels {
         pixels: Arc<image::RgbaImage>,
         reply: Sender<Result<(), String>>,
@@ -198,6 +202,10 @@ enum Reply {
     },
     Copied {
         preview: Option<PreviewGuard>,
+        result: Result<(), String>,
+    },
+    Revealed {
+        preview: PreviewGuard,
         result: Result<(), String>,
     },
     HistoryDecoded {
@@ -395,6 +403,11 @@ enum PreviewMessage {
         directory: PathBuf,
         format: captures_settings::ScreenshotFormat,
     },
+    Reveal {
+        artifact_id: String,
+        generation: u64,
+        path: PathBuf,
+    },
     OpenHistory {
         artifact_id: String,
         generation: u64,
@@ -431,6 +444,7 @@ struct PreviewCard {
     texture: Option<egui::TextureHandle>,
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
+    saved_path: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -442,6 +456,7 @@ struct PreviewRenderCard {
     texture: egui::TextureHandle,
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
+    saved_path: Option<PathBuf>,
     layout: captures_app::preview::PreviewCardLayout,
     hover_y: f64,
 }
@@ -554,6 +569,7 @@ impl MiniPreviews {
                 texture: None,
                 busy: None,
                 message: None,
+                saved_path: artifact.entry.saved_path.as_deref().map(PathBuf::from),
             },
         );
         if target.is_some() {
@@ -949,6 +965,10 @@ impl Live {
                     Job::Copy { path, preview } => Reply::Copied {
                         preview,
                         result: copy_image(&path, &mut clipboard),
+                    },
+                    Job::Reveal { path, preview } => Reply::Revealed {
+                        preview,
+                        result: reveal(&path).map_err(|error| error.to_string()),
                     },
                     Job::CopyPixels { pixels, reply } => {
                         // The workspace owns X11 clipboard data beyond any editor's lifetime.
@@ -2082,6 +2102,9 @@ impl Live {
                             .cards
                             .get_mut(&artifact_id)
                             .expect("accepted preview exists");
+                        if card.busy.is_some() || card.saved_path.is_some() {
+                            continue;
+                        }
                         card.busy = Some(crate::mini_preview::Busy::Save);
                         card.message = Some("Saving with current preferences…".into());
                         card.artifact_id.clone()
@@ -2098,6 +2121,30 @@ impl Live {
                             generation,
                         },
                     );
+                }
+                PreviewMessage::Reveal {
+                    artifact_id,
+                    generation,
+                    path,
+                } if self.previews.accepts(&artifact_id, generation) => {
+                    let card = self
+                        .previews
+                        .cards
+                        .get_mut(&artifact_id)
+                        .expect("accepted preview exists");
+                    if card.busy.is_some() || card.saved_path.as_ref() != Some(&path) {
+                        continue;
+                    }
+                    card.busy = Some(crate::mini_preview::Busy::Reveal);
+                    card.message = Some("Showing saved file in folder…".into());
+                    self.pending += 1;
+                    let _ = self.tx.send(Job::Reveal {
+                        path,
+                        preview: PreviewGuard {
+                            artifact_id,
+                            generation,
+                        },
+                    });
                 }
                 PreviewMessage::OpenHistory {
                     artifact_id,
@@ -2142,6 +2189,7 @@ impl Live {
                 }
                 PreviewMessage::Copy { .. }
                 | PreviewMessage::Save { .. }
+                | PreviewMessage::Reveal { .. }
                 | PreviewMessage::MoveStack { .. }
                 | PreviewMessage::OpenHistory { .. } => {}
             }
@@ -2890,6 +2938,21 @@ impl Live {
                         }
                     }
                 }
+                Reply::Revealed { preview, result } => {
+                    self.pending = self.pending.saturating_sub(1);
+                    if let Some(card) = self
+                        .previews
+                        .cards
+                        .get_mut(&preview.artifact_id)
+                        .filter(|card| card.generation == preview.generation)
+                    {
+                        card.busy = None;
+                        card.message = Some(match result {
+                            Ok(()) => "Shown in folder".into(),
+                            Err(error) => format!("Reveal failed: {error}"),
+                        });
+                    }
+                }
                 Reply::Executed {
                     preview,
                     notice,
@@ -3426,6 +3489,14 @@ impl Live {
                 self.previews.clear(&removed);
                 self.confirm_clear_history = false;
                 self.confirm_delete = None;
+                for card in self.previews.cards.values_mut() {
+                    if let Some(artifact) = artifacts
+                        .iter()
+                        .find(|artifact| artifact.entry.id == card.artifact_id)
+                    {
+                        card.saved_path = artifact.entry.saved_path.as_deref().map(PathBuf::from);
+                    }
+                }
                 self.artifacts = artifacts;
                 self.refresh_history_selection();
                 self.status = self
@@ -3437,15 +3508,19 @@ impl Live {
                 self.accept_artifact(artifact, "Full display captured as PNG");
             }
             Response::Saved { artifact, path } => {
+                let artifact_id = artifact.entry.id.clone();
                 if announce && let Some(notice) = &mut self.recording_notice {
-                    notice.mark_saved(&artifact.entry.id, path.clone(), Instant::now());
+                    notice.mark_saved(&artifact_id, path.clone(), Instant::now());
                 }
                 if let Some(item) = self
                     .artifacts
                     .iter_mut()
-                    .find(|item| item.entry.id == artifact.entry.id)
+                    .find(|item| item.entry.id == artifact_id)
                 {
                     *item = artifact;
+                }
+                if let Some(card) = self.previews.cards.get_mut(&artifact_id) {
+                    card.saved_path = Some(path.clone());
                 }
                 if announce {
                     self.status = format!("Saved {}", path.display());
@@ -3595,6 +3670,7 @@ impl Live {
                     texture: card.texture.clone()?,
                     busy: card.busy,
                     message: card.message.clone(),
+                    saved_path: card.saved_path.clone(),
                     layout: self.previews.stack.card_layout(index, top_anchor)?,
                     hover_y: self
                         .previews
@@ -3702,6 +3778,7 @@ impl Live {
                             busy: card.busy,
                             message: card.message.as_deref(),
                             can_save: save.is_some(),
+                            saved: card.saved_path.is_some(),
                             interactive: card.layout.interactive,
                             collapsed,
                             stack_count: count,
@@ -3731,6 +3808,13 @@ impl Live {
                                     directory: directory.clone(),
                                     format: *format,
                                 })
+                        }
+                        Some(crate::mini_preview::Action::Reveal) => {
+                            card.saved_path.as_ref().map(|path| PreviewMessage::Reveal {
+                                artifact_id: card.artifact_id.clone(),
+                                generation: card.generation,
+                                path: path.clone(),
+                            })
                         }
                         Some(crate::mini_preview::Action::OpenHistory) => {
                             restore_root_for_history(ui.ctx());
@@ -5593,6 +5677,134 @@ mod tests {
             captures_capture::CaptureMode::Display,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn preview_saved_path_starts_from_history_and_tracks_authoritative_save_response() {
+        let root = tempfile::tempdir().unwrap();
+        let mut artifact = preview_artifact(root.path(), [12, 34, 56, 255]);
+        let original = root.path().join("original-export.png");
+        artifact.entry.saved_path = Some(original.to_string_lossy().into_owned());
+        let mut previews = MiniPreviews::default();
+        previews
+            .begin_capture(&AppSettings::default(), Some(preview_target()), 1)
+            .unwrap();
+        let (guard, _) = previews.start_artifact(&artifact).unwrap().unwrap();
+        assert_eq!(
+            previews.cards[&guard.artifact_id].saved_path.as_deref(),
+            Some(original.as_path())
+        );
+
+        let ctx = egui::Context::default();
+        let mut live = Live::new(ctx, Some(root.path().into()));
+        live.previews = previews;
+        let current = root.path().join("current-export.png");
+        artifact.entry.saved_path = Some(current.to_string_lossy().into_owned());
+        live.apply(
+            Response::Saved {
+                artifact,
+                path: current.clone(),
+            },
+            false,
+        );
+        assert_eq!(
+            live.previews.cards[&guard.artifact_id]
+                .saved_path
+                .as_deref(),
+            Some(current.as_path())
+        );
+        live.flush();
+    }
+
+    #[test]
+    fn reveal_dispatch_guards_identity_path_busy_and_dismissed_completions() {
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [65, 43, 21, 255]);
+        let original = artifact.image_path.clone();
+        let missing = root.path().join("Café shots 東京.png");
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.flush();
+        let (jobs, requests) = mpsc::channel();
+        live.tx = jobs;
+        let (results, replies) = mpsc::channel();
+        live.rx = replies;
+        live.pending = 0;
+        live.previews
+            .begin_capture(&AppSettings::default(), Some(preview_target()), 1)
+            .unwrap();
+        let (guard, _) = live.previews.start_artifact(&artifact).unwrap().unwrap();
+        live.previews
+            .cards
+            .get_mut(&guard.artifact_id)
+            .unwrap()
+            .saved_path = Some(missing.clone());
+        live.artifacts.push(artifact);
+        ctx.begin_pass(Default::default());
+
+        for (generation, path) in [
+            (guard.generation + 1, missing.clone()),
+            (guard.generation, root.path().join("another capture.png")),
+        ] {
+            live.preview_tx
+                .send(PreviewMessage::Reveal {
+                    artifact_id: guard.artifact_id.clone(),
+                    generation,
+                    path,
+                })
+                .unwrap();
+        }
+        live.logic(&ctx, &mut frame);
+        assert!(requests.try_recv().is_err());
+        for dismiss in [false, true] {
+            // Two queued clicks dispatch only once while the first is busy.
+            for _ in 0..2 {
+                live.preview_tx
+                    .send(PreviewMessage::Reveal {
+                        artifact_id: guard.artifact_id.clone(),
+                        generation: guard.generation,
+                        path: missing.clone(),
+                    })
+                    .unwrap();
+            }
+            live.logic(&ctx, &mut frame);
+            let Job::Reveal { path, preview } = requests.try_recv().unwrap() else {
+                panic!("not a reveal")
+            };
+            assert_eq!(path, missing);
+            assert_eq!(preview.artifact_id, guard.artifact_id);
+            assert_eq!(preview.generation, guard.generation);
+            assert!(requests.try_recv().is_err());
+            assert_eq!(live.pending, 1);
+            if dismiss {
+                assert!(live.previews.dismiss(&guard.artifact_id, guard.generation));
+            }
+            results
+                .send(Reply::Revealed {
+                    preview,
+                    result: Err(reveal(&missing).unwrap_err().to_string()),
+                })
+                .unwrap();
+            live.logic(&ctx, &mut frame);
+            assert_eq!(live.pending, 0);
+            if dismiss {
+                assert!(live.previews.cards.is_empty());
+            } else {
+                let card = &live.previews.cards[&guard.artifact_id];
+                assert_eq!(card.saved_path.as_ref(), Some(&missing));
+                assert!(card.busy.is_none());
+                assert!(
+                    card.message
+                        .as_deref()
+                        .unwrap()
+                        .contains("no longer exists")
+                );
+            }
+            assert_eq!(live.artifacts.len(), 1);
+            assert!(original.exists());
+        }
+        ctx.end_pass().textures_delta.clear();
     }
 
     #[test]

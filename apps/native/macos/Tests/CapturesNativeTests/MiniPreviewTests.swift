@@ -37,6 +37,19 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(actions, ["copy", "save", "open", "dismiss"])
     }
 
+    func testSavedCardUsesRevealWithShowInFolderAccessibility() throws {
+        _ = NSApplication.shared
+        let panel = fixturePanel(ids: ["saved"], images: ["saved": solidImage(.systemBlue)],
+                                 savedPaths: ["saved": "/Exports/Café image.png"])
+        defer { panel.close() }
+        let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
+        let reveal = try XCTUnwrap(buttons.first { $0.title == "Reveal" })
+        XCTAssertEqual(buttons.map(\.title), ["Copy", "Reveal", "Open", "Dismiss"])
+        XCTAssertEqual(reveal.accessibilityLabel(), "Show in Folder")
+        XCTAssertEqual(reveal.toolTip, "Show in Folder")
+        try write(render(panel), name: "mini-preview-single-saved-reveal.png")
+    }
+
     func testCollapsedPointerDragTracksDesktopWithoutExpandingAndClickStillExpands() throws {
         _ = NSApplication.shared
         var moves: [NSPoint] = []
@@ -139,6 +152,111 @@ final class MiniPreviewTests: XCTestCase {
         try waitUntil { pasteboard.data(forType: .png) == png }
         XCTAssertEqual(pasteboard.data(forType: .png), png,
             "Copy must publish the full-resolution PNG, not the thumbnail")
+    }
+
+    func testSavedActionRevealsExactUnicodePathWithoutSavingAgain() throws {
+        let path = "/Exports/Client shots/Café 東京.png"
+        let transport = MiniPreviewActionTransport()
+        var checkedPath: String?
+        var revealed: [URL] = []
+        let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
+            loadPreferences: { try self.preferences() }, fileExists: {
+                checkedPath = $0; return true
+            }, revealFiles: { revealed = $0 })
+
+        actions.save(artifact(id: "stable-id", previewPath: "/preview.png", savedPath: path))
+        LiveCaptureController.flush()
+        try waitUntil { !revealed.isEmpty }
+        XCTAssertEqual(checkedPath, path)
+        XCTAssertEqual(revealed, [URL(fileURLWithPath: path)])
+        XCTAssertEqual(transport.saveCount, 0, "Reveal must not create another export")
+    }
+
+    func testSaveUpdatesExistingCardThenRevealAndMissingExportNeverSaveAgain() throws {
+        _ = NSApplication.shared
+        let image = solidImage(.systemBlue)
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in image })
+        defer { controller.close() }
+        let settings = MiniPreviewSettings(enabled: true, placement: "bottom_right",
+                                           includeInCaptures: false)
+        let captured = artifact(id: "save-reveal", previewPath: "/save-reveal-preview.png")
+        let generation = try XCTUnwrap(controller.beginCapture(settings: settings))
+        controller.present(captured, on: screenID(), settings: settings, generation: generation)
+        try waitUntil { controller.isPanelVisible }
+        let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+            .first { $0.previewView.artifactIDs == [captured.id] })
+        let button = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
+            .first { $0.title == "Save" })
+        let originalFrame = panel.frame
+        let transport = MiniPreviewActionTransport()
+        transport.gate = DispatchSemaphore(value: 0)
+        var exists = true
+        var revealed: [URL] = []
+        let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
+            loadPreferences: { try self.preferences() }, fileExists: { path in
+                XCTAssertFalse(Thread.isMainThread)
+                XCTAssertEqual(path, "/exports/latest.png")
+                return exists
+            }, revealFiles: { revealed.append(contentsOf: $0) })
+        actions.bind(previews: controller); actions.configure(historyRoot: "/History")
+        controller.saveArtifact = { actions.save($0) }
+        button.performClick(nil)
+        XCTAssertEqual(transport.started.wait(timeout: .now() + 5), .success)
+        button.performClick(nil)
+        XCTAssertEqual(transport.saveCount, 1, "in-flight Save must not dispatch twice")
+        transport.gate?.signal()
+        LiveCaptureController.flush()
+        try waitUntil { button.title == "Reveal" }
+        XCTAssertEqual(panel.frame, originalFrame)
+        XCTAssertTrue(panel.isVisible, "Save updates the existing panel")
+        XCTAssertEqual(button.accessibilityLabel(), "Show in Folder")
+        controller.refreshArtifacts([captured])
+        XCTAssertEqual(button.title, "Reveal", "an older unsaved snapshot cannot erase export state")
+        button.performClick(nil)
+        try waitUntil { revealed.count == 1 }
+        XCTAssertEqual(revealed, [URL(fileURLWithPath: "/exports/latest.png")])
+        exists = false
+        button.performClick(nil)
+        try waitUntil { controller.statusText(for: captured.id) == "Saved file is missing" }
+        XCTAssertEqual(revealed.count, 1)
+        XCTAssertEqual(transport.saveCount, 1)
+        XCTAssertEqual(button.title, "Reveal")
+        XCTAssertEqual(controller.presentedArtifactIDs, [captured.id])
+        try write(render(panel), name: "mini-preview-reveal-missing-export.png")
+    }
+
+    func testSaveFailureStaysSaveAndCompletionAfterDismissalIsRejected() throws {
+        _ = NSApplication.shared
+        let image = solidImage(.systemBlue)
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in image })
+        let settings = MiniPreviewSettings(enabled: true, placement: "bottom_right",
+                                           includeInCaptures: false)
+        let captured = artifact(id: "stable", previewPath: "/stable-preview.png")
+        let generation = try XCTUnwrap(controller.beginCapture(settings: settings))
+        controller.present(captured, on: screenID(), settings: settings, generation: generation)
+        try waitUntil { controller.isPanelVisible }
+
+        let failedTransport = MiniPreviewActionTransport(); failedTransport.fail = true
+        let failedActions = MiniPreviewActions(settingsPath: nil, transport: failedTransport,
+                                               loadPreferences: { try self.preferences() })
+        failedActions.bind(previews: controller); failedActions.configure(historyRoot: "/History")
+        failedActions.save(captured)
+        LiveCaptureController.flush()
+        try waitUntil { controller.statusText(for: captured.id) == "Save failed" }
+
+        let blockedTransport = MiniPreviewActionTransport()
+        blockedTransport.gate = DispatchSemaphore(value: 0)
+        let blockedActions = MiniPreviewActions(settingsPath: nil, transport: blockedTransport,
+                                                loadPreferences: { try self.preferences() })
+        blockedActions.bind(previews: controller); blockedActions.configure(historyRoot: "/History")
+        blockedActions.save(captured)
+        XCTAssertEqual(blockedTransport.started.wait(timeout: .now() + 5), .success)
+        controller.dismiss(captured.id)
+        blockedTransport.gate?.signal()
+        LiveCaptureController.flush()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.presentedArtifactIDs, [],
+            "a dismissed card must not be recreated by a late save completion")
     }
 
     func testOutOfOrderDecodesPreserveCaptureOrderAndCaptureCancellationRestoresPanel() throws {
@@ -406,14 +524,16 @@ final class MiniPreviewTests: XCTestCase {
     }
 
     private func artifact(id: String, previewPath: String,
-                          imagePath: String? = nil) -> CaptureArtifact {
+                          imagePath: String? = nil, savedPath: String? = nil) -> CaptureArtifact {
         CaptureArtifact(["entry": ["id": id, "width": 800, "height": 600,
-            "created_at": "2026-09-18T00:00:00Z"],
+            "created_at": "2026-09-18T00:00:00Z",
+            "saved_path": savedPath.map { $0 as Any } ?? NSNull()],
             "image_path": imagePath ?? "/\(id).png", "preview_path": previewPath])!
     }
 
     private func fixturePanel(ids: [String], images: [String: NSImage],
                               collapsed: Bool = false, topAnchor: Bool = false,
+                              savedPaths: [String: String] = [:],
                               copy: @escaping (String) -> Void = { _ in },
                               save: @escaping (String) -> Void = { _ in },
                               open: @escaping (String) -> Void = { _ in },
@@ -431,7 +551,7 @@ final class MiniPreviewTests: XCTestCase {
             collapsed: collapsed, placement: placement)!
         let resources = Dictionary(uniqueKeysWithValues: ids.compactMap { id in
             images[id].map { (id, MiniPreviewResource(artifact: artifact(id: id,
-                previewPath: "/\(id)-preview.png"), image: $0)) }
+                previewPath: "/\(id)-preview.png", savedPath: savedPaths[id]), image: $0)) }
         })
         let layouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
             stack.cardLayout(index: index, topAnchor: topAnchor).map { (id, $0) }
@@ -497,6 +617,9 @@ private final class MiniPreviewActionTransport: AppTransport {
     private let lock = NSLock()
     private var saves = 0
     private var root: String?
+    var fail = false
+    var gate: DispatchSemaphore?
+    let started = DispatchSemaphore(value: 0)
     var saveCount: Int { lock.lock(); defer { lock.unlock() }; return saves }
     var savedRoot: String? { lock.lock(); defer { lock.unlock() }; return root }
 
@@ -505,7 +628,10 @@ private final class MiniPreviewActionTransport: AppTransport {
         guard object["operation"] as? String == "save_screenshot" else {
             throw AppBridgeError.invalidResponse
         }
-        saves += 1; root = object["root"] as? String
+        saves += 1; root = object["root"] as? String; started.signal()
+        let gate = self.gate
+        lock.unlock(); gate?.wait(); lock.lock()
+        if fail { throw AppBridgeError.invalidResponse }
         return ["path": "/exports/latest.png"]
     }
 }
