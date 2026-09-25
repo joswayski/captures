@@ -188,8 +188,9 @@ final class MiniPreviewTests: XCTestCase {
         controller.present(replacement, on: screenID(), settings: previewSettings(), generation: newGeneration)
         try waitUntil { preparations.count == 2 }
         preparations[0].1("/tmp/stale.png")
+        // The dismissed panel is closed but may still be listed in NSApp.windows.
         let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
-            .first { $0.previewView.artifactIDs == ["same"] })
+            .first { $0.isVisible && $0.previewView.artifactIDs == ["same"] })
         XCTAssertFalse(panel.previewView.containsPreparedDragPath("/tmp/stale.png"))
         preparations[1].1("/tmp/current.png")
         XCTAssertTrue(panel.previewView.containsPreparedDragPath("/tmp/current.png"))
