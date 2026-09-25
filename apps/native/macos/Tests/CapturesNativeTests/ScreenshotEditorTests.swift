@@ -3289,6 +3289,14 @@ final class ScreenshotEditorTests: XCTestCase {
         overlay.begin(at: start); overlay.end(at: end)
         XCTAssertEqual(worker.requests.count, count + 2)
         XCTAssertEqual((worker.requests.last?["style"] as? [String: Any])?["dropShadowStyle"] as? NSDictionary, expectedShadow)
+        // AppKit constrains windows to the runner's screen even after requesting
+        // 1000 points. Reveal the entire expanded group within that real viewport.
+        let shadowInputs = try ["color", "opacity", "blur", "offsetX", "offsetY"].map {
+            try field("New drawing shadow \($0)", in: controller.root)
+        }
+        let shadowContent = try XCTUnwrap(shadowInputs.first?.superview)
+        let shadowBounds = shadowInputs.map(\.frame).reduce(NSRect.null) { $0.union($1) }
+        shadowContent.scrollToVisible(shadowBounds.insetBy(dx: 0, dy: -22))
         for key in ["color", "opacity", "blur", "offsetX", "offsetY"] {
             let input = try field("New drawing shadow \(key)", in: controller.root)
             XCTAssertTrue(input.visibleRect.contains(input.bounds), "expanded shadow \(key) is fully visible")
