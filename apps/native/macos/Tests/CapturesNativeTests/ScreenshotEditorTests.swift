@@ -3200,6 +3200,14 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(request["opacity"] as? Double, 0)
         XCTAssertEqual((request["style"] as? [String: Any])?["strokeWidth"] as? Double, 13,
                        "worker responses and tool switches do not reset host-local defaults")
+        let count = worker.requests.count
+        tool.selectItem(at: 0); _ = tool.sendAction(tool.action, to: tool.target)
+        let fill = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing fill" })
+        fill.state = .off; _ = fill.sendAction(fill.action, to: fill.target)
+        fill.state = .on; _ = fill.sendAction(fill.action, to: fill.target)
+        XCTAssertEqual(try field("New drawing fill color", in: controller.root).stringValue, "#123456",
+                       "reenabling fill adopts current stroke color, matching shipping")
+        XCTAssertEqual(worker.requests.count, count)
     }
 
     func testDrawingPreviewCompositesOpacityOnceAndKeepsBrushGuidesVisible() throws {

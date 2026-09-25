@@ -1584,8 +1584,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawingFill.frame = NSRect(x: 132, y: 270, width: 120, height: 24)
         drawingStroke.setAccessibilityLabel("New drawing stroke")
         drawingFill.setAccessibilityLabel("New drawing fill")
-        drawingStroke.target = self; drawingStroke.action = #selector(drawingDefaultsChanged)
-        drawingFill.target = self; drawingFill.action = #selector(drawingDefaultsChanged)
+        drawingStroke.target = self; drawingStroke.action = #selector(drawingDefaultsChanged(_:))
+        drawingFill.target = self; drawingFill.action = #selector(drawingDefaultsChanged(_:))
         content.addSubview(drawingStroke); content.addSubview(drawingFill)
         drawingDefaultControls = [strokeColorLabel, fillColorLabel, drawingStrokeColor, drawingFillColor,
                                   widthLabel, opacityLabel, drawingStrokeWidth, drawingOpacity,
@@ -1606,7 +1606,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawingDefaultsChanged()
     }
 
-    @objc private func drawingDefaultsChanged() { updateDrawingPreviewStyle() }
+    @objc private func drawingDefaultsChanged(_ sender: Any? = nil) {
+        if sender as? NSButton === drawingFill, drawingFill.state == .on {
+            drawingFillColor.stringValue = drawingStrokeColor.stringValue
+        }
+        updateDrawingPreviewStyle()
+    }
 
     private func updateDrawingPreviewStyle() {
         if let color = NSColor(hex: drawingStrokeColor.stringValue) { drawOverlay.strokeColor = color }
