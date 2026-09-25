@@ -641,6 +641,7 @@ dependencies = [
  "captures-image",
  "captures-media",
  "captures-recording",
+ "captures-recording-macos",
  "captures-session",
  "captures-settings",
  "chrono",

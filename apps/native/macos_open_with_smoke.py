@@ -30,6 +30,7 @@ def main():
     history = output / "history"
     settings = output / "settings.json"
     settings.write_text(json.dumps({"settings_schema_version": 5,
+        "onboarding_completed": True,
         "appearance": "dark", "theme": "mustard", "output_directory": str(output / "exports"),
         "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
         "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",

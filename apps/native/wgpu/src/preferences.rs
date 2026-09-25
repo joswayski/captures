@@ -112,6 +112,7 @@ impl ShortcutRecorder {
 enum Command {
     Save(u64, Box<AppSettings>),
     Load,
+    Onboarding(captures_app::onboarding::Action),
     LoginItem(PathBuf, Option<bool>),
     Flush,
 }
@@ -120,6 +121,7 @@ enum Message {
     Saved(u64, Result<AppSettings, String>),
     Folder(Option<PathBuf>),
     LoginItem(Result<bool, String>),
+    Onboarding(Result<captures_app::onboarding::State, String>),
 }
 
 /// One owner serializes disk operations. Closing the window flushes the newest
@@ -132,6 +134,7 @@ impl SettingsIo {
     fn start(path: PathBuf, out: Sender<Message>, wake: impl Fn() + Send + 'static) -> Self {
         let (tx, rx) = mpsc::channel();
         let worker = thread::spawn(move || {
+            let mut onboarding = captures_app::onboarding::Session::new();
             let send_load = || {
                 let _ = out.send(Message::Loaded(
                     captures_settings::load(&path).map_err(|e| e.to_string()),
@@ -144,13 +147,22 @@ impl SettingsIo {
                 wake();
             };
             send_load();
+            let _ = out.send(Message::Onboarding(
+                onboarding.execute(&path, captures_app::onboarding::Action::Check),
+            ));
+            wake();
             while let Ok(command) = rx.recv() {
                 match command {
                     Command::Load => send_load(),
+                    Command::Onboarding(action) => {
+                        let _ = out.send(Message::Onboarding(onboarding.execute(&path, action)));
+                        wake();
+                    }
                     Command::LoginItem(root, enabled) => login_item(root, enabled),
                     Command::Flush => break,
                     Command::Save(mut revision, mut settings) => {
                         let mut finish = false;
+                        let mut after_save = None;
                         loop {
                             match rx.recv_timeout(Duration::from_millis(250)) {
                                 Ok(Command::Save(next_revision, next)) => {
@@ -162,6 +174,10 @@ impl SettingsIo {
                                     break;
                                 }
                                 Ok(Command::Load) => {}
+                                Ok(Command::Onboarding(action)) => {
+                                    after_save = Some(action);
+                                    break;
+                                }
                                 Ok(Command::LoginItem(root, enabled)) => login_item(root, enabled),
                                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                             }
@@ -170,6 +186,11 @@ impl SettingsIo {
                             captures_settings::save(&path, &settings).map_err(|e| e.to_string());
                         let _ = out.send(Message::Saved(revision, result));
                         wake();
+                        if let Some(action) = after_save {
+                            let _ =
+                                out.send(Message::Onboarding(onboarding.execute(&path, action)));
+                            wake();
+                        }
                         if finish {
                             break;
                         }
@@ -226,6 +247,9 @@ pub struct Preferences {
     login_enabled: Option<bool>,
     login_pending: bool,
     login_error: Option<String>,
+    onboarding: Option<captures_app::onboarding::State>,
+    onboarding_error: Option<String>,
+    onboarding_busy: bool,
 }
 
 impl Preferences {
@@ -288,6 +312,9 @@ impl Preferences {
             login_enabled: None,
             login_pending: false,
             login_error: None,
+            onboarding: None,
+            onboarding_error: None,
+            onboarding_busy: true,
         }
     }
 
@@ -323,6 +350,45 @@ impl Preferences {
     }
     pub fn is_loading(&self) -> bool {
         self.value.is_null() && self.load_error.is_none()
+    }
+
+    pub fn onboarding_complete(&self) -> bool {
+        self.load_error.is_none()
+            && self.onboarding_error.is_none()
+            && self
+                .onboarding
+                .as_ref()
+                .is_some_and(|state| state.onboarding_completed)
+    }
+
+    pub fn onboarding_pending(&self) -> bool {
+        self.onboarding_busy || (self.onboarding.is_none() && self.onboarding_error.is_none())
+    }
+
+    pub fn onboarding_error(&self) -> Option<&str> {
+        self.onboarding_error.as_deref()
+    }
+
+    pub fn retry_onboarding(&mut self) {
+        let _ = self.io.tx.send(Command::Load);
+        self.send_onboarding(captures_app::onboarding::Action::Check);
+    }
+
+    pub fn complete_onboarding(&mut self) {
+        self.send_onboarding(captures_app::onboarding::Action::Complete);
+    }
+
+    fn send_onboarding(&mut self, action: captures_app::onboarding::Action) {
+        if self.onboarding_busy {
+            return;
+        }
+        self.onboarding_busy = true;
+        self.onboarding_error = None;
+        if self.io.tx.send(Command::Onboarding(action)).is_err() {
+            self.onboarding_busy = false;
+            self.onboarding_error =
+                Some("Setup service is unavailable. Restart Captures to retry.".into());
+        }
     }
 
     pub fn snapshot(&self) -> Result<AppSettings, String> {
@@ -407,6 +473,16 @@ impl Preferences {
                             self.login_error = None;
                         }
                         Err(error) => self.login_error = Some(error),
+                    }
+                }
+                Message::Onboarding(result) => {
+                    self.onboarding_busy = false;
+                    match result {
+                        Ok(state) => {
+                            self.onboarding = Some(state);
+                            self.onboarding_error = None;
+                        }
+                        Err(error) => self.onboarding_error = Some(error),
                     }
                 }
             }
@@ -1487,6 +1563,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut io = SettingsIo::start(path.clone(), tx, || {});
         assert!(matches!(rx.recv().unwrap(), Message::Loaded(Ok(_))));
+        assert!(matches!(rx.recv().unwrap(), Message::Onboarding(Ok(_))));
         let mut settings = AppSettings::default();
         for revision in 1..=20 {
             settings.screenshot_countdown_seconds = (revision % 11) as u8;
@@ -1552,6 +1629,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut io = SettingsIo::start(path.clone(), tx, || {});
         assert!(matches!(rx.recv().unwrap(), Message::Loaded(Err(_))));
+        assert!(matches!(rx.recv().unwrap(), Message::Onboarding(Err(_))));
         let settings = AppSettings {
             screenshot_countdown_seconds: 7,
             ..Default::default()
@@ -1572,5 +1650,79 @@ mod tests {
                 .screenshot_countdown_seconds,
             7
         );
+    }
+
+    #[test]
+    fn onboarding_is_serialized_with_saves_and_fixture_paths_are_isolated() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let first_path = first.path().join("settings.json");
+        let second_path = second.path().join("settings.json");
+        let (tx, rx) = mpsc::channel();
+        let mut io = SettingsIo::start(first_path.clone(), tx, || {});
+        assert!(matches!(rx.recv().unwrap(), Message::Loaded(Ok(_))));
+        assert!(matches!(rx.recv().unwrap(), Message::Onboarding(Ok(_))));
+
+        let settings = AppSettings {
+            screenshot_countdown_seconds: 6,
+            ..Default::default()
+        };
+        io.tx.send(Command::Save(1, Box::new(settings))).unwrap();
+        io.tx
+            .send(Command::Onboarding(
+                captures_app::onboarding::Action::Complete,
+            ))
+            .unwrap();
+        io.flush();
+
+        assert!(matches!(rx.recv().unwrap(), Message::Saved(1, Ok(_))));
+        assert!(matches!(rx.recv().unwrap(), Message::Onboarding(Ok(_))));
+        let saved = captures_settings::load(&first_path).unwrap();
+        assert!(saved.onboarding_completed);
+        assert_eq!(saved.screenshot_countdown_seconds, 6);
+        let untouched = captures_settings::load(&second_path).unwrap();
+        assert!(!untouched.onboarding_completed);
+        assert!(!second_path.exists());
+    }
+
+    #[test]
+    fn onboarding_loading_busy_and_error_states_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), path, None, None);
+        assert!(prefs.onboarding_pending());
+        assert!(!prefs.onboarding_complete());
+        prefs.io.flush();
+        prefs.receive(&ctx);
+        assert!(!prefs.onboarding_pending());
+        let (tx, rx) = mpsc::channel();
+        prefs.io.tx = tx;
+        prefs.complete_onboarding();
+        prefs.complete_onboarding(); // A busy action is deliberately ignored.
+        assert!(prefs.onboarding_pending());
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Command::Onboarding(
+                captures_app::onboarding::Action::Complete
+            ))
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "busy completion cannot enqueue twice"
+        );
+        let mut state = prefs.onboarding.take().unwrap();
+        state.onboarding_completed = true;
+        prefs.out.send(Message::Onboarding(Ok(state))).unwrap();
+        prefs.receive(&ctx);
+        assert!(prefs.onboarding_complete());
+
+        prefs
+            .out
+            .send(Message::Onboarding(Err("malformed settings".into())))
+            .unwrap();
+        prefs.receive(&ctx);
+        assert!(!prefs.onboarding_complete());
+        assert_eq!(prefs.onboarding_error(), Some("malformed settings"));
     }
 }

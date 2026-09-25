@@ -352,6 +352,7 @@ def main():
             }))
         settings = output / "settings.json"
         settings.write_text(json.dumps({
+            "onboarding_completed": True,
             "settings_schema_version": 5, "appearance": args.appearance, "theme": "mustard",
             "output_directory": str(output / "exports"), "launch_at_login": False,
             "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",

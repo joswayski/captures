@@ -296,6 +296,7 @@ pcm.!pulse {
             run("hsetroot", "-solid", "#c02040")
         settings = output / "settings.json"
         settings.write_text(json.dumps({
+            "onboarding_completed": True,
             "settings_schema_version": 5, "appearance": args.appearance, "theme": "mustard",
             "output_directory": str(output / "exports"),
             "new_capture_shortcut": "Ctrl+Shift+F10", "region_shortcut": "Ctrl+Shift+F7",
