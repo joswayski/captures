@@ -9,6 +9,7 @@ use reqwest::{
 };
 use serde::Deserialize;
 
+pub mod sharing;
 mod vault;
 pub use vault::OsVault;
 

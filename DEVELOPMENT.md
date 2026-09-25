@@ -34,6 +34,26 @@ and injected-vault contract tests; never use staging Compose (real SES/R2).
 Custom origins require an injected vault via `AccountClient::new`; the real OS
 vault is bound to the canonical API and cannot be paired with a mock/staging URL.
 
+For the unconnected upload worker, construct `SharingCoordinator::new(&mut account,
+AssociationStore::new(native_profile_root))` without network or file access.
+`open(artifact_id)` explicitly checks the current account and remote list but never
+uploads. Resolve a stable original History file and call `upload` only after the
+user confirms; pass a cancellation flag and progress callback. The coordinator
+streams bounded chunks directly to presigned object-store URLs without bearer or
+cookies. It persists per-account/per-profile artifact associations, part ETags and
+ready state atomically. `configure_share` is a separate explicit operation; only
+its successful response supplies a usable share ID. `Patch::Keep` omits a field,
+`Patch::Clear` sends null and `Patch::Set` sends a value. `trash`/`restore` preserve
+the association; restore never revives an old share. A failed share configuration
+can be retried without re-upload. An ambiguous asset-create response is blocked
+durably, because the API has no idempotency key; do not reset the marker or create
+again without manual remote reconciliation. A confirmed create with a failed
+association write returns its ID for explicit `recover_created` after storage is
+repaired. The host must serialize access to the profile and retain its accepted
+upload worker after the preview closes. Only disposable loopback fixtures and
+fake vaults were exercised; no real SES/R2, physical vault, AppKit, Windows, X11
+or Wayland sharing UI has been exercised.
+
 `OsVault` uses a separate `es.captur.native.account` credential in macOS Keychain,
 Windows Credential Manager, or Linux Secret Service (with encrypted D-Bus transport),
 not settings files or the installed Tauri identity. Missing credentials mean signed
