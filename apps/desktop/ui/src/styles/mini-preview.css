@@ -151,7 +151,7 @@ body:has(.thumbnail-stack),
   height: 160px;
   margin-bottom: 0;
   background: transparent;
-  border-radius: 12px;
+  border-radius: var(--thumbnail-card-radius);
   box-shadow:
     var(--thumbnail-card-shadow),
     0 0 0 1px rgba(

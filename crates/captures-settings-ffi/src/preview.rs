@@ -3,7 +3,7 @@ use captures_app::preview::{
     self, ThumbnailMonitorBounds, ThumbnailStackAnchor, ThumbnailStackOrigin, ThumbnailVisibility,
 };
 use captures_settings::MiniPreviewPlacement;
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, CString, c_char};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -481,10 +481,34 @@ pub unsafe extern "C" fn captures_preview_stack_card_v2(
     true
 }
 
+/// Idle mini-preview metadata ("W × H · size"). Returns owned UTF-8; free
+/// with captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_card_metadata_v1(
+    width: u32,
+    height: u32,
+    size_bytes: u64,
+) -> *mut c_char {
+    CString::new(preview::card_metadata(width, height, size_bytes))
+        .map_or(std::ptr::null_mut(), CString::into_raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ptr::{null, null_mut};
+
+    #[test]
+    fn card_metadata_crosses_the_abi_as_owned_utf8() {
+        let value = captures_preview_card_metadata_v1(1440, 900, 245_760);
+        assert!(!value.is_null());
+        // SAFETY: The export returns an owned NUL-terminated string that is
+        // read, then freed exactly once through the documented free function.
+        unsafe {
+            assert_eq!(CStr::from_ptr(value).to_str(), Ok("1440 × 900 · 246 KB"));
+            crate::captures_settings_free_v1(value);
+        }
+    }
 
     #[test]
     fn stack_membership_poses_and_borrowed_utf8_cross_the_abi() {

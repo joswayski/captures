@@ -587,9 +587,46 @@ pub fn thumbnail_geometry(
     }
 }
 
+/// Compact decimal file size, matching the shipping `formatFileSize`.
+pub fn format_file_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    if bytes == 0 {
+        return "0 B".to_owned();
+    }
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1_000. && unit < UNITS.len() - 1 {
+        value /= 1_000.;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", value.round(), UNITS[unit])
+    } else if value >= 100. {
+        format!("{value:.0} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// Idle mini-preview metadata: pixel dimensions and file size.
+pub fn card_metadata(width: u32, height: u32, size_bytes: u64) -> String {
+    format!("{width} × {height} · {}", format_file_size(size_bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_sizes_match_shipping_compact_decimal_units() {
+        assert_eq!(format_file_size(999), "999 B");
+        assert_eq!(format_file_size(1_200), "1.2 KB");
+        assert_eq!(format_file_size(1_200_000), "1.2 MB");
+        assert_eq!(format_file_size(125_000_000), "125 MB");
+        assert_eq!(format_file_size(0), "0 B");
+        assert_eq!(format_file_size(5_000_000_000_000), "5000 GB");
+        assert_eq!(card_metadata(1440, 900, 245_760), "1440 × 900 · 246 KB");
+    }
 
     #[test]
     fn outbound_file_drag_only_dismisses_on_accepted_external_copy() {
