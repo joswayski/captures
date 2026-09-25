@@ -75,7 +75,9 @@ final class PreviewPolicyTests: XCTestCase {
         XCTAssertEqual(bottom.x, -340); XCTAssertEqual(bottom.edge, 798)
         let top = try XCTUnwrap(NativePreviewLayout.movedOrigin(monitor: monitor, count: 2,
             frameOrigin: NSPoint(x: -9000, y: -9000), placement: "top_right"))
-        XCTAssertEqual(top.x, -1200); XCTAssertEqual(top.edge, 72)
+        // Dragging reaches the work-area edge (120 physical pixels / 2),
+        // unlike the default placement, which starts with a 12-point inset.
+        XCTAssertEqual(top.x, -1200); XCTAssertEqual(top.edge, 60)
     }
 
     func testVisibilityGenerationsDecodeCancellationAndSettingsThroughCABI() throws {
