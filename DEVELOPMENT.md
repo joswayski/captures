@@ -18,6 +18,29 @@ tests. It does not participate in local desktop capture. See
 migrations and tests, and [`apps/web/README.md`](apps/web/README.md#optional-accounts)
 for the account placeholder. Sign-in is unavailable. `npm run check` verifies
 that account requests fail closed and the built public website still works.
+
+`captures-account` is a native-host prerequisite, not connected to either host.
+On a serialized worker, construct `AccountClient::new(DEFAULT_API, OsVault)` without
+side effects; only after the user opens Share, explicitly call `load`, `request_code`,
+`verify`, `me`, `retry_save`, or `logout`. The host owns email/code controls and
+selected artifact state; the client owns only the bearer session. If `verify`
+returns a vault error, the accepted user/token stay in memory: call `retry_save`
+without reusing the one-time code. A 401 invalidates the session; if vault removal
+fails, retry `clear_invalid`. Offline/503 leave a valid token alone. Logout revokes
+remotely before deleting locally; if revocation fails, retry logout. There is no
+refresh flow. The account API is still disabled by default, and no native UI is
+connected. Run `cargo test -p captures-account` for the disposable loopback HTTP
+and injected-vault contract tests; never use staging Compose (real SES/R2).
+
+`OsVault` uses a separate `es.captur.native.account` credential in macOS Keychain,
+Windows Credential Manager, or Linux Secret Service (with encrypted D-Bus transport),
+not settings files or the installed Tauri identity. Missing credentials mean signed
+out; locked/inaccessible and unavailable credential services are distinct errors.
+Linux desktop sessions need an active Secret Service collection. Physical vault
+unlock, persistence/restart and access behavior remain unverified on macOS,
+Windows, X11 and Wayland; root CI compiles/tests the platform-gated adapters on
+macOS, Windows and Ubuntu, but a green fake-vault test does not close acceptance.
+
 The offline deployment-notification tests also require Bash and `jq` on PATH
 (including on Windows); they intercept HTTP calls and send no Discord messages.
 
