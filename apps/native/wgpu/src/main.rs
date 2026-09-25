@@ -6,6 +6,7 @@ mod editor;
 mod feedback;
 mod live;
 mod mini_preview;
+mod onboarding;
 mod options;
 mod outbound_drag;
 mod preferences;
