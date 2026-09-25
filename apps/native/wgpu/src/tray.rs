@@ -289,6 +289,20 @@ impl Tray {
             Err(error) => eprintln!("Could not refresh tray shortcuts: {error}"),
         }
     }
+
+    /// Physical screen rect `(x, y, width, height)` of the tray icon, where
+    /// the platform reports one. StatusNotifier (Linux) never does, so the
+    /// launch notice uses its panel-edge fallback there.
+    pub fn rect(&self) -> Option<(f64, f64, f64, f64)> {
+        #[cfg(target_os = "windows")]
+        {
+            let rect = self.icon.rect()?;
+            let (width, height) = (f64::from(rect.size.width), f64::from(rect.size.height));
+            (width > 0. && height > 0.).then_some((rect.position.x, rect.position.y, width, height))
+        }
+        #[cfg(not(target_os = "windows"))]
+        None
+    }
 }
 
 fn send_action(actions: &mpsc::Sender<Action>, ctx: &egui::Context, action: Action) {

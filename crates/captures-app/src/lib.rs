@@ -21,6 +21,7 @@ pub mod recording_timeline;
 pub mod region;
 pub mod selection;
 pub mod shortcuts;
+pub mod tray_notice;
 pub mod window;
 
 pub use captures_session::instance;
