@@ -45,7 +45,10 @@ mod tests {
         // SAFETY: A valid C string for the duration of the call.
         let pause = take(unsafe { captures_icon_polylines_v1(name.as_ptr()) });
         assert_eq!(pause["ok"], true);
-        assert_eq!(pause["result"], json!([[[8., 5.], [8., 19.]], [[16., 5.], [16., 19.]]]));
+        assert_eq!(
+            pause["result"],
+            json!([[[8., 5.], [8., 19.]], [[16., 5.], [16., 19.]]])
+        );
         let unknown = CString::new("nope").unwrap();
         // SAFETY: A valid C string for the duration of the call.
         let missing = take(unsafe { captures_icon_polylines_v1(unknown.as_ptr()) });

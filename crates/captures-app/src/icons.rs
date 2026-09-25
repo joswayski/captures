@@ -191,7 +191,15 @@ pub fn flatten(d: &str) -> Vec<Vec<[f32; 2]>> {
                 current = end;
             }
             'A' => {
-                let (Some(rx), Some(ry), Some(rotation), Some(large), Some(sweep), Some(x), Some(y)) = (
+                let (
+                    Some(rx),
+                    Some(ry),
+                    Some(rotation),
+                    Some(large),
+                    Some(sweep),
+                    Some(x),
+                    Some(y),
+                ) = (
                     number(&tokens, &mut index),
                     number(&tokens, &mut index),
                     number(&tokens, &mut index),
@@ -199,7 +207,8 @@ pub fn flatten(d: &str) -> Vec<Vec<[f32; 2]>> {
                     number(&tokens, &mut index),
                     number(&tokens, &mut index),
                     number(&tokens, &mut index),
-                ) else {
+                )
+                else {
                     break;
                 };
                 let end = [base[0] + x, base[1] + y];
@@ -265,7 +274,11 @@ fn arc(
         let dot = ux * vx + uy * vy;
         let length = (ux * ux + uy * uy).sqrt() * (vx * vx + vy * vy).sqrt();
         let value = (dot / length).clamp(-1., 1.).acos();
-        if ux * vy - uy * vx < 0. { -value } else { value }
+        if ux * vy - uy * vx < 0. {
+            -value
+        } else {
+            value
+        }
     };
     let start = angle(1., 0., (x1 - cx1) / rx, (y1 - cy1) / ry);
     let mut delta = angle(
@@ -355,7 +368,14 @@ mod tests {
         );
         assert_eq!(
             flatten("M5 4h12l2 2v14H5Z"),
-            vec![vec![[5., 4.], [17., 4.], [19., 6.], [19., 20.], [5., 20.], [5., 4.]]]
+            vec![vec![
+                [5., 4.],
+                [17., 4.],
+                [19., 6.],
+                [19., 20.],
+                [5., 20.],
+                [5., 4.]
+            ]]
         );
         assert_eq!(flatten("m8 5 11 7-11 7Z")[0].last(), Some(&[8., 5.]));
     }
@@ -401,7 +421,10 @@ mod tests {
             for line in lines {
                 assert!(line.len() >= 2, "{name}");
                 for [x, y] in line {
-                    assert!((-0.5..=24.5).contains(&x) && (-0.5..=24.5).contains(&y), "{name} {x},{y}");
+                    assert!(
+                        (-0.5..=24.5).contains(&x) && (-0.5..=24.5).contains(&y),
+                        "{name} {x},{y}"
+                    );
                 }
             }
         }
