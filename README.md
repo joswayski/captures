@@ -202,10 +202,12 @@ targeting and pixel-source policy, with window/desktop confirmation, freeze/live
 selection, countdown and cancellation. Real desktop, mixed-DPI and accessibility
 acceptance is still open; private-X11 tests check saved region/window pixels and
 simulated session cancellation. Both native hosts connect screenshot mini previews
-with Copy, Save, History/Open and nondestructive Dismiss, respecting the four
+with Copy, Save/Reveal, History/Open and nondestructive Dismiss, respecting the four
 corner placements and capture-inclusion preference. Multiple captures remain in
 a stack with expand/collapse, scrolling and Clear all; dismissing previews leaves
-history and exports intact. Drag a collapsed pile within its capture display;
+history and exports intact. After export, Reveal shows the saved file's folder
+instead of saving another copy; a missing export leaves the capture available.
+Drag a collapsed pile within its capture display;
 its session position survives expansion and new captures without activating the
 workspace. Hovering the collapsed front card fans the rear cards outward; pressing
 and dragging keeps the fan open. macOS follows Reduce Motion; the Windows/Linux

@@ -1035,9 +1035,14 @@ platform acceptance row. Hardware capture and clipboard tests remain required.
 
 Both hosts now connect retained screenshot mini-preview stacks, backed by shared
 Rust membership, layout and visibility policy. Copy uses full pixels; Save reads current output
-preferences; History/Open restores the workspace; Dismiss preserves history and
+preferences and becomes Reveal after export; History/Open restores the workspace; Dismiss preserves history and
 exports. Show less/expand preserves capture order, overflow scrolls without a
 count cap, and Clear all dismisses only snapshotted IDs, not later captures.
+Reveal uses the current exported path, with file checks off the UI thread and
+guarded async completion. A missing export reports an error without another save
+or removal of the capture. Saves through History also update the preview action.
+AppKit selects the export in Finder; Windows uses Explorer selection; Linux opens
+its parent directory. File-manager behavior on physical desktops remains unverified.
 The four corner placements use actual monitor work areas. Private-X11
 tests exercise placement, focus, minimized-root actions, exact capture inclusion/
 exclusion and cancellation. AppKit tests cover panel/decode/action

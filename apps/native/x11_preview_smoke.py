@@ -47,6 +47,17 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     env = {**os.environ, "WGPU_BACKEND": "gl", "WINIT_X11_SCALE_FACTOR": "1", "XDG_SESSION_TYPE": "x11"}
     env.pop("WAYLAND_DISPLAY", None)
+    # Observe OS command delivery without launching the orb's file manager.
+    # Physical file-manager selection/focus remains a separate acceptance gate.
+    reveal_log = output / "revealed-folders.jsonl"
+    reveal_tools = output / "reveal-tools"
+    reveal_tools.mkdir()
+    opener = reveal_tools / "xdg-open"
+    opener.write_text("#!/usr/bin/python3\nimport json, sys\n"
+        f"with open({str(reveal_log)!r}, 'a') as stream:\n"
+        "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n")
+    opener.chmod(0o755)
+    env["PATH"] = f"{reveal_tools}:{env['PATH']}"
     if args.lifecycle:
         # Set before D-Bus starts: activated xfconfd must inherit the same
         # disposable configuration as the panel, not the orb user's home.
@@ -387,7 +398,7 @@ def main():
             settings.write_text(json.dumps({
                 "onboarding_completed": True,
                 "settings_schema_version": 5, "appearance": "dark", "theme": "mustard",
-                "output_directory": str(output / prefix / "exports"),
+                "output_directory": str(output / prefix / "exports Café"),
                 "new_capture_shortcut": "Ctrl+Shift+F10",
                 "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
                 "display_shortcut": "Ctrl+Shift+F9", "launch_at_login": False,
@@ -476,6 +487,30 @@ def main():
                     shot("root", f"{prefix}-saved")
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Save activated Captures"
                     assert not windows("Captures"), "Copy/Save unexpectedly restored workspace"
+
+                    def reveals():
+                        return [json.loads(line) for line in reveal_log.read_text().splitlines()] if reveal_log.exists() else []
+
+                    time.sleep(.3)  # Allow the saved-state label to paint before another click.
+                    click(preview, 122, 169, activate=False)  # Same button is now Reveal.
+                    wait(lambda: reveals() == [[str(exported.parent)]], "Reveal receives exact Unicode export folder")
+                    assert list(exported.parent.iterdir()) == [exported], "Reveal created another export"
+                    assert run("xdotool", "getwindowfocus").decode().strip() == other, "Reveal activated Captures"
+                    assert not windows("Captures"), "Reveal restored workspace"
+                    shot(preview, f"{prefix}-reveal")
+                    preserved = entries()
+                    held = exported.with_suffix(".held")
+                    exported.rename(held)
+                    click(preview, 122, 169, activate=False)
+                    time.sleep(.5)
+                    shot(preview, f"{prefix}-reveal-missing")
+                    assert reveals() == [[str(exported.parent)]], "missing export launched a file manager"
+                    assert list(exported.parent.iterdir()) == [held], "missing export silently saved a replacement"
+                    assert entries() == preserved and windows(PREVIEW), "missing export removed history or preview"
+                    held.rename(exported)
+                    click(preview, 122, 169, activate=False)
+                    wait(lambda: len(reveals()) == 2, "Reveal retries after export is restored")
+                    assert reveals() == [[str(exported.parent)]] * 2
                     click(preview, 189, 169, activate=False)  # Padded card History center.
                     wait(lambda: windows("Captures"), "History restores workspace")
                     preserved = entries()
@@ -1006,6 +1041,7 @@ def main():
             "multiCard": args.stack, "residentLifecycle": args.lifecycle, "shortcutEditing": args.shortcut_editing,
             "checks": ["selected corner positions and dimensions", "nonactivating map",
                 "minimized-root full-pixel Copy and Save without activation",
+                "Save becomes Reveal; exact Unicode folder delivery, missing export and retry preserve files",
                 "History restores minimized workspace", "Dismiss preserves history and export",
                 "new capture after dismissal", "exact inclusion and exclusion pixels",
                 "Escape and simulated-lock restoration", "clean exit"] +

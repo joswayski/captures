@@ -16,13 +16,14 @@ final class MiniPreviewCardView: NSView {
     private let title = NSTextField(labelWithString: "Screenshot")
     private let status = NSTextField(labelWithString: "")
     private var actionButtons: [CaptureButton] = []
+    private var saveButton: CaptureButton?
     private var compact = false
     private(set) var artifactID: String
     var hasVisibleLabels: Bool { !title.isHidden || !status.isHidden }
     override var isFlipped: Bool { true }
 
     init(frame: NSRect, artifactID: String, image: NSImage, tokens: Tokens,
-         copy: @escaping () -> Void, save: @escaping () -> Void,
+         saved: Bool, copy: @escaping () -> Void, save: @escaping () -> Void,
          open: @escaping () -> Void, dismiss: @escaping () -> Void) {
         self.artifactID = artifactID; self.tokens = tokens
         super.init(frame: frame)
@@ -53,7 +54,7 @@ final class MiniPreviewCardView: NSView {
         status.textColor = tokens.color("glass-text-muted"); styleLabelBacking(status)
         status.isHidden = true; addSubview(status)
 
-        let actions: [(String, () -> Void)] = [("Copy", copy), ("Save", save),
+        let actions: [(String, () -> Void)] = [("Copy", copy), (saved ? "Reveal" : "Save", save),
             ("Open", open), ("Dismiss", dismiss)]
         let buttonHeight = tokens.number("h-md"), gap = tokens.number("s-2")
         let actionWidth = (bounds.width - inset * 2 - gap * 3) / 4
@@ -64,6 +65,7 @@ final class MiniPreviewCardView: NSView {
                 tokens: tokens, glass: true, action: action.1)
             addSubview(button)
             actionButtons.append(button)
+            if index == 1 { saveButton = button; updateSaveButton(saved: saved) }
         }
         setAccessibilityRole(.group); setAccessibilityLabel("Screenshot mini preview")
     }
@@ -74,6 +76,14 @@ final class MiniPreviewCardView: NSView {
         status.isHidden = compact || value.isEmpty
         status.setAccessibilityLabel(value.isEmpty ? nil : value)
     }
+
+    func updateSaveButton(saved: Bool) {
+        saveButton?.title = saved ? "Reveal" : "Save"
+        saveButton?.setAccessibilityLabel(saved ? "Show in Folder" : "Save")
+        saveButton?.toolTip = saved ? "Show in Folder" : "Save"
+    }
+
+    var statusText: String { status.stringValue }
 
     func setCompact(_ compact: Bool, depth: Int) {
         self.compact = compact
@@ -94,7 +104,7 @@ final class MiniPreviewCardView: NSView {
 }
 
 struct MiniPreviewResource {
-    let artifact: CaptureArtifact
+    var artifact: CaptureArtifact
     let image: NSImage
 }
 
@@ -217,6 +227,7 @@ final class MiniPreviewView: NSView {
             let card = MiniPreviewCardView(frame: NSRect(x: padding, y: CGFloat(layout.y),
                 width: cardWidth, height: cardHeight), artifactID: id,
                 image: resource.image, tokens: tokens,
+                saved: resource.artifact.savedPath != nil,
                 copy: { copy(id) }, save: { save(id) }, open: { open(id) },
                 dismiss: { dismiss(id) })
             card.isHidden = false
@@ -261,6 +272,12 @@ final class MiniPreviewView: NSView {
     func setStatus(_ value: String, for artifactID: String) {
         cards[artifactID]?.setStatus(value)
     }
+
+    func updateSavedState(_ saved: Bool, for artifactID: String) {
+        cards[artifactID]?.updateSaveButton(saved: saved)
+    }
+
+    func statusText(for artifactID: String) -> String? { cards[artifactID]?.statusText }
 
     func activatePileExpand() { pileExpandButton?.performClick(nil) }
 
@@ -337,6 +354,9 @@ final class MiniPreviewController {
     var decodedArtifactIDs: [String] { stack.ids.filter { resources[$0] != nil } }
     var isCollapsed: Bool { stack.isCollapsed }
     var isPanelVisible: Bool { panel?.isVisible == true }
+    func statusText(for artifactID: String) -> String? {
+        panel?.previewView.statusText(for: artifactID)
+    }
 
     init(tokens: Tokens, policy: NativePreviewPolicy = NativePreviewPolicy(),
          stack: NativePreviewStack = NativePreviewStack(),
@@ -439,6 +459,39 @@ final class MiniPreviewController {
     func setStatus(_ value: String, for artifactID: String) {
         guard resources[artifactID] != nil else { return }
         panel?.previewView.setStatus(value, for: artifactID)
+    }
+
+    @discardableResult
+    func updateSavedPath(_ path: String, for artifact: CaptureArtifact) -> Bool {
+        precondition(Thread.isMainThread)
+        guard var resource = resources[artifact.id],
+              resource.artifact.imagePath == artifact.imagePath,
+              resource.artifact.previewPath == artifact.previewPath,
+              stack.ids.contains(artifact.id) else { return false }
+        resource.artifact.savedPath = path
+        resources[artifact.id] = resource
+        panel?.previewView.updateSavedState(true, for: artifact.id)
+        return true
+    }
+
+    func refreshArtifacts(_ artifacts: [CaptureArtifact]) {
+        precondition(Thread.isMainThread)
+        for artifact in artifacts {
+            guard var resource = resources[artifact.id] else { continue }
+            var refreshed = artifact
+            // A History request may have started before an export completed. Do not let
+            // that stale response turn a freshly saved preview back into Save.
+            if refreshed.savedPath == nil { refreshed.savedPath = resource.artifact.savedPath }
+            resource.artifact = refreshed
+            resources[artifact.id] = resource
+            panel?.previewView.updateSavedState(refreshed.savedPath != nil, for: artifact.id)
+        }
+    }
+
+    func contains(_ artifact: CaptureArtifact) -> Bool {
+        guard let current = resources[artifact.id]?.artifact else { return false }
+        return stack.ids.contains(artifact.id) && current.imagePath == artifact.imagePath
+            && current.previewPath == artifact.previewPath
     }
 
     func dismiss(_ artifactID: String) {
@@ -610,18 +663,31 @@ final class MiniPreviewActions {
     private let transport: AppTransport
     private let loadPreferences: () throws -> CapturePreferences
     private let pasteboard: () -> NSPasteboard
+    private let fileExists: (String) -> Bool
+    private let revealFiles: ([URL]) -> Void
     private weak var previews: MiniPreviewController?
+    private var boundToPreviews = false
     private var historyRoot: String?
+    private var inFlight: Set<String> = []
 
     init(settingsPath: String?, transport: AppTransport = AppBridge(),
          loadPreferences: (() throws -> CapturePreferences)? = nil,
-         pasteboard: @escaping () -> NSPasteboard = { .general }) {
+         pasteboard: @escaping () -> NSPasteboard = { .general },
+         fileExists: @escaping (String) -> Bool = {
+             var directory: ObjCBool = false
+             return FileManager.default.fileExists(atPath: $0, isDirectory: &directory)
+                 && !directory.boolValue
+         },
+         revealFiles: @escaping ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }) {
         self.transport = transport
         self.loadPreferences = loadPreferences ?? { try CapturePreferences.load(path: settingsPath) }
         self.pasteboard = pasteboard
+        self.fileExists = fileExists; self.revealFiles = revealFiles
     }
 
-    func bind(previews: MiniPreviewController) { self.previews = previews }
+    func bind(previews: MiniPreviewController) {
+        self.previews = previews; boundToPreviews = true
+    }
     func configure(historyRoot: String) { self.historyRoot = historyRoot }
 
     func copy(_ artifact: CaptureArtifact) {
@@ -644,26 +710,56 @@ final class MiniPreviewActions {
     }
 
     func save(_ artifact: CaptureArtifact) {
+        guard (!boundToPreviews || previews?.contains(artifact) == true),
+              !inFlight.contains(artifact.id) else { return }
+        inFlight.insert(artifact.id)
+        if let path = artifact.savedPath {
+            previews?.setStatus("Finding…", for: artifact.id)
+            LiveCaptureController.queue.async { [weak self] in
+                guard let self else { return }
+                let exists = self.fileExists(path)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.inFlight.remove(artifact.id)
+                    guard !self.boundToPreviews || self.previews?.contains(artifact) == true else { return }
+                    if exists {
+                        self.revealFiles([URL(fileURLWithPath: path)])
+                        self.previews?.setStatus("Shown in Folder", for: artifact.id)
+                    } else {
+                        self.previews?.setStatus("Export missing", for: artifact.id)
+                    }
+                }
+            }
+            return
+        }
         guard let historyRoot else {
+            inFlight.remove(artifact.id)
             previews?.setStatus("Save unavailable", for: artifact.id); return
         }
         previews?.setStatus("Saving…", for: artifact.id)
         LiveCaptureController.queue.async { [weak self] in
             guard let self else { return }
-            let result = Result { () throws -> Void in
+            let result = Result { () throws -> String in
                 let preferences = try self.loadPreferences()
                 let response = try self.transport.request(["operation": "save_screenshot",
                     "root": historyRoot, "id": artifact.id,
                     "directory": preferences.directory, "format": preferences.format])
-                guard response["path"] as? String != nil else { throw AppBridgeError.invalidResponse }
+                guard let path = response["path"] as? String,
+                      !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else { throw AppBridgeError.invalidResponse }
+                return path
             }
             DispatchQueue.main.async { [weak self] in
-                let status: String
+                guard let self else { return }
+                self.inFlight.remove(artifact.id)
+                guard !self.boundToPreviews || self.previews?.contains(artifact) == true else { return }
                 switch result {
-                case .success: status = "Saved"
-                case .failure: status = "Save failed"
+                case .success(let path):
+                    guard !self.boundToPreviews
+                            || self.previews?.updateSavedPath(path, for: artifact) == true else { return }
+                    self.previews?.setStatus("Saved", for: artifact.id)
+                case .failure: self.previews?.setStatus("Save failed", for: artifact.id)
                 }
-                self?.previews?.setStatus(status, for: artifact.id)
             }
         }
     }
