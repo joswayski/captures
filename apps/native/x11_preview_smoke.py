@@ -12,7 +12,7 @@ import select
 import subprocess
 import threading
 import time
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 import xml.etree.ElementTree as ET
 
 import dbus
@@ -428,7 +428,25 @@ def main():
             root = wait(lambda: windows("Captures"), "root workspace")[0]
             # Leave the left-hand preview/capture area unobstructed. Both root
             # capture buttons still fit on this desktop after moving the window.
-            run("xdotool", "windowmove", "--sync", root, "620", "20")
+            def move_root(x, y):
+                # windowmove --sync returns on any location change. After a
+                # remap Openbox may still be placing the workspace, so that
+                # change can be its intermediate placement and our move lands
+                # later, under a pointer already positioned for the old origin.
+                # Wait for the client origin our frame position implies.
+                run("xdotool", "windowmove", "--sync", root, str(x), str(y))
+
+                def placed():
+                    extents = run("xprop", "-id", root, "_NET_FRAME_EXTENTS").decode()
+                    left, _, top, _ = map(int, extents.split("=", 1)[1].split(","))
+                    info = run("xwininfo", "-id", root).decode()
+                    origin = tuple(int(line.split(":", 1)[1]) for line in info.splitlines()
+                                   if "Absolute upper-left" in line)
+                    return origin == (x + left, y + top)
+
+                wait(placed, f"root workspace moved to {x},{y}")
+
+            move_root(620, 20)
             time.sleep(1)
 
             def entries():
@@ -441,7 +459,7 @@ def main():
                 # including their transparent margins and expanded stacks.
                 run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
                 wait(lambda: windows("Captures"), "workspace restored before positioning")
-                run("xdotool", "windowmove", "--sync", root, "300", "280")
+                move_root(300, 280)
                 click(root, 575, 126)
                 selector = wait(lambda: windows(SELECTOR), "region selector")[0]
                 wait(lambda: int(run("import", "-window", selector, "-crop", "640x120+320+390",
@@ -457,7 +475,7 @@ def main():
                 # Openbox may reposition an off-screen workspace when remapping.
                 # Keep it out of the pixel oracle crop again before comparing a
                 # composited card with the following screenshot (which hides it).
-                run("xdotool", "windowmove", "--sync", root, "620", "20")
+                move_root(620, 20)
                 return entry
 
             first = capture((140, 180, 310, 170))
@@ -598,6 +616,28 @@ def main():
                     wait(lambda: len(reveals()) == 2, "Reveal retries after export is restored")
                     assert reveals() == [[str(exported.parent)]] * 2
 
+                    # With a FileManager1 implementer on the session bus, Reveal
+                    # selects the exact file (shipping reveal_item_in_dir) and
+                    # does not also open the folder.
+                    class FileManager(dbus.service.Object):
+                        calls = []
+
+                        @dbus.service.method("org.freedesktop.FileManager1", in_signature="ass", out_signature="")
+                        def ShowItems(self, uris, startup_id):
+                            self.calls.append([str(uri) for uri in uris])
+
+                    manager_name = dbus.service.BusName("org.freedesktop.FileManager1", bus=bus, do_not_queue=True)
+                    manager = FileManager(manager_name, "/org/freedesktop/FileManager1")
+                    click(preview, 170, second_action_y(first), activate=False)
+                    wait(lambda: manager.calls == [["file://" + quote(str(exported))]],
+                         "Reveal selects the exact file through FileManager1.ShowItems")
+                    time.sleep(.3)
+                    assert len(reveals()) == 2, "ShowItems success also opened the folder"
+                    # Dropping the last BusName reference releases the name
+                    # while the private bus is still connected.
+                    manager.remove_from_connection()
+                    del manager, manager_name
+
                     def private_files(entry):
                         return {path.relative_to(entry.parent): path.read_bytes()
                                 for path in entry.parent.rglob("*") if path.is_file()}
@@ -732,7 +772,7 @@ def main():
                     preview = wait(lambda: windows(PREVIEW), "fresh preview after Trash checks")[0]
                     wait(lambda: int(run("import", "-window", preview, "-format", "%k", "info:")) > 16,
                          "fresh preview paints after Trash checks")
-                    print("PASS preview actions: Copy/Save/Reveal/Edit, Dismiss, and disposable OS Trash", flush=True)
+                    print("PASS preview actions: Copy/Save/Reveal (ShowItems or folder)/Edit, Dismiss, and disposable OS Trash", flush=True)
                 if placement == "bottom_left":
                     # Frozen capture must exactly include the prior composited
                     # card, or exactly omit it, depending on the stored setting.
@@ -891,15 +931,19 @@ def main():
 
                     if placement == "bottom_left":
                         # Overflow is not a membership cap. Reveal newest, then
-                        # scroll back and Copy the oldest retained capture.
+                        # use the shipping "Show older captures" cue to scroll
+                        # back and Copy the oldest retained capture.
                         while len(stack_entries) < 8:
                             index = len(stack_entries)
                             stack_entries.append(capture((30 + index * 9, 40, 120 + index * 7, 100)))
                         preview = wait(lambda: windows(PREVIEW), "eight-card preview")[0]
                         wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 812, "bounded overflow viewport")
                         shot(preview, f"{prefix}-overflow-newest")
-                        run("xdotool", "mousemove", "--window", preview, "170", "400", "click", "--repeat", "30", "--delay", "30", "4")
-                        time.sleep(.5)
+                        # 1476 px of cards in a 760 px viewport: four 184 px
+                        # slots reach the oldest card; the cue then hides.
+                        for _ in range(4):
+                            click(preview, 170, 17, activate=False)
+                            time.sleep(.45)
                         shot(preview, f"{prefix}-overflow-oldest")
                         click(preview, 170, 89, activate=False)
                         expected_pixels = rgb(stack_entries[0].parent / "capture.png")
@@ -1253,13 +1297,14 @@ def main():
             "checks": ["selected corner positions and dimensions", "nonactivating map",
                 "minimized-root full-pixel Copy and Save without activation",
                 "Save becomes Reveal; exact Unicode folder delivery, missing export and retry preserve files",
+                "Reveal selects the exact file URI through FileManager1.ShowItems when available",
                 "Edit opens and refocuses one editor without restoring root or changing artifact, History or drafts",
                 "Dismiss preserves history and export",
                 "new capture after dismissal", "exact inclusion and exclusion pixels",
                 "Escape and simulated-lock restoration", "clean exit"] +
                 ([] if args.lifecycle else ["disabled previews"]) +
                 (["three-card retention and per-card Copy", "middle-card dismissal preserves files",
-                  "collapsed arrival/cancel/front-card expand", "eight-card overflow retains oldest",
+                  "collapsed arrival/cancel/front-card expand", "eight-card overflow cue scrolls to oldest",
                   "Clear all preserves files and later arrivals"] if args.stack else []) +
                 (["real SNI menu History/Preferences/Quit", "close-to-background keeps previews",
                   "region/window/display global shortcuts", "release-only launch", "hidden root stays hidden",

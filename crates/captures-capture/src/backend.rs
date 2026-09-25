@@ -74,6 +74,17 @@ impl XcapBackend {
         capture_monitor(&monitor)
     }
 
+    /// The display under a desktop point from [`crate::pointer_position`],
+    /// using the same monitor lookup as [`Self::capture_display_at_point`].
+    /// Shortcut and tray captures start on this display, not a remembered one.
+    pub fn display_id_at_point(&self, point: (i32, i32)) -> Option<String> {
+        Monitor::from_point(point.0, point.1)
+            .ok()?
+            .id()
+            .ok()
+            .map(|id| id.to_string())
+    }
+
     /// Capture the display containing `point` without enumerating every display first.
     /// Falls back to the primary display when the pointer position is unavailable.
     pub fn capture_display_at_point(
