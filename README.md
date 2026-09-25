@@ -214,6 +214,7 @@ regains focus. Linux requires a portal exposing the reduced-motion setting;
 `--reduced-motion` can force it when that setting is unavailable.
 Cross-display movement, automatic top/bottom anchor changes, native file dragging,
 3D fan styling, stagger and the remaining preview effects are still unconnected.
+Rear cards use fixed-glass depth shading; front and expanded images stay unshaded.
 Live native hosts expose menu-bar/tray New Capture,
 screenshot, History, Preferences, output-folder and Quit actions, plus configured
 New Capture and region/window/display screenshot and recording global shortcuts. New Capture opens shared

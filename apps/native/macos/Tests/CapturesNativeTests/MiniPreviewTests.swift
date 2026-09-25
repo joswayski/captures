@@ -281,6 +281,35 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(controller.decodedArtifactIDs, ["older"])
     }
 
+    func testCompactDepthShadePreservesFrontAndClearsOnExpansion() throws {
+        _ = NSApplication.shared
+        let panel = fixturePanel(ids: ["red"],
+            images: ["red": solidImage(NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))], collapsed: true)
+        defer { panel.close() }
+        let card = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewCardView }.first)
+        func red() throws -> CGFloat {
+            let bitmap = try render(panel)
+            XCTAssertEqual(bitmap.colorSpace, .sRGB)
+            XCTAssertEqual(bitmap.bitsPerSample, 8)
+            // colorAt returns a calibrated NSColor even for this sRGB bitmap;
+            // converting that color again changes the already-correct bytes.
+            var pixel = [Int](repeating: 0, count: bitmap.samplesPerPixel)
+            bitmap.getPixel(&pixel, atX: 170, y: 132)
+            return CGFloat(pixel[0]) / 255
+        }
+        XCTAssertEqual(try red(), 1, accuracy: 0.01)
+        card.setCompact(true, depth: 1)
+        // Source red composited with (15,15,18) at CSS depth1 opacity .13748.
+        XCTAssertEqual(try red(), 0.870607, accuracy: 0.015)
+        try write(render(panel), name: "mini-preview-depth-one.png")
+        card.setCompact(true, depth: 6)
+        XCTAssertEqual(try red(), 0.322353, accuracy: 0.015, "deep shade caps at .72")
+        card.setCompact(false, depth: 6)
+        XCTAssertEqual(try red(), 1, accuracy: 0.01, "expanded images are never shaded")
+        card.setCompact(true, depth: 0)
+        XCTAssertEqual(try red(), 1, accuracy: 0.01, "new front image is never shaded")
+    }
+
     func testRealThumbnailRendersExpandedAndCollapsedStacks() throws {
         _ = NSApplication.shared
         let ids = ["oldest", "middle", "newest"]
@@ -456,7 +485,10 @@ final class MiniPreviewTests: XCTestCase {
     private func render(_ panel: MiniPreviewPanel) throws -> NSBitmapImageRep {
         panel.display(); panel.previewView.layoutSubtreeIfNeeded()
         let view = panel.previewView
-        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        // Set the destination profile BEFORE drawing. Display-dependent blending
+        // followed by conversion to sRGB does not give the same channel values.
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds)?
+            .retagging(with: .sRGB))
         view.cacheDisplay(in: view.bounds, to: bitmap)
         return bitmap
     }

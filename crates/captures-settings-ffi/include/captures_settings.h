@@ -188,6 +188,10 @@ bool captures_preview_stack_card_v1(const CapturesPreviewStack *handle, size_t i
 bool captures_preview_stack_card_v2(const CapturesPreviewStack *handle, size_t index,
     bool top_anchor, bool hovered, CapturesPreviewCardLayout *output);
 
+/* Pure compact-card shade policy. Paint glass-strong-solid at this opacity.
+ * Depth zero is undimmed. Expanded cards never use this overlay. */
+double captures_preview_dim_opacity_v1(size_t depth);
+
 /* Owned immutable region session. Prepare/capture may block; use a worker after
  * hiding capture windows. Begin/retain a capture-flow guard on the event-loop
  * thread first. Freeze and cursor settings are fixed at prepare. No pixel data

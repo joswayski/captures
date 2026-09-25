@@ -561,6 +561,18 @@ def main():
                     wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 264, "two-card compact pile")
                     run("xdotool", "mousemove", "0", "0")
                     time.sleep(.35)
+                    # Independent CSS blend: rear depth1=.13748 over the
+                    # known asymmetric capture, glass-strong-solid=(15,15,18).
+                    rear_y = 220 if placement.startswith("top") else 44
+                    source = BACKGROUNDS[0][2 if placement.startswith("top") else 0]
+                    expected_rear = [round(s * (1 - .13748) + tint * .13748)
+                                     for s, tint in zip(source, (15, 15, 18))]
+                    actual_rear = run("import", "-window", preview, "-crop", f"1x1+100+{rear_y}",
+                                      "-depth", "8", "rgb:-")
+                    assert all(abs(a - b) <= 1 for a, b in zip(actual_rear, expected_rear)), (
+                        "compact rear depth shade", list(actual_rear), expected_rear)
+                    assert run("import", "-window", preview, "-crop", "1x1+170+132", "-depth", "8", "rgb:-") == bytes(
+                        BACKGROUNDS[0][3]), "front card was shaded"
                     def fan_pixels(front=False):
                         # Compare only the rear peek or front interior, excluding
                         # pointer, tooltip and the rest of the changing desktop.

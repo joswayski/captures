@@ -429,6 +429,12 @@ pub unsafe extern "C" fn captures_preview_stack_collapsed_v1(
     unsafe { handle.as_ref() }.is_some_and(|handle| handle.0.is_collapsed())
 }
 
+/// Pure compact-card shade policy. Depth zero is the undimmed front image.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_dim_opacity_v1(depth: usize) -> f64 {
+    preview::collapsed_dim_opacity(depth)
+}
+
 /// Allocation-free card pose for a chronological index, in unscrolled content.
 /// # Safety
 /// Handle is null or live without concurrent mutation/free. Output is null or
