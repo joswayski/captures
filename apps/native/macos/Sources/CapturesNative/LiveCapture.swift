@@ -1143,7 +1143,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     hud.hud.restart = { [weak self] in self?.confirmRestartRecording() }
                     hud.hud.screenshot = { [weak self] in self?.takeRecordingScreenshot() }
                     hud.hud.stop = { [weak self] in self?.stopRecording() }
-                    hud.hud.discard = { [weak self] in self?.discardRecording() }
+                    hud.hud.discard = { [weak self] in self?.confirmDeleteRecording() }
                     hud.hud.hide = { [weak self] in self?.hideRecordingControls() }
                     hud.hud.setPaused(false, elapsedMilliseconds: snapshot.elapsedMilliseconds)
                     hud.hud.setMicrophone(muted: snapshot.microphoneMuted,
@@ -1604,6 +1604,19 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 self.preserveFailedRecording(session, warning: error.localizedDescription)
             }
         }
+    }
+
+    /// Shipping `deleteRecording` asks before discarding a started take.
+    private func confirmDeleteRecording() {
+        guard !recordingLifecycle.busy else { return }
+        let alert = NSAlert()
+        alert.messageText = "Delete recording?"
+        alert.informativeText = "This recording will be deleted permanently."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        discardRecording()
     }
 
     private func confirmRestartRecording() {
