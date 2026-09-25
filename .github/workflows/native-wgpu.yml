@@ -125,6 +125,9 @@ jobs:
       - name: Exercise native Linux windows (X11, software Vulkan)
         if: matrix.suite == 'capture'
         run: xvfb-run -a python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-smoke
+      - name: Exercise native first-run gating and queued media on private X11
+        if: matrix.suite == 'capture'
+        run: python apps/native/x11_onboarding_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-onboarding
       - name: Capture real region and window pixels on private X11 (simulated session state)
         if: matrix.suite == 'capture'
         # Distro dbus/gi bindings belong to system Python, not setup-python.

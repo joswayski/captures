@@ -68,12 +68,21 @@ jobs:
               --screenshot "$RUNNER_TEMP/native-preferences/$appearance.png" --quit-after 4
             test -s "$RUNNER_TEMP/native-preferences/$appearance.png"
           done
+          python3 - <<'PY'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, "apps/native")
+          from history_fixture import write_completed_settings
+          write_completed_settings(Path(os.environ["RUNNER_TEMP"]) / "native-preferences/live-settings.json")
+          PY
           apps/native/macos/.build/release/CapturesNative --live \
+            --settings-file "$RUNNER_TEMP/native-preferences/live-settings.json" \
             --history-root "$RUNNER_TEMP/native-live-history" --appearance light \
             --screenshot "$RUNNER_TEMP/native-preferences/live-empty.png" --quit-after 4
           test -s "$RUNNER_TEMP/native-preferences/live-empty.png"
           python3 apps/native/history_fixture.py "$RUNNER_TEMP/native-populated-history"
           apps/native/macos/.build/release/CapturesNative --live \
+            --settings-file "$RUNNER_TEMP/native-preferences/live-settings.json" \
             --history-root "$RUNNER_TEMP/native-populated-history" --appearance dark \
             --screenshot "$RUNNER_TEMP/native-preferences/live-populated.png" --quit-after 4
           test -s "$RUNNER_TEMP/native-preferences/live-populated.png"

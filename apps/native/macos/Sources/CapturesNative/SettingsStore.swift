@@ -76,6 +76,27 @@ final class SettingsStore {
         }
     }
 
+    /// Onboarding shares this worker with preference writes so completion can
+    /// never overtake an older settings mutation.
+    func onboarding(_ action: String,
+                    completion: @escaping (Result<OnboardingState, Error>) -> Void) {
+        queue.async {
+            self.debounce?.cancel()
+            self.debounce = nil
+            self.writePending()
+            let result = Result { () throws -> OnboardingState in
+                let response = try self.transport.request([
+                    "operation": "onboarding", "path": self.path, "action": action,
+                ])
+                guard let value = response["state"] as? [String: Any] else {
+                    throw SettingsStoreError.invalidResponse
+                }
+                return try OnboardingState(value)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     @discardableResult func save(_ settings: [String: Any], completion: @escaping Completion) -> Int {
         revisionLock.lock()
         revision += 1

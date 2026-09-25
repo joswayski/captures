@@ -243,6 +243,7 @@ def main():
             history = output / prefix / "history"
             settings = output / f"{prefix}-settings.json"
             settings.write_text(json.dumps({
+                "onboarding_completed": True,
                 "settings_schema_version": 5, "appearance": "dark", "theme": "mustard",
                 "output_directory": str(output / prefix / "exports"),
                 "new_capture_shortcut": "Ctrl+Shift+F10",

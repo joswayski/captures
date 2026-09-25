@@ -14,6 +14,8 @@ import subprocess
 import threading
 import time
 
+from history_fixture import write_completed_settings
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -60,6 +62,7 @@ def main():
                 spawn(["openbox", "--sm-disable"])
                 for appearance in ("dark", "light"):
                     release.clear()
+                    write_completed_settings(output / f"{appearance}.json")
                     app = spawn([str(binary), "--live", "--history-root", str(output / "history"),
                         "--settings-file", str(output / f"{appearance}.json"), "--appearance", appearance])
                     window = run("xdotool", "search", "--sync", "--onlyvisible", "--pid", str(app.pid), "--name", "^Captures$").decode().splitlines()[0]

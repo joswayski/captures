@@ -79,6 +79,7 @@ pub struct Workbench {
     live: Option<Live>,
     live_preferences: bool,
     root_hidden: bool,
+    onboarding_presented: bool,
     root_was_focused: bool,
     tray: Option<Tray>,
     tray_error: Option<String>,
@@ -244,6 +245,7 @@ impl Workbench {
             instance,
             live_preferences: false,
             root_hidden,
+            onboarding_presented: false,
             root_was_focused: false,
             tray,
             tray_error,
@@ -433,7 +435,11 @@ impl Workbench {
 
     fn sync_shortcuts(&mut self, ctx: &egui::Context) {
         let generation = self.preferences_state.persisted_generation();
-        if !self.options.live || generation == 0 || generation == self.shortcuts_generation {
+        if !self.options.live
+            || !self.preferences_state.onboarding_complete()
+            || generation == 0
+            || generation == self.shortcuts_generation
+        {
             return;
         }
         self.shortcuts_generation = generation;
@@ -476,6 +482,12 @@ impl Workbench {
     }
 
     fn sync_shortcut_routing(&self) {
+        if !self.preferences_state.onboarding_complete() {
+            if let Some(shortcuts) = self.shortcuts.0.borrow().as_ref() {
+                shortcuts.set_enabled(false);
+            }
+            return;
+        }
         let (enabled, selector_generation, restore_only) =
             self.live.as_ref().map_or((false, None, false), |live| {
                 shortcut_routing_state(
@@ -923,6 +935,16 @@ impl eframe::App for Workbench {
             self.options.scene == Scene::Preferences
         });
         self.preferences_state.receive(ctx);
+        let onboarding_complete = self.preferences_state.onboarding_complete();
+        if self.options.live
+            && !self.onboarding_presented
+            && !self.preferences_state.onboarding_pending()
+            && !onboarding_complete
+        {
+            // Login launches and already-hidden roots must never strand setup.
+            self.onboarding_presented = true;
+            self.show_root(ctx);
+        }
         self.receive_instance(ctx);
         while let Ok(result) = self.action_rx.try_recv() {
             self.action_error = result
@@ -933,7 +955,10 @@ impl eframe::App for Workbench {
             }
         }
         if let Some(live) = &mut self.live {
-            if !self.options.open_media.is_empty() && !self.preferences_state.is_loading() {
+            if onboarding_complete
+                && !self.options.open_media.is_empty()
+                && !self.preferences_state.is_loading()
+            {
                 live.queue_open_media(
                     std::mem::take(&mut self.options.open_media),
                     self.preferences_state
@@ -951,8 +976,12 @@ impl eframe::App for Workbench {
             && ctx.input(|input| input.viewport().close_requested())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            self.root_hidden = true;
+            if onboarding_complete {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                self.root_hidden = true;
+            } else {
+                self.show_root(ctx);
+            }
         }
         if self.options.live
             && self.tray.is_none()
@@ -982,7 +1011,8 @@ impl eframe::App for Workbench {
             .borrow()
             .as_ref()
             .and_then(CaptureShortcuts::next_action);
-        if let (Some(action), Some(live)) = (shortcut_action, &mut self.live)
+        if onboarding_complete
+            && let (Some(action), Some(live)) = (shortcut_action, &mut self.live)
             && !live.apply_selector_shortcut(action, ctx)
         {
             if action == CaptureShortcut::NewCapture && live.show_recording_controls(ctx) {
@@ -1011,9 +1041,13 @@ impl eframe::App for Workbench {
             }
         }
         for action in tray_actions {
-            self.handle_tray_action(action, ctx);
+            if onboarding_complete || action == TrayAction::Quit {
+                self.handle_tray_action(action, ctx);
+            } else {
+                self.show_root(ctx);
+            }
         }
-        if let Some(live) = &mut self.live {
+        if onboarding_complete && let Some(live) = &mut self.live {
             live.launch_requested_capture(ctx, frame, self.preferences_state.snapshot());
         }
         let quit_key = !self.preferences_state.is_recording_shortcut()
@@ -1084,7 +1118,9 @@ impl eframe::App for Workbench {
         if self.started.elapsed() >= Duration::from_secs(2) {
             self.settled_frames += 1;
         }
-        if self.options.scene == Scene::Idle && (!self.options.live || self.frames == 0) {
+        if self.options.scene == Scene::Idle
+            && (!self.options.live || (self.frames == 0 && !self.onboarding_presented))
+        {
             // eframe 0.36.2 auto-shows the root after its first paint, even if
             // the builder requested hidden. Viewport commands run after that
             // show, so hide once here; deadlines continue through logic().
@@ -1102,6 +1138,57 @@ impl eframe::App for Workbench {
         }
         let t = self.tokens(&ctx);
         ui.set_style(ctx.style_of(ctx.theme()));
+        if self.live.is_some() && !self.preferences_state.onboarding_complete() {
+            egui::CentralPanel::default().show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(t.number("s-12"));
+                        ui.heading("Welcome to Captures");
+                        ui.add_space(t.number("s-4"));
+                        ui.label("Capture screenshots, GIFs, and video with native tools.");
+                        ui.add_space(t.number("s-6"));
+                        egui::Frame::new()
+                            .fill(t.color("surface-raised"))
+                            .stroke(Stroke::new(1., t.color("border-subtle")))
+                            .corner_radius(t.number("r-xl") as u8)
+                            .inner_margin(t.number("s-6") as i8)
+                            .show(ui, |ui| {
+                                ui.set_max_width(560.);
+                                ui.heading("Your captures stay under your control");
+                                ui.label("Captures only reads the screen when you start a capture. Files and preferences are stored on this computer.");
+                                ui.add_space(t.number("s-4"));
+                                #[cfg(target_os = "windows")]
+                                ui.label("Windows does not require an upfront screen-recording permission. You can choose microphone access when recording.");
+                                #[cfg(target_os = "linux")]
+                                if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+                                    ui.colored_label(t.color("theme-signal"), "Wayland live capture is not supported yet. Setup does not enable capture on this display server.");
+                                } else {
+                                    ui.label("X11 does not require an upfront screen-recording permission. You can choose audio sources when recording.");
+                                }
+                                ui.add_space(t.number("s-6"));
+                                if self.preferences_state.onboarding_pending() {
+                                    ui.add_enabled(false, egui::Button::new("Checking setup…"));
+                                } else if let Some(error) = self.preferences_state.onboarding_error().map(str::to_owned) {
+                                    ui.colored_label(t.color("danger-text"), format!("Setup could not continue: {error}"));
+                                    ui.label("Your settings were left unchanged. Correct the problem, then retry.");
+                                    if ui.button("Retry setup").clicked() {
+                                        self.preferences_state.retry_onboarding();
+                                    }
+                                } else if ui.button("Start capturing").clicked() {
+                                    self.preferences_state.complete_onboarding();
+                                }
+                            });
+                    });
+                });
+            self.sync_shortcut_routing();
+            if self.options.screenshot.is_some()
+                && !self.screenshot_requested
+                && self.started.elapsed() >= self.options.screenshot_after
+            {
+                self.request_screenshot(&ctx);
+            }
+            self.frames += 1;
+            return;
+        }
         if let Some(live) = &mut self.live {
             live.viewports(&ctx, &t, self.preferences_state.snapshot());
             if live.take_open_history_requested() {

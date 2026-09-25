@@ -8,6 +8,15 @@ import uuid
 import zlib
 
 
+def write_completed_settings(path: Path):
+    """Existing-profile fixture; first-run behavior has its own UI smoke test."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"settings_schema_version": 5, "onboarding_completed": True,
+        "output_directory": str(path.parent / "exports"), "launch_at_login": False,
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10"}))
+
+
 def write_history(root: Path):
     root.mkdir(parents=True, exist_ok=False)
     width, height = 640, 360

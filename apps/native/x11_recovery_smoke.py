@@ -10,7 +10,7 @@ import tempfile
 import time
 import uuid
 
-from history_fixture import write_history
+from history_fixture import write_completed_settings, write_history
 
 
 def write_bundle(root, kind, created):
@@ -107,6 +107,7 @@ exec /usr/bin/ffmpeg "$@"
                     wrapper.chmod(0o755)
                     previous_path = env["PATH"]
                     env["PATH"] = str(tools) + os.pathsep + previous_path
+                    write_completed_settings(root / "settings.json")
                     app = spawn([str(binary), "--live", "--history-root", str(history),
                                  "--settings-file", str(root / "settings.json"), "--appearance", appearance])
                     env["PATH"] = previous_path

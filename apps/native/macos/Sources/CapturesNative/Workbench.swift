@@ -441,6 +441,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var shortcutSelectorGeneration: UInt64?
     private var captureBusy = false
     private var terminating = false
+    private var onboardingReady = false
+    private var onboardingWasPresented = false
+    private var onboardingController: OnboardingController?
+    private var onboardingView: OnboardingView?
     private var liveContent: Surface?
     private var liveStyleRevision = 0
     private var renderedLiveStyleRevision = -1
@@ -524,14 +528,15 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             terminate: { NSApp.terminate(nil) }, hidesRootWindow: options.live)
         self.rootWindowCloseHandler = rootWindowCloseHandler
         window.delegate = rootWindowCloseHandler
+        if options.live { scene = "onboarding" }
         render()
         if options.live {
             installStatusItem()
-            installCaptureShortcuts()
+            startOnboarding()
         }
         let startup = startupDecision(options: options)
-        if startup.showsWindow { window.makeKeyAndOrderFront(nil) }
-        if startup.activatesApplication { NSApp.activate(ignoringOtherApps: true) }
+        if !options.live, startup.showsWindow { window.makeKeyAndOrderFront(nil) }
+        if !options.live, startup.activatesApplication { NSApp.activate(ignoringOtherApps: true) }
         Metrics.write(["event": "ready", "scene": scene, "window": window.windowNumber,
             "scale": window.backingScaleFactor, "appearance": appearance, "theme": theme,
             "historyCount": historyCount, "referenceChips": options.referenceChips])
@@ -569,7 +574,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func drainOpenImages() {
-        guard options.live, !pendingOpenImages.isEmpty else { return }
+        guard options.live, onboardingReady, !pendingOpenImages.isEmpty else { return }
         if scene != "live" { scene = "live"; render() }
         guard let liveController else { return }
         liveController.openImages(pendingOpenImages)
@@ -596,6 +601,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !options.live }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard scene == "onboarding", onboardingController?.busy == false,
+              onboardingController?.state != nil else { return }
+        onboardingController?.check()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Drain the editor's dedicated worker before capture teardown. A failed
         // draft save keeps its session/window recoverable and cancels this quit.
@@ -605,6 +616,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }
         terminating = true
         nativeInstance?.stopAccepting()
+        onboardingController?.flush()
         performTermination(flushPreferences: { [weak self] in self?.preferencesController?.flush() },
             cancelCapture: { [weak self] in self?.liveController?.finishCapture(restoreWindow: false) },
             closeShortcuts: { [weak self] in self?.closeCaptureShortcuts() },
@@ -626,6 +638,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard options.live else { return true }
+        guard onboardingReady else {
+            window.makeKeyAndOrderFront(nil)
+            sender.activate(ignoringOtherApps: true)
+            return true
+        }
         if liveController?.showRecordingControls() == true { return true }
         switch liveReopenAction(hasVisibleWindows: flag) {
         case .focusExisting:
@@ -645,10 +662,105 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     @objc private func systemAppearanceChanged() {
         guard appearance == "system" else { return }
         resolvedTokens = makeTokens()
+        if scene == "onboarding" { render(); return }
         preferencesController?.restyle()
         feedbackController?.restyle(tokens)
         liveStyleRevision += 1
         rebuildRenderedLiveWorkspaceIfNeeded()
+    }
+
+    private func startOnboarding() {
+        do {
+            let store = try SettingsStore(path: options.settingsFile)
+            let controller = OnboardingController(store: store)
+            controller.completed = { [weak self] in self?.finishOnboarding() }
+            controller.requiresAttention = { [weak self] in
+                guard let self, !self.onboardingWasPresented else { return }
+                self.showOnboarding()
+            }
+            onboardingController = controller
+            scene = "onboarding"
+            render()
+            store.load { [weak self, weak controller] result in
+                guard let self, let controller else { return }
+                if case .success(let settings) = result {
+                    if !self.options.appearanceOverride { self.appearance = settings.string("appearance", "system") }
+                    if !self.options.themeOverride { self.theme = settings.string("theme", "mustard") }
+                    self.customTheme = settings["custom_theme"] as? [String: Any] ?? [:]
+                    self.resolvedTokens = self.makeTokens()
+                    self.render()
+                }
+                controller.check()
+            }
+        } catch {
+            showOnboarding()
+            presentHostError(title: "Setup Unavailable", message: error.localizedDescription)
+        }
+    }
+
+    private func showOnboarding() {
+        guard options.live else { return }
+        onboardingWasPresented = true
+        scene = "onboarding"
+        render()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func finishOnboarding() {
+        guard !onboardingReady else { return }
+        onboardingReady = true
+        scene = "live"
+        render()
+        installCaptureShortcuts()
+        let startup = startupDecision(options: options)
+        if startup.showsWindow || onboardingWasPresented || !pendingOpenImages.isEmpty {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            window.orderOut(nil)
+        }
+        drainOpenImages()
+    }
+
+    private func restartAfterPermissionRequest() {
+        // This first-run restart is unavailable after the workspace opens, so
+        // there can be no active recording or unsaved editor to abandon.
+        guard !onboardingReady, !terminating, onboardingController?.busy == false else { return }
+        onboardingController?.flush()
+        preferencesController?.flush()
+        LiveCaptureController.flush()
+        nativeInstance?.stopAccepting()
+        drainInstanceRequests()
+        nativeInstance?.close()
+        nativeInstance = nil
+        do {
+            let process = Process()
+            process.executableURL = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
+            process.arguments = permissionRestartArguments(options: options, pendingMedia: pendingOpenImages)
+            try process.run()
+            terminating = true
+            NSApp.terminate(nil)
+        } catch {
+            // Re-elect this process when spawning fails so instance delivery is
+            // not silently left without an owner.
+            let restartError = error.localizedDescription
+            do {
+                let result = try NativeInstance.start(historyRoot: options.historyRoot, paths: pendingOpenImages)
+                nativeInstance = result.owner
+                if !result.primary {
+                    // Another primary accepted the queued media. Do not keep
+                    // a second live host after losing the election.
+                    NSApp.terminate(nil)
+                    return
+                }
+                presentHostError(title: "Couldn’t Restart Captures", message: restartError)
+            } catch {
+                presentHostError(title: "Couldn’t Restart Captures",
+                    message: "\(restartError) Captures could not restore its application lock and will quit. Reopen it to continue setup.")
+                NSApp.terminate(nil)
+            }
+        }
     }
 
     private func render() {
@@ -673,6 +785,23 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         content.layer!.backgroundColor = tokens.color("surface-canvas").cgColor
         window.appearance = NSAppearance(named: tokens.color("text").brightnessComponent > 0.5 ? .darkAqua : .aqua)
         window.contentView = content
+        if scene == "onboarding" {
+            if let onboardingController {
+                let view = OnboardingView(frame: content.bounds, tokens: tokens, controller: onboardingController)
+                view.autoresizingMask = [.width, .height]
+                view.restartRequested = { [weak self] in self?.restartAfterPermissionRequest() }
+                content.addSubview(view)
+                onboardingView = view
+            } else {
+                label("Setup is unavailable. Retry to continue.", x: 48, y: 80, width: 800)
+                content.addSubview(CaptureButton("Retry setup", frame: NSRect(x: 48, y: 130, width: 150, height: 34), tokens: tokens) {
+                    [weak self] in self?.startOnboarding()
+                })
+            }
+            Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000,
+                detail: scene)
+            return
+        }
         if scene == "preferences" {
             do {
                 let path = options.exercise
@@ -822,6 +951,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             self?.preferencesController?.flush()
             self?.launchNewCapture()
         }, showRecordingControls: { [weak self] in
+            guard self?.onboardingReady == true else { self?.showOnboarding(); return }
             _ = self?.liveController?.showRecordingControls()
         }, capture: { [weak self] kind in
             self?.preferencesController?.flush()
@@ -911,7 +1041,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func drainCaptureShortcuts() {
-        guard !terminating, !preferencesFocused,
+        guard onboardingReady, !terminating, !preferencesFocused,
               captureShortcutsEnabled(captureBusy: captureBusy,
                   selectorGeneration: shortcutSelectorGeneration,
                   recordingControlsHidden: liveController?.recordingControlsHidden == true),
@@ -958,6 +1088,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func launchCapture(_ kind: StillCaptureKind) {
+        guard onboardingReady else { showOnboarding(); return }
         guard liveController?.capture(kind) == true else {
             presentHostError(title: "Capture Unavailable",
                 message: "The capture workspace is still loading or another capture is already active.")
@@ -966,6 +1097,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func launchNewCapture(recordingTarget: UnifiedCaptureTarget? = nil) {
+        guard onboardingReady else { showOnboarding(); return }
         if liveController?.showRecordingControls() == true { return }
         guard liveController?.newCapture(recordingTarget: recordingTarget) == true else {
             presentHostError(title: "Capture Unavailable",
@@ -978,6 +1110,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         guard options.live else {
             scene = "history"; render(); return
         }
+        guard onboardingReady else { showOnboarding(); return }
         preferencesController?.flush()
         scene = "live"
         _ = discardLiveWorkspaceForStyleChange()
@@ -989,6 +1122,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func showPreferences() {
+        guard !options.live || onboardingReady else { showOnboarding(); return }
         preferencesController?.flush()
         scene = "preferences"
         render()

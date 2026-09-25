@@ -187,7 +187,11 @@ types regardless of the selected filter, and keeps exported files and recovery d
 It uses separate development data; Wayland capture is gated
 until the candidate can hide its window reliably. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
-in a separate development settings file. The native workspace now applies
+in a separate development settings file. Fresh native profiles show setup before
+capture or opening queued media. macOS offers explicit Screen Recording and
+optional Microphone access, Settings links, and a permission restart; Windows/X11
+do not require upfront screen access. Setup does not enable Wayland capture.
+The native workspace now applies
 automatic copy, output folder, PNG/JPEG/WebP save-format, screenshot countdown,
 and cursor inclusion preferences. Cursor rendering matches the shipping app:
 system cursor pixels on macOS, a synthetic arrow on Windows/X11. Escape cancels
@@ -612,8 +616,8 @@ Apply changes the document in one undo step; Cancel restores accepted values.
 Custom shadows and pinned-font named styles are connected, including style/size/color
 choices for new text. Font import and physical input/IME/accessibility acceptance
 remain open.
-Post-save source adoption, remaining editor layout/interaction parity, onboarding,
-login items and updates remain open. Shared editor support is prerequisite work,
+Post-save source adoption, remaining editor layout/interaction parity, capture-time
+permission recovery, physical setup/login acceptance and updates remain open. Shared editor support is prerequisite work,
 not native editor acceptance. Resident shortcuts and single-instance relaunch are
 connected, but physical cross-platform acceptance and full feature/design parity
 remain open. The

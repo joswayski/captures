@@ -192,6 +192,19 @@ Run `/usr/bin/python3 apps/native/x11_preview_smoke.py --lifecycle --login-item-
 launch, hidden startup/focus, relaunch and disable in light/dark appearances.
 This is private-X11/software-rendering evidence, not physical logon acceptance.
 
+Fresh `--live` development profiles show setup before capture or external-media
+import. Use a new `--settings-file` and `--history-root` to exercise it without
+resetting shipping data or OS permissions. macOS checks are prompt-free until
+Allow is selected; Screen Recording is required and microphone optional. Restart
+is explicit and retains the development profile and queued media. macOS TCC may
+require relaunch after changing the switch; a different signed build has a
+different identity. Existing profiles with completed setup keep normal startup.
+Run `python3 apps/native/x11_onboarding_smoke.py --binary PATH --output NEW_DIRECTORY`
+for first-run, hidden-launch, capture-gating, queued-media and completion/relaunch
+checks. Other live smoke fixtures explicitly represent completed profiles.
+AppKit tests render permission/error states under `CAPTURES_TEST_ARTIFACTS`.
+These do not verify physical TCC, Windows input or Wayland capture.
+
 Run `python3 apps/native/instance_smoke.py --binary PATH --output NEW_DIRECTORY`
 in a graphical session for real-process forwarding, sender-relative Unicode paths,
 unchanged sources and normal-quit restart. Mac/Windows native CI runs this check;

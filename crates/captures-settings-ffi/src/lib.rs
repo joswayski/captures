@@ -21,10 +21,13 @@ use std::{
     os::raw::c_char,
     panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
+    sync::Mutex,
     time::Instant,
 };
 
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
+static ONBOARDING: Mutex<captures_app::onboarding::Session> =
+    Mutex::new(captures_app::onboarding::Session::new());
 
 thread_local! {
     // Native key registration and destruction must stay on the event-loop thread.
@@ -194,6 +197,10 @@ enum Request {
         settings_file: String,
         enabled: Option<bool>,
     },
+    Onboarding {
+        path: String,
+        action: captures_app::onboarding::Action,
+    },
 }
 
 fn response(request: *const c_char) -> Value {
@@ -220,6 +227,12 @@ fn response(request: *const c_char) -> Value {
         Ok(Request::DefaultPath) => {
             json!({"ok":true,"path":captures_settings::default_native_settings_path()})
         }
+        Ok(Request::Onboarding { path, action }) => ONBOARDING
+            .lock()
+            .map_err(|_| "The onboarding service is unavailable. Restart Captures.".to_owned())
+            .and_then(|mut session| session.execute(Path::new(&path), action))
+            .map(|state| json!({"ok":true,"state":state}))
+            .unwrap_or_else(|error| json!({"ok":false,"error":error})),
         Ok(Request::LoginItem {
             history_root,
             settings_file,
@@ -307,6 +320,31 @@ pub unsafe extern "C" fn captures_settings_free_v1(response: *mut c_char) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn onboarding_abi_checks_without_creating_settings_and_rejects_unknown_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fresh settings.json");
+        for (action, succeeds) in [("check", true), ("grant_everything", false)] {
+            let input = CString::new(
+                json!({"operation":"onboarding", "path":path,
+                "action":action})
+                .to_string(),
+            )
+            .unwrap();
+            let pointer = unsafe { captures_settings_request_v1(input.as_ptr()) };
+            let result: Value =
+                serde_json::from_slice(unsafe { CStr::from_ptr(pointer) }.to_bytes()).unwrap();
+            unsafe { captures_settings_free_v1(pointer) };
+            assert_eq!(result["ok"], succeeds);
+            if succeeds {
+                assert_eq!(result["state"]["onboarding_completed"], false);
+                assert_eq!(result["state"]["platform"], std::env::consts::OS);
+                assert!(result["state"]["screen_recording_required"].is_boolean());
+            }
+            assert!(!path.exists());
+        }
+    }
 
     #[test]
     fn flow_abi_rejects_invalid_or_stale_requests_without_registering_keys() {

@@ -31,5 +31,8 @@ uuid.workspace = true
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+captures-recording-macos = { path = "../captures-recording-macos" }
+
 [lints]
 workspace = true

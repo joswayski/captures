@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 
-from history_fixture import write_history
+from history_fixture import write_completed_settings, write_history
 
 
 def main():
@@ -66,6 +66,7 @@ def main():
                     entry = json.loads(metadata.read_text())
                     entry["saved_path"] = str(export)
                     metadata.write_text(json.dumps(entry))
+                    write_completed_settings(root / "settings.json")
                     app = spawn([str(binary), "--live", "--history-root", str(history),
                         "--settings-file", str(root / "settings.json"), "--appearance", appearance])
                     window = run("xdotool", "search", "--sync", "--onlyvisible", "--pid", str(app.pid), "--name", "^Captures$").decode().splitlines()[0]
