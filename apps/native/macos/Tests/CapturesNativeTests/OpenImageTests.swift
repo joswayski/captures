@@ -119,6 +119,105 @@ final class OpenImageTests: XCTestCase {
                        "closing without saving reloads the canonical source under the same History ID")
     }
 
+    func testRealBridgePreviewEditTargetsArtifactWithoutShowingOrChangingHistory() throws {
+        _ = NSApplication.shared
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let firstSource = folder.appendingPathComponent("first.png")
+        let secondSource = folder.appendingPathComponent("second.png")
+        try XCTUnwrap(NSBitmapImageRep(cgImage: PreviewView.fixtureImage(scale: 1))
+            .representation(using: .png, properties: [:])).write(to: firstSource)
+        let secondImage = NSImage(size: NSSize(width: 96, height: 64), flipped: true) { rect in
+            NSColor.systemBlue.setFill(); rect.fill(); return true
+        }
+        try XCTUnwrap(secondImage.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?
+            .representation(using: .png, properties: [:])).write(to: secondSource)
+        let sourceBytes = [try Data(contentsOf: firstSource), try Data(contentsOf: secondSource)]
+        let history = folder.appendingPathComponent("history")
+        let settingsPath = folder.appendingPathComponent("settings.json").path
+        let settingsBridge = SettingsBridge()
+        var settings = try XCTUnwrap(settingsBridge.request([
+            "operation": "load", "path": settingsPath])["settings"] as? [String: Any])
+        settings["output_directory"] = folder.path
+        _ = try settingsBridge.request(["operation": "save", "path": settingsPath, "settings": settings])
+        let bridge = AppBridge()
+        let firstResponse = try bridge.request([
+            "operation": "open_image", "root": history.path, "path": firstSource.path,
+            "open_artifact_ids": [],
+        ])
+        let first = try XCTUnwrap((firstResponse["artifact"] as? [String: Any]).flatMap(CaptureArtifact.init))
+        let secondResponse = try bridge.request([
+            "operation": "open_image", "root": history.path, "path": secondSource.path,
+            "open_artifact_ids": [],
+        ])
+        let second = try XCTUnwrap((secondResponse["artifact"] as? [String: Any]).flatMap(CaptureArtifact.init))
+        XCTAssertNotEqual(first.id, second.id)
+        let ownedBytes = [try Data(contentsOf: URL(fileURLWithPath: first.imagePath)),
+                          try Data(contentsOf: URL(fileURLWithPath: second.imagePath))]
+
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame); window.contentView = root
+        let controller = LiveCaptureController(root: root, window: window,
+            tokens: try XCTUnwrap(Tokens.variants["dark-mustard"]),
+            historyRoot: history.path, settingsPath: settingsPath, showPreferences: {})
+        defer { withExtendedLifetime(controller) {} }
+        let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
+            .first?.documentView as? NSTableView)
+        try waitUntil { table.numberOfRows == 2 }
+        let loaded = [first, second].sorted { $0.createdAt > $1.createdAt }
+        let selectedRow = try XCTUnwrap(loaded.firstIndex { $0.id == second.id })
+        table.selectRowIndexes([selectedRow], byExtendingSelection: false)
+        XCTAssertFalse(window.isVisible)
+
+        controller.openPreview(first)
+        try waitUntil { NSApp.windows.contains { $0.title.hasPrefix("Edit screenshot") && $0.isVisible } }
+        let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
+        defer {
+            editor.performClose(nil)
+            if let sheet = editor.attachedSheet {
+                editor.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+            }
+            editor.orderOut(nil)
+        }
+        let controls = try XCTUnwrap(editor.contentView)
+        try waitUntil { descendants(controls).compactMap { $0 as? NSImageView }
+            .contains { $0.image != nil && $0.accessibilityLabel() == "Edited screenshot preview" } }
+        XCTAssertFalse(window.isVisible, "preview Edit must leave the root window hidden")
+        XCTAssertEqual(table.selectedRow, selectedRow,
+                       "preview Edit must preserve the selected History row")
+        let dimensions = try XCTUnwrap(descendants(controls).compactMap { $0 as? NSTextField }
+            .first { $0.accessibilityLabel() == "Edited canvas dimensions" })
+        XCTAssertTrue(dimensions.stringValue.contains("\(first.width) × \(first.height)"),
+                      "the editor must show the exact preview artifact")
+
+        for (label, value) in [("Crop X", "7"), ("Crop Y", "11"),
+                               ("Crop width", "120"), ("Crop height", "80")] {
+            try XCTUnwrap(descendants(controls).compactMap { $0 as? NSTextField }
+                .first { $0.accessibilityLabel() == label }).stringValue = value
+        }
+        try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
+            .first { $0.title == "Apply crop" }).performClick(nil)
+        try waitUntil { editor.title.contains("Unsaved") }
+        editor.orderOut(nil)
+        controller.openPreview(first)
+        try waitUntil { editor.isVisible && editor.title.contains("Unsaved") }
+        XCTAssertTrue(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible } === editor)
+        XCTAssertTrue(descendants(controls).compactMap { ($0 as? NSTextField)?.stringValue }
+            .contains { $0.contains("120 × 80") }, "duplicate Edit must preserve the staged crop")
+        XCTAssertFalse(window.isVisible)
+        XCTAssertEqual(table.selectedRow, selectedRow)
+        XCTAssertEqual(try XCTUnwrap(bridge.request([
+            "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]]).count, 2)
+        XCTAssertEqual(try Data(contentsOf: firstSource), sourceBytes[0])
+        XCTAssertEqual(try Data(contentsOf: secondSource), sourceBytes[1])
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: first.imagePath)), ownedBytes[0])
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: second.imagePath)), ownedBytes[1])
+    }
+
     func testRealExternalRecordingsOpenWithoutChangingSourceOrAllowingReplace() throws {
         _ = NSApplication.shared
         guard let tools = try? NativeMediaTools.locate() else {

@@ -32,7 +32,8 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
         XCTAssertEqual(panel.previewView.artifactIDs, ["latest"])
         let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
-        XCTAssertEqual(buttons.map(\.title), ["Copy", "Save", "Open", "Trash", "×"])
+        XCTAssertEqual(buttons.map(\.title), ["Copy", "Save", "Edit", "Trash", "×"])
+        XCTAssertEqual(buttons.first { $0.title == "Edit" }?.accessibilityLabel(), "Edit screenshot")
         XCTAssertTrue(buttons.allSatisfy(\.glass))
         XCTAssertTrue(try XCTUnwrap(buttons.first { $0.title == "Trash" }).signal)
         XCTAssertEqual(buttons.last?.accessibilityLabel(), "Dismiss preview")
@@ -42,7 +43,7 @@ final class MiniPreviewTests: XCTestCase {
         ]).width < $0.bounds.width })
         buttons.forEach { $0.performClick(nil) }
         XCTAssertEqual(actions, ["copy", "save", "open", "trash", "dismiss"])
-        try write(render(panel), name: "mini-preview-single-unsaved-trash.png")
+        try write(render(panel), name: "mini-preview-single-unsaved-edit-trash.png")
     }
 
     func testSavedCardUsesRevealWithShowInFolderAccessibility() throws {
@@ -52,7 +53,7 @@ final class MiniPreviewTests: XCTestCase {
         defer { panel.close() }
         let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
         let reveal = try XCTUnwrap(buttons.first { $0.title == "Reveal" })
-        XCTAssertEqual(buttons.map(\.title), ["Copy", "Reveal", "Open", "Trash", "×"])
+        XCTAssertEqual(buttons.map(\.title), ["Copy", "Reveal", "Edit", "Trash", "×"])
         XCTAssertEqual(reveal.accessibilityLabel(), "Show in Folder")
         XCTAssertEqual(reveal.toolTip, "Show in Folder")
         try write(render(panel), name: "mini-preview-single-saved-reveal.png")

@@ -413,9 +413,10 @@ enum PreviewMessage {
         generation: u64,
         saved_path: Option<PathBuf>,
     },
-    OpenHistory {
+    Edit {
         artifact_id: String,
         generation: u64,
+        directory: PathBuf,
     },
     Dismiss {
         artifact_id: String,
@@ -778,7 +779,6 @@ pub struct Live {
     recording_notice_target: Option<CaptureTarget>,
     previews: MiniPreviews,
     root_hide_deferred: bool,
-    open_history_requested: bool,
     region_freeze: bool,
     region_auto_start: bool,
     region_countdown_seconds: u8,
@@ -1035,7 +1035,6 @@ impl Live {
             recording_notice_target: None,
             previews: MiniPreviews::default(),
             root_hide_deferred: false,
-            open_history_requested: false,
             region_freeze: false,
             region_auto_start: false,
             region_countdown_seconds: 0,
@@ -1293,10 +1292,6 @@ impl Live {
 
     fn can_start_capture(&self) -> bool {
         self.can_launch_capture() && self.display_id.is_some() && self.can_hide == Some(true)
-    }
-
-    pub fn take_open_history_requested(&mut self) -> bool {
-        std::mem::take(&mut self.open_history_requested)
     }
 
     pub fn request_capture(&mut self, request: CaptureRequest) {
@@ -2178,14 +2173,31 @@ impl Live {
                         },
                     );
                 }
-                PreviewMessage::OpenHistory {
+                PreviewMessage::Edit {
                     artifact_id,
                     generation,
+                    directory,
                 } if self.previews.accepts(&artifact_id, generation) => {
-                    self.select(artifact_id);
-                    self.open_history_requested = true;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.request_repaint();
+                    if self.previews.cards[&artifact_id].busy.is_some()
+                        || self.pending > 0
+                        || self.recovery.blocking()
+                        || self.permission_recovery_visible
+                    {
+                        continue;
+                    }
+                    let Some(artifact) = self.artifacts.iter().find(|item| {
+                        item.entry.id == artifact_id
+                            && item.entry.kind == captures_history::ArtifactKind::Screenshot
+                    }) else {
+                        self.previews.cards.get_mut(&artifact_id).unwrap().message =
+                            Some("Capture is no longer available".into());
+                        continue;
+                    };
+                    let mode = artifact
+                        .entry
+                        .mode
+                        .unwrap_or(captures_capture::CaptureMode::Region);
+                    self.open_screenshot_editor(ctx, artifact_id, directory, mode);
                 }
                 PreviewMessage::Dismiss {
                     artifact_id,
@@ -2224,7 +2236,7 @@ impl Live {
                 | PreviewMessage::Reveal { .. }
                 | PreviewMessage::Trash { .. }
                 | PreviewMessage::MoveStack { .. }
-                | PreviewMessage::OpenHistory { .. } => {}
+                | PreviewMessage::Edit { .. } => {}
             }
         }
         while let Some(event) = self.recording_worker.try_recv() {
@@ -3876,11 +3888,16 @@ impl Live {
                             generation: card.generation,
                             saved_path: card.saved_path.clone(),
                         }),
-                        Some(crate::mini_preview::Action::OpenHistory) => {
-                            restore_root_for_history(ui.ctx());
-                            Some(PreviewMessage::OpenHistory {
-                                artifact_id: card.artifact_id.clone(),
-                                generation: card.generation,
+                        Some(crate::mini_preview::Action::Edit) => {
+                            save.as_ref().map(|(directory, _)| {
+                                // The independently repainting card must wake the
+                                // minimized/hidden owner without showing its workspace.
+                                request_hidden_root_paint(ui.ctx());
+                                PreviewMessage::Edit {
+                                    artifact_id: card.artifact_id.clone(),
+                                    generation: card.generation,
+                                    directory: directory.clone(),
+                                }
                             })
                         }
                         Some(crate::mini_preview::Action::Dismiss) => {
@@ -5104,16 +5121,6 @@ fn capture_viewport(
         .with_taskbar(false)
 }
 
-fn restore_root_for_history(ctx: &egui::Context) {
-    // The root may not run Live::logic while minimized. Target it directly
-    // from the independently repainting preview before queueing selection.
-    ctx.send_viewport_cmd_to(
-        egui::ViewportId::ROOT,
-        egui::ViewportCommand::Minimized(false),
-    );
-    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
-}
-
 fn same_display_geometry(left: &DisplayDescriptor, right: &DisplayDescriptor) -> bool {
     left.id == right.id
         && left.x == right.x
@@ -5363,6 +5370,7 @@ fn reveal(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn shared_worker_wakes_root_while_an_editor_viewport_is_active() {
@@ -6017,28 +6025,82 @@ mod tests {
     }
 
     #[test]
-    fn history_preview_action_restores_minimized_root_without_waiting_for_live_logic() {
+    fn preview_edit_targets_its_artifact_without_showing_root_or_changing_history_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [65, 43, 21, 255]);
+        let other = preview_artifact(root.path(), [11, 155, 241, 255]);
+        let id = artifact.entry.id.clone();
+        let other_id = other.entry.id.clone();
+        let original = fs::read(&artifact.image_path).unwrap();
         let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.flush();
+        live.previews
+            .begin_capture(&AppSettings::default(), Some(preview_target()), 1)
+            .unwrap();
+        let (guard, _) = live.previews.start_artifact(&artifact).unwrap().unwrap();
+        live.artifacts = vec![artifact, other];
+        live.selection.begin(other_id.clone());
         ctx.begin_pass(Default::default());
-        restore_root_for_history(&ctx);
+        live.logic(&ctx, &mut frame);
+        for busy in [true, false] {
+            live.previews.cards.get_mut(&id).unwrap().busy =
+                busy.then_some(crate::mini_preview::Busy::Save);
+            live.preview_tx
+                .send(PreviewMessage::Edit {
+                    artifact_id: id.clone(),
+                    generation: guard.generation + u64::from(!busy),
+                    directory: output.path().into(),
+                })
+                .unwrap();
+            live.logic(&ctx, &mut frame);
+            assert!(
+                live.editors.is_empty(),
+                "busy and stale actions must not open an editor"
+            );
+        }
+        for _ in 0..2 {
+            live.preview_tx
+                .send(PreviewMessage::Edit {
+                    artifact_id: id.clone(),
+                    generation: guard.generation,
+                    directory: output.path().into(),
+                })
+                .unwrap();
+            live.logic(&ctx, &mut frame);
+            assert_eq!(live.editors.keys().collect::<Vec<_>>(), [&id]);
+            live.editors[&id].flush(&ctx).unwrap();
+            assert_eq!(live.selection.id.as_ref(), Some(&other_id));
+            assert_eq!(live.artifacts.len(), 2);
+        }
         let mut output = ctx.end_pass();
         let commands = &output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
             .expect("root viewport output")
             .commands;
-
-        assert!(
-            commands
-                .iter()
-                .any(|command| matches!(command, egui::ViewportCommand::Minimized(false)))
-        );
-        assert!(
-            commands
-                .iter()
-                .any(|command| matches!(command, egui::ViewportCommand::Visible(true)))
-        );
+        assert!(!commands.iter().any(|command| matches!(
+            command,
+            egui::ViewportCommand::Minimized(false)
+                | egui::ViewportCommand::Visible(true)
+                | egui::ViewportCommand::Focus
+        )));
         output.textures_delta.clear();
+        assert_eq!(
+            fs::read(
+                &live
+                    .artifacts
+                    .iter()
+                    .find(|item| item.entry.id == id)
+                    .unwrap()
+                    .image_path
+            )
+            .unwrap(),
+            original
+        );
+        live.flush();
     }
 
     #[test]

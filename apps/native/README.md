@@ -297,8 +297,10 @@ available for retry. Private History files and metadata remain untouched.
 macOS uses Finder (which may request automation permission), Windows uses the
 Recycle Bin, and Linux uses its desktop trash specification. Actual Finder and
 Recycle Bin behavior still needs physical-host acceptance.
-History/Open selects the capture in the workspace, and Dismiss closes only the
-targeted card. Clear all dismisses a snapshot of the stack, preserving history,
+Edit opens the exact screenshot in its native editor without showing a hidden
+workspace, switching Preferences, or changing the selected History row. Repeated
+Edit focuses the existing editor without resetting its pending edits.
+Dismiss closes only the targeted card. Clear all dismisses a snapshot of the stack, preserving history,
 exports and any later capture. There is no automatic dismissal timer or count cap.
 
 Stacks start expanded, with newest cards nearest the configured top/bottom edge.

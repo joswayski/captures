@@ -1035,8 +1035,16 @@ platform acceptance row. Hardware capture and clipboard tests remain required.
 
 Both hosts now connect retained screenshot mini-preview stacks, backed by shared
 Rust membership, layout and visibility policy. Copy uses full pixels; Save reads current output
-preferences and becomes Reveal after export; History/Open restores the workspace; Dismiss preserves history and
-exports. Show less/expand preserves capture order, overflow scrolls without a
+preferences and becomes Reveal after export; Edit opens that screenshot directly;
+Dismiss preserves history and exports. Edit leaves a hidden workspace hidden and
+does not switch Preferences or change the selected History item. It reuses the
+existing native editor/session rather than reimporting media or resetting drafts.
+AppKit real-bridge tests cover a different selected History item and refocusing
+pending crop edits; wgpu tests exercise the dispatcher, stale/busy guards, target
+identity and root visibility commands. Private-X11 checks direct editor focus,
+repeat activation, unchanged History and clean close. Physical-platform focus,
+accessibility and Wayland live acceptance remain open.
+Show less/expand preserves capture order, overflow scrolls without a
 count cap, and Clear all dismisses only snapshotted IDs, not later captures.
 Reveal uses the current exported path, with file checks off the UI thread and
 guarded async completion. A missing export reports an error without another save

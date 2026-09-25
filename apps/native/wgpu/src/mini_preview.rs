@@ -9,7 +9,7 @@ pub enum Action {
     Copy,
     Save,
     Reveal,
-    OpenHistory,
+    Edit,
     Trash,
     Dismiss,
 }
@@ -205,11 +205,11 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                 action = Some(Action::Save);
             }
             if ui
-                .add_enabled(enabled, egui::Button::new("History"))
-                .on_hover_text("Select this capture in history")
+                .add_enabled(enabled && view.can_save, egui::Button::new("Edit"))
+                .on_hover_text("Edit screenshot")
                 .clicked()
             {
-                action = Some(Action::OpenHistory);
+                action = Some(Action::Edit);
             }
             if ui
                 .add_enabled(
@@ -459,7 +459,7 @@ mod tests {
             let labels = [
                 "Copy",
                 if saved { "Reveal" } else { "Save" },
-                "History",
+                "Edit",
                 "Trash",
                 "×",
             ];
