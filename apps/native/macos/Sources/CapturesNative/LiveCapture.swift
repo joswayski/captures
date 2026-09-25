@@ -333,7 +333,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         deleteButton = button("Delete from history", frame: NSRect(x: 836, y: 594, width: 136, height: 34)) { [weak self] in self?.confirmDelete() }
         clearHistoryButton = button("Clear history…", frame: NSRect(x: 28, y: 594, width: 180, height: 34)) { [weak self] in self?.confirmClearHistory() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
-        let limits = title("Screenshots support native crop, canvas resize and recoverable editor drafts. Recordings support native trim, audio adjustments and save-new-copy editing; playback remains unavailable.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
+        let limits = title("Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here for 30 days.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
     }
 
@@ -459,8 +459,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             let date = draft.createdAtMilliseconds.map {
                 Date(timeIntervalSince1970: Double($0) / 1_000).formatted(date: .abbreviated, time: .shortened)
             } ?? "Unknown date"
-            let seconds = draft.completedDurationMilliseconds / 1_000
-            let details = NSTextField(labelWithString: "\(date) · \(seconds)s playable")
+            let details = NSTextField(labelWithString:
+                "\(date) · \(formatRecordingTime(milliseconds: draft.completedDurationMilliseconds)) recovered so far")
             details.frame = NSRect(x: 2, y: y + 20, width: 278, height: 17)
             details.font = .systemFont(ofSize: 10); details.textColor = tokens.color("text-muted")
             content.addSubview(details)
@@ -913,7 +913,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     }
                     if preferences.recording.countdown > 0 {
                         let countdown = ScreenshotCountdownPanel(screen: screen, tokens: self.tokens,
-                            remaining: preferences.recording.countdown)
+                            remaining: preferences.recording.countdown, kind: .recording)
                         self.countdownPanel = countdown; countdown.orderFrontRegardless()
                     }
                     self.preparingRecording = false
@@ -1035,6 +1035,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         do {
             let state = try AppBridge.flow(["operation": "poll", "generation": generation])
             guard state["current"] as? Bool == true else {
+                if let panel = countdownPanel { countdownPanel = nil; panel.closeAfterCancelling() }
                 finishCapture(); status.stringValue = "Capture cancelled (Escape or desktop session unavailable)."; return
             }
             guard !preparingRegion, !preparingWindow, !preparingUnified, !preparingRecording,
@@ -1269,6 +1270,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         do {
             let state = try AppBridge.flow(["operation": "poll", "generation": generation])
             guard state["current"] as? Bool == true else {
+                if let panel = recordingScreenshotCountdownPanel {
+                    recordingScreenshotCountdownPanel = nil; panel.closeAfterCancelling()
+                }
                 finishRecordingScreenshot()
                 status.stringValue = "Screenshot cancelled; recording continues."
                 return
@@ -1568,7 +1572,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 if preferences.recording.countdown > 0,
                    let screen = self.screen(for: display) {
                     let countdown = ScreenshotCountdownPanel(screen: screen, tokens: self.tokens,
-                        remaining: preferences.recording.countdown)
+                        remaining: preferences.recording.countdown, kind: .recording)
                     self.countdownPanel = countdown; countdown.orderFrontRegardless()
                 }
                 let tick: () -> Void = { [weak self] in

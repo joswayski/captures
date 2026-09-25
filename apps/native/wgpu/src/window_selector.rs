@@ -357,10 +357,11 @@ fn paint_surface(
         }
     }
 
+    // Shipping CaptureGuidance: shell/desktop hover switches to display copy.
     let guidance = if hovered == Some(SelectionTarget::Display) {
-        "Capture the entire display"
+        "Click to capture this display"
     } else {
-        "Choose a window"
+        "Select a window to continue"
     };
     let title = painter.layout_no_wrap(
         guidance.into(),
@@ -368,12 +369,10 @@ fn paint_surface(
         tokens.color("glass-text"),
     );
     let hint = painter.layout_no_wrap(
-        if view.auto_start {
-            "Click to capture · Esc to cancel"
-        } else if has_selection {
-            "Press Enter or Capture to confirm · Esc to cancel"
+        if has_selection && !view.auto_start {
+            "Esc to cancel · Press Enter to confirm"
         } else {
-            "Click a target to select it · Esc to cancel"
+            "Esc to cancel"
         }
         .into(),
         FontId::proportional(tokens.number("text-sm")),
@@ -437,7 +436,7 @@ fn selection_label(target: Option<SelectionTarget>, windows: &[WindowDescriptor]
             .get(index)
             .map(window_label)
             .unwrap_or("Selected window"),
-        None => "Click a target to select it",
+        None => "Select a window to continue",
     }
 }
 

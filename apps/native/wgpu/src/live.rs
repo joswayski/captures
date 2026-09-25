@@ -450,6 +450,35 @@ struct CaptureTarget {
     preview_bounds: Option<captures_app::preview::ThumbnailMonitorBounds>,
 }
 
+#[derive(Clone, Copy)]
+struct CountdownExit {
+    until: Instant,
+    viewport: egui::ViewportId,
+    title: &'static str,
+    target: CaptureTarget,
+    kind: crate::countdown::Kind,
+    remaining: u8,
+}
+
+impl CountdownExit {
+    fn new(
+        viewport: egui::ViewportId,
+        title: &'static str,
+        target: CaptureTarget,
+        kind: crate::countdown::Kind,
+        remaining: u8,
+    ) -> Self {
+        Self {
+            until: Instant::now() + Duration::from_millis(crate::countdown::CANCEL_LINGER_MS),
+            viewport,
+            title,
+            target,
+            kind,
+            remaining,
+        }
+    }
+}
+
 struct PreviewCard {
     generation: u64,
     artifact_id: String,
@@ -777,6 +806,8 @@ pub struct Live {
     flow: Option<CaptureFlow>,
     capture_phase: Option<CapturePhase>,
     countdown_target: Option<CaptureTarget>,
+    /// Keeps a cancelled countdown up briefly with the shipping "Cancelling…" copy.
+    countdown_exit: Option<CountdownExit>,
     region_session: Option<Box<RegionSession>>,
     region_texture: Option<egui::TextureHandle>,
     region_selector: Arc<Mutex<Selector>>,
@@ -1035,6 +1066,7 @@ impl Live {
             flow: None,
             capture_phase: None,
             countdown_target: None,
+            countdown_exit: None,
             region_session: None,
             region_texture: None,
             region_selector: Arc::new(Mutex::new(Selector::default())),
@@ -2625,6 +2657,31 @@ impl Live {
         }
         if let Some(flow) = &self.flow {
             if !flow.is_current() {
+                let remaining = flow.countdown().remaining(Instant::now());
+                if remaining > 0
+                    && !self.capture_waiting_for_hide
+                    && !self.capture_in_flight
+                    && matches!(
+                        self.capture_phase,
+                        Some(
+                            CapturePhase::DisplayCountdown
+                                | CapturePhase::RegionCountdown { .. }
+                                | CapturePhase::WindowCountdown { .. }
+                                | CapturePhase::ControlsCountdown { .. }
+                                | CapturePhase::RecordingCountdown
+                        )
+                    )
+                    && let Some(target) = self.countdown_target
+                {
+                    let (title, kind) = main_countdown_presentation(self.capture_phase);
+                    self.countdown_exit = Some(CountdownExit::new(
+                        main_countdown_viewport(),
+                        title,
+                        target,
+                        kind,
+                        remaining,
+                    ));
+                }
                 match self.capture_phase {
                     Some(CapturePhase::RecordingRestarting) => {
                         let generation = flow.generation();
@@ -2708,6 +2765,20 @@ impl Live {
         }
         if let Some(flow) = &self.recording_screenshot_flow {
             if !flow.is_current() {
+                let remaining = flow.countdown().remaining(Instant::now());
+                if remaining > 0
+                    && let Some(RecordingScreenshotPhase::Countdown { .. }) =
+                        self.recording_screenshot_phase
+                    && let Some(target) = self.countdown_target
+                {
+                    self.countdown_exit = Some(CountdownExit::new(
+                        recording_screenshot_countdown_viewport(flow.generation()),
+                        "Captures Screenshot Countdown",
+                        target,
+                        crate::countdown::Kind::Screenshot,
+                        remaining,
+                    ));
+                }
                 self.finish_recording_screenshot(ctx, false);
             } else {
                 let generation = flow.generation();
@@ -4300,10 +4371,8 @@ impl Live {
                             recording_controls_are_excluded(include_controls),
                         ));
                     let notice = warning.as_deref().unwrap_or({
-                        if cfg!(target_os = "linux") {
-                            "These controls will show in recordings on Linux"
-                        } else if include_controls {
-                            "These controls will show in recordings"
+                        if cfg!(target_os = "linux") || include_controls {
+                            "These controls will show in recordings · Use Hide controls to keep them out"
                         } else {
                             "These controls won’t show in recordings"
                         }
@@ -4684,6 +4753,7 @@ impl Live {
                 },
             );
         }
+        let mut countdown_declared = false;
         if let Some(flow) = &self.recording_screenshot_flow
             && let Some(RecordingScreenshotPhase::Countdown { .. }) =
                 self.recording_screenshot_phase
@@ -4694,7 +4764,7 @@ impl Live {
                 let generation = flow.generation();
                 let target = self.countdown_target.expect("countdown target validated");
                 ctx.show_viewport_deferred(
-                    egui::ViewportId::from_hash_of(("recording-screenshot-countdown", generation)),
+                    recording_screenshot_countdown_viewport(generation),
                     capture_viewport(
                         "Captures Screenshot Countdown",
                         target.monitor,
@@ -4708,10 +4778,17 @@ impl Live {
                             captures_app::capture_flow::cancel(generation);
                             ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                         }
-                        crate::countdown::show(ui, &t, clock.remaining(Instant::now()).max(1));
+                        crate::countdown::show(
+                            ui,
+                            &t,
+                            clock.remaining(Instant::now()).max(1),
+                            crate::countdown::Kind::Screenshot,
+                            !captures_app::capture_flow::is_current(generation),
+                        );
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     },
                 );
+                countdown_declared = true;
             }
         }
         if let Some(flow) = &self.flow
@@ -4733,18 +4810,10 @@ impl Live {
                 let t = t.clone();
                 let generation = flow.generation();
                 let target = self.countdown_target.expect("countdown target validated");
+                let (title, kind) = main_countdown_presentation(self.capture_phase);
                 ctx.show_viewport_deferred(
-                    egui::ViewportId::from_hash_of("screenshot-countdown"),
-                    capture_viewport(
-                        if self.capture_phase == Some(CapturePhase::RecordingCountdown) {
-                            "Captures Recording Countdown"
-                        } else {
-                            "Captures Screenshot Countdown"
-                        },
-                        target.monitor,
-                        target.position,
-                        target.size,
-                    ),
+                    main_countdown_viewport(),
+                    capture_viewport(title, target.monitor, target.position, target.size),
                     move |ui, _| {
                         if ui.input(|i| {
                             i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)
@@ -4752,14 +4821,44 @@ impl Live {
                             captures_app::capture_flow::cancel(generation);
                             ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                         }
-                        crate::countdown::show(ui, &t, clock.remaining(Instant::now()).max(1));
+                        crate::countdown::show(
+                            ui,
+                            &t,
+                            clock.remaining(Instant::now()).max(1),
+                            kind,
+                            !captures_app::capture_flow::is_current(generation),
+                        );
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     },
                 );
+                countdown_declared = true;
             } else {
                 // Stop declaring the child before hiding the root. Hidden-root
                 // logic then verifies visibility and waits for compositor settling.
                 self.hide_for_capture(ctx);
+            }
+        }
+        // A cancelled countdown stays up briefly with "Cancelling…", matching
+        // the shipping fade-out window. A new countdown always takes over.
+        if let Some(exit) = self.countdown_exit {
+            let now = Instant::now();
+            if countdown_declared || now >= exit.until {
+                self.countdown_exit = None;
+            } else {
+                let t = t.clone();
+                ctx.show_viewport_deferred(
+                    exit.viewport,
+                    capture_viewport(
+                        exit.title,
+                        exit.target.monitor,
+                        exit.target.position,
+                        exit.target.size,
+                    ),
+                    move |ui, _| {
+                        crate::countdown::show(ui, &t, exit.remaining, exit.kind, true);
+                    },
+                );
+                ctx.request_repaint_after(exit.until - now);
             }
         }
     }
@@ -5034,7 +5133,7 @@ impl Live {
                         },
                         entry.width,
                         entry.height,
-                        format_duration(entry.duration_ms.unwrap_or_default())
+                        captures_app::recording_timeline::format_recording_time(entry.duration_ms.unwrap_or_default())
                     ))
                     .color(t.color("text-muted")),
                 );
@@ -5180,6 +5279,30 @@ fn monitor_matches_overlay(
             .into_iter()
             .zip([overlay.0, overlay.1, overlay.2, overlay.3])
             .all(|(actual, expected)| (actual - expected).abs() <= 1.)
+}
+
+fn main_countdown_viewport() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("screenshot-countdown")
+}
+
+fn recording_screenshot_countdown_viewport(generation: u64) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(("recording-screenshot-countdown", generation))
+}
+
+fn main_countdown_presentation(
+    phase: Option<CapturePhase>,
+) -> (&'static str, crate::countdown::Kind) {
+    if phase == Some(CapturePhase::RecordingCountdown) {
+        (
+            "Captures Recording Countdown",
+            crate::countdown::Kind::Recording,
+        )
+    } else {
+        (
+            "Captures Screenshot Countdown",
+            crate::countdown::Kind::Screenshot,
+        )
+    }
 }
 
 fn capture_viewport(
@@ -5353,11 +5476,6 @@ fn is_recording_phase(phase: Option<CapturePhase>) -> bool {
                 | CapturePhase::RecordingDiscarding
         )
     )
-}
-
-fn format_duration(elapsed_ms: u64) -> String {
-    let elapsed_seconds = elapsed_ms / 1_000;
-    format!("{}:{:02}", elapsed_seconds / 60, elapsed_seconds % 60)
 }
 
 fn snapshot_interpolation_origin(state: RecordingState, now: Instant) -> Option<Instant> {
@@ -6426,6 +6544,24 @@ mod tests {
     }
 
     #[test]
+    fn recording_countdown_uses_shipping_heading_and_title() {
+        assert_eq!(
+            main_countdown_presentation(Some(CapturePhase::RecordingCountdown)),
+            (
+                "Captures Recording Countdown",
+                crate::countdown::Kind::Recording
+            )
+        );
+        assert_eq!(
+            main_countdown_presentation(Some(CapturePhase::DisplayCountdown)),
+            (
+                "Captures Screenshot Countdown",
+                crate::countdown::Kind::Screenshot
+            )
+        );
+    }
+
+    #[test]
     fn capture_viewports_do_not_depend_on_workspace_or_preview_rendering() {
         let root = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
@@ -6450,6 +6586,43 @@ mod tests {
             .contains_key(&egui::ViewportId::from_hash_of("screenshot-countdown"));
         output.textures_delta.clear();
         assert!(declared);
+        live.flush();
+    }
+
+    #[test]
+    fn cancelled_countdown_lingers_with_cancelling_copy_then_closes() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        let target = CaptureTarget {
+            monitor: 0,
+            position: egui::pos2(0., 0.),
+            size: egui::vec2(800., 600.),
+            preview_bounds: None,
+        };
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let declared = |live: &mut Live| {
+            ctx.begin_pass(Default::default());
+            live.viewports(&ctx, &tokens, Ok(AppSettings::default()), false);
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            output
+                .viewport_output
+                .contains_key(&main_countdown_viewport())
+        };
+
+        live.countdown_exit = Some(CountdownExit::new(
+            main_countdown_viewport(),
+            "Captures Recording Countdown",
+            target,
+            crate::countdown::Kind::Recording,
+            2,
+        ));
+        assert!(declared(&mut live), "cancelled countdown stays up briefly");
+        live.countdown_exit.as_mut().unwrap().until = Instant::now();
+        assert!(!declared(&mut live), "the exit window elapsed");
+        assert!(live.countdown_exit.is_none());
         live.flush();
     }
 

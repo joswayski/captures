@@ -912,9 +912,9 @@ def main():
                 shot("root", "lifecycle-tray-visible")
 
                 def menu_action(label, screenshot=False):
-                    labels = ["New Capture", "Show recording controls",
-                              "Capture display", "Capture region", "Capture window",
-                              "History", "Preferences", "Open output folder", "Quit Captures"]
+                    labels = ["New Capture…", "Show Recording Controls",
+                              "Screenshot Region", "Screenshot Window", "Screenshot Display",
+                              "Capture History…", "Open Save Location", "Preferences", "Quit Captures"]
                     index = labels.index(label)
                     panel_ids = run("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel").decode().split()
                     tray = next(window for window in panel_ids
@@ -932,7 +932,7 @@ def main():
                     popup = wait(visible_popup, f"tray popup for {label}")
                     popup_geometry = window_geometry(popup)
                     print(f"Tray action {label}: tray={tray} popup={popup} geometry={popup_geometry}", flush=True)
-                    shot(popup, "lifecycle-menu-" + label.lower().replace(" ", "-"))
+                    shot(popup, "lifecycle-menu-" + label.lower().replace(" ", "-").replace("…", ""))
                     if screenshot:
                         shot("root", "lifecycle-open-tray-menu")
                     click(popup, int(popup_geometry["WIDTH"]) // 2,
@@ -970,7 +970,7 @@ def main():
                 wait(lambda: windows(PREVIEW), "display preview")
                 assert not windows("Captures"), "display capture reopened workspace"
 
-                menu_action("History", screenshot=True)  # Real GTK/DBusMenu item.
+                menu_action("Capture History…", screenshot=True)  # Real GTK/DBusMenu item.
                 wait(lambda: windows("Captures"), "tray History reopens workspace")
                 menu_action("Preferences")
                 time.sleep(.3)
@@ -1001,14 +1001,14 @@ def main():
                 wait(lambda: not windows(SELECTOR) and not windows("Captures Screenshot Countdown"),
                      "cancel hidden Preferences countdown")
                 assert not windows("Captures") and entries() == previous
-                for label, title in [("Capture region", SELECTOR), ("Capture window", "Captures Window Selection")]:
+                for label, title in [("Screenshot Region", SELECTOR), ("Screenshot Window", "Captures Window Selection")]:
                     menu_action(label)
                     selector = wait(lambda: windows(title), f"tray {label} launches from hidden Preferences")[0]
                     shot(selector, "lifecycle-selector-" + label.lower().replace(" ", "-"))
                     run("xdotool", "key", "Escape")
                     wait(lambda: not windows(title), f"cancel tray {label}")
                     assert not windows("Captures")
-                menu_action("New Capture")
+                menu_action("New Capture…")
                 controls = wait(lambda: windows(CONTROLS), "tray New Capture opens unified controls")[0]
                 shot(controls, "controls-tray-empty")
                 run("xdotool", "key", "Return", "sleep", ".3")

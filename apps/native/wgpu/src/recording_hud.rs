@@ -88,15 +88,16 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                                     tokens.color("theme-signal"),
                                 );
                                 ui.vertical_centered_justified(|ui| {
-                                    ui.monospace(format_duration(view.elapsed_ms));
+                                    ui.monospace(
+                                        captures_app::recording_timeline::format_recording_time(
+                                            view.elapsed_ms,
+                                        ),
+                                    );
+                                    // Shipping CSS uppercases the status label.
                                     ui.label(
-                                        RichText::new(if view.paused {
-                                            "PAUSED"
-                                        } else {
-                                            "RECORDING"
-                                        })
-                                        .small()
-                                        .color(tokens.color("glass-text-muted")),
+                                        RichText::new(status_label(view.paused).to_uppercase())
+                                            .small()
+                                            .color(tokens.color("glass-text-muted")),
                                     );
                                 });
                             },
@@ -151,7 +152,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                         if control(
                             ui,
                             Icon::Screenshot,
-                            "Take region screenshot",
+                            "Take a region screenshot",
                             false,
                             !view.busy,
                             false,
@@ -192,7 +193,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                         if control(
                             ui,
                             Icon::Discard,
-                            "Discard recording",
+                            "Delete recording",
                             false,
                             !view.busy,
                             false,
@@ -442,9 +443,9 @@ fn paint_icon(ui: &egui::Ui, rect: Rect, icon: Icon, color: egui::Color32) {
     }
 }
 
-fn format_duration(elapsed_ms: u64) -> String {
-    let elapsed_seconds = elapsed_ms / 1_000;
-    format!("{}:{:02}", elapsed_seconds / 60, elapsed_seconds % 60)
+/// Shipping `recordingStatusLabel` copy for the states this HUD renders.
+fn status_label(paused: bool) -> &'static str {
+    if paused { "Paused" } else { "Recording" }
 }
 
 #[cfg(test)]
@@ -452,9 +453,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn duration_uses_unpadded_minutes_and_padded_seconds() {
-        assert_eq!(format_duration(0), "0:00");
-        assert_eq!(format_duration(94_000), "1:34");
+    fn status_label_uses_shipping_copy() {
+        assert_eq!(status_label(false), "Recording");
+        assert_eq!(status_label(true), "Paused");
     }
 
     #[test]

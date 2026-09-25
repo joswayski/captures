@@ -124,9 +124,9 @@ def main():
         return values
 
     def menu_action(label):
-        labels = ["New Capture", "Show recording controls", "Capture display",
-                  "Capture region", "Capture window", "History", "Preferences",
-                  "Open output folder", "Quit Captures"]
+        labels = ["New Capture…", "Show Recording Controls", "Screenshot Region",
+                  "Screenshot Window", "Screenshot Display", "Capture History…",
+                  "Open Save Location", "Preferences", "Quit Captures"]
         panel_ids = run("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel").decode().split()
         tray = next(window for window in panel_ids if int(window_geometry(window)["WIDTH"]) >= 24)
         geometry = window_geometry(tray)
@@ -695,7 +695,7 @@ pcm.!pulse {
             hud = wait(lambda: windows("Captures Recording Controls"), "paused HUD")[0]
             click(hud, 398, 54)
             wait(lambda: not windows("Captures Recording Controls"), "paused HUD hidden")
-            menu_action("Show recording controls")
+            menu_action("Show Recording Controls")
             hud = wait(lambda: windows("Captures Recording Controls"),
                        "real tray action restores paused HUD")[0]
             assert (manifest()["state"] == "paused"
