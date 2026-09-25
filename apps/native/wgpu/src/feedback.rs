@@ -29,7 +29,7 @@ impl Feedback {
             let wake = ctx.clone();
             thread::spawn(move || {
                 let _ = tx.send(captures_feedback::native::context());
-                wake.request_repaint();
+                wake.request_repaint_of(egui::ViewportId::ROOT);
             });
         }
     }
@@ -81,7 +81,7 @@ impl Feedback {
         let wake = ctx.clone();
         thread::spawn(move || {
             let _ = tx.send(send(draft));
-            wake.request_repaint();
+            wake.request_repaint_of(egui::ViewportId::ROOT);
         });
     }
 
@@ -170,6 +170,35 @@ mod tests {
         },
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn context_and_submission_workers_wake_root_while_an_editor_is_active() {
+        for load_context in [true, false] {
+            let ctx = egui::Context::default();
+            let wakes = crate::root_repaint::observe_from_child(&ctx);
+            let mut form = Feedback::default();
+            if load_context {
+                form.open(&ctx);
+            } else {
+                form.context = Some(captures_feedback::native::context());
+                form.message = "Explicit test feedback".into();
+                form.submit_with(&ctx, true, |_| Ok(()));
+            }
+            assert_eq!(
+                wakes.recv_timeout(Duration::from_secs(5)).unwrap(),
+                egui::ViewportId::ROOT
+            );
+            form.poll();
+            if load_context {
+                assert!(form.context.is_some());
+                assert!(form.context_rx.is_none());
+            } else {
+                assert_eq!(form.result, Some(Ok(())));
+                assert!(form.message.is_empty());
+            }
+            ctx.end_pass().textures_delta.clear();
+        }
+    }
 
     #[test]
     fn explicit_submit_is_gated_and_failed_draft_survives_navigation_and_retry() {

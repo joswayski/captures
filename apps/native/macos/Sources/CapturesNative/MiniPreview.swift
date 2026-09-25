@@ -12,6 +12,7 @@ struct MiniPreviewSettings: Equatable {
 final class MiniPreviewCardView: NSView {
     private let tokens: Tokens
     private let imageView = NSImageView()
+    private let depthShade = NSView()
     private let title = NSTextField(labelWithString: "Screenshot")
     private let status = NSTextField(labelWithString: "")
     private var actionButtons: [CaptureButton] = []
@@ -37,6 +38,11 @@ final class MiniPreviewCardView: NSView {
         imageView.layer?.masksToBounds = true
         imageView.setAccessibilityLabel("Screenshot thumbnail")
         addSubview(imageView)
+
+        depthShade.frame = bounds; depthShade.wantsLayer = true
+        depthShade.layer?.cornerRadius = tokens.number("r-lg")
+        depthShade.isHidden = true; depthShade.setAccessibilityElement(false)
+        addSubview(depthShade)
 
         let inset = tokens.number("s-2")
         title.frame = NSRect(x: inset, y: inset, width: 150, height: 19)
@@ -79,8 +85,11 @@ final class MiniPreviewCardView: NSView {
 
     var statusText: String { status.stringValue }
 
-    func setCompact(_ compact: Bool) {
+    func setCompact(_ compact: Bool, depth: Int) {
         self.compact = compact
+        depthShade.isHidden = !compact || depth == 0
+        depthShade.layer?.backgroundColor = tokens.color("glass-strong-solid")
+            .withAlphaComponent(CGFloat(captures_preview_dim_opacity_v1(depth))).cgColor
         title.isHidden = compact
         status.isHidden = compact || status.stringValue.isEmpty
         actionButtons.forEach { $0.isHidden = compact }
@@ -222,7 +231,7 @@ final class MiniPreviewView: NSView {
                 copy: { copy(id) }, save: { save(id) }, open: { open(id) },
                 dismiss: { dismiss(id) })
             card.isHidden = false
-            card.setCompact(collapsed)
+            card.setCompact(collapsed, depth: layout.depth)
             card.setAccessibilityElement(layout.interactive)
             document.addSubview(card); cards[id] = card
         }

@@ -1111,7 +1111,7 @@ impl Preferences {
                 if ui.add_enabled(!this.folder_open,egui::Button::new("Choose…")).clicked() {
                     this.folder_open = true;
                     let out = this.out.clone(); let ctx = ui.ctx().clone();
-                    thread::spawn(move || { let result = rfd::FileDialog::new().set_title("Choose capture folder").pick_folder(); let _=out.send(Message::Folder(result)); ctx.request_repaint(); });
+                    thread::spawn(move || { let result = rfd::FileDialog::new().set_title("Choose capture folder").pick_folder(); let _=out.send(Message::Folder(result)); ctx.request_repaint_of(egui::ViewportId::ROOT); });
                 }
             });
             ui.separator();

@@ -252,7 +252,7 @@ impl Worker {
                 if events.send(event).is_err() {
                     break;
                 }
-                ctx.request_repaint();
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
             }
         });
         Self {
@@ -296,6 +296,23 @@ mod tests {
     use super::*;
     use captures_recording_platform::RecordingRecovery;
     use std::time::Duration;
+
+    #[test]
+    fn worker_wakes_root_while_an_editor_is_active() {
+        let ctx = egui::Context::default();
+        let wakes = crate::root_repaint::observe_from_child(&ctx);
+        let worker = Worker::new(ctx.clone());
+        worker.send(Command::Retire);
+        assert!(matches!(
+            worker.rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Event::Retired
+        ));
+        assert_eq!(
+            wakes.recv_timeout(Duration::from_secs(5)).unwrap(),
+            egui::ViewportId::ROOT
+        );
+        ctx.end_pass().textures_delta.clear();
+    }
 
     #[test]
     fn terminal_owner_is_retired_before_recovery_or_next_prepare() {

@@ -48,6 +48,37 @@ impl Pending {
     }
 }
 
+/// Drain initial root paints, then observe worker wakes during a child pass.
+/// The caller finishes that pass after checking the worker's real reply.
+#[cfg(test)]
+pub fn observe_from_child(
+    ctx: &eframe::egui::Context,
+) -> std::sync::mpsc::Receiver<eframe::egui::ViewportId> {
+    use eframe::egui;
+    for _ in 0..3 {
+        ctx.begin_pass(Default::default());
+        ctx.end_pass().textures_delta.clear();
+    }
+    let child = egui::ViewportId::from_hash_of("worker-wake-editor");
+    let mut input = egui::RawInput {
+        viewport_id: child,
+        ..Default::default()
+    };
+    input.viewports.insert(
+        child,
+        egui::ViewportInfo {
+            parent: Some(egui::ViewportId::ROOT),
+            ..Default::default()
+        },
+    );
+    ctx.begin_pass(input);
+    let (tx, rx) = std::sync::mpsc::channel();
+    ctx.set_request_repaint_callback(move |info| {
+        let _ = tx.send(info.viewport_id);
+    });
+    rx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
