@@ -958,7 +958,7 @@ def main():
             save_layers(lambda values: not values[0]["locked"], "unlocked original")
             shot(editor, "rotation-snap-controls")
             before = draft.read_bytes()
-            field(743, 37, x=50)
+            field(775, 37, x=50)
             shot(editor, "rotation-snap-custom")
             assert draft.read_bytes() == before, "snap preference must not edit or save a draft"
             # Full-canvas image uses the inset top grip at (558,117), pivot (558,269).
