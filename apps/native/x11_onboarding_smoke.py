@@ -95,12 +95,33 @@ def main():
                 window = wait(lambda: windows(again.pid), "completed profile workspace")[0]
                 time.sleep(1)
                 run("import", "-window", window, str(output / f"completed-{appearance}.png"))
+                accepted_settings = settings.read_bytes()
+                recovery_media = root / "during permission recovery.png"
+                recovery_media.write_bytes(png(19, 9))
+                click(window, 835, 126)  # Capture permissions, without an OS prompt.
+                time.sleep(.5)
+                secondary = subprocess.run(common + ["--", str(recovery_media)], env=env,
+                                           capture_output=True, timeout=15)
+                assert secondary.returncode == 0, secondary.stderr
+                click(window, 196, 18)  # Navigation behind the dialog stays disabled.
+                run("xdotool", "key", "super+shift+s")
+                time.sleep(.5)
+                assert len(list(history.glob("*/metadata.json"))) == 2, "recovery imported queued media"
+                assert len(windows(again.pid, ".*")) == 1, "recovery launched capture/editor"
+                run("import", "-window", window, str(output / f"permission-recovery-{appearance}.png"))
+                click(window, 305, 440)  # Refresh is prompt-free and does not complete setup.
+                time.sleep(.4)
+                assert settings.read_bytes() == accepted_settings, "recovery changed setup/settings"
+                click(window, 287, 484)  # Done, including when no upfront permission is required.
+                wait(lambda: len(list(history.glob("*/metadata.json"))) == 3, "recovery releases queued media")
+                assert recovery_media.read_bytes() == png(19, 9), "recovery changed the input"
+                time.sleep(1)
                 click(window, 196, 18)  # Real Preferences navigation, absent on setup.
                 time.sleep(.4)
                 run("import", "-window", window, str(output / f"preferences-{appearance}.png"))
                 run("xdotool", "key", "ctrl+q")
                 assert again.wait(timeout=20) == 0
-                print(f"PASS {appearance}: first run, hidden={hidden}, capture gate, queued media, persistence and relaunch", flush=True)
+                print(f"PASS {appearance}: first run, hidden={hidden}, capture gate, queued media, persistence, relaunch and permission recovery", flush=True)
             broken = output / "malformed.json"
             broken.write_text("invalid-json")
             app = spawn([str(binary), "--live", "--history-root", str(output / "error-history"),
