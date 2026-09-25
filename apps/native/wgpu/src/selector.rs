@@ -498,7 +498,7 @@ fn paint_surface(
         painter.text(
             surface.center(),
             Align2::CENTER_CENTER,
-            "Hold Shift for a square · Esc to cancel",
+            "Shift for square · Esc to cancel",
             FontId::proportional(tokens.number("text-sm")),
             tokens.color("glass-text-muted"),
         );

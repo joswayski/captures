@@ -118,9 +118,8 @@ final class WindowSelectionView: NSView {
          confirm: @escaping (WindowSelectionChoice) -> Void, cancel: @escaping () -> Void) {
         self.tokens = tokens; self.autoStart = autoStart; self.targets = targets
         self.hitTest = hitTest; self.confirm = confirm; self.cancel = cancel
-        hint = NSTextField(labelWithString: autoStart
-            ? "Point at a window · Click to capture · Esc to cancel"
-            : "Point at a window · Click to select · Enter to capture · Esc to cancel")
+        hint = NSTextField(labelWithString: CaptureGuidanceCopy.directHint(
+            CaptureGuidanceCopy.windowTitle, CaptureGuidanceCopy.hint, confirm: !autoStart))
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -228,7 +227,7 @@ final class WindowSelectionView: NSView {
     }
 
     private var choiceName: String {
-        guard case .window(let index, _) = activeChoice else { return "Full display — empty desktop or system chrome" }
+        guard case .window(let index, _) = activeChoice else { return "Entire display" }
         return targets[index].name
     }
 

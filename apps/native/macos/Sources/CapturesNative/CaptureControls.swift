@@ -1,6 +1,28 @@
 import AppKit
 import CCapturesSettings
 
+/// Shipping `CaptureGuidance` and capture-menu note copy (App.tsx), shared by
+/// New Capture and the direct region/window overlays.
+enum CaptureGuidanceCopy {
+    static let regionTitle = "Drag to select a region"
+    static let regionHint = "Shift for square · Esc to cancel"
+    static let windowTitle = "Select a window to continue"
+    static let hint = "Esc to cancel"
+    static let confirm = "Press Enter to confirm"
+    static let autoStart = "Auto-capture is on. Selecting a target starts immediately."
+
+    /// Direct overlays keep a confirm step until they commit on release/click.
+    static func directHint(_ title: String, _ hint: String, confirm: Bool) -> String {
+        ([title, hint] + (confirm ? [Self.confirm] : [])).joined(separator: " · ")
+    }
+
+    /// "These controls won’t show in screenshots · Press Enter to confirm".
+    static func menuNote(recording: Bool, autoStart: Bool) -> String {
+        let output = recording ? "recordings" : "screenshots"
+        return "These controls won’t show in \(output)  ·  \(autoStart ? Self.autoStart : Self.confirm)"
+    }
+}
+
 enum UnifiedCaptureTarget: String, CaseIterable {
     case region
     case window
@@ -118,9 +140,7 @@ final class CaptureControlsView: NSView {
         captureButton = CaptureButton("Capture", frame: .zero, tokens: tokens, glass: true) {}
         screenshotButton = CaptureButton("Screenshot", frame: .zero, tokens: tokens, glass: true) {}
         recordButton = CaptureButton("Record", frame: .zero, tokens: tokens, glass: true) {}
-        note = NSTextField(labelWithString: autoStart
-            ? "Controls are hidden from screenshots  ·  Auto-capture is on. Selecting a target starts immediately."
-            : "Controls are hidden from screenshots  ·  Press Enter to confirm")
+        note = NSTextField(labelWithString: CaptureGuidanceCopy.menuNote(recording: false, autoStart: autoStart))
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color("glass-strong").cgColor
@@ -303,11 +323,9 @@ final class CaptureControlsView: NSView {
 
     private func updateRecordingControls() {
         let recording = mode == .record
-        note.stringValue = recording
-            ? "These controls won’t show in recordings  ·  Press Enter to confirm"
-            : autoStart
-                ? "Controls are hidden from screenshots  ·  Auto-capture is on. Selecting a target starts immediately."
-                : "Controls are hidden from screenshots  ·  Press Enter to confirm"
+        // AppKit record mode always confirms; auto-start applies to screenshots.
+        note.stringValue = CaptureGuidanceCopy.menuNote(recording: recording,
+            autoStart: autoStart && !recording)
         note.setAccessibilityLabel(note.stringValue)
         fpsMenu.isHidden = !recording
         resolutionMenu.isHidden = !recording
@@ -639,8 +657,8 @@ final class UnifiedCaptureSelectionView: NSView {
         switch target {
         case .region:
             guidance.isHidden = region.mode != nil
-            guidanceTitle.stringValue = "Drag to select a region"
-            guidanceDetail.stringValue = "Shift for square  ·  Esc to cancel"
+            guidanceTitle.stringValue = CaptureGuidanceCopy.regionTitle
+            guidanceDetail.stringValue = CaptureGuidanceCopy.regionHint
             label = region.capturable
                 ? "\(Int(region.rect.width.rounded())) × \(Int(region.rect.height.rounded()))" : ""
             rect = region.capturable ? region.nsRect : nil
@@ -651,8 +669,8 @@ final class UnifiedCaptureSelectionView: NSView {
                 label = targets[Int(active)].name; rect = targets[Int(active)].rect
             } else {
                 guidance.isHidden = false
-                guidanceTitle.stringValue = "Select a window"
-                guidanceDetail.stringValue = "Click a window  ·  Esc to cancel"
+                guidanceTitle.stringValue = CaptureGuidanceCopy.windowTitle
+                guidanceDetail.stringValue = CaptureGuidanceCopy.hint
                 label = ""; rect = nil
             }
         case .display:

@@ -59,7 +59,7 @@ final class RegionSelectionView: NSView {
     private(set) var selection: RegionSelection
     private let canvas = RegionCanvas()
     private let toolbar = NSView()
-    private let hint = NSTextField(labelWithString: "Drag to select · Shift for square · Enter to capture · Esc to cancel")
+    private let hint: NSTextField
     private let dimensions = NSTextField(labelWithString: "")
     private var aspectButtons: [CaptureButton] = []
     private var captureButton: CaptureButton!
@@ -71,6 +71,8 @@ final class RegionSelectionView: NSView {
     init(frame: NSRect, image: CGImage?, tokens: Tokens, autoStart: Bool,
          confirm: @escaping (CapturesSelectionRect) -> Void, cancel: @escaping () -> Void) {
         self.tokens = tokens; self.autoStart = autoStart; self.confirm = confirm; self.cancel = cancel
+        hint = NSTextField(labelWithString: CaptureGuidanceCopy.directHint(
+            CaptureGuidanceCopy.regionTitle, CaptureGuidanceCopy.regionHint, confirm: !autoStart))
         selection = RegionSelection(bounds: CapturesSelectionBounds(width: frame.width, height: frame.height))
         super.init(frame: frame)
         wantsLayer = true

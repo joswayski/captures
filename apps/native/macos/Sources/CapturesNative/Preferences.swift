@@ -292,14 +292,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             }
             button.alignment = .left; button.setAccessibilityRole(.button); nav.addSubview(button)
         }
-        addLabel("Native development build", frame: NSRect(x: 22, y: root.bounds.height - 62, width: 160, height: 20),
-                 size: 11, muted: true, parent: nav).autoresizingMask = [.minYMargin]
-        addLabel(liveCaptureAvailable ? "Display capture enabled" : "Capture engine not connected", frame: NSRect(x: 22, y: root.bounds.height - 40, width: 166, height: 20),
-                 size: 11, muted: true, parent: nav).autoresizingMask = [.minYMargin]
-
         addLabel("Preferences", frame: NSRect(x: 224, y: 18, width: 220, height: 28), size: 20, weight: .semibold, parent: root)
         addLabel("Changes save automatically.", frame: NSRect(x: 224, y: 43, width: 240, height: 20), size: 12, muted: true, parent: root)
-        let history = actionButton(liveCaptureAvailable ? "Capture Workspace" : "Capture History", x: root.bounds.width - 574, y: 22, width: 174, parent: root) { [weak self] in
+        let history = actionButton("Capture History…", x: root.bounds.width - 574, y: 22, width: 174, parent: root) { [weak self] in
             self?.flush(); self?.showHistory()
         }
         history.autoresizingMask = [.minXMargin]
@@ -381,37 +376,48 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         let directory = NSTextField(string: settings.string("output_directory")); directory.frame = NSRect(x: 290, y: 96, width: 278, height: 30)
         directory.identifier = NSUserInterfaceItemIdentifier("setting.output_directory"); directory.delegate = self; styleField(directory); card.addSubview(directory)
         _ = actionButton("Choose…", x: 578, y: 96, width: 100, parent: card) { [weak self] in self?.chooseFolder() }
-        toggle("Automatically copy captures to the clipboard", detail: "Turn this off to preserve existing clipboard contents.", key: "auto_copy_to_clipboard", y: 150, parent: card)
-        toggle("Start capture as soon as a target is selected", detail: "Region, window, or Full screen selection immediately starts capture.", key: "auto_start_on_selection", y: 214, parent: card)
+        toggle("Automatically copy captures to the clipboard", detail: "Turn this off to preserve existing text or other clipboard contents.", key: "auto_copy_to_clipboard", y: 150, parent: card)
+        toggle("Start capture as soon as a target is selected", detail: "Drawing a region, choosing a window, or clicking Full screen immediately starts the capture. When this is off, press Enter in the capture menu to confirm.", key: "auto_start_on_selection", y: 214, parent: card)
         toggle("Show mini previews after screenshots", detail: "Turn this off to keep the quick-access preview stack hidden.", key: "show_mini_previews", y: 278, parent: card)
         menuSetting("Mini preview position", detail: "Choose the screen corner for the preview stack.", key: "mini_preview_placement", values: ["bottom_left", "bottom_right", "top_left", "top_right"], y: 342, parent: card, enabled: settings.bool("show_mini_previews"))
-        toggle("Show mini previews in screenshots and recordings", detail: "Mini previews must be enabled above.", key: "include_mini_previews_in_captures", y: 406, parent: card, enabled: settings.bool("show_mini_previews"))
-        toggle("Show recording controls in screenshots and recordings", detail: "This native fixture cannot exclude recording controls yet.", key: "include_recording_controls_in_captures", y: 470, parent: card, enabled: false)
-        toggle("Freeze screen when capturing", detail: "Holds hover states, menus and motion still while selecting.", key: "freeze_screen", y: 534, parent: card)
-        toggle("Show cursor in screenshots", detail: "Includes the pointer in still captures.", key: "show_cursor_in_screenshots", y: 598, parent: card)
-        menuSetting("Screenshot format", detail: "Used when you save or export.", key: "screenshot_format", values: ["png", "jpeg", "webp"], y: 662, parent: card)
-        menuSetting("Screenshot countdown", detail: "Wait before capturing; Escape cancels.", key: "screenshot_countdown_seconds", values: Array(0...10), y: 726, parent: card)
+        let previews = settings.bool("show_mini_previews")
+        toggle("Show mini previews in screenshots and recordings", detail: !previews
+            ? "Mini previews are off, so they won’t show in screenshots or recordings."
+            : settings.bool("include_mini_previews_in_captures")
+                ? "Mini previews will show in screenshots and recordings. Turn this off to keep them out."
+                : "Mini previews won’t show in screenshots or recordings.",
+            key: "include_mini_previews_in_captures", y: 406, parent: card, enabled: previews)
+        // AppKit keeps the HUD out of captures (sharingType) unless this is on.
+        toggle("Show recording controls in screenshots and recordings",
+            detail: settings.bool("include_recording_controls_in_captures")
+                ? "Recording controls will show in screenshots and recordings. Turn this off to keep them out."
+                : "Recording controls won’t show in screenshots or recordings.",
+            key: "include_recording_controls_in_captures", y: 470, parent: card)
+        toggle("Freeze screen when capturing", detail: "Holds hover states, tooltips, menus, and motion still while you choose a region or window. Turn this off to select from the live desktop.", key: "freeze_screen", y: 534, parent: card)
+        toggle("Show cursor in screenshots", detail: "Includes the pointer in still captures. Freeze screen only holds the desktop still; it does not add the cursor by itself.", key: "show_cursor_in_screenshots", y: 598, parent: card)
+        menuSetting("Screenshot format", detail: "Used when you save or export. Capture History keeps a lossless PNG until then.", key: "screenshot_format", values: ["png", "jpeg", "webp"], y: 662, parent: card)
+        menuSetting("Screenshot countdown", detail: "Wait before capturing so you can open menus or hover states. Press Esc to cancel.", key: "screenshot_countdown_seconds", values: Array(0...10), y: 726, parent: card)
         return y + card.frame.height + 22
     }
 
     private func shortcutsCard(_ y: CGFloat) -> CGFloat {
         let description = liveCaptureAvailable
-            ? "Edit saved shortcuts for New Capture, screenshots and recordings."
+            ? "Select a shortcut, then press the key combination you want. Press Esc to cancel recording."
             : "Edit disposable fixture settings. Fixture scenes never register global keys."
         let card = card("shortcuts", title: "Shortcuts", description: description, y: y, height: 574)
         shortcutRecorders.removeAll(); shortcutErrors.removeAll()
         let rows = [
             ("new_capture_shortcut", "New Capture", false),
-            ("region_shortcut", "Screenshot region", false),
-            ("window_shortcut", "Screenshot window", false),
-            ("display_shortcut", "Screenshot display", false),
-            ("video_shortcut", "Record region", true),
-            ("window_shortcut", "Record window", true),
-            ("display_shortcut", "Record display", true),
+            ("region_shortcut", "Region", false),
+            ("window_shortcut", "Window", false),
+            ("display_shortcut", "Full Screen", false),
+            ("video_shortcut", "Record Region", true),
+            ("window_shortcut", "Record Window", true),
+            ("display_shortcut", "Record Full Screen", true),
         ]
         for (index, row) in rows.enumerated() {
             shortcutRow(key: row.0, title: row.1,
-                detail: liveCaptureAvailable ? "Active in the native workspace" : "Fixture settings only",
+                detail: liveCaptureAvailable ? "" : "Fixture settings only",
                 recordingSetting: row.2, y: 84 + CGFloat(index) * 68, parent: card)
         }
         return y + card.frame.height + 22
@@ -610,15 +616,15 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     private func recordingCard(_ y: CGFloat) -> CGFloat {
-        let card = card("recording", title: "Recording", description: "Defaults for new screen recordings in native development builds.", y: y, height: 626)
-        recordingMenu("Recording format", detail: "MP4, GIF or WebM", key: "video_format", values: ["mp4", "gif", "webm"], y: 88, parent: card)
-        recordingMenu("Frames per second", detail: "Default recording frame rate", key: "video_fps", values: [60, 30, 15], y: 146, parent: card)
-        recordingMenu("Maximum resolution", detail: "Original, 1080p or 720p", key: "video_max_resolution", values: ["original", "p1080", "p720"], y: 204, parent: card)
-        recordingMenu("Countdown", detail: "Delay before a recording starts", key: "countdown_seconds", values: Array(0...10), y: 262, parent: card)
-        toggleRecording("Record desktop audio", key: "capture_system_audio", y: 320, parent: card)
-        disabledRow("Microphone", detail: "Unavailable until native microphone capture is connected.", y: 366, parent: card)
+        let card = card("recording", title: "Recording", description: "Defaults for new screen recordings. You can still change them in the capture menu.", y: y, height: 626)
+        recordingMenu("Recording format", detail: "Recordings are captured as H.264 MP4. GIF and WebM are converted when you save or export.", key: "video_format", values: ["mp4", "gif", "webm"], y: 88, parent: card)
+        recordingMenu("Frames per second", detail: "", key: "video_fps", values: [60, 30, 15], y: 146, parent: card)
+        recordingMenu("Maximum resolution", detail: "", key: "video_max_resolution", values: ["original", "p1080", "p720"], y: 204, parent: card)
+        recordingMenu("Countdown", detail: "Delay before a recording starts.", key: "countdown_seconds", values: Array(0...10), y: 262, parent: card)
+        toggleRecording("Record desktop audio", detail: "Records sound playing through the system output.", key: "capture_system_audio", y: 320, parent: card)
+        disabledRow("Default microphone", detail: "Choose a microphone in New Capture.", y: 366, parent: card)
         toggleRecording("Show cursor in recordings", key: "show_cursor", y: 412, parent: card)
-        toggleRecording("Open the editor after recording", key: "open_editor_after_recording", y: 458, parent: card)
+        toggleRecording("Open the editor after recording", detail: "The recording is kept in Capture History for 30 days, so closing the editor never loses it.", key: "open_editor_after_recording", y: 458, parent: card)
         toggleRecording("Export recording audio in mono", key: "mono_audio", y: 504, parent: card)
         toggleRecording("Show clicks in recordings", key: "highlight_clicks", y: 550, parent: card)
         return y + card.frame.height + 22
@@ -631,15 +637,15 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         return y + card.frame.height + 22
     }
     private func updatesCard(_ y: CGFloat) -> CGFloat {
-        let card = card("updates", title: "Updates", description: "Preview build update preferences.", y: y, height: 150)
-        toggle("Show release notes with updates", detail: "Show what changed when an update is available.", key: "show_update_changelog", y: 88, parent: card)
+        let card = card("updates", title: "Updates", description: "Experimental native build — signed Preview updates are not connected yet.", y: y, height: 150)
+        toggle("Show what’s new on update notices", detail: "Lists every Preview since the version you have. Turn this off for a compact Update now prompt.", key: "show_update_changelog", y: 88, parent: card)
         return y + card.frame.height + 22
     }
     private func aboutCard(_ y: CGFloat) -> CGFloat {
         let hasLoginItem = loginItemService != nil
-        let card = card("about", title: "About", description: "Captures native development fixture.", y: y,
+        let card = card("about", title: "About", description: "Captures is in active development. Telling us what breaks is the fastest way to fix it.", y: y,
                         height: hasLoginItem ? 220 : 150)
-        rowTitle("Send feedback", detail: "No captures or diagnostics are attached.", y: 88, parent: card)
+        rowTitle("Send feedback", detail: "Report a bug or share an idea.", y: 88, parent: card)
         _ = actionButton("Open", x: 558, y: 95, width: 120, parent: card) { [weak self] in self?.showFeedback() }
         if hasLoginItem {
             let detail = loginItemError.map { "Couldn’t update the login item: \($0) Select Retry to try again." }
@@ -697,9 +703,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         button.setAccessibilityLabel(title); button.isEnabled = enabled; button.alphaValue = enabled ? 1 : 0.55
     }
 
-    private func toggleRecording(_ title: String, key: String, y: CGFloat, parent: NSView) {
+    private func toggleRecording(_ title: String, detail: String = "", key: String, y: CGFloat, parent: NSView) {
         let recording = settings["recording"] as? [String: Any] ?? [:]
-        rowTitle(title, detail: "Recording default", y: y, parent: parent)
+        rowTitle(title, detail: detail, y: y, parent: parent)
         let button = actionButton(recording.bool(key) ? "On" : "Off", x: 600, y: y + 5, width: 78, parent: parent) { [weak self] in
             guard let self else { return }; var value = self.settings["recording"] as? [String: Any] ?? [:]
             value[key] = !value.bool(key); self.settings["recording"] = value; self.changed(rerender: true)

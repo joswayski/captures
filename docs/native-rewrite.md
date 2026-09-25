@@ -1059,7 +1059,11 @@ visibility support. Automatic copy and output folder/format preferences are now
 connected; JPEG/WebP encoding is shared with the legacy host and history remains
 lossless PNG. Screenshot countdown and temporary global Escape now share Rust
 deadlines, generation invalidation, and a cancellation/commit boundary across
-hosts; native countdown windows use the fixed media palette. Real mixed-DPI,
+hosts; native countdown windows use the fixed media palette. Both hosts use the
+shipping "Screenshot in" / "Recording starts in" headings and hold "Cancelling…"
+for the shipping 180 ms exit window after Escape; the fade animations remain open.
+HUD, tray, guidance and Preferences copy follow the shipping strings, and recording
+times use the shared `h:mm:ss` formatter. Real mixed-DPI,
 focus, compositor, accessibility, and animation acceptance remains open.
 Cursor inclusion now shares sampling/compositing with the shipping host (macOS
 system pixels, Windows/X11 synthetic arrow). Full region/window parity, recording, editor,

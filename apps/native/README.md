@@ -113,9 +113,11 @@ compositor and accessibility acceptance; Wayland remains gated.
 ## Resident lifecycle and screenshot shortcuts
 
 Only `--live` creates the macOS menu-bar item or Windows/Linux tray and registers
-the persisted New Capture and region/window/display shortcuts. The menu offers
-New Capture, those three captures, History, Preferences, the output folder, and
-Quit. Closing the root hides it when a usable tray is available; previews and
+the persisted New Capture and region/window/display shortcuts. The menu uses the
+shipping labels and order: New Capture…, Show Recording Controls (native only),
+Screenshot Region/Window/Display, Capture History…, Open Save Location,
+Preferences and Quit Captures. Record items, accelerators, separators on
+Windows/Linux, Send Feedback… and the update item remain open. Closing the root hides it when a usable tray is available; previews and
 accepted work stay alive.
 Quit cancels pending capture, drains accepted file work and removes shortcuts/tray.
 Timed and framebuffer-screenshot completion also explicitly quit, not hide.

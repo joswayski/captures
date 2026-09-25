@@ -1779,9 +1779,6 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             }
             ui.small("Fits visible layer bounds, including off-canvas content. Does not trim transparent pixels within images.");
         });
-        ui.add_space(tokens.number("s-6"));
-        ui.label(RichText::new("Native editor preview").color(tokens.color("text-muted")));
-        ui.small("Geometry, layers, filled shapes, drafts, new-copy export and clipboard output are connected. Other drawing tools and replacing files are still in development.");
         });
     });
     show_tool_rail(ui, tokens, view);
