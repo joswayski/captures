@@ -205,8 +205,11 @@ simulated session cancellation. Both native hosts connect screenshot mini previe
 with Copy, Save, History/Open and nondestructive Dismiss, respecting the four
 corner placements and capture-inclusion preference. Multiple captures remain in
 a stack with expand/collapse, scrolling and Clear all; dismissing previews leaves
-history and exports intact. Preview dragging, hover-fan animation and effects
-are still unconnected. Live native hosts expose menu-bar/tray New Capture,
+history and exports intact. Drag a collapsed pile within its capture display;
+its session position survives expansion and new captures without activating the
+workspace. Cross-display movement, automatic top/bottom anchor changes, native
+file dragging, hover-fan animation and effects remain unconnected.
+Live native hosts expose menu-bar/tray New Capture,
 screenshot, History, Preferences, output-folder and Quit actions, plus configured
 New Capture and region/window/display screenshot and recording global shortcuts. New Capture opens shared
 Screenshot and Record controls for Region, Window and Full screen, retaining selections when

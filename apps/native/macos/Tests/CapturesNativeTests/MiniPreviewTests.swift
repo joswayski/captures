@@ -37,6 +37,42 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(actions, ["copy", "save", "open", "dismiss"])
     }
 
+    func testCollapsedPointerDragTracksDesktopWithoutExpandingAndClickStillExpands() throws {
+        _ = NSApplication.shared
+        var moves: [NSPoint] = []
+        var expanded = 0
+        let panel = fixturePanel(ids: ["one", "two"],
+            images: ["one": solidImage(.red), "two": solidImage(.blue)], collapsed: true,
+            setCollapsed: { if !$0 { expanded += 1 } }, move: { moves.append($0) })
+        defer { panel.close() }
+        panel.setFrameOrigin(NSPoint(x: 300, y: 200))
+        let button = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "Expand 2 previews" })
+        let point = button.convert(NSPoint(x: 100, y: 80), to: nil)
+        func event(_ type: NSEvent.EventType, _ point: NSPoint) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                timestamp: 1, windowNumber: panel.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        button.mouseDown(with: try event(.leftMouseDown, point))
+        button.mouseDragged(with: try event(.leftMouseDragged, NSPoint(x: point.x + 2, y: point.y - 1)))
+        XCTAssertTrue(moves.isEmpty)
+        button.mouseDragged(with: try event(.leftMouseDragged, NSPoint(x: point.x + 40, y: point.y - 25)))
+        XCTAssertEqual(moves.last, NSPoint(x: 340, y: 175))
+        panel.setFrameOrigin(try XCTUnwrap(moves.last))
+        // The stationary desktop pointer returns to its original local position.
+        button.mouseDragged(with: try event(.leftMouseDragged, point))
+        XCTAssertEqual(moves.last, NSPoint(x: 340, y: 175))
+        button.mouseUp(with: try event(.leftMouseUp, point))
+        XCTAssertEqual(expanded, 0)
+        button.mouseDown(with: try event(.leftMouseDown, point))
+        button.mouseUp(with: try event(.leftMouseUp, point))
+        XCTAssertEqual(expanded, 1)
+        button.performClick(nil)
+        XCTAssertEqual(expanded, 2, "Accessibility activation must remain a click")
+        XCTAssertFalse(panel.canBecomeKey)
+    }
+
     func testPendingFirstDecodeIsInvalidatedWhenHistoryIsCleared() throws {
         _ = NSApplication.shared
         let releaseDecode = DispatchSemaphore(value: 0)
@@ -172,15 +208,22 @@ final class MiniPreviewTests: XCTestCase {
                            on: screenID(), settings: settings, generation: first)
         try waitUntil { controller.isPanelVisible }
         controller.setCollapsed(true)
+        controller.moveStack(to: NSPoint(x: 240, y: 270))
+        let moved = try XCTUnwrap(controller.stackOrigin)
 
         let second = try XCTUnwrap(controller.beginCapture(settings: settings))
         controller.present(artifact(id: "second", previewPath: "/second-preview.png"),
                            on: screenID(), settings: settings, generation: second)
         try waitUntil { controller.decodedArtifactIDs == ["first", "second"] }
         XCTAssertTrue(controller.isCollapsed)
+        XCTAssertEqual(controller.stackOrigin?.x, moved.x)
+        XCTAssertEqual(controller.stackOrigin?.edge, moved.edge)
+        controller.setCollapsed(false)
+        XCTAssertEqual(controller.stackOrigin?.edge, moved.edge)
 
         controller.updateSettings(MiniPreviewSettings(enabled: false, placement: "top_left",
                                                        includeInCaptures: false))
+        XCTAssertNil(controller.stackOrigin)
         XCTAssertFalse(controller.isPanelVisible)
         XCTAssertFalse(controller.isCollapsed)
         XCTAssertEqual(controller.presentedArtifactIDs, ["first", "second"])
@@ -188,6 +231,11 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertTrue(controller.isPanelVisible)
         XCTAssertEqual(controller.presentedArtifactIDs, ["first", "second"],
             "hiding previews must retain membership for re-enable")
+        controller.setCollapsed(true)
+        controller.moveStack(to: NSPoint(x: 270, y: 250))
+        XCTAssertNotNil(controller.stackOrigin)
+        controller.clearAll()
+        XCTAssertNil(controller.stackOrigin)
     }
 
     func testDeletingBlockedLatestDecodeRestoresVisibleOlderCard() throws {
@@ -355,7 +403,8 @@ final class MiniPreviewTests: XCTestCase {
                               save: @escaping (String) -> Void = { _ in },
                               open: @escaping (String) -> Void = { _ in },
                               dismiss: @escaping (String) -> Void = { _ in },
-                              setCollapsed: @escaping (Bool) -> Void = { _ in }) -> MiniPreviewPanel {
+                              setCollapsed: @escaping (Bool) -> Void = { _ in },
+                              move: @escaping (NSPoint) -> Void = { _ in }) -> MiniPreviewPanel {
         let stack = NativePreviewStack()
         ids.forEach { XCTAssertTrue(stack.insert($0)) }
         if collapsed { stack.setCollapsed(true) }
@@ -377,7 +426,7 @@ final class MiniPreviewTests: XCTestCase {
             contentHeight: stack.contentHeight,
             resources: resources, ids: ids, layouts: layouts, collapsed: collapsed,
             topAnchor: topAnchor, tokens: tokens, copy: copy, save: save, open: open,
-            dismiss: dismiss, setCollapsed: setCollapsed, clearAll: {})
+            dismiss: dismiss, setCollapsed: setCollapsed, clearAll: {}, move: move)
     }
 
     private func solidImage(_ color: NSColor) -> NSImage {

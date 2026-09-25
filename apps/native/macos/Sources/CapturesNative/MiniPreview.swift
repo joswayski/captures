@@ -94,17 +94,42 @@ private final class MiniPreviewDocumentView: NSView {
 
 private final class MiniPreviewExpandButton: NSButton {
     private let actionBlock: () -> Void
+    private let move: (NSPoint) -> Void
+    private var press: NSPoint?
+    private var frameOrigin = NSPoint.zero
+    private var dragging = false
 
-    init(frame: NSRect, count: Int, action: @escaping () -> Void) {
-        actionBlock = action
+    init(frame: NSRect, count: Int, move: @escaping (NSPoint) -> Void,
+         action: @escaping () -> Void) {
+        actionBlock = action; self.move = move
         super.init(frame: frame)
         title = ""; isBordered = false; setButtonType(.momentaryPushIn)
         target = self; self.action = #selector(activate)
         setAccessibilityLabel(count == 1 ? "Expand preview" : "Expand \(count) previews")
+        toolTip = "Click to expand; drag to move the preview pile"
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func activate() { actionBlock() }
     override func draw(_ dirtyRect: NSRect) {}
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
+        press = window.convertPoint(toScreen: event.locationInWindow)
+        frameOrigin = window.frame.origin; dragging = false
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard let window, let press else { return }
+        let current = window.convertPoint(toScreen: event.locationInWindow)
+        let delta = NSSize(width: current.x - press.x, height: current.y - press.y)
+        guard dragging || max(abs(delta.width), abs(delta.height)) >= 4 else { return }
+        dragging = true
+        move(NSPoint(x: frameOrigin.x + delta.width, y: frameOrigin.y + delta.height))
+    }
+    override func mouseUp(with event: NSEvent) {
+        let clicked = press != nil && !dragging && bounds.contains(convert(event.locationInWindow, from: nil))
+        press = nil; dragging = false
+        if clicked { actionBlock() }
+    }
 }
 
 final class MiniPreviewView: NSView {
@@ -140,7 +165,7 @@ final class MiniPreviewView: NSView {
          topAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          dismiss: @escaping (String) -> Void, setCollapsed: @escaping (Bool) -> Void,
-         clearAll: @escaping () -> Void) {
+         clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
         self.geometry = geometry; self.tokens = tokens; artifactIDs = ids
         super.init(frame: NSRect(x: 0, y: 0, width: geometry.width, height: geometry.height))
         wantsLayer = true
@@ -174,7 +199,7 @@ final class MiniPreviewView: NSView {
         if collapsed, let front = ids.compactMap({ id in
             layouts[id].map { (id, $0) }
         }).first(where: { $0.1.interactive }), let card = cards[front.0] {
-            let expand = MiniPreviewExpandButton(frame: card.frame, count: ids.count) {
+            let expand = MiniPreviewExpandButton(frame: card.frame, count: ids.count, move: move) {
                 setCollapsed(false)
             }
             document.addSubview(expand); pileExpandButton = expand
@@ -221,12 +246,12 @@ final class MiniPreviewPanel: NSPanel {
          topAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          dismiss: @escaping (String) -> Void, setCollapsed: @escaping (Bool) -> Void,
-         clearAll: @escaping () -> Void) {
+         clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
         previewView = MiniPreviewView(geometry: geometry, contentHeight: contentHeight,
             resources: resources, ids: ids,
             layouts: layouts, collapsed: collapsed, topAnchor: topAnchor, tokens: tokens,
             copy: copy, save: save, open: open, dismiss: dismiss,
-            setCollapsed: setCollapsed, clearAll: clearAll)
+            setCollapsed: setCollapsed, clearAll: clearAll, move: move)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear
@@ -252,6 +277,7 @@ final class MiniPreviewController {
     private var settings = MiniPreviewSettings(enabled: false, placement: "bottom_right",
                                                includeInCaptures: false)
     private var screenID: String?
+    private(set) var stackOrigin: CapturesPreviewOrigin?
     private var pendingDecodes: [String: Int] = [:]
     private var visibilityPendingArtifactID: String?
     private var nextDecodeToken = 0
@@ -274,6 +300,7 @@ final class MiniPreviewController {
 
     func beginCapture(settings: MiniPreviewSettings) -> UInt64? {
         precondition(Thread.isMainThread)
+        if !settings.enabled || self.settings.placement != settings.placement { stackOrigin = nil }
         self.settings = settings
         guard let generation = policy.beginCapture() else { return nil }
         policy.suppressCaptureUI(true)
@@ -336,6 +363,7 @@ final class MiniPreviewController {
 
     func updateSettings(_ settings: MiniPreviewSettings) {
         precondition(Thread.isMainThread)
+        if !settings.enabled || self.settings.placement != settings.placement { stackOrigin = nil }
         self.settings = settings
         if !settings.enabled, stack.isCollapsed { stack.setCollapsed(false) }
         if !stack.ids.isEmpty { makePanel() }
@@ -373,7 +401,7 @@ final class MiniPreviewController {
             visibilityPendingArtifactID = nil
         }
         resources[artifactID] = nil
-        if stack.ids.isEmpty { panel?.close(); panel = nil; screenID = nil }
+        if stack.ids.isEmpty { panel?.close(); panel = nil; screenID = nil; stackOrigin = nil }
         else { makePanel(); updateVisibility() }
     }
 
@@ -387,7 +415,7 @@ final class MiniPreviewController {
            policy.stopWaiting() {
             visibilityPendingArtifactID = nil
         }
-        if stack.ids.isEmpty { panel?.close(); panel = nil; screenID = nil }
+        if stack.ids.isEmpty { panel?.close(); panel = nil; screenID = nil; stackOrigin = nil }
         else { makePanel(); updateVisibility() }
     }
 
@@ -401,6 +429,7 @@ final class MiniPreviewController {
     func close() {
         precondition(Thread.isMainThread)
         _ = policy.stopWaiting(); visibilityPendingArtifactID = nil; screenID = nil
+        stackOrigin = nil
         let ids = stack.ids; _ = stack.removeAll(ids)
         resources.removeAll(); pendingDecodes.removeAll()
         panel?.close(); panel = nil
@@ -409,10 +438,11 @@ final class MiniPreviewController {
     private func makePanel() {
         panel?.close(); panel = nil
         let ids = stack.ids
+        if ids.isEmpty { stackOrigin = nil }
         guard !ids.isEmpty, let screen = targetScreen(),
               let monitor = Self.monitor(for: screen),
               let geometry = NativePreviewLayout.geometry(monitor: monitor, count: ids.count,
-                  collapsed: stack.isCollapsed,
+                  collapsed: stack.isCollapsed, origin: stackOrigin,
                   placement: settings.placement) else { return }
         let topAnchor = settings.placement.hasPrefix("top_")
         let layouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
@@ -429,7 +459,8 @@ final class MiniPreviewController {
             open: { [weak self] in self?.perform(\.openArtifact, artifactID: $0) },
             dismiss: { [weak self] in self?.dismiss($0) },
             setCollapsed: { [weak self] in self?.setCollapsed($0) },
-            clearAll: { [weak self] in self?.clearAll() })
+            clearAll: { [weak self] in self?.clearAll() },
+            move: { [weak self] in self?.moveStack(to: $0) })
         next.sharingType = settings.includeInCaptures ? .readOnly : .none
         panel = next
     }
@@ -463,10 +494,21 @@ final class MiniPreviewController {
     private func position(panel: NSPanel, on screen: NSScreen) {
         guard let monitor = Self.monitor(for: screen),
               let geometry = NativePreviewLayout.geometry(monitor: monitor, count: stack.ids.count,
-                  collapsed: stack.isCollapsed,
+                  collapsed: stack.isCollapsed, origin: stackOrigin,
                   placement: settings.placement) else { return }
         panel.setFrame(Self.appKitFrame(geometry: geometry, monitor: monitor,
                                        screenFrame: screen.frame), display: panel.isVisible)
+    }
+
+    func moveStack(to position: NSPoint) {
+        guard stack.isCollapsed, settings.enabled, let panel, panel.isVisible,
+              let screen = targetScreen(), let monitor = Self.monitor(for: screen) else { return }
+        let scale = max(1, monitor.scale_factor)
+        let logical = NSPoint(x: Double(monitor.full_x) / scale + position.x - screen.frame.minX,
+            y: Double(monitor.full_y) / scale + screen.frame.maxY - position.y - panel.frame.height)
+        stackOrigin = NativePreviewLayout.movedOrigin(monitor: monitor, count: stack.ids.count,
+            frameOrigin: logical, placement: settings.placement)
+        self.position(panel: panel, on: screen)
     }
 
     static func displayID(for screen: NSScreen) -> String? {

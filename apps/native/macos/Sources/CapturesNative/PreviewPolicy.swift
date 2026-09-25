@@ -123,6 +123,23 @@ final class NativePreviewPolicy {
 }
 
 enum NativePreviewLayout {
+    /// Convert a dragged compact window into the shared pile edge. Always save
+    /// the clamped result, so later expansion/arrival retains the visible pile.
+    static func movedOrigin(monitor: CapturesPreviewMonitor, count: Int,
+                            frameOrigin: NSPoint, placement: String) -> CapturesPreviewOrigin? {
+        guard let base = geometry(monitor: monitor, count: count, collapsed: true,
+                                  placement: placement) else { return nil }
+        let top = placement.hasPrefix("top_")
+        let offset = (base.height - base.card_height) / 2
+            + (top ? -base.control_gutter : base.card_height + base.control_gutter)
+        var origin = CapturesPreviewOrigin(x: frameOrigin.x, edge: frameOrigin.y + offset,
+                                            anchor: top ? 1 : 0)
+        guard let clamped = geometry(monitor: monitor, count: count, collapsed: true,
+                                    origin: origin, placement: placement) else { return nil }
+        origin.x = clamped.x; origin.edge = clamped.y + offset
+        return origin
+    }
+
     /// Monitor is physical top-left desktop geometry; returned frame is logical
     /// top-left geometry. AppKit's coordinate conversion stays with the host.
     static func geometry(monitor: CapturesPreviewMonitor, count: Int,
