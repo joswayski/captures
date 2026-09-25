@@ -140,28 +140,16 @@ def main():
         # the clicked recorder/navigation target before sending its next key.
 
     def select_region(selector, rect):
-        wait(lambda: int(run("import", "-window", selector, "-crop", "1280x96+0+804",
-            "-format", "%k", "info:")) > 16, "painted region controls before drag")
-
-        def controls_pixels():
-            return run("import", "-window", selector, "-crop", "1280x96+0+804",
-                       "-depth", "8", "rgb:-")
-
+        # Direct region overlays have no toolbar: they paint centered guidance,
+        # and releasing the drag commits the capture like the shipping app.
+        wait(lambda: int(run("import", "-window", selector, "-crop", "640x120+320+390",
+            "-format", "%k", "info:")) > 16, "painted region guidance before drag")
         x, y, width, height = rect
         run("xdotool", "windowfocus", "--sync", selector, "sleep", ".15",
             "mousemove", "--sync", "--window", selector, str(x - 1), str(y),
             "mousemove_relative", "--sync", "1", "0", "sleep", ".15")
         wait(lambda: run("xdotool", "getwindowfocus", "-f").decode().strip() == selector,
              "region selector has X input focus")
-        before = controls_pixels()
-        # --sync observes the server pointer, not consumption by winit/egui.
-        # Hover the enabled Aspect dropdown and observe it repaint, then leave
-        # and observe the normal toolbar again before pressing. This also gives
-        # remapped selectors a distinct, acknowledged pointer position.
-        run("xdotool", "mousemove", "--sync", "--window", selector, "631", "849")
-        wait(lambda: controls_pixels() != before, "selector consumes toolbar hover")
-        run("xdotool", "mousemove", "--sync", "--window", selector, str(x), str(y))
-        wait(lambda: controls_pixels() == before, "selector consumes pointer return before drag")
 
         def selection_pixel():
             return run("import", "-window", selector, "-crop",
@@ -171,12 +159,10 @@ def main():
         run("xdotool", "mousedown", "1", "sleep", ".15", "mousemove", "--sync", "--window", selector,
             str(x + width), str(y + height))
         # Observe the held drag before releasing: XSync does not mean egui has
-        # consumed it. The selection unveils this interior pixel; the toolbar
-        # remains disabled until release. Final saved pixels still verify geometry.
+        # consumed it. The selection unveils this interior pixel; release then
+        # commits. Final saved pixels still verify geometry.
         wait(lambda: selection_pixel() != veiled_pixel, "painted region selection while dragging")
         run("xdotool", "mouseup", "1", "sleep", ".15")
-        wait(lambda: controls_pixels() != before, "painted region selection after drag")
-        run("xdotool", "key", "Return")
 
     def rgb(path):
         return run("convert", str(path), "-depth", "8", "rgb:-")
@@ -450,8 +436,8 @@ def main():
                 run("xdotool", "windowmove", "--sync", root, "300", "280")
                 click(root, 575, 126)
                 selector = wait(lambda: windows(SELECTOR), "region selector")[0]
-                wait(lambda: int(run("import", "-window", selector, "-crop", "1280x96+0+804",
-                    "-format", "%k", "info:")) > 16, "painted region controls")
+                wait(lambda: int(run("import", "-window", selector, "-crop", "640x120+320+390",
+                    "-format", "%k", "info:")) > 16, "painted region guidance")
                 return selector
 
             def capture(rect):
