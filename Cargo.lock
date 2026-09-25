@@ -656,6 +656,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tiff",
+ "trash",
  "uuid",
  "winreg 0.55.0",
 ]

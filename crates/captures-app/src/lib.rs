@@ -51,6 +51,8 @@ pub enum Error {
     Image(String),
     #[error("media could not be opened: {0}")]
     Media(String),
+    #[error("Could not move export to Trash: {0}")]
+    Trash(String),
     #[error("capture is no longer available")]
     Missing,
     #[error("Capture cancelled")]
@@ -108,6 +110,11 @@ pub enum Request {
         id: String,
         directory: PathBuf,
     },
+    TrashPreview {
+        root: PathBuf,
+        id: String,
+        saved_path: Option<PathBuf>,
+    },
     Delete {
         root: PathBuf,
         id: String,
@@ -151,6 +158,9 @@ pub enum Response {
     Saved {
         artifact: Artifact,
         path: PathBuf,
+    },
+    PreviewTrashed {
+        id: String,
     },
     Deleted {
         id: String,
@@ -239,6 +249,11 @@ pub fn execute(request: Request) -> Result<Response, Error> {
             id,
             directory,
         } => save_recording(&root, &id, &directory),
+        Request::TrashPreview {
+            root,
+            id,
+            saved_path,
+        } => trash_preview(&root, &id, saved_path.as_deref(), move_export_to_trash),
         Request::Delete { root, id } => {
             captures_history::delete(&root, &id)?;
             Ok(Response::Deleted { id })
@@ -516,6 +531,54 @@ pub fn persist_screenshot(
     artifact(root, entry)
 }
 
+/// Match screenshot preview Trash: move the explicit export, then let the host
+/// dismiss the preview. Never delete private History or rewrite its metadata.
+/// The expected path binds the action to the export the user actually saw.
+fn trash_preview(
+    root: &Path,
+    id: &str,
+    expected_path: Option<&Path>,
+    move_to_trash: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<Response, Error> {
+    let item = list(root)?
+        .into_iter()
+        .find(|item| item.entry.id == id && item.entry.kind == ArtifactKind::Screenshot)
+        .ok_or(Error::Missing)?;
+    let path = item.entry.saved_path.as_deref().map(Path::new);
+    if path != expected_path {
+        return Err(Error::Trash(
+            "the saved export changed; refresh and try again".into(),
+        ));
+    }
+    if let Some(path) = path {
+        // The OS API also accepts directories and symlinks. A preview may only
+        // trash its exported regular file, never a substituted directory/link.
+        if !fs::symlink_metadata(path)?.file_type().is_file()
+            || fs::canonicalize(path)?.starts_with(fs::canonicalize(root)?)
+        {
+            return Err(Error::Trash(
+                "the export is not a regular file outside private History".into(),
+            ));
+        }
+        move_to_trash(path).map_err(Error::Trash)?;
+    }
+    Ok(Response::PreviewTrashed { id: id.into() })
+}
+
+fn move_export_to_trash(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        // trash initializes STA COM. A capture worker may already have a
+        // different apartment; do not let that kill the shared worker.
+        let path = path.to_owned();
+        std::thread::spawn(move || trash::delete(path).map_err(|error| error.to_string()))
+            .join()
+            .map_err(|_| "the Windows Trash worker stopped".to_owned())?
+    }
+    #[cfg(not(target_os = "windows"))]
+    trash::delete(path).map_err(|error| error.to_string())
+}
+
 fn save_screenshot(
     root: &Path,
     id: &str,
@@ -640,6 +703,114 @@ fn publish_export(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_trash_moves_only_the_expected_export_and_preserves_history() {
+        let root = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let captured = persist_screenshot(
+            root.path(),
+            &RgbaImage::from_pixel(7, 3, image::Rgba([19, 81, 173, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let id = &captured.entry.id;
+        let original = fs::read(&captured.image_path).unwrap();
+        let preview = fs::read(&captured.preview_path).unwrap();
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "operation": "trash_preview", "root": root.path(), "id": id, "saved_path": null,
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(execute(request).unwrap()).unwrap(),
+            serde_json::json!({"kind": "preview_trashed", "id": id})
+        );
+        assert_eq!(fs::read(&captured.image_path).unwrap(), original);
+
+        let Response::Saved { path, .. } = save_screenshot(
+            root.path(),
+            id,
+            &output.path().join("Café exports"),
+            ScreenshotFormat::Png,
+        )
+        .unwrap() else {
+            panic!("saved")
+        };
+        let metadata_path = captures_history::entry_directory(root.path(), id)
+            .unwrap()
+            .join(captures_history::HISTORY_METADATA_FILE);
+        let metadata = fs::read(&metadata_path).unwrap();
+        for expected in [None, Some(output.path())] {
+            assert!(matches!(
+                trash_preview(root.path(), id, expected, |_| panic!("stale export moved")),
+                Err(Error::Trash(_))
+            ));
+        }
+        let error = trash_preview(root.path(), id, Some(&path), |actual| {
+            assert_eq!(actual, path);
+            Err("fixture denied".into())
+        })
+        .unwrap_err();
+        assert!(matches!(error, Error::Trash(message) if message == "fixture denied"));
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::read(&metadata_path).unwrap(), metadata);
+
+        let recycled = output.path().join("recycled.png");
+        let response = trash_preview(root.path(), id, Some(&path), |actual| {
+            assert_eq!(actual, path);
+            fs::rename(actual, &recycled).map_err(|error| error.to_string())
+        })
+        .unwrap();
+        assert!(matches!(response, Response::PreviewTrashed { id: actual } if actual == *id));
+        assert!(!path.exists());
+        assert_eq!(fs::read(&recycled).unwrap(), original);
+        assert_eq!(fs::read(&captured.image_path).unwrap(), original);
+        assert_eq!(fs::read(&captured.preview_path).unwrap(), preview);
+        assert_eq!(fs::read(&metadata_path).unwrap(), metadata);
+        assert!(
+            trash_preview(root.path(), id, Some(&path), |_| panic!(
+                "missing file moved"
+            ))
+            .is_err()
+        );
+        assert!(matches!(
+            trash_preview(root.path(), "unknown", None, |_| panic!(
+                "unknown capture moved"
+            )),
+            Err(Error::Missing)
+        ));
+    }
+
+    #[test]
+    fn preview_trash_refuses_private_files_directories_and_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let captured =
+            persist_screenshot(root.path(), &RgbaImage::new(3, 7), CaptureMode::Window).unwrap();
+        let rejected = vec![captured.image_path.clone(), output.path().to_owned()];
+        #[cfg(unix)]
+        let rejected = {
+            let mut rejected = rejected;
+            let link = output.path().join("export-link.png");
+            std::os::unix::fs::symlink(&captured.image_path, &link).unwrap();
+            rejected.push(link);
+            rejected
+        };
+        for path in rejected {
+            let mut entry = captured.entry.clone();
+            entry.saved_path = Some(path.to_string_lossy().into_owned());
+            captures_history::update_metadata(root.path(), &entry).unwrap();
+            assert!(matches!(
+                trash_preview(root.path(), &entry.id, Some(&path), |_| panic!(
+                    "unsafe path moved"
+                )),
+                Err(Error::Trash(_))
+            ));
+            assert!(path.exists());
+            assert!(captured.image_path.exists());
+            assert!(captured.preview_path.exists());
+        }
+    }
 
     #[test]
     fn stale_capture_is_rejected_before_permission_or_disk_access() {

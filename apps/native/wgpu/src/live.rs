@@ -3526,6 +3526,12 @@ impl Live {
                     self.status = format!("Saved {}", path.display());
                 }
             }
+            Response::PreviewTrashed { id } => {
+                self.previews.remove(&id);
+                if announce {
+                    self.status = "Preview removed; the private History copy was kept".into();
+                }
+            }
             Response::Deleted { id } => {
                 self.previews.remove(&id);
                 self.artifacts.retain(|item| item.entry.id != id);
