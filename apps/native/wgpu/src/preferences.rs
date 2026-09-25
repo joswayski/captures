@@ -285,6 +285,9 @@ pub struct Preferences {
     permission_recovery_busy: bool,
     system_reduced_motion: bool,
     motion_pending: bool,
+    /// Microphones for the Default microphone select, enumerated off the UI thread.
+    microphones: Option<Vec<(String, String)>>,
+    microphones_rx: Option<Receiver<Vec<(String, String)>>>,
 }
 
 impl Preferences {
@@ -356,6 +359,8 @@ impl Preferences {
             permission_recovery_busy: false,
             system_reduced_motion: false,
             motion_pending: false,
+            microphones: None,
+            microphones_rx: None,
         }
     }
 
@@ -1176,15 +1181,7 @@ impl Preferences {
             let response = ui
                 .vertical(|ui| {
                     ui.set_width(230.);
-                    let label = if keys.is_empty() {
-                        "Press shortcut…".to_owned()
-                    } else {
-                        keys.join("  +  ")
-                    };
-                    let response = ui.add_sized(
-                        [230., t.number("h-md")],
-                        egui::Button::new(label).selected(recording),
-                    );
+                    let response = shortcut_recorder(ui, t, field.label(), &keys, recording);
                     if let Some(error) = &error {
                         ui.colored_label(t.color("danger-text"), error);
                     }
@@ -1313,12 +1310,90 @@ impl Preferences {
             ui.separator();
             this.combo(ui,&["recording","countdown_seconds"],"Countdown","Delay before a recording starts.",&countdowns());
             ui.separator();
-            this.row(ui,"Default microphone","Choose a microphone in New Capture.",|_,ui| { ui.add_enabled(false,egui::Button::new("Unavailable")); });
+            this.microphone_combo(ui);
             for (key,title,desc) in [("capture_system_audio","Record desktop audio","Records sound playing through the system output."),("mono_audio","Export recording audio in mono",""),("show_cursor","Show cursor in recordings",""),("highlight_clicks","Show clicks in recordings",""),("open_editor_after_recording","Open the editor after recording","The recording is kept in Capture History for 30 days, so closing the editor never loses it.")] {
                 ui.separator(); this.toggle(ui,&["recording",key],title,desc,true);
             }
         });
     }
+    /// Shipping Default microphone select: Off, then each input device. A saved
+    /// device that is not connected stays selectable by its id. Devices are
+    /// enumerated off the UI thread the first time the menu opens, because
+    /// ALSA/PulseAudio probing can be slow or start an audio daemon.
+    fn microphone_combo(&mut self, ui: &mut egui::Ui) {
+        if let Some(devices) = self
+            .microphones_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
+            self.microphones = Some(devices);
+            self.microphones_rx = None;
+        }
+        let path = ["recording", "microphone_device_id"];
+        let saved = at(&self.value, &path)
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let mut options = vec![(None, "Off".to_owned())];
+        options.extend(
+            self.microphones
+                .iter()
+                .flatten()
+                .map(|(id, name)| (Some(id.clone()), name.clone())),
+        );
+        if let Some(saved) = &saved
+            && !options.iter().any(|(id, _)| id.as_ref() == Some(saved))
+        {
+            options.push((Some(saved.clone()), saved.clone()));
+        }
+        let loading = self.microphones.is_none();
+        let mut open_requested = false;
+        let mut chosen = None;
+        self.row(
+            ui,
+            "Default microphone",
+            "Used when a recording starts with microphone audio.",
+            |_, ui| {
+                egui::ComboBox::from_id_salt(path.join("."))
+                    .width(160.)
+                    .selected_text(
+                        options
+                            .iter()
+                            .find(|(id, _)| *id == saved)
+                            .map_or_else(|| "Off".to_owned(), |(_, label)| label.clone()),
+                    )
+                    .show_ui(ui, |ui| {
+                        open_requested = true;
+                        for (id, label) in &options {
+                            if ui.selectable_label(*id == saved, label).clicked() {
+                                chosen = Some(id.clone());
+                            }
+                        }
+                        if loading {
+                            ui.add_enabled(false, egui::Label::new("Finding microphones…"));
+                        }
+                    });
+            },
+        );
+        if open_requested && loading && self.microphones_rx.is_none() {
+            let (tx, rx) = mpsc::channel();
+            let wake = ui.ctx().clone();
+            std::thread::spawn(move || {
+                let devices = captures_recording_platform::microphone_devices()
+                    .into_iter()
+                    .map(|device| (device.id, device.name))
+                    .collect();
+                let _ = tx.send(devices);
+                wake.request_repaint_of(egui::ViewportId::ROOT);
+            });
+            self.microphones_rx = Some(rx);
+        }
+        if let Some(id) = chosen
+            && id != saved
+        {
+            self.set(&path, id.map_or(Value::Null, Value::String));
+        }
+    }
+
     fn gif(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         self.card(
             ui,
@@ -1425,6 +1500,95 @@ fn shortcut_platform() -> ShortcutPlatform {
     return ShortcutPlatform::Macos;
     #[allow(unreachable_code)]
     ShortcutPlatform::Linux
+}
+
+/// Shipping `.shortcut-recorder`: a field with `<kbd>` key chips, or the
+/// "Press shortcut…" prompt while empty.
+fn shortcut_recorder(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    label: &str,
+    keys: &[String],
+    recording: bool,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(230., t.number("h-md")), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, recording, label)
+    });
+    let radius = t.number("r-md");
+    let border = if recording || response.has_focus() {
+        t.color("theme-accent")
+    } else if response.hovered() {
+        t.color("border-strong")
+    } else {
+        t.color("control-border")
+    };
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        radius,
+        t.color("surface-field"),
+        egui::Stroke::new(1., border),
+        egui::StrokeKind::Inside,
+    );
+    if recording || response.has_focus() {
+        painter.rect_stroke(
+            rect.expand(2.),
+            radius + 2.,
+            egui::Stroke::new(2., t.color("theme-accent").gamma_multiply(0.35)),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let mut x = rect.left() + t.number("s-4");
+    if keys.is_empty() {
+        let prompt = painter.layout_no_wrap(
+            "Press shortcut…".into(),
+            egui::FontId::proportional(t.number("text-sm")),
+            t.color("text-faint"),
+        );
+        painter.galley(
+            egui::pos2(x, rect.center().y - prompt.size().y / 2.),
+            prompt,
+            t.color("text-faint"),
+        );
+        return response;
+    }
+    for key in keys {
+        let text = painter.layout_no_wrap(
+            key.clone(),
+            egui::FontId::proportional(t.number("text-2xs")),
+            t.color("text-muted"),
+        );
+        let size = egui::vec2((text.size().x + 10.).max(20.), text.size().y + 6.);
+        let chip = egui::Rect::from_min_size(egui::pos2(x, rect.center().y - size.y / 2.), size);
+        if chip.right() > rect.right() - t.number("s-4") {
+            break;
+        }
+        let chip_radius = t.number("r-xs");
+        painter.rect(
+            chip,
+            chip_radius,
+            t.color("surface-raised"),
+            egui::Stroke::new(1., t.color("border")),
+            egui::StrokeKind::Inside,
+        );
+        // `border-bottom-width: 2px`
+        painter.line_segment(
+            [
+                chip.left_bottom() + egui::vec2(chip_radius, -1.5),
+                chip.right_bottom() + egui::vec2(-chip_radius, -1.5),
+            ],
+            egui::Stroke::new(1., t.color("border")),
+        );
+        painter.galley(
+            chip.center() - text.size() / 2. - egui::vec2(0., 1.),
+            text,
+            t.color("text-muted"),
+        );
+        x = chip.right() + t.number("s-3");
+    }
+    response
 }
 
 fn choices(values: &[(&str, &str)]) -> Vec<(Value, String)> {
