@@ -81,21 +81,24 @@ def main():
                     def screenshot(name):
                         run("import", "-window", window, str(output / f"{prefix}-{name}.png"))
 
+                    # Token-font rows: Clear history…, then the five-line
+                    # confirmation's Cancel / Delete all buttons.
+                    clear_y, confirm_y = 351, 489
                     screenshot("populated")
-                    click(63, 336)
+                    click(63, clear_y)
                     screenshot("confirmation")
                     assert len(list(history.glob("*/metadata.json"))) == 2, "opening confirmation deleted files"
                     run("xdotool", "key", "Escape")
                     time.sleep(.2)
                     assert len(list(history.glob("*/metadata.json"))) == 2, "Escape deleted files"
-                    click(63, 336)
-                    click(46, 460)  # Explicit Cancel.
+                    click(63, clear_y)
+                    click(46, confirm_y)  # Explicit Cancel.
                     assert len(list(history.glob("*/metadata.json"))) == 2, "Cancel deleted files"
                     screenshot("cancelled")
                     if fail_partway:
                         protected.chmod(0o555)
-                    click(63, 336)
-                    click(124, 460)  # Explicit Delete all.
+                    click(63, clear_y)
+                    click(124, confirm_y)  # Explicit Delete all.
                     if fail_partway:
                         try:
                             wait(lambda: len(list(history.glob("*/metadata.json"))) == 1)
@@ -104,8 +107,8 @@ def main():
                             assert (protected / "capture.png").is_file(), "failed item disappeared"
                         finally:
                             protected.chmod(0o755)
-                        click(63, 336)
-                        click(124, 460)  # Retry after restoring write access.
+                        click(63, clear_y)
+                        click(124, confirm_y)  # Retry after restoring write access.
                     wait(lambda: not list(history.glob("*/metadata.json")))
                     time.sleep(.3)
                     screenshot("empty")

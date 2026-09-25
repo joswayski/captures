@@ -406,7 +406,7 @@ def main():
             return
         time.sleep(1)
         shot(root, "history")
-        click(root, 795, 191)
+        click(root, 795, 210)  # Edit recording, below the two-line token-font description.
         editor = wait(lambda: windows("Recording editor"), "recording editor opens")[0]
         run("xdotool", "windowmove", "--sync", editor, "80", "60")
         run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
