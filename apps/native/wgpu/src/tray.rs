@@ -127,6 +127,20 @@ impl Tray {
     pub fn try_recv(&self) -> Option<Action> {
         self.actions.try_recv().ok()
     }
+
+    /// Physical screen rect `(x, y, width, height)` of the tray icon, where
+    /// the platform reports one. StatusNotifier (Linux) never does, so the
+    /// launch notice uses its panel-edge fallback there.
+    pub fn rect(&self) -> Option<(f64, f64, f64, f64)> {
+        #[cfg(target_os = "windows")]
+        {
+            let rect = self._icon.rect()?;
+            let (width, height) = (f64::from(rect.size.width), f64::from(rect.size.height));
+            (width > 0. && height > 0.).then_some((rect.position.x, rect.position.y, width, height))
+        }
+        #[cfg(not(target_os = "windows"))]
+        None
+    }
 }
 
 fn send_action(actions: &mpsc::Sender<Action>, ctx: &egui::Context, action: Action) {

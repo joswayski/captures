@@ -713,7 +713,7 @@ enum SelectorKind {
     Controls,
 }
 
-fn request_hidden_root_paint(ctx: &egui::Context) {
+pub(crate) fn request_hidden_root_paint(ctx: &egui::Context) {
     ctx.send_viewport_cmd_to(
         egui::ViewportId::ROOT,
         egui::ViewportCommand::RequestPaintWhileHidden,

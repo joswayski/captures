@@ -191,6 +191,8 @@ in a separate development settings file. Fresh native profiles show setup before
 capture or opening queued media. macOS offers explicit Screen Recording and
 optional Microphone access, Settings links, and a permission restart; Windows/X11
 do not require upfront screen access. Setup does not enable Wayland capture.
+Finishing setup, or a hidden launch into the menu bar or tray, briefly shows a
+"Captures is ready to use" notice with the New Capture shortcut.
 The native workspace now applies
 automatic copy, output folder, PNG/JPEG/WebP save-format, screenshot countdown,
 and cursor inclusion preferences. Cursor rendering matches the shipping app:

@@ -433,6 +433,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var rootWindowCloseHandler: RootWindowCloseHandler?
     private var statusItem: NSStatusItem?
     private var statusActions: LiveStatusActions?
+    private var startupNotice: StartupNoticeController?
     private var captureShortcuts: NativeCaptureShortcuts?
     private var shortcutWakeObserver: NSObjectProtocol?
     private var shortcutFocusObservers: [NSObjectProtocol] = []
@@ -760,6 +761,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         render()
         installCaptureShortcuts()
         let startup = startupDecision(options: options)
+        if options.live, options.screenshot == nil,
+           let trigger = startupNoticeTrigger(setupWasPresented: onboardingWasPresented,
+               hiddenLaunch: !startup.showsWindow, openingMedia: !pendingOpenImages.isEmpty) {
+            showStartupNotice(trigger)
+        }
         if startup.showsWindow || onboardingWasPresented || !pendingOpenImages.isEmpty {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -767,6 +773,25 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             window.orderOut(nil)
         }
         drainOpenImages()
+    }
+
+    /// Shipping launch notice pointing at the menu bar item, with the saved
+    /// New Capture shortcut. Nonactivating; the Close button dismisses it.
+    private func showStartupNotice(_ trigger: StartupNoticeTrigger) {
+        let controller = startupNotice ?? StartupNoticeController(tokens: tokens)
+        controller.statusItemFrame = { [weak self] in self?.statusItem?.button?.window?.frame }
+        startupNotice = controller
+        let present: ([String: Any]) -> Void = { [weak controller] settings in
+            let saved = settings.string("new_capture_shortcut", StartupNoticeCopy.defaultShortcut)
+            let shortcut = saved.trimmingCharacters(in: .whitespaces).isEmpty
+                ? StartupNoticeCopy.defaultShortcut : saved
+            let keys = (try? NativeCaptureShortcuts.display(shortcut)) ?? []
+            controller?.present(trigger: trigger, keys: keys)
+        }
+        guard let store = try? SettingsStore(path: options.settingsFile) else { present([:]); return }
+        store.load { result in
+            if case .success(let settings) = result { present(settings) } else { present([:]) }
+        }
     }
 
     private func restartAfterPermissionRequest() {

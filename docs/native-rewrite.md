@@ -1234,6 +1234,22 @@ failure/retry, missing exports, intercepted OS-reveal arguments, hidden-root exp
 dismissal and capture cleanup; AppKit provides state and render fixtures. Physical
 macOS/Windows, Wayland, accessibility and motion parity remain open.
 
+The launch notice slice adds the shipping "Captures is ready to use" pill to both
+native hosts: fixed dark glass, a painted triangle caret pointing at the tray or
+menu bar item, the saved New Capture shortcut as key chips, and Close. It appears
+for 15 seconds after first-run setup completes and 5 seconds on a hidden,
+tray-resident live launch without media. It never appears on a visible relaunch.
+The Tauri placement policy and its tests moved into `captures_app::tray_notice`,
+and AppKit reaches it through `captures_startup_notice_placement_v1`. AppKit uses a
+nonactivating, floating, all-Spaces `NSPanel` anchored to the status item. It
+flips coordinates at the ABI boundary and retries briefly while the item is
+unplaced. wgpu uses a transparent, undecorated, always-on-top, nonactivating
+viewport. On Windows it anchors to `TrayIcon::rect()` with the same retry. X11 has
+no StatusNotifier rect, so it uses the panel-edge fallback. Private-X11 onboarding
+smoke checks the setup-completion notice title, size, focus retention and Close
+dismissal. AppKit has XCTest layout/copy/dismiss coverage. The macOS, Windows,
+Wayland and quiet-login paths have not been verified on physical hosts.
+
 Native region recordings now retain a passive display-local guide from countdown
 until finalization/discard/cancellation. AppKit and wgpu paint the fixed glass veil
 and accent border strictly outside an outward-pixel-rounded transparent hole;

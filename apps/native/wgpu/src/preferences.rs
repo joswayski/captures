@@ -1414,7 +1414,7 @@ fn shortcut_recording_lost_focus(active: bool, just_started: bool, has_focus: bo
     active && !just_started && !has_focus
 }
 
-fn shortcut_platform() -> ShortcutPlatform {
+pub(crate) fn shortcut_platform() -> ShortcutPlatform {
     #[cfg(target_os = "windows")]
     return ShortcutPlatform::Windows;
     #[cfg(target_os = "linux")]
