@@ -59,13 +59,13 @@ final class RecordingHUDView: NSView {
         layer?.shadowRadius = 22; layer?.shadowOffset = NSSize(width: 0, height: -8)
         setAccessibilityRole(.group); setAccessibilityLabel("Recording controls")
 
-        noticeLabel.stringValue = defaultNotice
         noticeLabel.frame = NSRect(x: 16, y: 8, width: 398, height: 18)
         noticeLabel.alignment = .center
         noticeLabel.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
         noticeLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         noticeLabel.lineBreakMode = .byTruncatingTail
         addSubview(noticeLabel)
+        showNotice(defaultNotice, warning: false)
 
         statusDot.frame = NSRect(x: 17, y: 43, width: 10, height: 10)
         statusDot.wantsLayer = true; statusDot.layer?.cornerRadius = 5
@@ -181,11 +181,31 @@ final class RecordingHUDView: NSView {
     }
 
     func setWarning(_ warning: String?) {
-        noticeLabel.stringValue = warning ?? defaultNotice
-        let noticeToken: RecordingHUDColorToken = warning == nil ? .glassTextSubtle : .themeSignal
-        noticeLabel.textColor = tokens.color(noticeToken.rawValue)
+        showNotice(warning ?? defaultNotice, warning: warning != nil)
         noticeLabel.toolTip = warning
-        noticeLabel.setAccessibilityLabel(noticeLabel.stringValue)
+    }
+
+    /// Shipping `.recording-hud-privacy`: subtle 2xs text with **will**/**won’t** in bold glass text.
+    private func showNotice(_ text: String, warning: Bool) {
+        let noticeToken: RecordingHUDColorToken = warning ? .themeSignal : .glassTextSubtle
+        let size = tokens.number("text-2xs")
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center; paragraph.lineBreakMode = .byTruncatingTail
+        let attributed = NSMutableAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: size, weight: .medium),
+            .foregroundColor: tokens.color(noticeToken.rawValue),
+            .paragraphStyle: paragraph,
+        ])
+        if !warning, let range = ["won’t", "will"].lazy
+            .map({ (text as NSString).range(of: " \($0) ") })
+            .first(where: { $0.location != NSNotFound }) {
+            attributed.addAttributes([
+                .font: NSFont.systemFont(ofSize: size, weight: .bold),
+                .foregroundColor: tokens.color(RecordingHUDColorToken.glassText.rawValue),
+            ], range: NSRange(location: range.location + 1, length: range.length - 2))
+        }
+        noticeLabel.attributedStringValue = attributed
+        noticeLabel.setAccessibilityLabel(text)
     }
 
     func setMicrophone(muted: Bool, available: Bool) {

@@ -86,13 +86,10 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                 ui.set_width(394.);
                 ui.spacing_mut().item_spacing = Vec2::new(4., 6.);
                 ui.with_layout(Layout::top_down(Align::Center), |ui| {
-                    ui.label(RichText::new(view.notice).small().color(tokens.color(
-                        if view.warning {
-                            "theme-signal"
-                        } else {
-                            "glass-text-muted"
-                        },
-                    )));
+                    ui.add(
+                        egui::Label::new(notice_job(tokens, view.notice, view.warning))
+                            .wrap_mode(egui::TextWrapMode::Truncate),
+                    );
                     ui.horizontal(|ui| {
                         ui.allocate_ui_with_layout(
                             Vec2::new(103., 32.),
@@ -417,6 +414,34 @@ fn paint_icon(ui: &egui::Ui, rect: Rect, icon: Icon, color: egui::Color32) {
     }
 }
 
+/// Shipping `.recording-hud-privacy`: one subtle 2xs line with **will**/**won’t** emphasized.
+fn notice_job(tokens: &Tokens, notice: &str, warning: bool) -> egui::text::LayoutJob {
+    let font = egui::FontId::proportional(tokens.number("text-2xs"));
+    let format = |token| egui::TextFormat::simple(font.clone(), tokens.color(token));
+    let mut job = egui::text::LayoutJob {
+        halign: Align::Center,
+        ..Default::default()
+    };
+    if warning {
+        job.append(notice, 0., format("theme-signal"));
+        return job;
+    }
+    let emphasis = ["won’t", "will"].iter().find_map(|word| {
+        notice
+            .find(&format!(" {word} "))
+            .map(|at| (at + 1, word.len()))
+    });
+    match emphasis {
+        Some((start, len)) => {
+            job.append(&notice[..start], 0., format("glass-text-subtle"));
+            job.append(&notice[start..start + len], 0., format("glass-text"));
+            job.append(&notice[start + len..], 0., format("glass-text-subtle"));
+        }
+        None => job.append(notice, 0., format("glass-text-subtle")),
+    }
+    job
+}
+
 /// Shipping `recording-pulse`: a 1.6 s ease-in-out cycle that dims to 0.6 opacity and
 /// shrinks to 0.84 scale at its midpoint. Returns 0 at rest and 1 at the midpoint.
 fn pulse_phase(time: f64, still: bool) -> f32 {
@@ -474,6 +499,32 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn notice_emphasizes_will_and_wont_like_shipping() {
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let job = notice_job(
+            &tokens,
+            "These controls will show in recordings · Use Hide controls to keep them out",
+            false,
+        );
+        let colors = |job: &egui::text::LayoutJob| -> Vec<egui::Color32> {
+            job.sections
+                .iter()
+                .map(|section| section.format.color)
+                .collect()
+        };
+        let (subtle, text) = (
+            tokens.color("glass-text-subtle"),
+            tokens.color("glass-text"),
+        );
+        assert_eq!(colors(&job), [subtle, text, subtle]);
+        let job = notice_job(&tokens, "These controls won’t show in recordings", false);
+        assert_eq!(colors(&job), [subtle, text, subtle]);
+        assert_eq!(job.text, "These controls won’t show in recordings");
+        let job = notice_job(&tokens, "Microphone disconnected", true);
+        assert_eq!(job.sections.len(), 1);
     }
 
     #[test]
