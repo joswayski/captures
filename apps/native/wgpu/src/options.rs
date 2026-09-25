@@ -237,8 +237,7 @@ impl Options {
             && (options.exercise
                 || options.floating
                 || !matches!(options.scene, Scene::Preferences | Scene::Idle)
-                || options.history_count != 1000
-                || options.reduced_motion)
+                || options.history_count != 1000)
         {
             return Err("--live cannot be combined with fixture scenes or exercise options".into());
         }
@@ -270,6 +269,12 @@ mod tests {
     use super::*;
     fn parse(args: &[&str]) -> Result<Options, String> {
         Options::parse(args.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn live_previews_accept_explicit_reduced_motion() {
+        let options = parse(&["--live", "--reduced-motion"]).unwrap();
+        assert!(options.live && options.reduced_motion);
     }
 
     #[test]

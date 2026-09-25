@@ -440,12 +440,27 @@ pub unsafe extern "C" fn captures_preview_stack_card_v1(
     top_anchor: bool,
     output: *mut CapturesPreviewCardLayout,
 ) -> bool {
+    // SAFETY: v2 has identical ownership/output requirements; v1 is the rest pose.
+    unsafe { captures_preview_stack_card_v2(handle, index, top_anchor, false, output) }
+}
+
+/// Hover-aware card pose. This extends, rather than changes, the v1 ABI.
+/// # Safety
+/// The requirements are identical to `captures_preview_stack_card_v1`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_card_v2(
+    handle: *const CapturesPreviewStack,
+    index: usize,
+    top_anchor: bool,
+    hovered: bool,
+    output: *mut CapturesPreviewCardLayout,
+) -> bool {
     if output.is_null() {
         return false;
     }
     // SAFETY: Caller guarantees shared access to live handle or null.
-    let Some(card) =
-        (unsafe { handle.as_ref() }).and_then(|handle| handle.0.card_layout(index, top_anchor))
+    let Some(card) = (unsafe { handle.as_ref() })
+        .and_then(|handle| handle.0.card_layout_hovered(index, top_anchor, hovered))
     else {
         return false;
     };
@@ -502,6 +517,12 @@ mod tests {
             assert!(captures_preview_stack_set_collapsed_v1(stack, true));
             assert!(captures_preview_stack_collapsed_v1(stack));
             assert!(captures_preview_stack_card_v1(stack, 0, false, &mut card));
+            assert!(!card.interactive);
+            let rest_y = card.y;
+            assert!(captures_preview_stack_card_v2(
+                stack, 0, false, true, &mut card
+            ));
+            assert!(card.y < rest_y);
             assert!(!card.interactive);
             assert!(captures_preview_stack_insert_v1(
                 stack,

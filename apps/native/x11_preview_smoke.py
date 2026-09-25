@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
+    parser.add_argument("--reduced-motion", action="store_true", help="Disable native preview motion")
     parser.add_argument("--lifecycle", action="store_true", help="Exercise a real Xfce SNI tray and background shortcuts")
     parser.add_argument("--shortcut-editing", action="store_true", help="Also exercise live Preferences recording and persistence")
     parser.add_argument("--login-item-only", action="store_true", help="Exercise explicit autostart and hidden launch recovery")
@@ -334,7 +335,8 @@ def main():
                 "include_mini_previews_in_captures": include, "mini_preview_placement": placement,
             }))
             app = spawn(prefix, [str(binary), "--live", "--history-root", str(history),
-                "--settings-file", str(settings), "--quit-after", "300" if args.lifecycle else "180"])
+                "--settings-file", str(settings), "--quit-after", "300" if args.lifecycle else "180"]
+                + (["--reduced-motion"] if args.reduced_motion else []))
             root = wait(lambda: windows("Captures"), "root workspace")[0]
             # Leave the left-hand preview/capture area unobstructed. Both root
             # capture buttons still fit on this desktop after moving the window.
@@ -494,7 +496,32 @@ def main():
 
                     toggle()
                     wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 264, "two-card compact pile")
+                    run("xdotool", "mousemove", "0", "0")
+                    time.sleep(.35)
+                    def fan_pixels(front=False):
+                        # Compare only the rear peek or front interior, excluding
+                        # pointer, tooltip and the rest of the changing desktop.
+                        # Top piles expose the lower rounded corner at y212..215;
+                        # the delayed tooltip starts at y216, below this sample.
+                        crop = "230x45+55+62" if front else (
+                            "20x4+28+212" if placement.startswith("top") else "230x30+55+20")
+                        return run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-")
+                    rest = fan_pixels()
+                    front = fan_pixels(True)
+                    fixed_frame = window_geometry(preview)
                     shot(preview, f"{prefix}-collapsed")
+                    run("xdotool", "mousemove", "--window", preview, "170", "132")
+                    wait(lambda: fan_pixels() != rest, "hover fans rear cards")
+                    time.sleep(.35)
+                    hovered = fan_pixels()
+                    assert fan_pixels(True) == front, "hover moved the front card"
+                    assert window_geometry(preview) == fixed_frame, "hover moved/resized the native window"
+                    shot(preview, f"{prefix}-hover-fan")
+                    time.sleep(.35)
+                    shot(preview, f"{prefix}-hover-settled")
+                    assert fan_pixels() == hovered, "stationary hover never settled"
+                    run("xdotool", "mousemove", "0", "0")
+                    wait(lambda: fan_pixels() == rest, "leaving restores the exact rest pose")
                     before_drag = window_geometry(preview)
                     start_x, start_y = int(before_drag["X"]), int(before_drag["Y"])
                     dx = -780 if placement.endswith("right") else 160

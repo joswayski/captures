@@ -1,5 +1,6 @@
 import AppKit
 import ImageIO
+import QuartzCore
 import CCapturesSettings
 
 struct MiniPreviewSettings: Equatable {
@@ -98,10 +99,13 @@ private final class MiniPreviewExpandButton: NSButton {
     private var press: NSPoint?
     private var frameOrigin = NSPoint.zero
     private var dragging = false
+    private let fan: (Bool) -> Void
+    private var tracking: NSTrackingArea?
 
     init(frame: NSRect, count: Int, move: @escaping (NSPoint) -> Void,
+         fan: @escaping (Bool) -> Void,
          action: @escaping () -> Void) {
-        actionBlock = action; self.move = move
+        actionBlock = action; self.move = move; self.fan = fan
         super.init(frame: frame)
         title = ""; isBordered = false; setButtonType(.momentaryPushIn)
         target = self; self.action = #selector(activate)
@@ -112,9 +116,18 @@ private final class MiniPreviewExpandButton: NSButton {
     @objc private func activate() { actionBlock() }
     override func draw(_ dirtyRect: NSRect) {}
     override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+    override func updateTrackingAreas() {
+        if let tracking { removeTrackingArea(tracking) }
+        let next = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(next); tracking = next
+        super.updateTrackingAreas()
+    }
+    override func mouseEntered(with event: NSEvent) { fan(true) }
+    override func mouseExited(with event: NSEvent) { if press == nil { fan(false) } }
     override func mouseDown(with event: NSEvent) {
         guard let window else { return }
-        press = window.convertPoint(toScreen: event.locationInWindow)
+        press = window.convertPoint(toScreen: event.locationInWindow); fan(true)
         frameOrigin = window.frame.origin; dragging = false
     }
     override func mouseDragged(with event: NSEvent) {
@@ -128,6 +141,7 @@ private final class MiniPreviewExpandButton: NSButton {
     override func mouseUp(with event: NSEvent) {
         let clicked = press != nil && !dragging && bounds.contains(convert(event.locationInWindow, from: nil))
         press = nil; dragging = false
+        fan(bounds.contains(convert(event.locationInWindow, from: nil)))
         if clicked { actionBlock() }
     }
 }
@@ -138,6 +152,9 @@ final class MiniPreviewView: NSView {
     private let scroll = NSScrollView()
     private let document = MiniPreviewDocumentView()
     private var cards: [String: MiniPreviewCardView] = [:]
+    private let restLayouts: [String: CapturesPreviewCardLayout]
+    private let hoverLayouts: [String: CapturesPreviewCardLayout]
+    private(set) var pileHovered = false
     private var pileExpandButton: MiniPreviewExpandButton?
     private var collapseButton: CaptureButton?
     private var clearButton: CaptureButton?
@@ -161,12 +178,15 @@ final class MiniPreviewView: NSView {
 
     init(geometry: CapturesPreviewGeometry, contentHeight: Double,
          resources: [String: MiniPreviewResource],
-         ids: [String], layouts: [String: CapturesPreviewCardLayout], collapsed: Bool,
+         ids: [String], layouts: [String: CapturesPreviewCardLayout],
+         hoverLayouts: [String: CapturesPreviewCardLayout] = [:], collapsed: Bool,
          topAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          dismiss: @escaping (String) -> Void, setCollapsed: @escaping (Bool) -> Void,
          clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
-        self.geometry = geometry; self.tokens = tokens; artifactIDs = ids
+        self.geometry = geometry; self.tokens = tokens; self.restLayouts = layouts
+        self.hoverLayouts = hoverLayouts
+        artifactIDs = ids
         super.init(frame: NSRect(x: 0, y: 0, width: geometry.width, height: geometry.height))
         wantsLayer = true
 
@@ -199,7 +219,8 @@ final class MiniPreviewView: NSView {
         if collapsed, let front = ids.compactMap({ id in
             layouts[id].map { (id, $0) }
         }).first(where: { $0.1.interactive }), let card = cards[front.0] {
-            let expand = MiniPreviewExpandButton(frame: card.frame, count: ids.count, move: move) {
+            let expand = MiniPreviewExpandButton(frame: card.frame, count: ids.count, move: move,
+                fan: { [weak self] hovered in self?.setPileHovered(hovered) }) {
                 setCollapsed(false)
             }
             document.addSubview(expand); pileExpandButton = expand
@@ -233,6 +254,22 @@ final class MiniPreviewView: NSView {
     }
 
     func activatePileExpand() { pileExpandButton?.performClick(nil) }
+
+    func setPileHovered(_ hovered: Bool) {
+        guard hovered != pileHovered else { return }
+        pileHovered = hovered
+        let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            ? 0 : Double(tokens.number("dur-3")) / 1000
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            for (id, card) in cards {
+                guard let layout = (hovered ? hoverLayouts[id] : restLayouts[id]) else { continue }
+                card.animator().setFrameOrigin(NSPoint(x: card.frame.origin.x,
+                    y: CGFloat(layout.y)))
+            }
+        }
+    }
 }
 
 final class MiniPreviewPanel: NSPanel {
@@ -242,14 +279,16 @@ final class MiniPreviewPanel: NSPanel {
 
     init(frame: NSRect, geometry: CapturesPreviewGeometry, contentHeight: Double,
          resources: [String: MiniPreviewResource], ids: [String],
-         layouts: [String: CapturesPreviewCardLayout], collapsed: Bool,
+         layouts: [String: CapturesPreviewCardLayout],
+         hoverLayouts: [String: CapturesPreviewCardLayout] = [:], collapsed: Bool,
          topAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          dismiss: @escaping (String) -> Void, setCollapsed: @escaping (Bool) -> Void,
          clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
         previewView = MiniPreviewView(geometry: geometry, contentHeight: contentHeight,
             resources: resources, ids: ids,
-            layouts: layouts, collapsed: collapsed, topAnchor: topAnchor, tokens: tokens,
+            layouts: layouts, hoverLayouts: hoverLayouts, collapsed: collapsed,
+            topAnchor: topAnchor, tokens: tokens,
             copy: copy, save: save, open: open, dismiss: dismiss,
             setCollapsed: setCollapsed, clearAll: clearAll, move: move)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
@@ -448,11 +487,14 @@ final class MiniPreviewController {
         let layouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
             stack.cardLayout(index: index, topAnchor: topAnchor).map { (id, $0) }
         })
+        let hoverLayouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
+            stack.cardLayout(index: index, topAnchor: topAnchor, hovered: true).map { (id, $0) }
+        })
         let frame = Self.appKitFrame(geometry: geometry, monitor: monitor,
                                      screenFrame: screen.frame)
         let next = MiniPreviewPanel(frame: frame, geometry: geometry,
             contentHeight: stack.contentHeight,
-            resources: resources, ids: ids, layouts: layouts,
+            resources: resources, ids: ids, layouts: layouts, hoverLayouts: hoverLayouts,
             collapsed: stack.isCollapsed, topAnchor: topAnchor, tokens: tokens,
             copy: { [weak self] in self?.perform(\.copyArtifact, artifactID: $0) },
             save: { [weak self] in self?.perform(\.saveArtifact, artifactID: $0) },
