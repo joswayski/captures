@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align, Layout, RichText, Stroke};
+use eframe::egui::{self, Color32, Stroke};
 
 use crate::tokens::Tokens;
 
@@ -49,6 +49,7 @@ pub struct View<'a> {
     pub depth: usize,
     pub desktop_pointer: Option<egui::Pos2>,
     pub reject_offset: f32,
+    pub right_anchor: bool,
 }
 
 pub fn reject_offset(elapsed_seconds: f32, reduced_motion: bool) -> f32 {
@@ -71,17 +72,18 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
     );
     let (card, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let card = card.translate(egui::vec2(view.reject_offset, 0.));
+    let radius = tokens.number("thumbnail-card-radius");
     ui.painter()
-        .rect_filled(card, tokens.number("r-xl"), tokens.color("glass-raised"));
+        .rect_filled(card, radius, tokens.color("glass-raised"));
     egui::Image::new(view.texture)
         .uv(cover_uv(view.texture.size_vec2(), card.size()))
         .fit_to_exact_size(card.size())
-        .corner_radius(tokens.number("r-xl") as u8)
+        .corner_radius(radius as u8)
         .paint_at(ui, card);
     if view.collapsed && view.depth > 0 {
         ui.painter().rect_filled(
             card,
-            tokens.number("r-xl"),
+            radius,
             tokens
                 .color("glass-strong-solid")
                 .gamma_multiply(captures_app::preview::collapsed_dim_opacity(view.depth) as f32),
@@ -89,7 +91,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
     }
     ui.painter().rect_stroke(
         card,
-        tokens.number("r-xl"),
+        radius,
         Stroke::new(1., tokens.color("glass-border")),
         egui::StrokeKind::Inside,
     );
@@ -147,59 +149,208 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         return action;
     }
 
-    let footer = egui::Rect::from_min_max(
-        egui::pos2(card.left(), card.bottom() - 44.),
-        card.right_bottom(),
+    let inset = 8.;
+    let icon_size = egui::vec2(28., 28.);
+    let gap = tokens.number("s-3");
+    let outer_x = if view.right_anchor {
+        card.right() - inset - icon_size.x
+    } else {
+        card.left() + inset
+    };
+    let inner_x = if view.right_anchor {
+        card.left() + inset
+    } else {
+        card.right() - inset - icon_size.x
+    };
+    let top_y = card.top() + inset;
+    let copy_rect = egui::Rect::from_center_size(
+        card.center() - egui::vec2(0., 16. + gap / 2.),
+        egui::vec2(140., 32.),
     );
+    let save_rect = egui::Rect::from_center_size(
+        card.center() + egui::vec2(0., 16. + gap / 2.),
+        egui::vec2(140., 32.),
+    );
+    let edit_rect = egui::Rect::from_min_size(egui::pos2(inner_x, top_y), icon_size);
+    let destructive_count: usize = if view.saved { 2 } else { 1 };
+    let destructive_width =
+        icon_size.x * destructive_count as f32 + gap * (destructive_count.saturating_sub(1)) as f32;
+    let destructive_start = if view.right_anchor {
+        outer_x + icon_size.x - destructive_width
+    } else {
+        outer_x
+    };
+    let close_rect = egui::Rect::from_min_size(egui::pos2(destructive_start, top_y), icon_size);
+    let delete_rect = egui::Rect::from_min_size(
+        egui::pos2(
+            destructive_start + if view.saved { icon_size.x + gap } else { 0. },
+            top_y,
+        ),
+        icon_size,
+    );
+    let pointer_over_control = ui
+        .input(|input| {
+            if input.pointer.primary_down() {
+                input.pointer.press_origin()
+            } else {
+                input.pointer.hover_pos()
+            }
+        })
+        .is_some_and(|pointer| {
+            [copy_rect, save_rect, edit_rect, delete_rect]
+                .iter()
+                .any(|rect| rect.contains(pointer))
+                || (view.saved && close_rect.contains(pointer))
+        });
     if view.interactive && view.busy.is_none() {
+        // Register the drag area every frame. egui hit-tests a press against
+        // the previous frame's widgets, so skipping it while the pointer was
+        // over a control would lose the next drag that starts off-control.
+        // Controls are added later and stay on top for clicks.
         let response = ui.interact(
-            egui::Rect::from_min_max(card.min, footer.right_top()),
+            card,
             ui.scope_id().with(("file-drag", view.artifact_id)),
             egui::Sense::drag(),
         );
-        if response.drag_started_by(egui::PointerButton::Primary) {
+        if response.drag_started_by(egui::PointerButton::Primary) && !pointer_over_control {
             action = Some(Action::DragFile);
         }
-        response
-            .on_hover_cursor(egui::CursorIcon::Grab)
-            .on_hover_text("Drag the original file to another app");
+        if !pointer_over_control {
+            response
+                .on_hover_cursor(egui::CursorIcon::Grab)
+                .on_hover_text("Drag the original file to another app");
+        }
     }
-    ui.painter().rect_filled(
-        footer,
-        egui::CornerRadius {
-            sw: tokens.number("r-xl") as u8,
-            se: tokens.number("r-xl") as u8,
-            ..Default::default()
+    let enabled = view.interactive && view.busy.is_none();
+    let mut controls = Vec::new();
+    if view.saved {
+        controls.push((
+            close_rect,
+            "close",
+            "Close",
+            Action::Dismiss,
+            Icon::Close,
+            enabled,
+        ));
+    }
+    controls.push((
+        delete_rect,
+        "delete",
+        "Delete",
+        if view.saved {
+            Action::Trash
+        } else {
+            Action::Dismiss
         },
-        tokens.color("glass-strong"),
-    );
+        Icon::Trash,
+        enabled,
+    ));
+    controls.push((
+        edit_rect,
+        "edit",
+        "Edit",
+        Action::Edit,
+        Icon::Edit,
+        enabled && view.can_save,
+    ));
+
+    let card_hovered = ui
+        .input(|input| input.pointer.hover_pos())
+        .is_some_and(|pointer| card.contains(pointer));
+    let any_focused = ui.memory(|memory| {
+        ["close", "delete", "edit", "copy", "save-reveal"]
+            .iter()
+            .any(|name| memory.has_focus(ui.scope_id().with((name, view.artifact_id))))
+    });
+    let reveal = view.interactive && (card_hovered || any_focused);
+    if reveal {
+        // wgpu has no inexpensive blur for an individual egui image. A dark
+        // scrim provides shipping-equivalent contrast without CPU readback.
+        ui.painter()
+            .rect_filled(card, radius, Color32::from_black_alpha(128));
+    }
+
+    for (rect, id, label, result, icon, control_enabled) in controls {
+        if control(
+            ui,
+            tokens,
+            rect,
+            (id, view.artifact_id),
+            label,
+            icon,
+            reveal,
+            control_enabled,
+            false,
+        ) {
+            action = Some(result);
+        }
+    }
+    if control(
+        ui,
+        tokens,
+        copy_rect,
+        ("copy", view.artifact_id),
+        "Copy",
+        Icon::Copy,
+        reveal,
+        enabled,
+        false,
+    ) {
+        action = Some(Action::Copy);
+    }
+    let second_label = if view.saved {
+        "Show in Folder"
+    } else {
+        "Save file"
+    };
+    let second_icon = if view.saved { Icon::Folder } else { Icon::Save };
+    if control(
+        ui,
+        tokens,
+        save_rect,
+        ("save-reveal", view.artifact_id),
+        second_label,
+        second_icon,
+        reveal,
+        enabled && (view.saved || view.can_save),
+        true,
+    ) {
+        action = Some(if view.saved {
+            Action::Reveal
+        } else {
+            Action::Save
+        });
+    }
+
     let label = view
         .message
         .map(str::to_owned)
         .unwrap_or_else(|| format!("{} × {}", view.width, view.height));
-    let label_position = card.left_top() + egui::vec2(tokens.number("s-3"), tokens.number("s-3"));
+    let label_position = card.left_bottom() + egui::vec2(inset, -inset);
     let mut label_job = egui::text::LayoutJob::simple(
         label.clone(),
-        egui::FontId::proportional(tokens.number("text-xs")),
+        egui::FontId::proportional(tokens.number("text-2xs")),
         tokens.color("glass-text"),
         card.width() - tokens.number("s-3") * 4.,
     );
     label_job.wrap.max_rows = 3;
     let galley = ui.painter().layout_job(label_job);
     let label_rect = egui::Rect::from_min_size(
-        label_position,
+        label_position - egui::vec2(0., galley.size().y + tokens.number("s-2") * 2.),
         galley.size() + egui::vec2(tokens.number("s-3") * 2., tokens.number("s-2") * 2.),
     );
-    ui.painter().rect_filled(
-        label_rect,
-        tokens.number("r-md"),
-        tokens.color("glass-strong"),
-    );
-    ui.painter().galley(
-        label_rect.min + egui::vec2(tokens.number("s-3"), tokens.number("s-2")),
-        galley,
-        tokens.color("glass-text"),
-    );
+    if view.message.is_some() || !reveal {
+        ui.painter().rect_filled(
+            label_rect,
+            tokens.number("r-md"),
+            tokens.color("glass-strong"),
+        );
+        ui.painter().galley(
+            label_rect.min + egui::vec2(tokens.number("s-3"), tokens.number("s-2")),
+            galley,
+            tokens.color("glass-text"),
+        );
+    }
     ui.interact(
         label_rect,
         ui.scope_id().with("preview-status"),
@@ -207,93 +358,243 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
     )
     .on_hover_text(label);
 
-    ui.scope_builder(egui::UiBuilder::new().max_rect(footer.shrink(8.)), |ui| {
-        tokens.glass_controls(ui);
-        ui.spacing_mut().button_padding.x = tokens.number("s-4");
-        ui.horizontal(|ui| {
-            let enabled = view.interactive && view.busy.is_none();
-            let copy = ui
-                .add_enabled(enabled, egui::Button::new("Copy"))
-                .on_hover_text("Copy full-resolution pixels");
-            if copy.clicked() {
-                action = Some(Action::Copy);
-            }
-            if view.saved {
-                if ui
-                    .add_enabled(enabled, egui::Button::new("Reveal"))
-                    .on_hover_text("Show in Folder")
-                    .clicked()
-                {
-                    action = Some(Action::Reveal);
-                }
-            } else if ui
-                .add_enabled(enabled && view.can_save, egui::Button::new("Save"))
-                .on_hover_text("Save with current screenshot preferences")
-                .clicked()
-            {
-                action = Some(Action::Save);
-            }
-            if ui
-                .add_enabled(enabled && view.can_save, egui::Button::new("Edit"))
-                .on_hover_text("Edit screenshot")
-                .clicked()
-            {
-                action = Some(Action::Edit);
-            }
-            if ui
-                .add_enabled(
-                    enabled,
-                    egui::Button::new(RichText::new("Trash").color(tokens.color("theme-signal"))),
-                )
-                .on_hover_text(
-                    "Move saved export to Trash and dismiss preview; keep private History",
-                )
-                .clicked()
-            {
-                action = Some(Action::Trash);
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        view.interactive,
-                        egui::Button::new(RichText::new("×").color(tokens.color("glass-text"))),
-                    )
-                    .on_hover_text("Dismiss preview")
-                    .clicked()
-                {
-                    action = Some(Action::Dismiss);
-                }
-            });
-        });
-    });
     action
 }
 
 pub fn show_stack_controls(
     ui: &mut egui::Ui,
     tokens: &Tokens,
-    count: usize,
+    _count: usize,
     collapsed: bool,
+    right_anchor: bool,
 ) -> Option<StackAction> {
     let mut action = None;
-    tokens.glass_controls(ui);
-    ui.horizontal(|ui| {
-        let toggle = ui.button(if collapsed { "Expand" } else { "Show less" });
-        if toggle.clicked() {
-            action = Some(StackAction::ToggleCollapsed);
-        }
-        ui.label(
-            RichText::new(format!("{count} captures"))
-                .small()
-                .color(tokens.color("glass-text-muted")),
-        );
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("Clear all").clicked() {
-                action = Some(StackAction::ClearAll);
-            }
-        });
-    });
+    let size = egui::vec2(28., 28.);
+    let gap = tokens.number("s-1");
+    let outer_x = if right_anchor {
+        ui.max_rect().right() - 28.
+    } else {
+        ui.max_rect().left()
+    };
+    let inner_x = outer_x
+        + if right_anchor {
+            -(28. + gap)
+        } else {
+            28. + gap
+        };
+    let y = ui.max_rect().center().y - 14.;
+    if control(
+        ui,
+        tokens,
+        egui::Rect::from_min_size(egui::pos2(outer_x, y), size),
+        "clear-all",
+        "Clear all",
+        Icon::Close,
+        true,
+        true,
+        false,
+    ) {
+        action = Some(StackAction::ClearAll);
+    }
+    if control(
+        ui,
+        tokens,
+        egui::Rect::from_min_size(egui::pos2(inner_x, y), size),
+        "show-less",
+        if collapsed { "Expand" } else { "Show less" },
+        Icon::Stack,
+        true,
+        true,
+        false,
+    ) {
+        action = Some(StackAction::ToggleCollapsed);
+    }
     action
+}
+
+#[derive(Clone, Copy)]
+enum Icon {
+    Close,
+    Trash,
+    Edit,
+    Copy,
+    Save,
+    Folder,
+    Stack,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn control(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    rect: egui::Rect,
+    id_source: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    icon: Icon,
+    reveal: bool,
+    enabled: bool,
+    primary: bool,
+) -> bool {
+    let id = ui.scope_id().with(id_source);
+    let response = ui.interact(rect, id, egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    let visible = reveal || response.has_focus();
+    if visible {
+        let fill = if primary {
+            tokens.color("theme-accent")
+        } else if response.hovered() {
+            tokens.color("glass-raised")
+        } else {
+            tokens.color("glass-strong")
+        };
+        ui.painter().rect(
+            rect,
+            tokens.number("r-md"),
+            fill,
+            Stroke::new(1., tokens.color("glass-border")),
+            egui::StrokeKind::Inside,
+        );
+        let color = if primary {
+            tokens.color("theme-accent-ink")
+        } else if enabled {
+            if matches!(icon, Icon::Trash) {
+                tokens.color("theme-signal-text")
+            } else {
+                tokens.color("glass-text")
+            }
+        } else {
+            tokens.color("glass-text-muted")
+        };
+        let label = (rect.width() > 40.).then(|| {
+            ui.painter().layout_no_wrap(
+                label.to_owned(),
+                egui::FontId::proportional(tokens.number("text-xs")),
+                color,
+            )
+        });
+        let gap = tokens.number("s-3");
+        let icon_center = label.as_ref().map_or(rect.center(), |text| {
+            rect.center() - egui::vec2((text.size().x + gap) / 2., 0.)
+        });
+        paint_icon(
+            ui.painter(),
+            icon,
+            egui::Rect::from_center_size(icon_center, egui::vec2(16., 16.)),
+            color,
+        );
+        if let Some(text) = label {
+            ui.painter().galley(
+                egui::pos2(
+                    icon_center.x + 8. + gap,
+                    rect.center().y - text.size().y / 2.,
+                ),
+                text,
+                color,
+            );
+        }
+        if response.has_focus() {
+            ui.painter().rect_stroke(
+                rect.expand(2.),
+                tokens.number("r-md"),
+                Stroke::new(2., tokens.color("theme-accent")),
+                egui::StrokeKind::Outside,
+            );
+        }
+    }
+    response.on_hover_text(label).clicked() && enabled
+}
+
+fn paint_icon(p: &egui::Painter, icon: Icon, rect: egui::Rect, color: Color32) {
+    let q = |x: f32, y: f32| {
+        egui::pos2(
+            rect.left() + x / 24. * rect.width(),
+            rect.top() + y / 24. * rect.height(),
+        )
+    };
+    let stroke = Stroke::new(1.8, color);
+    let line = |points: &[(f32, f32)]| {
+        p.add(egui::Shape::line(
+            points.iter().map(|&(x, y)| q(x, y)).collect(),
+            stroke,
+        ))
+    };
+    match icon {
+        Icon::Close => {
+            line(&[(6., 6.), (18., 18.)]);
+            line(&[(18., 6.), (6., 18.)]);
+        }
+        Icon::Edit => {
+            line(&[
+                (4., 16.),
+                (3., 21.),
+                (8., 20.),
+                (19., 9.),
+                (15., 5.),
+                (4., 16.),
+                (8., 20.),
+            ]);
+            line(&[(13.5, 6.5), (17.5, 10.5)]);
+        }
+        Icon::Trash => {
+            line(&[(4., 7.), (20., 7.)]);
+            line(&[(9., 7.), (9., 4.), (15., 4.), (15., 7.)]);
+            line(&[(18., 7.), (17., 20.), (7., 20.), (6., 7.)]);
+            line(&[(10., 11.), (10., 16.)]);
+            line(&[(14., 11.), (14., 16.)]);
+        }
+        Icon::Copy => {
+            p.rect_stroke(
+                egui::Rect::from_min_max(q(8., 8.), q(19., 19.)),
+                2.,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            line(&[
+                (16., 8.),
+                (16., 6.),
+                (14., 4.),
+                (6., 4.),
+                (4., 6.),
+                (4., 14.),
+                (6., 16.),
+                (8., 16.),
+            ]);
+        }
+        Icon::Save => {
+            line(&[
+                (5., 4.),
+                (17., 4.),
+                (19., 6.),
+                (19., 20.),
+                (5., 20.),
+                (5., 4.),
+            ]);
+            line(&[(8., 4.), (8., 10.), (16., 10.), (16., 4.)]);
+            line(&[(8., 20.), (8., 14.), (16., 14.), (16., 20.)]);
+        }
+        Icon::Folder => {
+            line(&[
+                (3., 7.),
+                (3., 17.),
+                (5., 19.),
+                (19., 19.),
+                (21., 17.),
+                (21., 9.),
+                (19., 7.),
+                (12., 7.),
+                (10., 5.),
+                (5., 5.),
+                (3., 7.),
+            ]);
+            p.circle_stroke(q(16.5, 13.5), rect.width() * 2.5 / 24., stroke);
+            line(&[(18.3, 15.3), (20.5, 17.5)]);
+        }
+        Icon::Stack => {
+            line(&[(4., 9.), (12., 4.), (20., 9.), (12., 14.), (4., 9.)]);
+            line(&[(4., 13.), (12., 18.), (20., 13.)]);
+            line(&[(4., 17.), (12., 22.), (20., 17.)]);
+        }
+    }
 }
 
 fn cover_uv(image: egui::Vec2, target: egui::Vec2) -> egui::Rect {
@@ -407,13 +708,7 @@ mod tests {
         can_save: bool,
         saved: bool,
     ) -> Option<Action> {
-        let screen = egui::Rect::from_min_size(
-            egui::Pos2::ZERO,
-            egui::vec2(
-                captures_app::preview::THUMBNAIL_WIDTH as f32,
-                captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
-            ),
-        );
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 160.));
         let tokens = crate::tokens::load()["dark-mustard"].clone();
         let mut input = raw(screen, events);
         input
@@ -445,6 +740,7 @@ mod tests {
                 depth: usize::from(!interactive),
                 desktop_pointer,
                 reject_offset: 0.,
+                right_anchor: false,
             },
         );
         let mut output = ctx.end_pass();
@@ -453,8 +749,8 @@ mod tests {
     }
 
     #[test]
-    fn all_action_labels_fit_real_card_width_with_runtime_spacing() {
-        for saved in [false, true] {
+    fn shipping_action_labels_fit_asymmetric_284_by_160_card() {
+        for (saved, right_anchor) in [(false, false), (true, false), (false, true), (true, true)] {
             let ctx = egui::Context::default();
             let tokens = crate::tokens::load()["dark-mustard"].clone();
             tokens.apply(&ctx, false);
@@ -463,15 +759,8 @@ mod tests {
                 egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
                 Default::default(),
             );
-            let rect = egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(
-                    (captures_app::preview::THUMBNAIL_WIDTH
-                        - 2. * captures_app::preview::THUMBNAIL_PADDING) as f32,
-                    captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
-                ),
-            );
-            ctx.begin_pass(raw(rect, vec![]));
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 160.));
+            ctx.begin_pass(raw(rect, moved(rect.center())));
             let mut ui = egui::Ui::new(
                 ctx.clone(),
                 egui::Id::unique("action-layout"),
@@ -495,16 +784,11 @@ mod tests {
                     depth: 0,
                     desktop_pointer: None,
                     reject_offset: 0.,
+                    right_anchor,
                 },
             );
             let mut output = ctx.end_pass();
-            let labels = [
-                "Copy",
-                if saved { "Reveal" } else { "Save" },
-                "Edit",
-                "Trash",
-                "×",
-            ];
+            let labels = ["Copy", if saved { "Show in Folder" } else { "Save file" }];
             let bounds: Vec<_> = labels
                 .iter()
                 .map(|label| {
@@ -520,15 +804,158 @@ mod tests {
                         .expect("every action must be painted")
                 })
                 .collect();
-            for pair in bounds.windows(2) {
-                assert!(
-                    pair[0].max.x + tokens.number("s-2") <= pair[1].min.x,
-                    "action labels overlap: {bounds:?}"
-                );
-            }
+            assert!(
+                bounds[0].max.y < bounds[1].min.y,
+                "actions must be vertical: {bounds:?}"
+            );
             assert!(bounds.iter().all(|bounds| rect.contains_rect(*bounds)));
             output.textures_delta.clear();
         }
+    }
+
+    #[test]
+    fn chrome_hides_at_rest_reveals_on_focus_and_keeps_busy_primary_contrast() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let texture = ctx.load_texture(
+            "chrome",
+            egui::ColorImage::filled([2, 2], Color32::WHITE),
+            Default::default(),
+        );
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 160.));
+        for (hovered, focused, busy) in [
+            (false, false, None),
+            (true, false, Some(Busy::Save)),
+            (false, true, None),
+        ] {
+            ctx.begin_pass(raw(
+                screen,
+                moved(if hovered {
+                    screen.center()
+                } else {
+                    egui::pos2(500., 500.)
+                }),
+            ));
+            let mut ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique("chrome-test"),
+                egui::UiBuilder::new().max_rect(screen),
+            );
+            if focused {
+                ui.memory_mut(|memory| {
+                    memory.request_focus(ui.scope_id().with(("copy", "fixture")))
+                });
+            }
+            show(
+                &mut ui,
+                &tokens,
+                View {
+                    artifact_id: "fixture",
+                    texture: &texture,
+                    width: 391,
+                    height: 207,
+                    busy,
+                    message: None,
+                    can_save: true,
+                    saved: false,
+                    interactive: true,
+                    collapsed: false,
+                    stack_count: 1,
+                    depth: 0,
+                    desktop_pointer: None,
+                    reject_offset: 0.,
+                    right_anchor: true,
+                },
+            );
+            let mut output = ctx.end_pass();
+            let text = |label: &str| {
+                output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => Some(text),
+                    _ => None,
+                })
+            };
+            assert_eq!(text("391 × 207").is_some(), !hovered && !focused);
+            assert_eq!(text("Copy").is_some(), hovered || focused);
+            if hovered || focused {
+                let save = text("Save file").unwrap();
+                assert_eq!(
+                    save.fallback_color,
+                    Color32::from_rgb(23, 24, 27),
+                    "busy yellow actions must not turn white"
+                );
+            }
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn image_drag_starts_on_image_press_but_never_on_action_press() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "drag-crossing",
+            egui::ColorImage::filled([2, 2], Color32::WHITE),
+            Default::default(),
+        );
+        let origin = egui::pos2(40., 60.);
+        run_card(&ctx, &texture, moved(origin), false, true);
+        assert_eq!(
+            run_card(&ctx, &texture, pointer(origin, true), false, true),
+            Some(Action::DragFile)
+        );
+        assert_eq!(
+            run_card(
+                &ctx,
+                &texture,
+                pointer(egui::pos2(142., 60.), false),
+                false,
+                true
+            ),
+            None
+        );
+        run_card(&ctx, &texture, moved(egui::pos2(142., 60.)), false, true);
+        assert_eq!(
+            run_card(
+                &ctx,
+                &texture,
+                pointer(egui::pos2(142., 60.), true),
+                false,
+                true
+            ),
+            None
+        );
+        assert_eq!(
+            run_card(
+                &ctx,
+                &texture,
+                pointer(egui::pos2(142., 60.), false),
+                false,
+                true
+            ),
+            Some(Action::Copy)
+        );
+    }
+
+    #[test]
+    fn image_drag_starts_right_after_pointer_rested_on_an_action() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "drag-after-action",
+            egui::ColorImage::filled([2, 2], Color32::WHITE),
+            Default::default(),
+        );
+        // The previous frame only saw the pointer over Copy; the move to the
+        // image and the press then arrive together in one frame.
+        run_card(&ctx, &texture, moved(egui::pos2(142., 60.)), false, true);
+        assert_eq!(
+            run_card(
+                &ctx,
+                &texture,
+                pointer(egui::pos2(40., 60.), true),
+                false,
+                true
+            ),
+            Some(Action::DragFile)
+        );
     }
 
     #[test]
@@ -539,7 +966,7 @@ mod tests {
             egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
             egui::TextureOptions::LINEAR,
         );
-        let click = egui::pos2(75., 138.);
+        let click = egui::pos2(142., 100.);
         for (saved, busy, can_save, expected) in [
             (false, None, true, Some(Action::Save)),
             (true, None, false, Some(Action::Reveal)),
@@ -603,7 +1030,7 @@ mod tests {
             egui::Id::unique("preview-controls-input-test"),
             egui::UiBuilder::new().max_rect(screen),
         );
-        let action = show_stack_controls(&mut ui, &tokens, 3, false);
+        let action = show_stack_controls(&mut ui, &tokens, 3, false, false);
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         action
@@ -644,6 +1071,7 @@ mod tests {
                     depth,
                     desktop_pointer: None,
                     reject_offset: 0.,
+                    right_anchor: false,
                 },
             );
             let mut output = ctx.end_pass();
@@ -746,14 +1174,14 @@ mod tests {
         );
 
         assert_eq!(
-            run_card(&ctx, &texture, moved(egui::pos2(30., 138.)), false, true),
+            run_card(&ctx, &texture, moved(egui::pos2(142., 60.)), false, true),
             None
         );
         assert_eq!(
             run_card(
                 &ctx,
                 &texture,
-                pointer(egui::pos2(30., 138.), true),
+                pointer(egui::pos2(142., 60.), true),
                 false,
                 true
             ),
@@ -763,7 +1191,7 @@ mod tests {
             run_card(
                 &ctx,
                 &texture,
-                pointer(egui::pos2(30., 138.), false),
+                pointer(egui::pos2(142., 60.), false),
                 false,
                 true
             ),
@@ -823,22 +1251,22 @@ mod tests {
     #[test]
     fn raw_input_routes_show_less_and_clear_all_controls() {
         let ctx = egui::Context::default();
-        assert_eq!(run_controls(&ctx, moved(egui::pos2(32., 10.))), None);
+        assert_eq!(run_controls(&ctx, moved(egui::pos2(40., 24.))), None);
         assert_eq!(
-            run_controls(&ctx, pointer(egui::pos2(32., 10.), true)),
+            run_controls(&ctx, pointer(egui::pos2(40., 24.), true)),
             None
         );
         assert_eq!(
-            run_controls(&ctx, pointer(egui::pos2(32., 10.), false)),
+            run_controls(&ctx, pointer(egui::pos2(40., 24.), false)),
             Some(StackAction::ToggleCollapsed)
         );
-        assert_eq!(run_controls(&ctx, moved(egui::pos2(305., 10.))), None);
+        assert_eq!(run_controls(&ctx, moved(egui::pos2(10., 24.))), None);
         assert_eq!(
-            run_controls(&ctx, pointer(egui::pos2(305., 10.), true)),
+            run_controls(&ctx, pointer(egui::pos2(10., 24.), true)),
             None
         );
         assert_eq!(
-            run_controls(&ctx, pointer(egui::pos2(305., 10.), false)),
+            run_controls(&ctx, pointer(egui::pos2(10., 24.), false)),
             Some(StackAction::ClearAll)
         );
     }
