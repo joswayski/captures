@@ -1998,7 +1998,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(end["x"]), 142.222, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(end["y"]), -99.556, accuracy: 0.001,
                        "preview whitespace maps to off-canvas document coordinates")
-        XCTAssertEqual((request["style"] as? [String: Any])?["color"] as? String, "#ff3b5c")
+        XCTAssertEqual((request["style"] as? [String: Any])?["color"] as? String, "#FF3B5C")
         XCTAssertEqual(request["opacity"] as? Double, 100)
         XCTAssertEqual(outputMode.selectedSegment, 0)
         XCTAssertFalse(outputMode.isEnabled, "accepted creation invalidates encoded output")
@@ -3174,7 +3174,7 @@ final class ScreenshotEditorTests: XCTestCase {
         var style = try XCTUnwrap(request["style"] as? [String: Any])
         XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
         XCTAssertEqual(style["color"] as? String, "#123456")
-        XCTAssertEqual(style["fill"] as? String, "#abcdef")
+        XCTAssertEqual(style["fill"] as? String, "#ABCDEF")
         XCTAssertEqual(style["strokeWidth"] as? Double, 13)
         XCTAssertEqual(style["strokeEnabled"] as? Bool, true)
         XCTAssertEqual(request["opacity"] as? Double, 37)
