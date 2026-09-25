@@ -726,7 +726,7 @@ final class MiniPreviewActions {
                         self.revealFiles([URL(fileURLWithPath: path)])
                         self.previews?.setStatus("Shown in Folder", for: artifact.id)
                     } else {
-                        self.previews?.setStatus("Saved file is missing", for: artifact.id)
+                        self.previews?.setStatus("Export missing", for: artifact.id)
                     }
                 }
             }

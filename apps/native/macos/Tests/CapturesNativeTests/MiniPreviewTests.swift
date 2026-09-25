@@ -217,7 +217,11 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(revealed, [URL(fileURLWithPath: "/exports/latest.png")])
         exists = false
         button.performClick(nil)
-        try waitUntil { controller.statusText(for: captured.id) == "Saved file is missing" }
+        try waitUntil { controller.statusText(for: captured.id) == "Export missing" }
+        let status = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == "Export missing" })
+        XCTAssertLessThanOrEqual(status.attributedStringValue.size().width, status.bounds.width,
+                                 "the missing-export status must fit without truncation")
         XCTAssertEqual(revealed.count, 1)
         XCTAssertEqual(transport.saveCount, 1)
         XCTAssertEqual(button.title, "Reveal")
