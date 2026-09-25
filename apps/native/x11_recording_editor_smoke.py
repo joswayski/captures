@@ -73,7 +73,10 @@ def main():
         child = subprocess.Popen(command, env=env, stdout=stdout, stderr=stderr)
         children.append(child)
         if announce:
-            assert select.select([child.stdout], [], [], 10)[0], name
+            # Cold CI X servers can exceed ten seconds before announcing readiness.
+            timeout = 60 if name == "xvfb" else 10
+            assert select.select([child.stdout], [], [], timeout)[0], (
+                f"{name} did not announce readiness within {timeout}s; inspect its stderr")
             return child.stdout.readline().decode().strip()
         return child
 

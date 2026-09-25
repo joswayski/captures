@@ -143,8 +143,10 @@ def main():
         process = subprocess.Popen(command, env=env, stdout=stdout, stderr=stderr)
         children.append(process)
         if announce:
-            if not select.select([process.stdout], [], [], 10)[0]:
-                raise RuntimeError(f"{name} did not announce its private endpoint")
+            # Cold CI X servers can exceed ten seconds before announcing readiness.
+            timeout = 60 if name == "xvfb" else 10
+            if not select.select([process.stdout], [], [], timeout)[0]:
+                raise RuntimeError(f"{name} did not announce readiness within {timeout}s; inspect its stderr")
             endpoint = process.stdout.readline().decode().strip()
             if not endpoint:
                 raise RuntimeError(f"{name} failed; see its stderr")
