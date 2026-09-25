@@ -6,6 +6,7 @@ pub mod instance;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+mod motion;
 #[cfg(any(target_os = "windows", test))]
 mod shell_ui;
 #[cfg(target_os = "windows")]
@@ -17,6 +18,8 @@ mod work_area;
 
 #[cfg(target_os = "windows")]
 pub use work_area::windows_monitor_work_area;
+
+pub use motion::prefers_reduced_motion;
 
 /// Returns whether the process belongs to an active, unlocked desktop session.
 pub fn capture_session_available() -> bool {
