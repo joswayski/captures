@@ -184,9 +184,17 @@ def main():
     def clipboard_pixels():
         value = subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
                                env=env, capture_output=True, timeout=5)
-        if value.returncode != 0:
+        # The reset xclip owner can answer an image/png request with its plain
+        # text before the asynchronous Copy takes ownership. Keep polling;
+        # the caller still requires the exact full-resolution image pixels.
+        if value.returncode != 0 or not value.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
             return None
         return subprocess.check_output(["convert", "png:-", "-depth", "8", "rgb:-"], input=value.stdout)
+
+    def second_action_y(entry):
+        # Shipping chrome hides Copy while the clipboard still holds this
+        # capture, centering Save file / Show in Folder on the card.
+        return 108 if clipboard_pixels() == rgb(entry.parent / "capture.png") else 127
 
     def wallpaper_crop(x, y, width, height):
         # Independent pixel oracle: asymmetric desktop split at (300,270).
@@ -499,6 +507,23 @@ def main():
                 expected_y = 12 if placement.startswith("top") else 600
                 assert (int(geometry["X"]), int(geometry["Y"])) == (expected_x, expected_y), geometry
                 assert (int(geometry["WIDTH"]), int(geometry["HEIGHT"])) == (340, 240), geometry
+                # Check the actual idle/hover presentation, not only clicks on
+                # controls. Sample empty media beside the centered action group.
+                run("xdotool", "mousemove", "--sync", "640", "440")
+                time.sleep(.25)
+                card_top = 52 if placement.startswith("top") else 28
+                crop = f"1x1+80+{card_top + 72}"
+                idle_pixel = run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-")
+                shot(preview, f"{prefix}-chrome-idle")
+                run("xdotool", "mousemove", "--sync", "--window", preview, "60", str(card_top + 72))
+                time.sleep(.25)
+                hover_pixel = run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-")
+                assert all(abs(b - a * .5) <= 2 for a, b in zip(idle_pixel, hover_pixel)), (
+                    "hover must dim only the media", list(idle_pixel), list(hover_pixel))
+                shot(preview, f"{prefix}-chrome-hover")
+                run("xdotool", "mousemove", "--sync", "640", "440")
+                time.sleep(.25)
+                assert run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-") == idle_pixel
                 if args.drag_only:
                     # Reject our own source without importing it into an editor.
                     # Record the real 420ms shake and settled pointer recovery.
@@ -508,8 +533,8 @@ def main():
                         env=env)
                     children.append(recording)
                     time.sleep(.5)
-                    run("xdotool", "mousemove", "--sync", "--window", preview, "150", "80", "mousedown", "1",
-                        "sleep", ".2", "mousemove", "--sync", "--window", preview, "190", "80", "sleep", ".5",
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "60", "90", "mousedown", "1",
+                        "sleep", ".2", "mousemove", "--sync", "--window", preview, "90", "90", "sleep", ".5",
                         "mousemove", "--sync", "--window", preview, "200", "90", "sleep", ".3", "mouseup", "1")
                     time.sleep(.7)
                     assert windows(PREVIEW) and not windows(EDITOR), "self drop must retain, not reimport"
@@ -517,13 +542,13 @@ def main():
                     shot(preview, "self-drop-settled")
                     for mode in ("cancel", "reject", "nofinish", "disappear", "accept"):
                         if mode == "accept":
-                            click(preview, 122, 169, activate=False)
+                            click(preview, 170, second_action_y(first), activate=False)
                             saved_path = Path(wait(lambda: json.loads(first.read_text()).get("saved_path"), "saved Unicode export"))
                         destination = output / f"received-{mode}.bin"
                         spawn(f"receiver-{mode}", ["/usr/bin/python3", str(Path(__file__).with_name("x11_drag_receiver.py")),
                               "--output", str(destination), "--mode", "accept" if mode == "cancel" else mode], True)
-                        run("xdotool", "mousemove", "--sync", "--window", preview, "150", "80", "mousedown", "1",
-                            "sleep", ".2", "mousemove", "--sync", "--window", preview, "190", "80", "sleep", ".5",
+                        run("xdotool", "mousemove", "--sync", "--window", preview, "60", "90", "mousedown", "1",
+                            "sleep", ".2", "mousemove", "--sync", "--window", preview, "90", "90", "sleep", ".5",
                             "mousemove", "--sync", "700", "550", "sleep", ".3")
                         events = destination.with_suffix(".jsonl")
                         wait(lambda: events.exists() and '"position"' in events.read_text(), "receiver negotiates COPY")
@@ -544,7 +569,9 @@ def main():
                             time.sleep(6 if mode in ("nofinish", "disappear") else .5)
                             assert windows(PREVIEW), f"{mode} must retain source preview"
                             subprocess.run(["xclip", "-selection", "clipboard"], input=b"reset", env=env, check=True)
-                            click(preview, 63, 169, activate=False)
+                            # Copy reappears once the host's 1 s clipboard check sees the reset.
+                            time.sleep(1.5)
+                            click(preview, 170, 89, activate=False)
                             wait(lambda: clipboard_pixels() == rgb(first.parent / "capture.png"),
                                  "pointer state recovers for exact-pixel Copy")
                     assert first.exists(), "drag dismissal does not delete History"
@@ -557,7 +584,7 @@ def main():
                         "-geometry", "220x70+900+20", "Keep this application focused"])
                     other = wait(lambda: windows("Preview action focus fixture"), "other app focus")[0]
                     run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
-                    click(preview, 63, 169, activate=False)  # Padded card Copy center.
+                    click(preview, 170, 89, activate=False)  # Centered Copy, not a footer.
 
                     def clipboard_png():
                         value = subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
@@ -571,7 +598,7 @@ def main():
                     assert pixels == rgb(first.parent / "capture.png"), "Copy changed full-resolution pixels"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Copy activated Captures"
 
-                    click(preview, 122, 169, activate=False)  # Padded card Save center.
+                    click(preview, 170, second_action_y(first), activate=False)  # Centered Save file.
                     exported = Path(wait(lambda: json.loads(first.read_text()).get("saved_path"), "saved export metadata"))
                     assert rgb(exported) == rgb(first.parent / "capture.png"), "Save changed full-resolution PNG pixels"
                     export_bytes = exported.read_bytes()
@@ -583,7 +610,7 @@ def main():
                         return [json.loads(line) for line in reveal_log.read_text().splitlines()] if reveal_log.exists() else []
 
                     time.sleep(.3)  # Allow the saved-state label to paint before another click.
-                    click(preview, 122, 169, activate=False)  # Same button is now Reveal.
+                    click(preview, 170, second_action_y(first), activate=False)  # Same button is now Show in Folder.
                     wait(lambda: reveals() == [[str(exported.parent)]], "Reveal receives exact Unicode export folder")
                     assert list(exported.parent.iterdir()) == [exported], "Reveal created another export"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Reveal activated Captures"
@@ -592,14 +619,14 @@ def main():
                     preserved = entries()
                     held = exported.with_suffix(".held")
                     exported.rename(held)
-                    click(preview, 122, 169, activate=False)
+                    click(preview, 170, second_action_y(first), activate=False)
                     time.sleep(.5)
                     shot(preview, f"{prefix}-reveal-missing")
                     assert reveals() == [[str(exported.parent)]], "missing export launched a file manager"
                     assert list(exported.parent.iterdir()) == [held], "missing export silently saved a replacement"
                     assert entries() == preserved and windows(PREVIEW), "missing export removed history or preview"
                     held.rename(exported)
-                    click(preview, 122, 169, activate=False)
+                    click(preview, 170, second_action_y(first), activate=False)
                     wait(lambda: len(reveals()) == 2, "Reveal retries after export is restored")
                     assert reveals() == [[str(exported.parent)]] * 2
 
@@ -615,7 +642,7 @@ def main():
                     preserved_private = private_files(first)
                     preserved = entries()
                     preserved_drafts = draft_files()
-                    click(preview, 175, 169, activate=False)  # Padded card Edit center.
+                    click(preview, 290, 50, activate=False)  # Top-right Edit on a left-anchored card.
                     editor = wait(lambda: windows(EDITOR),
                                   "Edit opens the screenshot editor")[0]
                     wait(lambda: active_window() == editor,
@@ -629,7 +656,7 @@ def main():
                     shot("root", f"{prefix}-edit-with-preview")
                     run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
                     assert active_window() == other
-                    click(preview, 175, 169, activate=False)
+                    click(preview, 290, 50, activate=False)
                     wait(lambda: active_window() == editor,
                          "repeated Edit focuses the existing screenshot editor")
                     assert windows(EDITOR) == [editor], (
@@ -644,7 +671,7 @@ def main():
                     assert draft_files() == preserved_drafts, "unmodified Edit changed saved drafts"
                     assert windows(PREVIEW) and not windows("Captures"), (
                         "closing Edit removed the preview or restored workspace")
-                    click(preview, 288, 169, activate=False)  # Padded card Dismiss center.
+                    click(preview, 50, 50, activate=False)  # Saved card Close (top-left).
                     wait(lambda: not windows(PREVIEW), "Dismiss closes only the card")
                     time.sleep(.3)
                     assert entries() == preserved and exported.read_bytes() == export_bytes, "Dismiss deleted history or export"
@@ -671,7 +698,7 @@ def main():
                     unsaved_private = private_files(unsaved)
                     unsaved_entries = entries()
                     shot(preview, f"{prefix}-trash-unsaved")
-                    click(preview, 220, 169, activate=False)  # Padded card Trash center.
+                    click(preview, 50, 50, activate=False)  # Unsaved Delete preserves History.
                     wait(lambda: not windows(PREVIEW), "unsaved Trash dismisses preview")
                     assert entries() == unsaved_entries, "unsaved Trash removed history"
                     assert private_files(unsaved) == unsaved_private, "unsaved Trash changed private files or metadata"
@@ -685,9 +712,9 @@ def main():
                     preview = wait(lambda: windows(PREVIEW), "saved Trash preview")[0]
                     run("xdotool", "windowminimize", root,
                         "windowactivate", "--sync", other, "windowfocus", "--sync", other)
-                    run("xdotool", "mousemove", "--sync", "--window", preview, "122", "169")
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "170", "127")
                     before_save = settled_preview(preview)
-                    click(preview, 122, 169, activate=False)
+                    click(preview, 170, 127, activate=False)
                     trash_export = Path(wait(lambda: json.loads(trashed.read_text()).get("saved_path"),
                                              "Trash fixture saved export metadata"))
                     wait(lambda: settled_preview(preview) != before_save, "saved preview state paints")
@@ -699,9 +726,9 @@ def main():
                     shot(preview, f"{prefix}-trash-saved")
                     held = trash_export.with_suffix(".held")
                     trash_export.rename(held)
-                    run("xdotool", "mousemove", "--sync", "--window", preview, "220", "169")
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "84", "50")
                     before_error = settled_preview(preview)
-                    click(preview, 220, 169, activate=False)
+                    click(preview, 84, 50, activate=False)
                     wait(lambda: windows(PREVIEW) and settled_preview(preview) != before_error,
                          "missing export Trash error paints")
                     shot(preview, f"{prefix}-trash-error")
@@ -714,7 +741,7 @@ def main():
                     assert not windows("Captures"), "failed Trash restored workspace"
 
                     held.rename(trash_export)
-                    click(preview, 220, 169, activate=False)
+                    click(preview, 84, 50, activate=False)
                     wait(lambda: not trash_export.exists() and not windows(PREVIEW),
                          "restored export moves to trash and closes preview")
                     assert {path: path.read_bytes() for path in trash_export.parent.iterdir()} == other_exports, (
@@ -781,28 +808,31 @@ def main():
                     shot(preview, f"{prefix}-three-cards")
                     assert run("xdotool", "getwindowfocus").decode().strip() != preview
 
-                    def card_action(index, x, count=None):
+                    def card_action(index, action, count=None):
                         count = len(stack_entries) if count is None else count
                         slot = count - 1 - index if placement.startswith("top") else index
-                        y = (52 if placement.startswith("top") else 28) + slot * 184 + 141
+                        x, local_y = (170, 61) if action == "copy" else (
+                            290 if placement.endswith("right") else 50, 22)
+                        y = (52 if placement.startswith("top") else 28) + slot * 184 + local_y
                         click(preview, x, y, activate=False)
 
                     # Oldest and newest have different dimensions and pixels;
                     # copying only the latest card cannot pass both assertions.
                     for index in (0, 2):
-                        card_action(index, 63)
+                        card_action(index, "copy")
                         expected_pixels = rgb(stack_entries[index].parent / "capture.png")
                         wait(lambda: clipboard_pixels() == expected_pixels, f"Copy routes to card {index}")
 
                     preserved = {path: (path.parent / "capture.png").read_bytes() for path in entries()}
-                    card_action(1, 288)
+                    card_action(1, "dismiss")
                     stack_entries.pop(1)
                     wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 424, "middle dismissal leaves two cards")
                     assert all((path.parent / "capture.png").read_bytes() == data for path, data in preserved.items())
 
                     def toggle():
                         height = int(window_geometry(preview)["HEIGHT"])
-                        click(preview, 65, 26 if placement.startswith("top") else height - 26, activate=False)
+                        click(preview, 268 if placement.endswith("right") else 72,
+                              26 if placement.startswith("top") else height - 26, activate=False)
 
                     toggle()
                     wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 264, "two-card compact pile")
@@ -903,13 +933,14 @@ def main():
                         run("xdotool", "mousemove", "--window", preview, "170", "400", "click", "--repeat", "30", "--delay", "30", "4")
                         time.sleep(.5)
                         shot(preview, f"{prefix}-overflow-oldest")
-                        click(preview, 63, 169, activate=False)
+                        click(preview, 170, 89, activate=False)
                         expected_pixels = rgb(stack_entries[0].parent / "capture.png")
                         wait(lambda: clipboard_pixels() == expected_pixels, "overflow retains actionable oldest card")
 
                     preserved = {path: (path.parent / "capture.png").read_bytes() for path in entries()}
                     height = int(window_geometry(preview)["HEIGHT"])
-                    click(preview, 250, 26 if placement.startswith("top") else height - 26, activate=False)
+                    click(preview, 298 if placement.endswith("right") else 42,
+                          26 if placement.startswith("top") else height - 26, activate=False)
                     wait(lambda: not windows(PREVIEW), "Clear all empties previews")
                     assert entries() == set(preserved), "Clear all removed history"
                     assert all((path.parent / "capture.png").read_bytes() == data for path, data in preserved.items())

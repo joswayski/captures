@@ -199,6 +199,10 @@ double captures_preview_dim_opacity_v1(size_t depth);
  * 1.8 units. Free with captures_settings_free_v1. */
 char *captures_icon_polylines_v1(const char *name);
 
+/* Idle mini-preview metadata, e.g. "1440 × 900 · 246 KB", matching the
+ * shipping card. Returns owned UTF-8; free with captures_settings_free_v1. */
+char *captures_preview_card_metadata_v1(uint32_t width, uint32_t height, uint64_t size_bytes);
+
 /* Owned immutable region session. Prepare/capture may block; use a worker after
  * hiding capture windows. Begin/retain a capture-flow guard on the event-loop
  * thread first. Freeze and cursor settings are fixed at prepare. No pixel data

@@ -830,6 +830,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let playbackLoop = NSButton(checkboxWithTitle: "Loop", target: nil, action: nil)
     private let playbackSound = NSButton(checkboxWithTitle: "Sound", target: nil, action: nil)
 
+    /// A user close of the editor window; quitting does not report closes.
+    var didClose: (String) -> Void = { _ in }
+
     init(tokens: Tokens, worker: RecordingEditorWorking = RecordingEditorWorker(),
          reportError: @escaping (String) -> Void = { _ in },
          didSaveCopy: @escaping () -> Void = {},
@@ -996,7 +999,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             return false
         }
         if dirty && !confirmDiscard() { return false }
-        closeSession(); return true
+        let closedArtifactID = artifactID
+        closeSession()
+        if let closedArtifactID { didClose(closedArtifactID) }
+        return true
     }
 
     func windowDidResize(_ notification: Notification) { cropOverlay.endDrag(); layout() }
