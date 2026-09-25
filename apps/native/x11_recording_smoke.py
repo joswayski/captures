@@ -97,7 +97,7 @@ def main():
 
     def meter_pixels(window):
         # The fixed-size live HUD's meter track only; exclude adjacent buttons.
-        pixels = run("import", "-window", window, "-crop", "28x4+272+51", "-depth", "8", "rgb:-")
+        pixels = run("import", "-window", window, "-crop", "28x10+272+45", "-depth", "8", "rgb:-")
         return sum(min(pixels[index:index + 3]) > 220 for index in range(0, len(pixels), 3))
 
     def wait(predicate, description):
