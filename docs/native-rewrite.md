@@ -856,6 +856,10 @@ native flow. Local capture remains signed-out and never uploads automatically.
   artifact/settings through sign-in. Shared Rust owns account/session state and
   uses explicit bearer transport; OS credential vaults persist tokens, never
   plaintext preferences. Canceling sign-in leaves the local capture untouched.
+  The unconnected `captures-account` prerequisite covers explicit request/verify,
+  account lookup, bearer persistence/retry, invalidation and logout with platform
+  vault adapters. Host controls, artifact retention and physical-vault acceptance
+  are still open on macOS, Windows, X11 and Wayland; this does not check the gate.
 - [ ] The popup previews the selected file and offers link access, optional
   password and expiry before explicit Upload and share. No upload merely from
   opening the popup. Existing API semantics are anyone-with-link plus optional

@@ -3,6 +3,7 @@ members = [
     "apps/api",
     "apps/desktop/src-tauri",
     "crates/captures-app",
+    "crates/captures-account",
     "crates/captures-capture",
     "crates/captures-feedback",
     "crates/captures-history",
