@@ -424,10 +424,12 @@ fn clipboard_chip(ui: &egui::Ui, tokens: &Tokens, card: egui::Rect, inset: f32) 
 pub fn show_stack_controls(
     ui: &mut egui::Ui,
     tokens: &Tokens,
-    _count: usize,
-    collapsed: bool,
     right_anchor: bool,
 ) -> Option<StackAction> {
+    use captures_app::preview::{
+        STACK_CLEAR_ALL_LABEL, STACK_CLEAR_ALL_TOOLTIP, STACK_MINIMIZE_HOVER_LABEL,
+        STACK_MINIMIZE_HOVER_WIDTH, STACK_MINIMIZE_LABEL,
+    };
     let mut action = None;
     let size = egui::vec2(28., 28.);
     let gap = tokens.number("s-1");
@@ -443,33 +445,207 @@ pub fn show_stack_controls(
             28. + gap
         };
     let y = ui.max_rect().center().y - 14.;
-    if control(
-        ui,
-        tokens,
-        egui::Rect::from_min_size(egui::pos2(outer_x, y), size),
-        "clear-all",
-        "Clear all",
+    // Clear all stays at the outside edge so the Show less pill grows inward
+    // and never covers it.
+    let clear = egui::Rect::from_min_size(egui::pos2(outer_x, y), size);
+    let clear_response = stack_button(ui, tokens, clear, "clear-all", STACK_CLEAR_ALL_LABEL, true);
+    paint_icon(
+        ui.painter(),
         Icon::Close,
-        true,
-        true,
-        false,
-    ) {
+        egui::Rect::from_center_size(clear.center(), egui::vec2(14., 14.)),
+        tokens.color("glass-text"),
+    );
+    if clear_response
+        .on_hover_text(STACK_CLEAR_ALL_TOOLTIP)
+        .clicked()
+    {
         action = Some(StackAction::ClearAll);
     }
-    if control(
+
+    // The pill keeps its hover width until the pointer leaves the wide
+    // bounds, so growing under a stationary pointer cannot flicker.
+    let minimize_id = ui.scope_id().with("show-less");
+    let expanded = ui.data(|data| data.get_temp::<bool>(minimize_id.with("expanded")))
+        == Some(true)
+        || ui.memory(|memory| memory.has_focus(minimize_id));
+    let width = if expanded {
+        STACK_MINIMIZE_HOVER_WIDTH as f32
+    } else {
+        28.
+    };
+    let minimize = if right_anchor {
+        egui::Rect::from_min_max(
+            egui::pos2(inner_x + 28. - width, y),
+            egui::pos2(inner_x + 28., y + 28.),
+        )
+    } else {
+        egui::Rect::from_min_size(egui::pos2(inner_x, y), egui::vec2(width, 28.))
+    };
+    let response = stack_button(
         ui,
         tokens,
-        egui::Rect::from_min_size(egui::pos2(inner_x, y), size),
+        minimize,
         "show-less",
-        if collapsed { "Expand" } else { "Show less" },
-        Icon::Stack,
-        true,
-        true,
-        false,
-    ) {
+        STACK_MINIMIZE_LABEL,
+        !expanded,
+    );
+    let hover = response.hovered() || response.has_focus();
+    if hover != expanded {
+        ui.data_mut(|data| data.insert_temp(minimize_id.with("expanded"), hover));
+        ui.ctx().request_repaint();
+    }
+    if expanded {
+        ui.painter().text(
+            minimize.center(),
+            egui::Align2::CENTER_CENTER,
+            STACK_MINIMIZE_HOVER_LABEL,
+            egui::FontId::proportional(tokens.number("text-2xs")),
+            tokens.color("glass-text"),
+        );
+    } else {
+        paint_icon(
+            ui.painter(),
+            Icon::Stack,
+            egui::Rect::from_center_size(minimize.center(), egui::vec2(14., 14.)),
+            tokens.color("glass-text"),
+        );
+    }
+    if response.clicked() {
         action = Some(StackAction::ToggleCollapsed);
     }
     action
+}
+
+/// Shipping `.thumbnail-stack-control`: solid glass square, raised on hover
+/// (the expanded Show less pill keeps the resting glass instead).
+fn stack_button(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    rect: egui::Rect,
+    id: &str,
+    label: &str,
+    raise_on_hover: bool,
+) -> egui::Response {
+    let response = ui.interact(rect, ui.scope_id().with(id), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    let (fill, border) = if response.hovered() && raise_on_hover {
+        ("glass-raised-solid", "glass-border-strong")
+    } else {
+        ("glass-strong-solid", "glass-border")
+    };
+    ui.painter().rect(
+        rect,
+        tokens.number("r-md"),
+        tokens.color(fill),
+        Stroke::new(1., tokens.color(border)),
+        egui::StrokeKind::Inside,
+    );
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect.expand(2.),
+            tokens.number("r-md"),
+            Stroke::new(2., tokens.color("theme-accent")),
+            egui::StrokeKind::Outside,
+        );
+    }
+    response
+}
+
+/// Shipping overflow cues: centered chevron tabs at the window's top and
+/// bottom edges while an expanded stack hides cards there. Returns the number
+/// of card slots to scroll (negative is up).
+pub fn show_overflow_cues(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    window: egui::Rect,
+    overflow: captures_app::preview::StackOverflow,
+    top_anchor: bool,
+) -> Option<i32> {
+    let mut slots = None;
+    let size = egui::vec2(46., 22.);
+    let radius = tokens.number("r-lg");
+    for (above, visible) in [(true, overflow.above), (false, overflow.below)] {
+        if !visible {
+            continue;
+        }
+        let rect = egui::Rect::from_center_size(
+            egui::pos2(
+                window.center().x,
+                if above {
+                    window.top() + 6. + size.y / 2.
+                } else {
+                    window.bottom() - 6. - size.y / 2.
+                },
+            ),
+            size,
+        );
+        let label = captures_app::preview::overflow_cue_label(above, top_anchor);
+        let response = ui.interact(
+            rect,
+            ui.scope_id().with(("overflow-cue", above)),
+            egui::Sense::click(),
+        );
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+        let corners = if above {
+            egui::CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: radius as u8,
+                se: radius as u8,
+            }
+        } else {
+            egui::CornerRadius {
+                nw: radius as u8,
+                ne: radius as u8,
+                sw: 0,
+                se: 0,
+            }
+        };
+        let paint_rect = if response.hovered() {
+            egui::Rect::from_center_size(rect.center(), size * 1.05)
+        } else {
+            rect
+        };
+        ui.painter().rect(
+            paint_rect,
+            corners,
+            tokens.color(if response.hovered() {
+                "glass-raised"
+            } else {
+                "glass-strong"
+            }),
+            Stroke::new(1., tokens.color("glass-border")),
+            egui::StrokeKind::Inside,
+        );
+        let chevron = egui::Rect::from_center_size(rect.center(), egui::vec2(16., 16.));
+        let point = |x: f32, y: f32| {
+            egui::pos2(
+                chevron.left() + x / 16. * chevron.width(),
+                chevron.top() + y / 16. * chevron.height(),
+            )
+        };
+        let points = if above {
+            [point(3.5, 10.), point(8., 5.5), point(12.5, 10.)]
+        } else {
+            [point(3.5, 6.), point(8., 10.5), point(12.5, 6.)]
+        };
+        ui.painter().add(egui::Shape::line(
+            points.to_vec(),
+            Stroke::new(2., tokens.color("glass-text")),
+        ));
+        if response.has_focus() {
+            ui.painter().rect_stroke(
+                rect.expand(2.),
+                corners,
+                Stroke::new(2., tokens.color("theme-accent")),
+                egui::StrokeKind::Outside,
+            );
+        }
+        if response.on_hover_text(label).clicked() {
+            slots = Some(if above { -1 } else { 1 });
+        }
+    }
+    slots
 }
 
 #[derive(Clone, Copy)]
@@ -1158,10 +1334,123 @@ mod tests {
             egui::Id::unique("preview-controls-input-test"),
             egui::UiBuilder::new().max_rect(screen),
         );
-        let action = show_stack_controls(&mut ui, &tokens, 3, false, false);
+        let action = show_stack_controls(&mut ui, &tokens, false);
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         action
+    }
+
+    fn painted_texts(output: &egui::FullOutput) -> Vec<String> {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn minimize_swaps_icon_for_show_less_label_on_hover_and_grows_inward() {
+        for right_anchor in [false, true] {
+            let ctx = egui::Context::default();
+            let tokens = crate::tokens::load()["dark-mustard"].clone();
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 52.));
+            // Resting minimize control: 32..60 left-anchored, 224..252 right.
+            let pointer = egui::pos2(if right_anchor { 238. } else { 46. }, 26.);
+            let mut label_rect = None;
+            for (frame, position) in [(0, egui::pos2(500., 500.)), (1, pointer), (2, pointer)] {
+                ctx.begin_pass(raw(screen, moved(position)));
+                let mut ui = egui::Ui::new(
+                    ctx.clone(),
+                    egui::Id::unique("show-less-test"),
+                    egui::UiBuilder::new().max_rect(screen),
+                );
+                show_stack_controls(&mut ui, &tokens, right_anchor);
+                let mut output = ctx.end_pass();
+                let texts = painted_texts(&output);
+                assert_eq!(
+                    texts.iter().any(|text| text == "Show less"),
+                    frame == 2,
+                    "frame {frame}: {texts:?}"
+                );
+                if frame == 2 {
+                    label_rect = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "Show less" => {
+                            Some(text.galley.rect.translate(text.pos.to_vec2()))
+                        }
+                        _ => None,
+                    });
+                }
+                output.textures_delta.clear();
+            }
+            let label = label_rect.unwrap();
+            // The 92 px pill keeps the Clear all square (outer edge) uncovered.
+            if right_anchor {
+                assert!(label.max.x <= 252. && label.min.x >= 160., "{label:?}");
+            } else {
+                assert!(label.min.x >= 32. && label.max.x <= 124., "{label:?}");
+            }
+        }
+    }
+
+    fn run_cues(
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        overflow: captures_app::preview::StackOverflow,
+        top_anchor: bool,
+    ) -> (Option<i32>, egui::FullOutput) {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(340., 600.));
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        ctx.begin_pass(raw(screen, events));
+        let mut ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::unique("overflow-cue-test"),
+            egui::UiBuilder::new().max_rect(screen),
+        );
+        let slots = show_overflow_cues(&mut ui, &tokens, screen, overflow, top_anchor);
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        (slots, output)
+    }
+
+    #[test]
+    fn overflow_cues_only_show_hidden_edges_and_scroll_one_slot() {
+        use captures_app::preview::StackOverflow;
+        let ctx = egui::Context::default();
+        let (_, output) = run_cues(&ctx, vec![], StackOverflow::default(), false);
+        assert!(
+            !output
+                .shapes
+                .iter()
+                .any(|shape| matches!(shape.shape, egui::Shape::Rect(_))),
+            "no overflow paints no cues"
+        );
+        let both = StackOverflow {
+            above: true,
+            below: true,
+        };
+        for (point, expected) in [(egui::pos2(170., 17.), -1), (egui::pos2(170., 583.), 1)] {
+            run_cues(&ctx, moved(point), both, false);
+            run_cues(&ctx, pointer(point, true), both, false);
+            assert_eq!(
+                run_cues(&ctx, pointer(point, false), both, false).0,
+                Some(expected)
+            );
+        }
+        let above_only = StackOverflow {
+            above: true,
+            below: false,
+        };
+        let point = egui::pos2(170., 583.);
+        run_cues(&ctx, moved(point), above_only, false);
+        run_cues(&ctx, pointer(point, true), above_only, false);
+        assert_eq!(
+            run_cues(&ctx, pointer(point, false), above_only, false).0,
+            None,
+            "a hidden cue must not scroll"
+        );
     }
 
     #[test]

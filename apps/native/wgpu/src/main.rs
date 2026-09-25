@@ -16,6 +16,7 @@ mod recording_hud;
 mod recording_recovery;
 mod recording_region;
 mod recording_saved_notice;
+mod reveal;
 #[cfg(any(target_os = "windows", test))]
 mod root_repaint;
 mod selector;
