@@ -287,6 +287,10 @@ final class EditorDrawOverlay: EditorViewportGestureView {
     var brushOutlineColor = NSColor.labelColor
     var fillColor = NSColor.controlAccentColor.withAlphaComponent(0.22)
     var strokeColor = NSColor.controlAccentColor
+    var annotationOpacity: CGFloat = 1 { didSet { needsDisplay = true } }
+    var annotationStrokeWidth: CGFloat = 8 { didSet { needsDisplay = true } }
+    var annotationStrokeEnabled = false { didSet { needsDisplay = true } }
+    var annotationFillEnabled = true { didSet { needsDisplay = true } }
     var imageRect: (() -> NSRect)?
     private(set) var startPoint: NSPoint?
     private(set) var currentPoint: NSPoint?
@@ -459,10 +463,17 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             ring.lineWidth = 1.5; ring.stroke()
             return
         }
+        // Composite the annotation once, including overlapping fill and stroke.
+        // Erase/Restore guides above do not use annotation opacity.
+        let context = NSGraphicsContext.current?.cgContext
+        context?.setAlpha(annotationOpacity)
+        context?.beginTransparencyLayer(auxiliaryInfo: nil)
+        defer { context?.endTransparencyLayer() }
         if shape == .line || shape == .arrow || shape == .pen || shape.polygonGeometryKind != nil {
             let samples = shape == .pen ? penPoints : [canvasPoint(for: startPoint), canvasPoint(for: currentPoint)]
             let kind = shape.polygonGeometryKind ?? (shape == .arrow ? 0 : 1)
-            guard let geometry = NativeEditorDrawGeometry(kind: kind, samples: samples),
+            guard let geometry = NativeEditorDrawGeometry(kind: kind, samples: samples,
+                                                         strokeWidth: Double(annotationStrokeWidth)),
                   let first = geometry.points.first else { return }
             let image = presentedImageRect
             let scale = image.width / canvasSize.width
@@ -473,16 +484,17 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             geometry.points.dropFirst().forEach { path.line(to: position($0)) }
             strokeColor.setFill(); strokeColor.setStroke()
             if shape.polygonGeometryKind != nil {
-                path.close(); fillColor.setFill(); path.fill()
-                path.lineWidth = 2; path.stroke()
+                path.close()
+                if annotationFillEnabled { fillColor.setFill(); path.fill() }
+                if annotationStrokeEnabled { path.lineWidth = annotationStrokeWidth * scale; path.stroke() }
             } else if shape == .arrow { path.close(); path.fill() }
             else if geometry.points.allSatisfy({ $0 == first }) {
-                let radius = geometry.strokeWidth * scale / 2
+                let radius = annotationStrokeWidth * scale / 2
                 let center = position(first)
                 NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius,
                                            width: radius * 2, height: radius * 2)).fill()
             } else {
-                path.lineWidth = geometry.strokeWidth * scale
+                path.lineWidth = annotationStrokeWidth * scale
                 path.lineCapStyle = .round; path.lineJoinStyle = .round; path.stroke()
             }
             return
@@ -493,8 +505,12 @@ final class EditorDrawOverlay: EditorViewportGestureView {
                           height: abs(currentPoint.y - startPoint.y))
         let path = shape == .rectangle ? NSBezierPath(rect: rect)
             : NSBezierPath(ovalIn: rect)
-        fillColor.setFill(); path.fill()
-        strokeColor.setStroke(); path.lineWidth = 2; path.stroke()
+        if annotationFillEnabled { fillColor.setFill(); path.fill() }
+        if annotationStrokeEnabled {
+            strokeColor.setStroke()
+            path.lineWidth = annotationStrokeWidth * presentedImageRect.width / canvasSize.width
+            path.stroke()
+        }
     }
 }
 
@@ -875,6 +891,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let createTextColor = NSTextField()
     private var createTextControls: [NSView] = []
     private var createTextDefaultsPublished = false
+    private let drawingStroke = NSButton(checkboxWithTitle: "Stroke", target: nil, action: nil)
+    private let drawingFill = NSButton(checkboxWithTitle: "Fill", target: nil, action: nil)
+    private let drawingStrokeColor = NSTextField()
+    private let drawingFillColor = NSTextField()
+    private let drawingStrokeWidth = NSTextField()
+    private let drawingOpacity = NSTextField()
+    private var drawingDefaultControls: [NSView] = []
+    private var drawingFillControls: [NSView] = []
+    private var drawingDefaultsArtifactID: String?
+    private var drawingDropShadow = false
     private let textEditor = NSTextView()
     private let textSize = NSTextField()
     private let textColor = NSTextField()
@@ -1084,6 +1110,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 }
                 accepted = true
                 self.createTextSize.stringValue = self.format(presentation.snapshot.initialTextSize)
+                self.publishInitialDrawingDefaults(presentation.snapshot)
                 self.publish(presentation, resetCrop: true)
                 self.status.textColor = self.tokens.color("text-muted")
                 self.status.stringValue = presentation.snapshot.hasDraft
@@ -1530,11 +1557,74 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         softnessFormatter.maximum = 100
         brushSoftness.formatter = softnessFormatter; brushSoftness.stringValue = "18"
         drawHelper = panelLabel("Other tools create one annotation layer on release.",
-                                frame: NSRect(x: 0, y: 278, width: 252, height: 42), muted: true,
+                                frame: NSRect(x: 0, y: 408, width: 252, height: 42), muted: true,
                                 parent: content)
+        buildDrawingDefaultControls(in: content)
         buildCreateTextControls(in: content)
         buildTextControls(in: content)
         publishDrawToolControls()
+    }
+
+    private func buildDrawingDefaultControls(in content: NSView) {
+        let strokeColorLabel = panelFieldLabel("Stroke color", x: 0, y: 146, parent: content)
+        let fillColorLabel = panelFieldLabel("Fill color", x: 132, y: 146, parent: content)
+        configure(drawingStrokeColor, frame: NSRect(x: 0, y: 168, width: 120, height: 30),
+                  label: "New drawing stroke color", parent: content)
+        configure(drawingFillColor, frame: NSRect(x: 132, y: 168, width: 120, height: 30),
+                  label: "New drawing fill color", parent: content)
+        drawingStrokeColor.formatter = nil; drawingFillColor.formatter = nil
+        let widthLabel = panelFieldLabel("Width (2–40)", x: 0, y: 208, parent: content)
+        let opacityLabel = panelFieldLabel("Opacity (0–100)", x: 132, y: 208, parent: content)
+        configure(drawingStrokeWidth, frame: NSRect(x: 0, y: 230, width: 120, height: 30),
+                  label: "New drawing stroke width", parent: content)
+        configure(drawingOpacity, frame: NSRect(x: 132, y: 230, width: 120, height: 30),
+                  label: "New drawing opacity", parent: content)
+        [drawingStrokeColor, drawingFillColor, drawingStrokeWidth, drawingOpacity].forEach { $0.delegate = self }
+        drawingStroke.frame = NSRect(x: 0, y: 270, width: 120, height: 24)
+        drawingFill.frame = NSRect(x: 132, y: 270, width: 120, height: 24)
+        drawingStroke.setAccessibilityLabel("New drawing stroke")
+        drawingFill.setAccessibilityLabel("New drawing fill")
+        drawingStroke.target = self; drawingStroke.action = #selector(drawingDefaultsChanged(_:))
+        drawingFill.target = self; drawingFill.action = #selector(drawingDefaultsChanged(_:))
+        content.addSubview(drawingStroke); content.addSubview(drawingFill)
+        drawingDefaultControls = [strokeColorLabel, fillColorLabel, drawingStrokeColor, drawingFillColor,
+                                  widthLabel, opacityLabel, drawingStrokeWidth, drawingOpacity,
+                                  drawingStroke, drawingFill]
+        drawingFillControls = [fillColorLabel, drawingFillColor, drawingFill]
+    }
+
+    private func publishInitialDrawingDefaults(_ snapshot: NativeEditorSnapshot) {
+        guard drawingDefaultsArtifactID != snapshot.artifactID, let style = snapshot.initialAnnotationStyle else { return }
+        drawingDefaultsArtifactID = snapshot.artifactID
+        drawingStrokeColor.stringValue = style.color
+        drawingFillColor.stringValue = style.fill ?? style.color
+        drawingStrokeWidth.stringValue = format(style.strokeWidth)
+        drawingOpacity.stringValue = "100"
+        drawingStroke.state = style.strokeEnabled ? .on : .off
+        drawingFill.state = style.fill == nil ? .off : .on
+        drawingDropShadow = style.dropShadow
+        drawingDefaultsChanged()
+    }
+
+    @objc private func drawingDefaultsChanged(_ sender: Any? = nil) {
+        if sender as? NSButton === drawingFill, drawingFill.state == .on {
+            drawingFillColor.stringValue = drawingStrokeColor.stringValue
+        }
+        updateDrawingPreviewStyle()
+    }
+
+    private func updateDrawingPreviewStyle() {
+        if let color = NSColor(hex: drawingStrokeColor.stringValue) { drawOverlay.strokeColor = color }
+        if let color = NSColor(hex: drawingFillColor.stringValue) { drawOverlay.fillColor = color }
+        if let width = number(drawingStrokeWidth), (2...40).contains(width) {
+            drawOverlay.annotationStrokeWidth = CGFloat(width)
+        }
+        if let opacity = number(drawingOpacity), (0...100).contains(opacity) {
+            drawOverlay.annotationOpacity = CGFloat(opacity / 100)
+        }
+        drawOverlay.annotationStrokeEnabled = drawingStroke.state == .on
+        drawOverlay.annotationFillEnabled = drawingFill.state == .on
+        drawOverlay.needsDisplay = true
     }
 
     private func buildCreateTextControls(in content: NSView) {
@@ -1998,11 +2088,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let wand = shape == .wand
         let brush = shape.isBackgroundBrush
         let creatingText = shape == .text
+        let textSelected = selectedLayer?.kind == .text
+        let creatingDrawing = !wand && !brush && !creatingText && !textSelected
         wandToleranceLabel?.isHidden = !wand
         wandTolerance.isHidden = !wand; wandContiguous.isHidden = !wand
         brushSizeLabel?.isHidden = !brush; brushSize.isHidden = !brush
         brushSoftnessLabel?.isHidden = !brush; brushSoftness.isHidden = !brush
         createTextControls.forEach { $0.isHidden = !creatingText }
+        drawingDefaultControls.forEach { $0.isHidden = !creatingDrawing }
+        let closed = [.rectangle, .ellipse, .triangle, .diamond, .star].contains(shape)
+        drawingStroke.isHidden = !creatingDrawing || !closed
+        drawingFillControls.forEach { $0.isHidden = !creatingDrawing || !closed }
         drawHelper.stringValue = wand
             ? "Wand removes matching pixels from the frontmost visible image."
             : brush
@@ -2010,14 +2106,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 : shape == .text
                     ? "Click once to create empty auto-width text. Edit it below, then Apply."
                     : "This tool creates one annotation layer on release."
-        let textSelected = selectedLayer?.kind == .text
         textControls.forEach { $0.isHidden = !textSelected }
         // Other tools need no Wand/brush/text-default fields. Collapse their
         // reserved space without overlapping Text's creation controls.
         let compact = textSelected && !wand && !brush && !creatingText
-        drawHelper.frame.origin.y = compact ? 148 : 278
+        drawHelper.frame.origin.y = compact ? 148 : creatingDrawing ? 308 : 278
         if let heading = textControls.first, let content = heading.superview {
-            let offset = (compact ? 196.0 : 326.0) - heading.frame.minY
+            let offset = (compact ? 196.0 : creatingDrawing ? 358.0 : 326.0) - heading.frame.minY
             for control in textControls { control.frame.origin.y += offset }
             updateTextShadowControls()
             content.frame.size.height = textSelected
@@ -2063,6 +2158,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSTextField else { return }
+        if [drawingStrokeColor, drawingFillColor, drawingStrokeWidth, drawingOpacity]
+            .contains(where: { $0 === field }) {
+            updateDrawingPreviewStyle()
+            return
+        }
         if [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) {
             publishCropSelection()
             return
@@ -2494,14 +2594,42 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if shape == .text {
             beginTextInput(at: start)
             return
-        } else if shape == .pen {
-            request = ["operation": "create_freehand_path", "points": points.map { ["x": $0.x, "y": $0.y] }]
         } else {
-            request = ["operation": shape == .line || shape == .arrow ? "create_open_shape" : "create_closed_shape",
-                       "shape": shape.rawValue,
-                       "start": ["x": start.x, "y": start.y], "end": ["x": end.x, "y": end.y]]
+            guard let style = drawingRequestStyle(shape: shape) else { return }
+            guard let opacity = number(drawingOpacity), (0...100).contains(opacity) else {
+                showError("Drawing opacity must be between 0 and 100."); return
+            }
+            if shape == .pen {
+                request = ["operation": "create_freehand_path", "points": points.map { ["x": $0.x, "y": $0.y] },
+                           "style": style, "opacity": opacity]
+            } else {
+                request = ["operation": shape == .line || shape == .arrow ? "create_open_shape" : "create_closed_shape",
+                           "shape": shape.rawValue,
+                           "start": ["x": start.x, "y": start.y], "end": ["x": end.x, "y": end.y],
+                           "style": style, "opacity": opacity]
+            }
         }
         command(request, message: "Drawing \(shape.rawValue)…", createdLayerExistingIDs: Set(layers.map(\.id)))
+    }
+
+    private func drawingRequestStyle(shape: EditorDrawOverlay.Shape) -> [String: Any]? {
+        guard let color = PreferencesController.normalizeHex(drawingStrokeColor.stringValue),
+              let width = number(drawingStrokeWidth), (2...40).contains(width) else {
+            showError("Enter drawing colors as #RGB or #RRGGBB and stroke width from 2 to 40.")
+            return nil
+        }
+        let closed = [.rectangle, .ellipse, .triangle, .diamond, .star].contains(shape)
+        var fill: Any = NSNull()
+        if closed && drawingFill.state == .on {
+            guard let color = PreferencesController.normalizeHex(drawingFillColor.stringValue) else {
+                showError("Enter drawing fill color as #RGB or #RRGGBB."); return nil
+            }
+            fill = color
+        }
+        updateDrawingPreviewStyle()
+        return ["color": color, "fill": fill,
+                "strokeWidth": width, "strokeEnabled": drawingStroke.state == .on,
+                "dropShadow": drawingDropShadow]
     }
 
     private func beginTextInput(at point: NSPoint) {
