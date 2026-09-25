@@ -636,9 +636,10 @@ not let clicks reach images underneath. Each edit clears the canvas fill, keeps
 the original image pixels, and supports undo/redo and draft restore. The original
 History capture remains unchanged. **Erase** and **Restore** use adjustable brush
 diameter and softness; Restore paints from the retained original image. The brush
-outline shows size and path while dragging; pixels apply on release in one undo
-step. Escape, focus loss or changing tools cancels an unfinished stroke. Live pixel
-painting and the shipping brush cursor design remain parity work.
+ring shows size while shared-renderer pixels preview the stroke during dragging.
+Release commits one undo step; Escape, focus loss or changing tools cancels the
+preview without editing. The shipping brush cursor design and physical-platform
+input acceptance remain parity work.
 Text controls support multiline content, pinned font families, size, bold/italic,
 alignment, color, square/rounded background plates, outlines and a Drop shadow toggle.
 Apply changes the document in one undo step; Cancel restores accepted values.

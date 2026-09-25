@@ -372,7 +372,9 @@ bool captures_editor_frame_pixels_v1(const CapturesEditorFrame *frame, CapturesR
 void captures_editor_frame_free_v1(CapturesEditorFrame *frame);
 
 /* Worker-only uncommitted drawing render. Accepts create_closed_shape,
- * create_open_shape or create_freehand_path requests. Never changes document,
+ * create_open_shape, create_freehand_path or paint_image_background requests.
+ * Brush requests contain the complete gesture, rendered from published assets.
+ * Never changes document,
  * undo/redo, assets, published frame or drafts; no I/O. Retains independent
  * pixels freed with frame_free_v1. Session access must remain serialized.
  * NULL output refuses the operation; otherwise writes owned success/error JSON

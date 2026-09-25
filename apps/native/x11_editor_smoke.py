@@ -1859,8 +1859,16 @@ def main():
             run("xdotool", "mousemove", "--window", editor, *map(str, brush_start), "mousedown", "1",
                 "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, brush_end), "sleep", ".3")
             shot(editor, "brush-active")
+            left, top, scale = fit_geometry(document_size(), window_size())
+            def brush_pixel(name):
+                x, y = round(left + 100 * scale), round(top + 100 * scale)
+                return run("convert", str(output / f"{name}.png"), "-crop", f"1x1+{x}+{y}",
+                           "-depth", "8", "rgb:-")
+            assert brush_pixel("brush-active") != brush_pixel("brush-controls"), "erase must show live pixels before release"
             assert draft.read_bytes() == before, "brush preview must not persist pixels"
             run("xdotool", "key", "Escape", "mouseup", "1", "sleep", ".3")
+            shot(editor, "brush-cancelled")
+            assert brush_pixel("brush-cancelled") == brush_pixel("brush-controls"), "Escape restores published pixels"
             save_layers(lambda values: values[0]["src"] == source, "escape cancels brush")
             drag((338, 189), (438, 229))
             erased = save_layers(lambda values: values[0]["src"] != source, "erase completed stroke")[0]
@@ -1872,11 +1880,22 @@ def main():
             assert edge[:3] == bytes((229, 179, 68)) and 0 < edge[3] < 255, edge
             asset_pixel(erased, 2, 1, (40, 110, 166, 255))
             shot(editor, "brush-erased")
+            assert brush_pixel("brush-active") == brush_pixel("brush-erased"), "live erase matches committed transparency"
             click(editor, 35, 62)
             save_layers(lambda values: values[0]["src"] == source, "one-step brush undo")
             click(editor, 98, 62)
             save_layers(lambda values: values[0]["src"] == erased["src"], "brush redo")
             inspector_click(170, 221)
+            before = draft.read_bytes()
+            start, end = fixture_point((108, 189)), fixture_point((208, 229))
+            run("xdotool", "mousemove", "--window", editor, *map(str, start), "mousedown", "1",
+                "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, end), "sleep", ".3")
+            shot(editor, "brush-restore-active")
+            document_pixel("brush-restore-active", 100, 100, (229, 179, 68))
+            assert draft.read_bytes() == before, "restore preview must not persist pixels"
+            run("xdotool", "key", "Escape", "mouseup", "1", "sleep", ".3")
+            shot(editor, "brush-restore-cancelled")
+            assert brush_pixel("brush-restore-cancelled") == brush_pixel("brush-erased"), "cancelled restore retains erased pixels"
             drag((338, 189), (438, 229))
             restored = save_layers(lambda values: values[0]["src"] != erased["src"], "restore stroke")[0]
             assert restored["originalSrc"] == source
@@ -2276,8 +2295,12 @@ def main():
         click(editor, 98, 62)
         assert save_layers(lambda values: len(values) == 3, "cancel preserves freehand redo")[-1]["id"] == dot["id"]
         drag((320, 500), (420, 560))
-        save_layers(lambda values: len(values) == 4, "outside freehand stroke")
-        assert saved(640, 479, 0, 0)  # authored sample max y=471 plus shipping 8px padding
+        outside = save_layers(lambda values: len(values) == 4, "outside freehand stroke")[-1]
+        outside_y = max(point["y"] for point in outside["points"])
+        # The canvas can grow while X11 delivers this drag, changing the Fit transform
+        # before the final pointer event. Check the authored geometry rather than the
+        # nominal pre-growth coordinate: shipping adds 8px beyond its furthest sample.
+        assert outside_y > 360 and saved(640, math.ceil(outside_y) + 8, 0, 0)
         shot(editor, "freehand-outside")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "freehand-minimum")
@@ -2864,7 +2887,11 @@ def main():
         drag((298, 500), (358, 570))  # Fully outside the image grows the canvas.
         outside = save_layers(lambda values: len(values) == 4, "outside shape retained")[-1]
         assert outside["shape"] == "rectangle"
-        assert saved(640, 486, 0, 0)
+        assert (outside["x"], outside["y"], outside["endX"]) == (60, 411, 120)
+        assert outside["endY"] > outside["y"] > 360
+        stroke_extent = math.ceil(outside["style"]["strokeWidth"] / 2) + 1
+        expected_height = math.ceil(max(outside["y"], outside["endY"]) + stroke_extent)
+        assert saved(640, expected_height, 0, 0)
         shot(editor, "shape-outside-expanded")
         assert (artifact / "capture.png").read_bytes() == original
         click(editor, 275, 62)

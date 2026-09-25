@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause (silent by default), opt-in Loop and accepted-mix Sound preview, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
 | Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and hover fan, explicit optional feedback | Capture-time permission recovery, remaining Preferences parity, remaining preview effects, physical setup/login and installed Open With acceptance, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; remaining recording controls |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, remaining viewport/output controls and Tauri design parity; remaining recording controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises; unsigned development package staging | Physical acceptance, accessibility/IME, Wayland live capture, release packaging/signing/updater, performance/energy and rollback gates |
 
 Development package staging now supplies macOS Editor/Alternate document types,
@@ -309,13 +309,16 @@ that retained original, including after draft reopen. Shared Rust/TypeScript vec
 check exact pixels. Both native Draw panels now connect Erase/Restore with diameter
 28 (4–120) and softness 18 (0–100). They sample press/movement/release into one
 worker command, including stationary release stamps that affect soft-edge alpha.
-The interim preview is a clipped path and brush-size ring, not live raster pixels;
-release applies the stroke. Escape, focus loss, close, viewport or tool/section changes
+Both hosts render live brush pixels on the serialized worker from the complete
+gesture and published assets, with one in-flight render and one replaceable pending
+request. Preview never publishes assets, history or drafts; late replies cannot
+revive a cancelled gesture. The size ring remains visible; release applies one
+stroke. Escape, focus loss, close, viewport or tool/section changes
 cancel without editing. Pan and clipped/off-image initial presses never paint.
 X11 tests cover cancellation, actual feathered alpha, erase/restore, undo/redo, drafts
 and clipboard; AppKit has input/bridge tests and minimum light/dark/error fixtures.
 Windows/Wayland presentation and physical AppKit input remain unverified; sampling
-cadence, live pixel feedback and the Tauri brush cursor/layout remain parity work.
+cadence and the Tauri brush cursor/layout remain parity work.
 Both hosts connect Geometry → Trim edges through a shared `trim_canvas` command.
 It fits visible layer geometry, including locked/zero-opacity and off-canvas layers,
 rounds bounds outward, and translates every layer including hidden siblings. Empty,
