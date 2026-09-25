@@ -27,6 +27,46 @@ private final class OnboardingTransport: SettingsTransport {
 }
 
 final class OnboardingTests: XCTestCase {
+    func testRecoveryDonePreservesSetupAndNeverRestartsOrCompletes() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            for state in ["denied", "ready", "error"] {
+                let transport = OnboardingTransport()
+                transport.granted = state == "ready"
+                transport.screenRequested = true
+                transport.canRequest = false
+                if state == "error" { transport.failure = SettingsStoreError.backend("Permission status unavailable. Refresh to retry.") }
+                let controller = OnboardingController(store: try SettingsStore(path: "/fixture.json", transport: transport))
+                var closed = false
+                let view = OnboardingView(frame: NSRect(x: 0, y: 0, width: 700, height: 620),
+                    tokens: Tokens.variants["\(appearance)-mustard"]!, controller: controller,
+                    done: { closed = true })
+                view.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+                let loaded = expectation(description: "recovery-\(appearance)-\(state)")
+                controller.requiresAttention = { loaded.fulfill() }
+                controller.check()
+                let buttons = view.subviews.compactMap { $0 as? NSButton }
+                let done = try XCTUnwrap(buttons.first { $0.title == "Done" })
+                XCTAssertFalse(done.isEnabled, "In-flight status requests retain the sheet")
+                wait(for: [loaded], timeout: 2)
+                XCTAssertTrue(done.isEnabled, "Denied access and check failures cannot trap the user")
+                XCTAssertTrue(try XCTUnwrap(buttons.first { $0.title == "Restart Captures" }).isHidden)
+                XCTAssertFalse(buttons.contains { $0.title == "Finish setup" })
+                view.layoutSubtreeIfNeeded()
+                if let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
+                    let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                    view.cacheDisplay(in: view.bounds, to: bitmap)
+                    let path = URL(fileURLWithPath: directory).appendingPathComponent("permission-recovery-\(appearance)-\(state).png")
+                    try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: path)
+                }
+                done.performClick(nil)
+                XCTAssertTrue(closed)
+                XCTAssertEqual(transport.requests.compactMap { $0["action"] as? String }, ["check"])
+            }
+        }
+    }
+
     func testRestartPreservesProfileAndQueuedMediaWithoutReplayingLaunchFlags() throws {
         let options = try Options(["--live", "--scene", "idle", "--history-root", "/profile space/history",
             "--settings-file", "/profile %/settings.json", "--appearance", "light",

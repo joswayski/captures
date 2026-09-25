@@ -445,6 +445,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var onboardingWasPresented = false
     private var onboardingController: OnboardingController?
     private var onboardingView: OnboardingView?
+    private var permissionController: OnboardingController?
+    private var permissionSheet: NSWindow?
     private var liveContent: Surface?
     private var liveStyleRevision = 0
     private var renderedLiveStyleRevision = -1
@@ -574,7 +576,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func drainOpenImages() {
-        guard options.live, onboardingReady, !pendingOpenImages.isEmpty else { return }
+        guard options.live, onboardingReady, permissionSheet == nil, !pendingOpenImages.isEmpty else { return }
         if scene != "live" { scene = "live"; render() }
         guard let liveController else { return }
         liveController.openImages(pendingOpenImages)
@@ -602,6 +604,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !options.live }
     func applicationDidBecomeActive(_ notification: Notification) {
+        if let permissionController, !permissionController.busy { permissionController.check() }
         guard scene == "onboarding", onboardingController?.busy == false,
               onboardingController?.state != nil else { return }
         onboardingController?.check()
@@ -617,6 +620,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         terminating = true
         nativeInstance?.stopAccepting()
         onboardingController?.flush()
+        permissionController?.flush()
         performTermination(flushPreferences: { [weak self] in self?.preferencesController?.flush() },
             cancelCapture: { [weak self] in self?.liveController?.finishCapture(restoreWindow: false) },
             closeShortcuts: { [weak self] in self?.closeCaptureShortcuts() },
@@ -665,8 +669,47 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         if scene == "onboarding" { render(); return }
         preferencesController?.restyle()
         feedbackController?.restyle(tokens)
+        renderPermissionSheet()
         liveStyleRevision += 1
         rebuildRenderedLiveWorkspaceIfNeeded()
+    }
+
+    private func showPermissions() {
+        guard onboardingReady, !terminating, !captureBusy, window.attachedSheet == nil else { return }
+        do {
+            // Use a separate controller: a completed profile must not run the
+            // first-run completion/restart callbacks when checking revoked access.
+            preferencesController?.flush()
+            permissionController = OnboardingController(store: try SettingsStore(path: options.settingsFile))
+            let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 620),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            sheet.title = "Capture permissions"
+            sheet.isReleasedWhenClosed = false
+            permissionSheet = sheet
+            renderPermissionSheet()
+            liveController?.setPermissionsVisible(true)
+            window.beginSheet(sheet)
+            permissionController?.check()
+        } catch {
+            presentHostError(title: "Permissions Unavailable", message: error.localizedDescription)
+        }
+    }
+
+    private func renderPermissionSheet() {
+        guard let permissionSheet, let permissionController else { return }
+        permissionSheet.appearance = NSAppearance(named: tokens.color("text").brightnessComponent > 0.5 ? .darkAqua : .aqua)
+        permissionSheet.contentView = OnboardingView(frame: NSRect(x: 0, y: 0, width: 700, height: 620),
+            tokens: tokens, controller: permissionController, done: { [weak self] in self?.closePermissions() })
+    }
+
+    private func closePermissions() {
+        guard let sheet = permissionSheet, permissionController?.busy == false else { return }
+        window.endSheet(sheet)
+        sheet.orderOut(nil)
+        permissionSheet = nil
+        permissionController = nil
+        liveController?.setPermissionsVisible(false)
+        drainOpenImages()
     }
 
     private func startOnboarding() {
@@ -893,7 +936,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self?.updateShortcutState()
                 }, reportError: { [weak self] message in
                     self?.presentHostError(title: "Capture Failed", message: message)
-                }) { [weak self] in
+                }, showPermissions: { [weak self] in self?.showPermissions() }) { [weak self] in
                     self?.showPreferences()
                 }
             renderedLiveStyleRevision = liveStyleRevision
@@ -939,7 +982,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func openPreview(_ artifact: CaptureArtifact) {
-        if liveController?.externalOpenPending == true { return }
+        if permissionSheet != nil || liveController?.externalOpenPending == true { return }
         previewSelectionID = artifact.id
         if scene != "live" { scene = "live"; render() }
         liveController?.openPreview(artifact)
@@ -1089,6 +1132,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     private func launchCapture(_ kind: StillCaptureKind) {
         guard onboardingReady else { showOnboarding(); return }
+        guard permissionSheet == nil else { window.makeKeyAndOrderFront(nil); return }
         guard liveController?.capture(kind) == true else {
             presentHostError(title: "Capture Unavailable",
                 message: "The capture workspace is still loading or another capture is already active.")
@@ -1098,6 +1142,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     private func launchNewCapture(recordingTarget: UnifiedCaptureTarget? = nil) {
         guard onboardingReady else { showOnboarding(); return }
+        guard permissionSheet == nil else { window.makeKeyAndOrderFront(nil); return }
         if liveController?.showRecordingControls() == true { return }
         guard liveController?.newCapture(recordingTarget: recordingTarget) == true else {
             presentHostError(title: "Capture Unavailable",
@@ -1107,6 +1152,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func showHistory() {
+        guard permissionSheet == nil else { window.makeKeyAndOrderFront(nil); return }
         guard options.live else {
             scene = "history"; render(); return
         }
@@ -1122,6 +1168,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func showPreferences() {
+        guard permissionSheet == nil else { window.makeKeyAndOrderFront(nil); return }
         guard !options.live || onboardingReady else { showOnboarding(); return }
         preferencesController?.flush()
         scene = "preferences"
