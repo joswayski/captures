@@ -1051,8 +1051,12 @@ hosts settle a 200 ms transition. AppKit follows the system Reduce Motion settin
 wgpu supports explicit `--reduced-motion`, while automatic Windows/Linux motion
 preference detection remains open. Reduced motion switches immediately. AppKit
 uses native frame animation; wgpu repaints only while egui's transition is active.
-This slice intentionally connects translation only: the shipping 3D depth,
-rotation, scale, shading and per-card 16 ms stagger, plus external file drag,
+Both hosts also paint the shipping `glass-strong-solid` depth overlay on compact
+rear cards: shared Rust calculates `min(.72, poseDepth * .14)`, with no shade on
+the front or expanded images. AppKit uses a clipped native view overlay; wgpu
+paints the same token over the retained image without altering source pixels.
+This connects translation and depth shading: the shipping 3D depth,
+rotation, scale and per-card 16 ms stagger, plus external file drag,
 dust/sway/expand effects and cross-display reanchoring remain open. Physical
 AppKit, Windows and Wayland presentation/interaction are unverified; private X11
 provides the Linux rendering/input evidence. The effects parity gate remains open.

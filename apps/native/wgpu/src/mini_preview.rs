@@ -39,6 +39,7 @@ pub struct View<'a> {
     pub interactive: bool,
     pub collapsed: bool,
     pub stack_count: usize,
+    pub depth: usize,
     pub desktop_pointer: Option<egui::Pos2>,
 }
 
@@ -56,6 +57,15 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         .fit_to_exact_size(card.size())
         .corner_radius(tokens.number("r-xl") as u8)
         .paint_at(ui, card);
+    if view.collapsed && view.depth > 0 {
+        ui.painter().rect_filled(
+            card,
+            tokens.number("r-xl"),
+            tokens
+                .color("glass-strong-solid")
+                .gamma_multiply(captures_app::preview::collapsed_dim_opacity(view.depth) as f32),
+        );
+    }
     ui.painter().rect_stroke(
         card,
         tokens.number("r-xl"),
@@ -329,6 +339,7 @@ mod tests {
                 interactive,
                 collapsed,
                 stack_count: 3,
+                depth: usize::from(!interactive),
                 desktop_pointer,
             },
         );
@@ -356,6 +367,54 @@ mod tests {
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         action
+    }
+
+    #[test]
+    fn only_compact_rear_images_receive_the_glass_depth_overlay() {
+        for (collapsed, depth, expected) in [(true, 0, false), (true, 1, true), (false, 1, false)] {
+            let ctx = egui::Context::default();
+            let texture = ctx.load_texture(
+                "shade",
+                egui::ColorImage::filled([2, 2], egui::Color32::RED),
+                egui::TextureOptions::LINEAR,
+            );
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 160.));
+            let tokens = crate::tokens::load()["dark-mustard"].clone();
+            ctx.begin_pass(raw(screen, vec![]));
+            let mut ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique("shade-test"),
+                egui::UiBuilder::new().max_rect(screen),
+            );
+            show(
+                &mut ui,
+                &tokens,
+                View {
+                    artifact_id: "red",
+                    texture: &texture,
+                    width: 2,
+                    height: 2,
+                    busy: None,
+                    message: None,
+                    can_save: true,
+                    interactive: depth == 0,
+                    collapsed,
+                    stack_count: 2,
+                    depth,
+                    desktop_pointer: None,
+                },
+            );
+            let mut output = ctx.end_pass();
+            // CSS depth1=.13748, glass-strong-solid=(15,15,18). Premultiplied
+            // 8-bit overlay rounds to (2,2,2,35), not black or full opacity.
+            let shade = egui::Color32::from_rgba_premultiplied(2, 2, 2, 35);
+            assert_eq!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Rect(rect) if rect.fill == shade)),
+                expected
+            );
+            output.textures_delta.clear();
+        }
     }
 
     #[test]

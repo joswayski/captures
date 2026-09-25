@@ -359,6 +359,12 @@ pub fn stack_pose_depth(depth: f64) -> f64 {
     }
 }
 
+/// Shipping compact-card overlay, painted with `glass-strong-solid`. The front
+/// stays unmodified; deep piles cap the shade rather than hiding older images.
+pub fn collapsed_dim_opacity(depth: usize) -> f64 {
+    (stack_pose_depth(depth as f64) * 0.14).min(0.72)
+}
+
 pub fn collapsed_peek(count: usize, hovered: bool) -> f64 {
     let extra = count.saturating_sub(1) as f64;
     let pose = stack_pose_depth(extra);
@@ -616,6 +622,16 @@ mod tests {
         }
         assert_eq!(stack.ids().len(), 40);
         assert_eq!(stack.card_layout(39, true).unwrap().depth, 0);
+    }
+
+    #[test]
+    fn compact_depth_shade_preserves_front_and_caps_the_receding_tail() {
+        assert_eq!(collapsed_dim_opacity(0), 0.);
+        // Independently evaluate CSS min(.72, n * (24 + .55*n) / (n+24) * .14).
+        assert!((collapsed_dim_opacity(1) - 0.13748).abs() < 1e-12);
+        assert!((collapsed_dim_opacity(5) - 0.6456896551724138).abs() < 1e-12);
+        assert_eq!(collapsed_dim_opacity(6), 0.72);
+        assert_eq!(collapsed_dim_opacity(usize::MAX), 0.72);
     }
 
     #[test]

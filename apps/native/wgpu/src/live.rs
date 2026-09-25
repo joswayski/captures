@@ -3696,6 +3696,7 @@ impl Live {
                             interactive: card.layout.interactive,
                             collapsed,
                             stack_count: count,
+                            depth: card.layout.depth,
                             desktop_pointer,
                         },
                     );
