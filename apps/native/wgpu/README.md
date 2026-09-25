@@ -220,6 +220,16 @@ transitions request one paint, not a recurring hidden repaint loop. Released
 0.36.2 lacks that API; 0.34.3 also lacks the native idle-loop fix. Do not downgrade
 solely to match the shipping toolchain.
 
+At this pin with winit 0.30.13, Windows can keep repainting an animated editor
+without delivering an already-requested visible root redraw. The host mirrors
+accepted ROOT repaint deadlines and dispatches one due pass at an event boundary;
+it does not poll or advance future deadlines. Hidden/minimized roots retain
+eframe's normal throttled path, and Linux is unchanged. A later native redraw may
+produce one redundant frame. Re-evaluate this adapter when changing the renderer
+pin. `CAPTURES_NATIVE_TRACE=1` enables opt-in event/pass/scheduler diagnostics
+without recording media paths or input contents. The forwarding smoke supports
+`--trace`; CI also exercises staged Windows forwarding with diagnostics off.
+
 From the repository root, on either Windows or Linux:
 
 ```sh

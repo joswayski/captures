@@ -133,8 +133,13 @@ launch at login, or complete lifecycle parity.
 Live hosts now elect one process per canonical History root. Subsequent launches
 forward media paths or request native reactivation without creating UI or capture
 workers. Fixtures remain independent. See [DEVELOPMENT.md](../../DEVELOPMENT.md#native-frontend-migration)
-for limits, acknowledgement semantics and cross-platform process tests. This does
-not register installed file associations or close physical lifecycle acceptance.
+for limits, acknowledgement semantics and cross-platform process tests.
+Optional [development Open With packages](../../DEVELOPMENT.md#native-development-open-with)
+stage a separate AppKit `.app`, Windows per-user alternate registration files or a
+Linux desktop entry. Nothing is installed or registered by staging; opt-in steps
+and removal are documented separately. Both CLIs support `--live -- FILE...`.
+The bundle defaults to live mode and collects cold Apple events before election.
+These packages do not close physical lifecycle or installed-release acceptance.
 
 Linux uses SNI/KSNI over session D-Bus, not XEmbed or GTK/AppIndicator. Building
 needs pkg-config and libdbus-1-dev; runtime needs a registered StatusNotifier host

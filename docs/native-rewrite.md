@@ -22,9 +22,23 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause (silent by default), opt-in Loop and accepted-mix Sound preview, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
-| Supporting UI | Appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, login items, installed Open With, crash reporting |
+| Supporting UI | Appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, login items, installed Open With acceptance, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; remaining recording controls |
-| Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
+| Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises; unsigned development package staging | Physical acceptance, accessibility/IME, Wayland live capture, release packaging/signing/updater, performance/energy and rollback gates |
+
+Development package staging now supplies macOS Editor/Alternate document types,
+Windows HKCU alternate ProgID/Application registration and Linux `%F` desktop
+metadata for PNG/JPEG/WebP/GIF/MP4/WebM. It never registers automatically or changes
+shipping identity/default handlers. Windows/Linux commands use `--live -- FILE...`
+so paths cannot become options. The AppKit bundle defaults to live and collects
+cold Apple events before instance election, including forced-secondary launches;
+it resolves resources inside the package rather than a SwiftPM build path.
+Python tests compare shipping formats, selective removal and actual GIO argument
+expansion; native CI exercises AppKit LaunchServices and staged Windows command
+delivery. Private X11 exercises the same positional forwarding path. Windows
+Explorer, physical Finder/Linux file-manager acceptance, accessibility, Wayland
+live capture, signing/notarization, redistributable dependency bundling and update
+installation remain open. No parity gate closes from this development package.
 
 The former History and recording/HUD/feedback stacks are integrated through
 [#583](https://github.com/joswayski/captures/pull/583),

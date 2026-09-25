@@ -1303,6 +1303,7 @@ impl Editor {
     }
 
     pub fn show(&self, ctx: &egui::Context, tokens: &Tokens) {
+        let _span = crate::diagnostics::span("editor-register");
         if self.closed() {
             return;
         }
@@ -1318,7 +1319,14 @@ impl Editor {
                 .with_inner_size([1000., 700.])
                 .with_min_inner_size([760., 540.]),
             move |ui, _| {
+                let _span = crate::diagnostics::span("editor-callback");
                 let mut view = state.lock().unwrap();
+                crate::diagnostics::event("editor-locked", || {
+                    serde_json::json!({
+                        "actualViewport":format!("{:?}", ui.ctx().viewport_id()),
+                        "rootPass":ui.ctx().cumulative_pass_nr_for(egui::ViewportId::ROOT),
+                    })
+                });
                 if ui.input(|input| input.viewport().close_requested()) {
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::CancelClose);

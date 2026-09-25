@@ -141,7 +141,7 @@ Neither path changes source bytes. External recordings offer Save new copy, not
 Replace original. An already-open source keeps its edits; a closed screenshot
 source with a saved draft must be restored or explicitly discarded from History
 before source reload. AppKit also queues macOS file-open callbacks in live mode.
-These development binaries do not register Open With associations. Subsequent
+Bare development binaries do not register Open With associations. Subsequent
 `--live` launches using the same canonical History root forward files to the
 running host before initializing UI, settings or shortcuts; no files means
 relaunch/focus. Relative paths use the sender's working directory. A different
@@ -163,6 +163,83 @@ unchanged sources and normal-quit restart. Mac/Windows native CI runs this check
 Linux needs a private X11 session and window manager (as in the existing smoke
 harness). The X11 `--external-image-only` suite also verifies edited-source alias
 refocus, unchanged drafts and relaunch from a minimized root in both appearances.
+
+### Native development Open With
+
+`python3 apps/native/package.py` stages **unsigned development packages**, not
+Preview installers. It never installs, registers, changes defaults, downloads
+dependencies or modifies shipping data. Build the native host first, then choose
+a new final output directory; staging refuses to overwrite one. Windows/Linux
+registration contains absolute paths, so unregister before moving the package.
+FFmpeg/FFprobe still need separate installation for GIF/video. Platform runtime
+dependencies remain those of the workbenches; these are not redistributable builds.
+
+macOS, after `bash apps/native/macos/build.sh`:
+
+```sh
+python3 apps/native/package.py --platform macos \
+  --binary apps/native/macos/.build/release/CapturesNative \
+  --resources apps/native/macos/.build/release/CapturesNative_CapturesNative.bundle \
+  --output "$HOME/Applications/captures-native-dev"
+codesign --force --deep --sign - "$HOME/Applications/captures-native-dev/Captures Native Development.app"
+```
+
+The `.app` uses its own packaged Swift resources and defaults to live mode.
+Open it once, then use Finder **Open With → Other…** without **Always Open With**.
+Its six document types use Editor/Alternate, not default ownership. Cold Apple
+events join the startup queue before single-instance election; running-app events
+use the existing queue. To remove, quit this development app, unregister its exact
+path with `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$HOME/Applications/captures-native-dev/Captures Native Development.app"`,
+then delete that development package. This is ad-hoc signing, not notarization or
+release signing; do not distribute it as a trusted download.
+
+Windows, from PowerShell after building the wgpu host:
+
+```powershell
+python apps/native/package.py --platform windows `
+  --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe `
+  --output "$env:LOCALAPPDATA\Captures Native Development"
+```
+
+Review and explicitly import `register-open-with.reg` from that directory to opt
+in. It writes only HKCU development ProgID/Application entries and alternate
+`OpenWithProgids` values; no elevation, extension default or `UserChoice` change.
+Choose **Open with → Captures Native Development**, not **Always**. Document-mode
+multi-selection invokes one process per file; the existing instance queues each
+request (Explorer determines cross-process order). Import `unregister-open-with.reg`
+before deleting/moving the package. It removes only this development identity and
+its alternate values, retaining shared extension keys and other apps. Explorer
+may need a sign-out/in to refresh its cached choices. Do not register two copies.
+
+Linux, after building the wgpu host:
+
+```sh
+python3 apps/native/package.py --platform linux \
+  --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
+  --output "$HOME/.local/opt/captures-native-dev"
+# Optional per-user registration (does not select a default):
+desktop-file-install --dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications" \
+  "$HOME/.local/opt/captures-native-dev/es.captur.native-development.desktop"
+update-desktop-database "${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+```
+
+The desktop entry passes local files as `--live -- %F`, without a shell. Staging
+paths cannot contain `%`, `=`, NUL or newlines; media filenames may contain `%` and
+shell metacharacters. Remove only `es.captur.native-development.desktop` from the
+applications directory and rerun `update-desktop-database` to unregister, then
+delete the package. Wayland live capture remains gated; association metadata does
+not change that limitation.
+
+Both CLIs accept `--live -- FILE...`; all arguments after `--` are paths, never
+options. `instance_smoke.py --positional` exercises that path on a disposable
+profile. Python package tests check metadata/default preservation and actual GIO
+argument expansion. macOS CI runs `macos_open_with_smoke.py` against a disposable
+ad-hoc-signed bundle, including cold/warm/forced-secondary Apple events. Windows
+CI tests the staged binary and command arguments, not Explorer registration.
+Physical Finder/Explorer/file-manager, accessibility and installed-update
+acceptance remain open on every platform.
+
+### Native editor validation
 
 Both native executables accept `--font-license` to print the bundled editor-font
 copyright and full OFL notice without opening a window. Native resources and

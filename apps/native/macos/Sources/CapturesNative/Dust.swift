@@ -7,7 +7,7 @@ struct DustFixture: Decodable {
     let particles: [ThumbnailDustParticle]
 
     static func load() throws -> DustFixture {
-        let url = Bundle.module.url(forResource: "dust", withExtension: "json")!
+        let url = NativeResources.bundle.url(forResource: "dust", withExtension: "json")!
         return try JSONDecoder().decode(Self.self, from: Data(contentsOf: url))
     }
 }

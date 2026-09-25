@@ -5,7 +5,7 @@ struct Tokens: Decodable {
     let numbers: [String: Double]
 
     static let variants: [String: Tokens] = {
-        let url = Bundle.module.url(forResource: "tokens", withExtension: "json")!
+        let url = NativeResources.bundle.url(forResource: "tokens", withExtension: "json")!
         return try! JSONDecoder().decode([String: Tokens].self, from: Data(contentsOf: url))
     }()
 
