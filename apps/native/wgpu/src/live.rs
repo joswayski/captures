@@ -393,6 +393,15 @@ enum SelectorMessage {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum PreviewMessage {
+    DragStarted {
+        artifact_id: String,
+        generation: u64,
+    },
+    DragFinished {
+        artifact_id: String,
+        generation: u64,
+        result: Result<captures_app::preview::PreviewDragOutcome, String>,
+    },
     Copy {
         artifact_id: String,
         generation: u64,
@@ -451,6 +460,7 @@ struct PreviewCard {
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
     saved_path: Option<PathBuf>,
+    rejected_at: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -463,6 +473,7 @@ struct PreviewRenderCard {
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
     saved_path: Option<PathBuf>,
+    rejected_at: Option<Instant>,
     layout: captures_app::preview::PreviewCardLayout,
     hover_y: f64,
 }
@@ -576,6 +587,7 @@ impl MiniPreviews {
                 busy: None,
                 message: None,
                 saved_path: artifact.entry.saved_path.as_deref().map(PathBuf::from),
+                rejected_at: None,
             },
         );
         if target.is_some() {
@@ -832,7 +844,9 @@ impl Live {
         let (preview_tx, preview_rx) = mpsc::channel();
         let (notice_tx, notice_rx) = mpsc::channel();
         let capture_ctx = ctx.clone();
+        let drag_root = root.clone();
         let worker = thread::spawn(move || {
+            let _ = captures_app::preview_drag::clear_previous_exports(&drag_root);
             // Retain ownership on X11. Disk decode and clipboard encoding never
             // block the UI, and the full uncompressed image is not retained by it.
             let mut clipboard = None;
@@ -2067,6 +2081,36 @@ impl Live {
         }
         while let Ok(message) = self.preview_rx.try_recv() {
             match message {
+                PreviewMessage::DragStarted {
+                    artifact_id,
+                    generation,
+                } if self.previews.accepts(&artifact_id, generation) => {
+                    let card = self.previews.cards.get_mut(&artifact_id).unwrap();
+                    card.busy = Some(crate::mini_preview::Busy::Drag);
+                    card.message = Some("Dragging original file…".into());
+                }
+                PreviewMessage::DragFinished {
+                    artifact_id,
+                    generation,
+                    result,
+                } if self.previews.accepts(&artifact_id, generation) => {
+                    let card = self.previews.cards.get_mut(&artifact_id).unwrap();
+                    card.busy = None;
+                    card.message = result.as_ref().err().cloned();
+                    card.rejected_at = matches!(
+                        result,
+                        Ok(captures_app::preview::PreviewDragOutcome::Reject)
+                    )
+                    .then(Instant::now);
+                    if matches!(
+                        result,
+                        Ok(captures_app::preview::PreviewDragOutcome::Dismiss)
+                    ) {
+                        self.previews.dismiss(&artifact_id, generation);
+                    }
+                    request_hidden_root_paint(ctx);
+                    ctx.request_repaint();
+                }
                 PreviewMessage::Copy {
                     artifact_id,
                     generation,
@@ -2231,7 +2275,9 @@ impl Live {
                         ctx.request_repaint();
                     }
                 }
-                PreviewMessage::Copy { .. }
+                PreviewMessage::DragStarted { .. }
+                | PreviewMessage::DragFinished { .. }
+                | PreviewMessage::Copy { .. }
                 | PreviewMessage::Save { .. }
                 | PreviewMessage::Reveal { .. }
                 | PreviewMessage::Trash { .. }
@@ -3605,7 +3651,9 @@ impl Live {
             }
             Response::HistoryRoot { .. }
             | Response::OpenedImage { .. }
-            | Response::OpenedMedia { .. } => {}
+            | Response::OpenedMedia { .. }
+            | Response::PreviewDragPrepared { .. }
+            | Response::PreviousPreviewDragsCleared => {}
         }
     }
 
@@ -3737,6 +3785,7 @@ impl Live {
                     busy: card.busy,
                     message: card.message.clone(),
                     saved_path: card.saved_path.clone(),
+                    rejected_at: card.rejected_at,
                     layout: self.previews.stack.card_layout(index, top_anchor)?,
                     hover_y: self
                         .previews
@@ -3750,6 +3799,7 @@ impl Live {
             return;
         }
         let tokens = tokens.clone();
+        let drag_root = self.root.clone();
         let geometry = captures_app::preview::thumbnail_geometry(
             preview_bounds,
             count,
@@ -3833,6 +3883,13 @@ impl Live {
                     None
                 };
                 let mut show_card = |ui: &mut egui::Ui, card: &PreviewRenderCard| {
+                    let reject_offset = card.rejected_at.map_or(0., |start| {
+                        let elapsed = start.elapsed().as_secs_f32();
+                        if !reduced_motion && elapsed < 0.420 {
+                            ui.ctx().request_repaint();
+                        }
+                        crate::mini_preview::reject_offset(elapsed, reduced_motion)
+                    });
                     let action = crate::mini_preview::show(
                         ui,
                         &tokens,
@@ -3850,9 +3907,34 @@ impl Live {
                             stack_count: count,
                             depth: card.layout.depth,
                             desktop_pointer,
+                            reject_offset,
                         },
                     );
                     let next_message = match action {
+                        Some(crate::mini_preview::Action::DragFile) => {
+                            let artifact_id = card.artifact_id.clone();
+                            let generation = card.generation;
+                            let completed = sender.clone();
+                            let wake = ui.ctx().clone();
+                            crate::outbound_drag::request(
+                                ui.ctx(),
+                                drag_root.clone(),
+                                artifact_id.clone(),
+                                Box::new(move |result| {
+                                    let _ = completed.send(PreviewMessage::DragFinished {
+                                        artifact_id,
+                                        generation,
+                                        result,
+                                    });
+                                    request_hidden_root_paint(&wake);
+                                    wake.request_repaint();
+                                }),
+                            )
+                            .then(|| PreviewMessage::DragStarted {
+                                artifact_id: card.artifact_id.clone(),
+                                generation,
+                            })
+                        }
                         Some(crate::mini_preview::Action::ExpandStack) => {
                             Some(PreviewMessage::ToggleCollapsed)
                         }

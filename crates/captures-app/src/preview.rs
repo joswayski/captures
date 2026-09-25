@@ -17,6 +17,36 @@ pub const THUMBNAIL_SYSTEM_CHROME_GAP: f64 = 12.0;
 /// reserve this many logical pixels so revealing chrome cannot cover cards.
 pub const THUMBNAIL_AUTO_HIDE_RESERVE: f64 = 48.0;
 
+pub const PREVIEW_DROP_REJECT_MS: u64 = 420;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreviewDropLanding {
+    PreviewStack,
+    AppWindow,
+    External,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreviewDragOutcome {
+    Retain,
+    Reject,
+    Dismiss,
+}
+
+/// Hosts classify the final pointer/window landing only after the OS accepts
+/// a COPY. Cancellation never dismisses or animates the source card.
+pub fn preview_drag_outcome(accepted: bool, landing: PreviewDropLanding) -> PreviewDragOutcome {
+    if !accepted {
+        PreviewDragOutcome::Retain
+    } else {
+        match landing {
+            PreviewDropLanding::PreviewStack => PreviewDragOutcome::Reject,
+            PreviewDropLanding::AppWindow => PreviewDragOutcome::Retain,
+            PreviewDropLanding::External => PreviewDragOutcome::Dismiss,
+        }
+    }
+}
+
 /// Session-only preview membership, oldest first. Removing a preview never
 /// removes a history entry or file. Hosts retain media resources keyed by ID.
 #[derive(Default)]
@@ -560,6 +590,18 @@ pub fn thumbnail_geometry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outbound_file_drag_only_dismisses_on_accepted_external_copy() {
+        use PreviewDragOutcome::{Dismiss, Reject, Retain};
+        use PreviewDropLanding::{AppWindow, External, PreviewStack};
+        assert_eq!(preview_drag_outcome(false, External), Retain);
+        assert_eq!(preview_drag_outcome(false, PreviewStack), Retain);
+        assert_eq!(preview_drag_outcome(true, AppWindow), Retain);
+        assert_eq!(preview_drag_outcome(true, PreviewStack), Reject);
+        assert_eq!(preview_drag_outcome(true, External), Dismiss);
+        assert_eq!(PREVIEW_DROP_REJECT_MS, 420);
+    }
 
     #[test]
     fn stack_snapshot_clear_preserves_new_capture_and_empty_resets_parking() {

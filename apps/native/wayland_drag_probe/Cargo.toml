@@ -1,0 +1,13 @@
+[package]
+name = "captures-wayland-drag-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+softbuffer = "0.4.8"
+wayland-client = "0.31.15"
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
+winit = { path = "../wgpu/vendor/winit", default-features = false, features = ["rwh_06", "wayland", "wayland-dlopen"] }

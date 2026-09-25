@@ -9,7 +9,7 @@ struct MiniPreviewSettings: Equatable {
     let includeInCaptures: Bool
 }
 
-final class MiniPreviewCardView: NSView {
+final class MiniPreviewCardView: NSView, NSDraggingSource {
     private let tokens: Tokens
     private let imageView = NSImageView()
     private let depthShade = NSView()
@@ -18,6 +18,11 @@ final class MiniPreviewCardView: NSView {
     private var actionButtons: [CaptureButton] = []
     private var saveButton: CaptureButton?
     private var compact = false
+    private var press: NSPoint?
+    private var fileDragStarted = false
+    var preparedDragPath: String?
+    var dragEnded: ((NSPoint, NSDragOperation) -> Void)?
+    var isOutboundFileDragEnabled: Bool { !compact && preparedDragPath != nil }
     private(set) var artifactID: String
     var hasVisibleLabels: Bool { !title.isHidden || !status.isHidden }
     override var isFlipped: Bool { true }
@@ -114,6 +119,59 @@ final class MiniPreviewCardView: NSView {
         label.layer?.backgroundColor = tokens.color("glass-strong").cgColor
         label.layer?.cornerRadius = tokens.number("r-xs")
         label.layer?.masksToBounds = true
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        // The image and labels are decorative; receive their gestures on the
+        // card. Buttons retain their own click handling.
+        return actionButtons.contains(where: { hit === $0 }) ? hit : self
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        press = event.locationInWindow
+        fileDragStarted = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isOutboundFileDragEnabled, !fileDragStarted, let press, let path = preparedDragPath,
+              hypot(event.locationInWindow.x - press.x, event.locationInWindow.y - press.y) >= 4,
+              let image = imageView.image else { return }
+        fileDragStarted = true
+        let item = NSDraggingItem(pasteboardWriter: NSURL(fileURLWithPath: path))
+        item.setDraggingFrame(imageView.frame, contents: image)
+        beginDraggingSession(with: [item], event: event, source: self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        press = nil
+        fileDragStarted = false
+    }
+
+    func draggingSession(_ session: NSDraggingSession,
+                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        sourceOperationMask(for: context)
+    }
+
+    func sourceOperationMask(for context: NSDraggingContext) -> NSDragOperation { .copy }
+
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint,
+                         operation: NSDragOperation) {
+        finishDrag(at: screenPoint, operation: operation)
+    }
+
+    func finishDrag(at screenPoint: NSPoint, operation: NSDragOperation) {
+        press = nil
+        fileDragStarted = false
+        dragEnded?(screenPoint, operation)
+    }
+
+    func rejectDrop() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let shake = CAKeyframeAnimation(keyPath: "transform.translation.x")
+        shake.values = [0, -8, 7, -5, 3, 0]
+        shake.duration = 0.42
+        layer?.add(shake, forKey: "preview-drop-reject")
     }
 }
 
@@ -292,6 +350,22 @@ final class MiniPreviewView: NSView {
         cards[artifactID]?.updateSaveButton(saved: saved)
     }
 
+    func setPreparedDragPath(_ path: String?, for artifactID: String) {
+        cards[artifactID]?.preparedDragPath = path
+    }
+
+    func containsPreparedDragPath(_ path: String) -> Bool {
+        cards.values.contains { $0.preparedDragPath == path }
+    }
+
+    func setDragEnded(_ callback: @escaping (String, NSPoint, NSDragOperation) -> Void) {
+        for (id, card) in cards {
+            card.dragEnded = { point, operation in callback(id, point, operation) }
+        }
+    }
+
+    func rejectDrop(for artifactID: String) { cards[artifactID]?.rejectDrop() }
+
     func statusText(for artifactID: String) -> String? { cards[artifactID]?.statusText }
 
     func activatePileExpand() { pileExpandButton?.performClick(nil) }
@@ -339,7 +413,18 @@ final class MiniPreviewPanel: NSPanel {
         hasShadow = true; level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         hidesOnDeactivate = false; isMovable = false; contentView = previewView
+        registerForDraggedTypes([.fileURL])
         setAccessibilityLabel(ids.count == 1 ? "Screenshot mini preview" : "Screenshot mini previews")
+    }
+
+    @objc func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let url = sender.draggingPasteboard.string(forType: .fileURL).flatMap(URL.init(string:)),
+              previewView.containsPreparedDragPath(url.path) else { return [] }
+        return .copy
+    }
+
+    @objc func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        draggingEntered(sender).contains(.copy)
     }
 }
 
@@ -360,12 +445,17 @@ final class MiniPreviewController {
     private var screenID: String?
     private(set) var stackOrigin: CapturesPreviewOrigin?
     private var pendingDecodes: [String: Int] = [:]
+    private var cardGenerations: [String: Int] = [:]
+    private var preparedDrags: [String: (imagePath: String, previewPath: String, path: String)] = [:]
     private var visibilityPendingArtifactID: String?
     private var nextDecodeToken = 0
     var copyArtifact: ArtifactAction = { _ in }
     var saveArtifact: ArtifactAction = { _ in }
     var openArtifact: ArtifactAction = { _ in }
     var trashArtifact: ArtifactAction = { _ in }
+    var prepareDrag: (CaptureArtifact, @escaping (String?) -> Void) -> Void = { _, completion in
+        completion(nil)
+    }
     var presentedArtifactID: String? { stack.ids.last }
     var presentedArtifactIDs: [String] { stack.ids }
     var decodedArtifactIDs: [String] { stack.ids.filter { resources[$0] != nil } }
@@ -416,6 +506,8 @@ final class MiniPreviewController {
         nextDecodeToken &+= 1
         let decodeToken = nextDecodeToken
         pendingDecodes[artifact.id] = decodeToken
+        cardGenerations[artifact.id] = decodeToken
+        preparedDrags[artifact.id] = nil
         policy.suppressCaptureUI(false)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
@@ -432,6 +524,7 @@ final class MiniPreviewController {
                     self.resources[artifact.id] = MiniPreviewResource(artifact: artifact, image: image)
                     self.makePanel()
                     self.updateVisibility()
+                    self.prepareFileDrag(for: artifact)
                 case .failure:
                     if self.visibilityPendingArtifactID == artifact.id,
                        self.policy.stopWaiting() {
@@ -468,7 +561,8 @@ final class MiniPreviewController {
         }
         let removed = stack.ids.filter { !ids.contains($0) }
         for id in removed {
-            _ = stack.remove(id); resources[id] = nil
+            _ = stack.remove(id); resources[id] = nil; preparedDrags[id] = nil
+            cardGenerations[id] = nil
         }
         if changed || !removed.isEmpty { makePanel(); updateVisibility() }
     }
@@ -488,6 +582,7 @@ final class MiniPreviewController {
         resource.artifact.savedPath = path
         resources[artifact.id] = resource
         panel?.previewView.updateSavedState(true, for: artifact.id)
+        prepareFileDrag(for: resource.artifact)
         return true
     }
 
@@ -499,9 +594,23 @@ final class MiniPreviewController {
             // A History request may have started before an export completed. Do not let
             // that stale response turn a freshly saved preview back into Save.
             if refreshed.savedPath == nil { refreshed.savedPath = resource.artifact.savedPath }
+            let changedExport = refreshed.savedPath != resource.artifact.savedPath
             resource.artifact = refreshed
             resources[artifact.id] = resource
             panel?.previewView.updateSavedState(refreshed.savedPath != nil, for: artifact.id)
+            if changedExport { prepareFileDrag(for: refreshed) }
+        }
+    }
+
+    private func prepareFileDrag(for artifact: CaptureArtifact) {
+        guard let generation = cardGenerations[artifact.id] else { return }
+        preparedDrags[artifact.id] = nil
+        panel?.previewView.setPreparedDragPath(nil, for: artifact.id)
+        prepareDrag(artifact) { [weak self] path in
+            guard let self, let path, self.cardGenerations[artifact.id] == generation,
+                  self.contains(artifact, savedPath: artifact.savedPath) else { return }
+            self.preparedDrags[artifact.id] = (artifact.imagePath, artifact.previewPath, path)
+            self.panel?.previewView.setPreparedDragPath(path, for: artifact.id)
         }
     }
 
@@ -523,6 +632,8 @@ final class MiniPreviewController {
             visibilityPendingArtifactID = nil
         }
         resources[artifactID] = nil
+        preparedDrags[artifactID] = nil
+        cardGenerations[artifactID] = nil
         if stack.ids.isEmpty { panel?.close(); panel = nil; screenID = nil; stackOrigin = nil }
         else { makePanel(); updateVisibility() }
     }
@@ -532,7 +643,10 @@ final class MiniPreviewController {
         let snapshot = stack.ids
         guard !snapshot.isEmpty else { return }
         _ = stack.removeAll(snapshot)
-        snapshot.forEach { id in resources[id] = nil; pendingDecodes[id] = nil }
+        snapshot.forEach { id in
+            resources[id] = nil; pendingDecodes[id] = nil
+            preparedDrags[id] = nil; cardGenerations[id] = nil
+        }
         if let pending = visibilityPendingArtifactID, snapshot.contains(pending),
            policy.stopWaiting() {
             visibilityPendingArtifactID = nil
@@ -554,6 +668,7 @@ final class MiniPreviewController {
         stackOrigin = nil
         let ids = stack.ids; _ = stack.removeAll(ids)
         resources.removeAll(); pendingDecodes.removeAll()
+        preparedDrags.removeAll(); cardGenerations.removeAll()
         panel?.close(); panel = nil
     }
 
@@ -588,6 +703,25 @@ final class MiniPreviewController {
             clearAll: { [weak self] in self?.clearAll() },
             move: { [weak self] in self?.moveStack(to: $0) })
         next.sharingType = settings.includeInCaptures ? .readOnly : .none
+        for id in ids {
+            guard let artifact = resources[id]?.artifact, let prepared = preparedDrags[id],
+                  prepared.imagePath == artifact.imagePath,
+                  prepared.previewPath == artifact.previewPath else { continue }
+            next.previewView.setPreparedDragPath(prepared.path, for: id)
+        }
+        let sourceArtifacts = resources.mapValues(\.artifact)
+        let sourceGenerations = cardGenerations
+        next.previewView.setDragEnded { [weak self] id, point, operation in
+            guard let self, let source = sourceArtifacts[id], self.contains(source),
+                  self.cardGenerations[id] == sourceGenerations[id] else { return }
+            if operation.contains(.copy), self.panel?.frame.contains(point) == true {
+                self.panel?.previewView.rejectDrop(for: id)
+            } else if operation.contains(.copy) && !NSApp.windows.contains(where: {
+                $0 !== self.panel && $0.isVisible && $0.frame.contains(point)
+            }) {
+                self.dismiss(id)
+            }
+        }
         panel = next
     }
 
@@ -710,7 +844,28 @@ final class MiniPreviewActions {
     func bind(previews: MiniPreviewController) {
         self.previews = previews; boundToPreviews = true
     }
-    func configure(historyRoot: String) { self.historyRoot = historyRoot }
+    func configure(historyRoot: String) {
+        // Style changes reconstruct LiveCaptureController, but retained exports
+        // must survive for the whole process, not just one workspace render.
+        guard self.historyRoot != historyRoot else { return }
+        self.historyRoot = historyRoot
+        LiveCaptureController.queue.async { [transport] in
+            // Serialized ahead of preparation; never clear a live OS drag.
+            _ = try? transport.request(["operation": "clear_previous_preview_drags",
+                                        "root": historyRoot])
+        }
+    }
+
+    func prepareDrag(_ artifact: CaptureArtifact, completion: @escaping (String?) -> Void) {
+        guard let historyRoot, !artifact.id.isEmpty else { completion(nil); return }
+        LiveCaptureController.queue.async { [transport] in
+            let response = try? transport.request(["operation": "prepare_preview_drag",
+                                                   "root": historyRoot, "id": artifact.id])
+            let path = response?["id"] as? String == artifact.id
+                ? response?["path"] as? String : nil
+            DispatchQueue.main.async { completion(path) }
+        }
+    }
 
     func copy(_ artifact: CaptureArtifact) {
         previews?.setStatus("Copying…", for: artifact.id)

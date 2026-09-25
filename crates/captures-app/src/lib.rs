@@ -14,6 +14,7 @@ pub mod editor_viewport;
 pub mod login_item;
 pub mod onboarding;
 pub mod preview;
+pub mod preview_drag;
 pub mod recording_editor;
 pub mod recording_timeline;
 pub mod region;
@@ -115,6 +116,13 @@ pub enum Request {
         id: String,
         saved_path: Option<PathBuf>,
     },
+    PreparePreviewDrag {
+        root: PathBuf,
+        id: String,
+    },
+    ClearPreviousPreviewDrags {
+        root: PathBuf,
+    },
     Delete {
         root: PathBuf,
         id: String,
@@ -162,6 +170,11 @@ pub enum Response {
     PreviewTrashed {
         id: String,
     },
+    PreviewDragPrepared {
+        id: String,
+        path: PathBuf,
+    },
+    PreviousPreviewDragsCleared,
     Deleted {
         id: String,
     },
@@ -254,6 +267,14 @@ pub fn execute(request: Request) -> Result<Response, Error> {
             id,
             saved_path,
         } => trash_preview(&root, &id, saved_path.as_deref(), move_export_to_trash),
+        Request::PreparePreviewDrag { root, id } => Ok(Response::PreviewDragPrepared {
+            path: preview_drag::prepare(&root, &id)?,
+            id,
+        }),
+        Request::ClearPreviousPreviewDrags { root } => {
+            preview_drag::clear_previous_exports(&root)?;
+            Ok(Response::PreviousPreviewDragsCleared)
+        }
         Request::Delete { root, id } => {
             captures_history::delete(&root, &id)?;
             Ok(Response::Deleted { id })

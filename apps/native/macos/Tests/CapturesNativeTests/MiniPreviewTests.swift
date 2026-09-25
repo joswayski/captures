@@ -110,6 +110,113 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertFalse(panel.canBecomeKey)
     }
 
+    func testOutboundCardDragIsCopyOnlyAndCompactPileRemainsMoveOnly() throws {
+        _ = NSApplication.shared
+        let image = solidImage(.systemBlue)
+        let expanded = fixturePanel(ids: ["expanded"], images: ["expanded": image])
+        let collapsed = fixturePanel(ids: ["older", "newer"],
+            images: ["older": image, "newer": image], collapsed: true)
+        defer { expanded.close(); collapsed.close() }
+        let expandedCard = try XCTUnwrap(expanded.previewView.subviewsRecursive
+            .compactMap { $0 as? MiniPreviewCardView }.first)
+        expandedCard.preparedDragPath = "/tmp/exact-source.png"
+        XCTAssertEqual(expandedCard.sourceOperationMask(for: .outsideApplication), .copy)
+        XCTAssertEqual(expandedCard.sourceOperationMask(for: .withinApplication), .copy)
+        XCTAssertTrue(expandedCard.isOutboundFileDragEnabled)
+
+        let compactCards = collapsed.previewView.subviewsRecursive
+            .compactMap { $0 as? MiniPreviewCardView }
+        compactCards.forEach { $0.preparedDragPath = "/tmp/\($0.artifactID).png" }
+        XCTAssertTrue(compactCards.allSatisfy { !$0.isOutboundFileDragEnabled },
+            "compact cards remain move-only even after their files are prepared")
+    }
+
+    func testWorkspaceReconfigurationDoesNotDeleteLiveDragExports() {
+        let transport = MiniPreviewActionTransport()
+        let actions = MiniPreviewActions(settingsPath: nil, transport: transport)
+        actions.configure(historyRoot: "/profile/history")
+        LiveCaptureController.queue.sync {}
+        XCTAssertEqual(transport.cleanupCount, 1)
+        actions.configure(historyRoot: "/profile/history")
+        LiveCaptureController.queue.sync {}
+        XCTAssertEqual(transport.cleanupCount, 1)
+    }
+
+    func testStaleAsyncDragPreparationCannotAttachToReplacementIdentity() throws {
+        _ = NSApplication.shared
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in self.solidImage(.blue) })
+        defer { controller.close() }
+        var preparations: [(CaptureArtifact, (String?) -> Void)] = []
+        controller.prepareDrag = { preparations.append(($0, $1)) }
+        let old = artifact(id: "same", previewPath: "/old-preview.png", imagePath: "/old.png")
+        let oldGeneration = try XCTUnwrap(controller.beginCapture(settings: previewSettings()))
+        controller.present(old, on: screenID(), settings: previewSettings(), generation: oldGeneration)
+        try waitUntil { preparations.count == 1 }
+
+        controller.dismiss(old.id)
+        let replacement = artifact(id: "same", previewPath: "/new-preview.png", imagePath: "/new.png")
+        let newGeneration = try XCTUnwrap(controller.beginCapture(settings: previewSettings()))
+        controller.present(replacement, on: screenID(), settings: previewSettings(), generation: newGeneration)
+        try waitUntil { preparations.count == 2 }
+        preparations[0].1("/tmp/stale.png")
+        // The dismissed panel is closed but may still be listed in NSApp.windows.
+        let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+            .first { $0.isVisible && $0.previewView.artifactIDs == ["same"] })
+        XCTAssertFalse(panel.previewView.containsPreparedDragPath("/tmp/stale.png"))
+        preparations[1].1("/tmp/current.png")
+        XCTAssertTrue(panel.previewView.containsPreparedDragPath("/tmp/current.png"))
+        XCTAssertTrue(controller.updateSavedPath("/Exports/Café.png", for: replacement))
+        XCTAssertEqual(preparations.count, 3)
+        XCTAssertEqual(preparations[2].0.savedPath, "/Exports/Café.png")
+        XCTAssertFalse(panel.previewView.containsPreparedDragPath("/tmp/current.png"))
+        preparations[1].1("/tmp/late-unsaved.png")
+        XCTAssertFalse(panel.previewView.containsPreparedDragPath("/tmp/late-unsaved.png"))
+        preparations[2].1("/Exports/Café.png")
+        XCTAssertTrue(panel.previewView.containsPreparedDragPath("/Exports/Café.png"))
+    }
+
+    func testDragCompletionRequiresExactSourceAndClassifiesDestinations() throws {
+        _ = NSApplication.shared
+        let controller = try presentedController(artifact(id: "source", previewPath: "/source.png"))
+        defer { controller.close() }
+        func card() throws -> (MiniPreviewPanel, MiniPreviewCardView) {
+            // Closed panels stay in NSApp.windows while this test still holds them.
+            let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+                .first { $0.isVisible && $0.previewView.artifactIDs == ["source"] })
+            return (panel, try XCTUnwrap(panel.previewView.subviewsRecursive
+                .compactMap { $0 as? MiniPreviewCardView }.first))
+        }
+        var current = try card()
+        current.1.finishDrag(at: NSPoint(x: current.0.frame.midX, y: current.0.frame.midY),
+                             operation: .copy)
+        XCTAssertEqual(controller.presentedArtifactIDs, ["source"], "own-panel drops are rejected")
+
+        let ownWindow = NSWindow(contentRect: NSRect(x: 20_000, y: 20_000, width: 100, height: 100),
+            styleMask: .borderless, backing: .buffered, defer: false)
+        ownWindow.isReleasedWhenClosed = false; defer { ownWindow.close() }
+        ownWindow.orderFrontRegardless()
+        current.1.finishDrag(at: NSPoint(x: ownWindow.frame.midX, y: ownWindow.frame.midY),
+                             operation: .copy)
+        XCTAssertEqual(controller.presentedArtifactIDs, ["source"], "another app window keeps the card")
+        current.1.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: [])
+        XCTAssertEqual(controller.presentedArtifactIDs, ["source"], "cancelled external drags keep the card")
+
+        let staleCard = current.1
+        controller.dismiss("source")
+        let replacement = artifact(id: "source", previewPath: "/replacement.png")
+        let generation = try XCTUnwrap(controller.beginCapture(settings: previewSettings()))
+        controller.present(replacement, on: screenID(), settings: previewSettings(), generation: generation)
+        try waitUntil { controller.isPanelVisible }
+        staleCard.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: .copy)
+        XCTAssertEqual(controller.presentedArtifactIDs, ["source"],
+            "late completion from a different source identity cannot dismiss its replacement")
+
+        current = try card()
+        current.1.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: .copy)
+        XCTAssertTrue(controller.presentedArtifactIDs.isEmpty,
+            "an accepted external copy dismisses the exact source card")
+    }
+
     func testPendingFirstDecodeIsInvalidatedWhenHistoryIsCleared() throws {
         _ = NSApplication.shared
         let releaseDecode = DispatchSemaphore(value: 0)
@@ -804,6 +911,7 @@ private final class MiniPreviewActionTransport: AppTransport {
     private var root: String?
     private var trashes = 0
     private var requests = 0
+    private var cleanups = 0
     private var recordedRequest: [String: Any]?
     var fail = false
     var malformed = false
@@ -813,12 +921,17 @@ private final class MiniPreviewActionTransport: AppTransport {
     var savedRoot: String? { lock.lock(); defer { lock.unlock() }; return root }
     var trashCount: Int { lock.lock(); defer { lock.unlock() }; return trashes }
     var requestCount: Int { lock.lock(); defer { lock.unlock() }; return requests }
+    var cleanupCount: Int { lock.lock(); defer { lock.unlock() }; return cleanups }
     var lastRequest: [String: Any]? { lock.lock(); defer { lock.unlock() }; return recordedRequest }
 
     func request(_ object: [String: Any]) throws -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
-        requests += 1; recordedRequest = object
         let operation = object["operation"] as? String
+        if operation == "clear_previous_preview_drags" {
+            cleanups += 1
+            return ["kind": "previous_preview_drags_cleared"]
+        }
+        requests += 1; recordedRequest = object
         guard operation == "save_screenshot" || operation == "trash_preview" else {
             throw AppBridgeError.invalidResponse
         }

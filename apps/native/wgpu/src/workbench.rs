@@ -970,7 +970,8 @@ fn permission_recovery_ui(preferences: &mut Preferences, ctx: &egui::Context, t:
 }
 
 impl eframe::App for Workbench {
-    fn raw_input_hook(&mut self, _: &egui::Context, input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        crate::outbound_drag::append(ctx, input);
         crate::diagnostics::event("raw-input", || {
             json!({
                 "viewport":format!("{:?}", input.viewport_id),

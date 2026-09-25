@@ -35,6 +35,7 @@ def main():
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
+    parser.add_argument("--drag-only", action="store_true", help="Exercise real outbound XDND transfer and cancellation")
     parser.add_argument("--reduced-motion", action="store_true", help="Disable native preview motion")
     parser.add_argument("--system-motion-only", action="store_true", help="Exercise desktop motion preference refresh")
     parser.add_argument("--lifecycle", action="store_true", help="Exercise a real Xfce SNI tray and background shortcuts")
@@ -408,7 +409,7 @@ def main():
 
         cases = [(placement, True, False) for placement in ("bottom_left", "bottom_right", "top_left", "top_right")]
         cases += [("bottom_left", True, True), ("bottom_left", False, False)]
-        if args.lifecycle:
+        if args.lifecycle or args.drag_only:
             cases = cases[:1]
         for placement, enabled, include in cases:
             prefix = f"{placement}-enabled-{enabled}-include-{include}"
@@ -480,6 +481,57 @@ def main():
                 expected_y = 12 if placement.startswith("top") else 600
                 assert (int(geometry["X"]), int(geometry["Y"])) == (expected_x, expected_y), geometry
                 assert (int(geometry["WIDTH"]), int(geometry["HEIGHT"])) == (340, 240), geometry
+                if args.drag_only:
+                    # Reject our own source without importing it into an editor.
+                    # Record the real 420ms shake and settled pointer recovery.
+                    recording = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "x11grab",
+                        "-video_size", "340x240", "-framerate", "30", "-i", env["DISPLAY"] + "+0,600",
+                        "-t", "4", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(output / "self-drop.mp4")],
+                        env=env)
+                    children.append(recording)
+                    time.sleep(.5)
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "150", "80", "mousedown", "1",
+                        "sleep", ".2", "mousemove", "--sync", "--window", preview, "190", "80", "sleep", ".5",
+                        "mousemove", "--sync", "--window", preview, "200", "90", "sleep", ".3", "mouseup", "1")
+                    time.sleep(.7)
+                    assert windows(PREVIEW) and not windows(EDITOR), "self drop must retain, not reimport"
+                    assert recording.wait(timeout=10) == 0
+                    shot(preview, "self-drop-settled")
+                    for mode in ("cancel", "reject", "nofinish", "disappear", "accept"):
+                        if mode == "accept":
+                            click(preview, 122, 169, activate=False)
+                            saved_path = Path(wait(lambda: json.loads(first.read_text()).get("saved_path"), "saved Unicode export"))
+                        destination = output / f"received-{mode}.bin"
+                        spawn(f"receiver-{mode}", ["/usr/bin/python3", str(Path(__file__).with_name("x11_drag_receiver.py")),
+                              "--output", str(destination), "--mode", "accept" if mode == "cancel" else mode], True)
+                        run("xdotool", "mousemove", "--sync", "--window", preview, "150", "80", "mousedown", "1",
+                            "sleep", ".2", "mousemove", "--sync", "--window", preview, "190", "80", "sleep", ".5",
+                            "mousemove", "--sync", "700", "550", "sleep", ".3")
+                        events = destination.with_suffix(".jsonl")
+                        wait(lambda: events.exists() and '"position"' in events.read_text(), "receiver negotiates COPY")
+                        shot("root", f"outbound-drag-{mode}")
+                        if mode == "cancel":
+                            run("xdotool", "key", "Escape", "mouseup", "1")
+                        else:
+                            run("xdotool", "mouseup", "1")
+                        if mode in ("accept", "nofinish"):
+                            wait(destination.exists, "receiver obtains file bytes")
+                            assert destination.read_bytes() == (first.parent / "capture.png").read_bytes(), "drag must transfer original PNG, not thumbnail"
+                        if mode == "accept":
+                            wait(lambda: not windows(PREVIEW), "accepted external COPY dismisses source preview")
+                            received = next(json.loads(line) for line in events.read_text().splitlines()
+                                            if json.loads(line)["event"] == "received")
+                            assert Path(received["path"]) == saved_path, "existing saved file must win"
+                        else:
+                            time.sleep(6 if mode in ("nofinish", "disappear") else .5)
+                            assert windows(PREVIEW), f"{mode} must retain source preview"
+                            subprocess.run(["xclip", "-selection", "clipboard"], input=b"reset", env=env, check=True)
+                            click(preview, 63, 169, activate=False)
+                            wait(lambda: clipboard_pixels() == rgb(first.parent / "capture.png"),
+                                 "pointer state recovers for exact-pixel Copy")
+                    assert first.exists(), "drag dismissal does not delete History"
+                    print("PASS native outbound drag: self drop, original bytes, saved Unicode path, cancellation, rejection, timeout, target loss and repeat")
+                    return
                 if placement == "bottom_left" and not include:
                     run("xdotool", "windowminimize", root)
                     wait(lambda: not windows("Captures"), "minimized workspace")

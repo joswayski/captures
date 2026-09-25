@@ -1120,10 +1120,39 @@ rear cards: shared Rust calculates `min(.72, poseDepth * .14)`, with no shade on
 the front or expanded images. AppKit uses a clipped native view overlay; wgpu
 paints the same token over the retained image without altering source pixels.
 This connects translation and depth shading: the shipping 3D depth,
-rotation, scale and per-card 16 ms stagger, plus external file drag,
+rotation, scale and per-card 16 ms stagger,
 dust/sway/expand effects and cross-display reanchoring remain open. Physical
 AppKit, Windows and Wayland presentation/interaction are unverified; private X11
 provides the Linux rendering/input evidence. The effects parity gate remains open.
+
+### Outbound preview file dragging — connected, acceptance open
+
+Expanded screenshot media starts a COPY-only native file drag; collapsed piles
+still move. Shared preparation chooses the saved artifact, otherwise copies the
+full PNG or recording media (never the poster) to a unique retained export.
+Temporary exports survive completion and History deletion and are cleaned at
+the next startup. This is not a new recording-preview presentation slice.
+
+AppKit uses `NSDraggingSource`; wgpu uses Windows `drag` 2.1.1/OLE and a private
+winit 0.30.13 patch for XDND and Wayland, on the window's existing connection.
+wgpu preparation runs off the UI thread and checks the originating press before
+starting; both hosts guard completion by artifact generation. Only an accepted
+external COPY dismisses. Own-app drops retain, and self-drops shake for 420 ms
+unless reduced motion is enabled. Native completion resets consumed pointer
+state; X11 cancellation, disappearing targets and missing Finished have bounded
+cleanup. See `apps/native/wgpu/vendor/README.md` for provenance/update obligations.
+
+| Host | Implementation | Verification / remaining acceptance |
+| --- | --- | --- |
+| macOS | AppKit source, async identity guards, COPY/landing policy | XCTest lifecycle cases added; physical Finder transfer still unverified |
+| Windows | GUI-thread OLE adapter, retained window, preloaded icon | Isolated adapter cross-compiled; real Explorer transfer and mixed-DPI own-window classification unverified |
+| X11 | wgpu bridge, same-connection XDND, Escape/timeout recovery | Real private-X11 original-byte and Unicode saved-path transfers, self-drop, reject/cancel/target loss/repeat; physical desktop acceptance open |
+| Wayland | Same-connection source and serial, own-offer completion, five-second post-drop deadline | Headless Sway → independent GTK receiver verifies exact URI/bytes, reject/cancel/repeat/self-drop, target loss and missing-Finished recovery; full capture host and physical compositor acceptance open |
+
+Windows classifies the final cursor against viewport rectangles conservatively;
+mixed-DPI/overlapping windows need physical verification. Wayland tests exercise
+protocol recovery on one disposable compositor, not a physical desktop or the
+full capture host. No shipping Tauri behavior or parity gate changes.
 
 The resident lifecycle slice adds live-only menu-bar/tray actions and three
 persisted screenshot shortcuts. One Rust dispatcher owns capture-launch and

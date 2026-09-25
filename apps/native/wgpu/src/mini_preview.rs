@@ -6,6 +6,7 @@ use crate::tokens::Tokens;
 pub enum Action {
     ExpandStack,
     MoveStack(egui::Pos2),
+    DragFile,
     Copy,
     Save,
     Reveal,
@@ -22,6 +23,7 @@ pub enum StackAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Busy {
+    Drag,
     Copy,
     Save,
     Reveal,
@@ -46,6 +48,19 @@ pub struct View<'a> {
     pub stack_count: usize,
     pub depth: usize,
     pub desktop_pointer: Option<egui::Pos2>,
+    pub reject_offset: f32,
+}
+
+pub fn reject_offset(elapsed_seconds: f32, reduced_motion: bool) -> f32 {
+    let duration = captures_app::preview::PREVIEW_DROP_REJECT_MS as f32 / 1000.;
+    if reduced_motion || elapsed_seconds >= duration {
+        return 0.;
+    }
+    let progress = (elapsed_seconds / duration).clamp(0., 1.);
+    let stops = [0., -8., 7., -5., 3., 0.];
+    let position = progress * 5.;
+    let index = (position as usize).min(4);
+    egui::lerp(stops[index]..=stops[index + 1], position - index as f32)
 }
 
 pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action> {
@@ -55,6 +70,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
     );
     let (card, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let card = card.translate(egui::vec2(view.reject_offset, 0.));
     ui.painter()
         .rect_filled(card, tokens.number("r-xl"), tokens.color("glass-raised"));
     egui::Image::new(view.texture)
@@ -135,6 +151,19 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         egui::pos2(card.left(), card.bottom() - 44.),
         card.right_bottom(),
     );
+    if view.interactive && view.busy.is_none() {
+        let response = ui.interact(
+            egui::Rect::from_min_max(card.min, footer.right_top()),
+            ui.scope_id().with(("file-drag", view.artifact_id)),
+            egui::Sense::drag(),
+        );
+        if response.drag_started_by(egui::PointerButton::Primary) {
+            action = Some(Action::DragFile);
+        }
+        response
+            .on_hover_cursor(egui::CursorIcon::Grab)
+            .on_hover_text("Drag the original file to another app");
+    }
     ui.painter().rect_filled(
         footer,
         egui::CornerRadius {
@@ -285,6 +314,17 @@ fn cover_uv(image: egui::Vec2, target: egui::Vec2) -> egui::Rect {
 mod tests {
     use super::*;
 
+    #[test]
+    fn self_drop_shake_settles_at_420ms_and_obeys_reduced_motion() {
+        assert_eq!(reject_offset(0., false), 0.);
+        assert!((reject_offset(0.084, false) + 8.).abs() < 0.001);
+        assert!((reject_offset(0.168, false) - 7.).abs() < 0.001);
+        assert_ne!(reject_offset(0.419, false), 0.);
+        assert_eq!(reject_offset(0.420, false), 0.);
+        assert_eq!(reject_offset(1., false), 0.);
+        assert_eq!(reject_offset(0.084, true), 0.);
+    }
+
     fn raw(screen: egui::Rect, events: Vec<egui::Event>) -> egui::RawInput {
         egui::RawInput {
             screen_rect: Some(screen),
@@ -404,6 +444,7 @@ mod tests {
                 stack_count: 3,
                 depth: usize::from(!interactive),
                 desktop_pointer,
+                reject_offset: 0.,
             },
         );
         let mut output = ctx.end_pass();
@@ -453,6 +494,7 @@ mod tests {
                     stack_count: 1,
                     depth: 0,
                     desktop_pointer: None,
+                    reject_offset: 0.,
                 },
             );
             let mut output = ctx.end_pass();
@@ -601,6 +643,7 @@ mod tests {
                     stack_count: 2,
                     depth,
                     desktop_pointer: None,
+                    reject_offset: 0.,
                 },
             );
             let mut output = ctx.end_pass();
