@@ -3115,6 +3115,12 @@ fn show_shape(
     }
     if matches!(view.draw_shape, DrawShape::Erase | DrawShape::Restore) {
         let clipped_image = preview.intersect(available).intersect(ui.clip_rect());
+        let previous_samples = view.brush_points.len();
+        let mode = if view.draw_shape == DrawShape::Erase {
+            BrushMode::Erase
+        } else {
+            BrushMode::Restore
+        };
         // egui does not report drag_started when down/up arrive in one frame.
         // Topmost hover ownership plus the raw press also admits those clicks.
         let can_start =
@@ -3189,6 +3195,25 @@ fn show_shape(
                 view.brush_points.push(point);
             }
         }
+        if first_pass
+            && previous_samples != view.brush_points.len()
+            && released.is_none()
+            && let Some(pixels) = &mut view.drawing_preview
+        {
+            if view.brush_points.is_empty() {
+                pixels.cancel();
+            } else {
+                pixels.request(
+                    tx,
+                    Request::PaintImageBackground {
+                        points: view.brush_points.clone(),
+                        size: view.brush_size,
+                        softness: view.brush_softness,
+                        mode,
+                    },
+                );
+            }
+        }
         if response.hovered() || !view.brush_points.is_empty() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
@@ -3200,7 +3225,12 @@ fn show_shape(
         };
         let painter = ui.painter().with_clip_rect(clipped_image);
         let feedback = egui::Stroke::new(1.5, ui.visuals().text_color());
-        if view.brush_points.len() > 1 {
+        if view.brush_points.len() > 1
+            && view
+                .drawing_preview
+                .as_ref()
+                .is_none_or(|pixels| pixels.texture.is_none())
+        {
             painter.add(egui::Shape::line(
                 view.brush_points.iter().copied().map(position).collect(),
                 feedback,
@@ -3218,11 +3248,6 @@ fn show_shape(
         }
         if first_pass && released.is_some() {
             let points = std::mem::take(&mut view.brush_points);
-            let mode = if view.draw_shape == DrawShape::Erase {
-                BrushMode::Erase
-            } else {
-                BrushMode::Restore
-            };
             view.submit(
                 tx,
                 Request::PaintImageBackground {
