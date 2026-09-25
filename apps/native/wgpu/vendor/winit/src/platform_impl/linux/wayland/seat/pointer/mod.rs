@@ -49,7 +49,7 @@ impl PointerHandler for WinitState {
             None => {
                 warn!("Received pointer event without seat");
                 return;
-            },
+            }
         };
 
         let themed_pointer = match seat_state.pointer.as_ref() {
@@ -57,7 +57,7 @@ impl PointerHandler for WinitState {
             None => {
                 warn!("Received pointer event without pointer");
                 return;
-            },
+            }
         };
 
         let device_id = crate::event::DeviceId(crate::platform_impl::DeviceId::Wayland(DeviceId));
@@ -97,14 +97,20 @@ impl PointerHandler for WinitState {
                     ) {
                         let _ = themed_pointer.set_cursor(connection, icon);
                     }
-                },
+                }
                 PointerEventKind::Leave { .. } if parent_surface != surface => {
                     window.frame_point_left();
-                },
-                ref kind @ PointerEventKind::Press { button, serial, time }
-                | ref kind @ PointerEventKind::Release { button, serial, time }
-                    if parent_surface != surface =>
-                {
+                }
+                ref kind @ PointerEventKind::Press {
+                    button,
+                    serial,
+                    time,
+                }
+                | ref kind @ PointerEventKind::Release {
+                    button,
+                    serial,
+                    time,
+                } if parent_surface != surface => {
                     let click = match wayland_button_to_winit(button) {
                         MouseButton::Left => FrameClick::Normal,
                         MouseButton::Right => FrameClick::Alternate,
@@ -122,7 +128,7 @@ impl PointerHandler for WinitState {
                         window_id,
                         &mut self.window_compositor_updates,
                     );
-                },
+                }
                 // Regular events on the main surface.
                 PointerEventKind::Enter { .. } => {
                     self.events_sink
@@ -134,10 +140,13 @@ impl PointerHandler for WinitState {
                     pointer.winit_data().inner.lock().unwrap().surface = Some(window_id);
 
                     self.events_sink.push_window_event(
-                        WindowEvent::CursorMoved { device_id, position },
+                        WindowEvent::CursorMoved {
+                            device_id,
+                            position,
+                        },
                         window_id,
                     );
-                },
+                }
                 PointerEventKind::Leave { .. } => {
                     window.pointer_left(Arc::downgrade(themed_pointer));
 
@@ -146,17 +155,22 @@ impl PointerHandler for WinitState {
 
                     self.events_sink
                         .push_window_event(WindowEvent::CursorLeft { device_id }, window_id);
-                },
+                }
                 PointerEventKind::Motion { .. } => {
                     self.events_sink.push_window_event(
-                        WindowEvent::CursorMoved { device_id, position },
+                        WindowEvent::CursorMoved {
+                            device_id,
+                            position,
+                        },
                         window_id,
                     );
-                },
+                }
                 ref kind @ PointerEventKind::Press { button, serial, .. }
                 | ref kind @ PointerEventKind::Release { button, serial, .. } => {
-                    // Update the last button serial.
-                    pointer.winit_data().inner.lock().unwrap().latest_button_serial = serial;
+                    let mut data = pointer.winit_data().inner.lock().unwrap();
+                    data.latest_button_serial = serial;
+                    data.button_held = matches!(kind, PointerEventKind::Press { .. });
+                    drop(data);
 
                     let button = wayland_button_to_winit(button);
                     let state = if matches!(kind, PointerEventKind::Press { .. }) {
@@ -165,11 +179,19 @@ impl PointerHandler for WinitState {
                         ElementState::Released
                     };
                     self.events_sink.push_window_event(
-                        WindowEvent::MouseInput { device_id, state, button },
+                        WindowEvent::MouseInput {
+                            device_id,
+                            state,
+                            button,
+                        },
                         window_id,
                     );
-                },
-                PointerEventKind::Axis { horizontal, vertical, .. } => {
+                }
+                PointerEventKind::Axis {
+                    horizontal,
+                    vertical,
+                    ..
+                } => {
                     // Get the current phase.
                     let mut pointer_data = pointer.winit_data().inner.lock().unwrap();
 
@@ -210,10 +232,14 @@ impl PointerHandler for WinitState {
                     };
 
                     self.events_sink.push_window_event(
-                        WindowEvent::MouseWheel { device_id, delta, phase },
+                        WindowEvent::MouseWheel {
+                            device_id,
+                            delta,
+                            phase,
+                        },
                         window_id,
                     )
-                },
+                }
             }
         }
     }
@@ -306,6 +332,11 @@ impl WinitPointerData {
         self.sctk_data.latest_button_serial().unwrap_or_default()
     }
 
+    pub fn held_button_serial(&self) -> Option<u32> {
+        let data = self.inner.lock().unwrap();
+        data.button_held.then_some(data.latest_button_serial)
+    }
+
     /// Last enter serial.
     pub fn latest_enter_serial(&self) -> u32 {
         self.sctk_data.latest_enter_serial().unwrap_or_default()
@@ -347,6 +378,7 @@ pub struct WinitPointerDataInner {
 
     /// Serial of the last button event.
     latest_button_serial: u32,
+    button_held: bool,
 
     /// Currently focused window.
     surface: Option<WindowId>,
@@ -374,6 +406,7 @@ impl Default for WinitPointerDataInner {
             locked_pointer: None,
             confined_pointer: None,
             latest_button_serial: 0,
+            button_held: false,
             phase: TouchPhase::Ended,
         }
     }
@@ -406,7 +439,8 @@ pub trait WinitPointerDataExt {
 
 impl WinitPointerDataExt for WlPointer {
     fn winit_data(&self) -> &WinitPointerData {
-        self.data::<WinitPointerData>().expect("failed to get pointer data.")
+        self.data::<WinitPointerData>()
+            .expect("failed to get pointer data.")
     }
 }
 
@@ -420,7 +454,9 @@ impl PointerConstraintsState {
         queue_handle: &QueueHandle<WinitState>,
     ) -> Result<Self, BindError> {
         let pointer_constraints = globals.bind(queue_handle, 1..=1, GlobalData)?;
-        Ok(Self { pointer_constraints })
+        Ok(Self {
+            pointer_constraints,
+        })
     }
 }
 

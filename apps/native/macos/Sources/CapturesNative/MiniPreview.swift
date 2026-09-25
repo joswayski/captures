@@ -22,6 +22,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private var fileDragStarted = false
     var preparedDragPath: String?
     var dragEnded: ((NSPoint, NSDragOperation) -> Void)?
+    var isOutboundFileDragEnabled: Bool { !compact && preparedDragPath != nil }
     private(set) var artifactID: String
     var hasVisibleLabels: Bool { !title.isHidden || !status.isHidden }
     override var isFlipped: Bool { true }
@@ -133,7 +134,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard !compact, !fileDragStarted, let press, let path = preparedDragPath,
+        guard isOutboundFileDragEnabled, !fileDragStarted, let press, let path = preparedDragPath,
               hypot(event.locationInWindow.x - press.x, event.locationInWindow.y - press.y) >= 4,
               let image = imageView.image else { return }
         fileDragStarted = true
@@ -149,11 +150,17 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession,
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        .copy
+        sourceOperationMask(for: context)
     }
+
+    func sourceOperationMask(for context: NSDraggingContext) -> NSDragOperation { .copy }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
+        finishDrag(at: screenPoint, operation: operation)
+    }
+
+    func finishDrag(at screenPoint: NSPoint, operation: NSDragOperation) {
         press = nil
         fileDragStarted = false
         dragEnded?(screenPoint, operation)
@@ -343,7 +350,7 @@ final class MiniPreviewView: NSView {
         cards[artifactID]?.updateSaveButton(saved: saved)
     }
 
-    func setPreparedDragPath(_ path: String, for artifactID: String) {
+    func setPreparedDragPath(_ path: String?, for artifactID: String) {
         cards[artifactID]?.preparedDragPath = path
     }
 
@@ -517,12 +524,7 @@ final class MiniPreviewController {
                     self.resources[artifact.id] = MiniPreviewResource(artifact: artifact, image: image)
                     self.makePanel()
                     self.updateVisibility()
-                    self.prepareDrag(artifact) { [weak self] path in
-                        guard let self, let path, self.cardGenerations[artifact.id] == decodeToken,
-                              self.contains(artifact) else { return }
-                        self.preparedDrags[artifact.id] = (artifact.imagePath, artifact.previewPath, path)
-                        self.panel?.previewView.setPreparedDragPath(path, for: artifact.id)
-                    }
+                    self.prepareFileDrag(for: artifact)
                 case .failure:
                     if self.visibilityPendingArtifactID == artifact.id,
                        self.policy.stopWaiting() {
@@ -580,6 +582,7 @@ final class MiniPreviewController {
         resource.artifact.savedPath = path
         resources[artifact.id] = resource
         panel?.previewView.updateSavedState(true, for: artifact.id)
+        prepareFileDrag(for: resource.artifact)
         return true
     }
 
@@ -591,9 +594,23 @@ final class MiniPreviewController {
             // A History request may have started before an export completed. Do not let
             // that stale response turn a freshly saved preview back into Save.
             if refreshed.savedPath == nil { refreshed.savedPath = resource.artifact.savedPath }
+            let changedExport = refreshed.savedPath != resource.artifact.savedPath
             resource.artifact = refreshed
             resources[artifact.id] = resource
             panel?.previewView.updateSavedState(refreshed.savedPath != nil, for: artifact.id)
+            if changedExport { prepareFileDrag(for: refreshed) }
+        }
+    }
+
+    private func prepareFileDrag(for artifact: CaptureArtifact) {
+        guard let generation = cardGenerations[artifact.id] else { return }
+        preparedDrags[artifact.id] = nil
+        panel?.previewView.setPreparedDragPath(nil, for: artifact.id)
+        prepareDrag(artifact) { [weak self] path in
+            guard let self, let path, self.cardGenerations[artifact.id] == generation,
+                  self.contains(artifact, savedPath: artifact.savedPath) else { return }
+            self.preparedDrags[artifact.id] = (artifact.imagePath, artifact.previewPath, path)
+            self.panel?.previewView.setPreparedDragPath(path, for: artifact.id)
         }
     }
 

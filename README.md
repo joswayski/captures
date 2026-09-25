@@ -220,7 +220,14 @@ and dragging keeps the fan open. macOS follows Reduce Motion; the Windows/Linux
 candidate reads the desktop animation preference at startup and when the workspace
 regains focus. Linux requires a portal exposing the reduced-motion setting;
 `--reduced-motion` can force it when that setting is unavailable.
-Cross-display movement, automatic top/bottom anchor changes, native file dragging,
+Expanded native screenshot previews can offer the original file to another app
+as a COPY. An accepted external drop dismisses only its source card; cancellation
+and in-app drops retain it. A self-drop briefly shakes the card unless reduced
+motion is enabled. Unsaved captures use retained temporary files cleaned on the
+next startup; saved exports are never removed by drag cleanup. X11 transfers and
+the isolated Wayland protocol are tested on disposable desktops. Physical macOS,
+Windows OLE, mixed-DPI and full Wayland capture-host acceptance remain open.
+Cross-display movement, automatic top/bottom anchor changes,
 3D fan styling, stagger and the remaining preview effects are still unconnected.
 Rear cards use fixed-glass depth shading; front and expanded images stay unshaded.
 Live native hosts expose menu-bar/tray New Capture,

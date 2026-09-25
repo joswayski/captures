@@ -7,6 +7,7 @@ mod feedback;
 mod live;
 mod mini_preview;
 mod options;
+mod outbound_drag;
 mod preferences;
 mod recording;
 mod recording_editor;
@@ -21,6 +22,8 @@ mod shortcut_input;
 mod tokens;
 mod tray;
 mod window_selector;
+#[cfg(target_os = "windows")]
+mod windows_drag;
 mod work_area;
 mod workbench;
 
@@ -52,6 +55,7 @@ fn emit(event: &str, detail: serde_json::Value) {
 
 struct InputApplication<'a> {
     inner: eframe::EframeWinitApplication<'a>,
+    outbound_drag: outbound_drag::Bridge,
     paste_input: clipboard_input::PasteInput,
     shortcut_input: shortcut_input::Bridge,
     shortcuts: workbench::ShortcutOwner,
@@ -127,6 +131,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
                 _ => {}
             }
         }
+        self.outbound_drag.begin_event(window_id, &event);
         self.paste_input.begin_event(window_id, &event);
         #[cfg(target_os = "windows")]
         if matches!(event, WindowEvent::Destroyed)
@@ -138,6 +143,8 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         }
         self.inner.window_event(event_loop, window_id, event);
         self.paste_input.end_event();
+        self.outbound_drag.end_event();
+        self.outbound_drag.service(event_loop);
         #[cfg(target_os = "windows")]
         self.service_root_repaint(event_loop);
     }
@@ -198,6 +205,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let _span = diagnostics::span("about-to-wait");
         self.inner.about_to_wait(event_loop);
+        self.outbound_drag.service(event_loop);
         #[cfg(target_os = "windows")]
         {
             self.service_root_repaint(event_loop);
@@ -401,13 +409,18 @@ fn main() -> eframe::Result {
     diagnostics::install_eframe_logger();
     let native_state = Rc::new(RefCell::new(RootState::default()));
     let create_native_state = native_state.clone();
+    let outbound_drag = outbound_drag::Bridge::default();
+    let create_drag = outbound_drag.clone();
     let inner = eframe::create_native(
         "Captures renderer experiment",
         native,
         Box::new(move |cc| {
+            create_drag.install(&cc.egui_ctx);
             let window = cc
                 .winit_window()
                 .expect("native creation context has a root window");
+            #[cfg(target_os = "windows")]
+            create_drag.set_window(window);
             *create_native_state.borrow_mut() = RootState {
                 egui_ctx: Some(cc.egui_ctx.clone()),
                 root_window_id: Some(window.id()),
@@ -428,6 +441,7 @@ fn main() -> eframe::Result {
         (cfg!(target_os = "windows") || diagnostics::is_enabled()).then_some(native_state);
     let mut application = InputApplication {
         inner,
+        outbound_drag,
         paste_input,
         shortcut_input,
         shortcuts,

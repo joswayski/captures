@@ -29,11 +29,15 @@ pub trait ActiveEventLoopExtWayland {
     fn is_wayland(&self) -> bool;
 
     /// Start a COPY-only URI-list drag from a currently pressed source window.
-    /// Completion reports OS acceptance and whether the destination was another
-    /// window in this client. The source file must remain available afterward.
-    fn start_file_drag(&self, source: crate::window::WindowId,
-                       path: std::path::PathBuf,
-                       finished: Box<dyn FnOnce(bool, bool) + Send>) -> Result<(), &'static str>;
+    /// Completion reports COPY acceptance, whether the destination belongs to
+    /// this client, and whether it is exactly the source window. The source file
+    /// must remain available afterward.
+    fn start_file_drag(
+        &self,
+        source: crate::window::WindowId,
+        path: std::path::PathBuf,
+        finished: Box<dyn FnOnce(bool, bool, bool) + Send>,
+    ) -> Result<(), &'static str>;
 }
 
 impl ActiveEventLoopExtWayland for ActiveEventLoop {
@@ -42,9 +46,12 @@ impl ActiveEventLoopExtWayland for ActiveEventLoop {
         self.p.is_wayland()
     }
 
-    fn start_file_drag(&self, source: crate::window::WindowId,
-                       path: std::path::PathBuf,
-                       finished: Box<dyn FnOnce(bool, bool) + Send>) -> Result<(), &'static str> {
+    fn start_file_drag(
+        &self,
+        source: crate::window::WindowId,
+        path: std::path::PathBuf,
+        finished: Box<dyn FnOnce(bool, bool, bool) + Send>,
+    ) -> Result<(), &'static str> {
         self.p.start_wayland_file_drag(source, path, finished)
     }
 }
@@ -124,8 +131,10 @@ pub trait WindowAttributesExtWayland {
 impl WindowAttributesExtWayland for WindowAttributes {
     #[inline]
     fn with_name(mut self, general: impl Into<String>, instance: impl Into<String>) -> Self {
-        self.platform_specific.name =
-            Some(crate::platform_impl::ApplicationName::new(general.into(), instance.into()));
+        self.platform_specific.name = Some(crate::platform_impl::ApplicationName::new(
+            general.into(),
+            instance.into(),
+        ));
         self
     }
 }

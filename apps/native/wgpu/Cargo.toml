@@ -46,6 +46,7 @@ x11rb = "0.13"
 tray-icon = { version = "0.25.1", default-features = false, features = ["ksni"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+drag = "=2.1.1"
 tray-icon = { version = "0.25.1", default-features = false }
 
 [profile.dev]

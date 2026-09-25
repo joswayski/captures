@@ -441,3 +441,20 @@ disabled, publishes a 3×2 asymmetric RGBA image, independently decodes two
 `image/png` pastes, and verifies the selection owner remains alive. This proves
 the supported wlroots data-control path, not physical compositor, editor input,
 accessibility, capture, or clipboard-manager acceptance.
+
+Outbound preview file dragging uses a private pinned winit patch on Linux and
+`drag` 2.1.1 on Windows; see [vendor provenance and update steps](vendor/README.md).
+Run `/usr/bin/python3 apps/native/x11_preview_smoke.py --drag-only --binary
+apps/native/wgpu/target/release/captures-wgpu-workbench --output /tmp/native-drag`
+from the repository root. Repeat with `--reduced-motion` and a new output folder.
+The disposable X11 receiver checks original bytes, Unicode saved paths, self-drop,
+cancellation, rejection, timeout, target loss, and subsequent Copy/drag input.
+It records the self-drop animation for inspection.
+
+`python3 apps/native/wayland_drag_smoke.py` builds an isolated protocol probe and
+starts headless Sway with DISPLAY unset. It requires GTK3's system Python bindings
+(`gir1.2-gtk-3.0`, `python3-gi`) and verifies exact URI/file bytes against an
+independent GTK receiver, two transfers from the same source process, rejection,
+cancellation and self-drop classification. This is not full Wayland capture-host
+or physical-compositor acceptance. Windows OLE transfers, mixed-DPI destination
+classification and a non-finishing Wayland receiver remain open validation gates.
