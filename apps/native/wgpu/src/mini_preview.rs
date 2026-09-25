@@ -39,8 +39,13 @@ pub struct View<'a> {
     pub texture: &'a egui::TextureHandle,
     pub width: u32,
     pub height: u32,
+    pub size_bytes: u64,
     pub busy: Option<Busy>,
     pub message: Option<&'a str>,
+    /// The clipboard still holds this capture: hide Copy, show the chip.
+    pub clipboard_current: bool,
+    /// Brief "Saved" confirmation after an explicit save.
+    pub saved_feedback: bool,
     pub can_save: bool,
     pub saved: bool,
     pub interactive: bool,
@@ -167,8 +172,14 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         card.center() - egui::vec2(0., 16. + gap / 2.),
         egui::vec2(140., 32.),
     );
+    // With Copy hidden, the remaining centered action sits at the card center.
     let save_rect = egui::Rect::from_center_size(
-        card.center() + egui::vec2(0., 16. + gap / 2.),
+        card.center()
+            + if view.clipboard_current {
+                egui::Vec2::ZERO
+            } else {
+                egui::vec2(0., 16. + gap / 2.)
+            },
         egui::vec2(140., 32.),
     );
     let edit_rect = egui::Rect::from_min_size(egui::pos2(inner_x, top_y), icon_size);
@@ -197,9 +208,10 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             }
         })
         .is_some_and(|pointer| {
-            [copy_rect, save_rect, edit_rect, delete_rect]
+            [save_rect, edit_rect, delete_rect]
                 .iter()
                 .any(|rect| rect.contains(pointer))
+                || (!view.clipboard_current && copy_rect.contains(pointer))
                 || (view.saved && close_rect.contains(pointer))
         });
     if view.interactive && view.busy.is_none() {
@@ -285,25 +297,28 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             action = Some(result);
         }
     }
-    if control(
-        ui,
-        tokens,
-        copy_rect,
-        ("copy", view.artifact_id),
-        "Copy",
-        Icon::Copy,
-        reveal,
-        enabled,
-        false,
-    ) {
+    if !view.clipboard_current
+        && control(
+            ui,
+            tokens,
+            copy_rect,
+            ("copy", view.artifact_id),
+            "Copy",
+            Icon::Copy,
+            reveal,
+            enabled,
+            false,
+        )
+    {
         action = Some(Action::Copy);
     }
-    let second_label = if view.saved {
-        "Show in Folder"
+    let (second_label, second_icon) = if view.saved_feedback {
+        ("Saved", Icon::Check)
+    } else if view.saved {
+        ("Show in Folder", Icon::Folder)
     } else {
-        "Save file"
+        ("Save file", Icon::Save)
     };
-    let second_icon = if view.saved { Icon::Folder } else { Icon::Save };
     if control(
         ui,
         tokens,
@@ -322,10 +337,12 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         });
     }
 
-    let label = view
-        .message
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("{} × {}", view.width, view.height));
+    if view.clipboard_current {
+        clipboard_chip(ui, tokens, card, inset);
+    }
+    let label = view.message.map(str::to_owned).unwrap_or_else(|| {
+        captures_app::preview::card_metadata(view.width, view.height, view.size_bytes)
+    });
     let label_position = card.left_bottom() + egui::vec2(inset, -inset);
     let mut label_job = egui::text::LayoutJob::simple(
         label.clone(),
@@ -359,6 +376,49 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
     .on_hover_text(label);
 
     action
+}
+
+/// Shipping `.clipboard-confirmation`: a green-edged pill at the bottom right.
+fn clipboard_chip(ui: &egui::Ui, tokens: &Tokens, card: egui::Rect, inset: f32) {
+    let text = ui.painter().layout_no_wrap(
+        "Copied to clipboard".to_owned(),
+        egui::FontId::proportional(tokens.number("text-2xs")),
+        Color32::from_rgb(0xea, 0xff, 0xf0),
+    );
+    let padding = egui::vec2(tokens.number("s-4"), 3.);
+    let icon = 12.;
+    let gap = tokens.number("s-2");
+    let size = egui::vec2(
+        padding.x * 2. + icon + gap + text.size().x,
+        padding.y * 2. + text.size().y.max(icon),
+    );
+    let rect =
+        egui::Rect::from_min_size(card.right_bottom() - egui::vec2(inset, inset) - size, size);
+    ui.painter().rect(
+        rect,
+        size.y / 2.,
+        Color32::from_rgba_unmultiplied(10, 22, 15, 230),
+        Stroke::new(1., Color32::from_rgba_unmultiplied(53, 163, 93, 140)),
+        egui::StrokeKind::Inside,
+    );
+    let icon_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + padding.x, rect.center().y - icon / 2.),
+        egui::vec2(icon, icon),
+    );
+    paint_icon(
+        ui.painter(),
+        Icon::Check,
+        icon_rect,
+        Color32::from_rgb(0x7f, 0xd7, 0x9c),
+    );
+    ui.painter().galley(
+        egui::pos2(
+            icon_rect.right() + gap,
+            rect.center().y - text.size().y / 2.,
+        ),
+        text,
+        Color32::from_rgb(0xea, 0xff, 0xf0),
+    );
 }
 
 pub fn show_stack_controls(
@@ -421,6 +481,7 @@ enum Icon {
     Save,
     Folder,
     Stack,
+    Check,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -522,6 +583,9 @@ fn paint_icon(p: &egui::Painter, icon: Icon, rect: egui::Rect, color: Color32) {
         Icon::Close => {
             line(&[(6., 6.), (18., 18.)]);
             line(&[(18., 6.), (6., 18.)]);
+        }
+        Icon::Check => {
+            line(&[(5., 12.), (9., 16.), (19., 6.)]);
         }
         Icon::Edit => {
             line(&[
@@ -730,6 +794,9 @@ mod tests {
                 texture,
                 width: 320,
                 height: 180,
+                size_bytes: 245_760,
+                clipboard_current: false,
+                saved_feedback: false,
                 busy,
                 message: None,
                 can_save,
@@ -774,6 +841,9 @@ mod tests {
                     texture: &texture,
                     width: 310,
                     height: 170,
+                    size_bytes: 245_760,
+                    clipboard_current: false,
+                    saved_feedback: false,
                     busy: None,
                     message: None,
                     can_save: true,
@@ -854,6 +924,9 @@ mod tests {
                     texture: &texture,
                     width: 391,
                     height: 207,
+                    size_bytes: 245_760,
+                    clipboard_current: false,
+                    saved_feedback: false,
                     busy,
                     message: None,
                     can_save: true,
@@ -874,7 +947,7 @@ mod tests {
                     _ => None,
                 })
             };
-            assert_eq!(text("391 × 207").is_some(), !hovered && !focused);
+            assert_eq!(text("391 × 207 · 246 KB").is_some(), !hovered && !focused);
             assert_eq!(text("Copy").is_some(), hovered || focused);
             if hovered || focused {
                 let save = text("Save file").unwrap();
@@ -884,6 +957,61 @@ mod tests {
                     "busy yellow actions must not turn white"
                 );
             }
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn clipboard_owner_hides_copy_shows_chip_and_saved_confirms() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let texture = ctx.load_texture(
+            "clipboard-chip",
+            egui::ColorImage::filled([2, 2], Color32::WHITE),
+            Default::default(),
+        );
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 180.));
+        for (clipboard_current, saved_feedback) in [(false, false), (true, false), (true, true)] {
+            ctx.begin_pass(raw(screen, moved(screen.center())));
+            let mut ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique("clipboard-chip"),
+                egui::UiBuilder::new().max_rect(screen),
+            );
+            show(
+                &mut ui,
+                &tokens,
+                View {
+                    artifact_id: "fixture",
+                    texture: &texture,
+                    width: 391,
+                    height: 207,
+                    size_bytes: 245_760,
+                    clipboard_current,
+                    saved_feedback,
+                    busy: None,
+                    message: None,
+                    can_save: true,
+                    saved: saved_feedback,
+                    interactive: true,
+                    collapsed: false,
+                    stack_count: 1,
+                    depth: 0,
+                    desktop_pointer: None,
+                    reject_offset: 0.,
+                    right_anchor: false,
+                },
+            );
+            let mut output = ctx.end_pass();
+            let has = |label: &str| {
+                output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)
+                })
+            };
+            assert_eq!(has("Copy"), !clipboard_current);
+            assert_eq!(has("Copied to clipboard"), clipboard_current);
+            assert_eq!(has("Saved"), saved_feedback);
+            assert_eq!(has("Save file"), !saved_feedback);
             output.textures_delta.clear();
         }
     }
@@ -1061,6 +1189,9 @@ mod tests {
                     texture: &texture,
                     width: 2,
                     height: 2,
+                    size_bytes: 245_760,
+                    clipboard_current: false,
+                    saved_feedback: false,
                     busy: None,
                     message: None,
                     can_save: true,

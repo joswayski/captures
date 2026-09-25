@@ -131,9 +131,9 @@ captures. Reference captures in this orb: `/tmp/tauri-preview-idle.png`,
 1. Add matching image hover blur and subtle card/button shadows. Current native
    hover is immediate 50% dimming only. Prefer a cached small preview/filter
    path; do not read back screenshot pixels every frame.
-2. Match metadata byte sizes, live clipboard confirmation and Copy visibility,
-   and the Edit → In editor / Show in editor presence pill. Bind to actual
-   state, not optimistic static labels.
+2. Done: metadata byte sizes, live clipboard confirmation with Copy hidden and
+   ✓ Saved feedback. Remaining: the Edit → In editor / Show in editor presence
+   pill, bound to actual editor state.
 3. Reproduce stationary-pointer hover suppression after arrival/expansion,
    tooltips, control animations and Show less hover morph. Keep focus-visible
    actions usable and test nonactivating-panel keyboard/screen-reader behavior.

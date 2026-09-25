@@ -317,6 +317,38 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(transport.saveCount, 0, "Reveal must not create another export")
     }
 
+    func testClipboardOwnerShowsChipHidesCopyAndReleasesOnExternalWrite() throws {
+        _ = NSApplication.shared
+        let controller = try presentedController(artifact(id: "owned", previewPath: "/owned.png"))
+        defer { controller.close() }
+        XCTAssertEqual(controller.metadataText(for: "owned"), "800 × 600 · 0 B")
+        let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+            .first { $0.isVisible && $0.previewView.artifactIDs == ["owned"] })
+        let card = try XCTUnwrap(panel.previewView.subviewsRecursive
+            .compactMap { $0 as? MiniPreviewCardView }.first)
+        let chip = try XCTUnwrap(card.subviews.compactMap { $0 as? MiniPreviewClipboardChip }.first)
+        let buttons = card.subviews.compactMap { $0 as? MiniPreviewButton }
+        let copy = try XCTUnwrap(buttons.first { $0.title == "Copy" })
+        let save = try XCTUnwrap(buttons.first { $0.title == "Save file" })
+        let pairedSaveY = save.frame.minY
+        XCTAssertTrue(chip.isHidden)
+
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        pasteboard.clearContents(); pasteboard.setString("capture", forType: .string)
+        controller.recordClipboardCopy(artifactID: "owned", pasteboard: pasteboard)
+        XCTAssertTrue(controller.isClipboardCurrent(for: "owned"))
+        XCTAssertFalse(chip.isHidden)
+        XCTAssertTrue(copy.isHidden)
+        XCTAssertEqual(save.frame.minY, (card.bounds.height - 32) / 2,
+            "the remaining action centers when Copy hides")
+
+        pasteboard.clearContents(); pasteboard.setString("another app", forType: .string)
+        controller.refreshClipboardOwner()
+        XCTAssertFalse(controller.isClipboardCurrent(for: "owned"))
+        XCTAssertTrue(chip.isHidden)
+        XCTAssertEqual(save.frame.minY, pairedSaveY)
+    }
+
     func testSaveUpdatesExistingCardThenRevealAndMissingExportNeverSaveAgain() throws {
         _ = NSApplication.shared
         let image = solidImage(.systemBlue)
