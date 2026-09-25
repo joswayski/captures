@@ -3605,7 +3605,9 @@ impl Live {
             }
             Response::HistoryRoot { .. }
             | Response::OpenedImage { .. }
-            | Response::OpenedMedia { .. } => {}
+            | Response::OpenedMedia { .. }
+            | Response::PreviewDragPrepared { .. }
+            | Response::PreviousPreviewDragsCleared => {}
         }
     }
 
