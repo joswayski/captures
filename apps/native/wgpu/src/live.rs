@@ -2,7 +2,6 @@ use std::{
     borrow::Cow,
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -35,7 +34,7 @@ use crate::{
     selector::Selector,
     window_selector::{self, SelectionTarget, WindowSelector},
 };
-use crate::{recording, recording_hud, tokens::Tokens};
+use crate::{recording, recording_hud, reveal::reveal, tokens::Tokens};
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(super) enum HistoryFilter {
@@ -4159,38 +4158,85 @@ impl Live {
                             ),
                         )
                     };
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(card_area), |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("preview-stack-scroll")
-                            .auto_shrink([false, false])
-                            .stick_to_bottom(!top_anchor)
-                            .show(ui, |ui| {
-                                let (content, _) = ui.allocate_exact_size(
-                                    egui::vec2(ui.available_width(), scroll_content_height),
-                                    egui::Sense::hover(),
-                                );
-                                for card in &cards {
-                                    let y =
-                                        card.layout.y as f32 - if top_anchor { gutter } else { 0. };
-                                    let rect = egui::Rect::from_min_size(
-                                        content.min
-                                            + egui::vec2(
-                                                captures_app::preview::THUMBNAIL_PADDING as f32,
-                                                y,
-                                            ),
-                                        egui::vec2(
-                                            (captures_app::preview::THUMBNAIL_WIDTH
-                                                - captures_app::preview::THUMBNAIL_PADDING * 2.)
-                                                as f32,
-                                            captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
-                                        ),
+                    // Overflow cues request whole-slot scrolls; apply them
+                    // inside the scroll area on the next pass so egui
+                    // animates the move and releases stick-to-bottom.
+                    let cue_scroll_id = egui::Id::unique("preview-stack-cue-scroll");
+                    let cue_scroll = ui.data_mut(|data| data.remove_temp::<f32>(cue_scroll_id));
+                    let scroll =
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(card_area), |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("preview-stack-scroll")
+                                .auto_shrink([false, false])
+                                .stick_to_bottom(!top_anchor)
+                                .show(ui, |ui| {
+                                    if let Some(delta) = cue_scroll {
+                                        ui.scroll_with_delta(egui::vec2(0., -delta));
+                                    }
+                                    let (content, _) = ui.allocate_exact_size(
+                                        egui::vec2(ui.available_width(), scroll_content_height),
+                                        egui::Sense::hover(),
                                     );
-                                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                                        show_card(ui, card)
-                                    });
-                                }
-                            });
-                    });
+                                    for card in &cards {
+                                        let y = card.layout.y as f32
+                                            - if top_anchor { gutter } else { 0. };
+                                        let rect = egui::Rect::from_min_size(
+                                            content.min
+                                                + egui::vec2(
+                                                    captures_app::preview::THUMBNAIL_PADDING as f32,
+                                                    y,
+                                                ),
+                                            egui::vec2(
+                                                (captures_app::preview::THUMBNAIL_WIDTH
+                                                    - captures_app::preview::THUMBNAIL_PADDING * 2.)
+                                                    as f32,
+                                                captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
+                                            ),
+                                        );
+                                        ui.scope_builder(
+                                            egui::UiBuilder::new().max_rect(rect),
+                                            |ui| show_card(ui, card),
+                                        );
+                                    }
+                                })
+                        });
+                    let scroll = scroll.inner;
+                    let (offset, content_height, viewport_height) = (
+                        f64::from(scroll.state.offset.y),
+                        f64::from(scroll.content_size.y),
+                        f64::from(scroll.inner_rect.height()),
+                    );
+                    let overflow = captures_app::preview::stack_overflow(
+                        offset,
+                        content_height,
+                        viewport_height,
+                    );
+                    // Cues paint over the cards and under the stack toolbar,
+                    // matching the shipping z-order.
+                    if let Some(slots) = crate::mini_preview::show_overflow_cues(
+                        ui,
+                        &tokens,
+                        egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(
+                                captures_app::preview::THUMBNAIL_WIDTH as f32,
+                                geometry.height as f32,
+                            ),
+                        ),
+                        overflow,
+                        top_anchor,
+                    ) {
+                        let target = captures_app::preview::stack_scroll_target(
+                            offset,
+                            content_height,
+                            viewport_height,
+                            slots,
+                        );
+                        ui.data_mut(|data| {
+                            data.insert_temp(cue_scroll_id, (target - offset) as f32)
+                        });
+                        ui.ctx().request_repaint();
+                    }
                 }
                 if crate::mini_preview::stack_controls_visible(count, collapsed) {
                     let gutter = captures_app::preview::THUMBNAIL_CONTROL_GUTTER as f32;
@@ -4213,8 +4259,6 @@ impl Live {
                         match crate::mini_preview::show_stack_controls(
                             ui,
                             &tokens,
-                            count,
-                            collapsed,
                             placement.is_right(),
                         ) {
                             Some(crate::mini_preview::StackAction::ToggleCollapsed) => {
@@ -5578,24 +5622,6 @@ fn clipboard_matches(
         // text offered for an image type), cannot be this capture.
         Err(_) => Ok(false),
     }
-}
-
-fn reveal(path: &Path) -> std::io::Result<()> {
-    if !path.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("saved file no longer exists: {}", path.display()),
-        ));
-    }
-    #[cfg(target_os = "windows")]
-    let result = Command::new("explorer")
-        .arg(format!("/select,{}", path.display()))
-        .spawn();
-    #[cfg(target_os = "linux")]
-    let result = Command::new("xdg-open")
-        .arg(path.parent().unwrap_or(path))
-        .spawn();
-    result.map(|_| ())
 }
 
 #[cfg(test)]
