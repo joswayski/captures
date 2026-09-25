@@ -230,6 +230,11 @@ checks. Other live smoke fixtures explicitly represent completed profiles.
 AppKit tests render permission/error states under `CAPTURES_TEST_ARTIFACTS`.
 These do not verify physical TCC, Windows input or Wayland capture.
 
+Run `python3 apps/native/x11_update_notice_smoke.py --binary PATH --output NEW_DIRECTORY`
+to screenshot every update notice state and drive notes, links, stub install,
+restart and Escape on private X11. The notice uses a stub status source; no native
+updater exists, and no download, install or URL open happens.
+
 Run `python3 apps/native/instance_smoke.py --binary PATH --output NEW_DIRECTORY`
 in a graphical session for real-process forwarding, sender-relative Unicode paths,
 unchanged sources and normal-quit restart. Mac/Windows native CI runs this check;

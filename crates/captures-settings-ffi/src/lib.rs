@@ -10,6 +10,7 @@ mod recording_timeline;
 mod region;
 mod selection;
 mod shortcuts;
+mod update_notice;
 mod window;
 
 use captures_settings::AppSettings;

@@ -524,6 +524,13 @@ impl Preferences {
         self.io.flush();
     }
 
+    /// The update notice's Hide / What's new toggle persists like shipping.
+    pub fn set_show_update_changelog(&mut self, show: bool) {
+        if !self.value.is_null() {
+            self.set(&["show_update_changelog"], json!(show));
+        }
+    }
+
     pub fn persisted_generation(&self) -> u64 {
         self.persisted_generation
     }

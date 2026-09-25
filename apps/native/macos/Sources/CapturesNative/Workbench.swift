@@ -452,6 +452,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var renderedLiveStyleRevision = -1
     private var regionSelector: RegionSelectionView?
     private var windowSelector: WindowSelectionView?
+    private var updateNotice: UpdateNoticeController?
+    private var updateNoticeSettings: SettingsStore?
     private var scene: String
     private var appearance: String
     private var theme: String
@@ -815,6 +817,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         table = nil
         regionSelector = nil
         windowSelector = nil
+        if scene != "update" {
+            updateNotice?.close(); updateNotice = nil; updateNoticeSettings = nil
+        }
         if !options.live {
             liveController?.finishCapture(restoreWindow: false)
             liveController = nil
@@ -958,8 +963,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             sidebar.addSubview(icon)
         }
         label("Captures", x: 58, y: 22, width: 125, size: "text-xl", parent: sidebar)
-        for (i, name) in ["preferences", "history", "hud", "preview", "region", "window"].enumerated() {
-            let button = CaptureButton(name == "hud" ? "Recording controls" : name.capitalized,
+        for (i, name) in ["preferences", "history", "hud", "preview", "region", "window", "update"].enumerated() {
+            let button = CaptureButton(Self.sceneTitle(name),
                 frame: NSRect(x: 12, y: 70 + i * 44, width: 172, height: 34), tokens: tokens) { [weak self] in
                     self?.scene = name
                     self?.render()
@@ -969,7 +974,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }
         label("Fixture mode", x: 24, y: 640, width: 155, size: "text-sm", muted: true, parent: sidebar)
         label("No capture access", x: 24, y: 663, width: 155, size: "text-sm", muted: true, parent: sidebar)
-        label(scene == "hud" ? "Recording controls" : scene.capitalized,
+        label(Self.sceneTitle(scene),
             x: 220, y: 20, width: 650, size: "text-xl")
         label("Native rendering workbench · synthetic data, not functional parity",
             x: 220, y: 47, width: 740, size: "text-sm", muted: true)
@@ -977,9 +982,54 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         case "history": history()
         case "hud": hud()
         case "preview": previews()
+        case "update": updateNoticeFixture()
         default: break
         }
         Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+    }
+
+    static func sceneTitle(_ name: String) -> String {
+        switch name {
+        case "hud": return "Recording controls"
+        case "update": return "Update notice"
+        default: return name.capitalized
+        }
+    }
+
+    /// Stub-driven update notice. Only an explicit --settings-file persists the
+    /// Hide / What's new choice; fixtures never touch the development profile.
+    private func updateNoticeFixture() {
+        label("Stub status source: no updater, download, install or relaunch is connected.",
+            x: 220, y: 90, width: 740, size: "text-sm", muted: true)
+        for (i, name) in UpdateNoticeModel.fixtures.enumerated() {
+            let button = CaptureButton(name, frame: NSRect(x: 220 + (i % 5) * 150, y: 130 + (i / 5) * 44,
+                width: 140, height: 34), tokens: tokens) { [weak self] in self?.showUpdateNotice(name) }
+            content.addSubview(button)
+        }
+        if updateNotice == nil { showUpdateNotice(options.updateState ?? "available") }
+    }
+
+    private func showUpdateNotice(_ fixture: String) {
+        if updateNotice == nil {
+            let controller = UpdateNoticeController(tokens: tokens, tray: options.updateTray ?? "top")
+            if let path = options.settingsFile, let store = try? SettingsStore(path: path) {
+                updateNoticeSettings = store
+                store.load { [weak controller] result in
+                    guard case .success(let settings) = result else { return }
+                    controller?.model.showChangelog = settings.bool("show_update_changelog", true)
+                    controller?.refresh()
+                }
+                controller.model.persistShowChangelog = { [weak store] show in
+                    store?.load { result in
+                        guard case .success(var settings) = result else { return }
+                        settings["show_update_changelog"] = show
+                        store?.save(settings) { _, _ in }
+                    }
+                }
+            }
+            updateNotice = controller
+        }
+        updateNotice?.present(fixture: fixture)
     }
 
     private func openPreview(_ artifact: CaptureArtifact) {
