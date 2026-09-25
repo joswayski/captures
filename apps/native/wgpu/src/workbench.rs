@@ -464,7 +464,7 @@ impl Workbench {
             shortcuts.update(&settings)
         } else {
             let wake = ctx.clone();
-            CaptureShortcuts::new(&settings, move || wake.request_repaint()).map(|shortcuts| {
+            CaptureShortcuts::new(&settings, move || wake_shortcut_host(&wake)).map(|shortcuts| {
                 *owner = Some(shortcuts);
             })
         };
@@ -1748,6 +1748,16 @@ fn window_selection_name(
     }
 }
 
+fn wake_shortcut_host(ctx: &egui::Context) {
+    // OS callbacks can run while a preview/editor owns the shared egui context.
+    // Shortcut routing lives in ROOT, including when the resident window is hidden.
+    ctx.send_viewport_cmd_to(
+        egui::ViewportId::ROOT,
+        egui::ViewportCommand::RequestPaintWhileHidden,
+    );
+    ctx.request_repaint_of(egui::ViewportId::ROOT);
+}
+
 fn shortcuts_should_be_suspended(
     preferences_selected: bool,
     root_visible: bool,
@@ -1802,6 +1812,42 @@ mod tests {
         assert!(history_rows(0, HistoryFilter::All).is_empty());
         assert_eq!(history_rows(1, HistoryFilter::Video), vec![0]);
         assert!(history_rows(1, HistoryFilter::Screenshots).is_empty());
+    }
+
+    #[test]
+    fn shortcut_wakes_hidden_root_when_preview_viewport_is_active() {
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            ctx.begin_pass(Default::default());
+            ctx.end_pass().textures_delta.clear();
+        }
+        let child = egui::ViewportId::from_hash_of("mini-preview");
+        let mut input = egui::RawInput {
+            viewport_id: child,
+            ..Default::default()
+        };
+        input.viewports.insert(
+            child,
+            egui::ViewportInfo {
+                parent: Some(egui::ViewportId::ROOT),
+                ..Default::default()
+            },
+        );
+        ctx.begin_pass(input);
+        let (wakes, received) = mpsc::channel();
+        ctx.set_request_repaint_callback(move |info| {
+            let _ = wakes.send(info.viewport_id);
+        });
+        wake_shortcut_host(&ctx);
+        assert_eq!(received.try_recv().unwrap(), egui::ViewportId::ROOT);
+        let mut output = ctx.end_pass();
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::RequestPaintWhileHidden))
+        );
+        output.textures_delta.clear();
     }
 
     #[test]
