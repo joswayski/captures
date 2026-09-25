@@ -552,13 +552,13 @@ final class MiniPreviewPanel: NSPanel {
         setAccessibilityLabel(ids.count == 1 ? "Screenshot mini preview" : "Screenshot mini previews")
     }
 
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+    @objc func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard let url = sender.draggingPasteboard.string(forType: .fileURL).flatMap(URL.init(string:)),
               previewView.containsPreparedDragPath(url.path) else { return [] }
         return .copy
     }
 
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+    @objc func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         draggingEntered(sender).contains(.copy)
     }
 }
