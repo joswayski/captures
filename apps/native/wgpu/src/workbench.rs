@@ -1296,9 +1296,6 @@ impl eframe::App for Workbench {
             if self.preferences_state.permission_recovery_open() {
                 ui.disable();
             }
-            if live.take_open_history_requested() {
-                self.live_preferences = false;
-            }
             if self.tray_error.is_some()
                 || self.shortcut_error.is_some()
                 || self.shortcut_suspension_error.is_some()

@@ -26,6 +26,8 @@ from x11_capture_smoke import BACKGROUNDS, ScreenSaver
 PREVIEW = "Captures Mini Preview"
 SELECTOR = "Captures Region Selection"
 CONTROLS = "Captures Capture Controls"
+# xdotool searches legacy WM_NAME, whose em dash is not decoded as UTF-8.
+EDITOR = "Screenshot editor.*"
 
 
 def main():
@@ -105,6 +107,13 @@ def main():
     def window_geometry(window):
         return dict(line.split("=", 1) for line in
                     run("xdotool", "getwindowgeometry", "--shell", window).decode().splitlines())
+
+    def active_window():
+        # Openbox can briefly clear _NET_ACTIVE_WINDOW while transferring focus.
+        result = subprocess.run(["xdotool", "getactivewindow"], env=env,
+                                capture_output=True, text=True, timeout=5)
+        assert result.returncode in (0, 1), result.stderr
+        return result.stdout.strip() if result.returncode == 0 else None
 
     def wait(predicate, description):
         deadline = time.monotonic() + 15
@@ -526,7 +535,7 @@ def main():
                                 for path in entry.parent.rglob("*") if path.is_file()}
 
                     def draft_files():
-                        drafts = output / "editor-drafts"
+                        drafts = history.with_name("editor-drafts")
                         return {path.relative_to(drafts): path.read_bytes()
                                 for path in drafts.rglob("*") if path.is_file()}
 
@@ -534,25 +543,30 @@ def main():
                     preserved = entries()
                     preserved_drafts = draft_files()
                     click(preview, 175, 169, activate=False)  # Padded card Edit center.
-                    editor = wait(lambda: windows("Screenshot editor — Captures"),
+                    editor = wait(lambda: windows(EDITOR),
                                   "Edit opens the screenshot editor")[0]
-                    wait(lambda: run("xdotool", "getactivewindow").decode().strip() == editor,
+                    wait(lambda: active_window() == editor,
                          "Edit focuses the screenshot editor")
+                    wait(lambda: run("xprop", "-id", editor, "_NET_WM_NAME").decode().strip()
+                         == '_NET_WM_NAME(UTF8_STRING) = "Screenshot editor — Captures"',
+                         "preview editor finishes loading its screenshot")
                     assert not windows("Captures"), "Edit restored minimized workspace"
                     assert entries() == preserved and private_files(first) == preserved_private, (
                         "Edit changed the artifact or History")
                     shot("root", f"{prefix}-edit-with-preview")
+                    run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                    assert active_window() == other
                     click(preview, 175, 169, activate=False)
-                    wait(lambda: run("xdotool", "getactivewindow").decode().strip() == editor,
+                    wait(lambda: active_window() == editor,
                          "repeated Edit focuses the existing screenshot editor")
-                    assert windows("Screenshot editor — Captures") == [editor], (
+                    assert windows(EDITOR) == [editor], (
                         "repeated Edit opened a duplicate screenshot editor")
                     assert not windows("Captures"), "repeated Edit restored minimized workspace"
                     assert entries() == preserved and private_files(first) == preserved_private, (
                         "repeated Edit changed the artifact or History")
                     run("xdotool", "keydown", "Alt_L", "sleep", ".1", "key", "F4",
                         "sleep", ".1", "keyup", "Alt_L", "sleep", ".4")
-                    wait(lambda: not windows("Screenshot editor — Captures"),
+                    wait(lambda: not windows(EDITOR),
                          "unmodified screenshot editor closes cleanly")
                     assert draft_files() == preserved_drafts, "unmodified Edit changed saved drafts"
                     assert windows(PREVIEW) and not windows("Captures"), (

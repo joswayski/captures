@@ -33,7 +33,7 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(panel.previewView.artifactIDs, ["latest"])
         let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
         XCTAssertEqual(buttons.map(\.title), ["Copy", "Save", "Edit", "Trash", "×"])
-        XCTAssertEqual(buttons.first { $0.title == "Edit" }?.accessibilityLabel(), "Edit")
+        XCTAssertEqual(buttons.first { $0.title == "Edit" }?.accessibilityLabel(), "Edit screenshot")
         XCTAssertTrue(buttons.allSatisfy(\.glass))
         XCTAssertTrue(try XCTUnwrap(buttons.first { $0.title == "Trash" }).signal)
         XCTAssertEqual(buttons.last?.accessibilityLabel(), "Dismiss preview")

@@ -67,6 +67,10 @@ final class MiniPreviewCardView: NSView {
             addSubview(button)
             actionButtons.append(button)
             if index == 1 { saveButton = button; updateSaveButton(saved: saved) }
+            if index == 2 {
+                button.setAccessibilityLabel("Edit screenshot")
+                button.toolTip = "Edit screenshot"
+            }
             if index == 3 {
                 button.signal = true
                 button.toolTip = "Move saved export to Trash and dismiss preview; keep private History"

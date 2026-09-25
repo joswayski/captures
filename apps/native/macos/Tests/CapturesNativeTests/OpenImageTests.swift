@@ -202,6 +202,7 @@ final class OpenImageTests: XCTestCase {
         try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
             .first { $0.title == "Apply crop" }).performClick(nil)
         try waitUntil { editor.title.contains("Unsaved") }
+        editor.orderOut(nil)
         controller.openPreview(first)
         try waitUntil { editor.isVisible && editor.title.contains("Unsaved") }
         XCTAssertTrue(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible } === editor)
