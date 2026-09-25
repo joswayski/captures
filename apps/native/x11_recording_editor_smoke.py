@@ -448,7 +448,7 @@ def main():
                 field(editor, x, 727, value)
             click(editor, 22, 771)
             field(editor, 78, 815, 81)
-            field(editor, 170, 815, 61)
+            field(editor, 197, 815, 61)
             click(editor, 793, 1082)
             shot(editor, "replace-accepted")
             click(editor, 782, 1038)
@@ -1606,7 +1606,7 @@ def main():
         field(editor, 208, 727, 160)
         click(editor, 22, 771)  # Custom output size.
         field(editor, 78, 815, 81)
-        field(editor, 170, 815, 61)
+        field(editor, 197, 815, 61)
         shot(editor, "crop-staged")
         click(editor, 793, 1082)
         shot(editor, "cropped")
@@ -1653,7 +1653,7 @@ def main():
         run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "20", "--delay", "60", "4", "sleep", ".5")
         field(editor, 227, 598, 1300)
         field(editor, 78, 815, 4001)
-        field(editor, 170, 815, 601)
+        field(editor, 197, 815, 601)
         click(editor, 33, 1082)
         large_destination = exports / "encoder-sized.mp4"
         field(editor, 360, 1038, large_destination)
