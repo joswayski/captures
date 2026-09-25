@@ -433,7 +433,7 @@ mod tests {
             ctx.begin_pass(raw(rect, vec![]));
             let mut ui = egui::Ui::new(
                 ctx.clone(),
-                egui::Id::new("action-layout"),
+                egui::Id::unique("action-layout"),
                 egui::UiBuilder::new().max_rect(rect),
             );
             show(
