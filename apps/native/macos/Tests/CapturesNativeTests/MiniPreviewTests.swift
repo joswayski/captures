@@ -283,7 +283,8 @@ final class MiniPreviewTests: XCTestCase {
 
     func testCompactDepthShadePreservesFrontAndClearsOnExpansion() throws {
         _ = NSApplication.shared
-        let panel = fixturePanel(ids: ["red"], images: ["red": solidImage(.red)], collapsed: true)
+        let panel = fixturePanel(ids: ["red"],
+            images: ["red": solidImage(NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))], collapsed: true)
         defer { panel.close() }
         let card = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewCardView }.first)
         func red() throws -> CGFloat {
@@ -477,7 +478,10 @@ final class MiniPreviewTests: XCTestCase {
     private func render(_ panel: MiniPreviewPanel) throws -> NSBitmapImageRep {
         panel.display(); panel.previewView.layoutSubtreeIfNeeded()
         let view = panel.previewView
-        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        // Set the destination profile BEFORE drawing. Display-dependent blending
+        // followed by conversion to sRGB does not give the same channel values.
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds)?
+            .retagging(with: .sRGB))
         view.cacheDisplay(in: view.bounds, to: bitmap)
         return bitmap
     }
