@@ -102,7 +102,7 @@ final class MiniPreviewButton: NSButton {
 
 final class MiniPreviewCardView: NSView, NSDraggingSource {
     private let tokens: Tokens
-    private let rightAnchor: Bool
+    private let mirrored: Bool
     private let imageView: MiniPreviewImageView
     private let depthShade = NSView()
     private let dimensions: NSTextField
@@ -129,7 +129,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
          open: @escaping () -> Void, trash: @escaping () -> Void,
          dismiss: @escaping () -> Void) {
         self.artifactID = artifactID; self.tokens = tokens
-        self.rightAnchor = rightAnchor
+        self.mirrored = rightAnchor
         self.saved = saved
         imageView = MiniPreviewImageView(frame: frame, image: image)
         dimensions = NSTextField(labelWithString: "\(width) × \(height)")
@@ -161,15 +161,15 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         status.isHidden = true; addSubview(status)
 
         let gap = tokens.number("s-3")
-        let outerX = rightAnchor ? bounds.width - inset - 28 : inset
-        let groupStart = rightAnchor && saved ? outerX - 28 - gap : outerX
+        let outerX = mirrored ? bounds.width - inset - 28 : inset
+        let groupStart = mirrored && saved ? outerX - 28 - gap : outerX
         let close = addButton("Close", .close, x: groupStart, y: inset, action: dismiss)
         closeButton = close
         let delete = addButton("Delete", .trash, x: groupStart + (saved ? 28 + gap : 0), y: inset) { [weak self] in
             self?.saved == true ? trash() : dismiss()
         }
         delete.toolTip = saved ? "Move saved export to Trash and dismiss preview; keep private History" : "Dismiss preview; keep private History"
-        _ = addButton("Edit", .edit, x: rightAnchor ? inset : bounds.width - 36, y: inset, action: open)
+        _ = addButton("Edit", .edit, x: mirrored ? inset : bounds.width - 36, y: inset, action: open)
         let centerX = (bounds.width - 140) / 2
         let centerTop = (bounds.height - 64 - gap) / 2
         _ = addButton("Copy", .copy, x: centerX, y: centerTop, width: 140, action: copy)
@@ -195,7 +195,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         saveButton?.toolTip = saved ? "Show in Folder" : "Save file"
         self.saved = saved
         let step = 28 + tokens.number("s-3")
-        let start = rightAnchor ? bounds.width - 36 - (saved ? step : 0) : 8
+        let start = mirrored ? bounds.width - 36 - (saved ? step : 0) : 8
         closeButton?.frame.origin.x = start
         let delete = actionButtons.first(where: { $0.kind == .trash })
         delete?.frame.origin.x = start + (saved ? step : 0)

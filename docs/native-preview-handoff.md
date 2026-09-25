@@ -46,31 +46,23 @@ Source ownership:
 - `shared/design.css` and desktop `mini-preview.css`: extract existing 12px
   card radius to a shared token; shipping Tauri geometry is unchanged.
 
-## First: resolve the drag regression / harness timing ambiguity
+## Resolved: X11 drag regression after Copy
 
-The final command failed; do not hide it behind passing unit tests:
+Root cause: the chrome slice only registered the card's drag widget on frames
+where the pointer was not over a control. egui hit-tests a press against the
+previous frame's widgets, so after the harness clicked Copy (pointer resting on
+the button) a move to the image plus press in one frame found no drag widget
+and no XDND session started (`Timed out: receiver negotiates COPY`). The drag
+area is now registered every frame; only `Action::DragFile` and the grab
+cursor/tooltip are suppressed when the press starts on a control. Regression
+test: `image_drag_starts_right_after_pointer_rested_on_an_action`. Verified on
+private X11: `--drag-only`, `--drag-only --reduced-motion` and `--stack` pass;
+the unfixed build reproduces the CI timeout.
 
-```sh
-/usr/bin/python3 apps/native/x11_preview_smoke.py --drag-only \
-  --binary /home/user/workspace/captures-brush-resume/apps/native/wgpu/target/debug/captures-wgpu-workbench \
-  --output /tmp/preview-chrome-final2
-```
-
-Observed: self-drop completed; `received-cancel.jsonl` records enter, position,
-leave. Copy recovered after Escape, then the next receiver never negotiated
-COPY (`Timed out: receiver negotiates COPY`, line 531 at handoff). No
-`received-reject.jsonl` was created. Logs/artifacts remain in
-`/tmp/preview-chrome-final2` and `/tmp/preview-chrome-final2.log` in this orb.
-The preceding attempt hit the reset clipboard's plain-text bytes; that polling
-fixture issue was fixed without weakening the exact PNG/pixel assertion.
-
-Investigate whether the next drag begins before the async Copy busy state
-clears, or whether changed hit regions/egui pointer recovery break the next
-press. These are hypotheses, not established causes. Trace
-`mini_preview::show`, `outbound_drag.rs`, and `PreviewMessage::Copy` / drag
-completion in `live.rs`. The new drag starts at window (60,90), outside buttons;
-Copy is (170,89), Save is (170,127). Preserve real receiver byte assertions,
-cancel/reject/timeout/target-loss/repeat and nonactivating behavior.
+The AppKit build also failed to compile: `override` on the panel's
+`NSDraggingDestination` methods (fixed on #808 with `@objc`) and a card
+property named `rightAnchor` shadowing `NSView.rightAnchor` (renamed
+`mirrored`).
 
 Then check AppKit CI compilation/rendered fixtures, Windows native CI and the
 new PR's checks. AppKit is uncompiled in the Linux orb. In particular exercise

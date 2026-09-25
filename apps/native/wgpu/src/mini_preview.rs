@@ -202,18 +202,24 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                 .any(|rect| rect.contains(pointer))
                 || (view.saved && close_rect.contains(pointer))
         });
-    if view.interactive && view.busy.is_none() && !pointer_over_control {
+    if view.interactive && view.busy.is_none() {
+        // Register the drag area every frame. egui hit-tests a press against
+        // the previous frame's widgets, so skipping it while the pointer was
+        // over a control would lose the next drag that starts off-control.
+        // Controls are added later and stay on top for clicks.
         let response = ui.interact(
             card,
             ui.scope_id().with(("file-drag", view.artifact_id)),
             egui::Sense::drag(),
         );
-        if response.drag_started_by(egui::PointerButton::Primary) {
+        if response.drag_started_by(egui::PointerButton::Primary) && !pointer_over_control {
             action = Some(Action::DragFile);
         }
-        response
-            .on_hover_cursor(egui::CursorIcon::Grab)
-            .on_hover_text("Drag the original file to another app");
+        if !pointer_over_control {
+            response
+                .on_hover_cursor(egui::CursorIcon::Grab)
+                .on_hover_text("Drag the original file to another app");
+        }
     }
     let enabled = view.interactive && view.busy.is_none();
     let mut controls = Vec::new();
@@ -926,6 +932,29 @@ mod tests {
                 true
             ),
             Some(Action::Copy)
+        );
+    }
+
+    #[test]
+    fn image_drag_starts_right_after_pointer_rested_on_an_action() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "drag-after-action",
+            egui::ColorImage::filled([2, 2], Color32::WHITE),
+            Default::default(),
+        );
+        // The previous frame only saw the pointer over Copy; the move to the
+        // image and the press then arrive together in one frame.
+        run_card(&ctx, &texture, moved(egui::pos2(142., 60.)), false, true);
+        assert_eq!(
+            run_card(
+                &ctx,
+                &texture,
+                pointer(egui::pos2(40., 60.), true),
+                false,
+                true
+            ),
+            Some(Action::DragFile)
         );
     }
 
