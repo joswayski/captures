@@ -288,7 +288,14 @@ final class MiniPreviewTests: XCTestCase {
         defer { panel.close() }
         let card = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewCardView }.first)
         func red() throws -> CGFloat {
-            try XCTUnwrap(render(panel).colorAt(x: 170, y: 132)?.usingColorSpace(.sRGB)).redComponent
+            let bitmap = try render(panel)
+            XCTAssertEqual(bitmap.colorSpace, .sRGB)
+            XCTAssertEqual(bitmap.bitsPerSample, 8)
+            // colorAt returns a calibrated NSColor even for this sRGB bitmap;
+            // converting that color again changes the already-correct bytes.
+            var pixel = [Int](repeating: 0, count: bitmap.samplesPerPixel)
+            bitmap.getPixel(&pixel, atX: 170, y: 132)
+            return CGFloat(pixel[0]) / 255
         }
         XCTAssertEqual(try red(), 1, accuracy: 0.01)
         card.setCompact(true, depth: 1)
