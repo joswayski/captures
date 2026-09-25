@@ -11,6 +11,9 @@ default-run = "captures-wgpu-workbench"
 # toolchain, lockfile, dependencies, packaging, or supported platforms.
 [workspace]
 
+[patch.crates-io]
+winit = { path = "vendor/winit" }
+
 [dependencies]
 eframe = { git = "https://github.com/emilk/egui", rev = "60d7caaea38a795618e842925061ad2210028a2a", default-features = false, features = ["wgpu", "x11", "wayland", "accesskit", "default_fonts"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "tiff"] }
