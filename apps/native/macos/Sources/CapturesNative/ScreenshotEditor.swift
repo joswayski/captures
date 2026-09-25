@@ -2160,7 +2160,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawHelper.stringValue = wand
             ? "Wand removes matching pixels from the frontmost visible image."
             : brush
-                ? "The outline previews brush size and path only. Pixels apply on release."
+                ? "Pixels preview while dragging. Release commits one undo step; Escape cancels."
                 : shape == .text
                     ? "Click once to create empty auto-width text. Edit it below, then Apply."
                     : drawingShadowVisible ? "Drawing pixels update in the background while dragging."

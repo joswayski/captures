@@ -1095,7 +1095,8 @@ impl EditorSession {
         Ok(())
     }
 
-    /// Render an uncommitted drawing on the serialized worker. Only renderer
+    /// Render an uncommitted drawing or complete background-brush gesture on the
+    /// serialized worker, starting from published assets. Only renderer
     /// caches may change: document, history, assets, published pixels and drafts
     /// remain untouched. The returned frame owns its pixels independently.
     pub fn preview_drawing(&mut self, request: Request) -> Result<Arc<RgbaImage>, String> {

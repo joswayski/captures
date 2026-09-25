@@ -917,6 +917,71 @@ fn background_brush(points: &[(f64, f64)], mode: &str) -> Request {
 }
 
 #[test]
+fn background_brush_previews_preserve_state_and_match_one_committed_stroke() {
+    let (data, id, original) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    editor
+        .execute(Request::SetBackground {
+            color: Some("#123456".into()),
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    for mode in ["erase", "restore"] {
+        editor
+            .execute(Request::SaveDraft { updated_at_ms: 42 })
+            .unwrap();
+        let before = serde_json::to_value(editor.snapshot()).unwrap();
+        let frame = editor.pixels();
+        let retained = open(data.path(), &id).unwrap().pixels();
+        if mode == "erase" {
+            let soft = || {
+                serde_json::from_value(json!({
+                    "operation": "paint_image_background", "points": [{"x": 2.5, "y": 1.5}],
+                    "size": 4, "softness": 100, "mode": "erase"
+                }))
+                .unwrap()
+            };
+            let feathered = editor.preview_drawing(soft()).unwrap();
+            assert!(feathered.get_pixel(3, 1)[3] > 0 && feathered.get_pixel(3, 1)[3] < 255);
+            assert_eq!(
+                *feathered,
+                *editor.preview_drawing(soft()).unwrap(),
+                "repeated previews must not accumulate soft-edge erasure"
+            );
+        }
+        let preview = editor
+            .preview_drawing(background_brush(&[(2.5, 1.5)], mode))
+            .unwrap();
+        assert_eq!(
+            preview.get_pixel(2, 1),
+            if mode == "erase" {
+                &Rgba([0; 4])
+            } else {
+                original.get_pixel(2, 1)
+            }
+        );
+        assert_eq!(preview.get_pixel(6, 2), original.get_pixel(6, 2));
+        // Replaying a complete gesture must start from published pixels, not the previous preview.
+        let repeated = editor
+            .preview_drawing(background_brush(&[(2.5, 1.5)], mode))
+            .unwrap();
+        assert_eq!(*preview, *repeated);
+        assert!(editor.preview_drawing(background_brush(&[], mode)).is_err());
+        assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+        assert!(Arc::ptr_eq(&frame, &editor.pixels()));
+        assert_eq!(*open(data.path(), &id).unwrap().pixels(), *retained);
+        editor
+            .execute(background_brush(&[(2.5, 1.5)], mode))
+            .unwrap();
+        assert_eq!(*preview, *editor.pixels());
+        editor.execute(Request::Undo).unwrap();
+        assert_eq!(*frame, *editor.pixels());
+        editor.execute(Request::Redo).unwrap();
+    }
+    assert_eq!(*editor.pixels(), original);
+}
+
+#[test]
 fn background_brush_erases_restores_and_undoes_each_completed_stroke() {
     let (data, id, original) = setup();
     let mut editor = open(data.path(), &id).unwrap();

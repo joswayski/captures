@@ -2051,6 +2051,11 @@ mod tests {
             let frame = captures_editor_preview_drawing_v1(session, drawing.as_ptr(), &mut output);
             assert!(!frame.is_null());
             assert_eq!(take_json(output)["ok"], true);
+            let brush = c"{\"operation\":\"paint_image_background\",\"points\":[{\"x\":2.5,\"y\":1.5}],\"size\":2,\"softness\":0,\"mode\":\"erase\"}";
+            let brush_frame =
+                captures_editor_preview_drawing_v1(session, brush.as_ptr(), &mut output);
+            assert!(!brush_frame.is_null());
+            assert_eq!(take_json(output)["ok"], true);
             assert_eq!(
                 serde_json::to_value((&*session).snapshot()).unwrap(),
                 serde_json::to_value(before).unwrap()
@@ -2065,6 +2070,15 @@ mod tests {
             let bytes = std::slice::from_raw_parts(pixels.data, pixels.length);
             assert_eq!(&bytes[(7 + 3) * 4..(7 + 4) * 4], &[18, 52, 86, 255]);
             captures_editor_frame_free_v1(frame);
+            let mut pixels = MaybeUninit::uninit();
+            assert!(captures_editor_frame_pixels_v1(
+                brush_frame,
+                pixels.as_mut_ptr()
+            ));
+            let pixels = pixels.assume_init();
+            let bytes = std::slice::from_raw_parts(pixels.data, pixels.length);
+            assert_eq!(&bytes[(7 + 2) * 4..(7 + 3) * 4], &[0; 4]);
+            captures_editor_frame_free_v1(brush_frame);
         }
     }
 

@@ -1625,7 +1625,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                         ui.label("Softness");
                         ui.add(egui::DragValue::new(&mut view.brush_softness).range(0. ..=100.).max_decimals(0).suffix("%").speed(1.));
                     });
-                    ui.label("Drag over an image, then release to apply the pixels as one undo step.");
+                    ui.label("Pixels preview while dragging. Release commits one undo step; Escape cancels.");
                     ui.small("Erase makes pixels transparent. Restore uses the image’s retained original pixels.");
                 } else if view.draw_shape == DrawShape::Text {
                     ui.label("New text style");
@@ -7693,6 +7693,10 @@ mod tests {
         view.draw_shape = DrawShape::Erase;
         view.brush_size = 28.;
         view.brush_softness = 18.;
+        view.drawing_preview = Some(drawing_preview::State::new(
+            ctx.clone(),
+            egui::ViewportId::ROOT,
+        ));
         let (tx, rx) = mpsc::channel();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 700.));
         let preview = egui::Rect::from_min_size(egui::pos2(220., 140.), egui::vec2(600., 300.));
@@ -7732,6 +7736,26 @@ mod tests {
             vec![moved(250., 170.), button(250., 170., true)],
             false,
         );
+        let Job::DrawingPreview {
+            request:
+                Request::PaintImageBackground {
+                    points,
+                    size,
+                    softness,
+                    mode,
+                },
+            epoch,
+            reply,
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("expected live brush preview")
+        };
+        assert_eq!(points, vec![Point { x: 60., y: 60. }]);
+        assert_eq!((size, softness, mode), (28., 18., BrushMode::Erase));
+        assert!(
+            !view.pending,
+            "preview does not publish an edit or block gesture input"
+        );
         frame(&mut view, vec![moved(260., 180.), moved(100., 100.)], false);
         frame(
             &mut view,
@@ -7760,6 +7784,22 @@ mod tests {
             view.pending && rx.try_recv().is_err(),
             "multipass submits once"
         );
+        reply
+            .send(drawing_preview::Reply {
+                epoch,
+                pixels: Ok(Arc::new(RgbaImage::new(1200, 600))),
+            })
+            .unwrap();
+        view.drawing_preview.as_mut().unwrap().receive(&tx);
+        assert!(
+            view.drawing_preview.as_ref().unwrap().texture.is_none(),
+            "late pre-release pixels cannot replace committed state"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "release discards the queued preview"
+        );
+        view.drawing_preview = None;
 
         view.pending = false;
         view.draw_shape = DrawShape::Restore;
