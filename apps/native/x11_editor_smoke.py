@@ -2887,7 +2887,11 @@ def main():
         drag((298, 500), (358, 570))  # Fully outside the image grows the canvas.
         outside = save_layers(lambda values: len(values) == 4, "outside shape retained")[-1]
         assert outside["shape"] == "rectangle"
-        assert saved(640, 486, 0, 0)
+        assert (outside["x"], outside["y"], outside["endX"]) == (60, 411, 120)
+        assert outside["endY"] > outside["y"] > 360
+        stroke_extent = math.ceil(outside["style"]["strokeWidth"] / 2) + 1
+        expected_height = math.ceil(max(outside["y"], outside["endY"]) + stroke_extent)
+        assert saved(640, expected_height, 0, 0)
         shot(editor, "shape-outside-expanded")
         assert (artifact / "capture.png").read_bytes() == original
         click(editor, 275, 62)
