@@ -179,8 +179,9 @@ final class MiniPreviewTests: XCTestCase {
         let controller = try presentedController(artifact(id: "source", previewPath: "/source.png"))
         defer { controller.close() }
         func card() throws -> (MiniPreviewPanel, MiniPreviewCardView) {
+            // Closed panels stay in NSApp.windows while this test still holds them.
             let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
-                .first { $0.previewView.artifactIDs == ["source"] })
+                .first { $0.isVisible && $0.previewView.artifactIDs == ["source"] })
             return (panel, try XCTUnwrap(panel.previewView.subviewsRecursive
                 .compactMap { $0 as? MiniPreviewCardView }.first))
         }
@@ -191,7 +192,7 @@ final class MiniPreviewTests: XCTestCase {
 
         let ownWindow = NSWindow(contentRect: NSRect(x: 20_000, y: 20_000, width: 100, height: 100),
             styleMask: .borderless, backing: .buffered, defer: false)
-        defer { ownWindow.close() }
+        ownWindow.isReleasedWhenClosed = false; defer { ownWindow.close() }
         ownWindow.orderFrontRegardless()
         current.1.finishDrag(at: NSPoint(x: ownWindow.frame.midX, y: ownWindow.frame.midY),
                              operation: .copy)
