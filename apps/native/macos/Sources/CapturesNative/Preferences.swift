@@ -207,6 +207,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     /// Default microphone choices, enumerated off the main thread once.
     private var microphones: [NativeMicrophoneDevice]?
     private var microphonesLoading = false
+    /// Refreshed in place when devices arrive: rebuilding every card would
+    /// reset controls in use, such as an in-progress shortcut recording.
+    private weak var microphonePopUp: ClosurePopUpButton?
     private var scroll = NSScrollView()
     private var document = Surface()
     private var status = NSTextField(labelWithString: "Loading preferences…")
@@ -674,17 +677,24 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     /// device that is not connected stays selectable by its id.
     private func microphoneMenu(y: CGFloat, parent: NSView) {
         rowTitle("Default microphone", detail: "Used when a recording starts with microphone audio.", y: y, parent: parent)
+        let menu = ClosurePopUpButton(frame: NSRect(x: 528, y: y + 7, width: 150, height: 30), pullsDown: false)
+        menu.tokens = tokens
+        menu.setAccessibilityLabel("Default microphone")
+        menu.target = menu; menu.action = #selector(ClosurePopUpButton.selectedValue); parent.addSubview(menu)
+        microphonePopUp = menu
+        fillMicrophoneMenu(menu)
         loadMicrophonesIfNeeded()
+    }
+
+    private func fillMicrophoneMenu(_ menu: ClosurePopUpButton) {
         let saved = (settings["recording"] as? [String: Any])?["microphone_device_id"] as? String
         var options: [(id: String?, title: String)] = [(nil, "Off")]
         options += (microphones ?? []).map { (id: Optional($0.id), title: $0.name) }
         if let saved, !options.contains(where: { $0.id == saved }) { options.append((id: saved, title: saved)) }
-        let menu = ClosurePopUpButton(frame: NSRect(x: 528, y: y + 7, width: 150, height: 30), pullsDown: false)
-        menu.tokens = tokens
+        menu.menu?.removeAllItems()
         // Add items individually: devices can share a display name.
         for option in options { menu.menu?.addItem(NSMenuItem(title: option.title, action: nil, keyEquivalent: "")) }
         menu.selectItem(at: options.firstIndex { $0.id == saved } ?? 0)
-        menu.setAccessibilityLabel("Default microphone")
         menu.change = { [weak self] index in
             guard let self, options.indices.contains(index) else { return }
             var recording = self.settings["recording"] as? [String: Any] ?? [:]
@@ -692,7 +702,6 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             else { recording["microphone_device_id"] = NSNull() }
             self.settings["recording"] = recording; self.changed(rerender: false)
         }
-        menu.target = menu; menu.action = #selector(ClosurePopUpButton.selectedValue); parent.addSubview(menu)
     }
 
     private func loadMicrophonesIfNeeded() {
@@ -703,7 +712,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.microphones = devices; self.microphonesLoading = false
-                self.rebuildCards()
+                if let menu = self.microphonePopUp { self.fillMicrophoneMenu(menu) }
             }
         }
     }
