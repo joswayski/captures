@@ -1998,7 +1998,8 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(end["x"]), 142.222, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(end["y"]), -99.556, accuracy: 0.001,
                        "preview whitespace maps to off-canvas document coordinates")
-        XCTAssertNil(request["style"]); XCTAssertNil(request["opacity"])
+        XCTAssertEqual((request["style"] as? [String: Any])?["color"] as? String, "#ff3b5c")
+        XCTAssertEqual(request["opacity"] as? Double, 100)
         XCTAssertEqual(outputMode.selectedSegment, 0)
         XCTAssertFalse(outputMode.isEnabled, "accepted creation invalidates encoded output")
         try showLayers(in: controller.root)
@@ -3143,6 +3144,91 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(geometry.strokeWidth, 8)
     }
 
+    func testDrawingDefaultsAreLocalAndApplyToClosedOpenAndPenRequests() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "styled"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "styled"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+
+        (try field("New drawing stroke color", in: controller.root)).stringValue = "#123456"
+        (try field("New drawing fill color", in: controller.root)).stringValue = "#abcdef"
+        (try field("New drawing stroke width", in: controller.root)).stringValue = "13"
+        (try field("New drawing opacity", in: controller.root)).stringValue = "37"
+        let toggles = descendants(in: controller.root).compactMap { $0 as? NSButton }
+        let stroke = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing stroke" })
+        stroke.state = .on; _ = stroke.sendAction(stroke.action, to: stroke.target)
+        XCTAssertTrue(worker.requests.isEmpty, "changing creation defaults is not a document command")
+
+        let overlay = controller.drawOverlay
+        let imageRect = overlay.presentedImageRect
+        let start = NSPoint(x: imageRect.minX + imageRect.width * 0.2,
+                            y: imageRect.minY + imageRect.height * 0.2)
+        let end = NSPoint(x: imageRect.minX + imageRect.width * 0.7,
+                          y: imageRect.minY + imageRect.height * 0.6)
+        overlay.begin(at: start); overlay.drag(to: end)
+        try render(controller.root, name: "screenshot-editor-new-drawing-closed-light")
+        overlay.end(at: end)
+        var request = try XCTUnwrap(worker.requests.last)
+        var style = try XCTUnwrap(request["style"] as? [String: Any])
+        XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
+        XCTAssertEqual(style["color"] as? String, "#123456")
+        XCTAssertEqual(style["fill"] as? String, "#abcdef")
+        XCTAssertEqual(style["strokeWidth"] as? Double, 13)
+        XCTAssertEqual(style["strokeEnabled"] as? Bool, true)
+        XCTAssertEqual(request["opacity"] as? Double, 37)
+
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(at: 2); _ = tool.sendAction(tool.action, to: tool.target)
+        XCTAssertTrue(stroke.isHidden, "Line always strokes regardless of the closed-shape toggle")
+        (try field("New drawing fill color", in: controller.root)).stringValue = "unfinished"
+        overlay.begin(at: start); overlay.drag(to: end)
+        try render(controller.root, name: "screenshot-editor-new-drawing-line-light")
+        overlay.end(at: end)
+        request = try XCTUnwrap(worker.requests.last)
+        style = try XCTUnwrap(request["style"] as? [String: Any])
+        XCTAssertEqual(request["operation"] as? String, "create_open_shape")
+        XCTAssertTrue(style["fill"] is NSNull,
+                      "hidden fill input cannot block a line or enter its request")
+
+        (try field("New drawing opacity", in: controller.root)).stringValue = "0"
+        tool.selectItem(at: 4); _ = tool.sendAction(tool.action, to: tool.target)
+        overlay.begin(at: NSPoint(x: 40, y: 40)); overlay.drag(to: NSPoint(x: 80, y: 70)); overlay.end(at: NSPoint(x: 90, y: 80))
+        request = try XCTUnwrap(worker.requests.last)
+        XCTAssertEqual(request["operation"] as? String, "create_freehand_path")
+        XCTAssertEqual(request["opacity"] as? Double, 0)
+        XCTAssertEqual((request["style"] as? [String: Any])?["strokeWidth"] as? Double, 13,
+                       "worker responses and tool switches do not reset host-local defaults")
+    }
+
+    func testDrawingPreviewCompositesOpacityOnceAndKeepsBrushGuidesVisible() throws {
+        _ = NSApplication.shared
+        let overlay = EditorDrawOverlay(frame: NSRect(x: 0, y: 0, width: 200, height: 120))
+        overlay.canvasSize = NSSize(width: 200, height: 120)
+        overlay.drawingEnabled = true
+        overlay.annotationStrokeWidth = 13
+        overlay.annotationStrokeEnabled = true
+        overlay.annotationFillEnabled = true
+        overlay.annotationOpacity = 0.37
+        overlay.strokeColor = .black; overlay.fillColor = .white
+        overlay.begin(at: NSPoint(x: 30, y: 30)); overlay.drag(to: NSPoint(x: 150, y: 90))
+        let bitmap = try XCTUnwrap(overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds))
+        overlay.cacheDisplay(in: overlay.bounds, to: bitmap)
+        let alpha = renderedAlphaRange(try XCTUnwrap(bitmap.cgImage)).upperBound
+        XCTAssertTrue((92...96).contains(alpha), "fill/stroke overlap must use one 37% composite, not two")
+        overlay.cancelGesture(); overlay.shape = .erase; overlay.annotationOpacity = 0
+        overlay.begin(at: NSPoint(x: 30, y: 30)); overlay.drag(to: NSPoint(x: 150, y: 90))
+        let brush = try XCTUnwrap(overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds))
+        overlay.cacheDisplay(in: overlay.bounds, to: brush)
+        XCTAssertGreaterThan(renderedAlphaRange(try XCTUnwrap(brush.cgImage)).upperBound, 200,
+                             "annotation opacity must not hide erase/restore feedback")
+        overlay.cancelGesture()
+        let arrow = try XCTUnwrap(NativeEditorDrawGeometry(kind: 0,
+            samples: [CGPoint(x: 5, y: 9), CGPoint(x: 205, y: 9)], strokeWidth: 13))
+        XCTAssertEqual(arrow.strokeWidth, 13)
+    }
+
     func testCanvasSelectionMapsFittedCoordinatesAndDistinguishesClickFromMove() {
         _ = NSApplication.shared
         let overlay = EditorSelectionOverlay(frame: NSRect(x: 0, y: 0, width: 200, height: 120))
@@ -3428,6 +3514,9 @@ final class ScreenshotEditorTests: XCTestCase {
         let value: [String: Any] = [
             "artifact_id": "shot", "document": ["height": 100, "elements": [rotatedElement], "width": 200],
             "initial_text_size": 39,
+            "initial_annotation_style": ["color": "#123456", "fill": "#abcdef",
+                                           "strokeWidth": 13.0, "strokeEnabled": true,
+                                           "dropShadow": false],
             "selection_outlines": ["rotated": [
                 ["x": 12, "y": 4], ["x": 26, "y": 18], ["x": 12, "y": 32], ["x": -2, "y": 18],
             ]],
@@ -3435,6 +3524,10 @@ final class ScreenshotEditorTests: XCTestCase {
         ]
         let parsed = try XCTUnwrap(NativeEditorSnapshot(value))
         XCTAssertEqual(parsed.initialTextSize, 39, "capture size must not be inferred from draft dimensions")
+        XCTAssertEqual(parsed.initialAnnotationStyle,
+                       NativeDrawingStyle(["color": "#123456", "fill": "#abcdef",
+                                           "strokeWidth": 13.0, "strokeEnabled": true,
+                                           "dropShadow": false]))
         XCTAssertEqual(parsed.layers[0].selectionOutline,
                        [CGPoint(x: 12, y: 4), CGPoint(x: 26, y: 18),
                         CGPoint(x: 12, y: 32), CGPoint(x: -2, y: 18)])
@@ -5835,6 +5928,9 @@ final class ScreenshotEditorTests: XCTestCase {
             "artifact_id": id, "document": ["width": width, "height": height,
                                                   "elements": layers],
             "initial_text_size": initialTextSize,
+            "initial_annotation_style": ["color": "#ff3b5c", "fill": "#ff3b5c",
+                                           "strokeWidth": 8.0, "strokeEnabled": false,
+                                           "dropShadow": false],
             "font_families": fonts,
             "text_style_presets": ([
                 ["id": "standard", "label": "Standard", "fontFamily": "sans", "background": NSNull(), "outlined": false, "roundedBackground": false],

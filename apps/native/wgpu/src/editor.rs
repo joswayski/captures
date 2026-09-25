@@ -168,7 +168,14 @@ impl DrawShape {
         }
     }
 
-    fn request(self, start: Point, end: Point, display_scale: f64) -> Option<Request> {
+    fn request(
+        self,
+        start: Point,
+        end: Point,
+        display_scale: f64,
+        style: &ElementStyle,
+        opacity: f64,
+    ) -> Option<Request> {
         match self {
             Self::Rectangle | Self::Ellipse | Self::Triangle | Self::Diamond | Self::Star
                 if start.x != end.x && start.y != end.y =>
@@ -178,8 +185,8 @@ impl DrawShape {
                         shape: self.closed_kind().expect("closed shape"),
                         start,
                         end,
-                        style: ElementStyle::default(),
-                        opacity: 100.,
+                        style: style.clone(),
+                        opacity,
                     },
                 })
             }
@@ -197,8 +204,8 @@ impl DrawShape {
                         },
                         start,
                         end,
-                        style: ElementStyle::default(),
-                        opacity: 100.,
+                        style: style.clone(),
+                        opacity,
                     },
                 })
             }
@@ -384,6 +391,8 @@ struct View {
     new_text_preset: Option<String>,
     new_text_size: f64,
     new_text_color: String,
+    new_annotation_style: ElementStyle,
+    new_annotation_opacity: f64,
     wand_tolerance: f64,
     wand_contiguous: bool,
     brush_size: f64,
@@ -448,6 +457,8 @@ impl Default for View {
             new_text_preset: None,
             new_text_size: 24.,
             new_text_color: "#ff3b5c".into(),
+            new_annotation_style: ElementStyle::default(),
+            new_annotation_opacity: 100.,
             wand_tolerance: 36.,
             wand_contiguous: true,
             brush_size: 28.,
@@ -1608,8 +1619,50 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     ui.label("Click to type on the canvas, or click existing text to edit it.");
                     ui.small("These defaults apply only to new text in this editor. Box styles center on the click.");
                 } else {
+                    let closed = view.draw_shape.closed_kind().is_some();
+                    let style = &mut view.new_annotation_style;
+                    if closed {
+                        let mut stroke = style.has_stroke();
+                        if ui.checkbox(&mut stroke, "Stroke").changed() {
+                            style.stroke_enabled = Some(stroke);
+                        }
+                    }
+                    if !closed || style.has_stroke() {
+                        annotation_color(
+                            ui,
+                            if closed { "Stroke color" } else { "Color" },
+                            &mut style.color,
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label("Size");
+                            ui.add(
+                                egui::DragValue::new(&mut style.stroke_width)
+                                    .range(2. ..=40.)
+                                    .speed(1.)
+                                    .suffix(" px"),
+                            );
+                        });
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Opacity");
+                        ui.add(
+                            egui::DragValue::new(&mut view.new_annotation_opacity)
+                                .range(0. ..=100.)
+                                .speed(1.)
+                                .suffix("%"),
+                        );
+                    });
+                    if closed {
+                        let mut filled = style.fill.is_some();
+                        if ui.checkbox(&mut filled, "Filled shape").changed() {
+                            style.fill = filled.then(|| style.color.clone());
+                        }
+                        if let Some(fill) = &mut style.fill {
+                            annotation_color(ui, "Fill color", fill);
+                        }
+                    }
                     ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
-                    ui.small("New shapes use the default annotation color. Change fill, stroke, shadow, opacity, position and ordering in Layers.");
+                    ui.small("These defaults apply to new shapes in this editor. Change shadow, position and ordering in Layers.");
                 }
                 return;
             }
@@ -3190,7 +3243,8 @@ fn show_shape(
     if response.hovered() || response.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
-    let style = ElementStyle::default();
+    let style = view.new_annotation_style.clone();
+    let opacity = view.new_annotation_opacity;
     if let Some((start, end)) = view.shape_drag {
         let position = |point: Point| {
             egui::pos2(
@@ -3202,21 +3256,41 @@ fn show_shape(
         let painter = ui
             .painter()
             .with_clip_rect(available.intersect(ui.clip_rect()));
-        let fill =
-            egui::Color32::from_hex(style.fill.as_deref().expect("default closed-shape fill"))
-                .expect("default annotation color is hex");
+        let color = |value: &str| {
+            egui::Color32::from_hex(value)
+                .unwrap_or(egui::Color32::TRANSPARENT)
+                .gamma_multiply((opacity / 100.).clamp(0., 1.) as f32)
+        };
+        let fill = style
+            .fill
+            .as_deref()
+            .map_or(egui::Color32::TRANSPARENT, color);
+        // Open shapes always stroke, regardless of the retained closed-shape toggle.
+        let stroke = if style.has_stroke() || view.draw_shape.closed_kind().is_none() {
+            egui::Stroke::new(
+                (style.stroke_width / bounds.width) as f32 * preview.width(),
+                color(&style.color),
+            )
+        } else {
+            egui::Stroke::NONE
+        };
         match view.draw_shape {
             DrawShape::Rectangle => {
                 let radius = (12. * preview.width() / bounds.width as f32)
                     .min(rect.width() / 6.)
                     .min(rect.height() / 6.);
-                painter.rect_filled(rect, radius, fill);
+                painter.rect(rect, radius, fill, stroke, egui::StrokeKind::Middle);
             }
             DrawShape::Ellipse => {
                 painter.add(egui::Shape::ellipse_filled(
                     rect.center(),
                     rect.size() / 2.,
                     fill,
+                ));
+                painter.add(egui::Shape::ellipse_stroke(
+                    rect.center(),
+                    rect.size() / 2.,
+                    stroke,
                 ));
             }
             DrawShape::Triangle | DrawShape::Diamond | DrawShape::Star => {
@@ -3226,19 +3300,15 @@ fn show_shape(
                     .expect("closed shape")
                     .polygon(start, end)
                     .expect("polygon kind");
-                painter.add(egui::Shape::mesh(polygon_mesh(
-                    points.into_iter().map(position).collect(),
-                    fill,
-                )));
+                let mut points: Vec<_> = points.into_iter().map(position).collect();
+                painter.add(egui::Shape::mesh(polygon_mesh(points.clone(), fill)));
+                if stroke != egui::Stroke::NONE && !points.is_empty() {
+                    points.push(points[0]);
+                    painter.add(egui::Shape::line(points, stroke));
+                }
             }
             DrawShape::Line => {
-                painter.line_segment(
-                    [position(start), position(end)],
-                    egui::Stroke::new(
-                        (style.stroke_width / bounds.width) as f32 * preview.width(),
-                        fill,
-                    ),
-                );
+                painter.line_segment([position(start), position(end)], stroke);
             }
             DrawShape::Freehand => {
                 let points: Vec<_> = smooth_path_centerline(&view.freehand_points)
@@ -3246,13 +3316,14 @@ fn show_shape(
                     .map(position)
                     .collect();
                 let width = (style.stroke_width / bounds.width) as f32 * preview.width();
+                let color = color(&style.color);
                 if points.len() == 1 {
-                    painter.circle_filled(points[0], width / 2., fill);
-                } else {
+                    painter.circle_filled(points[0], width / 2., color);
+                } else if !points.is_empty() {
                     // egui's open path has flat caps; shipping Pen strokes are round.
-                    painter.circle_filled(points[0], width / 2., fill);
-                    painter.circle_filled(points[points.len() - 1], width / 2., fill);
-                    painter.add(egui::Shape::line(points, egui::Stroke::new(width, fill)));
+                    painter.circle_filled(points[0], width / 2., color);
+                    painter.circle_filled(points[points.len() - 1], width / 2., color);
+                    painter.add(egui::Shape::line(points, egui::Stroke::new(width, color)));
                 }
             }
             DrawShape::Arrow => {
@@ -3279,7 +3350,7 @@ fn show_shape(
                         .into_iter()
                         .map(position)
                         .collect(),
-                    fill,
+                    color(&style.color),
                 )));
             }
             DrawShape::Text | DrawShape::Wand | DrawShape::Erase | DrawShape::Restore => {
@@ -3297,12 +3368,17 @@ fn show_shape(
                 create: FreehandPathCreate {
                     points: std::mem::take(&mut view.freehand_points),
                     style,
-                    opacity: 100.,
+                    opacity,
                 },
             })
         } else {
-            view.draw_shape
-                .request(start, end, f64::from(preview.width()) / bounds.width)
+            view.draw_shape.request(
+                start,
+                end,
+                f64::from(preview.width()) / bounds.width,
+                &style,
+                opacity,
+            )
         };
         if let Some(request) = request {
             view.submit(tx, request);
@@ -7172,6 +7248,14 @@ mod tests {
         value.pixels = Arc::new(RgbaImage::new(1280, 640));
         view.receive(&ctx, Ok(value));
         view.draw_shape = DrawShape::Freehand;
+        view.new_annotation_style = ElementStyle {
+            color: "#123456".into(),
+            fill: Some("#abcdef".into()),
+            stroke_width: 13.,
+            stroke_enabled: Some(false),
+            ..ElementStyle::default()
+        };
+        view.new_annotation_opacity = 37.;
         view.canvas = [9., 7.]; // Unapplied fields must not affect the 0.5× mapping.
         let pixels = view.presented.as_ref().unwrap().pixels.clone();
         let (tx, rx) = mpsc::channel();
@@ -7257,17 +7341,22 @@ mod tests {
                 Point { x: -8., y: 88. }
             ]
         );
+        assert_eq!(create.style, view.new_annotation_style);
+        assert_eq!(create.opacity, 37.);
         assert!(
             rx.try_recv().is_err() && view.freehand_points.is_empty() && view.shape_drag.is_none()
         );
 
         view.pending = false;
+        view.new_annotation_opacity = 0.;
         frame(&mut view, vec![moved(120., 130.), button(120., 130., true)]);
         frame(&mut view, vec![button(120., 130., false)]);
         let Job::Apply(Request::CreateFreehandPath { create }) = rx.try_recv().unwrap() else {
             panic!()
         };
         assert_eq!(create.points, vec![Point { x: 40., y: 60. }]);
+        assert_eq!(create.style, view.new_annotation_style);
+        assert_eq!(create.opacity, 0.);
         view.pending = false;
         frame(&mut view, vec![moved(140., 150.), button(140., 150., true)]);
         view.request_close();
@@ -7281,7 +7370,7 @@ mod tests {
         let start = Point { x: -7.25, y: 13.5 };
         for end in [start, Point { x: 4., y: 13.5 }, Point { x: -7.25, y: -2. }] {
             let Some(Request::CreateOpenShape { create }) =
-                DrawShape::Line.request(start, end, 0.5)
+                DrawShape::Line.request(start, end, 0.5, &ElementStyle::default(), 100.)
             else {
                 panic!("lines must not use closed-shape or arrow minimum rules")
             };
@@ -7297,15 +7386,83 @@ mod tests {
                 x: start.x - threshold,
                 y: start.y,
             };
-            assert!(DrawShape::Arrow.request(start, below, scale).is_none());
+            assert!(
+                DrawShape::Arrow
+                    .request(start, below, scale, &ElementStyle::default(), 100.)
+                    .is_none()
+            );
             let Some(Request::CreateOpenShape { create }) =
-                DrawShape::Arrow.request(start, at, scale)
+                DrawShape::Arrow.request(start, at, scale, &ElementStyle::default(), 100.)
             else {
                 panic!("an arrow at the inclusive boundary must commit")
             };
             assert_eq!(create.shape, OpenShapeKind::Arrow);
             assert_eq!((create.start, create.end), (start, at));
         }
+    }
+
+    #[test]
+    fn new_annotation_defaults_are_host_local_and_survive_tools_and_failures() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(false)));
+        let pixels = view.presented.as_ref().unwrap().pixels.clone();
+        let document = view.presented.as_ref().unwrap().document.clone();
+        let texture = ctx.load_texture(
+            "defaults-output",
+            egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+            egui::TextureOptions::default(),
+        );
+        view.output = Some((texture, 4));
+        view.show_output = true;
+        let (tx, rx) = mpsc::channel::<Job>();
+
+        view.new_annotation_style = ElementStyle {
+            color: "#123456".into(),
+            fill: None,
+            stroke_width: 13.,
+            stroke_enabled: Some(true),
+            ..ElementStyle::default()
+        };
+        view.new_annotation_opacity = 37.;
+        assert!(rx.try_recv().is_err());
+        assert!(view.show_output && view.output.is_some() && !view.unsaved());
+        assert!(Arc::ptr_eq(
+            &pixels,
+            &view.presented.as_ref().unwrap().pixels
+        ));
+        assert!(Arc::ptr_eq(
+            &document,
+            &view.presented.as_ref().unwrap().document
+        ));
+
+        view.activate_tool(Section::Draw, Some(DrawShape::Line));
+        view.activate_tool(Section::Draw, Some(DrawShape::Star));
+        view.pending = true;
+        view.receive(&ctx, Err("creation failed".into()));
+        assert_eq!(view.new_annotation_style.color, "#123456");
+        assert_eq!(view.new_annotation_style.fill, None);
+        assert_eq!(view.new_annotation_style.stroke_width, 13.);
+        assert_eq!(view.new_annotation_opacity, 37.);
+        assert_eq!(view.draw_shape, DrawShape::Star);
+        assert!(rx.try_recv().is_err());
+
+        let request = DrawShape::Line
+            .request(
+                Point { x: 1., y: 2. },
+                Point { x: 8., y: 9. },
+                1.,
+                &view.new_annotation_style,
+                view.new_annotation_opacity,
+            )
+            .unwrap();
+        let Request::CreateOpenShape { create } = request else {
+            panic!()
+        };
+        assert_eq!(create.style.fill, None);
+        assert_eq!(create.style.stroke_enabled, Some(true));
+        assert_eq!(create.opacity, 37.);
+        drop(tx);
     }
 
     #[test]
@@ -7592,6 +7749,14 @@ mod tests {
         let mut value = presented(false);
         value.pixels = Arc::new(RgbaImage::new(1280, 640));
         view.receive(&ctx, Ok(value));
+        view.new_annotation_style = ElementStyle {
+            color: "#123456".into(),
+            fill: Some("#abcdef".into()),
+            stroke_width: 13.,
+            stroke_enabled: Some(true),
+            ..ElementStyle::default()
+        };
+        view.new_annotation_opacity = 37.;
         let pixels = view.presented.as_ref().unwrap().pixels.clone();
         let document = view.presented.as_ref().unwrap().document.clone();
         view.canvas = [999., 777.]; // Never use unapplied canvas fields for mapping.
@@ -7671,8 +7836,8 @@ mod tests {
             };
             assert_eq!(start, Point { x: 800., y: 400. });
             assert_eq!(end, Point { x: -80., y: 100. });
-            assert_eq!(style, ElementStyle::default());
-            assert_eq!(opacity, 100.);
+            assert_eq!(style, view.new_annotation_style);
+            assert_eq!(opacity, 37.);
             assert!(rx.try_recv().is_err() && view.shape_drag.is_none() && view.pending);
             assert_eq!(view.draw_shape, kind); // Creation does not switch back to another tool.
             view.pending = false;
@@ -7738,10 +7903,22 @@ mod tests {
         receive(&editor, &ctx);
         for request in [
             DrawShape::Line
-                .request(Point { x: 6., y: 2. }, Point { x: 0., y: 2. }, 1.)
+                .request(
+                    Point { x: 6., y: 2. },
+                    Point { x: 0., y: 2. },
+                    1.,
+                    &ElementStyle::default(),
+                    100.,
+                )
                 .unwrap(),
             DrawShape::Arrow
-                .request(Point { x: 6., y: 2. }, Point { x: 0., y: 2. }, 1.)
+                .request(
+                    Point { x: 6., y: 2. },
+                    Point { x: 0., y: 2. },
+                    1.,
+                    &ElementStyle::default(),
+                    100.,
+                )
                 .unwrap(),
             Request::CreateFreehandPath {
                 create: FreehandPathCreate {

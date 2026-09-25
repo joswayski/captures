@@ -604,12 +604,37 @@ pub unsafe extern "C" fn captures_editor_draw_geometry_v1(
     length: usize,
     output: *mut DrawPoints,
 ) -> *mut DrawGeometry {
+    // SAFETY: v1 has the same pointer contract and keeps its original default width.
+    unsafe {
+        captures_editor_draw_geometry_v2(
+            kind,
+            input,
+            length,
+            ElementStyle::default().stroke_width,
+            output,
+        )
+    }
+}
+
+/// Like v1, with an explicit finite positive stroke width for new drawing controls.
+/// # Safety
+/// The input/output ownership and lifetime contract is identical to v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_draw_geometry_v2(
+    kind: u32,
+    input: *const AbiPoint,
+    length: usize,
+    stroke_width: f64,
+    output: *mut DrawPoints,
+) -> *mut DrawGeometry {
     if input.is_null()
         || output.is_null()
         || length == 0
         || length > isize::MAX as usize / (24 * size_of::<AbiPoint>())
         || kind > 4
         || (kind != 1 && length != 2)
+        || !(stroke_width as f32).is_finite()
+        || stroke_width <= 0.
     {
         return ptr::null_mut();
     }
@@ -622,7 +647,10 @@ pub unsafe extern "C" fn captures_editor_draw_geometry_v1(
         {
             return None;
         }
-        let style = ElementStyle::default();
+        let style = ElementStyle {
+            stroke_width,
+            ..ElementStyle::default()
+        };
         let width = style.stroke_width;
         let points = if kind == 0 {
             arrow_fill_polygon(&ShapeElement {
@@ -1743,6 +1771,49 @@ mod tests {
             assert!(points.iter().any(|point| point.y > 9.));
             assert!(points.iter().any(|point| point.y < 9.));
             captures_editor_draw_geometry_free_v1(arrow);
+        }
+    }
+
+    #[test]
+    fn explicit_drawing_width_changes_arrow_geometry_and_rejects_invalid_widths() {
+        let endpoints = [AbiPoint { x: 5., y: 9. }, AbiPoint { x: 205., y: 9. }];
+        let mut heights = Vec::new();
+        // SAFETY: buffers remain live, and every successful owner is freed after reading.
+        unsafe {
+            for width in [8., 13.] {
+                let mut output = MaybeUninit::uninit();
+                let owner = captures_editor_draw_geometry_v2(
+                    0,
+                    endpoints.as_ptr(),
+                    2,
+                    width,
+                    output.as_mut_ptr(),
+                );
+                assert!(!owner.is_null());
+                let output = output.assume_init();
+                assert_eq!(output.stroke_width, width);
+                let points = std::slice::from_raw_parts(output.data, output.length);
+                heights.push(points.iter().map(|p| (p.y - 9.).abs()).fold(0., f64::max));
+                assert!(points.iter().any(|p| p.x == 205. && p.y == 9.));
+                captures_editor_draw_geometry_free_v1(owner);
+            }
+            assert!(
+                heights[1] > heights[0] + 1.,
+                "the configured width must reach the arrow outline, not just its descriptor"
+            );
+            for width in [0., -1., f64::NAN, f64::INFINITY, f64::MAX] {
+                let mut output = DrawPoints {
+                    data: ptr::null(),
+                    length: 123,
+                    stroke_width: 456.,
+                };
+                assert!(
+                    captures_editor_draw_geometry_v2(0, endpoints.as_ptr(), 2, width, &mut output)
+                        .is_null()
+                );
+                assert!(output.data.is_null());
+                assert_eq!((output.length, output.stroke_width), (123, 456.));
+            }
         }
     }
 

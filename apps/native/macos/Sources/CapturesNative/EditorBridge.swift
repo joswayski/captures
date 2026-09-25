@@ -81,17 +81,20 @@ struct NativeEditorDrawGeometry {
         self.init(kind: arrow ? 0 : 1, samples: samples)
     }
 
-    init?(kind: UInt32, samples: [CGPoint]) {
+    init?(kind: UInt32, samples: [CGPoint], strokeWidth: Double? = nil) {
         let input = samples.map { CapturesSelectionPoint(x: $0.x, y: $0.y) }
         var output = CapturesEditorDrawPoints()
         let handle = input.withUnsafeBufferPointer {
-            captures_editor_draw_geometry_v1(kind, $0.baseAddress, $0.count, &output)
+            if let strokeWidth {
+                return captures_editor_draw_geometry_v2(kind, $0.baseAddress, $0.count, strokeWidth, &output)
+            }
+            return captures_editor_draw_geometry_v1(kind, $0.baseAddress, $0.count, &output)
         }
         guard let handle else { return nil }
         defer { captures_editor_draw_geometry_free_v1(handle) }
         points = UnsafeBufferPointer(start: output.data, count: output.length)
             .map { CGPoint(x: $0.x, y: $0.y) }
-        strokeWidth = output.stroke_width
+        self.strokeWidth = output.stroke_width
     }
 }
 
@@ -443,6 +446,7 @@ struct NativeEditorSnapshot: Equatable {
     let artifactID: String
     let originalExportPath: String?
     let initialTextSize: Double
+    let initialAnnotationStyle: NativeDrawingStyle?
     let width: Double
     let height: Double
     let background: String?
@@ -514,6 +518,15 @@ struct NativeEditorSnapshot: Equatable {
         self.artifactID = artifactID
         self.originalExportPath = originalExportPath
         self.initialTextSize = initialTextSize.doubleValue
+        if let style = value["initial_annotation_style"] as? [String: Any] {
+            guard let parsed = NativeDrawingStyle(style) else { return nil }
+            initialAnnotationStyle = parsed
+        } else if value["initial_annotation_style"] == nil {
+            // Older host-only fixtures predate this shared snapshot field.
+            initialAnnotationStyle = nil
+        } else {
+            return nil
+        }
         self.width = width.doubleValue; self.height = height.doubleValue
         self.background = document["background"] as? String
         self.canUndo = canUndo; self.canRedo = canRedo
@@ -547,6 +560,27 @@ struct NativeEditorSnapshot: Equatable {
         self.layers = Array(layers.reversed())
         self.documentJSON = String(decoding: documentData, as: UTF8.self)
     }
+}
+
+struct NativeDrawingStyle: Equatable {
+    var color: String
+    var fill: String?
+    var strokeWidth: Double
+    var strokeEnabled: Bool
+    var dropShadow: Bool
+
+    init?(_ value: [String: Any]) {
+        guard let color = value["color"] as? String,
+              let width = value["strokeWidth"] as? NSNumber,
+              let stroke = value["strokeEnabled"] as? Bool,
+              let shadow = value["dropShadow"] as? Bool else { return nil }
+        self.color = color
+        fill = value["fill"] as? String
+        strokeWidth = width.doubleValue
+        strokeEnabled = stroke
+        dropShadow = shadow
+    }
+
 }
 
 enum NativeEditorHitTesting {

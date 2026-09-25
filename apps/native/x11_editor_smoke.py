@@ -95,6 +95,8 @@ def main():
                         help="Exercise on-canvas text composition, finish, blank discard, undo and quit")
     parser.add_argument("--polygon-only", action="store_true",
                         help="Exercise Triangle/Diamond/Star previews, cancellation and saved pixels")
+    parser.add_argument("--drawing-defaults-only", action="store_true",
+                        help="Exercise pre-placement shape style, opacity, retained defaults and pixels")
     parser.add_argument("--rotation-snap-only", action="store_true",
                         help="Exercise custom Shift rotation stops without saving the UI setting")
     parser.add_argument("--output-presets-only", action="store_true",
@@ -1011,6 +1013,82 @@ def main():
                            "saved-angle-reopen", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native rotation snap: custom angle, no preference edit, cancel, undo, draft, pixels")
+            return
+
+        if args.drawing_defaults_only:
+            resize_editor(942, 1001)
+            save(640, 360, 0, 0)
+            before = draft.read_bytes()
+            click(editor, 736, 62)
+            inspector_click(16, 308)  # Enable the initially disabled closed-shape stroke.
+            shot(editor, "drawing-default-controls")
+            field(382, "#123456", 145)
+            field(426, "13", 77)
+            field(470, "37", 87)
+            field(586, "#abcdef", 145)
+            shot(editor, "drawing-custom-controls")
+            assert draft.read_bytes() == before, "default controls alone wrote a draft"
+
+            start, end = document_point((250, 45)), document_point((350, 145))
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                *map(str, end), "sleep", ".3")
+            shot(editor, "drawing-styled-transient")
+            assert draft.read_bytes() == before, "transient drawing wrote a draft"
+            run("xdotool", "mouseup", "1", "sleep", ".3")
+            created = save_layers(lambda values: len(values) == 2, "styled rectangle created")[-1]
+            assert created["opacity"] == 37 and created["style"]["strokeWidth"] == 13, created
+            assert created["style"]["color"] == "#123456" and created["style"]["fill"] == "#abcdef", created
+            assert created["style"]["strokeEnabled"] is True
+            shot(editor, "drawing-styled-committed")
+            # Independently blend 37% #abcdef / #123456 over the #286ea6 source.
+            document_pixel("drawing-styled-committed", 300, 95, (88, 145, 193), 1)
+            document_pixel("drawing-styled-committed", 300, 40, (32, 89, 136), 1)
+            click(editor, 35, 62)
+            save_layers(lambda values: len(values) == 1, "one undo removes the new shape")
+
+            # A line must stroke despite the retained closed-shape toggle being off.
+            click(editor, 736, 62)
+            inspector_click(16, 308)
+            inspector_click(30, 177)
+            shot(editor, "drawing-line-controls")
+            start, end = document_point((250, 70)), document_point((370, 70))
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                *map(str, end), "sleep", ".3")
+            shot(editor, "drawing-line-transient")
+            document_pixel("drawing-line-transient", 300, 70, (32, 89, 136), 2)
+            run("xdotool", "mouseup", "1", "sleep", ".3")
+            line = save_layers(lambda values: len(values) == 2, "styled line created")[-1]
+            assert line["shape"] == "line" and line["opacity"] == 37, line
+            assert line["style"]["color"] == "#123456" and line["style"]["strokeWidth"] == 13, line
+            # Like Tauri, preserve the closed-only flag in metadata; open rendering ignores it.
+            assert line["style"]["fill"] is None and line["style"]["strokeEnabled"] is False
+            shot(editor, "drawing-line-committed")
+            document_pixel("drawing-line-committed", 300, 70, (32, 89, 136), 1)
+            click(editor, 35, 62)
+            save_layers(lambda values: len(values) == 1, "undo line")
+            click(editor, 736, 62)
+            field(426, "0", 87)  # Open-tool controls have no closed Stroke toggle.
+            start, end = document_point((250, 70)), document_point((370, 70))
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
+            invisible = save_layers(lambda values: len(values) == 2, "zero-opacity line remains an editable layer")[-1]
+            assert invisible["opacity"] == 0, invisible
+            shot(editor, "drawing-zero-opacity")
+            document_pixel("drawing-zero-opacity", 300, 70, (40, 110, 166))
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "drawing defaults suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["default-fields-no-write", "asymmetric-stroke-fill", "custom-width-opacity",
+                           "independent-composited-pixels", "single-undo", "open-stroke-ignores-closed-toggle",
+                           "tool-and-response-retention", "zero-opacity-layer", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native drawing defaults: style, opacity, preview, pixels, undo and retained local choices")
             return
 
         if args.polygon_only:

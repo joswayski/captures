@@ -603,6 +603,42 @@ fn initial_text_size_uses_capture_short_axis_rounding_and_clamps_not_draft_canva
 }
 
 #[test]
+fn initial_annotation_controls_match_shipping_without_following_document_edits() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    // Independently copied from Tauri's defaultStyle, not the Rust factory.
+    let expected = serde_json::json!({
+        "color": "#ff3b5c", "fill": "#ff3b5c", "strokeWidth": 8.0,
+        "strokeEnabled": false, "dropShadow": false,
+    });
+    assert_eq!(
+        serde_json::to_value(editor.snapshot()).unwrap()["initial_annotation_style"],
+        expected
+    );
+    editor
+        .execute(Request::CreateClosedShape {
+            create: captures_app::editor::ClosedShapeCreate {
+                shape: captures_app::editor::ClosedShapeKind::Rectangle,
+                start: Point { x: 1., y: 1. },
+                end: Point { x: 5., y: 3. },
+                style: captures_app::editor::ElementStyle {
+                    color: "#123456".into(),
+                    fill: None,
+                    stroke_width: 13.,
+                    stroke_enabled: Some(true),
+                    ..Default::default()
+                },
+                opacity: 37.,
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(editor.snapshot()).unwrap()["initial_annotation_style"],
+        expected
+    );
+}
+
+#[test]
 fn trim_is_one_undo_step_preserves_pixels_redo_and_original_and_reopens() {
     let (data, id, original) = setup();
     let path = data.path().join("history").join(&id).join("capture.png");
