@@ -809,6 +809,12 @@ pub struct Live {
     recording_notice: Option<crate::recording_saved_notice::Notice>,
     recording_notice_generation: u64,
     recording_notice_target: Option<CaptureTarget>,
+    /// Output folder when `open_editor_after_recording` applies to this take.
+    open_editor_after_recording: Option<PathBuf>,
+    /// Where the saved notice appears when each recording editor closes.
+    recording_editor_notice_targets: HashMap<String, Option<CaptureTarget>>,
+    /// Most recent capture display, for editors opened outside a capture.
+    last_capture_target: Option<CaptureTarget>,
     previews: MiniPreviews,
     clipboard: captures_app::clipboard::ClipboardOwnership,
     root_hide_deferred: bool,
@@ -1077,6 +1083,9 @@ impl Live {
             recording_notice: None,
             recording_notice_generation: 0,
             recording_notice_target: None,
+            open_editor_after_recording: None,
+            recording_editor_notice_targets: HashMap::new(),
+            last_capture_target: None,
             previews: MiniPreviews::default(),
             clipboard: Default::default(),
             root_hide_deferred: false,
@@ -1380,6 +1389,9 @@ impl Live {
         };
         let target = capture_target(frame, &self.displays, self.display_id.as_deref());
         self.countdown_target = target;
+        if target.is_some() {
+            self.last_capture_target = target;
+        }
         let countdown = matches!(request, CaptureRequest::Display)
             .then_some(settings.screenshot_countdown_seconds)
             .unwrap_or(0);
@@ -1424,6 +1436,10 @@ impl Live {
             .unwrap_or(true);
         self.flow = Some(flow);
         self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
+        self.open_editor_after_recording = settings
+            .recording
+            .open_editor_after_recording
+            .then(|| PathBuf::from(&settings.output_directory));
         self.include_cursor = settings.show_cursor_in_screenshots;
         self.recording_screenshot_settings = matches!(
             request,
@@ -1692,6 +1708,28 @@ impl Live {
             if editor.take_original_replaced() {
                 self.previews.remove(id);
             }
+        }
+        let closed = self
+            .recording_editors
+            .iter()
+            .filter(|(_, editor)| editor.closed())
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in closed {
+            // Shipping shows the saved notice whenever a recording editor closes.
+            let target = self
+                .recording_editor_notice_targets
+                .remove(&id)
+                .flatten()
+                .or(self.last_capture_target);
+            self.recording_notice_generation = self.recording_notice_generation.wrapping_add(1);
+            self.recording_notice = Some(crate::recording_saved_notice::Notice::new(
+                id,
+                self.recording_notice_generation,
+                Instant::now(),
+            ));
+            self.recording_notice_target = target;
+            request_hidden_root_paint(ctx);
         }
         self.recording_editors.retain(|_, editor| !editor.closed());
         for (id, editor) in &self.editors {
@@ -2586,15 +2624,8 @@ impl Live {
                 {
                     match result {
                         Ok(finalized) => {
-                            self.recording_notice_generation =
-                                self.recording_notice_generation.wrapping_add(1);
-                            self.recording_notice =
-                                Some(crate::recording_saved_notice::Notice::new(
-                                    finalized.entry.id.clone(),
-                                    self.recording_notice_generation,
-                                    Instant::now(),
-                                ));
-                            self.recording_notice_target = self.countdown_target;
+                            let id = finalized.entry.id.clone();
+                            let target = self.countdown_target;
                             self.status = finalized.warning.map_or_else(
                                 || format!("Recording saved to {}", finalized.path.display()),
                                 |warning| {
@@ -2607,6 +2638,13 @@ impl Live {
                             self.history_refresh_status = Some(self.status.clone());
                             self.finish_capture(ctx, false);
                             self.load_history();
+                            // Shipping opens the recording editor when the
+                            // preference is on; the saved notice follows its close.
+                            if let Some(directory) = self.open_editor_after_recording.take() {
+                                self.recording_editor_notice_targets
+                                    .insert(id.clone(), target);
+                                self.open_recording_editor(ctx, id, directory);
+                            }
                             request_hidden_root_paint(ctx);
                         }
                         Err(error) => {

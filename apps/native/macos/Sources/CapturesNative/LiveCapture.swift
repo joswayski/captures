@@ -190,6 +190,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var recordingPendingStart = false
     private var activeRecordingGeneration: UInt64?
     private var recordingDisplay: DisplayItem?
+    /// Saved-notice screens for recording editors opened after a take.
+    private var recordingEditorNoticeScreens: [String: NSScreen] = [:]
+    private var lastRecordingNoticeScreen: NSScreen?
     private var recordingPreferences: CapturePreferences?
     private var selectorShortcutGeneration: UInt64? {
         didSet {
@@ -1661,6 +1664,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         guard let session = recordingSession, recordingLifecycle.begin() else { return }
         recordingMeter?.setActive(false); recordingMeter = nil
         let noticeScreen = recordingHUD?.screen ?? recordingDisplay.flatMap(screen(for:))
+        let openEditor = recordingPreferences?.recording.openEditorAfterRecording ?? true
         clearRecordingControlsHiddenState()
         recordingHUD?.hud.setLifecycleActionsEnabled(false)
         recordingPollTimer?.invalidate(); recordingPollTimer = nil
@@ -1688,9 +1692,16 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                           !self.capturing,
                           self.artifacts.contains(where: { $0.id == finalized.id }) else { return }
                     self.status.stringValue = finalStatus
+                    // Shipping opens the recording editor when the preference is
+                    // on; the saved notice follows that editor's close.
+                    guard openEditor,
+                          let artifact = self.artifacts.first(where: { $0.id == finalized.id })
+                    else { return }
                     if let noticeScreen {
-                        self.recordingSavedNotice.present(artifactID: finalized.id, screen: noticeScreen)
+                        self.recordingEditorNoticeScreens[finalized.id] = noticeScreen
+                        self.lastRecordingNoticeScreen = noticeScreen
                     }
+                    self.presentEditor(artifact, requiresCurrentSelection: false)
                 }
             case .failure(let error):
                 self.preserveFailedRecording(session, warning: error.localizedDescription)
@@ -1927,6 +1938,16 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]
         save(artifact)
     }
+    /// Shipping shows the saved notice whenever a recording editor closes and
+    /// the recording is still in History.
+    private func recordingEditorClosed(_ artifactID: String) {
+        let screen = recordingEditorNoticeScreens.removeValue(forKey: artifactID)
+            ?? lastRecordingNoticeScreen ?? NSScreen.main
+        guard !capturing, artifacts.contains(where: { $0.id == artifactID }),
+              let screen else { return }
+        recordingSavedNotice.present(artifactID: artifactID, screen: screen)
+    }
+
     private func editScreenshot() {
         guard let index = selectedIndex, artifacts.indices.contains(index),
               !historyRoot.isEmpty, !externalOpenPending else { return }
@@ -1958,6 +1979,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                                 self?.miniPreviews?.dismiss(artifactID)
                                 self?.loadHistory(select: artifactID)
                             })
+                        self.recordingEditor?.didClose = { [weak self] artifactID in
+                            self?.recordingEditorClosed(artifactID)
+                        }
                     }
                     self.recordingEditor?.present(artifact: artifact,
                                                   historyRoot: self.historyRoot,

@@ -1260,8 +1260,10 @@ nonactivating top-right notice in both native hosts. Save file reuses the shared
 original-recording export operation; saved state offers Show in Folder. Pending
 saves pause the 15.2-second expiry; failure keeps retry available. Dismiss, expiry
 and new capture only remove presentation, and stale callbacks cannot revive it.
-The recording editor is a separate History action, so the trigger remains finalization, not the
-shipping editor-close event. Private-X11 input tests exercise export byte equality,
+Both hosts now honour `open_editor_after_recording` like the shipping app: a
+finished take opens the recording editor, and the notice appears when a recording
+editor closes (including editors opened from History). With the preference off,
+no editor or notice appears. Private-X11 input tests exercise export byte equality,
 failure/retry, missing exports, intercepted OS-reveal arguments, hidden-root expiry,
 dismissal and capture cleanup; AppKit provides state and render fixtures. Physical
 macOS/Windows, Wayland, accessibility and motion parity remain open.

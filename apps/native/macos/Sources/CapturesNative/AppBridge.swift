@@ -88,6 +88,8 @@ struct RecordingPreferences: Equatable {
     let showKeystrokes: Bool
     let gifMaxWidth: Int
     let gifMaxColors: Int
+    /// Shipping opens the recording editor after a take; its close shows the saved notice.
+    let openEditorAfterRecording: Bool
 
     init(_ value: [String: Any]) throws {
         let framesPerSecond = value["video_fps"] as? Int ?? 60
@@ -112,6 +114,7 @@ struct RecordingPreferences: Equatable {
         self.monoAudio = monoAudio; self.showKeystrokes = showKeystrokes
         self.gifMaxWidth = gifMaxWidth
         self.gifMaxColors = gifMaxColors
+        openEditorAfterRecording = value["open_editor_after_recording"] as? Bool ?? true
     }
 
     func options(target: [String: Any], capabilities: NativeRecordingCapabilities) -> [String: Any] {
