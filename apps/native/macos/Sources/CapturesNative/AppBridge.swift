@@ -369,6 +369,8 @@ struct CaptureArtifact {
     let height: Int
     let createdAt: String
     let mode: String
+    /// Private History file size, shown on mini-preview cards.
+    let sizeBytes: UInt64
     var savedPath: String?
 
     init?(_ value: [String: Any]) {
@@ -386,6 +388,7 @@ struct CaptureArtifact {
         mode = entryMode.flatMap { ["region", "window", "display"].contains($0) ? $0 : nil }
             ?? "region"
         savedPath = entry["saved_path"] as? String
+        sizeBytes = (entry["size_bytes"] as? NSNumber)?.uint64Value ?? 0
     }
 
     var isRecording: Bool { kind != "screenshot" }

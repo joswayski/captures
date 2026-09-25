@@ -1080,7 +1080,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                             settings: preferences.miniPreviewSettings,
                             generation: previewGeneration)
                         self.loadHistory(select: artifact.id)
-                        if preferences.autoCopy { self.copyImage(at: artifact.imagePath) }
+                        if preferences.autoCopy { self.copyImage(at: artifact.imagePath, artifactID: artifact.id) }
                     case .failure(let error):
                         self.finishCapture(); self.showError("Capture failed", error)
                     }
@@ -1299,7 +1299,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                             settings: preferences.miniPreviewSettings,
                             generation: previewGeneration)
                         self.loadHistory(select: artifact.id)
-                        if preferences.autoCopy { self.copyImage(at: artifact.imagePath) }
+                        if preferences.autoCopy { self.copyImage(at: artifact.imagePath, artifactID: artifact.id) }
                     case .failure(let error):
                         self.finishRecordingScreenshot()
                         self.showError("Screenshot failed", error)
@@ -2001,7 +2001,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                       completion: ((Result<String, Error>) -> Void)? = nil) {
         let noun = artifact.isRecording ? "recording" : "image"
         status.stringValue = "Saving \(noun)…"
-        miniPreviews?.setStatus("Saving…", for: artifact.id)
+        miniPreviews?.setStatus("", for: artifact.id)
         run({ [transport, historyRoot, settingsPath] in
             let preferences = try CapturePreferences.load(path: settingsPath)
             let result = try transport.request(["operation": artifact.isRecording ? "save_recording" : "save_screenshot", "root": historyRoot, "id": artifact.id,
@@ -2017,7 +2017,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 if let current = self.artifacts.firstIndex(where: { $0.id == artifact.id }) { self.artifacts[current] = value.0 }
                 self.status.stringValue = "Saved \(noun) to \(value.1)"
                 _ = self.miniPreviews?.updateSavedPath(value.1, for: artifact)
-                self.miniPreviews?.setStatus("Saved", for: artifact.id)
+                self.miniPreviews?.setStatus("", for: artifact.id)
+                self.miniPreviews?.showSavedFeedback(for: artifact.id)
                 completion?(.success(value.1))
                 if completion == nil {
                     self.recordingSavedNotice.savedFromHistory(artifactID: artifact.id, path: value.1)
@@ -2031,16 +2032,20 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
     private func copyImage() {
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }
-        copyImage(at: artifacts[index].imagePath)
+        copyImage(at: artifacts[index].imagePath, artifactID: artifacts[index].id)
     }
-    private func copyImage(at path: String) {
+    private func copyImage(at path: String, artifactID: String) {
         run({ try Data(contentsOf: URL(fileURLWithPath: path)) }) { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let png):
                 let pasteboard = NSPasteboard.general; pasteboard.clearContents()
-                self.status.stringValue = pasteboard.setData(png, forType: .png)
+                let copied = pasteboard.setData(png, forType: .png)
+                self.status.stringValue = copied
                     ? "Copied the selected image." : "Couldn’t copy the selected image."
+                if copied {
+                    self.miniPreviews?.recordClipboardCopy(artifactID: artifactID, pasteboard: pasteboard)
+                }
             case .failure(let error): self.showError("Couldn’t copy image", error)
             }
         }

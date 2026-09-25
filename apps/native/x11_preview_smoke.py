@@ -191,6 +191,11 @@ def main():
             return None
         return subprocess.check_output(["convert", "png:-", "-depth", "8", "rgb:-"], input=value.stdout)
 
+    def second_action_y(entry):
+        # Shipping chrome hides Copy while the clipboard still holds this
+        # capture, centering Save file / Show in Folder on the card.
+        return 108 if clipboard_pixels() == rgb(entry.parent / "capture.png") else 127
+
     def wallpaper_crop(x, y, width, height):
         # Independent pixel oracle: asymmetric desktop split at (300,270).
         colors = [bytes(color) for color in BACKGROUNDS[0]]
@@ -519,7 +524,7 @@ def main():
                     shot(preview, "self-drop-settled")
                     for mode in ("cancel", "reject", "nofinish", "disappear", "accept"):
                         if mode == "accept":
-                            click(preview, 170, 127, activate=False)
+                            click(preview, 170, second_action_y(first), activate=False)
                             saved_path = Path(wait(lambda: json.loads(first.read_text()).get("saved_path"), "saved Unicode export"))
                         destination = output / f"received-{mode}.bin"
                         spawn(f"receiver-{mode}", ["/usr/bin/python3", str(Path(__file__).with_name("x11_drag_receiver.py")),
@@ -546,6 +551,8 @@ def main():
                             time.sleep(6 if mode in ("nofinish", "disappear") else .5)
                             assert windows(PREVIEW), f"{mode} must retain source preview"
                             subprocess.run(["xclip", "-selection", "clipboard"], input=b"reset", env=env, check=True)
+                            # Copy reappears once the host's 1 s clipboard check sees the reset.
+                            time.sleep(1.5)
                             click(preview, 170, 89, activate=False)
                             wait(lambda: clipboard_pixels() == rgb(first.parent / "capture.png"),
                                  "pointer state recovers for exact-pixel Copy")
@@ -573,7 +580,7 @@ def main():
                     assert pixels == rgb(first.parent / "capture.png"), "Copy changed full-resolution pixels"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Copy activated Captures"
 
-                    click(preview, 170, 127, activate=False)  # Centered Save file.
+                    click(preview, 170, second_action_y(first), activate=False)  # Centered Save file.
                     exported = Path(wait(lambda: json.loads(first.read_text()).get("saved_path"), "saved export metadata"))
                     assert rgb(exported) == rgb(first.parent / "capture.png"), "Save changed full-resolution PNG pixels"
                     export_bytes = exported.read_bytes()
@@ -585,7 +592,7 @@ def main():
                         return [json.loads(line) for line in reveal_log.read_text().splitlines()] if reveal_log.exists() else []
 
                     time.sleep(.3)  # Allow the saved-state label to paint before another click.
-                    click(preview, 170, 127, activate=False)  # Same button is now Show in Folder.
+                    click(preview, 170, second_action_y(first), activate=False)  # Same button is now Show in Folder.
                     wait(lambda: reveals() == [[str(exported.parent)]], "Reveal receives exact Unicode export folder")
                     assert list(exported.parent.iterdir()) == [exported], "Reveal created another export"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Reveal activated Captures"
@@ -594,14 +601,14 @@ def main():
                     preserved = entries()
                     held = exported.with_suffix(".held")
                     exported.rename(held)
-                    click(preview, 170, 127, activate=False)
+                    click(preview, 170, second_action_y(first), activate=False)
                     time.sleep(.5)
                     shot(preview, f"{prefix}-reveal-missing")
                     assert reveals() == [[str(exported.parent)]], "missing export launched a file manager"
                     assert list(exported.parent.iterdir()) == [held], "missing export silently saved a replacement"
                     assert entries() == preserved and windows(PREVIEW), "missing export removed history or preview"
                     held.rename(exported)
-                    click(preview, 170, 127, activate=False)
+                    click(preview, 170, second_action_y(first), activate=False)
                     wait(lambda: len(reveals()) == 2, "Reveal retries after export is restored")
                     assert reveals() == [[str(exported.parent)]] * 2
 

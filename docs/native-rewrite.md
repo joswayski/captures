@@ -1089,9 +1089,14 @@ control click (see [handoff](native-preview-handoff.md)). AppKit fixture coverag
 checks mirrored geometry, hidden controls and in-place saved-state updates;
 macOS CI must verify it. Windows physical presentation and input, screen-reader
 and keyboard traversal on nonactivating panels, and Wayland live-host rendering
-remain unverified. Hover blur, metadata byte sizes, clipboard/editor-presence
-badges, stale-pointer hover suppression, toolbar morphing and animated transitions
-remain follow-up work; this does not close the visual parity gate. Share/sign-in
+remain unverified. Cards now show shared `W × H · size` metadata, the shipping
+"Copied to clipboard" chip with Copy hidden while the clipboard still holds that
+capture, and a one-second ✓ Saved confirmation. Ownership follows the shared
+`captures_app::clipboard` model: the macOS pasteboard change count, the Windows
+clipboard sequence number, or on Linux a host write counter plus a throttled
+pixel comparison that notices other apps replacing the clipboard. Hover blur,
+the editor-presence pill, stale-pointer hover suppression, toolbar morphing and
+animated transitions remain follow-up work; this does not close the visual parity gate. Share/sign-in
 UI is deliberately outside this slice.
 Show less/expand preserves capture order, overflow scrolls without a
 count cap, and Clear all dismisses only snapshotted IDs, not later captures.
