@@ -21,6 +21,7 @@ mod reveal;
 mod root_repaint;
 mod selector;
 mod shortcut_input;
+mod startup_notice;
 mod tokens;
 mod tray;
 mod window_selector;

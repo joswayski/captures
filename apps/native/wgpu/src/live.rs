@@ -762,7 +762,7 @@ const CLIPBOARD_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// Shipping `THUMBNAIL_SAVED_FEEDBACK_MS`.
 const SAVED_FEEDBACK: Duration = Duration::from_millis(1_000);
 
-fn request_hidden_root_paint(ctx: &egui::Context) {
+pub(crate) fn request_hidden_root_paint(ctx: &egui::Context) {
     ctx.send_viewport_cmd_to(
         egui::ViewportId::ROOT,
         egui::ViewportCommand::RequestPaintWhileHidden,
