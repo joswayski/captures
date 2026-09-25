@@ -613,6 +613,9 @@ Share icon and opens a native upload/settings popup, including native sign-in an
 credential storage. The [sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--required-not-implemented)
 remains required regardless of accounts/backend or rewrite merge order; opening a
 preview never uploads automatically.
+Shared Rust has an unconnected account-client prerequisite for explicit email-code
+sign-in and native credential-vault sessions. It does not add a native sign-in
+screen, enable the account service, or make sharing available.
 Both hosts can copy the full-resolution edited image without saving a file or draft;
 copy ignores export format and quality settings.
 Canvas background controls support a hex color or transparency, with undo/redo and
