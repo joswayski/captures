@@ -912,9 +912,12 @@ def main():
                 shot("root", "lifecycle-tray-visible")
 
                 def menu_action(label, screenshot=False):
-                    labels = ["New Capture…", "Show Recording Controls",
-                              "Screenshot Region", "Screenshot Window", "Screenshot Display",
-                              "Capture History…", "Open Save Location", "Preferences", "Quit Captures"]
+                    # Enabled shipping rows; keyboard navigation skips separators
+                    # and the disabled "Check for Updates…" row.
+                    labels = ["New Capture…", "Screenshot Region", "Screenshot Window",
+                              "Screenshot Display", "Record Region", "Record Window",
+                              "Record Display", "Capture History…", "Open Save Location",
+                              "Preferences", "Send Feedback…", "Quit Captures"]
                     index = labels.index(label)
                     panel_ids = run("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel").decode().split()
                     tray = next(window for window in panel_ids
@@ -923,7 +926,6 @@ def main():
                     click(tray, int(geometry["WIDTH"]) // 2, int(geometry["HEIGHT"]) // 2,
                           activate=False, button=3)
                     # Resolve the actual GTK popup, not a fixed desktop point.
-                    # These native menu entries have equal-height, non-separator rows.
                     def visible_popup():
                         popup_ids = run("xdotool", "search", "--onlyvisible", "--class", ".*").decode().split()
                         return next((window for window in popup_ids
@@ -935,8 +937,7 @@ def main():
                     shot(popup, "lifecycle-menu-" + label.lower().replace(" ", "-").replace("…", ""))
                     if screenshot:
                         shot("root", "lifecycle-open-tray-menu")
-                    click(popup, int(popup_geometry["WIDTH"]) // 2,
-                          int((index + .5) * int(popup_geometry["HEIGHT"]) / len(labels)), activate=False)
+                    run("xdotool", "key", "--delay", "60", *(["Down"] * (index + 1)), "Return")
                     # The click destroys GTK's popup. Do not race its teardown
                     # with another whole-tree query; callers verify the action.
 

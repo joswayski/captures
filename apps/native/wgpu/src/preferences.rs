@@ -524,6 +524,11 @@ impl Preferences {
         self.io.flush();
     }
 
+    /// Tray "Send Feedback…": show the feedback form in Preferences.
+    pub fn open_feedback(&mut self, ctx: &egui::Context) {
+        self.feedback.open(ctx);
+    }
+
     pub fn persisted_generation(&self) -> u64 {
         self.persisted_generation
     }

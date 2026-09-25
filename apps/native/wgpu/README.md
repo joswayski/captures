@@ -13,9 +13,10 @@ use an explicit test file. Screenshots and scripted exercises without that flag
 use disposable settings. `--live` opts into the shared Rust New Capture controls
 plus direct full-display, region and window PNG, history, copy, export and delete
 flows; see the [live slice and limits](../README.md#live-display-capture-slice).
-Live mode also provides a native tray menu with the shipping labels: New Capture…,
-Show Recording Controls, Screenshot Region/Window/Display, Capture History…,
-Open Save Location, Preferences and Quit Captures. Its persisted
+Live mode also provides a native tray menu with the shipping labels and order:
+New Capture…, Screenshot Region/Window/Display, Record Region/Window/Display,
+Capture History…, Open Save Location, Preferences, Send Feedback…, a disabled
+Check for Updates… and Quit Captures. Its persisted
 display, region, window, recording and New Capture shortcuts work globally except while
 capture is unavailable or a focused Preferences window is editing them. All seven
 shortcut rows can be edited from Preferences with

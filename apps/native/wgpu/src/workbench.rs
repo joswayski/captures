@@ -83,6 +83,8 @@ pub struct Workbench {
     permission_dialog_presented: bool,
     root_was_focused: bool,
     tray: Option<Tray>,
+    /// Preferences generation last applied to tray accelerators.
+    tray_shortcuts_generation: u64,
     tray_error: Option<String>,
     shortcuts: ShortcutOwner,
     shortcuts_generation: u64,
@@ -182,7 +184,8 @@ impl Workbench {
             .live
             .then(|| Live::new(cc.egui_ctx.clone(), options.history_root.clone()));
         let (tray, tray_error) = if options.live {
-            match Tray::new(cc.egui_ctx.clone()) {
+            // Accelerators refresh once saved settings load (tray_shortcuts_generation).
+            match Tray::new(cc.egui_ctx.clone(), Default::default()) {
                 Ok(tray) => (Some(tray), None),
                 Err(error) => (
                     None,
@@ -253,6 +256,7 @@ impl Workbench {
             permission_dialog_presented: false,
             root_was_focused: false,
             tray,
+            tray_shortcuts_generation: u64::MAX,
             tray_error,
             shortcuts,
             shortcuts_generation: 0,
@@ -308,7 +312,6 @@ impl Workbench {
                     live.request_capture(CaptureRequest::NewCapture);
                 }
             }
-            TrayAction::ShowRecordingControls => {}
             TrayAction::CaptureDisplay => {
                 if restored_controls {
                     return;
@@ -332,6 +335,24 @@ impl Workbench {
                 if let Some(live) = &mut self.live {
                     live.request_capture(CaptureRequest::Window);
                 }
+            }
+            TrayAction::RecordRegion | TrayAction::RecordWindow | TrayAction::RecordDisplay => {
+                if restored_controls {
+                    return;
+                }
+                let target = match action {
+                    TrayAction::RecordRegion => crate::capture_controls::TargetMode::Region,
+                    TrayAction::RecordWindow => crate::capture_controls::TargetMode::Window,
+                    _ => crate::capture_controls::TargetMode::Display,
+                };
+                if let Some(live) = &mut self.live {
+                    live.request_capture(CaptureRequest::Recording(target));
+                }
+            }
+            TrayAction::SendFeedback => {
+                self.live_preferences = true;
+                self.preferences_state.open_feedback(ctx);
+                self.show_root(ctx);
             }
             TrayAction::History => {
                 self.live_preferences = false;
@@ -1130,6 +1151,15 @@ impl eframe::App for Workbench {
                     CaptureRequest::Recording(crate::capture_controls::TargetMode::Display)
                 }
             });
+        }
+        let persisted = self.preferences_state.persisted_generation();
+        if let Some(tray) = &mut self.tray
+            && self.tray_shortcuts_generation != persisted
+        {
+            self.tray_shortcuts_generation = persisted;
+            if let Ok(settings) = self.preferences_state.snapshot() {
+                tray.set_shortcuts(crate::tray::MenuShortcuts::from_settings(&settings));
+            }
         }
         let mut tray_actions = Vec::new();
         if let Some(tray) = &self.tray {

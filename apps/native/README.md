@@ -114,10 +114,12 @@ compositor and accessibility acceptance; Wayland remains gated.
 
 Only `--live` creates the macOS menu-bar item or Windows/Linux tray and registers
 the persisted New Capture and region/window/display shortcuts. The menu uses the
-shipping labels and order: New Capture…, Show Recording Controls (native only),
-Screenshot Region/Window/Display, Capture History…, Open Save Location,
-Preferences and Quit Captures. Record items, accelerators, separators on
-Windows/Linux, Send Feedback… and the update item remain open. Closing the root hides it when a usable tray is available; previews and
+shipping labels, order and separators: New Capture…, Screenshot
+Region/Window/Display, Record Region/Window/Display, Capture History…, Open Save
+Location, Preferences, Send Feedback…, a disabled Check for Updates… (signed
+updates are not connected) and Quit Captures. Capture items show the saved
+shortcuts as accelerators where the platform menu displays them (Linux SNI hosts
+may not), and any tray capture action brings hidden recording controls back. Closing the root hides it when a usable tray is available; previews and
 accepted work stay alive.
 Quit cancels pending capture, drains accepted file work and removes shortcuts/tray.
 Timed and framebuffer-screenshot completion also explicitly quit, not hide.

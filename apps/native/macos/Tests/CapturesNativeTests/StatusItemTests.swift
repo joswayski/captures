@@ -3,31 +3,43 @@ import XCTest
 @testable import CapturesNative
 
 final class StatusItemTests: XCTestCase {
-    func testStatusMenuContainsOnlyShippingActionsAndRoutesThem() {
+    func testStatusMenuMatchesShippingOrderAndRoutesActions() {
         _ = NSApplication.shared
         var captures: [StillCaptureKind] = []
+        var records: [UnifiedCaptureTarget] = []
         var actions: [String] = []
         let target = LiveStatusActions(newCapture: { actions.append("new") },
-            showRecordingControls: { actions.append("show-controls") },
             capture: { captures.append($0) },
+            record: { records.append($0) },
             history: { actions.append("history") },
             preferences: { actions.append("preferences") },
+            feedback: { actions.append("feedback") },
             outputFolder: { actions.append("folder") },
             quit: { actions.append("quit") })
+        target.shortcuts = ["CommandOrControl+Shift+Space", "Ctrl+Shift+F7", "Alt+KeyW",
+                            "Shift+Digit4", "", "Nonsense+Key", "CmdOrCtrl+Alt+D"]
 
         let menu = target.makeMenu()
-        XCTAssertEqual(menu.items.map(\.title), ["New Capture…", "Show Recording Controls",
-            "Screenshot Region", "Screenshot Window", "Screenshot Display", "", "Capture History…",
-            "Open Save Location", "Preferences", "", "Quit Captures"])
-        XCTAssertFalse(menu.items.contains { $0.title == "Start Recording" })
-        XCTAssertFalse(menu.items.contains { $0.title.localizedCaseInsensitiveContains("update") })
+        XCTAssertEqual(menu.items.map(\.title), ["New Capture…", "Screenshot Region",
+            "Screenshot Window", "Screenshot Display", "Record Region", "Record Window",
+            "Record Display", "", "Capture History…", "Open Save Location", "Preferences",
+            "Send Feedback…", "Check for Updates…", "", "Quit Captures"])
+        XCTAssertFalse(menu.items[12].isEnabled, "updates are not connected yet")
+        XCTAssertEqual(menu.items[0].keyEquivalent, " ")
+        XCTAssertEqual(menu.items[0].keyEquivalentModifierMask, [.command, .shift])
+        XCTAssertEqual(menu.items[2].keyEquivalent, "w")
+        XCTAssertEqual(menu.items[2].keyEquivalentModifierMask, [.option])
+        XCTAssertEqual(menu.items[3].keyEquivalent, "4")
+        XCTAssertEqual(menu.items[4].keyEquivalent, "", "an empty shortcut has no key equivalent")
+        XCTAssertEqual(menu.items[5].keyEquivalent, "", "an unknown key has no key equivalent")
+        XCTAssertEqual(menu.items[6].keyEquivalentModifierMask, [.command, .option])
 
-        for index in [0, 1, 2, 3, 4, 6, 7, 8, 10] {
+        for index in [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 14] {
             menu.performActionForItem(at: index)
         }
         XCTAssertEqual(captures, [.region, .window, .display])
-        XCTAssertEqual(actions,
-            ["new", "show-controls", "history", "folder", "preferences", "quit"])
+        XCTAssertEqual(records, [.region, .window, .display])
+        XCTAssertEqual(actions, ["new", "history", "folder", "preferences", "feedback", "quit"])
     }
 
     func testLiveRootCloseHidesWithoutClosingPreviewsOrTerminating() {
