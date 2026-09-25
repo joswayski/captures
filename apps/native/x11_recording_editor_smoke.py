@@ -898,7 +898,7 @@ def main():
             shot(editor, "maximum-invalid")
             assert not list(exports.iterdir())
             field(editor, 40, 961, ".1")
-            field(editor, 211, 598, 800)
+            field(editor, 240, 598, 800)
             click(editor, 793, 1082)
             shot(editor, "maximum-accepted")
             limited = exports / "limited.mp4"
@@ -1187,7 +1187,7 @@ def main():
                 return int(wait(copied_position, "fresh playback position clipboard value"))
 
             field(editor, 98, 598, 1500)
-            field(editor, 211, 598, 4500)
+            field(editor, 240, 598, 4500)
             motion_click()
             time.sleep(.3)
             assert not playing(), "unapplied trim gates Play"
@@ -1342,7 +1342,7 @@ def main():
             start = read_time(98)
             assert 1000 <= start <= 1100, ("start drag", start)
             drag(938, -200)
-            end = read_time(211)
+            end = read_time(240)
             assert 2250 <= end <= 2400, ("end drag", end)
             drag(355, 15, cancel=True)
             cancelled_start = read_time(98)
@@ -1526,7 +1526,7 @@ def main():
         click(editor, 222, 520)
         shot(editor, "seek-green")
         dominant(output / "seek-green.png", 1)
-        field(editor, 211, 598, 1100)
+        field(editor, 240, 598, 1100)
         field(editor, 98, 598, 2600)
         click(editor, 793, 882)  # Apply edits stays in the fixed save bar.
         shot(editor, "invalid-trim")
