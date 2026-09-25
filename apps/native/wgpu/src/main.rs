@@ -1,5 +1,6 @@
 mod capture_controls;
 mod clipboard_input;
+mod clipboard_revision;
 mod countdown;
 mod diagnostics;
 mod editor;
@@ -15,6 +16,7 @@ mod recording_hud;
 mod recording_recovery;
 mod recording_region;
 mod recording_saved_notice;
+mod reveal;
 #[cfg(any(target_os = "windows", test))]
 mod root_repaint;
 mod selector;

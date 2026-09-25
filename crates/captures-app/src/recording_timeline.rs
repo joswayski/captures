@@ -169,9 +169,38 @@ pub fn timeline_time_at_client_x(
     time_ms.is_finite().then(|| time_ms.clamp(0., duration_ms))
 }
 
+/// Elapsed or saved recording length, matching the shipping UI's
+/// `formatRecordingTime`: `m:ss` below an hour and `h:mm:ss` from one hour.
+pub fn format_recording_time(milliseconds: u64) -> String {
+    let total_seconds = milliseconds / 1_000;
+    let hours = total_seconds / 3_600;
+    let minutes = total_seconds % 3_600 / 60;
+    let seconds = total_seconds % 60;
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recording_time_matches_shipping_minutes_and_hours_format() {
+        for (milliseconds, expected) in [
+            (0, "0:00"),
+            (999, "0:00"),
+            (94_000, "1:34"),
+            (3_599_999, "59:59"),
+            (3_600_000, "1:00:00"),
+            (3_725_000, "1:02:05"),
+            (36_059_000, "10:00:59"),
+        ] {
+            assert_eq!(format_recording_time(milliseconds), expected);
+        }
+    }
 
     fn oracle_start() -> TimelineTrimDrag {
         TimelineTrimDrag::begin(

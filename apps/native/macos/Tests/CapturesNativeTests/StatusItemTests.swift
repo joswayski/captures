@@ -18,7 +18,7 @@ final class StatusItemTests: XCTestCase {
         let menu = target.makeMenu()
         XCTAssertEqual(menu.items.map(\.title), ["New Capture…", "Show Recording Controls",
             "Screenshot Region", "Screenshot Window", "Screenshot Display", "", "Capture History…",
-            "Open Save Location", "Preferences…", "", "Quit Captures"])
+            "Open Save Location", "Preferences", "", "Quit Captures"])
         XCTAssertFalse(menu.items.contains { $0.title == "Start Recording" })
         XCTAssertFalse(menu.items.contains { $0.title.localizedCaseInsensitiveContains("update") })
 

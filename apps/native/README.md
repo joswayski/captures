@@ -113,9 +113,11 @@ compositor and accessibility acceptance; Wayland remains gated.
 ## Resident lifecycle and screenshot shortcuts
 
 Only `--live` creates the macOS menu-bar item or Windows/Linux tray and registers
-the persisted New Capture and region/window/display shortcuts. The menu offers
-New Capture, those three captures, History, Preferences, the output folder, and
-Quit. Closing the root hides it when a usable tray is available; previews and
+the persisted New Capture and region/window/display shortcuts. The menu uses the
+shipping labels and order: New Capture…, Show Recording Controls (native only),
+Screenshot Region/Window/Display, Capture History…, Open Save Location,
+Preferences and Quit Captures. Record items, accelerators, separators on
+Windows/Linux, Send Feedback… and the update item remain open. Closing the root hides it when a usable tray is available; previews and
 accepted work stay alive.
 Quit cancels pending capture, drains accepted file work and removes shortcuts/tray.
 Timed and framebuffer-screenshot completion also explicitly quit, not hide.
@@ -143,7 +145,8 @@ These packages do not close physical lifecycle or installed-release acceptance.
 
 Linux uses SNI/KSNI over session D-Bus, not XEmbed or GTK/AppIndicator. Building
 needs pkg-config and libdbus-1-dev; runtime needs a registered StatusNotifier host
-and `xdg-open` for the folder action. No watcher/host means an explicit error and
+and `xdg-open` for folder fallbacks; Show in Folder first asks a
+`org.freedesktop.FileManager1` implementer to select the saved file. No watcher/host means an explicit error and
 normal close-to-quit. Losing the tray host restores the root instead of stranding
 the process. XEmbed-only trays require an SNI bridge. Wayland capture/hidden-window
 support remains gated; a tray does not remove that limitation. Physical macOS,
@@ -304,7 +307,8 @@ Dismiss closes only the targeted card. Clear all dismisses a snapshot of the sta
 exports and any later capture. There is no automatic dismissal timer or count cap.
 
 Stacks start expanded, with newest cards nearest the configured top/bottom edge.
-Overflow scrolls without dropping captures. Show less parks a compact pile with
+Overflow scrolls without dropping captures; chevron cues at the stack edges
+scroll one card at a time. Show less parks a compact pile with
 the newest card in front; clicking it expands the stack. Incoming captures and
 capture cancellation preserve the parked state. Collapsed piles drag within
 their capture display and fan on hover, respecting reduced motion. Native file

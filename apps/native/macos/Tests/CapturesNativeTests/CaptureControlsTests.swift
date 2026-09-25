@@ -12,6 +12,21 @@ final class CaptureControlsTests: XCTestCase {
             rect: NSRect(x: 406, y: 176, width: 478, height: 372), cornerRadius: 10),
     ]
 
+    func testGuidanceAndNoteUseShippingCopy() {
+        XCTAssertEqual(CaptureGuidanceCopy.directHint(CaptureGuidanceCopy.regionTitle,
+            CaptureGuidanceCopy.regionHint, confirm: false),
+            "Drag to select a region · Shift for square · Esc to cancel")
+        XCTAssertEqual(CaptureGuidanceCopy.directHint(CaptureGuidanceCopy.windowTitle,
+            CaptureGuidanceCopy.hint, confirm: true),
+            "Select a window to continue · Esc to cancel · Press Enter to confirm")
+        XCTAssertEqual(CaptureGuidanceCopy.menuNote(recording: false, autoStart: false),
+            "These controls won’t show in screenshots  ·  Press Enter to confirm")
+        XCTAssertEqual(CaptureGuidanceCopy.menuNote(recording: false, autoStart: true),
+            "These controls won’t show in screenshots  ·  Auto-capture is on. Selecting a target starts immediately.")
+        XCTAssertEqual(CaptureGuidanceCopy.menuNote(recording: true, autoStart: false),
+            "These controls won’t show in recordings  ·  Press Enter to confirm")
+    }
+
     func testTargetSwitchesRetainSettledRegionAndWindowIndependently() throws {
         _ = NSApplication.shared
         var confirmed: [WindowSelectionChoice] = []

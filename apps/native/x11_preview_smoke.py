@@ -12,7 +12,7 @@ import select
 import subprocess
 import threading
 import time
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 import xml.etree.ElementTree as ET
 
 import dbus
@@ -190,6 +190,11 @@ def main():
         if value.returncode != 0 or not value.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
             return None
         return subprocess.check_output(["convert", "png:-", "-depth", "8", "rgb:-"], input=value.stdout)
+
+    def second_action_y(entry):
+        # Shipping chrome hides Copy while the clipboard still holds this
+        # capture, centering Save file / Show in Folder on the card.
+        return 108 if clipboard_pixels() == rgb(entry.parent / "capture.png") else 127
 
     def wallpaper_crop(x, y, width, height):
         # Independent pixel oracle: asymmetric desktop split at (300,270).
@@ -437,7 +442,25 @@ def main():
             root = wait(lambda: windows("Captures"), "root workspace")[0]
             # Leave the left-hand preview/capture area unobstructed. Both root
             # capture buttons still fit on this desktop after moving the window.
-            run("xdotool", "windowmove", "--sync", root, "620", "20")
+            def move_root(x, y):
+                # windowmove --sync returns on any location change. After a
+                # remap Openbox may still be placing the workspace, so that
+                # change can be its intermediate placement and our move lands
+                # later, under a pointer already positioned for the old origin.
+                # Wait for the client origin our frame position implies.
+                run("xdotool", "windowmove", "--sync", root, str(x), str(y))
+
+                def placed():
+                    extents = run("xprop", "-id", root, "_NET_FRAME_EXTENTS").decode()
+                    left, _, top, _ = map(int, extents.split("=", 1)[1].split(","))
+                    info = run("xwininfo", "-id", root).decode()
+                    origin = tuple(int(line.split(":", 1)[1]) for line in info.splitlines()
+                                   if "Absolute upper-left" in line)
+                    return origin == (x + left, y + top)
+
+                wait(placed, f"root workspace moved to {x},{y}")
+
+            move_root(620, 20)
             time.sleep(1)
 
             def entries():
@@ -450,7 +473,7 @@ def main():
                 # including their transparent margins and expanded stacks.
                 run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
                 wait(lambda: windows("Captures"), "workspace restored before positioning")
-                run("xdotool", "windowmove", "--sync", root, "300", "280")
+                move_root(300, 280)
                 click(root, 575, 126)
                 selector = wait(lambda: windows(SELECTOR), "region selector")[0]
                 wait(lambda: int(run("import", "-window", selector, "-crop", "1280x96+0+804",
@@ -466,7 +489,7 @@ def main():
                 # Openbox may reposition an off-screen workspace when remapping.
                 # Keep it out of the pixel oracle crop again before comparing a
                 # composited card with the following screenshot (which hides it).
-                run("xdotool", "windowmove", "--sync", root, "620", "20")
+                move_root(620, 20)
                 return entry
 
             first = capture((140, 180, 310, 170))
@@ -519,7 +542,7 @@ def main():
                     shot(preview, "self-drop-settled")
                     for mode in ("cancel", "reject", "nofinish", "disappear", "accept"):
                         if mode == "accept":
-                            click(preview, 170, 127, activate=False)
+                            click(preview, 170, second_action_y(first), activate=False)
                             saved_path = Path(wait(lambda: json.loads(first.read_text()).get("saved_path"), "saved Unicode export"))
                         destination = output / f"received-{mode}.bin"
                         spawn(f"receiver-{mode}", ["/usr/bin/python3", str(Path(__file__).with_name("x11_drag_receiver.py")),
@@ -546,6 +569,8 @@ def main():
                             time.sleep(6 if mode in ("nofinish", "disappear") else .5)
                             assert windows(PREVIEW), f"{mode} must retain source preview"
                             subprocess.run(["xclip", "-selection", "clipboard"], input=b"reset", env=env, check=True)
+                            # Copy reappears once the host's 1 s clipboard check sees the reset.
+                            time.sleep(1.5)
                             click(preview, 170, 89, activate=False)
                             wait(lambda: clipboard_pixels() == rgb(first.parent / "capture.png"),
                                  "pointer state recovers for exact-pixel Copy")
@@ -573,7 +598,7 @@ def main():
                     assert pixels == rgb(first.parent / "capture.png"), "Copy changed full-resolution pixels"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Copy activated Captures"
 
-                    click(preview, 170, 127, activate=False)  # Centered Save file.
+                    click(preview, 170, second_action_y(first), activate=False)  # Centered Save file.
                     exported = Path(wait(lambda: json.loads(first.read_text()).get("saved_path"), "saved export metadata"))
                     assert rgb(exported) == rgb(first.parent / "capture.png"), "Save changed full-resolution PNG pixels"
                     export_bytes = exported.read_bytes()
@@ -585,7 +610,7 @@ def main():
                         return [json.loads(line) for line in reveal_log.read_text().splitlines()] if reveal_log.exists() else []
 
                     time.sleep(.3)  # Allow the saved-state label to paint before another click.
-                    click(preview, 170, 127, activate=False)  # Same button is now Show in Folder.
+                    click(preview, 170, second_action_y(first), activate=False)  # Same button is now Show in Folder.
                     wait(lambda: reveals() == [[str(exported.parent)]], "Reveal receives exact Unicode export folder")
                     assert list(exported.parent.iterdir()) == [exported], "Reveal created another export"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Reveal activated Captures"
@@ -594,16 +619,38 @@ def main():
                     preserved = entries()
                     held = exported.with_suffix(".held")
                     exported.rename(held)
-                    click(preview, 170, 127, activate=False)
+                    click(preview, 170, second_action_y(first), activate=False)
                     time.sleep(.5)
                     shot(preview, f"{prefix}-reveal-missing")
                     assert reveals() == [[str(exported.parent)]], "missing export launched a file manager"
                     assert list(exported.parent.iterdir()) == [held], "missing export silently saved a replacement"
                     assert entries() == preserved and windows(PREVIEW), "missing export removed history or preview"
                     held.rename(exported)
-                    click(preview, 170, 127, activate=False)
+                    click(preview, 170, second_action_y(first), activate=False)
                     wait(lambda: len(reveals()) == 2, "Reveal retries after export is restored")
                     assert reveals() == [[str(exported.parent)]] * 2
+
+                    # With a FileManager1 implementer on the session bus, Reveal
+                    # selects the exact file (shipping reveal_item_in_dir) and
+                    # does not also open the folder.
+                    class FileManager(dbus.service.Object):
+                        calls = []
+
+                        @dbus.service.method("org.freedesktop.FileManager1", in_signature="ass", out_signature="")
+                        def ShowItems(self, uris, startup_id):
+                            self.calls.append([str(uri) for uri in uris])
+
+                    manager_name = dbus.service.BusName("org.freedesktop.FileManager1", bus=bus, do_not_queue=True)
+                    manager = FileManager(manager_name, "/org/freedesktop/FileManager1")
+                    click(preview, 170, second_action_y(first), activate=False)
+                    wait(lambda: manager.calls == [["file://" + quote(str(exported))]],
+                         "Reveal selects the exact file through FileManager1.ShowItems")
+                    time.sleep(.3)
+                    assert len(reveals()) == 2, "ShowItems success also opened the folder"
+                    # Dropping the last BusName reference releases the name
+                    # while the private bus is still connected.
+                    manager.remove_from_connection()
+                    del manager, manager_name
 
                     def private_files(entry):
                         return {path.relative_to(entry.parent): path.read_bytes()
@@ -739,7 +786,7 @@ def main():
                     preview = wait(lambda: windows(PREVIEW), "fresh preview after Trash checks")[0]
                     wait(lambda: int(run("import", "-window", preview, "-format", "%k", "info:")) > 16,
                          "fresh preview paints after Trash checks")
-                    print("PASS preview actions: Copy/Save/Reveal/Edit, Dismiss, and disposable OS Trash", flush=True)
+                    print("PASS preview actions: Copy/Save/Reveal (ShowItems or folder)/Edit, Dismiss, and disposable OS Trash", flush=True)
                 if placement == "bottom_left":
                     # Frozen capture must exactly include the prior composited
                     # card, or exactly omit it, depending on the stored setting.
@@ -898,15 +945,19 @@ def main():
 
                     if placement == "bottom_left":
                         # Overflow is not a membership cap. Reveal newest, then
-                        # scroll back and Copy the oldest retained capture.
+                        # use the shipping "Show older captures" cue to scroll
+                        # back and Copy the oldest retained capture.
                         while len(stack_entries) < 8:
                             index = len(stack_entries)
                             stack_entries.append(capture((30 + index * 9, 40, 120 + index * 7, 100)))
                         preview = wait(lambda: windows(PREVIEW), "eight-card preview")[0]
                         wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 812, "bounded overflow viewport")
                         shot(preview, f"{prefix}-overflow-newest")
-                        run("xdotool", "mousemove", "--window", preview, "170", "400", "click", "--repeat", "30", "--delay", "30", "4")
-                        time.sleep(.5)
+                        # 1476 px of cards in a 760 px viewport: four 184 px
+                        # slots reach the oldest card; the cue then hides.
+                        for _ in range(4):
+                            click(preview, 170, 17, activate=False)
+                            time.sleep(.45)
                         shot(preview, f"{prefix}-overflow-oldest")
                         click(preview, 170, 89, activate=False)
                         expected_pixels = rgb(stack_entries[0].parent / "capture.png")
@@ -936,9 +987,9 @@ def main():
                 shot("root", "lifecycle-tray-visible")
 
                 def menu_action(label, screenshot=False):
-                    labels = ["New Capture", "Show recording controls",
-                              "Capture display", "Capture region", "Capture window",
-                              "History", "Preferences", "Open output folder", "Quit Captures"]
+                    labels = ["New Capture…", "Show Recording Controls",
+                              "Screenshot Region", "Screenshot Window", "Screenshot Display",
+                              "Capture History…", "Open Save Location", "Preferences", "Quit Captures"]
                     index = labels.index(label)
                     panel_ids = run("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel").decode().split()
                     tray = next(window for window in panel_ids
@@ -956,7 +1007,7 @@ def main():
                     popup = wait(visible_popup, f"tray popup for {label}")
                     popup_geometry = window_geometry(popup)
                     print(f"Tray action {label}: tray={tray} popup={popup} geometry={popup_geometry}", flush=True)
-                    shot(popup, "lifecycle-menu-" + label.lower().replace(" ", "-"))
+                    shot(popup, "lifecycle-menu-" + label.lower().replace(" ", "-").replace("…", ""))
                     if screenshot:
                         shot("root", "lifecycle-open-tray-menu")
                     click(popup, int(popup_geometry["WIDTH"]) // 2,
@@ -994,7 +1045,7 @@ def main():
                 wait(lambda: windows(PREVIEW), "display preview")
                 assert not windows("Captures"), "display capture reopened workspace"
 
-                menu_action("History", screenshot=True)  # Real GTK/DBusMenu item.
+                menu_action("Capture History…", screenshot=True)  # Real GTK/DBusMenu item.
                 wait(lambda: windows("Captures"), "tray History reopens workspace")
                 menu_action("Preferences")
                 time.sleep(.3)
@@ -1025,14 +1076,14 @@ def main():
                 wait(lambda: not windows(SELECTOR) and not windows("Captures Screenshot Countdown"),
                      "cancel hidden Preferences countdown")
                 assert not windows("Captures") and entries() == previous
-                for label, title in [("Capture region", SELECTOR), ("Capture window", "Captures Window Selection")]:
+                for label, title in [("Screenshot Region", SELECTOR), ("Screenshot Window", "Captures Window Selection")]:
                     menu_action(label)
                     selector = wait(lambda: windows(title), f"tray {label} launches from hidden Preferences")[0]
                     shot(selector, "lifecycle-selector-" + label.lower().replace(" ", "-"))
                     run("xdotool", "key", "Escape")
                     wait(lambda: not windows(title), f"cancel tray {label}")
                     assert not windows("Captures")
-                menu_action("New Capture")
+                menu_action("New Capture…")
                 controls = wait(lambda: windows(CONTROLS), "tray New Capture opens unified controls")[0]
                 shot(controls, "controls-tray-empty")
                 run("xdotool", "key", "Return", "sleep", ".3")
@@ -1260,13 +1311,14 @@ def main():
             "checks": ["selected corner positions and dimensions", "nonactivating map",
                 "minimized-root full-pixel Copy and Save without activation",
                 "Save becomes Reveal; exact Unicode folder delivery, missing export and retry preserve files",
+                "Reveal selects the exact file URI through FileManager1.ShowItems when available",
                 "Edit opens and refocuses one editor without restoring root or changing artifact, History or drafts",
                 "Dismiss preserves history and export",
                 "new capture after dismissal", "exact inclusion and exclusion pixels",
                 "Escape and simulated-lock restoration", "clean exit"] +
                 ([] if args.lifecycle else ["disabled previews"]) +
                 (["three-card retention and per-card Copy", "middle-card dismissal preserves files",
-                  "collapsed arrival/cancel/front-card expand", "eight-card overflow retains oldest",
+                  "collapsed arrival/cancel/front-card expand", "eight-card overflow cue scrolls to oldest",
                   "Clear all preserves files and later arrivals"] if args.stack else []) +
                 (["real SNI menu History/Preferences/Quit", "close-to-background keeps previews",
                   "region/window/display global shortcuts", "release-only launch", "hidden root stays hidden",

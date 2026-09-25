@@ -587,9 +587,153 @@ pub fn thumbnail_geometry(
     }
 }
 
+/// Compact decimal file size, matching the shipping `formatFileSize`.
+pub fn format_file_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    if bytes == 0 {
+        return "0 B".to_owned();
+    }
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1_000. && unit < UNITS.len() - 1 {
+        value /= 1_000.;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", value.round(), UNITS[unit])
+    } else if value >= 100. {
+        format!("{value:.0} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// Idle mini-preview metadata: pixel dimensions and file size.
+pub fn card_metadata(width: u32, height: u32, size_bytes: u64) -> String {
+    format!("{width} × {height} · {}", format_file_size(size_bytes))
+}
+
+/// One card plus its gap: the distance a shipping overflow cue scrolls.
+pub const THUMBNAIL_CARD_SLOT: f64 = THUMBNAIL_CARD_HEIGHT + THUMBNAIL_GAP;
+
+/// Shipping stack toolbar copy. Clear all is an icon button with a tooltip;
+/// Minimize swaps its icon for the "Show less" label on hover/focus.
+pub const STACK_CLEAR_ALL_TOOLTIP: &str = "Clear all";
+pub const STACK_CLEAR_ALL_LABEL: &str = "Clear all previews";
+pub const STACK_MINIMIZE_LABEL: &str = "Minimize previews";
+pub const STACK_MINIMIZE_HOVER_LABEL: &str = "Show less";
+/// Width of the hovered Minimize pill (`.thumbnail-stack-minimize:hover`).
+pub const STACK_MINIMIZE_HOVER_WIDTH: f64 = 92.0;
+
+/// Which edges of an expanded, scrolled stack hide cards.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StackOverflow {
+    /// Cards are hidden above the viewport (upper chevron cue).
+    pub above: bool,
+    /// Cards are hidden below the viewport (lower chevron cue).
+    pub below: bool,
+}
+
+/// Shipping `thumbnailStackOverflow`: a 1 px tolerance keeps fractional
+/// scroll positions from flickering the edge cues.
+pub fn stack_overflow(scroll_top: f64, content_height: f64, viewport_height: f64) -> StackOverflow {
+    const TOLERANCE: f64 = 1.0;
+    let max_scroll = (content_height - viewport_height).max(0.0);
+    if max_scroll <= TOLERANCE || !scroll_top.is_finite() {
+        return StackOverflow::default();
+    }
+    let top = scroll_top.clamp(0.0, max_scroll);
+    StackOverflow {
+        above: top > TOLERANCE,
+        below: top < max_scroll - TOLERANCE,
+    }
+}
+
+/// Shipping `scrollStackBy`: move by whole card slots, clamped to content.
+pub fn stack_scroll_target(
+    scroll_top: f64,
+    content_height: f64,
+    viewport_height: f64,
+    slots: i32,
+) -> f64 {
+    let max_scroll = (content_height - viewport_height).max(0.0);
+    let top = if scroll_top.is_finite() {
+        scroll_top
+    } else {
+        0.0
+    };
+    (top + f64::from(slots) * THUMBNAIL_CARD_SLOT).clamp(0.0, max_scroll)
+}
+
+/// Accessible name/tooltip for an overflow cue. Top-anchored stacks put the
+/// newest capture first, so the upper cue reveals newer captures there.
+pub fn overflow_cue_label(above: bool, top_anchor: bool) -> &'static str {
+    if above != top_anchor {
+        "Show older captures"
+    } else {
+        "Show newer captures"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_sizes_match_shipping_compact_decimal_units() {
+        assert_eq!(format_file_size(999), "999 B");
+        assert_eq!(format_file_size(1_200), "1.2 KB");
+        assert_eq!(format_file_size(1_200_000), "1.2 MB");
+        assert_eq!(format_file_size(125_000_000), "125 MB");
+        assert_eq!(format_file_size(0), "0 B");
+        assert_eq!(format_file_size(5_000_000_000_000), "5000 GB");
+        assert_eq!(card_metadata(1440, 900, 245_760), "1440 × 900 · 246 KB");
+    }
+
+    #[test]
+    fn overflow_cues_match_shipping_edges_tolerance_and_copy() {
+        assert_eq!(stack_overflow(0.0, 500.0, 500.5), StackOverflow::default());
+        assert_eq!(
+            stack_overflow(0.0, 1_000.0, 600.0),
+            StackOverflow {
+                above: false,
+                below: true
+            }
+        );
+        assert_eq!(
+            stack_overflow(400.0, 1_000.0, 600.0),
+            StackOverflow {
+                above: true,
+                below: false
+            }
+        );
+        assert_eq!(
+            stack_overflow(0.5, 1_000.0, 600.0),
+            StackOverflow {
+                above: false,
+                below: true
+            }
+        );
+        assert_eq!(
+            stack_overflow(200.0, 1_000.0, 600.0),
+            StackOverflow {
+                above: true,
+                below: true
+            }
+        );
+        assert_eq!(
+            stack_overflow(f64::NAN, 1_000.0, 600.0),
+            StackOverflow::default()
+        );
+        assert_eq!(stack_scroll_target(400.0, 1_000.0, 600.0, -1), 216.0);
+        assert_eq!(stack_scroll_target(100.0, 1_000.0, 600.0, -1), 0.0);
+        assert_eq!(stack_scroll_target(300.0, 1_000.0, 600.0, 1), 400.0);
+        assert_eq!(stack_scroll_target(0.0, 500.0, 600.0, 1), 0.0);
+        assert_eq!(overflow_cue_label(true, false), "Show older captures");
+        assert_eq!(overflow_cue_label(false, false), "Show newer captures");
+        assert_eq!(overflow_cue_label(true, true), "Show newer captures");
+        assert_eq!(overflow_cue_label(false, true), "Show older captures");
+    }
 
     #[test]
     fn outbound_file_drag_only_dismisses_on_accepted_external_copy() {

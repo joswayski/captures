@@ -2,7 +2,6 @@ use std::{
     borrow::Cow,
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -35,7 +34,7 @@ use crate::{
     selector::Selector,
     window_selector::{self, SelectionTarget, WindowSelector},
 };
-use crate::{recording, recording_hud, tokens::Tokens};
+use crate::{recording, recording_hud, reveal::reveal, tokens::Tokens};
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(super) enum HistoryFilter {
@@ -156,7 +155,10 @@ enum Job {
     Copy {
         path: PathBuf,
         preview: Option<PreviewGuard>,
+        /// Artifact that owns the clipboard after a successful copy.
+        owner: Option<String>,
     },
+    VerifyClipboard(captures_app::clipboard::ClipboardVerification),
     Reveal {
         path: PathBuf,
         preview: PreviewGuard,
@@ -202,7 +204,12 @@ enum Reply {
     },
     Copied {
         preview: Option<PreviewGuard>,
-        result: Result<(), String>,
+        owner: Option<String>,
+        result: Result<ClipboardWrite, String>,
+    },
+    ClipboardVerified {
+        verification: captures_app::clipboard::ClipboardVerification,
+        result: Result<bool, String>,
     },
     Revealed {
         preview: PreviewGuard,
@@ -450,6 +457,35 @@ struct CaptureTarget {
     preview_bounds: Option<captures_app::preview::ThumbnailMonitorBounds>,
 }
 
+#[derive(Clone, Copy)]
+struct CountdownExit {
+    until: Instant,
+    viewport: egui::ViewportId,
+    title: &'static str,
+    target: CaptureTarget,
+    kind: crate::countdown::Kind,
+    remaining: u8,
+}
+
+impl CountdownExit {
+    fn new(
+        viewport: egui::ViewportId,
+        title: &'static str,
+        target: CaptureTarget,
+        kind: crate::countdown::Kind,
+        remaining: u8,
+    ) -> Self {
+        Self {
+            until: Instant::now() + Duration::from_millis(crate::countdown::CANCEL_LINGER_MS),
+            viewport,
+            title,
+            target,
+            kind,
+            remaining,
+        }
+    }
+}
+
 struct PreviewCard {
     generation: u64,
     artifact_id: String,
@@ -457,9 +493,12 @@ struct PreviewCard {
     width: u32,
     height: u32,
     texture: Option<egui::TextureHandle>,
+    size_bytes: u64,
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
     saved_path: Option<PathBuf>,
+    /// Start of the brief "Saved" confirmation after an explicit save.
+    saved_at: Option<Instant>,
     rejected_at: Option<Instant>,
 }
 
@@ -470,9 +509,12 @@ struct PreviewRenderCard {
     width: u32,
     height: u32,
     texture: egui::TextureHandle,
+    size_bytes: u64,
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
     saved_path: Option<PathBuf>,
+    saved_at: Option<Instant>,
+    clipboard_current: bool,
     rejected_at: Option<Instant>,
     layout: captures_app::preview::PreviewCardLayout,
     hover_y: f64,
@@ -584,9 +626,11 @@ impl MiniPreviews {
                 width: artifact.entry.width,
                 height: artifact.entry.height,
                 texture: None,
+                size_bytes: artifact.entry.size_bytes,
                 busy: None,
                 message: None,
                 saved_path: artifact.entry.saved_path.as_deref().map(PathBuf::from),
+                saved_at: None,
                 rejected_at: None,
             },
         );
@@ -713,6 +757,11 @@ enum SelectorKind {
     Controls,
 }
 
+/// How often Linux checks that the clipboard still holds a preview's pixels.
+const CLIPBOARD_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+/// Shipping `THUMBNAIL_SAVED_FEEDBACK_MS`.
+const SAVED_FEEDBACK: Duration = Duration::from_millis(1_000);
+
 fn request_hidden_root_paint(ctx: &egui::Context) {
     ctx.send_viewport_cmd_to(
         egui::ViewportId::ROOT,
@@ -777,6 +826,8 @@ pub struct Live {
     flow: Option<CaptureFlow>,
     capture_phase: Option<CapturePhase>,
     countdown_target: Option<CaptureTarget>,
+    /// Keeps a cancelled countdown up briefly with the shipping "Cancelling…" copy.
+    countdown_exit: Option<CountdownExit>,
     region_session: Option<Box<RegionSession>>,
     region_texture: Option<egui::TextureHandle>,
     region_selector: Arc<Mutex<Selector>>,
@@ -796,6 +847,7 @@ pub struct Live {
     /// Most recent capture display, for editors opened outside a capture.
     last_capture_target: Option<CaptureTarget>,
     previews: MiniPreviews,
+    clipboard: captures_app::clipboard::ClipboardOwnership,
     root_hide_deferred: bool,
     region_freeze: bool,
     region_auto_start: bool,
@@ -987,9 +1039,18 @@ impl Live {
                         artifact_id,
                         result: decode(&path),
                     },
-                    Job::Copy { path, preview } => Reply::Copied {
+                    Job::Copy {
+                        path,
                         preview,
+                        owner,
+                    } => Reply::Copied {
+                        preview,
+                        owner,
                         result: copy_image(&path, &mut clipboard),
+                    },
+                    Job::VerifyClipboard(verification) => Reply::ClipboardVerified {
+                        verification,
+                        result: clipboard_matches(verification.fingerprint, &mut clipboard),
                     },
                     Job::Reveal { path, preview } => Reply::Revealed {
                         preview,
@@ -997,7 +1058,7 @@ impl Live {
                     },
                     Job::CopyPixels { pixels, reply } => {
                         // The workspace owns X11 clipboard data beyond any editor's lifetime.
-                        let _ = reply.send(copy_pixels(&pixels, &mut clipboard));
+                        let _ = reply.send(copy_pixels(&pixels, &mut clipboard).map(|_| ()));
                         continue;
                     }
                 };
@@ -1041,6 +1102,7 @@ impl Live {
             flow: None,
             capture_phase: None,
             countdown_target: None,
+            countdown_exit: None,
             region_session: None,
             region_texture: None,
             region_selector: Arc::new(Mutex::new(Selector::default())),
@@ -1057,6 +1119,7 @@ impl Live {
             recording_editor_notice_targets: HashMap::new(),
             last_capture_target: None,
             previews: MiniPreviews::default(),
+            clipboard: Default::default(),
             root_hide_deferred: false,
             region_freeze: false,
             region_auto_start: false,
@@ -1356,6 +1419,15 @@ impl Live {
                 return;
             }
         };
+        // Shipping shortcut, tray and New Capture flows start on the display
+        // under the pointer. Keep the current display when it is unknown
+        // (for example Wayland, where the pointer position is unavailable).
+        if let Some(id) = captures_capture::pointer_position()
+            .and_then(|point| captures_capture::XcapBackend.display_id_at_point(point))
+            .filter(|id| self.displays.iter().any(|display| &display.id == id))
+        {
+            self.display_id = Some(id);
+        }
         let target = capture_target(frame, &self.displays, self.display_id.as_deref());
         self.countdown_target = target;
         if target.is_some() {
@@ -2125,7 +2197,7 @@ impl Live {
                 } if self.previews.accepts(&artifact_id, generation) => {
                     let card = self.previews.cards.get_mut(&artifact_id).unwrap();
                     card.busy = Some(crate::mini_preview::Busy::Drag);
-                    card.message = Some("Dragging original file…".into());
+                    card.message = None;
                 }
                 PreviewMessage::DragFinished {
                     artifact_id,
@@ -2160,12 +2232,13 @@ impl Live {
                             .get_mut(&artifact_id)
                             .expect("accepted preview exists");
                         card.busy = Some(crate::mini_preview::Busy::Copy);
-                        card.message = Some("Copying full-resolution pixels…".into());
+                        card.message = None;
                         card.image_path.clone()
                     };
                     self.pending += 1;
                     let _ = self.tx.send(Job::Copy {
                         path,
+                        owner: Some(artifact_id.clone()),
                         preview: Some(PreviewGuard {
                             artifact_id,
                             generation,
@@ -2188,7 +2261,7 @@ impl Live {
                             continue;
                         }
                         card.busy = Some(crate::mini_preview::Busy::Save);
-                        card.message = Some("Saving with current preferences…".into());
+                        card.message = None;
                         card.artifact_id.clone()
                     };
                     self.send_preview(
@@ -2663,6 +2736,31 @@ impl Live {
         }
         if let Some(flow) = &self.flow {
             if !flow.is_current() {
+                let remaining = flow.countdown().remaining(Instant::now());
+                if remaining > 0
+                    && !self.capture_waiting_for_hide
+                    && !self.capture_in_flight
+                    && matches!(
+                        self.capture_phase,
+                        Some(
+                            CapturePhase::DisplayCountdown
+                                | CapturePhase::RegionCountdown { .. }
+                                | CapturePhase::WindowCountdown { .. }
+                                | CapturePhase::ControlsCountdown { .. }
+                                | CapturePhase::RecordingCountdown
+                        )
+                    )
+                    && let Some(target) = self.countdown_target
+                {
+                    let (title, kind) = main_countdown_presentation(self.capture_phase);
+                    self.countdown_exit = Some(CountdownExit::new(
+                        main_countdown_viewport(),
+                        title,
+                        target,
+                        kind,
+                        remaining,
+                    ));
+                }
                 match self.capture_phase {
                     Some(CapturePhase::RecordingRestarting) => {
                         let generation = flow.generation();
@@ -2746,6 +2844,20 @@ impl Live {
         }
         if let Some(flow) = &self.recording_screenshot_flow {
             if !flow.is_current() {
+                let remaining = flow.countdown().remaining(Instant::now());
+                if remaining > 0
+                    && let Some(RecordingScreenshotPhase::Countdown { .. }) =
+                        self.recording_screenshot_phase
+                    && let Some(target) = self.countdown_target
+                {
+                    self.countdown_exit = Some(CountdownExit::new(
+                        recording_screenshot_countdown_viewport(flow.generation()),
+                        "Captures Screenshot Countdown",
+                        target,
+                        crate::countdown::Kind::Screenshot,
+                        remaining,
+                    ));
+                }
                 self.finish_recording_screenshot(ctx, false);
             } else {
                 let generation = flow.generation();
@@ -3045,8 +3157,17 @@ impl Live {
                         }
                     }
                 }
-                Reply::Copied { preview, result } => {
+                Reply::Copied {
+                    preview,
+                    owner,
+                    result,
+                } => {
                     self.pending = self.pending.saturating_sub(1);
+                    if let (Ok(write), Some(owner)) = (&result, owner) {
+                        self.clipboard
+                            .record(write.revision, owner, write.fingerprint);
+                        request_hidden_root_paint(ctx);
+                    }
                     if let Some(preview) = preview {
                         if let Some(card) = self
                             .previews
@@ -3055,18 +3176,33 @@ impl Live {
                             .filter(|card| card.generation == preview.generation)
                         {
                             card.busy = None;
-                            card.message = Some(match result {
-                                Ok(()) => "Copied full-resolution pixels".into(),
-                                Err(error) => format!("Copy failed: {error}"),
-                            });
+                            // Success shows the shipping clipboard confirmation chip.
+                            card.message = result
+                                .as_ref()
+                                .err()
+                                .map(|error| format!("Copy failed: {error}"));
                         }
                     } else {
                         match result {
-                            Ok(()) => self.status = "Copied actual capture pixels".into(),
+                            Ok(_) => self.status = "Copied actual capture pixels".into(),
                             Err(error) => self.error = Some(error),
                         }
                     }
                 }
+                Reply::ClipboardVerified {
+                    verification,
+                    result,
+                } => match result {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if crate::clipboard_revision::invalidate(verification.revision)
+                            && self.clipboard.clear_if_revision(verification.revision)
+                        {
+                            request_hidden_root_paint(ctx);
+                        }
+                    }
+                    Err(error) => eprintln!("Could not verify the clipboard owner: {error}"),
+                },
                 Reply::Revealed { preview, result } => {
                     self.pending = self.pending.saturating_sub(1);
                     if let Some(card) = self
@@ -3076,10 +3212,7 @@ impl Live {
                         .filter(|card| card.generation == preview.generation)
                     {
                         card.busy = None;
-                        card.message = Some(match result {
-                            Ok(()) => "Shown in folder".into(),
-                            Err(error) => format!("Reveal failed: {error}"),
-                        });
+                        card.message = result.err().map(|error| format!("Reveal failed: {error}"));
                     }
                 }
                 Reply::Executed {
@@ -3165,7 +3298,8 @@ impl Live {
                                     .filter(|card| card.generation == preview.generation)
                             {
                                 card.busy = None;
-                                card.message = Some("Saved with current preferences".into());
+                                card.message = None;
+                                card.saved_at = Some(Instant::now());
                             }
                         }
                     }
@@ -3578,7 +3712,7 @@ impl Live {
         let path = artifact.image_path.clone();
         let preview = self.previews.start_artifact(&artifact);
         self.artifacts.insert(0, artifact);
-        self.select(id);
+        self.select(id.clone());
         self.status = status.into();
         match preview {
             Ok(Some((preview, path))) => {
@@ -3596,6 +3730,7 @@ impl Live {
             let _ = self.tx.send(Job::Copy {
                 path,
                 preview: None,
+                owner: Some(id),
             });
         }
     }
@@ -3806,6 +3941,25 @@ impl Live {
         let collapsed = self.previews.stack.is_collapsed();
         let placement = self.previews.placement;
         let top_anchor = placement.is_top();
+        let clipboard_owner = self
+            .clipboard
+            .current_artifact(crate::clipboard_revision::current());
+        if clipboard_owner
+            .as_ref()
+            .is_some_and(|owner| self.previews.cards.contains_key(owner))
+        {
+            // Notice other apps replacing the clipboard while the chip shows.
+            if crate::clipboard_revision::NEEDS_PIXEL_CHECK
+                && let Some(verification) = self
+                    .clipboard
+                    .verification(Instant::now(), CLIPBOARD_CHECK_INTERVAL)
+            {
+                let _ = self.tx.send(Job::VerifyClipboard(verification));
+            }
+            request_hidden_root_paint(ctx);
+            ctx.request_repaint_after(CLIPBOARD_CHECK_INTERVAL);
+        }
+        let now = Instant::now();
         let cards = self
             .previews
             .stack
@@ -3820,9 +3974,14 @@ impl Live {
                     width: card.width,
                     height: card.height,
                     texture: card.texture.clone()?,
+                    size_bytes: card.size_bytes,
                     busy: card.busy,
                     message: card.message.clone(),
                     saved_path: card.saved_path.clone(),
+                    saved_at: card
+                        .saved_at
+                        .filter(|at| now.saturating_duration_since(*at) < SAVED_FEEDBACK),
+                    clipboard_current: clipboard_owner.as_deref() == Some(artifact_id.as_str()),
                     rejected_at: card.rejected_at,
                     layout: self.previews.stack.card_layout(index, top_anchor)?,
                     hover_y: self
@@ -3928,6 +4087,13 @@ impl Live {
                         }
                         crate::mini_preview::reject_offset(elapsed, reduced_motion)
                     });
+                    if let Some(saved_at) = card.saved_at {
+                        // Clear "Saved" when the shipping confirmation window ends.
+                        request_hidden_root_paint(ui.ctx());
+                        ui.ctx().request_repaint_after(
+                            SAVED_FEEDBACK.saturating_sub(saved_at.elapsed()),
+                        );
+                    }
                     let action = crate::mini_preview::show(
                         ui,
                         &tokens,
@@ -3936,8 +4102,11 @@ impl Live {
                             texture: &card.texture,
                             width: card.width,
                             height: card.height,
+                            size_bytes: card.size_bytes,
                             busy: card.busy,
                             message: card.message.as_deref(),
+                            clipboard_current: card.clipboard_current,
+                            saved_feedback: card.saved_at.is_some(),
                             can_save: save.is_some(),
                             saved: card.saved_path.is_some(),
                             interactive: card.layout.interactive,
@@ -4107,38 +4276,85 @@ impl Live {
                             ),
                         )
                     };
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(card_area), |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("preview-stack-scroll")
-                            .auto_shrink([false, false])
-                            .stick_to_bottom(!top_anchor)
-                            .show(ui, |ui| {
-                                let (content, _) = ui.allocate_exact_size(
-                                    egui::vec2(ui.available_width(), scroll_content_height),
-                                    egui::Sense::hover(),
-                                );
-                                for card in &cards {
-                                    let y =
-                                        card.layout.y as f32 - if top_anchor { gutter } else { 0. };
-                                    let rect = egui::Rect::from_min_size(
-                                        content.min
-                                            + egui::vec2(
-                                                captures_app::preview::THUMBNAIL_PADDING as f32,
-                                                y,
-                                            ),
-                                        egui::vec2(
-                                            (captures_app::preview::THUMBNAIL_WIDTH
-                                                - captures_app::preview::THUMBNAIL_PADDING * 2.)
-                                                as f32,
-                                            captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
-                                        ),
+                    // Overflow cues request whole-slot scrolls; apply them
+                    // inside the scroll area on the next pass so egui
+                    // animates the move and releases stick-to-bottom.
+                    let cue_scroll_id = egui::Id::unique("preview-stack-cue-scroll");
+                    let cue_scroll = ui.data_mut(|data| data.remove_temp::<f32>(cue_scroll_id));
+                    let scroll =
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(card_area), |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("preview-stack-scroll")
+                                .auto_shrink([false, false])
+                                .stick_to_bottom(!top_anchor)
+                                .show(ui, |ui| {
+                                    if let Some(delta) = cue_scroll {
+                                        ui.scroll_with_delta(egui::vec2(0., -delta));
+                                    }
+                                    let (content, _) = ui.allocate_exact_size(
+                                        egui::vec2(ui.available_width(), scroll_content_height),
+                                        egui::Sense::hover(),
                                     );
-                                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                                        show_card(ui, card)
-                                    });
-                                }
-                            });
-                    });
+                                    for card in &cards {
+                                        let y = card.layout.y as f32
+                                            - if top_anchor { gutter } else { 0. };
+                                        let rect = egui::Rect::from_min_size(
+                                            content.min
+                                                + egui::vec2(
+                                                    captures_app::preview::THUMBNAIL_PADDING as f32,
+                                                    y,
+                                                ),
+                                            egui::vec2(
+                                                (captures_app::preview::THUMBNAIL_WIDTH
+                                                    - captures_app::preview::THUMBNAIL_PADDING * 2.)
+                                                    as f32,
+                                                captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
+                                            ),
+                                        );
+                                        ui.scope_builder(
+                                            egui::UiBuilder::new().max_rect(rect),
+                                            |ui| show_card(ui, card),
+                                        );
+                                    }
+                                })
+                        });
+                    let scroll = scroll.inner;
+                    let (offset, content_height, viewport_height) = (
+                        f64::from(scroll.state.offset.y),
+                        f64::from(scroll.content_size.y),
+                        f64::from(scroll.inner_rect.height()),
+                    );
+                    let overflow = captures_app::preview::stack_overflow(
+                        offset,
+                        content_height,
+                        viewport_height,
+                    );
+                    // Cues paint over the cards and under the stack toolbar,
+                    // matching the shipping z-order.
+                    if let Some(slots) = crate::mini_preview::show_overflow_cues(
+                        ui,
+                        &tokens,
+                        egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(
+                                captures_app::preview::THUMBNAIL_WIDTH as f32,
+                                geometry.height as f32,
+                            ),
+                        ),
+                        overflow,
+                        top_anchor,
+                    ) {
+                        let target = captures_app::preview::stack_scroll_target(
+                            offset,
+                            content_height,
+                            viewport_height,
+                            slots,
+                        );
+                        ui.data_mut(|data| {
+                            data.insert_temp(cue_scroll_id, (target - offset) as f32)
+                        });
+                        ui.ctx().request_repaint();
+                    }
                 }
                 if crate::mini_preview::stack_controls_visible(count, collapsed) {
                     let gutter = captures_app::preview::THUMBNAIL_CONTROL_GUTTER as f32;
@@ -4161,8 +4377,6 @@ impl Live {
                         match crate::mini_preview::show_stack_controls(
                             ui,
                             &tokens,
-                            count,
-                            collapsed,
                             placement.is_right(),
                         ) {
                             Some(crate::mini_preview::StackAction::ToggleCollapsed) => {
@@ -4343,10 +4557,8 @@ impl Live {
                             recording_controls_are_excluded(include_controls),
                         ));
                     let notice = warning.as_deref().unwrap_or({
-                        if cfg!(target_os = "linux") {
-                            "These controls will show in recordings on Linux"
-                        } else if include_controls {
-                            "These controls will show in recordings"
+                        if cfg!(target_os = "linux") || include_controls {
+                            "These controls will show in recordings · Use Hide controls to keep them out"
                         } else {
                             "These controls won’t show in recordings"
                         }
@@ -4727,6 +4939,7 @@ impl Live {
                 },
             );
         }
+        let mut countdown_declared = false;
         if let Some(flow) = &self.recording_screenshot_flow
             && let Some(RecordingScreenshotPhase::Countdown { .. }) =
                 self.recording_screenshot_phase
@@ -4737,7 +4950,7 @@ impl Live {
                 let generation = flow.generation();
                 let target = self.countdown_target.expect("countdown target validated");
                 ctx.show_viewport_deferred(
-                    egui::ViewportId::from_hash_of(("recording-screenshot-countdown", generation)),
+                    recording_screenshot_countdown_viewport(generation),
                     capture_viewport(
                         "Captures Screenshot Countdown",
                         target.monitor,
@@ -4751,10 +4964,17 @@ impl Live {
                             captures_app::capture_flow::cancel(generation);
                             ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                         }
-                        crate::countdown::show(ui, &t, clock.remaining(Instant::now()).max(1));
+                        crate::countdown::show(
+                            ui,
+                            &t,
+                            clock.remaining(Instant::now()).max(1),
+                            crate::countdown::Kind::Screenshot,
+                            !captures_app::capture_flow::is_current(generation),
+                        );
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     },
                 );
+                countdown_declared = true;
             }
         }
         if let Some(flow) = &self.flow
@@ -4776,18 +4996,10 @@ impl Live {
                 let t = t.clone();
                 let generation = flow.generation();
                 let target = self.countdown_target.expect("countdown target validated");
+                let (title, kind) = main_countdown_presentation(self.capture_phase);
                 ctx.show_viewport_deferred(
-                    egui::ViewportId::from_hash_of("screenshot-countdown"),
-                    capture_viewport(
-                        if self.capture_phase == Some(CapturePhase::RecordingCountdown) {
-                            "Captures Recording Countdown"
-                        } else {
-                            "Captures Screenshot Countdown"
-                        },
-                        target.monitor,
-                        target.position,
-                        target.size,
-                    ),
+                    main_countdown_viewport(),
+                    capture_viewport(title, target.monitor, target.position, target.size),
                     move |ui, _| {
                         if ui.input(|i| {
                             i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)
@@ -4795,14 +5007,44 @@ impl Live {
                             captures_app::capture_flow::cancel(generation);
                             ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                         }
-                        crate::countdown::show(ui, &t, clock.remaining(Instant::now()).max(1));
+                        crate::countdown::show(
+                            ui,
+                            &t,
+                            clock.remaining(Instant::now()).max(1),
+                            kind,
+                            !captures_app::capture_flow::is_current(generation),
+                        );
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     },
                 );
+                countdown_declared = true;
             } else {
                 // Stop declaring the child before hiding the root. Hidden-root
                 // logic then verifies visibility and waits for compositor settling.
                 self.hide_for_capture(ctx);
+            }
+        }
+        // A cancelled countdown stays up briefly with "Cancelling…", matching
+        // the shipping fade-out window. A new countdown always takes over.
+        if let Some(exit) = self.countdown_exit {
+            let now = Instant::now();
+            if countdown_declared || now >= exit.until {
+                self.countdown_exit = None;
+            } else {
+                let t = t.clone();
+                ctx.show_viewport_deferred(
+                    exit.viewport,
+                    capture_viewport(
+                        exit.title,
+                        exit.target.monitor,
+                        exit.target.position,
+                        exit.target.size,
+                    ),
+                    move |ui, _| {
+                        crate::countdown::show(ui, &t, exit.remaining, exit.kind, true);
+                    },
+                );
+                ctx.request_repaint_after(exit.until - now);
             }
         }
     }
@@ -5077,7 +5319,7 @@ impl Live {
                         },
                         entry.width,
                         entry.height,
-                        format_duration(entry.duration_ms.unwrap_or_default())
+                        captures_app::recording_timeline::format_recording_time(entry.duration_ms.unwrap_or_default())
                     ))
                     .color(t.color("text-muted")),
                 );
@@ -5122,9 +5364,15 @@ impl Live {
         if let Some(path) = &self.decoded_path {
             self.pending += 1;
             self.error = None;
+            let owner = self
+                .artifacts
+                .iter()
+                .find(|artifact| &artifact.image_path == path)
+                .map(|artifact| artifact.entry.id.clone());
             let _ = self.tx.send(Job::Copy {
                 path: path.clone(),
                 preview: None,
+                owner,
             });
         }
     }
@@ -5223,6 +5471,30 @@ fn monitor_matches_overlay(
             .into_iter()
             .zip([overlay.0, overlay.1, overlay.2, overlay.3])
             .all(|(actual, expected)| (actual - expected).abs() <= 1.)
+}
+
+fn main_countdown_viewport() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("screenshot-countdown")
+}
+
+fn recording_screenshot_countdown_viewport(generation: u64) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(("recording-screenshot-countdown", generation))
+}
+
+fn main_countdown_presentation(
+    phase: Option<CapturePhase>,
+) -> (&'static str, crate::countdown::Kind) {
+    if phase == Some(CapturePhase::RecordingCountdown) {
+        (
+            "Captures Recording Countdown",
+            crate::countdown::Kind::Recording,
+        )
+    } else {
+        (
+            "Captures Screenshot Countdown",
+            crate::countdown::Kind::Screenshot,
+        )
+    }
 }
 
 fn capture_viewport(
@@ -5398,11 +5670,6 @@ fn is_recording_phase(phase: Option<CapturePhase>) -> bool {
     )
 }
 
-fn format_duration(elapsed_ms: u64) -> String {
-    let elapsed_seconds = elapsed_ms / 1_000;
-    format!("{}:{:02}", elapsed_seconds / 60, elapsed_seconds % 60)
-}
-
 fn snapshot_interpolation_origin(state: RecordingState, now: Instant) -> Option<Instant> {
     (state == RecordingState::Recording).then_some(now)
 }
@@ -5451,7 +5718,16 @@ fn decode(path: &Path) -> Result<Decoded, String> {
     })
 }
 
-fn copy_image(path: &Path, clipboard: &mut Option<arboard::Clipboard>) -> Result<(), String> {
+#[derive(Clone, Copy)]
+struct ClipboardWrite {
+    revision: i64,
+    fingerprint: captures_app::clipboard::ClipboardFingerprint,
+}
+
+fn copy_image(
+    path: &Path,
+    clipboard: &mut Option<arboard::Clipboard>,
+) -> Result<ClipboardWrite, String> {
     let image = image::open(path).map_err(|e| e.to_string())?.into_rgba8();
     copy_pixels(&image, clipboard)
 }
@@ -5459,7 +5735,7 @@ fn copy_image(path: &Path, clipboard: &mut Option<arboard::Clipboard>) -> Result
 fn copy_pixels(
     image: &image::RgbaImage,
     clipboard: &mut Option<arboard::Clipboard>,
-) -> Result<(), String> {
+) -> Result<ClipboardWrite, String> {
     if clipboard.is_none() {
         *clipboard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
     }
@@ -5471,25 +5747,46 @@ fn copy_pixels(
             height: image.height() as usize,
             bytes: Cow::Borrowed(image.as_raw()),
         })
-        .map_err(|e| format!("Could not copy image: {e}"))
+        .map_err(|e| format!("Could not copy image: {e}"))?;
+    Ok(ClipboardWrite {
+        revision: crate::clipboard_revision::after_write(),
+        fingerprint: captures_app::clipboard::ClipboardFingerprint::of_rgba(
+            image.width(),
+            image.height(),
+            image.as_raw(),
+        ),
+    })
 }
 
-fn reveal(path: &Path) -> std::io::Result<()> {
-    if !path.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("saved file no longer exists: {}", path.display()),
-        ));
+/// Whether the clipboard still holds exactly the recorded pixels.
+fn clipboard_matches(
+    expected: captures_app::clipboard::ClipboardFingerprint,
+    clipboard: &mut Option<arboard::Clipboard>,
+) -> Result<bool, String> {
+    if clipboard.is_none() {
+        *clipboard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
     }
-    #[cfg(target_os = "windows")]
-    let result = Command::new("explorer")
-        .arg(format!("/select,{}", path.display()))
-        .spawn();
-    #[cfg(target_os = "linux")]
-    let result = Command::new("xdg-open")
-        .arg(path.parent().unwrap_or(path))
-        .spawn();
-    result.map(|_| ())
+    match clipboard
+        .as_mut()
+        .expect("clipboard initialized")
+        .get_image()
+    {
+        Ok(image) => {
+            let width = u32::try_from(image.width).unwrap_or(u32::MAX);
+            let height = u32::try_from(image.height).unwrap_or(u32::MAX);
+            Ok(
+                captures_app::clipboard::ClipboardFingerprint::of_rgba(width, height, &image.bytes)
+                    == expected,
+            )
+        }
+        // Retry later when another app briefly holds the clipboard.
+        Err(arboard::Error::ClipboardOccupied) => {
+            Err(arboard::Error::ClipboardOccupied.to_string())
+        }
+        // No image, or contents that are not a decodable image (for example
+        // text offered for an image type), cannot be this capture.
+        Err(_) => Ok(false),
+    }
 }
 
 #[cfg(test)]
@@ -6469,6 +6766,24 @@ mod tests {
     }
 
     #[test]
+    fn recording_countdown_uses_shipping_heading_and_title() {
+        assert_eq!(
+            main_countdown_presentation(Some(CapturePhase::RecordingCountdown)),
+            (
+                "Captures Recording Countdown",
+                crate::countdown::Kind::Recording
+            )
+        );
+        assert_eq!(
+            main_countdown_presentation(Some(CapturePhase::DisplayCountdown)),
+            (
+                "Captures Screenshot Countdown",
+                crate::countdown::Kind::Screenshot
+            )
+        );
+    }
+
+    #[test]
     fn capture_viewports_do_not_depend_on_workspace_or_preview_rendering() {
         let root = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
@@ -6493,6 +6808,43 @@ mod tests {
             .contains_key(&egui::ViewportId::from_hash_of("screenshot-countdown"));
         output.textures_delta.clear();
         assert!(declared);
+        live.flush();
+    }
+
+    #[test]
+    fn cancelled_countdown_lingers_with_cancelling_copy_then_closes() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        let target = CaptureTarget {
+            monitor: 0,
+            position: egui::pos2(0., 0.),
+            size: egui::vec2(800., 600.),
+            preview_bounds: None,
+        };
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let declared = |live: &mut Live| {
+            ctx.begin_pass(Default::default());
+            live.viewports(&ctx, &tokens, Ok(AppSettings::default()), false);
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            output
+                .viewport_output
+                .contains_key(&main_countdown_viewport())
+        };
+
+        live.countdown_exit = Some(CountdownExit::new(
+            main_countdown_viewport(),
+            "Captures Recording Countdown",
+            target,
+            crate::countdown::Kind::Recording,
+            2,
+        ));
+        assert!(declared(&mut live), "cancelled countdown stays up briefly");
+        live.countdown_exit.as_mut().unwrap().until = Instant::now();
+        assert!(!declared(&mut live), "the exit window elapsed");
+        assert!(live.countdown_exit.is_none());
         live.flush();
     }
 

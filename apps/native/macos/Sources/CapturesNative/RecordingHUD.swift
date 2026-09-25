@@ -16,7 +16,7 @@ final class RecordingHUDView: NSView {
     private let defaultNotice: String
     private let statusDot = NSView()
     private let timerLabel = NSTextField(labelWithString: "0:00")
-    private let statusLabel = NSTextField(labelWithString: "RECORDING")
+    private let statusLabel = NSTextField(labelWithString: "")
     private let noticeLabel = NSTextField(labelWithString: "These controls won’t show in recordings")
     private let pauseButton: CaptureButton
     private let microphoneButton: CaptureButton
@@ -46,7 +46,7 @@ final class RecordingHUDView: NSView {
         self.tokens = tokens
         defaultNotice = excludedFromCapture
             ? "These controls won’t show in recordings"
-            : "These controls will appear in recordings"
+            : "These controls will show in recordings · Use Hide controls to keep them out"
         pauseButton = CaptureButton("Ⅱ", frame: .zero, tokens: tokens, glass: true) {}
         microphoneButton = CaptureButton("", frame: .zero, tokens: tokens, glass: true) {}
         super.init(frame: frame)
@@ -59,18 +59,18 @@ final class RecordingHUDView: NSView {
         layer?.shadowRadius = 22; layer?.shadowOffset = NSSize(width: 0, height: -8)
         setAccessibilityRole(.group); setAccessibilityLabel("Recording controls")
 
-        noticeLabel.stringValue = defaultNotice
-        noticeLabel.frame = NSRect(x: 60, y: 8, width: 310, height: 18)
+        noticeLabel.frame = NSRect(x: 16, y: 8, width: 398, height: 18)
         noticeLabel.alignment = .center
-        noticeLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        noticeLabel.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
         noticeLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         noticeLabel.lineBreakMode = .byTruncatingTail
         addSubview(noticeLabel)
+        showNotice(defaultNotice, warning: false)
 
         statusDot.frame = NSRect(x: 18, y: 44, width: 9, height: 9)
         statusDot.wantsLayer = true; statusDot.layer?.cornerRadius = 4.5
         addSubview(statusDot)
-        timerLabel.frame = NSRect(x: 34, y: 31, width: 64, height: 30)
+        timerLabel.frame = NSRect(x: 34, y: 31, width: 68, height: 30)
         timerLabel.font = .monospacedDigitSystemFont(ofSize: 22, weight: .semibold)
         timerLabel.textColor = tokens.color(RecordingHUDColorToken.glassText.rawValue); addSubview(timerLabel)
         statusLabel.frame = NSRect(x: 34, y: 60, width: 76, height: 16)
@@ -78,7 +78,7 @@ final class RecordingHUDView: NSView {
         statusLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         addSubview(statusLabel)
 
-        let stop = hudButton("■", x: 104, help: "Stop and save recording") { [weak self] in self?.stop() }
+        let stop = hudButton("■", x: 104, help: "Stop and save") { [weak self] in self?.stop() }
         stop.signal = true; stop.setAccessibilityLabel("Stop recording")
         pauseButton.frame = NSRect(x: 144, y: 39, width: 38, height: 34)
         pauseButton.actionBlock = { [weak self] in self?.pauseOrResume() }
@@ -87,10 +87,10 @@ final class RecordingHUDView: NSView {
             [weak self] in self?.restart()
         }
         restart.setAccessibilityLabel("Restart recording")
-        let screenshot = hudButton("⌗", x: 224, help: "Take region screenshot") {
+        let screenshot = hudButton("⌗", x: 224, help: "Take a region screenshot") {
             [weak self] in self?.screenshot()
         }
-        screenshot.setAccessibilityLabel("Take region screenshot")
+        screenshot.setAccessibilityLabel("Take a region screenshot")
         meterTrack.frame = NSRect(x: 267, y: 58, width: 32, height: 6)
         meterTrack.wantsLayer = true
         meterTrack.layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassActive.rawValue).cgColor
@@ -113,10 +113,10 @@ final class RecordingHUDView: NSView {
         microphoneButton.frame = NSRect(x: 304, y: 39, width: 38, height: 34)
         microphoneButton.actionBlock = { [weak self] in self?.toggleMicrophone() }
         addSubview(microphoneButton)
-        let trash = hudButton("⌫", x: 344, help: "Discard recording") { [weak self] in self?.discard() }
-        trash.setAccessibilityLabel("Discard recording")
+        let trash = hudButton("⌫", x: 344, help: "Delete recording") { [weak self] in self?.discard() }
+        trash.setAccessibilityLabel("Delete recording")
         lifecycleButtons = [stop, pauseButton, restart, screenshot, microphoneButton, trash]
-        let hide = hudButton("◉̸", x: 384, help: "Hide recording controls") {
+        let hide = hudButton("◉̸", x: 384, help: "Hide controls") {
             [weak self] in self?.hide()
         }
         hide.setAccessibilityLabel("Hide recording controls")
@@ -138,7 +138,9 @@ final class RecordingHUDView: NSView {
         if self.paused != paused { setMicrophoneLevel(0) }
         self.paused = paused; self.elapsedMilliseconds = elapsedMilliseconds
         resumedAt = paused ? nil : Date()
-        statusLabel.stringValue = paused ? "PAUSED" : "RECORDING"
+        let status = recordingStatusLabel(paused: paused)
+        // Shipping CSS uppercases the status label; assistive tech reads its copy.
+        statusLabel.stringValue = status.uppercased(); statusLabel.setAccessibilityLabel(status)
         updateMeterLabel()
         let statusToken: RecordingHUDColorToken = paused ? .themeAccent : .themeSignal
         statusDot.layer?.backgroundColor = tokens.color(statusToken.rawValue).cgColor
@@ -152,11 +154,31 @@ final class RecordingHUDView: NSView {
     }
 
     func setWarning(_ warning: String?) {
-        noticeLabel.stringValue = warning ?? defaultNotice
-        let noticeToken: RecordingHUDColorToken = warning == nil ? .glassTextSubtle : .themeSignal
-        noticeLabel.textColor = tokens.color(noticeToken.rawValue)
+        showNotice(warning ?? defaultNotice, warning: warning != nil)
         noticeLabel.toolTip = warning
-        noticeLabel.setAccessibilityLabel(noticeLabel.stringValue)
+    }
+
+    /// Shipping `.recording-hud-privacy`: subtle 2xs text with **will**/**won’t** in bold glass text.
+    private func showNotice(_ text: String, warning: Bool) {
+        let noticeToken: RecordingHUDColorToken = warning ? .themeSignal : .glassTextSubtle
+        let size = tokens.number("text-2xs")
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center; paragraph.lineBreakMode = .byTruncatingTail
+        let attributed = NSMutableAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: size, weight: .medium),
+            .foregroundColor: tokens.color(noticeToken.rawValue),
+            .paragraphStyle: paragraph,
+        ])
+        if !warning, let range = ["won’t", "will"].lazy
+            .map({ (text as NSString).range(of: " \($0) ") })
+            .first(where: { $0.location != NSNotFound }) {
+            attributed.addAttributes([
+                .font: NSFont.systemFont(ofSize: size, weight: .bold),
+                .foregroundColor: tokens.color(RecordingHUDColorToken.glassText.rawValue),
+            ], range: NSRange(location: range.location + 1, length: range.length - 2))
+        }
+        noticeLabel.attributedStringValue = attributed
+        noticeLabel.setAccessibilityLabel(text)
     }
 
     func setMicrophone(muted: Bool, available: Bool) {
@@ -205,11 +227,28 @@ final class RecordingHUDView: NSView {
 
     private func updateTimer() {
         let running = resumedAt.map { UInt64(max(0, Date().timeIntervalSince($0)) * 1_000) } ?? 0
-        let seconds = (elapsedMilliseconds + running) / 1_000
-        timerLabel.stringValue = "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+        let text = formatRecordingTime(milliseconds: elapsedMilliseconds + running)
+        guard timerLabel.stringValue != text else { return }
+        // h:mm:ss must fit the fixed status column beside Stop.
+        timerLabel.font = .monospacedDigitSystemFont(ofSize: text.count > 5 ? 17 : 22, weight: .semibold)
+        timerLabel.stringValue = text
     }
 
     deinit { timer?.invalidate() }
+}
+
+/// Shipping `recordingStatusLabel` copy for the states this HUD renders.
+func recordingStatusLabel(paused: Bool) -> String { paused ? "Paused" : "Recording" }
+
+/// Mirrors `captures_app::recording_timeline::format_recording_time` and the
+/// shipping `formatRecordingTime`: m:ss below an hour, h:mm:ss from one hour.
+func formatRecordingTime(milliseconds: UInt64) -> String {
+    let total = milliseconds / 1_000
+    let hours = total / 3_600
+    let minutes = total % 3_600 / 60
+    let seconds = total % 60
+    let padded: (UInt64) -> String = { $0 < 10 ? "0\($0)" : "\($0)" }
+    return hours > 0 ? "\(hours):\(padded(minutes)):\(padded(seconds))" : "\(minutes):\(padded(seconds))"
 }
 
 final class RecordingHUDPanel: NSPanel {

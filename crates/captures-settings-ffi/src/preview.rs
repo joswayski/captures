@@ -3,7 +3,7 @@ use captures_app::preview::{
     self, ThumbnailMonitorBounds, ThumbnailStackAnchor, ThumbnailStackOrigin, ThumbnailVisibility,
 };
 use captures_settings::MiniPreviewPlacement;
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, CString, c_char};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -481,10 +481,104 @@ pub unsafe extern "C" fn captures_preview_stack_card_v2(
     true
 }
 
+/// Idle mini-preview metadata ("W × H · size"). Returns owned UTF-8; free
+/// with captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_card_metadata_v1(
+    width: u32,
+    height: u32,
+    size_bytes: u64,
+) -> *mut c_char {
+    CString::new(preview::card_metadata(width, height, size_bytes))
+        .map_or(std::ptr::null_mut(), CString::into_raw)
+}
+
+/// Overflow-cue edges for an expanded stack: bit 0 = cards hidden above the
+/// viewport, bit 1 = cards hidden below. Uses the shipping 1 px tolerance.
+pub const CAPTURES_PREVIEW_OVERFLOW_ABOVE: u32 = 1;
+pub const CAPTURES_PREVIEW_OVERFLOW_BELOW: u32 = 2;
+
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_overflow_v1(
+    scroll_top: f64,
+    content_height: f64,
+    viewport_height: f64,
+) -> u32 {
+    let overflow = preview::stack_overflow(scroll_top, content_height, viewport_height);
+    u32::from(overflow.above) * CAPTURES_PREVIEW_OVERFLOW_ABOVE
+        + u32::from(overflow.below) * CAPTURES_PREVIEW_OVERFLOW_BELOW
+}
+
+/// Scroll offset after an overflow cue moves `slots` whole cards (negative is
+/// up), clamped to the scrollable range.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_scroll_target_v1(
+    scroll_top: f64,
+    content_height: f64,
+    viewport_height: f64,
+    slots: i32,
+) -> f64 {
+    preview::stack_scroll_target(scroll_top, content_height, viewport_height, slots)
+}
+
+/// Shipping overflow-cue name ("Show older captures"/"Show newer captures").
+/// Returns static UTF-8; never free it.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_overflow_label_v1(
+    above: bool,
+    top_anchor: bool,
+) -> *const c_char {
+    match preview::overflow_cue_label(above, top_anchor) {
+        "Show older captures" => c"Show older captures".as_ptr(),
+        _ => c"Show newer captures".as_ptr(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ptr::{null, null_mut};
+
+    #[test]
+    fn overflow_cues_cross_the_abi() {
+        assert_eq!(captures_preview_overflow_v1(0., 500., 600.), 0);
+        assert_eq!(
+            captures_preview_overflow_v1(0., 1_000., 600.),
+            CAPTURES_PREVIEW_OVERFLOW_BELOW
+        );
+        assert_eq!(
+            captures_preview_overflow_v1(200., 1_000., 600.),
+            CAPTURES_PREVIEW_OVERFLOW_ABOVE | CAPTURES_PREVIEW_OVERFLOW_BELOW
+        );
+        assert_eq!(
+            captures_preview_scroll_target_v1(400., 1_000., 600., -1),
+            216.
+        );
+        // SAFETY: The export returns static NUL-terminated UTF-8.
+        unsafe {
+            for (above, top, expected) in [
+                (true, false, "Show older captures"),
+                (false, false, "Show newer captures"),
+                (true, true, "Show newer captures"),
+                (false, true, "Show older captures"),
+            ] {
+                let label = captures_preview_overflow_label_v1(above, top);
+                assert_eq!(CStr::from_ptr(label).to_str(), Ok(expected));
+            }
+        }
+    }
+
+    #[test]
+    fn card_metadata_crosses_the_abi_as_owned_utf8() {
+        let value = captures_preview_card_metadata_v1(1440, 900, 245_760);
+        assert!(!value.is_null());
+        // SAFETY: The export returns an owned NUL-terminated string that is
+        // read, then freed exactly once through the documented free function.
+        unsafe {
+            assert_eq!(CStr::from_ptr(value).to_str(), Ok("1440 × 900 · 246 KB"));
+            crate::captures_settings_free_v1(value);
+        }
+    }
 
     #[test]
     fn stack_membership_poses_and_borrowed_utf8_cross_the_abi() {

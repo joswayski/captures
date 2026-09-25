@@ -1130,9 +1130,11 @@ impl Preferences {
             let previews = this.value["show_mini_previews"].as_bool().unwrap_or(false);
             ui.add_enabled_ui(previews,|ui| this.combo(ui,&["mini_preview_placement"],"Mini preview position","Choose a screen corner. The stack opens away from it.",&choices(&[("bottom_left","Bottom left"),("bottom_right","Bottom right"),("top_left","Top left"),("top_right","Top right")])));
             ui.separator();
-            this.toggle(ui,&["include_mini_previews_in_captures"],"Show mini previews in screenshots and recordings",if previews { "Turn this off to keep mini previews out of captures." } else { "Mini previews are off, so they won’t show in screenshots or recordings." },previews);
+            let include_previews = this.value["include_mini_previews_in_captures"].as_bool().unwrap_or(false);
+            this.toggle(ui,&["include_mini_previews_in_captures"],"Show mini previews in screenshots and recordings",if !previews { "Mini previews are off, so they won’t show in screenshots or recordings." } else if include_previews { "Mini previews will show in screenshots and recordings. Turn this off to keep them out." } else { "Mini previews won’t show in screenshots or recordings." },previews);
             ui.separator();
-            this.toggle(ui,&["include_recording_controls_in_captures"],"Show recording controls in screenshots and recordings",if cfg!(target_os="linux") { "This desktop session cannot keep recording controls out of screenshots and recordings. Use Hide controls on the recording bar to keep them off-screen." } else { "Turn this off to keep recording controls out of captures." },!cfg!(target_os="linux"));
+            let include_controls = this.value["include_recording_controls_in_captures"].as_bool().unwrap_or(false);
+            this.toggle(ui,&["include_recording_controls_in_captures"],"Show recording controls in screenshots and recordings",if cfg!(target_os="linux") { "This desktop session cannot keep recording controls out of screenshots and recordings. Use Hide controls on the recording bar to keep them off-screen." } else if include_controls { "Recording controls will show in screenshots and recordings. Turn this off to keep them out." } else { "Recording controls won’t show in screenshots or recordings." },!cfg!(target_os="linux"));
             ui.separator();
             this.toggle(ui,&["freeze_screen"],"Freeze screen when capturing","Holds hover states, tooltips, menus, and motion still while you choose a region or window. Turn this off to select from the live desktop.",true);
             ui.separator();
@@ -1144,7 +1146,7 @@ impl Preferences {
         });
     }
     fn shortcuts(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui,t,2,"Shortcuts","Select a shortcut, then press the key combination you want. Press Escape to cancel. Live mode registers New Capture, screenshot and recording shortcuts; fixture scenes only edit settings.",|this,ui| {
+        self.card(ui,t,2,"Shortcuts","Select a shortcut, then press the key combination you want. Press Esc to cancel recording.",|this,ui| {
             for (index, field) in SHORTCUT_FIELDS.into_iter().enumerate() {
                 if index > 0 {
                     ui.separator();
@@ -1318,7 +1320,7 @@ impl Preferences {
             ui.separator();
             this.combo(ui,&["recording","countdown_seconds"],"Countdown","Delay before a recording starts.",&countdowns());
             ui.separator();
-            this.row(ui,"Default microphone","Microphone device discovery is not connected yet.",|_,ui| { ui.add_enabled(false,egui::Button::new("Unavailable")); });
+            this.row(ui,"Default microphone","Choose a microphone in New Capture.",|_,ui| { ui.add_enabled(false,egui::Button::new("Unavailable")); });
             for (key,title,desc) in [("capture_system_audio","Record desktop audio","Records sound playing through the system output."),("mono_audio","Export recording audio in mono",""),("show_cursor","Show cursor in recordings",""),("highlight_clicks","Show clicks in recordings",""),("open_editor_after_recording","Open the editor after recording","The recording is kept in Capture History for 30 days, so closing the editor never loses it.")] {
                 ui.separator(); this.toggle(ui,&["recording",key],title,desc,true);
             }
@@ -1367,8 +1369,8 @@ impl Preferences {
                 this.toggle(
                     ui,
                     &["show_update_changelog"],
-                    "Show what’s new with Preview updates",
-                    "Turn this off to keep the update notice compact.",
+                    "Show what’s new on update notices",
+                    "Lists every Preview since the version you have. Turn this off for a compact Update now prompt.",
                     true,
                 );
                 ui.add_enabled(false, egui::Button::new("Check for updates"));
@@ -1377,7 +1379,7 @@ impl Preferences {
     }
     fn about(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         self.card(ui,t,6,"About","Captures is in active development. Telling us what breaks is the fastest way to fix it.",|this,ui| {
-            this.row(ui,"Send feedback","No captures or diagnostics are attached.",|this,ui| {
+            this.row(ui,"Send feedback","Report a bug or share an idea.",|this,ui| {
                 if ui.button("Open").clicked() { this.feedback.open(ui.ctx()); }
             });
             ui.separator();

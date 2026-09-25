@@ -50,6 +50,10 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(buttons.map(\.title), ["Close", "Delete", "Edit", "Copy", "Show in Folder"])
         XCTAssertEqual(reveal.accessibilityLabel(), "Show in Folder")
         XCTAssertEqual(reveal.toolTip, "Show in Folder")
+        // Shipping icon buttons use short tooltips that match their names.
+        for name in ["Close", "Delete", "Edit"] {
+            XCTAssertEqual(buttons.first { $0.title == name }?.toolTip, name)
+        }
         try write(render(panel), name: "mini-preview-single-saved-reveal.png")
     }
 
@@ -315,6 +319,38 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(checkedPath, path)
         XCTAssertEqual(revealed, [URL(fileURLWithPath: path)])
         XCTAssertEqual(transport.saveCount, 0, "Reveal must not create another export")
+    }
+
+    func testClipboardOwnerShowsChipHidesCopyAndReleasesOnExternalWrite() throws {
+        _ = NSApplication.shared
+        let controller = try presentedController(artifact(id: "owned", previewPath: "/owned.png"))
+        defer { controller.close() }
+        XCTAssertEqual(controller.metadataText(for: "owned"), "800 × 600 · 0 B")
+        let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+            .first { $0.isVisible && $0.previewView.artifactIDs == ["owned"] })
+        let card = try XCTUnwrap(panel.previewView.subviewsRecursive
+            .compactMap { $0 as? MiniPreviewCardView }.first)
+        let chip = try XCTUnwrap(card.subviews.compactMap { $0 as? MiniPreviewClipboardChip }.first)
+        let buttons = card.subviews.compactMap { $0 as? MiniPreviewButton }
+        let copy = try XCTUnwrap(buttons.first { $0.title == "Copy" })
+        let save = try XCTUnwrap(buttons.first { $0.title == "Save file" })
+        let pairedSaveY = save.frame.minY
+        XCTAssertTrue(chip.isHidden)
+
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        pasteboard.clearContents(); pasteboard.setString("capture", forType: .string)
+        controller.recordClipboardCopy(artifactID: "owned", pasteboard: pasteboard)
+        XCTAssertTrue(controller.isClipboardCurrent(for: "owned"))
+        XCTAssertFalse(chip.isHidden)
+        XCTAssertTrue(copy.isHidden)
+        XCTAssertEqual(save.frame.minY, (card.bounds.height - 32) / 2,
+            "the remaining action centers when Copy hides")
+
+        pasteboard.clearContents(); pasteboard.setString("another app", forType: .string)
+        controller.refreshClipboardOwner()
+        XCTAssertFalse(controller.isClipboardCurrent(for: "owned"))
+        XCTAssertTrue(chip.isHidden)
+        XCTAssertEqual(save.frame.minY, pairedSaveY)
     }
 
     func testSaveUpdatesExistingCardThenRevealAndMissingExportNeverSaveAgain() throws {
@@ -802,6 +838,77 @@ final class MiniPreviewTests: XCTestCase {
             renderPanel.previewView.documentHeight - renderPanel.previewView.bounds.height,
             accuracy: 0.5, "bottom overflow opens with newest capture visible")
         try write(render(renderPanel), name: "mini-preview-stack-bottom-overflow.png")
+    }
+
+    func testStackToolbarNeedsTwoPreviewsAndShowLessGrowsInwardOnHover() throws {
+        _ = NSApplication.shared
+        let single = fixturePanel(ids: ["only"], images: ["only": solidImage(.systemBlue)])
+        defer { single.close() }
+        XCTAssertTrue(single.previewView.stackToolbarButtons.isEmpty, "one preview has no stack toolbar")
+
+        for right in [false, true] {
+            let ids = ["older", "newer"]
+            let panel = fixturePanel(ids: ids,
+                images: Dictionary(uniqueKeysWithValues: ids.map { ($0, solidImage(.systemBlue)) }),
+                rightAnchor: right)
+            defer { panel.close() }
+            let toolbar = panel.previewView.stackToolbarButtons
+            let clear = try XCTUnwrap(toolbar.first { $0.kind == .clear })
+            let minimize = try XCTUnwrap(toolbar.first { $0.kind == .collapse })
+            XCTAssertEqual(clear.accessibilityLabel(), "Clear all previews")
+            XCTAssertEqual(clear.toolTip, "Clear all")
+            XCTAssertEqual(minimize.accessibilityLabel(), "Minimize previews")
+            XCTAssertNil(minimize.toolTip)
+            let rest = minimize.frame
+            XCTAssertEqual(rest.width, 28)
+            XCTAssertFalse(minimize.showsHoverLabel)
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: .zero,
+                modifierFlags: [], timestamp: 1, windowNumber: panel.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 0, pressure: 0))
+            minimize.mouseEntered(with: event)
+            XCTAssertTrue(minimize.showsHoverLabel)
+            XCTAssertEqual(minimize.frame.width, 92)
+            XCTAssertEqual(right ? minimize.frame.maxX : minimize.frame.minX,
+                           right ? rest.maxX : rest.minX, "Show less grows away from the screen edge")
+            XCTAssertFalse(minimize.frame.intersects(clear.frame), "Show less covered Clear all")
+            try write(render(panel), name: "mini-preview-show-less-\(right ? "right" : "left").png")
+            minimize.mouseExited(with: event)
+            XCTAssertFalse(minimize.showsHoverLabel)
+            XCTAssertEqual(minimize.frame, rest)
+        }
+    }
+
+    func testOverflowCuesFollowHiddenEdgesAndScrollOneCardSlot() throws {
+        _ = NSApplication.shared
+        let ids = (0..<8).map { "capture-\($0)" }
+        let images = Dictionary(uniqueKeysWithValues: ids.map { ($0, solidImage(.systemPurple)) })
+        let bottom = fixturePanel(ids: ids, images: images)
+        defer { bottom.close() }
+        let view = bottom.previewView
+        // Bottom stacks open on the newest card; only older captures are hidden above.
+        XCTAssertEqual(view.visibleOverflowCueLabels, ["Show older captures"])
+        let start = view.scrollOffsetY
+        let older = try XCTUnwrap(view.subviewsRecursive.compactMap { $0 as? MiniPreviewOverflowCue }
+            .first { $0.above })
+        older.performClick(nil)
+        try waitUntil { abs(view.scrollOffsetY - (start - 184)) < 0.5 }
+        try waitUntil { view.visibleOverflowCueLabels == ["Show older captures", "Show newer captures"] }
+        try write(render(bottom), name: "mini-preview-stack-overflow-cues.png")
+        view.scrollStack(bySlots: -20)
+        try waitUntil { view.scrollOffsetY < 0.5 }
+        try waitUntil { view.visibleOverflowCueLabels == ["Show newer captures"] }
+
+        let top = fixturePanel(ids: ids, images: images, topAnchor: true)
+        defer { top.close() }
+        XCTAssertEqual(top.previewView.visibleOverflowCueLabels, ["Show older captures"],
+            "top stacks list newest first, so the lower cue reveals older captures")
+
+        let fits = fixturePanel(ids: ["a", "b"], images: ["a": solidImage(.red), "b": solidImage(.blue)])
+        defer { fits.close() }
+        XCTAssertEqual(fits.previewView.visibleOverflowCueLabels, [])
+        let collapsed = fixturePanel(ids: ids, images: images, collapsed: true)
+        defer { collapsed.close() }
+        XCTAssertEqual(collapsed.previewView.visibleOverflowCueLabels, [])
     }
 
     func testClosingRootWindowClosesOpenPanelAndRequestsTermination() {

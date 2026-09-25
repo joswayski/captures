@@ -13,8 +13,9 @@ use an explicit test file. Screenshots and scripted exercises without that flag
 use disposable settings. `--live` opts into the shared Rust New Capture controls
 plus direct full-display, region and window PNG, history, copy, export and delete
 flows; see the [live slice and limits](../README.md#live-display-capture-slice).
-Live mode also provides a native tray menu for New Capture, those three direct
-capture modes, History, Preferences, the output folder and Quit. Its persisted
+Live mode also provides a native tray menu with the shipping labels: New Capture…,
+Show Recording Controls, Screenshot Region/Window/Display, Capture History…,
+Open Save Location, Preferences and Quit Captures. Its persisted
 display, region, window, recording and New Capture shortcuts work globally except while
 capture is unavailable or a focused Preferences window is editing them. All seven
 shortcut rows can be edited from Preferences with
@@ -268,7 +269,8 @@ It requires a session D-Bus and a registered SNI host, such as Xfce Panel's buil
 systray. `trayer` or `tint2` alone is insufficient without an SNI bridge. If no host
 is available, or the watcher/last host disappears, the root is restored and close
 quits so the process cannot be stranded. Opening the output folder also requires
-`xdg-open` (provided by `xdg-utils`).
+`xdg-open` (provided by `xdg-utils`); Show in Folder first asks a session-bus
+`org.freedesktop.FileManager1` implementer to select the file.
 
 ## Implemented probes and deliberate gaps
 
