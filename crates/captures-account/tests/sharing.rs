@@ -109,7 +109,7 @@ impl Server {
                         .to_owned(),
                         "",
                     )
-                } else if line.starts_with("POST /api/assets HTTP/") {
+                } else if line.starts_with("PUT /api/asset-uploads/") {
                     state.create += 1;
                     if state.ambiguous_create {
                         continue;
@@ -393,7 +393,7 @@ fn upload_retries_expired_part_without_credentials_then_configures_without_reupl
 }
 
 #[test]
-fn ambiguous_create_is_not_retried_after_restart_and_missing_file_never_creates() {
+fn ambiguous_create_reuses_durable_key_after_restart_and_missing_file_never_creates() {
     let server = Server::new();
     server.state.lock().unwrap().ambiguous_create = true;
     let dir = tempfile::tempdir().unwrap();
@@ -427,9 +427,60 @@ fn ambiguous_create_is_not_retried_after_restart_and_missing_file_never_creates(
         Some(Error::CreateUncertain)
     );
     drop(flow);
+    let association = dir.path().join("native-share-associations.json");
+    let creating = fs::read(&association).unwrap();
+    server.state.lock().unwrap().ambiguous_create = false;
     let mut flow =
         SharingCoordinator::new(&mut account, AssociationStore::new(dir.path())).unwrap();
     assert!(matches!(flow.open("artifact1").unwrap(), Opened::Pending));
+    assert_eq!(server.state.lock().unwrap().create, 1); // Opening never retries.
+    flow.upload(
+        "artifact1",
+        &path,
+        "original.png",
+        "image/png",
+        cancelled(),
+        progress(),
+    )
+    .unwrap();
+    drop(flow);
+    // The same durable state remains if a process dies after receiving create
+    // but before saving the asset ID. Explicit retry must use that same key.
+    fs::write(&association, &creating).unwrap();
+    let mut flow =
+        SharingCoordinator::new(&mut account, AssociationStore::new(dir.path())).unwrap();
+    flow.upload(
+        "artifact1",
+        &path,
+        "original.png",
+        "image/png",
+        cancelled(),
+        progress(),
+    )
+    .unwrap();
+    drop(flow);
+    let state = server.state.lock().unwrap();
+    let creates: Vec<_> = state
+        .requests
+        .iter()
+        .filter(|(line, _, _)| line.starts_with("PUT /api/asset-uploads/"))
+        .collect();
+    assert_eq!(creates.len(), 3);
+    assert!(
+        creates
+            .iter()
+            .all(|(line, _, body)| line == &creates[0].0 && body == &creates[0].2)
+    );
+    drop(state);
+    // Pre-key checkpoint records cannot safely infer an identity or retry.
+    let mut legacy: serde_json::Value = serde_json::from_slice(&creating).unwrap();
+    legacy["accounts"]["owner1"]["artifact1"]
+        .as_object_mut()
+        .unwrap()
+        .remove("create_key");
+    fs::write(&association, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let mut flow =
+        SharingCoordinator::new(&mut account, AssociationStore::new(dir.path())).unwrap();
     assert_eq!(
         flow.upload(
             "artifact1",
@@ -442,7 +493,7 @@ fn ambiguous_create_is_not_retried_after_restart_and_missing_file_never_creates(
         .err(),
         Some(Error::CreateUncertain)
     );
-    assert_eq!(server.state.lock().unwrap().create, 1);
+    assert_eq!(server.state.lock().unwrap().create, 3);
 }
 
 #[test]

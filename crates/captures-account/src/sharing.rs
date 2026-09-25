@@ -38,10 +38,11 @@ pub enum Error {
     NotFound,
     Protocol,
     Storage,
-    /// Create may have committed without a response. Never repeat it blindly.
+    /// Create may have committed without a response. Explicit upload retry uses
+    /// its durable key; legacy unkeyed records require manual reconciliation.
     CreateUncertain,
-    /// Create returned an ID, but local persistence failed. Keep this ID for
-    /// explicit `recover_created` after fixing local storage.
+    /// Create returned an ID, but local persistence failed. Retry the keyed
+    /// upload or use `recover_created` after fixing local storage.
     StoreAfterCreate {
         asset_id: String,
         part_size: u64,
@@ -125,6 +126,9 @@ struct Record {
     content_type: String,
     byte_size: u64,
     sha256: String,
+    /// Missing only on legacy, non-idempotent creates, which cannot be retried.
+    #[serde(default)]
+    create_key: Option<String>,
     phase: Phase,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -196,6 +200,10 @@ impl AssociationStore {
         temp.flush().map_err(|_| Error::Storage)?;
         temp.as_file().sync_all().map_err(|_| Error::Storage)?;
         temp.persist(&self.path).map_err(|_| Error::Storage)?;
+        #[cfg(unix)]
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| Error::Storage)?;
         Ok(())
     }
 }
@@ -273,8 +281,8 @@ impl<'a, V: Vault> SharingCoordinator<'a, V> {
             .ok_or(Error::NotFound)
     }
 
-    /// Explicit upload. A create with an ambiguous outcome is durably blocked;
-    /// an acknowledged upload resumes from saved ETags, including after restart.
+    /// Explicit upload. Retry keyed creates after an ambiguous outcome using the
+    /// persisted key; acknowledged uploads resume from saved ETags on restart.
     pub fn upload(
         &mut self,
         artifact: &str,
@@ -309,16 +317,24 @@ impl<'a, V: Vault> SharingCoordinator<'a, V> {
                 content_type: content_type.to_owned(),
                 byte_size: size,
                 sha256: hash,
+                create_key: Some(uuid::Uuid::new_v4().to_string()),
                 phase: Phase::Creating,
             };
             if cancelled.load(Ordering::Relaxed) {
                 return Err(Error::Cancelled);
             }
             self.store.put(&user, artifact, record.clone())?;
+            record
+        };
+        if matches!(record.phase, Phase::Creating) {
+            let key = record.create_key.as_ref().ok_or(Error::CreateUncertain)?;
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
             let response = self
                 .account
                 .http
-                .post(self.account.url("api/assets"))
+                .put(self.account.url(&format!("api/asset-uploads/{key}")))
                 .header(AUTHORIZATION, self.bearer()?)
                 .json(&serde_json::json!({"name":name,"contentType":content_type,"byteSize":size}))
                 .send();
@@ -332,7 +348,6 @@ impl<'a, V: Vault> SharingCoordinator<'a, V> {
             };
             check_id(&created.id).map_err(|_| Error::CreateUncertain)?;
             validate_parts(size, created.part_size, created.part_count)?;
-            let mut record = record;
             record.phase = Phase::Uploading {
                 id: created.id.clone(),
                 part_size: created.part_size,
@@ -345,10 +360,6 @@ impl<'a, V: Vault> SharingCoordinator<'a, V> {
                     part_size: created.part_size,
                     part_count: created.part_count,
                 })?;
-            record
-        };
-        if matches!(record.phase, Phase::Creating) {
-            return Err(Error::CreateUncertain);
         }
         self.transfer(&user, artifact, file, &cancelled, &progress, &mut record)
     }

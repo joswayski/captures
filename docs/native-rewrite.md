@@ -870,7 +870,9 @@ native flow. Local capture remains signed-out and never uploads automatically.
   failure recovery. Never show a usable share link before upload completion and
   successful share configuration; configuration failure must not re-upload bytes.
   The unconnected shared coordinator streams bounded file parts, persists ETags,
-  and deliberately blocks ambiguous non-idempotent asset creation. Host launch,
+  and explicitly retries durable account-scoped creation keys after response
+  loss/restart (requires the keyed API endpoint on the accounts-sharing branch).
+  Legacy unkeyed creates remain blocked for manual reconciliation. Host launch,
   lifecycle, real object-store and physical-platform acceptance remain open.
 - [ ] Reopening manages the existing remote asset/share rather than duplicating
   the upload. Persist the local-artifact/remote-asset association. Show shared date,

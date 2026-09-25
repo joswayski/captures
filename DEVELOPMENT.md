@@ -45,12 +45,19 @@ ready state atomically. `configure_share` is a separate explicit operation; only
 its successful response supplies a usable share ID. `Patch::Keep` omits a field,
 `Patch::Clear` sends null and `Patch::Set` sends a value. `trash`/`restore` preserve
 the association; restore never revives an old share. A failed share configuration
-can be retried without re-upload. An ambiguous asset-create response is blocked
-durably, because the API has no idempotency key; do not reset the marker or create
-again without manual remote reconciliation. A confirmed create with a failed
-association write returns its ID for explicit `recover_created` after storage is
-repaired. The host must serialize access to the profile and retain its accepted
-upload worker after the preview closes. Only disposable loopback fixtures and
+can be retried without re-upload. Creation requires the account-scoped
+`PUT /api/asset-uploads/{UUID}` contract (a separate prerequisite on the
+accounts-sharing API branch). A random key is persisted before network access;
+an explicit retry after response loss or a process crash reuses that key and
+recovers the same asset. It never falls back to non-idempotent `POST /api/assets`.
+Legacy unkeyed Creating markers still require manual remote reconciliation.
+A confirmed create with a failed association write also returns its ID for
+`recover_created`; keyed records can instead retry after storage is repaired.
+Keep the profile: deleting its associations discards this recovery identity.
+Atomic replacement syncs the file and, on Unix, its directory; Windows sudden
+power-loss durability is not verified. The host must serialize access to the
+profile and retain its accepted upload worker after the preview closes.
+Only disposable loopback fixtures and
 fake vaults were exercised; no real SES/R2, physical vault, AppKit, Windows, X11
 or Wayland sharing UI has been exercised.
 

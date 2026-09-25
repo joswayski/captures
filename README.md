@@ -618,6 +618,8 @@ remains required regardless of accounts/backend or rewrite merge order; opening 
 preview never uploads automatically.
 Shared Rust has unconnected account and upload prerequisites for explicit email-code
 sign-in, native credential-vault sessions and original-byte multipart sharing.
+Explicit upload retry preserves a creation key across restart; it requires the
+keyed creation API prerequisite on the accounts-sharing branch.
 They do not add native sign-in/share controls, enable the account service, or make
 sharing available.
 Both hosts can copy the full-resolution edited image without saving a file or draft;
