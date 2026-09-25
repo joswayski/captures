@@ -23,6 +23,7 @@ serde_json = "1"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 captures-settings = { path = "../../../crates/captures-settings" }
+captures-session = { path = "../../../crates/captures-session" }
 captures-app = { path = "../../../crates/captures-app" }
 captures-capture = { path = "../../../crates/captures-capture" }
 captures-feedback = { path = "../../../crates/captures-feedback" }
@@ -42,7 +43,6 @@ x11rb = "0.13"
 tray-icon = { version = "0.25.1", default-features = false, features = ["ksni"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-captures-session = { path = "../../../crates/captures-session" }
 tray-icon = { version = "0.25.1", default-features = false }
 
 [profile.dev]

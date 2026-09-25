@@ -1048,8 +1048,15 @@ shared Rust pose expands rear-card spacing from 13 to 16 points in the correct
 direction for top and bottom anchors while leaving the front card and window
 fixed. Rear cards remain noninteractive; press/drag holds the fan open. Both
 hosts settle a 200 ms transition. AppKit follows the system Reduce Motion setting;
-wgpu supports explicit `--reduced-motion`, while automatic Windows/Linux motion
-preference detection remains open. Reduced motion switches immediately. AppKit
+wgpu supports explicit `--reduced-motion` and reads Windows client-area animation
+or the Linux Settings portal's standardized reduced-motion preference off the UI
+thread on live startup and workspace foreground return. Reads coalesce, never
+write settings, and retain the last known value if temporarily unavailable.
+Fixtures stay independent of the host preference. Linux desktops without that key
+use ordinary motion unless explicitly overridden. Changes while the workspace
+remains unfocused require returning to it; continuous OS change subscription and
+physical Windows/Linux accessibility acceptance remain open.
+Reduced motion switches immediately. AppKit
 uses native frame animation; wgpu repaints only while egui's transition is active.
 This slice intentionally connects translation only: the shipping 3D depth,
 rotation, scale, shading and per-card 16 ms stagger, plus external file drag,

@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
     parser.add_argument("--reduced-motion", action="store_true", help="Disable native preview motion")
+    parser.add_argument("--system-motion-only", action="store_true", help="Exercise desktop motion preference refresh")
     parser.add_argument("--lifecycle", action="store_true", help="Exercise a real Xfce SNI tray and background shortcuts")
     parser.add_argument("--shortcut-editing", action="store_true", help="Also exercise live Preferences recording and persistence")
     parser.add_argument("--login-item-only", action="store_true", help="Exercise explicit autostart and hidden launch recovery")
@@ -180,6 +181,68 @@ def main():
         background = output / "wallpaper.ppm"
         background.write_bytes(b"P6\n1280 900\n255\n" + wallpaper_crop(0, 0, 1280, 900))
         run("hsetroot", "-fill", str(background))
+
+        if args.system_motion_only:
+            class PortalSettings(dbus.service.Object):
+                value = 1
+                calls = 0
+
+                @dbus.service.method("org.freedesktop.portal.Settings", in_signature="as", out_signature="a{sa{sv}}")
+                def ReadAll(self, namespaces):
+                    assert list(namespaces) == ["org.freedesktop.appearance"]
+                    self.calls += 1
+                    return {"org.freedesktop.appearance": {} if self.value is None else {
+                        "reduced-motion": dbus.UInt32(self.value, variant_level=1)}}
+
+            portal_name = dbus.service.BusName("org.freedesktop.portal.Desktop", bus=bus, do_not_queue=True)
+            portal = PortalSettings(portal_name, "/org/freedesktop/portal/desktop")
+            settings = output / "motion-settings.json"
+            settings.write_text(json.dumps({"settings_schema_version": 5, "onboarding_completed": True,
+                                            "appearance": "dark", "theme": "mustard"}))
+            original = settings.read_bytes()
+            app = spawn("motion", [str(binary), "--live", "--settings-file", str(settings),
+                                   "--history-root", str(output / "history"), "--quit-after", "60"])
+            root = wait(lambda: windows("Captures"), "motion workspace")[0]
+
+            def motion_events():
+                events = []
+                for line in (output / "motion.stdout.log").read_text().splitlines():
+                    if line.startswith("{") and line.endswith("}"):
+                        value = json.loads(line)
+                        if value.get("event") == "motion-preference":
+                            events.append(value["detail"])
+                return events
+
+            wait(lambda: motion_events() and motion_events()[-1] == {"available": True, "reduced": True},
+                 "startup reads reduced motion")
+            focus = spawn("motion-focus", ["xmessage", "-title", "Motion focus", "Change desktop preference"])
+            other = wait(lambda: windows("Motion focus"), "external focus window")[0]
+            for reported, expected in [(0, False), (1, True), (None, True), (2, False)]:
+                run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other, "sleep", ".3")
+                portal.value = reported
+                count = len(motion_events())
+                run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
+                wait(lambda: len(motion_events()) > count and motion_events()[-1] == {
+                    "available": reported is not None, "reduced": expected}, "foreground motion refresh")
+                calls = portal.calls
+                time.sleep(.5)
+                assert portal.calls == calls, "idle motion preference must not poll"
+                assert settings.read_bytes() == original, "desktop preference read saved app settings"
+            shot(root, "motion-foreground")
+            run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
+            wait(lambda: app.poll() is not None, "motion workspace closes")
+            assert app.returncode == 0
+            focus.terminate()
+            calls = portal.calls
+            fixture = spawn("motion-fixture", [str(binary), "--scene", "idle", "--quit-after", "1"])
+            wait(lambda: fixture.poll() is not None, "isolated motion fixture closes")
+            assert fixture.returncode == 0
+            assert portal.calls == calls, "render fixtures must not read desktop motion preferences"
+            (output / "result.json").write_text(json.dumps({"passed": True, "checks": [
+                "startup", "foreground-toggle", "unavailable-retains", "unknown-no-preference",
+                "no-idle-query", "settings-unchanged", "fixture-isolation"]}, indent=2) + "\n")
+            print("PASS native system motion: startup, foreground, unavailable, unknown, no polling or writes")
+            return
 
         if args.lifecycle:
             # A real SNI host, not a fake watcher or an XEmbed-only tray. Keep

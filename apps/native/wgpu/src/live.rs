@@ -3771,15 +3771,17 @@ impl Live {
                                         .is_some_and(|point| rect.contains(point)))
                         })
                     });
-                    let fan = if reduced_motion {
-                        f32::from(fan_open)
-                    } else {
-                        ui.ctx().animate_bool_with_time(
-                            egui::Id::unique("mini-preview-hover-fan"),
-                            fan_open,
-                            tokens.number("dur-3") / 1000.,
-                        )
-                    };
+                    // Zero duration also updates the stored endpoint. Bypassing
+                    // the animator would revive a stale fan when motion returns.
+                    let fan = ui.ctx().animate_bool_with_time(
+                        egui::Id::unique("mini-preview-hover-fan"),
+                        fan_open,
+                        if reduced_motion {
+                            0.
+                        } else {
+                            tokens.number("dur-3") / 1000.
+                        },
+                    );
                     for card in &cards {
                         let y = egui::lerp(card.layout.y as f32..=card.hover_y as f32, fan);
                         let rect = egui::Rect::from_min_size(
@@ -5891,6 +5893,46 @@ mod tests {
         assert!(previews.cards.is_empty());
         assert_eq!(captures_app::list(root.path()).unwrap().len(), 1);
         assert!(artifact.image_path.exists());
+    }
+
+    #[test]
+    fn reduced_motion_snaps_stored_preview_animation_before_reenabling() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(true);
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        let settings = AppSettings::default();
+        let texture = ctx.load_texture(
+            "motion",
+            egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        for color in [[31, 59, 127, 255], [171, 23, 91, 255]] {
+            let artifact = preview_artifact(root.path(), color);
+            live.previews
+                .begin_capture(&settings, Some(preview_target()), 1)
+                .unwrap();
+            let (guard, _) = live.previews.start_artifact(&artifact).unwrap().unwrap();
+            live.previews
+                .cards
+                .get_mut(&guard.artifact_id)
+                .unwrap()
+                .texture = Some(texture.clone());
+            live.previews.mark_ready(&guard.artifact_id);
+        }
+        live.previews.stack.set_collapsed(true);
+        assert!(live.previews.is_visible());
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        ctx.begin_pass(Default::default());
+        let animation = egui::Id::unique("mini-preview-hover-fan");
+        assert_eq!(ctx.animate_bool_with_time(animation, true, 0.), 1.);
+        // While reduction is enabled the pointer left the card. Re-enabling
+        // motion must not resurrect the old open fan from the animation cache.
+        live.viewports(&ctx, &tokens, Ok(settings), true);
+        assert_eq!(ctx.animate_bool_with_time(animation, false, 0.2), 0.);
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        live.flush();
     }
 
     #[test]
