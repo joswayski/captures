@@ -236,7 +236,7 @@ async fn postgres_users_and_startup_regressions() {
             sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations WHERE success")
                 .fetch_one(&pool)
                 .await?;
-        assert_eq!(migrations, 4);
+        assert_eq!(migrations, 5);
         // An owner can also use the unqualified name for DDL, without changing
         // search_path. Roll back so the test leaves the migrated schema intact.
         let mut tx = pool.begin().await?;

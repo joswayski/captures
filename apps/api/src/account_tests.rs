@@ -45,6 +45,7 @@ struct Objects {
     complete_calls: AtomicUsize,
     fail_abort: AtomicBool,
     fail_head_once: AtomicBool,
+    fail_create_once: AtomicBool,
 }
 impl Objects {
     fn stage(&self, asset: &str, bytes: &[u8]) {
@@ -84,6 +85,9 @@ impl ObjectStore for Objects {
             .lock()
             .unwrap()
             .insert(id.clone(), (key.into(), Vec::new()));
+        if self.fail_create_once.swap(false, Ordering::SeqCst) {
+            return Err(());
+        }
         Ok(id)
     }
     async fn sign_part(
@@ -415,6 +419,158 @@ async fn postgres_otp_concurrency_expiry_and_sessions() {
             .await
             .status(),
         StatusCode::BAD_REQUEST
+    );
+    finish(admin, pool, &name).await;
+}
+
+#[tokio::test]
+#[ignore = "requires disposable local TEST_DATABASE_URL"]
+async fn postgres_upload_create_recovery() {
+    let (admin, pool, name) = database().await;
+    let mail = Arc::new(Mail::default());
+    let store = Arc::new(Objects::default());
+    let (app, _) = app(&pool, mail.clone(), store.clone());
+    let owner = login(&app, &mail, "owner@example.com").await;
+    let other = login(&app, &mail, "other@example.com").await;
+    let path = format!("/api/asset-uploads/{}", Uuid::new_v4());
+    let metadata = json!({"name":"original.png","contentType":"image/png","byteSize":7});
+    // Storage succeeds but its response is lost before the DB transaction can
+    // commit. Rollback leaves no asset; the orphan multipart needs bucket GC.
+    store.fail_create_once.store(true, Ordering::SeqCst);
+    assert_eq!(
+        call(
+            &app,
+            "PUT",
+            &path,
+            Some(&owner),
+            None,
+            Some(metadata.clone())
+        )
+        .await
+        .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let count: (i64,) = sqlx::query_as("SELECT count(*) FROM assets")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 0);
+    // Concurrent retry after rollback creates exactly one committed identity.
+    let (a, b) = tokio::join!(
+        call(
+            &app,
+            "PUT",
+            &path,
+            Some(&owner),
+            None,
+            Some(metadata.clone())
+        ),
+        call(
+            &app,
+            "PUT",
+            &path,
+            Some(&owner),
+            None,
+            Some(metadata.clone())
+        )
+    );
+    assert_eq!(a.status(), StatusCode::CREATED);
+    assert_eq!(b.status(), StatusCode::CREATED);
+    let a = body(a).await;
+    assert_eq!(a, body(b).await);
+    assert_eq!(store.created_keys.lock().unwrap().len(), 2); // orphan + committed
+    // Lose the successful HTTP response, reconstruct the router, then retry.
+    let (restarted, _) = self::app(&pool, mail.clone(), store.clone());
+    assert_eq!(
+        a,
+        body(
+            call(
+                &restarted,
+                "PUT",
+                &path,
+                Some(&owner),
+                None,
+                Some(metadata.clone())
+            )
+            .await
+        )
+        .await
+    );
+    assert_eq!(store.created_keys.lock().unwrap().len(), 2);
+    for changed in [
+        json!({"name":"different.png","contentType":"image/png","byteSize":7}),
+        json!({"name":"original.png","contentType":"image/gif","byteSize":7}),
+        json!({"name":"original.png","contentType":"image/png","byteSize":8}),
+    ] {
+        assert_eq!(
+            call(&app, "PUT", &path, Some(&owner), None, Some(changed))
+                .await
+                .status(),
+            StatusCode::CONFLICT
+        );
+    }
+    let other_asset = body(
+        call(
+            &app,
+            "PUT",
+            &path,
+            Some(&other),
+            None,
+            Some(metadata.clone()),
+        )
+        .await,
+    )
+    .await;
+    assert_ne!(a["id"], other_asset["id"]);
+    assert_eq!(store.created_keys.lock().unwrap().len(), 3);
+    // Ready replay is stable; cancelled or trashed keys are tombstones.
+    sqlx::query("UPDATE assets SET state='ready' WHERE external_id=$1")
+        .bind(a["id"].as_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        a,
+        body(
+            call(
+                &app,
+                "PUT",
+                &path,
+                Some(&owner),
+                None,
+                Some(metadata.clone())
+            )
+            .await
+        )
+        .await
+    );
+    for state in ["cancelled", "ready"] {
+        sqlx::query("UPDATE assets SET state=$2,deleted_at=now() WHERE external_id=$1")
+            .bind(a["id"].as_str().unwrap())
+            .bind(state)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            call(
+                &app,
+                "PUT",
+                &path,
+                Some(&owner),
+                None,
+                Some(metadata.clone())
+            )
+            .await
+            .status(),
+            StatusCode::GONE
+        );
+    }
+    assert_eq!(store.created_keys.lock().unwrap().len(), 3);
+    assert_eq!(
+        call(&app, "PUT", &path, None, None, Some(metadata))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
     );
     finish(admin, pool, &name).await;
 }
@@ -1367,6 +1523,10 @@ async fn postgres_forward_migration_preserves_legacy_assets_and_backfills_users(
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0005_upload_create_keys.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
     let (a, b) = tokio::join!(
         crate::backfill_user_external_ids(&pool),
         crate::backfill_user_external_ids(&pool)

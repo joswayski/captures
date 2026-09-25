@@ -294,6 +294,24 @@ SELECT * FROM users;
 Account HTTP access remains unavailable (503). Publishing or merging this PR does
 not reset a production database or deploy an image.
 
+## Recoverable upload creation
+
+Explicit native uploads use authenticated `PUT /api/asset-uploads/{UUID}` with
+the same `{name, contentType, byteSize}` body as `POST /api/assets`. Persist a
+random UUID before sending. Repeating the key under the same account returns
+201 and the original `{id, partSize, partCount}`, including pending assets which
+the gallery list does not expose. Metadata mismatch returns 409; a cancelled or
+trashed asset returns 410 without re-creation. Keys are scoped to the authenticated
+account, retained on asset tombstones, and never expire independently. Do not
+purge these rows while clients may retry. The existing browser POST is unchanged.
+
+PostgreSQL serializes keyed creation per account through commit. A crash before
+commit may leave an unreferenced incomplete multipart upload for the bucket's
+incomplete-upload lifecycle policy, but no committed duplicate asset. A crash
+or lost response after commit is recovered by retrying the same key. Deployment
+requires migration 0005; this change does not run production migrations or enable
+sharing. Native host controls and physical-platform verification remain separate.
+
 ## Build and test
 
 ```sh
