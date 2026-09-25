@@ -53,6 +53,31 @@ final class PreviewPolicyTests: XCTestCase {
         XCTAssertNil(NativePreviewLayout.geometry(monitor: monitor, count: 1, placement: "invalid"))
     }
 
+    func testDraggedPileStoresClampedVisibleEdgeAndSurvivesArrivalAndExpansion() throws {
+        let monitor = CapturesPreviewMonitor(work_x: -2400, work_y: 120,
+            work_width: 2400, work_height: 1500, full_x: -2400, full_y: 40,
+            full_width: 2400, full_height: 1660, scale_factor: 2)
+        for (placement, edge) in [("top_left", 250.0), ("bottom_right", 514.0)] {
+            let origin = try XCTUnwrap(NativePreviewLayout.movedOrigin(monitor: monitor, count: 2,
+                frameOrigin: NSPoint(x: -700, y: 250), placement: placement))
+            XCTAssertEqual(origin.x, -700); XCTAssertEqual(origin.edge, edge)
+            let compact = try XCTUnwrap(NativePreviewLayout.geometry(monitor: monitor, count: 3,
+                collapsed: true, origin: origin, placement: placement))
+            // Count changes the transparent padding, never the front-card top.
+            XCTAssertEqual(compact.y + (compact.height - 160) / 2, 302, accuracy: 0.0001)
+            let expanded = try XCTUnwrap(NativePreviewLayout.geometry(monitor: monitor, count: 2,
+                origin: origin, placement: placement))
+            XCTAssertEqual(expanded.x, -700)
+            XCTAssertEqual(expanded.y + (origin.anchor == 0 ? expanded.height : 0), edge)
+        }
+        let bottom = try XCTUnwrap(NativePreviewLayout.movedOrigin(monitor: monitor, count: 2,
+            frameOrigin: NSPoint(x: 9000, y: 9000), placement: "bottom_left"))
+        XCTAssertEqual(bottom.x, -340); XCTAssertEqual(bottom.edge, 798)
+        let top = try XCTUnwrap(NativePreviewLayout.movedOrigin(monitor: monitor, count: 2,
+            frameOrigin: NSPoint(x: -9000, y: -9000), placement: "top_right"))
+        XCTAssertEqual(top.x, -1200); XCTAssertEqual(top.edge, 72)
+    }
+
     func testVisibilityGenerationsDecodeCancellationAndSettingsThroughCABI() throws {
         let policy = NativePreviewPolicy()
         let first = try XCTUnwrap(policy.beginCapture())

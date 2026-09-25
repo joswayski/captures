@@ -67,6 +67,18 @@ checks are diagnostics; physical TCC/signature changes, OS microphone prompts,
 Windows presentation, accessibility and capture-time permission revocation/retry
 remain open. This slice does not close the onboarding acceptance gate.
 
+Both native hosts now connect pointer dragging on the collapsed preview front
+card, separately from click-to-expand. Desktop-coordinate tracking compensates
+for the native window moving under the pointer. Shared geometry clamps the pile
+to its capture display; the clamped session edge survives expansion, cancellation
+and new captures. Empty/disabled piles and changes to the preferred corner clear
+the custom position. Private-X11 interaction checks cover a minimized root,
+external-app focus, arrivals and reset; AppKit tests cover native pointer events
+and Retina/negative-origin geometry. Cross-display dragging, automatic anchor
+changes, native file drag, hover-fan/effects, physical Windows/macOS input and
+accessibility acceptance remain open; Wayland capture remains gated. This does
+not close the preview or layout/effects parity gates.
+
 The former History and recording/HUD/feedback stacks are integrated through
 [#583](https://github.com/joswayski/captures/pull/583),
 [#585](https://github.com/joswayski/captures/pull/585),

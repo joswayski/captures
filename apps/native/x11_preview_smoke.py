@@ -495,12 +495,44 @@ def main():
                     toggle()
                     wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 264, "two-card compact pile")
                     shot(preview, f"{prefix}-collapsed")
+                    before_drag = window_geometry(preview)
+                    start_x, start_y = int(before_drag["X"]), int(before_drag["Y"])
+                    dx = -780 if placement.endswith("right") else 160
+                    dy = 80 if placement.startswith("top") else -80
+                    other_app = spawn(f"{prefix}-drag-focus", ["xmessage", "-title", "Preview drag focus",
+                        "-geometry", "240x30+580+850", "Keep this app focused"])
+                    other = wait(lambda: windows("Preview drag focus"), "drag focus fixture")[0]
+                    run("xdotool", "windowminimize", root,
+                        "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                    run("xdotool", "mousemove", "--window", preview, "170", "132", "mousedown", "1")
+                    for step in range(1, 9):
+                        run("xdotool", "mousemove", str(start_x + 170 + dx * step // 8),
+                            str(start_y + 132 + dy * step // 8))
+                        time.sleep(.08)
+                    def moved_to_target():
+                        actual = window_geometry(preview)
+                        return (int(actual["X"]), int(actual["Y"])) == (start_x + dx, start_y + dy)
+                    wait(moved_to_target, "compact pile follows desktop pointer")
+                    time.sleep(.3)
+                    assert moved_to_target(), "stationary pointer drifted after native window movement"
+                    run("xdotool", "mouseup", "1")
+                    time.sleep(.2)
+                    assert int(window_geometry(preview)["HEIGHT"]) == 264, "drag expanded the pile"
+                    assert run("xdotool", "getwindowfocus").decode().strip() == other, "drag stole focus"
+                    assert not windows("Captures"), "drag restored hidden root"
+                    shot("root", f"{prefix}-dragged")
+                    other_app.terminate(); other_app.wait(timeout=5)
+                    run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
+                    time.sleep(.5)
                     third = capture((80, 90, 180, 100))
                     stack_entries.append(third)
                     preview = wait(lambda: windows(PREVIEW), "incoming capture retains pile")[0]
                     # Third card increases reserved peek padding: rounded
                     # 160 + 2 × (28 + 16 × 2 × 25.1 / 26) = 278 px.
                     wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 278, "incoming capture stays collapsed")
+                    after_arrival = window_geometry(preview)
+                    assert int(after_arrival["X"]) == start_x + dx, "arrival reset dragged x"
+                    assert abs(int(after_arrival["Y"]) + 59 - (start_y + dy + 52)) <= 1, "arrival moved front card"
                     begin()
                     run("xdotool", "key", "Escape")
                     preview = wait(lambda: windows(PREVIEW) and not windows(SELECTOR) and windows(PREVIEW),
@@ -508,6 +540,7 @@ def main():
                     assert int(window_geometry(preview)["HEIGHT"]) == 278
                     click(preview, 170, 132, activate=False)
                     wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 608, "front card expands all previews")
+                    assert int(window_geometry(preview)["X"]) == start_x + dx, "expansion reset dragged x"
 
                     if placement == "bottom_left":
                         # Overflow is not a membership cap. Reveal newest, then
@@ -534,6 +567,7 @@ def main():
                     capture((170, 190, 110, 80))
                     preview = wait(lambda: windows(PREVIEW), "later capture survives Clear all")[0]
                     wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 240, "new stack after Clear all")
+                    assert int(window_geometry(preview)["X"]) == expected_x, "empty stack did not reset placement"
                     print(f"PASS {placement} stack: per-card Copy/Dismiss, compact arrival/cancel/expand, nondestructive Clear all", flush=True)
             else:
                 time.sleep(1)
