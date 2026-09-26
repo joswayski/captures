@@ -97,20 +97,20 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertEqual(controller.drawOverlay.shape, shape)
                 XCTAssertTrue(rail[index].selected)
             }
-            try showOutput(in: controller.root)
+            try showGeometry(in: controller.root)
             XCTAssertEqual(rail.filter(\.selected).count, 0)
             XCTAssertTrue(rail.allSatisfy { $0.isEnabled && !$0.isHidden })
             rail[4].performClick(nil)
             try render(controller.root, name: "screenshot-editor-tool-rail-minimum-\(appearance)")
             worker.deferEncodes = true
-            try button("Copy image", in: controller.root).performClick(nil)
+            try copyButton(in: controller.root).performClick(nil)
             XCTAssertTrue(rail.allSatisfy { !$0.isEnabled })
             rail[5].performClick(nil)
             XCTAssertEqual(controller.drawOverlay.shape, .arrow)
             worker.completePendingEncode()
             XCTAssertTrue(rail.allSatisfy(\.isEnabled))
             worker.failEncode = true
-            try button("Copy image", in: controller.root).performClick(nil)
+            try copyButton(in: controller.root).performClick(nil)
             XCTAssertEqual(worker.encodes.count, 2)
             XCTAssertTrue(rail.allSatisfy(\.isEnabled))
             try render(controller.root, name: "screenshot-editor-tool-rail-error-\(appearance)")
@@ -199,7 +199,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(controller.drawOverlay.shape, .rectangle)
         }
         worker.deferEncodes = true
-        try button("Copy image", in: controller.root).performClick(nil)
+        try copyButton(in: controller.root).performClick(nil)
         XCTAssertTrue(controller.state.busy)
         XCTAssertTrue(controller.window.performKeyEquivalent(with: pen))
         XCTAssertEqual(controller.drawOverlay.shape, .rectangle)
@@ -386,132 +386,169 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(NativeEditorViewport.sliderPosition(percent: .infinity))
     }
 
-    func testReplaceOriginalRequiresConfirmationAndUsesImmutableRequest() throws {
+    func testSaveOverwritesSavedOriginalByDefaultWithoutConfirmation() throws {
         _ = NSApplication.shared
-        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", originalExportPath: "/exports/original.png"))
-        var confirmation: ((Bool) -> Void)?
-        var confirmedPath: String?
-        var replaced: [String] = []
+        let folder = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let original = folder.appendingPathComponent("Original shot.png")
+        try Data([1]).write(to: original)
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true,
+                                                              originalExportPath: original.path))
+            worker.exportSaveResult = .success(EditorExportSaved(path: original.path, artifactID: "shot",
+                sizeBytes: 321, warning: nil, notice: "Saved changes to the original"))
+            var replaced: [String] = [], copies = 0
+            let controller = ScreenshotEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker,
+                didSaveCopy: { copies += 1 }, didReplaceOriginal: { replaced.append($0) })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot", mode: "window"), historyRoot: "/native/History",
+                               outputDirectory: "/exports")
+            XCTAssertEqual(try field("Saved filename", in: controller.root).stringValue, "Original shot")
+            XCTAssertEqual(try field("Save location", in: controller.root).stringValue, folder.path)
+            let newFile = try saveAsNewSwitch(in: controller.root)
+            XCTAssertFalse(newFile.isHidden); XCTAssertEqual(newFile.state, .off)
+            XCTAssertTrue(labels(in: controller.root).contains(
+                "Save keeps original quality as PNG and overwrites the original."))
+            XCTAssertEqual(try popup("Format", in: controller.root).titleOfSelectedItem, ".png")
+            try render(controller.root, name: "screenshot-editor-save-overwrite-\(appearance)")
+            try button("Save", in: controller.root).performClick(nil)
+            XCTAssertNil(controller.window.attachedSheet,
+                         "like the shipping editor, Save overwrites without a second step")
+            let request = try XCTUnwrap(worker.exportSaves.last)
+            let plan = try XCTUnwrap(request["plan"] as? [String: Any])
+            XCTAssertEqual(plan["kind"] as? String, "overwrite")
+            XCTAssertEqual(plan["artifact_id"] as? String, "shot")
+            XCTAssertEqual(plan["path"] as? String, original.path)
+            XCTAssertEqual(request["history_root"] as? String, "/native/History")
+            XCTAssertEqual(request["mode"] as? String, "window")
+            XCTAssertEqual((request["options"] as? [String: Any])?["format"] as? String, "png")
+            XCTAssertEqual(replaced, ["shot"]); XCTAssertEqual(copies, 0)
+            XCTAssertTrue(labels(in: controller.root).contains("Saved changes to the original"))
+            let reveal = try button("Show in Folder", in: controller.root)
+            XCTAssertFalse(reveal.isHidden)
+            XCTAssertEqual(controller.lastSavedPath, original.path)
+            XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true, "saving never changes the draft")
+            XCTAssertTrue(worker.saves.isEmpty && worker.originalSaves.isEmpty)
+            try render(controller.root, name: "screenshot-editor-save-overwrite-saved-\(appearance)")
+        }
+    }
+
+    func testSaveAsNewFileSwitchRenameFolderAndFormatFollowTheSharedModel() throws {
+        _ = NSApplication.shared
+        let folder = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let original = folder.appendingPathComponent("Shot.png")
+        try Data([1]).write(to: original)
+        let copyURL = folder.appendingPathComponent("Shot-edited.png")
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, originalExportPath: original.path))
+        var replaced: [String] = [], copies = 0
+        var revealed: [URL] = []
         let controller = ScreenshotEditorController(
             tokens: Tokens.variants["light-mustard"]!, worker: worker,
-            didReplaceOriginal: { replaced.append($0) },
-            confirmReplaceOriginal: { _, path, completion in
-                confirmedPath = path; confirmation = completion
-            })
+            didSaveCopy: { copies += 1 }, didReplaceOriginal: { replaced.append($0) },
+            revealFiles: { revealed = $0 })
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showOutput(in: controller.root)
-        let replace = try button("Replace original…", in: controller.root)
-        replace.scrollToVisible(replace.bounds)
-        try render(controller.root, name: "screenshot-editor-replace-original-light")
-        replace.performClick(nil)
-        XCTAssertEqual(confirmedPath, "/exports/original.png")
-        XCTAssertTrue(worker.originalSaves.isEmpty)
-        XCTAssertFalse(controller.state.busy)
-        XCTAssertFalse(replace.isEnabled, "a second confirmation must not overlap")
+        let filename = try field("Saved filename", in: controller.root)
+        let newFile = try saveAsNewSwitch(in: controller.root)
+        newFile.state = .on; _ = newFile.sendAction(newFile.action, to: newFile.target)
+        XCTAssertEqual(filename.stringValue, "Shot-edited", "the switch suggests a name beside the source")
+        XCTAssertTrue(labels(in: controller.root).contains(
+            "Save writes a new PNG at original quality and leaves the original untouched."))
+        // The published copy exists before the shared model adopts it as the next target.
+        try Data([2]).write(to: copyURL)
+        worker.exportSaveResult = .success(EditorExportSaved(path: copyURL.path, artifactID: "copy-id",
+            sizeBytes: 9, warning: nil, notice: "Saved \(copyURL.path)"))
+        try button("Save", in: controller.root).performClick(nil)
+        var plan = try XCTUnwrap(worker.exportSaves.last?["plan"] as? [String: Any])
+        XCTAssertEqual(plan["kind"] as? String, "new_file")
+        XCTAssertEqual(plan["path"] as? String, copyURL.path)
+        XCTAssertEqual(copies, 1); XCTAssertTrue(replaced.isEmpty)
+        XCTAssertEqual(newFile.state, .off, "the saved copy becomes the file Save overwrites")
+        XCTAssertEqual(filename.stringValue, "Shot-edited")
+        try button("Show in Folder", in: controller.root).performClick(nil)
+        XCTAssertEqual(revealed.map(\.path), [copyURL.path])
+        worker.exportSaveResult = .success(EditorExportSaved(path: copyURL.path, artifactID: "copy-id",
+            sizeBytes: 9, warning: nil, notice: "Saved changes to the original"))
+        try button("Save", in: controller.root).performClick(nil)
+        plan = try XCTUnwrap(worker.exportSaves.last?["plan"] as? [String: Any])
+        XCTAssertEqual(plan["kind"] as? String, "overwrite")
+        XCTAssertEqual(plan["artifact_id"] as? String, "copy-id")
+        XCTAssertEqual(replaced, ["copy-id"])
 
-        confirmation?(false)
-        XCTAssertTrue(worker.originalSaves.isEmpty)
-        XCTAssertFalse(controller.state.busy)
-        replace.performClick(nil)
-        // Simulate a late control callback while the native sheet is open.
-        (try field("Output filename", in: controller.root)).stringValue = "different.webp"
-        let format = try popup("Output format", in: controller.root)
-        format.selectItem(withTitle: "WebP")
-        _ = format.sendAction(format.action, to: format.target)
-        confirmation?(true)
-        XCTAssertEqual(worker.originalSaves.count, 1)
-        XCTAssertEqual(worker.originalSaves[0]["destination"] as? String, "/exports/original.png")
-        XCTAssertEqual((worker.originalSaves[0]["options"] as? [String: Any])?["format"] as? String, "png")
-        XCTAssertEqual(replaced, ["shot"])
+        filename.stringValue = "Renamed"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: filename))
+        XCTAssertEqual(newFile.state, .on, "a different filename turns on Save as new file")
+        XCTAssertTrue(try button("Show in Folder", in: controller.root).isHidden,
+                      "a different target is no longer the saved file")
+        let format = try popup("Format", in: controller.root)
+        format.selectItem(withTitle: ".webp"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertTrue(newFile.isHidden, "a format change always saves a copy")
+        try button("Save", in: controller.root).performClick(nil)
+        plan = try XCTUnwrap(worker.exportSaves.last?["plan"] as? [String: Any])
+        XCTAssertEqual(plan["kind"] as? String, "new_file")
+        XCTAssertEqual(plan["path"] as? String, folder.appendingPathComponent("Renamed.webp").path)
+        XCTAssertEqual((worker.exportSaves.last?["options"] as? [String: Any])?["format"] as? String, "webp")
     }
 
-    func testReplaceOriginalResultScopeAndStaleConfirmation() throws {
+    func testSaveFailuresAndHistoryWarningsStayRecoverableInTheExportBar() throws {
         _ = NSApplication.shared
-        let worker = FakeEditorWorker(snapshot: snapshot(id: "first", originalExportPath: "/exports/first.png"))
-        var confirmation: ((Bool) -> Void)?
-        var errors: [String] = [], replaced: [String] = []
-        let controller = ScreenshotEditorController(
-            tokens: Tokens.variants["dark-mustard"]!, worker: worker,
-            reportError: { errors.append($0) }, didReplaceOriginal: { replaced.append($0) },
-            confirmReplaceOriginal: { _, _, completion in confirmation = completion })
-        defer { controller.window.orderOut(nil) }
-        controller.present(artifact: artifact(id: "first"), historyRoot: "/native/History")
-        try showOutput(in: controller.root)
-        try button("Replace original…", in: controller.root).performClick(nil)
-        worker.snapshot = snapshot(id: "second", originalExportPath: "/exports/second.png")
-        controller.present(artifact: artifact(id: "second"), historyRoot: "/native/History")
-        confirmation?(true)
-        XCTAssertTrue(worker.originalSaves.isEmpty)
-        XCTAssertTrue(errors.last?.contains("changed before replacement") == true)
+        let folder = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let original = folder.appendingPathComponent("Shot.png")
+        try Data([1]).write(to: original)
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true,
+                                                              originalExportPath: original.path))
+            var errors: [String] = [], replaced: [String] = []
+            let controller = ScreenshotEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker,
+                reportError: { errors.append($0) }, didReplaceOriginal: { replaced.append($0) })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            worker.exportSaveResult = .failure(AppBridgeError.backend(
+                "The original screenshot History entry changed; reopen the editor before replacing it."))
+            try button("Save", in: controller.root).performClick(nil)
+            XCTAssertFalse(controller.state.busy); XCTAssertTrue(controller.window.isVisible)
+            XCTAssertTrue(errors.last?.contains("History entry changed") == true)
+            XCTAssertTrue(labels(in: controller.root).contains { $0.contains("History entry changed") })
+            XCTAssertTrue(replaced.isEmpty, "failed publication must not notify")
+            XCTAssertTrue(try button("Show in Folder", in: controller.root).isHidden)
+            try render(controller.root, name: "screenshot-editor-save-error-\(appearance)")
 
-        try button("Preview output", in: controller.root).performClick(nil)
-        let outputMode = try segmented("Output preview image", in: controller.root)
-        let snapshotBeforeSave = controller.state.snapshot
-        worker.saveOriginalResult = .success(.savedWithoutHistory(path: "/exports/second.png", warning: "database locked"))
-        try button("Replace original…", in: controller.root).performClick(nil)
-        confirmation?(true)
-        XCTAssertEqual(controller.state.snapshot, snapshotBeforeSave)
-        XCTAssertTrue(outputMode.isEnabled)
-        XCTAssertEqual(outputMode.selectedSegment, 1)
-        XCTAssertEqual(replaced, ["second"], "partial publication still notifies only the replaced artifact")
-        XCTAssertTrue(errors.last?.contains("couldn’t update History: database locked") == true)
-        let replace = try button("Replace original…", in: controller.root)
-        replace.scrollToVisible(replace.bounds)
-        try render(controller.root, name: "screenshot-editor-replace-original-history-error-dark")
-
-        worker.saveOriginalResult = .failure(AppBridgeError.backend("denied"))
-        try button("Replace original…", in: controller.root).performClick(nil)
-        confirmation?(true)
-        XCTAssertEqual(replaced, ["second"], "failed publication must not notify")
-        XCTAssertTrue(errors.last?.contains("Couldn’t replace original: denied") == true)
+            worker.exportSaveResult = .success(EditorExportSaved(path: original.path, artifactID: nil,
+                sizeBytes: nil, warning: "database locked",
+                notice: "Saved \(original.path). History was not updated: database locked"))
+            try button("Save", in: controller.root).performClick(nil)
+            XCTAssertEqual(replaced, ["shot"], "partial publication still notifies the replaced artifact")
+            XCTAssertTrue(errors.last?.contains("couldn’t update History: database locked") == true)
+            XCTAssertTrue(labels(in: controller.root).contains { $0.contains("History was not updated") })
+            XCTAssertFalse(try button("Show in Folder", in: controller.root).isHidden)
+            try render(controller.root, name: "screenshot-editor-save-history-warning-\(appearance)")
+        }
     }
 
-    func testReplaceOriginalActionOnlyAppearsForSavedOriginal() throws {
+    func testMissingOriginalAndInvalidFilenamesNeverOverwrite() throws {
         _ = NSApplication.shared
-        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", originalExportPath: "/missing/original.png"))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showOutput(in: controller.root)
-        XCTAssertTrue(try button("Replace original…", in: controller.root).isHidden)
-        try render(controller.root, name: "screenshot-editor-no-original-minimum-light")
-    }
-
-    func testReplaceOriginalNativeSheetHasExplicitCancelAndTarget() throws {
-        _ = NSApplication.shared
-        for appearance in ["light", "dark"] {
-            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", originalExportPath: "/exports/My capture.png"))
-            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
-            defer { controller.window.orderOut(nil) }
-            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-            try showOutput(in: controller.root)
-            try button("Replace original…", in: controller.root).performClick(nil)
-            let sheet = try XCTUnwrap(controller.window.attachedSheet)
-            settle(sheet)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-            let content = try XCTUnwrap(sheet.contentView)
-            let buttons = descendants(in: content).compactMap { $0 as? NSButton }
-            XCTAssertTrue(buttons.contains { $0.title == "Replace" })
-            XCTAssertTrue(buttons.contains { $0.title == "Cancel" })
-            XCTAssertTrue(worker.originalSaves.isEmpty)
-            if let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
-                // NSAlert uses WindowServer-composited material and controls;
-                // cacheDisplay produces blank/incomplete images for its content view.
-                let url = URL(fileURLWithPath: directory)
-                    .appendingPathComponent("screenshot-editor-replace-confirm-\(appearance).png")
-                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                        withIntermediateDirectories: true)
-                let capture = Process()
-                capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                capture.arguments = ["-x", "-o", "-l", String(sheet.windowNumber), url.path]
-                try capture.run(); capture.waitUntilExit()
-                XCTAssertEqual(capture.terminationStatus, 0, "Native sheet capture must be composited")
-            }
-            controller.window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
-            sheet.orderOut(nil)
-            XCTAssertTrue(worker.originalSaves.isEmpty)
-        }
+        XCTAssertTrue(try saveAsNewSwitch(in: controller.root).isHidden)
+        XCTAssertTrue(labels(in: controller.root).contains(
+            "The original was deleted. You can still copy or save this edit."))
+        try button("Save", in: controller.root).performClick(nil)
+        let plan = try XCTUnwrap(worker.exportSaves.last?["plan"] as? [String: Any])
+        XCTAssertEqual(plan["kind"] as? String, "new_file")
+        let filename = try field("Saved filename", in: controller.root)
+        filename.stringValue = "bad/name"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: filename))
+        XCTAssertFalse(try button("Save", in: controller.root).isEnabled)
+        XCTAssertTrue(labels(in: controller.root).contains(
+            "Enter a filename without folders or reserved characters."))
+        XCTAssertEqual(worker.exportSaves.count, 1)
+        try render(controller.root, name: "screenshot-editor-missing-original-minimum-light")
     }
 
     func testViewportBridgeKeepsAsymmetricAnchorAfterPanAndRejectsInvalidInput() throws {
@@ -602,33 +639,53 @@ final class ScreenshotEditorTests: XCTestCase {
             let inspector = try XCTUnwrap(descendants(in: controller.root)
                 .first { $0.accessibilityLabel() == "Geometry controls" })
             let undo = try button("Undo", in: controller.root)
+            // The export bar adds 80pt below the historical 1000×700 layout,
+            // but a display whose visible frame is shorter keeps the whole
+            // window, export bar included, on screen.
+            let visible = try XCTUnwrap((controller.window.screen ?? NSScreen.main)?.visibleFrame)
+            let defaultHeight = min(780, controller.window.contentRect(forFrameRect: visible).height)
+            XCTAssertEqual(controller.root.bounds.width, 1000)
+            XCTAssertEqual(controller.root.bounds.height, defaultHeight, accuracy: 1)
+            let bar = try XCTUnwrap(descendants(in: controller.root).first { $0.accessibilityLabel() == "Export bar" })
+            XCTAssertEqual(bar.frame.maxY, controller.root.bounds.height)
+            XCTAssertEqual(bar.frame.height, 80)
             // Exercise both axes without exceeding the CI display's height.
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            waitUntil { input.bounds.size == NSSize(width: 300, height: 318) }
+            waitUntil { input.bounds.size == NSSize(width: 300, height: 238) }
             controller.window.setContentSize(NSSize(width: 1200, height: 600))
             controller.root.layoutSubtreeIfNeeded()
-            waitUntil { controller.presentedImageRect == NSRect(x: 50, y: 27, width: 640, height: 360) }
-            XCTAssertEqual(input.bounds.size, NSSize(width: 740, height: 414))
+            // 740×334 is shorter than the 640×360 screenshot: Fit scales it
+            // by 334/360 and centres it horizontally.
+            waitUntil { input.bounds.size == NSSize(width: 740, height: 334)
+                && abs(controller.presentedImageRect.height - 334) < 1e-7 }
+            XCTAssertEqual(input.bounds.size, NSSize(width: 740, height: 334))
             XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1200, height: 600))
             XCTAssertEqual(section.frame.minX, 888)
-            XCTAssertEqual(inspector.frame, NSRect(x: 888, y: 66, width: 272, height: 246))
-            XCTAssertEqual(undo.frame.origin, NSPoint(x: 888, y: 326))
-            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 50, y: 27, width: 640, height: 360))
+            XCTAssertEqual(inspector.frame, NSRect(x: 888, y: 66, width: 272, height: 230))
+            XCTAssertEqual(undo.frame.origin, NSPoint(x: 888, y: 310))
+            let fitWidth: CGFloat = 640 * 334 / 360
+            XCTAssertEqual(controller.presentedImageRect.minX, (740 - fitWidth) / 2, accuracy: 1e-7)
+            XCTAssertEqual(controller.presentedImageRect.minY, 0, accuracy: 1e-7)
+            XCTAssertEqual(controller.presentedImageRect.width, fitWidth, accuracy: 1e-7)
+            XCTAssertEqual(controller.presentedImageRect.height, 334, accuracy: 1e-7)
+            XCTAssertEqual(bar.frame, NSRect(x: 0, y: 520, width: 1200, height: 80))
             for control in descendants(in: controller.root) where
                 ["Canvas zoom", "Canvas zoom preset", "Edited canvas dimensions", "Screenshot editor status"]
                     .contains(control.accessibilityLabel() ?? "") {
-                XCTAssertTrue(controller.root.bounds.contains(control.convert(control.bounds, to: controller.root)))
+                let frame = control.convert(control.bounds, to: controller.root)
+                XCTAssertTrue(controller.root.bounds.contains(frame))
+                XCTAssertFalse(frame.intersects(bar.frame), "\(control) stays above the export bar")
             }
             try render(controller.root, name: "screenshot-editor-resized-fit-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             controller.root.layoutSubtreeIfNeeded()
             waitUntil { controller.presentedImageRect.width == 300 }
-            XCTAssertEqual(input.bounds.size, NSSize(width: 300, height: 318))
+            XCTAssertEqual(input.bounds.size, NSSize(width: 300, height: 238))
             XCTAssertEqual(section.frame.minX, 448)
-            XCTAssertEqual(inspector.frame, NSRect(x: 448, y: 66, width: 272, height: 186))
-            XCTAssertEqual(undo.frame.origin, NSPoint(x: 448, y: 266))
+            XCTAssertEqual(inspector.frame, NSRect(x: 448, y: 66, width: 272, height: 170))
+            XCTAssertEqual(undo.frame.origin, NSPoint(x: 448, y: 250))
             XCTAssertEqual(controller.presentedImageRect.minX, 0, accuracy: 1e-7)
-            XCTAssertEqual(controller.presentedImageRect.minY, 74.625, accuracy: 1e-7)
+            XCTAssertEqual(controller.presentedImageRect.minY, 34.625, accuracy: 1e-7)
             XCTAssertEqual(controller.presentedImageRect.width, 300, accuracy: 1e-7)
             XCTAssertEqual(controller.presentedImageRect.height, 168.75, accuracy: 1e-7)
             try render(controller.root, name: "screenshot-editor-resized-minimum-\(appearance)")
@@ -650,23 +707,34 @@ final class ScreenshotEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History",
                                outputDirectory: "/native/Exports")
-            let copy = try button("Copy image", in: controller.root)
-            let save = try button("Save new copy", in: controller.root)
+            let copy = try copyButton(in: controller.root)
+            let save = try button("Save", in: controller.root)
+            let disclosure = try exportDisclosure(in: controller.root)
+            let bar = try XCTUnwrap(save.superview)
+            XCTAssertEqual(bar.accessibilityLabel(), "Export bar")
+            XCTAssertTrue(bar.superview === controller.root)
+            XCTAssertTrue(try saveAsNewSwitch(in: controller.root).isHidden, "a first save always writes a new file")
             let sections = try segmented("Editor section", in: controller.root)
+            XCTAssertEqual(sections.segmentCount, 3)
             for size in [NSSize(width: 1200, height: 600), NSSize(width: 760, height: 540)] {
                 controller.window.setContentSize(size)
                 controller.root.layoutSubtreeIfNeeded()
-                XCTAssertEqual(copy.frame, NSRect(x: size.width - 312, y: size.height - 70, width: 100, height: 34))
-                XCTAssertEqual(save.frame, NSRect(x: size.width - 192, y: size.height - 70, width: 152, height: 34))
-                for index in 0..<4 {
+                let widths = ScreenshotEditorController.exportWidths(size.width)
+                XCTAssertEqual(bar.frame, NSRect(x: 0, y: size.height - 80, width: size.width, height: 80))
+                XCTAssertEqual(disclosure.frame, NSRect(x: 16, y: 32, width: widths.disclosure, height: 36))
+                XCTAssertEqual(copy.frame, NSRect(x: 16 + widths.disclosure + 8 + widths.filename + 8 + 72 + 8,
+                                                  y: 33, width: 96, height: 34))
+                XCTAssertEqual(save.frame, NSRect(x: size.width - 112, y: 33, width: 96, height: 34))
+                XCTAssertLessThan(copy.frame.maxX, save.frame.minX - 140, "room for the new-file switch")
+                for index in 0..<3 {
                     sections.selectedSegment = index
                     _ = sections.sendAction(sections.action, to: sections.target)
-                    for action in [copy, save] {
-                        XCTAssertTrue(action.superview === controller.root)
+                    for action in [copy, save, disclosure] {
+                        XCTAssertTrue(action.superview === bar)
                         XCTAssertNil(action.enclosingScrollView)
                         XCTAssertFalse(action.isHiddenOrHasHiddenAncestor)
                         XCTAssertTrue(action.isEnabled)
-                        XCTAssertTrue(controller.root.bounds.contains(action.frame))
+                        XCTAssertTrue(bar.bounds.contains(action.frame))
                     }
                 }
             }
@@ -675,12 +743,63 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(controller.state.busy)
             XCTAssertFalse(copy.isEnabled); XCTAssertFalse(save.isEnabled)
             save.performClick(nil)
-            XCTAssertTrue(worker.saves.isEmpty)
-            try render(controller.root, name: "screenshot-editor-pinned-export-pending-\(appearance)")
+            XCTAssertTrue(worker.exportSaves.isEmpty)
+            try render(controller.root, name: "screenshot-editor-export-bar-pending-\(appearance)")
             worker.completePendingEncode()
             XCTAssertEqual(copies, 1)
+            XCTAssertEqual(copy.title, "✓ Copied"); XCTAssertEqual(copy.accessibilityLabel(), "Copied")
             XCTAssertTrue(copy.isEnabled); XCTAssertTrue(save.isEnabled)
+            try render(controller.root, name: "screenshot-editor-export-bar-copied-\(appearance)")
+            waitUntil(timeout: ScreenshotEditorController.exportConfirmationDuration + 2) {
+                copy.title == "Copy image"
+            }
             XCTAssertTrue(worker.requests.isEmpty)
+        }
+    }
+
+    func testExportSettingsDisclosureSummaryAndDebouncedEstimate() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: 1920, height: 1080))
+            worker.estimateResult = .success(EditorEstimate(bytes: 240_000, baselineBytes: 300_000))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                                                         worker: worker)
+            defer { controller.window.orderOut(nil) }
+            var fixture = artifact(id: "shot")
+            fixture = CaptureArtifact(["entry": [
+                "id": "shot", "kind": "screenshot", "width": 1920, "height": 1080,
+                "created_at": "2026-09-20T00:00:00Z", "mode": "region", "size_bytes": 300_000,
+            ], "image_path": fixture.imagePath, "preview_path": fixture.previewPath])!
+            controller.present(artifact: fixture, historyRoot: "/native/History")
+            let summary = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSTextField }
+                .first { $0.accessibilityLabel() == "Export summary" })
+            waitUntil { summary.stringValue == "PNG · 1920 × 1080 · ≈ 240 KB" }
+            XCTAssertEqual(worker.estimates.count, 1, "one debounced estimate, not one per update")
+            let request = try XCTUnwrap(worker.estimates.last)
+            XCTAssertEqual(request["original_bytes"] as? UInt64, 300_000)
+            XCTAssertEqual((request["options"] as? [String: Any])?["format"] as? String, "png")
+            XCTAssertTrue(worker.encodes.isEmpty, "estimates never occupy the session's encode path")
+            let panel = try XCTUnwrap(descendants(in: controller.root).first {
+                !($0 is CaptureButton) && $0.accessibilityLabel() == "Export settings" })
+            XCTAssertTrue(panel.isHidden)
+            try showOutput(in: controller.root)
+            XCTAssertFalse(panel.isHidden)
+            XCTAssertTrue(controller.exportSettingsOpen)
+            XCTAssertEqual(controller.exportBarHeight, 208)
+            XCTAssertTrue(labels(in: controller.root).contains("≈ 240 KB"))
+            XCTAssertTrue(labels(in: controller.root).contains("−20%"))
+            XCTAssertTrue(labels(in: controller.root).contains("1,920 × 1,080")
+                || labels(in: controller.root).contains("1920 × 1080"))
+            try render(controller.root, name: "screenshot-editor-export-settings-\(appearance)")
+            let size = try popup("Output size", in: controller.root)
+            size.selectItem(withTitle: "50%"); _ = size.sendAction(size.action, to: size.target)
+            waitUntil { worker.estimates.count == 2 }
+            XCTAssertEqual(((worker.estimates.last?["options"] as? [String: Any])?["size"] as? [String: Any])?["percent"] as? Int, 50)
+            waitUntil { summary.stringValue == "PNG · 960 × 540 · ≈ 240 KB" }
+            try exportDisclosure(in: controller.root).performClick(nil)
+            XCTAssertTrue(panel.isHidden)
+            XCTAssertEqual(controller.exportBarHeight, 80)
+            XCTAssertTrue(worker.requests.isEmpty && worker.exportSaves.isEmpty)
         }
     }
 
@@ -716,7 +835,8 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.drawOverlay.end(at: NSPoint(x: 260, y: 220))
         XCTAssertEqual(controller.viewport, viewport)
         XCTAssertEqual(controller.presentedImageRect.midX, 370 + CGFloat(viewport.panX), accuracy: 1e-7)
-        XCTAssertEqual(controller.presentedImageRect.midY, 207 + CGFloat(viewport.panY), accuracy: 1e-7)
+        // 1200×600 leaves a 740×334 viewport above the 80pt export bar.
+        XCTAssertEqual(controller.presentedImageRect.midY, 167 + CGFloat(viewport.panY), accuracy: 1e-7)
         let point = NSPoint(x: 160, y: 180)
         let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
             location: controller.drawOverlay.convert(point, to: nil), modifierFlags: [.command],
@@ -724,7 +844,7 @@ final class ScreenshotEditorTests: XCTestCase {
             eventNumber: 0, clickCount: 1, pressure: 1))
         controller.drawOverlay.mouseDown(with: down)
         XCTAssertTrue(controller.drawOverlay.isViewportPanning)
-        controller.window.setContentSize(NSSize(width: 1000, height: 700))
+        controller.window.setContentSize(NSSize(width: 1000, height: 600))
         waitUntil { !controller.drawOverlay.isViewportPanning }
         XCTAssertEqual(controller.viewport, viewport)
         XCTAssertEqual(controller.state.snapshot, original)
@@ -752,15 +872,15 @@ final class ScreenshotEditorTests: XCTestCase {
                 controller.window.setContentSize(NSSize(width: width, height: 540))
                 controller.root.layoutSubtreeIfNeeded()
                 waitUntil { input.bounds.width == width - 460 }
-                XCTAssertEqual(zoom.frame.origin.y, width < 1000 ? 454 : 490)
-                XCTAssertEqual(dimensions.frame.origin, NSPoint(x: width < 1000 ? 24 : 440, y: 494))
-                XCTAssertEqual(input.bounds.height, width < 1000 ? 318 : 354)
+                XCTAssertEqual(zoom.frame.origin.y, width < 1000 ? 374 : 410)
+                XCTAssertEqual(dimensions.frame.origin, NSPoint(x: width < 1000 ? 24 : 440, y: 414))
+                XCTAssertEqual(input.bounds.height, width < 1000 ? 238 : 274)
                 XCTAssertFalse(zoom.frame.intersects(dimensions.frame))
                 XCTAssertLessThanOrEqual(zoom.frame.maxX, sections.frame.minX - 24)
             }
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             waitUntil { controller.presentedImageRect.width == 300 }
-            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 74.625, width: 300, height: 168.75))
+            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 34.625, width: 300, height: 168.75))
             XCTAssertEqual(zoom.frame.width, 92)
             XCTAssertEqual(sections.frame, NSRect(x: 448, y: 24, width: 272, height: 28))
             for control in controller.root.subviews where !control.isHidden {
@@ -769,8 +889,13 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-compact-fit-\(appearance)")
             let controls: [NSView] = [try button("Trim edges", in: controller.root),
                 try button("Add image…", in: controller.root),
-                try popup("Drawing tool", in: controller.root),
-                try button("Change…", in: controller.root)]
+                try popup("Drawing tool", in: controller.root)]
+            for control in [try button("Change…", in: controller.root), try button("Save", in: controller.root),
+                            try copyButton(in: controller.root)] as [NSView] {
+                XCTAssertNil(control.enclosingScrollView, "export actions are pinned, not scrolled")
+                XCTAssertFalse(control.isHiddenOrHasHiddenAncestor)
+                XCTAssertTrue(controller.root.bounds.contains(control.convert(control.bounds, to: controller.root)))
+            }
             for (index, control) in controls.enumerated() {
                 sections.selectedSegment = index
                 _ = sections.sendAction(sections.action, to: sections.target)
@@ -1182,7 +1307,7 @@ final class ScreenshotEditorTests: XCTestCase {
             x.stringValue = "120"
             controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: x))
             XCTAssertEqual(controller.cropOverlay.selection?.minX, 120)
-            controller.window.setContentSize(NSSize(width: 1000, height: 700))
+            controller.window.setContentSize(NSSize(width: 1000, height: 780))
             let apply = try button("Apply crop", in: controller.root)
             let scroll = try XCTUnwrap(apply.enclosingScrollView)
             XCTAssertTrue(scroll.contentView.bounds.contains(apply.convert(apply.bounds, to: scroll.contentView)))
@@ -1227,8 +1352,8 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showOutput(in: controller.root)
-        let format = try popup("Output format", in: controller.root)
-        let quality = try popup("Output quality mode", in: controller.root)
+        let format = try popup("Format", in: controller.root)
+        let quality = try popup("Save quality", in: controller.root)
         let qualityValue = try field("Output quality value", in: controller.root)
         let palette = try field("PNG maximum colors", in: controller.root)
         let budget = try field("Output byte budget", in: controller.root)
@@ -1236,9 +1361,9 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(budget.isHidden)
 
         quality.selectItem(withTitle: "Compress"); _ = quality.sendAction(quality.action, to: quality.target)
-        format.selectItem(withTitle: "WebP"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".webp"); _ = format.sendAction(format.action, to: format.target)
         qualityValue.stringValue = "1"
-        format.selectItem(withTitle: "JPEG"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".jpg"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertEqual(qualityValue.stringValue, "40", "JPEG UI clamps to the encoder's minimum")
         qualityValue.stringValue = "73"
         try button("Preview output", in: controller.root).performClick(nil)
@@ -1252,7 +1377,7 @@ final class ScreenshotEditorTests: XCTestCase {
                       "encoding does not mutate draft state")
         let previewMode = try segmented("Output preview image", in: controller.root)
         XCTAssertEqual(previewMode.selectedSegment, 1)
-        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Exact encoded size") })
+        XCTAssertTrue(controller.exportSettingsOpen, "encoded previews live in the export settings")
 
         (try field("Crop X", in: controller.root)).stringValue = "3"
         (try field("Crop Y", in: controller.root)).stringValue = "5"
@@ -1264,7 +1389,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
         try button("Preview output", in: controller.root).performClick(nil)
         XCTAssertEqual(previewMode.selectedSegment, 1)
-        format.selectItem(withTitle: "WebP"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".webp"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertEqual(previewMode.selectedSegment, 0)
         XCTAssertFalse(previewMode.isEnabled, "changed options cannot leave stale output current")
     }
@@ -1285,7 +1410,7 @@ final class ScreenshotEditorTests: XCTestCase {
         let previewMode = try segmented("Output preview image", in: controller.root)
 
         size.selectItem(withTitle: "75%"); _ = size.sendAction(size.action, to: size.target)
-        XCTAssertTrue(labels(in: controller.root).contains("Output: 481 × 269 pixels"))
+        XCTAssertTrue(labels(in: controller.root).contains("481 × 269"))
         try button("Preview output", in: controller.root).performClick(nil)
         XCTAssertEqual((worker.encodes.last?["size"] as? [String: Any])?["mode"] as? String, "percent")
         XCTAssertEqual((worker.encodes.last?["size"] as? [String: Any])?["percent"] as? Int, 75)
@@ -1319,7 +1444,7 @@ final class ScreenshotEditorTests: XCTestCase {
         lock.performClick(nil)
         width.stringValue = String(UInt64.max)
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: width))
-        XCTAssertTrue(labels(in: controller.root).contains("Invalid output dimensions."))
+        XCTAssertTrue(labels(in: controller.root).contains("Invalid size"))
         XCTAssertEqual(worker.encodes.count, count, "invalid text must not overflow or encode")
     }
 
@@ -1330,7 +1455,7 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showOutput(in: controller.root)
-        let mode = try popup("Output quality mode", in: controller.root)
+        let mode = try popup("Save quality", in: controller.root)
         let preset = try popup("Output compression preset", in: controller.root)
         let quality = try field("Output quality value", in: controller.root)
         let palette = try field("PNG maximum colors", in: controller.root)
@@ -1350,11 +1475,11 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(preset.titleOfSelectedItem, "Custom")
         XCTAssertFalse((try segmented("Output preview image", in: controller.root)).isEnabled,
                        "manual palette edits invalidate a stale encoded preview")
-        let format = try popup("Output format", in: controller.root)
-        format.selectItem(withTitle: "JPEG"); _ = format.sendAction(format.action, to: format.target)
+        let format = try popup("Format", in: controller.root)
+        format.selectItem(withTitle: ".jpg"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertEqual(preset.titleOfSelectedItem, "Tiny", "inactive PNG overrides do not change JPEG quality")
         XCTAssertEqual(palette.stringValue, "64")
-        format.selectItem(withTitle: "PNG"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".png"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertEqual(preset.titleOfSelectedItem, "Custom")
         preset.selectItem(withTitle: "Highest"); _ = preset.sendAction(preset.action, to: preset.target)
         XCTAssertEqual(quality.stringValue, "98")
@@ -1367,7 +1492,7 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
                                                       object: quality))
         XCTAssertEqual(preset.titleOfSelectedItem, "Custom")
-        mode.selectItem(withTitle: "Preserve"); _ = mode.sendAction(mode.action, to: mode.target)
+        mode.selectItem(withTitle: "Preserve quality"); _ = mode.sendAction(mode.action, to: mode.target)
         XCTAssertTrue(preset.isHidden)
         mode.selectItem(withTitle: "Compress"); _ = mode.sendAction(mode.action, to: mode.target)
         XCTAssertEqual(quality.stringValue, "73", "mode changes preserve a custom numeric value")
@@ -1507,7 +1632,7 @@ final class ScreenshotEditorTests: XCTestCase {
             waitUntil { !controller.state.busy }
             XCTAssertEqual(mode.titleOfSelectedItem, "Transparent")
             try showOutput(in: controller.root)
-            try button("Copy image", in: controller.root).performClick(nil)
+            try copyButton(in: controller.root).performClick(nil)
             waitUntil { !controller.state.busy && copied != nil }
             let bitmap = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(copied)))
             XCTAssertEqual(bitmap.pixelsWide, 10); XCTAssertEqual(bitmap.pixelsHigh, 5)
@@ -1537,8 +1662,8 @@ final class ScreenshotEditorTests: XCTestCase {
             try showOutput(in: controller.root)
             try button("Preview output", in: controller.root).performClick(nil)
             let mode = try segmented("Output preview image", in: controller.root)
-            let copy = try button("Copy image", in: controller.root)
-            XCTAssertEqual(copy.accessibilityLabel(), "Copy edited screenshot")
+            let copy = try copyButton(in: controller.root)
+            XCTAssertEqual(copy.accessibilityLabel(), "Copy image")
             copy.performClick(nil)
             XCTAssertEqual(mode.selectedSegment, 1, "Copy must not replace the encoded preview")
             XCTAssertTrue(mode.isEnabled)
@@ -1546,9 +1671,9 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Edited image copied") })
             try render(controller.root, name: "screenshot-editor-clipboard-success-\(appearance)")
 
-            let format = try popup("Output format", in: controller.root)
-            format.selectItem(withTitle: "JPEG"); _ = format.sendAction(format.action, to: format.target)
-            let quality = try popup("Output quality mode", in: controller.root)
+            let format = try popup("Format", in: controller.root)
+            format.selectItem(withTitle: ".jpg"); _ = format.sendAction(format.action, to: format.target)
+            let quality = try popup("Save quality", in: controller.root)
             quality.selectItem(withTitle: "Maximum file size"); _ = quality.sendAction(quality.action, to: quality.target)
             (try field("Output byte budget", in: controller.root)).stringValue = "invalid"
             clipboardAvailable = false
@@ -1581,7 +1706,7 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showOutput(in: controller.root)
-        let copy = try button("Copy image", in: controller.root)
+        let copy = try copyButton(in: controller.root)
         copy.performClick(nil)
         XCTAssertTrue(controller.state.busy); XCTAssertFalse(copy.isEnabled)
         XCTAssertFalse(controller.windowShouldClose(controller.window))
@@ -1615,7 +1740,7 @@ final class ScreenshotEditorTests: XCTestCase {
         waitUntil { controller.state.snapshot?.width == 4 && !controller.state.busy }
         let edited = controller.state.snapshot
         // Copy is available while editing geometry, without switching to Output.
-        try button("Copy image", in: controller.root).performClick(nil)
+        try copyButton(in: controller.root).performClick(nil)
         waitUntil { !controller.state.busy && pasteboard.data(forType: .png) != nil }
         let png = try XCTUnwrap(pasteboard.data(forType: .png))
         let bitmap = try XCTUnwrap(NSBitmapImageRep(data: png))
@@ -1641,7 +1766,7 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showOutput(in: controller.root)
-        let quality = try popup("Output quality mode", in: controller.root)
+        let quality = try popup("Save quality", in: controller.root)
         quality.selectItem(withTitle: "Maximum file size")
         _ = quality.sendAction(quality.action, to: quality.target)
         let budget = try field("Output byte budget", in: controller.root)
@@ -1655,7 +1780,7 @@ final class ScreenshotEditorTests: XCTestCase {
         try button("Preview output", in: controller.root).performClick(nil)
         XCTAssertFalse(controller.state.busy)
         XCTAssertEqual(worker.encodes.count, 1)
-        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("at least 10,000") })
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("at least 10 KB") })
 
         budget.stringValue = "10000"
         worker.failEncode = true
@@ -1684,47 +1809,69 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(controller.window.isVisible)
     }
 
-    func testSaveNewCopySendsExactDestinationOptionsAndModeWithoutChangingDraft() throws {
+    func testFirstSaveWritesNewFileInOutputFolderWithSharedOptionsWithoutChangingDraft() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
         var refreshCount = 0
+        var errors: [String] = []
         let controller = ScreenshotEditorController(
             tokens: Tokens.variants["light-mustard"]!, worker: worker,
-            didSaveCopy: { refreshCount += 1 })
+            reportError: { errors.append($0) }, didSaveCopy: { refreshCount += 1 })
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot", mode: "window"),
                            historyRoot: "/native/History", outputDirectory: "/exports")
-        try showOutput(in: controller.root)
+        let filename = try field("Saved filename", in: controller.root)
+        XCTAssertTrue(filename.stringValue.hasPrefix("Captures_") && filename.stringValue.hasSuffix("_edited"))
+        XCTAssertEqual(try field("Save location", in: controller.root).stringValue, "/exports")
+        XCTAssertTrue(try saveAsNewSwitch(in: controller.root).isHidden, "a first save always writes a new file")
+        XCTAssertTrue(labels(in: controller.root).contains("Save writes a PNG at original quality."))
 
-        let format = try popup("Output format", in: controller.root)
-        format.selectItem(withTitle: "JPEG")
+        let format = try popup("Format", in: controller.root)
+        format.selectItem(withTitle: ".jpg")
         _ = format.sendAction(format.action, to: format.target)
-        (try field("Output filename", in: controller.root)).stringValue = "asymmetric-edited.jpeg"
+        filename.stringValue = "asymmetric-edited"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: filename))
         try showDraw(in: controller.root)
-        try button("Save new copy", in: controller.root).performClick(nil)
+        worker.exportSaveResult = .success(EditorExportSaved(path: "/exports/asymmetric-edited.jpg",
+            artifactID: "new-id", sizeBytes: 12, warning: nil,
+            notice: "Saved /exports/asymmetric-edited.jpg"))
+        try button("Save", in: controller.root).performClick(nil)
 
-        let request = try XCTUnwrap(worker.saves.last)
+        let request = try XCTUnwrap(worker.exportSaves.last)
         XCTAssertEqual(request["history_root"] as? String, "/native/History")
-        XCTAssertEqual(request["destination"] as? String, "/exports/asymmetric-edited.jpg")
         XCTAssertEqual(request["mode"] as? String, "window")
+        let plan = try XCTUnwrap(request["plan"] as? [String: Any])
+        XCTAssertEqual(plan["kind"] as? String, "new_file")
+        XCTAssertEqual(plan["path"] as? String, "/exports/asymmetric-edited.jpg")
         let options = try XCTUnwrap(request["options"] as? [String: Any])
         XCTAssertEqual(options["format"] as? String, "jpeg")
         XCTAssertEqual(options["quality"] as? String, "preserve")
         XCTAssertEqual(refreshCount, 1)
         XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
         XCTAssertTrue(controller.state.snapshot?.hasDraft == true)
+        XCTAssertTrue(labels(in: controller.root).contains("Saved /exports/asymmetric-edited.jpg"))
+        XCTAssertTrue(worker.saves.isEmpty, "the export bar uses the shared plan, not the legacy copy call")
 
-        worker.saveResult = .failure(AppBridgeError.backend("destination already exists"))
-        try button("Save new copy", in: controller.root).performClick(nil)
+        worker.exportSaveResult = .failure(AppBridgeError.backend(
+            "asymmetric-edited.jpg already exists. Choose another filename."))
+        try button("Save", in: controller.root).performClick(nil)
         XCTAssertFalse(controller.state.busy)
         XCTAssertTrue(controller.window.isVisible)
-        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("destination already exists") })
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("already exists") })
+        XCTAssertTrue(errors.last?.contains("already exists") == true)
 
-        worker.saveResult = .success(.savedWithoutHistory(
-            path: "/exports/asymmetric-edited.jpg", warning: "fixture History failure"))
-        try button("Save new copy", in: controller.root).performClick(nil)
+        filename.stringValue = "recovered"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: filename))
+        XCTAssertFalse(labels(in: controller.root).contains { $0.contains("already exists") },
+                       "editing the filename clears the failure")
+        worker.exportSaveResult = .success(EditorExportSaved(path: "/exports/recovered.jpg", artifactID: nil,
+            sizeBytes: nil, warning: "fixture History failure",
+            notice: "Saved /exports/recovered.jpg. History was not updated: fixture History failure"))
+        try button("Save", in: controller.root).performClick(nil)
+        XCTAssertEqual((worker.exportSaves.last?["plan"] as? [String: Any])?["path"] as? String,
+                       "/exports/recovered.jpg")
         XCTAssertTrue(labels(in: controller.root).contains {
-            $0.contains("Saved new copy") && $0.contains("fixture History failure")
+            $0.contains("recovered.jpg") && $0.contains("fixture History failure")
         })
         XCTAssertEqual(refreshCount, 1, "partial publication does not claim a History refresh")
     }
@@ -1742,29 +1889,34 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History",
                            outputDirectory: "/first folder")
-        try showOutput(in: controller.root)
-        let filename = try field("Output filename", in: controller.root)
-        filename.stringValue = "keep-this-name.png"
+        let filename = try field("Saved filename", in: controller.root)
+        filename.stringValue = "keep-this-name"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: filename))
         try button("Change…", in: controller.root).performClick(nil)
         XCTAssertEqual(pickerCurrent?.path, "/first folder")
         pickerCompletion?(nil)
-        XCTAssertEqual(filename.stringValue, "keep-this-name.png")
-        XCTAssertEqual((try field("Output save location", in: controller.root)).stringValue,
-                       "/first folder")
+        XCTAssertEqual(filename.stringValue, "keep-this-name")
+        XCTAssertEqual((try field("Save location", in: controller.root)).stringValue, "/first folder")
         XCTAssertFalse(controller.state.busy, "the folder panel does not occupy the editor worker")
 
         try button("Change…", in: controller.root).performClick(nil)
         pickerCompletion?(URL(fileURLWithPath: "/selected folder", isDirectory: true))
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertEqual((try field("Output save location", in: controller.root)).stringValue,
-                       "/selected folder")
-        XCTAssertEqual(filename.stringValue, "keep-this-name.png")
+        XCTAssertEqual((try field("Save location", in: controller.root)).stringValue, "/selected folder")
+        XCTAssertEqual(filename.stringValue, "keep-this-name")
+        worker.exportSaveResult = .success(EditorExportSaved(path: "/selected folder/keep-this-name.png",
+            artifactID: nil, sizeBytes: nil, warning: "fixture History failure",
+            notice: "Saved /selected folder/keep-this-name.png. History was not updated: fixture History failure"))
+        try button("Save", in: controller.root).performClick(nil)
+        XCTAssertEqual((worker.exportSaves.last?["plan"] as? [String: Any])?["path"] as? String,
+                       "/selected folder/keep-this-name.png")
 
         try button("Change…", in: controller.root).performClick(nil)
+        XCTAssertEqual(pickerCurrent?.path, "/selected folder")
         XCTAssertFalse(controller.windowShouldClose(controller.window))
         pickerCompletion?(URL(fileURLWithPath: "/stale folder", isDirectory: true))
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertEqual((try field("Output save location", in: controller.root)).stringValue,
+        XCTAssertEqual((try field("Save location", in: controller.root)).stringValue,
                        "/selected folder", "a retired editor ignores the folder reply")
 
         let panel = ScreenshotEditorController.outputDirectoryPanel(
@@ -2002,7 +2154,7 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = NSApplication.shared
         let original = layer(id: "original", name: "Original", x: 0, y: 0,
                              visible: true, locked: true, opacity: 100)
-        let created = shapeLayer(id: "fresh-shape", x: 142.222, y: -99.556)
+        let created = shapeLayer(id: "fresh-shape", x: 142.222, y: -64)
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: 1280, height: 640,
                                                           unsaved: true, layers: [original]))
         worker.response = { request in
@@ -2025,12 +2177,14 @@ final class ScreenshotEditorTests: XCTestCase {
         let tool = try popup("Drawing tool", in: controller.root)
         tool.selectItem(at: 1); _ = tool.sendAction(tool.action, to: tool.target)
         let overlay = controller.drawOverlay
+        // A 540×334 viewport fits the 1280×640 canvas by width (scale 27/64),
+        // leaving 32pt of whitespace above and below it.
         XCTAssertEqual(overlay.presentedImageRect,
-                       NSRect(x: 0, y: 72, width: 540, height: 270))
-        overlay.begin(at: NSPoint(x: 500, y: 300))
-        overlay.drag(to: NSPoint(x: 60, y: 30))
+                       NSRect(x: 0, y: 32, width: 540, height: 270))
+        overlay.begin(at: NSPoint(x: 500, y: 275))
+        overlay.drag(to: NSPoint(x: 60, y: 5))
         XCTAssertTrue(worker.requests.isEmpty, "transient drawing never mutates the document")
-        overlay.end(at: NSPoint(x: 60, y: 30))
+        overlay.end(at: NSPoint(x: 60, y: 5))
 
         let request = try XCTUnwrap(worker.requests.last)
         XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
@@ -2038,9 +2192,9 @@ final class ScreenshotEditorTests: XCTestCase {
         let start = try XCTUnwrap(request["start"] as? [String: CGFloat])
         let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
         XCTAssertEqual(try XCTUnwrap(start["x"]), 1_185.185, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(start["y"]), 540.444, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(start["y"]), 576, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(end["x"]), 142.222, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(end["y"]), -99.556, accuracy: 0.001,
+        XCTAssertEqual(try XCTUnwrap(end["y"]), -64, accuracy: 0.001,
                        "preview whitespace maps to off-canvas document coordinates")
         XCTAssertEqual((request["style"] as? [String: Any])?["color"] as? String, "#FF3B5C")
         XCTAssertEqual(request["opacity"] as? Double, 100)
@@ -2102,15 +2256,15 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(geometry.points.count, count)
             XCTAssertEqual(geometry.points[0].x, 50, accuracy: 0.00001)
             XCTAssertEqual(geometry.points[0].y, 20, accuracy: 0.00001)
-            overlay.begin(at: NSPoint(x: 500, y: 300)); overlay.drag(to: NSPoint(x: 60, y: 30))
+            overlay.begin(at: NSPoint(x: 500, y: 275)); overlay.drag(to: NSPoint(x: 60, y: 5))
             XCTAssertTrue(worker.requests.isEmpty)
-            overlay.end(at: NSPoint(x: 60, y: 30))
+            overlay.end(at: NSPoint(x: 60, y: 5))
             XCTAssertEqual(worker.requests.count, 1)
             let request = try XCTUnwrap(worker.requests.last)
             XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
             XCTAssertEqual(request["shape"] as? String, title.lowercased())
             let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
-            XCTAssertEqual(try XCTUnwrap(end["y"]), -99.556, accuracy: 0.001)
+            XCTAssertEqual(try XCTUnwrap(end["y"]), -64, accuracy: 0.001)
             overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 300, y: 350))
             overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 400, y: 200))
             overlay.begin(at: NSPoint(x: 200, y: 200)); overlay.drag(to: NSPoint(x: 260, y: 260))
@@ -2329,7 +2483,7 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: width))
             try render(controller.root, name: "screenshot-editor-output-size-custom-\(appearance)")
 
-            let quality = try popup("Output quality mode", in: controller.root)
+            let quality = try popup("Save quality", in: controller.root)
             quality.selectItem(withTitle: "Compress")
             _ = quality.sendAction(quality.action, to: quality.target)
             XCTAssertFalse(preset.isHidden)
@@ -2352,7 +2506,7 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
-    func testSaveNewCopyRenderedStates() throws {
+    func testExportBarRenderedStates() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
             let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
@@ -2361,25 +2515,33 @@ final class ScreenshotEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History",
                                outputDirectory: "/Users/test/Pictures/Captures Export")
-            try showOutput(in: controller.root)
-            try scrollOutputSaveControlsVisible(in: controller.root)
-            try render(controller.root, name: "screenshot-editor-save-copy-normal-\(appearance)")
+            try render(controller.root, name: "screenshot-editor-export-bar-normal-\(appearance)")
 
-            worker.saveResult = .success(.saved(
-                path: "/Users/test/Pictures/Captures Export/Captures_2026-09-20_edited.png"))
-            try button("Save new copy", in: controller.root).performClick(nil)
-            try render(controller.root, name: "screenshot-editor-save-copy-success-\(appearance)")
-
-            worker.saveResult = .failure(AppBridgeError.backend("A file with this name already exists."))
-            try button("Save new copy", in: controller.root).performClick(nil)
-            try render(controller.root, name: "screenshot-editor-save-copy-error-\(appearance)")
-
-            worker.saveResult = .success(.savedWithoutHistory(
+            worker.exportSaveResult = .success(EditorExportSaved(
                 path: "/Users/test/Pictures/Captures Export/Captures_2026-09-20_edited.png",
-                warning: "The new file is safe, but the isolated native History location is unavailable. You can reveal the saved file and retry History publication later."))
-            try button("Save new copy", in: controller.root).performClick(nil)
-            try render(controller.root,
-                       name: "screenshot-editor-save-copy-error-minimum-\(appearance)")
+                artifactID: "saved", sizeBytes: 12, warning: nil,
+                notice: "Saved /Users/test/Pictures/Captures Export/Captures_2026-09-20_edited.png"))
+            try button("Save", in: controller.root).performClick(nil)
+            try render(controller.root, name: "screenshot-editor-export-bar-success-\(appearance)")
+
+            worker.exportSaveResult = .failure(AppBridgeError.backend(
+                "Captures_2026-09-20_edited.png already exists. Choose another filename."))
+            try button("Save", in: controller.root).performClick(nil)
+            try render(controller.root, name: "screenshot-editor-export-bar-error-\(appearance)")
+
+            worker.exportSaveResult = .success(EditorExportSaved(
+                path: "/Users/test/Pictures/Captures Export/Captures_2026-09-20_edited.png",
+                artifactID: nil, sizeBytes: nil,
+                warning: "The new file is safe, but the isolated native History location is unavailable.",
+                notice: "Saved /Users/test/Pictures/Captures Export/Captures_2026-09-20_edited.png. History was not updated: The new file is safe, but the isolated native History location is unavailable."))
+            try button("Save", in: controller.root).performClick(nil)
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            try render(controller.root, name: "screenshot-editor-export-bar-warning-minimum-\(appearance)")
+            try showOutput(in: controller.root)
+            try render(controller.root, name: "screenshot-editor-export-settings-minimum-\(appearance)")
+            for control in controller.root.subviews where !control.isHidden {
+                XCTAssertTrue(controller.root.bounds.contains(control.frame), "\(control) must fit at minimum size")
+            }
         }
     }
 
@@ -2673,6 +2835,66 @@ final class ScreenshotEditorTests: XCTestCase {
                          "quit drains an accepted publication before freeing the session")
         XCTAssertTrue(FileManager.default.fileExists(atPath: drainedOutput.path))
         wait(for: [drained], timeout: 5)
+    }
+
+    func testRealBridgeExportBarSaveOverwritesAdoptedFileAndEstimatesExactBytes() throws {
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker()
+        defer { worker.close(); EditorWorker.flush() }
+        let opened = expectation(description: "opened")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                    artifactID: fixture.id) { result in
+            XCTAssertNotNil(try? result.get()); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        let options: [String: Any] = ["format": "png", "quality": "preserve", "quality_value": 100,
+                                      "png": [String: Any](), "size": ["mode": "original"]]
+        var estimate: EditorEstimate?
+        let estimated = expectation(description: "estimated")
+        worker.estimate(["options": options, "original_bytes": UInt64(1_234)]) { result in
+            estimate = try? result.get(); estimated.fulfill()
+        }
+        wait(for: [estimated], timeout: 5)
+        XCTAssertEqual(estimate?.baselineBytes, 1_234, "Preserve compares with the original file size")
+
+        let output = fixture.root.appendingPathComponent("exports/edited.png")
+        func save(_ plan: [String: Any]) -> Result<EditorExportSaved, Error>? {
+            var saved: Result<EditorExportSaved, Error>?
+            let done = expectation(description: "saved")
+            worker.save(["history_root": fixture.history.path, "plan": plan, "options": options,
+                         "mode": "region"]) { saved = $0; done.fulfill() }
+            wait(for: [done], timeout: 5)
+            return saved
+        }
+        let first = try XCTUnwrap(try save(["kind": "new_file", "path": output.path])?.get())
+        XCTAssertEqual(first.path, output.path)
+        XCTAssertEqual(first.notice, "Saved \(output.path)")
+        XCTAssertNil(first.warning)
+        let written = try Data(contentsOf: output)
+        XCTAssertEqual(first.sizeBytes, UInt64(written.count))
+        XCTAssertEqual(estimate?.bytes, UInt64(written.count), "Est. size is exactly what Save writes")
+        let artifactID = try XCTUnwrap(first.artifactID)
+        XCTAssertNotEqual(artifactID, fixture.id)
+
+        let bar = try NativeExportBar.present([
+            "init": ["source": ["artifact_id": artifactID, "path": output.path],
+                     "default_directory": "/unused", "default_stem": "unused"],
+            "options": options, "document_size": [7, 3],
+        ])
+        XCTAssertTrue(bar.planOverwrites)
+        XCTAssertEqual(bar.planArtifactID, artifactID)
+        XCTAssertEqual(bar.stem, "edited")
+        XCTAssertEqual(bar.suffix, ".png")
+        XCTAssertFalse(bar.formatRequiresCopy)
+        let second = try XCTUnwrap(try save(try XCTUnwrap(bar.plan))?.get())
+        XCTAssertEqual(second.notice, "Saved changes to the original")
+        XCTAssertEqual(second.artifactID, artifactID)
+        guard case .failure(let error)? = save(["kind": "new_file", "path": output.path]) else {
+            return XCTFail("a new file never replaces an existing one")
+        }
+        XCTAssertEqual(error.localizedDescription, "edited.png already exists. Choose another filename.")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.history.path).count, 2)
     }
 
     func testImageIODecoderAppliesExifOrientationAndProducesStraightSrgbRgba() throws {
@@ -5262,7 +5484,7 @@ final class ScreenshotEditorTests: XCTestCase {
             let document = try XCTUnwrap(scroll.documentView)
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-text-normal-\(appearance)")
-            controller.window.setContentSize(NSSize(width: 1000, height: 700))
+            controller.window.setContentSize(NSSize(width: 1000, height: 780))
             scroll.contentView.scroll(to: NSPoint(x: 0, y: document.bounds.height - scroll.contentView.bounds.height))
             scroll.reflectScrolledClipView(scroll.contentView)
             controller.root.layoutSubtreeIfNeeded()
@@ -6213,9 +6435,49 @@ final class ScreenshotEditorTests: XCTestCase {
     }
 
     private func showLayers(in view: NSView) throws {
+        try hideExportSettings(in: view)
         let sections = try segmented("Editor section", in: view)
         sections.selectedSegment = 1
         _ = sections.sendAction(sections.action, to: sections.target)
+    }
+
+    private func showGeometry(in view: NSView) throws {
+        try hideExportSettings(in: view)
+        let sections = try segmented("Editor section", in: view)
+        sections.selectedSegment = 0
+        _ = sections.sendAction(sections.action, to: sections.target)
+    }
+
+    private func exportSettingsPanel(in view: NSView) throws -> NSView {
+        try XCTUnwrap(descendants(in: view).first {
+            !($0 is CaptureButton) && $0.accessibilityLabel() == "Export settings" })
+    }
+
+    private func exportDisclosure(in view: NSView) throws -> CaptureButton {
+        try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }
+            .first { $0.accessibilityLabel() == "Export settings" })
+    }
+
+    /// Canvas tests keep their historical viewport: collapse the export settings.
+    private func hideExportSettings(in view: NSView) throws {
+        let panel = try exportSettingsPanel(in: view)
+        if !panel.isHidden { try exportDisclosure(in: view).performClick(nil) }
+    }
+
+    private func copyButton(in view: NSView) throws -> CaptureButton {
+        try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }
+            .first { $0.title == "Copy image" || $0.title == "✓ Copied" })
+    }
+
+    private func saveAsNewSwitch(in view: NSView) throws -> NSSwitch {
+        try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSSwitch }
+            .first { $0.accessibilityLabel() == "Save as new file" })
+    }
+
+    private func temporaryFolder() throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
     }
 
     private func chooseZoomPreset(_ title: String, in view: NSView) throws {
@@ -6225,31 +6487,17 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = control.sendAction(control.action, to: control.target)
     }
 
+    /// Open the export bar's settings disclosure (idempotent).
     private func showOutput(in view: NSView) throws {
-        let sections = try segmented("Editor section", in: view)
-        sections.selectedSegment = 3
-        _ = sections.sendAction(sections.action, to: sections.target)
+        let panel = try exportSettingsPanel(in: view)
+        if panel.isHidden { try exportDisclosure(in: view).performClick(nil) }
     }
 
     private func showDraw(in view: NSView) throws {
+        try hideExportSettings(in: view)
         let sections = try segmented("Editor section", in: view)
         sections.selectedSegment = 2
         _ = sections.sendAction(sections.action, to: sections.target)
-    }
-
-    private func scrollOutputSaveControlsVisible(in view: NSView) throws {
-        let filename = try field("Output filename", in: view)
-        let scroll = try XCTUnwrap(filename.enclosingScrollView)
-        let document = try XCTUnwrap(scroll.documentView)
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height)))
-        scroll.reflectScrolledClipView(scroll.contentView)
-        view.layoutSubtreeIfNeeded()
-        XCTAssertTrue(scroll.contentView.bounds.contains(filename.convert(filename.bounds, to: scroll.contentView)),
-                      "Export filename remains reachable after output sizing controls")
-        let save = try button("Save new copy", in: view)
-        XCTAssertTrue(save.superview === view)
-        XCTAssertTrue(view.bounds.contains(save.frame))
-        XCTAssertFalse(save.isHiddenOrHasHiddenAncestor)
     }
 
     private func scrollImageImportVisible(in view: NSView) throws {
@@ -6301,8 +6549,8 @@ final class ScreenshotEditorTests: XCTestCase {
         view.subviews + view.subviews.flatMap { descendants(in: $0) }
     }
 
-    private func waitUntil(_ predicate: () -> Bool) {
-        let deadline = Date().addingTimeInterval(2)
+    private func waitUntil(timeout: TimeInterval = 2, _ predicate: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
         while !predicate() && Date() < deadline {
             RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         }
@@ -6417,6 +6665,12 @@ private final class FakeEditorWorker: EditorWorking {
     var failEncode = false
     var saveResult: Result<EditorSavePresentation, Error> = .success(.saved(path: "/output/edited.png"))
     var saveOriginalResult: Result<EditorSavePresentation, Error> = .success(.saved(path: "/exports/original.png"))
+    var exportSaves: [[String: Any]] = []
+    var exportSaveResult: Result<EditorExportSaved, Error> = .success(EditorExportSaved(
+        path: "/output/edited.png", artifactID: "saved-id", sizeBytes: 12_345, warning: nil,
+        notice: "Saved /output/edited.png"))
+    var estimates: [[String: Any]] = []
+    var estimateResult: Result<EditorEstimate, Error> = .success(EditorEstimate(bytes: 12_345, baselineBytes: nil))
     var importLayerID = "imported-layer"
     var failImport = false
     var importedSnapshot: NativeEditorSnapshot?
@@ -6508,6 +6762,18 @@ private final class FakeEditorWorker: EditorWorking {
                       completion: @escaping (Result<EditorSavePresentation, Error>) -> Void) {
         originalSaves.append(request)
         completion(saveOriginalResult)
+    }
+
+    func save(_ request: [String: Any],
+              completion: @escaping (Result<EditorExportSaved, Error>) -> Void) {
+        exportSaves.append(request)
+        completion(exportSaveResult)
+    }
+
+    func estimate(_ request: [String: Any],
+                  completion: @escaping (Result<EditorEstimate, Error>) -> Void) {
+        estimates.append(request)
+        completion(estimateResult)
     }
 
     func importImage(_ image: EditorDecodedImage, selectedID: String?,

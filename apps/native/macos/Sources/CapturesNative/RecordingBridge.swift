@@ -7,6 +7,8 @@ struct NativeRecordingCapabilities: Equatable {
     let cursorControl: Bool
     let clickHighlights: Bool
     let controlsExcluded: Bool
+    /// False on Linux; macOS can keep the controls out of captures.
+    let canExcludeControls: Bool
 
     init?(_ value: [String: Any]) {
         guard let systemAudio = value["system_audio"] as? Bool,
@@ -18,6 +20,7 @@ struct NativeRecordingCapabilities: Equatable {
         self.systemAudio = systemAudio; self.microphone = microphone
         self.cursorControl = cursorControl; self.clickHighlights = clickHighlights
         self.controlsExcluded = controlsExcluded
+        canExcludeControls = value["can_exclude_controls"] as? Bool ?? true
     }
 }
 

@@ -8,6 +8,7 @@ use std::{
         mpsc::{self, Receiver, Sender},
     },
     thread,
+    time::{Duration, Instant},
 };
 
 use captures_app::{
@@ -20,8 +21,12 @@ use captures_app::{
         TextElement, arrow_fill_polygon, preview_rotation, rotation_angle, rotation_handle,
         smooth_path_centerline,
     },
+    editor_export::{
+        self as export, EstimateState, ExportBarView, ExportEstimate, ExportSource, ExportTarget,
+        SavePlan,
+    },
     editor_image_background::BrushMode,
-    editor_output::{SavedExport, save_new_export},
+    editor_output::SavedExport,
     editor_session::{
         EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize, ImportImage,
         OpenRequest, PngOptions, Request, TextCreate, TextPatch,
@@ -58,12 +63,8 @@ enum Job {
     },
     Preview(ExportOptions),
     Copy,
-    SaveNew {
-        destination: PathBuf,
-        options: ExportOptions,
-    },
-    SaveOriginal {
-        destination: PathBuf,
+    Save {
+        plan: SavePlan,
         options: ExportOptions,
     },
     Flush {
@@ -78,11 +79,10 @@ struct Presented {
     pixels: Arc<RgbaImage>,
     original_export_path: Option<PathBuf>,
     initial_text_size: f64,
-    replaced_original: bool,
     font_families: BTreeMap<String, String>,
     text_style_presets: Vec<TextStylePreset>,
     output: Option<(RgbaImage, usize)>,
-    saved: Option<SavedExport>,
+    saved: Option<(SavePlan, SavedExport)>,
     copied: bool,
     copied_layer: bool,
     pasted_layer: bool,
@@ -106,7 +106,6 @@ impl Presented {
             pixels: session.pixels(),
             original_export_path: snapshot.original_export_path.map(Path::to_owned),
             initial_text_size: snapshot.initial_text_size,
-            replaced_original: false,
             font_families: snapshot.font_families.cloned().unwrap_or_default(),
             text_style_presets: snapshot.text_style_presets,
             output: None,
@@ -138,9 +137,13 @@ impl Presented {
 enum Section {
     Geometry,
     Layers,
-    Output,
     Draw,
 }
+
+/// Shipping debounce before the export size estimate re-encodes.
+const ESTIMATE_DEBOUNCE: Duration = Duration::from_millis(220);
+/// Shipping duration of the Copied / Saved confirmations.
+const EXPORT_CONFIRMATION: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DrawShape {
@@ -421,7 +424,24 @@ struct View {
     export_aspect_locked: bool,
     output: Option<(egui::TextureHandle, usize)>,
     show_output: bool,
-    destination: String,
+    artifact_id: String,
+    default_directory: PathBuf,
+    default_stem: String,
+    export_target: Option<ExportTarget>,
+    filename: String,
+    export_settings_open: bool,
+    estimate: EstimateState,
+    estimate_key: Option<(u64, ExportOptions, Option<u64>)>,
+    estimate_due: Option<Instant>,
+    estimate_generation: u64,
+    estimate_rx: Option<Receiver<(u64, Result<ExportEstimate, String>)>>,
+    pixels_revision: u64,
+    original_bytes: Option<u64>,
+    last_saved: Option<PathBuf>,
+    notice_until: Option<Instant>,
+    copied_until: Option<Instant>,
+    export_error: Option<String>,
+    export_job: bool,
     folder_picker: Option<Receiver<Option<PathBuf>>>,
     output_notice: Option<String>,
     import_picker: Option<Receiver<Option<PathBuf>>>,
@@ -443,7 +463,6 @@ struct View {
     close_requested: bool,
     close_after_save: bool,
     confirm_discard: bool,
-    confirm_replace: Option<(PathBuf, ExportOptions)>,
     error: Option<String>,
     viewport: Viewport,
     viewport_pan: Option<(egui::PointerButton, egui::Pos2)>,
@@ -496,7 +515,24 @@ impl Default for View {
             export_aspect_locked: true,
             output: None,
             show_output: false,
-            destination: String::new(),
+            artifact_id: String::new(),
+            default_directory: PathBuf::new(),
+            default_stem: String::new(),
+            export_target: None,
+            filename: String::new(),
+            export_settings_open: false,
+            estimate: EstimateState::default(),
+            estimate_key: None,
+            estimate_due: None,
+            estimate_generation: 0,
+            estimate_rx: None,
+            pixels_revision: 0,
+            original_bytes: None,
+            last_saved: None,
+            notice_until: None,
+            copied_until: None,
+            export_error: None,
+            export_job: false,
             folder_picker: None,
             output_notice: None,
             import_picker: None,
@@ -518,7 +554,6 @@ impl Default for View {
             close_requested: false,
             close_after_save: false,
             confirm_discard: false,
-            confirm_replace: None,
             error: None,
             viewport: Viewport::default(),
             viewport_pan: None,
@@ -601,7 +636,6 @@ impl View {
         if self.close_inline() {
             return;
         }
-        self.confirm_replace = None;
         self.cancel_drawing();
         self.cancel_layer_gesture();
         self.pending_layer_selection = None;
@@ -626,7 +660,7 @@ impl View {
             return;
         }
         self.pending = false;
-        self.confirm_replace = None;
+        let export_job = std::mem::take(&mut self.export_job);
         match result {
             Ok(mut presented) => {
                 if self.presented.is_none() {
@@ -651,6 +685,7 @@ impl View {
                 if changed {
                     self.invalidate_output();
                     self.output_notice = None;
+                    self.pixels_revision += 1;
                     self.cancel_crop();
                     self.cancel_drawing();
                     self.viewport_pan = None;
@@ -680,29 +715,32 @@ impl View {
                     ));
                     self.show_output = true;
                 }
-                if let Some(saved) = presented.saved.take() {
-                    let action = if presented.replaced_original {
-                        self.original_replaced = true;
+                if let Some((plan, saved)) = presented.saved.take() {
+                    self.output_notice = Some(export::saved_notice(&plan, &saved));
+                    self.notice_until = Some(Instant::now() + EXPORT_CONFIRMATION);
+                    let (SavedExport::Saved { path, .. }
+                    | SavedExport::SavedWithoutHistory { path, .. }) = &saved;
+                    self.last_saved = Some(path.clone());
+                    if let SavedExport::Saved { artifact, .. } = &saved {
                         self.history_changed = true;
-                        "Replaced original at"
-                    } else {
-                        "Saved copy to"
-                    };
-                    self.output_notice = Some(match saved {
-                        SavedExport::Saved { path, .. } => {
-                            self.history_changed = true;
-                            format!("{action} {}", path.display())
-                        }
-                        SavedExport::SavedWithoutHistory { path, warning } => {
-                            format!(
-                                "{action} {}. History was not updated: {warning}",
-                                path.display()
-                            )
-                        }
-                    });
+                        // The saved file becomes the original, as in the shipping app.
+                        self.original_bytes =
+                            Some(artifact.entry.size_bytes).filter(|bytes| *bytes > 0);
+                    }
+                    if let SavePlan::Overwrite { artifact_id, .. } = &plan {
+                        self.history_changed = true;
+                        self.original_replaced |= *artifact_id == self.artifact_id;
+                    }
+                    if let Some(target) = &mut self.export_target {
+                        target.record_saved(&saved);
+                        self.filename.clone_from(&target.stem);
+                    }
                 }
                 if presented.copied {
-                    self.output_notice = Some("Copied edited pixels to the clipboard.".into());
+                    self.copied_until = Some(Instant::now() + EXPORT_CONFIRMATION);
+                }
+                if export_job {
+                    self.export_error = None;
                 }
                 let copied_layer = presented.copied_layer;
                 let pasted_layer = presented.pasted_layer;
@@ -714,6 +752,7 @@ impl View {
                         .or(self.selected_layer.clone())
                 });
                 self.presented = Some(presented);
+                self.ensure_export_target();
                 if !copied_layer {
                     self.select_layer(selected);
                 }
@@ -740,7 +779,12 @@ impl View {
             Err(error) => {
                 self.pending_layer_selection = None;
                 self.combine_pending = false;
-                self.error = Some(error);
+                if export_job {
+                    // Save and copy failures belong to the export bar's status line.
+                    self.export_error = Some(error);
+                } else {
+                    self.error = Some(error);
+                }
                 self.inline_failed();
                 // A rejected explicit text Apply keeps the user's staged composition.
                 if !self.text_apply_pending {
@@ -776,61 +820,185 @@ impl View {
         self.show_output = false;
     }
 
+    /// Build the export target once the session reports its saved original.
+    fn ensure_export_target(&mut self) {
+        if self.export_target.is_some() {
+            return;
+        }
+        let Some(presented) = &self.presented else {
+            return;
+        };
+        let source = presented
+            .original_export_path
+            .clone()
+            .map(|path| ExportSource {
+                artifact_id: self.artifact_id.clone(),
+                path,
+            });
+        let target = ExportTarget::new(source, &self.default_directory, &self.default_stem);
+        self.filename.clone_from(&target.stem);
+        self.export_target = Some(target);
+    }
+
+    fn export_view(&self) -> Option<ExportBarView> {
+        let target = self.export_target.as_ref()?;
+        let presented = self.presented.as_ref()?;
+        Some(export::present(
+            target,
+            self.export_options,
+            presented.pixels.dimensions(),
+            presented.document.background.is_none(),
+            self.estimate,
+        ))
+    }
+
+    /// A different file, folder or encoding is no longer the saved result.
+    fn export_target_changed(&mut self) {
+        self.last_saved = None;
+        self.output_notice = None;
+        self.notice_until = None;
+        self.export_error = None;
+    }
+
+    fn update_export_target(&mut self, update: impl FnOnce(&mut ExportTarget, ExportFormat)) {
+        let format = self.export_options.format;
+        if let Some(target) = &mut self.export_target {
+            update(target, format);
+            self.filename.clone_from(&target.stem);
+        }
+        self.export_target_changed();
+    }
+
     fn preview(&mut self, tx: &Sender<Job>) {
         self.invalidate_output();
         self.submit_job(tx, Job::Preview(self.export_options));
     }
 
-    fn save_new(&mut self, tx: &Sender<Job>) {
+    fn save(&mut self, tx: &Sender<Job>) {
+        let Some(bar) = self.export_view() else {
+            return;
+        };
+        let (Some(plan), None) = (bar.plan, bar.error.clone()) else {
+            self.export_error = bar.error;
+            return;
+        };
         self.output_notice = None;
-        self.submit_job(
+        self.notice_until = None;
+        self.export_error = None;
+        self.export_job = self.submit_job(
             tx,
-            Job::SaveNew {
-                destination: PathBuf::from(&self.destination),
+            Job::Save {
+                plan,
                 options: self.export_options,
             },
         );
     }
 
     fn copy(&mut self, tx: &Sender<Job>) {
-        self.output_notice = None;
-        self.submit_job(tx, Job::Copy);
+        self.export_error = None;
+        self.export_job = self.submit_job(tx, Job::Copy);
     }
 
-    fn begin_replace(&mut self) {
-        if self.pending || self.closed || self.close_requested || self.confirm_replace.is_some() {
+    fn reveal_saved(&mut self) {
+        let Some(path) = self.last_saved.clone() else {
+            return;
+        };
+        if !path.is_file() {
+            self.export_error = Some(format!(
+                "Couldn’t show the saved file: saved file no longer exists: {}",
+                path.display()
+            ));
             return;
         }
-        if let Some(path) = self
-            .presented
-            .as_ref()
-            .and_then(|p| p.original_export_path.clone())
-        {
-            self.cancel_edit_gestures();
-            self.confirm_replace = Some((path, self.export_options));
-        }
+        // Asking the file manager over D-Bus can wait for a service to start;
+        // keep that off the UI thread like the preview card's Show in Folder.
+        std::thread::spawn(move || {
+            if let Err(error) = crate::reveal::reveal(&path) {
+                eprintln!("Couldn’t show the saved file: {error}");
+            }
+        });
     }
 
-    fn confirm_replacement(&mut self, tx: &Sender<Job>) {
-        if let Some((destination, options)) = self.confirm_replace.take() {
-            self.output_notice = None;
-            self.submit_job(
-                tx,
-                Job::SaveOriginal {
-                    destination,
-                    options,
-                },
-            );
+    /// Re-encode the export in the background after edits or option changes
+    /// settle, exactly as Save would, without occupying the session worker.
+    fn drive_estimate(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.estimate_rx {
+            match rx.try_recv() {
+                Ok((generation, result)) => {
+                    self.estimate_rx = None;
+                    if generation == self.estimate_generation {
+                        self.estimate = match result {
+                            Ok(estimate) => EstimateState {
+                                bytes: Some(estimate.bytes),
+                                baseline_bytes: estimate.baseline_bytes,
+                                pending: false,
+                            },
+                            Err(_) => EstimateState::default(),
+                        };
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.estimate_rx = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
         }
+        let Some(presented) = &self.presented else {
+            return;
+        };
+        let pixels = presented.pixels.clone();
+        let key = (
+            self.pixels_revision,
+            self.export_options,
+            self.original_bytes,
+        );
+        if self.estimate_key != Some(key) {
+            self.estimate_key = Some(key);
+            self.estimate_generation += 1;
+            self.estimate.pending = true;
+            self.estimate_due = Some(Instant::now() + ESTIMATE_DEBOUNCE);
+        }
+        let Some(due) = self.estimate_due else {
+            return;
+        };
+        let now = Instant::now();
+        if now < due {
+            ctx.request_repaint_after(due - now);
+            return;
+        }
+        if self.estimate_rx.is_some() {
+            return; // A superseded encode finishes first; its result is dropped.
+        }
+        self.estimate_due = None;
+        let (width, height) = pixels.dimensions();
+        if export::validate_options(self.export_options, width, height).is_err() {
+            self.estimate = EstimateState::default();
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.estimate_rx = Some(rx);
+        let (generation, options, original) = (
+            self.estimate_generation,
+            self.export_options,
+            self.original_bytes,
+        );
+        let ctx = ctx.clone();
+        let viewport = ctx.viewport_id();
+        thread::spawn(move || {
+            let _ = tx.send((
+                generation,
+                export::estimate_export(&pixels, options, original),
+            ));
+            ctx.request_repaint_of(viewport);
+        });
     }
 
     fn choose_folder(&mut self, ctx: &egui::Context) {
         if self.folder_picker.is_some() {
             return;
         }
-        let directory = PathBuf::from(&self.destination)
-            .parent()
-            .map(|path| path.to_owned())
+        let directory = self
+            .export_target
+            .as_ref()
+            .map(|target| target.directory.clone())
             .unwrap_or_default();
         let (tx, rx) = mpsc::channel();
         self.folder_picker = Some(rx);
@@ -885,12 +1053,7 @@ impl View {
         }
         match result {
             Ok(Some(directory)) => {
-                let destination = PathBuf::from(&self.destination);
-                self.destination = directory
-                    .join(destination.file_name().unwrap_or_default())
-                    .to_string_lossy()
-                    .into_owned();
-                self.output_notice = None;
+                self.update_export_target(|target, _| target.set_directory(directory));
                 self.error = None;
             }
             Ok(None) => {} // Cancellation preserves the path and current session.
@@ -906,11 +1069,7 @@ impl View {
         }
         // Preserve the one-in-flight edit contract. A selected file waits until
         // an accepted edit or a discard confirmation has finished.
-        if self.pending
-            || self.inline.is_some()
-            || self.confirm_discard
-            || self.confirm_replace.is_some()
-        {
+        if self.pending || self.inline.is_some() || self.confirm_discard {
             return false;
         }
         let Some(result) = self.import_picker.as_ref().map(Receiver::try_recv) else {
@@ -921,20 +1080,22 @@ impl View {
         }
         self.import_picker = None;
         match result {
-            Ok(Some(path)) => self.submit_job(
-                tx,
-                Job::Import {
-                    path,
-                    selected_id: self.selected_layer.clone(),
-                },
-            ),
+            Ok(Some(path)) => {
+                self.submit_job(
+                    tx,
+                    Job::Import {
+                        path,
+                        selected_id: self.selected_layer.clone(),
+                    },
+                );
+            }
             Ok(None) => {}
             Err(_) => self.error = Some("Image selection failed. Try again.".into()),
         }
         true
     }
 
-    fn submit_job(&mut self, tx: &Sender<Job>, job: Job) {
+    fn submit_job(&mut self, tx: &Sender<Job>, job: Job) -> bool {
         if self.inline.is_some()
             && !matches!(
                 &job,
@@ -946,9 +1107,8 @@ impl View {
             )
         {
             self.error = Some("Finish or cancel text input before another editor action.".into());
-            return;
+            return false;
         }
-        self.confirm_replace = None;
         self.cancel_layer_gesture();
         if let Some(preview) = &mut self.drawing_preview {
             preview.cancel();
@@ -957,11 +1117,13 @@ impl View {
             Ok(()) => {
                 self.pending = true;
                 self.error = None;
+                true
             }
             Err(_) => {
                 self.pending_layer_selection = None;
                 self.error =
-                    Some("The editor worker stopped. Your last saved draft is preserved.".into())
+                    Some("The editor worker stopped. Your last saved draft is preserved.".into());
+                false
             }
         }
     }
@@ -1106,13 +1268,12 @@ impl Editor {
         copy: impl Fn(Arc<RgbaImage>) -> Result<(), String> + Send + 'static,
     ) -> Self {
         let viewport = egui::ViewportId::from_hash_of(("screenshot-editor", &artifact_id));
-        let destination = output_directory
-            .join(format!(
-                "Captures_{}_edited.png",
-                chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
-            ))
-            .to_string_lossy()
-            .into_owned();
+        let default_stem = format!(
+            "Captures_{}_edited",
+            chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
+        );
+        let original_bytes = export::original_size_bytes(&root, &artifact_id);
+        let view_artifact_id = artifact_id.clone();
         let (tx, jobs) = mpsc::channel();
         let (out, rx) = mpsc::channel();
         let wake_ctx = ctx.clone();
@@ -1222,10 +1383,7 @@ impl Editor {
                             presented.copied = true;
                             Ok(presented)
                         }),
-                    Job::SaveNew {
-                        destination,
-                        options,
-                    } => session
+                    Job::Save { plan, options } => session
                         .as_ref()
                         .ok_or_else(|| "Editor is unavailable.".to_owned())
                         .and_then(|session| {
@@ -1234,29 +1392,10 @@ impl Editor {
                                     "Finish or cancel text input before saving pixels.".into()
                                 );
                             }
-                            let saved = save_new_export(
-                                &root,
-                                &session.pixels(),
-                                &destination,
-                                options,
-                                mode,
-                            )
-                            .map_err(|error| error.to_string())?;
+                            let saved =
+                                export::publish(&root, &session.pixels(), &plan, options, mode)?;
                             let mut presented = Presented::from_session(session);
-                            presented.saved = Some(saved);
-                            Ok(presented)
-                        }),
-                    Job::SaveOriginal {
-                        destination,
-                        options,
-                    } => session
-                        .as_ref()
-                        .ok_or_else(|| "Editor is unavailable.".to_owned())
-                        .and_then(|session| {
-                            let saved = session.save_original_export(&destination, options)?;
-                            let mut presented = Presented::from_session(session);
-                            presented.replaced_original = true;
-                            presented.saved = Some(saved);
+                            presented.saved = Some((plan, saved));
                             Ok(presented)
                         }),
                     Job::Flush { input, reply } => {
@@ -1294,7 +1433,10 @@ impl Editor {
         Self {
             viewport,
             view: Arc::new(Mutex::new(View {
-                destination,
+                artifact_id: view_artifact_id,
+                default_directory: output_directory,
+                default_stem,
+                original_bytes,
                 drawing_preview: Some(drawing_preview::State::new(ctx.clone(), viewport)),
                 ..View::default()
             })),
@@ -1412,7 +1554,13 @@ impl Editor {
 
 impl Drop for Editor {
     fn drop(&mut self) {
-        self.view.lock().unwrap().closed = true;
+        // Never panic here: a panic while holding the view lock (for example a
+        // failed assertion) poisons it, and a second panic during unwinding
+        // aborts the process and hides the original failure.
+        self.view
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closed = true;
         let _ = self.tx.send(Job::Shutdown);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -1433,7 +1581,6 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         view.cancel_crop();
         view.cancel_drawing();
         view.cancel_layer_gesture();
-        view.confirm_replace = None;
     }
     egui::Panel::top("editor-actions").show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -1482,7 +1629,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     let mut position = zoom_slider_position(percent).unwrap_or(0.);
                     ui.scope(|ui| {
                         ui.spacing_mut().slider_width = tokens.number("s-12") * 2.;
-                        let response = ui.add_enabled(!view.pending && view.confirm_replace.is_none(),
+                        let response = ui.add_enabled(!view.pending,
                             egui::Slider::new(&mut position, 0.0..=1.0).show_value(false))
                             .on_hover_text(format!("Canvas zoom: {percent:.1}%. Drag from 5% to 800%."));
                         response.widget_info(|| egui::WidgetInfo::labeled(
@@ -1494,7 +1641,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 }
             });
         });
-        ui.add_enabled_ui(!view.pending && view.inline.is_none() && view.confirm_replace.is_none(), |ui| {
+        ui.add_enabled_ui(!view.pending && view.inline.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(view.presented.as_ref().is_some_and(|p| p.can_undo), egui::Button::new("Undo")).clicked() { view.submit(tx, Request::Undo); }
                 if ui.add_enabled(view.presented.as_ref().is_some_and(|p| p.can_redo), egui::Button::new("Redo")).clicked() { view.submit(tx, Request::Redo); }
@@ -1505,7 +1652,6 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 ui.separator();
                 ui.selectable_value(&mut view.section, Section::Geometry, "Geometry");
                 ui.selectable_value(&mut view.section, Section::Layers, "Layers");
-                ui.selectable_value(&mut view.section, Section::Output, "Output");
                 if ui.add_enabled(view.import_picker.is_none() && !view.close_requested && !view.confirm_discard, egui::Button::new("Import image…")).clicked() {
                     view.choose_image(ui.ctx());
                 }
@@ -1536,18 +1682,6 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 }));
             });
         }
-        if let Some((path, _)) = &view.confirm_replace {
-            let path = path.display().to_string();
-            ui.group(|ui| {
-                ui.label("Replace the original screenshot?");
-                ui.label(path);
-                ui.label("This replaces the file and History image. Your draft and undo history are retained.");
-                ui.horizontal(|ui| {
-                    if ui.button("Replace original").clicked() { view.confirm_replacement(tx); }
-                    if ui.button("Cancel replacement").clicked() { view.confirm_replace = None; }
-                });
-            });
-        }
     });
     if view.section != previous_section {
         view.viewport_pan = None;
@@ -1570,16 +1704,11 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     {
         view.cancel_layer_gesture();
     }
+    view.drive_estimate(ui.ctx());
+    show_export_bar(ui, tokens, view, tx);
     egui::Panel::right("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
-        egui::Panel::bottom("editor-export-actions")
-            .resizable(false).exact_size(tokens.number("s-12") + tokens.number("s-6"))
-            .show(ui, |ui| show_export_actions(ui, view, tx));
         egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
-        ui.add_enabled_ui(!view.pending && view.inline.is_none() && view.presented.is_some() && view.confirm_replace.is_none(), |ui| {
-            if view.section == Section::Output {
-                show_output(ui, tokens, view, tx);
-                return;
-            }
+        ui.add_enabled_ui(!view.pending && view.inline.is_none() && view.presented.is_some(), |ui| {
             if view.section == Section::Layers {
                 show_layers(ui, view, tx);
                 return;
@@ -1788,7 +1917,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     });
     show_tool_rail(ui, tokens, view);
     egui::CentralPanel::default().show(ui, |ui| {
-        let texture = if view.show_output && view.section == Section::Output {
+        let texture = if view.show_output && view.export_settings_open {
             view.output.as_ref().map(|(texture, _)| texture)
         } else {
             view.drawing_preview
@@ -1824,7 +1953,6 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             if view.section == Section::Draw
                 && view.inline.is_none()
                 && !view.pending
-                && view.confirm_replace.is_none()
                 && !view.close_requested
                 && !view.confirm_discard
             {
@@ -1833,7 +1961,6 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             if view.section == Section::Layers
                 && view.inline.is_none()
                 && !view.pending
-                && view.confirm_replace.is_none()
                 && !view.close_requested
                 && !view.confirm_discard
             {
@@ -1874,7 +2001,6 @@ fn show_tool_rail(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
                 && !view.closed
                 && !view.close_requested
                 && !view.confirm_discard
-                && view.confirm_replace.is_none()
                 && view.import_picker.is_none()
                 && view.folder_picker.is_none();
             ui.add_enabled_ui(enabled, |ui| {
@@ -2130,7 +2256,6 @@ fn handle_viewport_shortcuts(ctx: &egui::Context, view: &mut View) {
         || !ctx.input(|input| input.focused)
         || view.close_requested
         || view.confirm_discard
-        || view.confirm_replace.is_some()
         || egui::Popup::is_any_open(ctx)
     {
         return;
@@ -2157,7 +2282,6 @@ fn handle_tool_shortcuts(ctx: &egui::Context, view: &mut View) {
         || view.closed
         || view.close_requested
         || view.confirm_discard
-        || view.confirm_replace.is_some()
         || view.import_picker.is_some()
         || view.folder_picker.is_some()
     {
@@ -2213,7 +2337,6 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
         || view.closed
         || view.close_requested
         || view.confirm_discard
-        || view.confirm_replace.is_some()
     {
         return;
     }
@@ -2371,7 +2494,6 @@ fn handle_viewport_input(ui: &egui::Ui, view: &mut View, available: egui::Rect) 
     if !focused
         || view.close_requested
         || view.confirm_discard
-        || view.confirm_replace.is_some()
         || egui::Popup::is_any_open(ui.ctx())
     {
         view.viewport_pan = None;
@@ -3646,271 +3768,912 @@ fn show_crop(
     painter.galley(origin, label, tokens.color("glass-text"));
 }
 
-fn show_export_actions(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
+/// The collapsed bar keeps the former pinned footer's height; the disclosure
+/// adds a fixed settings area. Both are even, whole pixels so the canvas
+/// geometry stays predictable and odd window heights center images on pixels.
+fn export_bar_height(tokens: &Tokens, open: bool) -> f32 {
+    let collapsed = tokens.number("s-12") + tokens.number("s-6");
+    if open {
+        collapsed + export_settings_height(tokens)
+    } else {
+        collapsed
+    }
+}
+
+fn export_settings_height(tokens: &Tokens) -> f32 {
+    tokens.number("s-12") * 2.
+}
+
+const EXPORT_DISCLOSURE_WIDTH: std::ops::RangeInclusive<f32> = 160.0..=210.0;
+const EXPORT_SUFFIX_WIDTH: f32 = 68.;
+const EXPORT_COPY_WIDTH: f32 = 92.;
+const EXPORT_SAVE_WIDTH: f32 = 100.;
+const EXPORT_SWITCH_WIDTH: f32 = 128.;
+const EXPORT_STEM_WIDTH: std::ops::RangeInclusive<f32> = 128.0..=320.0;
+
+/// Shipping bottom export bar: settings disclosure with a live summary,
+/// filename and format suffix, save location, Copy image, the "Save as new
+/// file" switch and the primary Save. Everything else in the editor stays usable.
+fn show_export_bar(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
+    let now = Instant::now();
+    if view.notice_until.is_some_and(|until| until <= now) {
+        view.notice_until = None;
+        view.output_notice = None;
+    }
+    if view.copied_until.is_some_and(|until| until <= now) {
+        view.copied_until = None;
+    }
+    for until in [view.notice_until, view.copied_until].into_iter().flatten() {
+        ui.ctx().request_repaint_after(until - now);
+    }
     let ready = view.presented.is_some()
         && !view.pending
         && view.inline.is_none()
         && !view.closed
         && !view.close_requested
-        && !view.confirm_discard
-        && view.confirm_replace.is_none();
-    ui.add_enabled_ui(ready, |ui| {
-        ui.horizontal(|ui| {
-            let copy = ui.button("Copy")
-                .on_hover_text("Copy full-resolution edited pixels as PNG. Export settings are ignored; no file or draft is saved.");
-            copy.widget_info(|| egui::WidgetInfo::labeled(
-                egui::WidgetType::Button, copy.enabled(), "Copy edited screenshot"));
-            if copy.clicked() { view.copy(tx); }
-            let valid_size = view.presented.as_ref().is_some_and(|p| {
-                let (width, height) = p.pixels.dimensions();
-                view.export_options.size.dimensions(width, height).is_ok()
-            });
-            if ui.add_enabled(!view.pending && view.folder_picker.is_none() && valid_size,
-                egui::Button::new("Save new copy"))
-                .on_hover_text(format!("Save to {}. Existing files are never replaced. Configure in Output.", view.destination))
-                .clicked() { view.save_new(tx); }
+        && !view.confirm_discard;
+    let (horizontal, vertical) = (tokens.number("s-5"), tokens.number("s-4"));
+    let height = export_bar_height(tokens, view.export_settings_open);
+    egui::Panel::bottom("editor-export-bar")
+        .resizable(false)
+        .show_separator_line(false)
+        .exact_size(height)
+        .frame(
+            egui::Frame::new()
+                .fill(tokens.color("surface-raised"))
+                .inner_margin(egui::Margin::symmetric(horizontal as i8, vertical as i8)),
+        )
+        .show(ui, |ui| {
+            // Contents never exceed this height, so egui reports the exact panel
+            // size and the canvas beside it stays on whole pixels.
+            ui.set_height(height - 2. * vertical);
+            let top = ui.max_rect().top() - vertical + 0.5;
+            ui.painter().hline(
+                ui.max_rect().x_range().expand(horizontal),
+                top,
+                egui::Stroke::new(1., tokens.color("border-subtle")),
+            );
+            ui.spacing_mut().item_spacing.y = tokens.number("s-2");
+            if view.export_settings_open {
+                let height = export_settings_height(tokens) - tokens.number("s-4");
+                egui::Frame::new()
+                    .fill(tokens.color("surface-sunken"))
+                    .stroke(egui::Stroke::new(1., tokens.color("border")))
+                    .corner_radius(tokens.number("r-xl"))
+                    .inner_margin(egui::Margin::symmetric(
+                        tokens.number("s-5") as i8,
+                        tokens.number("s-4") as i8,
+                    ))
+                    .show(ui, |ui| {
+                        let inner = height - 2. * tokens.number("s-4") - 2.;
+                        ui.set_width(ui.available_width());
+                        ui.set_height(inner);
+                        egui::ScrollArea::vertical()
+                            .id_salt("export-settings")
+                            .max_height(inner)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.add_enabled_ui(ready, |ui| {
+                                    show_export_settings(ui, tokens, view, tx)
+                                });
+                            });
+                    });
+            }
+            let bar = view.export_view();
+            let widths = export_widths(ui.available_width(), ui.spacing().item_spacing.x);
+            show_export_heading(ui, tokens, view, ready, bar.as_ref(), widths);
+            show_export_row(ui, tokens, view, tx, ready, bar.as_ref(), widths);
         });
-    });
-    let notice = view
-        .output_notice
-        .as_deref()
-        .unwrap_or("Export settings are in Output.");
-    ui.add(egui::Label::new(notice).truncate());
 }
 
-fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
-    ui.heading("Output preview");
+fn show_export_heading(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    ready: bool,
+    bar: Option<&ExportBarView>,
+    (disclosure, stem): (f32, f32),
+) {
+    let small = tokens.number("text-xs");
+    let row = small + tokens.number("s-4") + 1.;
+    let width = ui.available_width();
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, row),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_height(row);
+            ui.add_space(disclosure);
+            let heading = stem + EXPORT_SUFFIX_WIDTH + ui.spacing().item_spacing.x;
+            ui.allocate_ui_with_layout(
+                egui::vec2(heading, row),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.label(
+                        RichText::new("Filename")
+                            .size(small)
+                            .color(tokens.color("text-muted")),
+                    );
+                    ui.label(
+                        RichText::new("Saving to")
+                            .size(small)
+                            .color(tokens.color("text-subtle")),
+                    );
+                    let directory = view
+                        .export_target
+                        .as_ref()
+                        .map(|target| target.directory.display().to_string())
+                        .unwrap_or_default();
+                    let change = RichText::new("Change…").size(small);
+                    let reserve = ui.fonts_mut(|fonts| {
+                        fonts
+                            .layout_no_wrap(
+                                "Change…".into(),
+                                egui::FontId::proportional(small),
+                                egui::Color32::WHITE,
+                            )
+                            .size()
+                            .x
+                    }) + ui.spacing().item_spacing.x
+                        + 2. * ui.spacing().button_padding.x;
+                    let path_width = (ui.available_width() - reserve).max(24.);
+                    ui.add_sized(
+                        [path_width, row],
+                        egui::Label::new(
+                            RichText::new(&directory)
+                                .size(small)
+                                .monospace()
+                                .color(tokens.color("text-subtle")),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(&directory)
+                    .widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Label,
+                            true,
+                            format!("Save location: {directory}"),
+                        )
+                    });
+                    let response = ui
+                        .add_enabled(
+                            ready && view.folder_picker.is_none(),
+                            egui::Button::new(change).small().frame(false),
+                        )
+                        .on_hover_text("Change save location");
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            response.enabled(),
+                            "Change save location",
+                        )
+                    });
+                    if response.clicked() {
+                        view.choose_folder(ui.ctx());
+                    }
+                },
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if view.last_saved.is_some()
+                    && ui
+                        .add_enabled(
+                            ready,
+                            egui::Button::new(RichText::new("Show in Folder").size(small)).small(),
+                        )
+                        .on_hover_text("Open the folder that contains the saved file")
+                        .clicked()
+                {
+                    view.reveal_saved();
+                }
+                let (text, color) = if let Some(error) = &view.export_error {
+                    (error.clone(), tokens.color("danger-text"))
+                } else if let Some(error) = bar.and_then(|bar| bar.error.clone()) {
+                    (error, tokens.color("danger-text"))
+                } else if let Some(notice) = &view.output_notice {
+                    (notice.clone(), tokens.color("positive-text"))
+                } else if let Some(bar) = bar {
+                    let color = if bar.hint_warning {
+                        "caution-text"
+                    } else {
+                        "text-subtle"
+                    };
+                    (bar.hint.clone(), tokens.color(color))
+                } else {
+                    (String::new(), tokens.color("text-subtle"))
+                };
+                ui.add(egui::Label::new(RichText::new(text).size(small).color(color)).truncate());
+            });
+        },
+    );
+}
+
+/// Disclosure and filename widths: fixed actions first, then the disclosure
+/// grows to fit its summary, then the filename field takes what remains.
+fn export_widths(width: f32, spacing: f32) -> (f32, f32) {
+    let fixed = EXPORT_SUFFIX_WIDTH
+        + EXPORT_COPY_WIDTH
+        + EXPORT_SWITCH_WIDTH
+        + EXPORT_SAVE_WIDTH
+        + 5. * spacing;
+    let flexible = (width - fixed).max(0.);
+    let disclosure = (flexible - EXPORT_STEM_WIDTH.start()).clamp(
+        *EXPORT_DISCLOSURE_WIDTH.start(),
+        *EXPORT_DISCLOSURE_WIDTH.end(),
+    );
+    let stem = (flexible - disclosure).clamp(*EXPORT_STEM_WIDTH.start(), *EXPORT_STEM_WIDTH.end());
+    (disclosure, stem)
+}
+
+fn show_export_row(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    tx: &Sender<Job>,
+    ready: bool,
+    bar: Option<&ExportBarView>,
+    (disclosure, stem): (f32, f32),
+) {
+    let height = tokens.number("h-lg");
+    ui.horizontal(|ui| {
+        ui.set_height(height);
+        let summary = bar.map_or_else(String::new, |bar| bar.summary.clone());
+        if export_disclosure(ui, tokens, disclosure, view.export_settings_open, &summary).clicked()
+        {
+            view.export_settings_open = !view.export_settings_open;
+        }
+        ui.add_enabled_ui(ready, |ui| {
+            let response = ui
+                .add_sized(
+                    [stem, height],
+                    egui::TextEdit::singleline(&mut view.filename)
+                        .align(egui::Align2::LEFT_CENTER)
+                        .hint_text("Filename"),
+                )
+                .on_hover_text("Saved filename");
+            response.widget_info(|| {
+                egui::WidgetInfo::text_edit(
+                    response.enabled(),
+                    "",
+                    view.filename.clone(),
+                    "Saved filename",
+                )
+            });
+            if response.changed() {
+                let stem = view.filename.clone();
+                view.update_export_target(|target, _| target.set_stem(stem));
+            }
+            let previous = view.export_options.format;
+            let transparent = view
+                .presented
+                .as_ref()
+                .is_some_and(|presented| presented.document.background.is_none());
+            let suffix = bar.map_or_else(|| ".png".to_owned(), |bar| bar.suffix.clone());
+            egui::ComboBox::from_id_salt("export-format")
+                .selected_text(&suffix)
+                .width(EXPORT_SUFFIX_WIDTH)
+                .height(height * 4.)
+                .show_ui(ui, |ui| {
+                    for (format, label) in [
+                        (ExportFormat::Png, "PNG"),
+                        (ExportFormat::Jpeg, "JPEG"),
+                        (ExportFormat::Webp, "WebP"),
+                    ] {
+                        let response =
+                            ui.selectable_value(&mut view.export_options.format, format, label);
+                        if format == ExportFormat::Jpeg && transparent {
+                            response.on_hover_text("Fills in transparent areas.");
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("Format")
+                .widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::ComboBox,
+                        true,
+                        format!("Format: {suffix}"),
+                    )
+                });
+            if view.export_options.format != previous {
+                view.invalidate_output();
+                view.export_target_changed();
+            }
+            let copied = view.copied_until.is_some();
+            let label = if copied { "Copied" } else { "Copy image" };
+            let mut copy = egui::Button::new(RichText::new(label).color(if copied {
+                tokens.color("positive-text")
+            } else {
+                tokens.color("text")
+            }));
+            if copied {
+                copy = copy.fill(tokens.color("positive-surface"));
+            }
+            let response = ui
+                .add_sized([EXPORT_COPY_WIDTH, height], copy)
+                .on_hover_text("Copy the edited image to the clipboard. Does not save a file.");
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    response.enabled(),
+                    if copied { "Copied" } else { "Copy image" },
+                )
+            });
+            if copied {
+                // The bundled UI font has no check glyph; draw the shipping check icon.
+                let text = ui.fonts_mut(|fonts| {
+                    fonts
+                        .layout_no_wrap(
+                            label.into(),
+                            egui::TextStyle::Button.resolve(ui.style()),
+                            egui::Color32::WHITE,
+                        )
+                        .size()
+                        .x
+                });
+                let center = response.rect.center() - egui::vec2(text / 2. + 10., 0.);
+                ui.painter().add(egui::Shape::line(
+                    vec![
+                        center + egui::vec2(-4., 0.),
+                        center + egui::vec2(-1., 3.),
+                        center + egui::vec2(4., -3.),
+                    ],
+                    egui::Stroke::new(1.8, tokens.color("positive-text")),
+                ));
+            }
+            if response.clicked() {
+                view.copy(tx);
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let plan_ready = bar.is_some_and(|bar| bar.plan.is_some() && bar.error.is_none());
+            let save = egui::Button::new(
+                RichText::new(if view.pending && view.export_job {
+                    "Saving…"
+                } else {
+                    "Save"
+                })
+                .strong()
+                .color(tokens.color("theme-accent-ink")),
+            )
+            .fill(tokens.color("theme-accent"));
+            let hint = bar.map_or_else(String::new, |bar| bar.hint.clone());
+            let response = ui
+                .add_enabled_ui(ready && plan_ready && view.folder_picker.is_none(), |ui| {
+                    ui.add_sized([EXPORT_SAVE_WIDTH, height], save)
+                })
+                .inner
+                .on_hover_text(&hint);
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), "Save")
+            });
+            if response.clicked() {
+                view.save(tx);
+            }
+            if let Some(bar) = bar.filter(|bar| !bar.format_requires_copy) {
+                let mut enabled = bar.saving_copy;
+                let response = ui
+                    .add_enabled_ui(ready, |ui| {
+                        export_switch(ui, tokens, &mut enabled, "Save as new file")
+                    })
+                    .inner
+                    .on_hover_text("Save as a new file and leave the original untouched");
+                if response.changed() {
+                    view.update_export_target(|target, format| {
+                        target.set_save_as_new(enabled, format);
+                    });
+                }
+            }
+        });
+    });
+}
+
+fn export_disclosure(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    width: f32,
+    open: bool,
+    summary: &str,
+) -> egui::Response {
+    let size = egui::vec2(width - ui.spacing().item_spacing.x, tokens.number("h-lg"));
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            true,
+            open,
+            format!("Export settings: {summary}"),
+        )
+    });
+    let response = response.on_hover_text(if open {
+        "Hide export settings"
+    } else {
+        "Show export settings"
+    });
+    if ui.is_rect_visible(rect) {
+        let hovered = response.hovered();
+        let painter = ui.painter();
+        painter.rect(
+            rect,
+            tokens.number("r-md"),
+            tokens.color(if hovered { "control-hover" } else { "control" }),
+            egui::Stroke::new(
+                1.,
+                tokens.color(if hovered {
+                    "border-strong"
+                } else {
+                    "control-border"
+                }),
+            ),
+            egui::StrokeKind::Inside,
+        );
+        let left = rect.left() + tokens.number("s-5");
+        let chevron = tokens.number("s-6");
+        let text_width = rect.width() - tokens.number("s-5") - chevron - tokens.number("s-4");
+        let label = painter.layout_no_wrap(
+            "Export settings".into(),
+            egui::FontId::proportional(tokens.number("text-sm")),
+            tokens.color(if hovered { "text" } else { "text-muted" }),
+        );
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            summary.into(),
+            egui::FontId::monospace(tokens.number("text-2xs")),
+            tokens.color("text-subtle"),
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(text_width);
+        let summary = ui.fonts_mut(|fonts| fonts.layout_job(job));
+        let gap = tokens.number("s-1");
+        let top = rect.center().y - (label.size().y + gap + summary.size().y) / 2.;
+        painter.galley(egui::pos2(left, top), label.clone(), egui::Color32::WHITE);
+        painter.galley(
+            egui::pos2(left, top + label.size().y + gap),
+            summary,
+            egui::Color32::WHITE,
+        );
+        let center = egui::pos2(
+            rect.right() - tokens.number("s-4") - chevron / 2.,
+            rect.center().y,
+        );
+        let half = chevron / 4.;
+        let direction = if open { -1. } else { 1. };
+        let stroke = egui::Stroke::new(
+            1.6,
+            tokens.color(if hovered { "text" } else { "text-muted" }),
+        );
+        painter.line_segment(
+            [
+                center + egui::vec2(-half, -half / 2. * direction),
+                center + egui::vec2(0., half / 2. * direction),
+            ],
+            stroke,
+        );
+        painter.line_segment(
+            [
+                center + egui::vec2(0., half / 2. * direction),
+                center + egui::vec2(half, -half / 2. * direction),
+            ],
+            stroke,
+        );
+        if response.has_focus() {
+            painter.rect_stroke(
+                rect.expand(2.),
+                tokens.number("r-md") + 2.,
+                ui.visuals().selection.stroke,
+                egui::StrokeKind::Outside,
+            );
+        }
+    }
+    response
+}
+
+/// Shipping labelled pill switch: the whole label toggles it, accent when on,
+/// focusable and announced as a checkbox.
+fn export_switch(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    value: &mut bool,
+    label: &str,
+) -> egui::Response {
+    let text = ui.painter().layout_no_wrap(
+        label.into(),
+        egui::FontId::proportional(tokens.number("text-sm")),
+        tokens.color("text"),
+    );
+    let pill = egui::vec2(28., 16.);
+    let gap = tokens.number("s-3");
+    let size = egui::vec2(pill.x + gap + text.size().x, tokens.number("h-lg"));
+    let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if response.clicked() {
+        *value = !*value;
+        response.mark_changed();
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *value, label)
+    });
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let alpha = if ui.is_enabled() { 1. } else { 0.55 };
+        let track = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + pill.x / 2., rect.center().y),
+            pill,
+        );
+        let (fill, border, knob) = if *value {
+            (
+                tokens.color("theme-accent"),
+                egui::Color32::TRANSPARENT,
+                tokens.color("theme-accent-ink"),
+            )
+        } else {
+            (
+                tokens.color("control"),
+                tokens.color("control-border"),
+                tokens.color("text-muted"),
+            )
+        };
+        painter.rect(
+            track,
+            track.height() / 2.,
+            fill.gamma_multiply(alpha),
+            egui::Stroke::new(1., border.gamma_multiply(alpha)),
+            egui::StrokeKind::Inside,
+        );
+        let radius = track.height() / 2. - 3.;
+        let x = if *value {
+            track.right() - 3. - radius
+        } else {
+            track.left() + 3. + radius
+        };
+        painter.circle_filled(
+            egui::pos2(x, track.center().y),
+            radius,
+            knob.gamma_multiply(alpha),
+        );
+        painter.galley(
+            egui::pos2(track.right() + gap, rect.center().y - text.size().y / 2.),
+            text,
+            tokens.color("text").gamma_multiply(alpha),
+        );
+        if response.has_focus() {
+            painter.rect_stroke(
+                track.expand(2.),
+                track.height() / 2. + 2.,
+                ui.visuals().selection.stroke,
+                egui::StrokeKind::Outside,
+            );
+        }
+    }
+    response
+}
+
+#[derive(Clone, Copy)]
+enum ExportGroup {
+    Size,
+    Custom,
+    Quality,
+    Preset,
+    Palette,
+    Maximum,
+    Estimate,
+    Canvas,
+}
+
+/// Export settings behind the disclosure: output size, save quality and the
+/// live size estimate. The format lives in the filename suffix menu. Groups
+/// wrap into rows explicitly; egui cannot measure nested groups before placing.
+fn show_export_settings(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let previous = view.export_options;
+    let mut groups = vec![(ExportGroup::Size, 200.)];
+    if matches!(view.export_options.size, ExportSize::Custom { .. }) {
+        groups.push((ExportGroup::Custom, 250.));
+    }
+    groups.push((ExportGroup::Quality, 150.));
+    match view.export_options.quality {
+        ExportQuality::Compress => {
+            groups.push((ExportGroup::Preset, 160.));
+            if view.export_options.format == ExportFormat::Png {
+                groups.push((ExportGroup::Palette, 150.));
+            }
+        }
+        ExportQuality::Maximum => groups.push((ExportGroup::Maximum, 170.)),
+        ExportQuality::Preserve => {}
+    }
+    groups.push((ExportGroup::Estimate, 150.));
+    groups.push((ExportGroup::Canvas, 160.));
+    let spacing = tokens.number("s-5");
+    let available = ui.available_width();
+    let mut rows: Vec<Vec<(ExportGroup, f32)>> = vec![Vec::new()];
+    let mut used = 0.;
+    for (group, width) in groups {
+        let row = rows.last_mut().expect("one row");
+        if !row.is_empty() && used + spacing + width > available {
+            rows.push(vec![(group, width)]);
+            used = width;
+        } else {
+            used += if row.is_empty() {
+                width
+            } else {
+                spacing + width
+            };
+            row.push((group, width));
+        }
+    }
+    let height = tokens.number("text-xs") + tokens.number("s-2") + tokens.number("h-md");
+    for row in rows {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = spacing;
+            for (group, width) in row {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(width, height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_min_size(egui::vec2(width, height));
+                        show_export_group(ui, tokens, view, tx, group);
+                    },
+                );
+            }
+        });
+    }
+    if view.export_options != previous {
+        view.invalidate_output();
+        if view.export_options.format != previous.format
+            || view.export_options.quality != previous.quality
+        {
+            view.export_target_changed();
+        }
+    }
+}
+
+fn show_export_group(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    tx: &Sender<Job>,
+    group: ExportGroup,
+) {
     let source_size = view
         .presented
         .as_ref()
         .map(|presented| presented.pixels.dimensions())
         .unwrap_or((0, 0));
-    let options = &mut view.export_options;
-    ui.label("Output size");
-    egui::ComboBox::from_id_salt("output-size")
-        .selected_text(match options.size {
-            ExportSize::Original => "Original",
-            ExportSize::Percent { percent: 75 } => "75%",
-            ExportSize::Percent { .. } => "50%",
-            ExportSize::Custom { .. } => "Custom",
-        })
-        .width(160.)
-        .show_ui(ui, |ui| {
-            for (size, label) in [
-                (ExportSize::Original, "Original"),
-                (ExportSize::Percent { percent: 75 }, "75%"),
-                (ExportSize::Percent { percent: 50 }, "50%"),
-            ] {
-                ui.selectable_value(&mut options.size, size, label);
-            }
-            let custom = matches!(options.size, ExportSize::Custom { .. });
-            if ui.selectable_label(custom, "Custom").clicked() && !custom {
-                view.custom_export_size = [source_size.0, source_size.1];
-                options.size = ExportSize::Custom {
-                    width: source_size.0,
-                    height: source_size.1,
+    let small = tokens.number("text-xs");
+    let caption = |ui: &mut egui::Ui, text: &str| {
+        ui.label(
+            RichText::new(text)
+                .size(small)
+                .color(tokens.color("text-muted")),
+        );
+    };
+    match group {
+        ExportGroup::Size => {
+            caption(ui, "Output size");
+            ui.horizontal(|ui| {
+                let options = &mut view.export_options;
+                egui::ComboBox::from_id_salt("output-size")
+                    .selected_text(match options.size {
+                        ExportSize::Original => "Original",
+                        ExportSize::Percent { percent: 75 } => "75%",
+                        ExportSize::Percent { .. } => "50%",
+                        ExportSize::Custom { .. } => "Custom",
+                    })
+                    .width(108.)
+                    .show_ui(ui, |ui| {
+                        for (size, label) in [
+                            (ExportSize::Original, "Original"),
+                            (ExportSize::Percent { percent: 75 }, "75%"),
+                            (ExportSize::Percent { percent: 50 }, "50%"),
+                        ] {
+                            ui.selectable_value(&mut options.size, size, label);
+                        }
+                        let custom = matches!(options.size, ExportSize::Custom { .. });
+                        if ui.selectable_label(custom, "Custom").clicked() && !custom {
+                            view.custom_export_size = [source_size.0, source_size.1];
+                            options.size = ExportSize::Custom {
+                                width: source_size.0,
+                                height: source_size.1,
+                            };
+                        }
+                    });
+                let dimensions = match options.size.dimensions(source_size.0, source_size.1) {
+                    Ok((width, height)) => RichText::new(format!("{width} × {height}"))
+                        .monospace()
+                        .size(tokens.number("text-2xs"))
+                        .color(tokens.color("text-subtle")),
+                    Err(_) => RichText::new("Invalid size")
+                        .size(tokens.number("text-2xs"))
+                        .color(tokens.color("danger-text")),
                 };
+                ui.label(dimensions);
+            });
+        }
+        ExportGroup::Custom => {
+            caption(ui, "Width × height");
+            let old = view.custom_export_size;
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut view.custom_export_size[0])
+                        .range(0..=16_384)
+                        .prefix("W "),
+                )
+                .on_hover_text("Custom output width");
+                ui.label("×");
+                ui.add(
+                    egui::DragValue::new(&mut view.custom_export_size[1])
+                        .range(0..=16_384)
+                        .prefix("H "),
+                )
+                .on_hover_text("Custom output height");
+                ui.toggle_value(&mut view.export_aspect_locked, "Lock")
+                    .on_hover_text("Lock output aspect ratio");
+            });
+            if view.export_aspect_locked && source_size.0 > 0 && source_size.1 > 0 {
+                if view.custom_export_size[0] != old[0] {
+                    view.custom_export_size[1] =
+                        ((u64::from(view.custom_export_size[0]) * u64::from(source_size.1)
+                            + u64::from(source_size.0) / 2)
+                            / u64::from(source_size.0))
+                        .max(1)
+                        .min(u64::from(u32::MAX)) as u32;
+                } else if view.custom_export_size[1] != old[1] {
+                    view.custom_export_size[0] =
+                        ((u64::from(view.custom_export_size[1]) * u64::from(source_size.0)
+                            + u64::from(source_size.1) / 2)
+                            / u64::from(source_size.1))
+                        .max(1)
+                        .min(u64::from(u32::MAX)) as u32;
+                }
             }
-        });
-    if matches!(options.size, ExportSize::Custom { .. }) {
-        let old = view.custom_export_size;
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::DragValue::new(&mut view.custom_export_size[0])
-                    .range(0..=16_384)
-                    .prefix("W "),
-            )
-            .on_hover_text("Custom output width");
-            ui.label("×");
-            ui.add(
-                egui::DragValue::new(&mut view.custom_export_size[1])
-                    .range(0..=16_384)
-                    .prefix("H "),
-            )
-            .on_hover_text("Custom output height");
-            ui.toggle_value(&mut view.export_aspect_locked, "Lock")
-                .on_hover_text("Keep the document aspect ratio");
-        });
-        if view.export_aspect_locked && source_size.0 > 0 && source_size.1 > 0 {
-            if view.custom_export_size[0] != old[0] {
-                view.custom_export_size[1] = ((u64::from(view.custom_export_size[0])
-                    * u64::from(source_size.1)
-                    + u64::from(source_size.0) / 2)
-                    / u64::from(source_size.0))
-                .max(1)
-                .min(u64::from(u32::MAX)) as u32;
-            } else if view.custom_export_size[1] != old[1] {
-                view.custom_export_size[0] = ((u64::from(view.custom_export_size[1])
-                    * u64::from(source_size.0)
-                    + u64::from(source_size.1) / 2)
-                    / u64::from(source_size.1))
-                .max(1)
-                .min(u64::from(u32::MAX)) as u32;
-            }
+            view.export_options.size = ExportSize::Custom {
+                width: view.custom_export_size[0],
+                height: view.custom_export_size[1],
+            };
         }
-        options.size = ExportSize::Custom {
-            width: view.custom_export_size[0],
-            height: view.custom_export_size[1],
-        };
-    }
-    let output_dimensions = options.size.dimensions(source_size.0, source_size.1);
-    match &output_dimensions {
-        Ok((width, height)) => {
-            ui.small(format!("Resolved size: {width} × {height} px"));
-        }
-        Err(message) => {
-            ui.colored_label(tokens.color("theme-signal"), message);
-        }
-    }
-    ui.label("Format");
-    ui.horizontal(|ui| {
-        for (value, label) in [
-            (ExportFormat::Png, "PNG"),
-            (ExportFormat::Jpeg, "JPEG"),
-            (ExportFormat::Webp, "WebP"),
-        ] {
-            ui.selectable_value(&mut options.format, value, label);
-        }
-    });
-    ui.label("Quality");
-    for (value, label) in [
-        (ExportQuality::Preserve, "Preserve"),
-        (ExportQuality::Compress, "Compress"),
-        (ExportQuality::Maximum, "Maximum file size"),
-    ] {
-        if ui.radio_value(&mut options.quality, value, label).changed() {
-            options.max_size_bytes = (value == ExportQuality::Maximum).then_some(1_000_000);
-        }
-    }
-    if options.quality == ExportQuality::Compress {
-        ui.horizontal(|ui| {
-            let selected = output_preset(options);
-            egui::ComboBox::from_id_salt("output-quality-preset")
-                .selected_text(selected.unwrap_or("Custom"))
-                .width(108.)
+        ExportGroup::Quality => {
+            caption(ui, "Save quality");
+            let options = &mut view.export_options;
+            egui::ComboBox::from_id_salt("output-quality-mode")
+                .selected_text(match options.quality {
+                    ExportQuality::Preserve => "Preserve quality",
+                    ExportQuality::Compress => "Compress",
+                    ExportQuality::Maximum => "Maximum file size",
+                })
+                .width(140.)
                 .show_ui(ui, |ui| {
-                    for (label, quality) in OUTPUT_PRESETS {
+                    for (value, label, description) in [
+                        (
+                            ExportQuality::Preserve,
+                            "Preserve quality",
+                            "Original quality with no extra compression unless an edit requires it.",
+                        ),
+                        (
+                            ExportQuality::Compress,
+                            "Compress",
+                            "Smaller file with Tiny through Highest quality presets.",
+                        ),
+                        (
+                            ExportQuality::Maximum,
+                            "Maximum file size",
+                            "Set a hard size limit for the saved file.",
+                        ),
+                    ] {
                         if ui
-                            .selectable_label(selected == Some(label), label)
-                            .clicked()
+                            .selectable_value(&mut options.quality, value, label)
+                            .on_hover_text(description)
+                            .changed()
                         {
-                            options.quality_value = quality;
-                            // Shared encoding owns PNG palette selection.
-                            options.png.max_colors = None;
+                            options.max_size_bytes =
+                                (value == ExportQuality::Maximum).then_some(1_000_000);
                         }
                     }
                 });
-            let minimum = if options.format == ExportFormat::Jpeg {
-                40
-            } else {
-                1
-            };
-            options.quality_value = options.quality_value.clamp(minimum, 100);
-            ui.add(egui::DragValue::new(&mut options.quality_value).range(minimum..=100))
-                .on_hover_text("Compression quality value");
-        });
-        if options.format == ExportFormat::Png {
-            let mut palette = options.png.max_colors.is_some();
-            if ui.checkbox(&mut palette, "Custom PNG colors").changed() {
-                options.png.max_colors = palette.then_some(128);
-            }
-            if let Some(colors) = &mut options.png.max_colors {
+        }
+        ExportGroup::Preset => {
+            caption(ui, "Quality");
+            ui.horizontal(|ui| {
+                let options = &mut view.export_options;
+                let selected = output_preset(options);
+                egui::ComboBox::from_id_salt("output-quality-preset")
+                    .selected_text(selected.unwrap_or("Custom"))
+                    .width(96.)
+                    .show_ui(ui, |ui| {
+                        for (label, quality) in OUTPUT_PRESETS {
+                            if ui
+                                .selectable_label(selected == Some(label), label)
+                                .clicked()
+                            {
+                                options.quality_value = quality;
+                                // Shared encoding owns PNG palette selection.
+                                options.png.max_colors = None;
+                            }
+                        }
+                    });
+                let minimum = if options.format == ExportFormat::Jpeg {
+                    40
+                } else {
+                    1
+                };
+                options.quality_value = options.quality_value.clamp(minimum, 100);
+                ui.add(egui::DragValue::new(&mut options.quality_value).range(minimum..=100))
+                    .on_hover_text("Compression quality value");
+            });
+        }
+        ExportGroup::Palette => {
+            caption(ui, "PNG colors");
+            ui.horizontal(|ui| {
+                let options = &mut view.export_options;
+                let mut palette = options.png.max_colors.is_some();
+                if ui.checkbox(&mut palette, "Limit").changed() {
+                    options.png.max_colors = palette.then_some(128);
+                }
+                if let Some(colors) = &mut options.png.max_colors {
+                    ui.add(
+                        egui::DragValue::new(colors)
+                            .range(2..=256)
+                            .suffix(" colors"),
+                    );
+                }
+            });
+        }
+        ExportGroup::Maximum => {
+            caption(ui, "Maximum file size");
+            if let Some(bytes) = &mut view.export_options.max_size_bytes {
                 ui.add(
-                    egui::DragValue::new(colors)
-                        .range(2..=256)
-                        .suffix(" colors"),
-                );
+                    egui::DragValue::new(bytes)
+                        .range(0..=u64::MAX)
+                        .suffix(" bytes"),
+                )
+                .on_hover_text("Hard size limit for the saved file (at least 10 KB)");
             }
         }
-    }
-    if let Some(bytes) = &mut options.max_size_bytes {
-        ui.add(
-            egui::DragValue::new(bytes)
-                .range(0..=u64::MAX)
-                .suffix(" bytes"),
-        );
-    }
-    if *options != previous {
-        if options.format != previous.format {
-            view.destination = PathBuf::from(&view.destination)
-                .with_extension(match options.format {
-                    ExportFormat::Png => "png",
-                    ExportFormat::Jpeg => "jpg",
-                    ExportFormat::Webp => "webp",
-                })
-                .to_string_lossy()
-                .into_owned();
+        ExportGroup::Estimate => {
+            caption(ui, "Est. size");
+            let bar = view.export_view();
+            ui.horizontal(|ui| {
+                ui.set_height(tokens.number("h-md"));
+                let label = bar
+                    .as_ref()
+                    .map_or_else(|| "—".to_owned(), |bar| bar.estimate_label.clone());
+                let color = if view.estimate.pending {
+                    "text-subtle"
+                } else {
+                    "text"
+                };
+                ui.label(RichText::new(label).strong().color(tokens.color(color)))
+                    .on_hover_text(
+                        "Estimated export file size for the current format, quality, and output size",
+                    );
+                if let Some(delta) = bar.and_then(|bar| bar.delta) {
+                    let color = if delta.percent < 0 {
+                        "positive-text"
+                    } else {
+                        "caution-text"
+                    };
+                    ui.label(RichText::new(delta.label).size(small).color(tokens.color(color)))
+                        .on_hover_text("Change versus the original image, before this export");
+                }
+            });
         }
-        view.invalidate_output();
-    }
-    ui.add_space(tokens.number("s-2"));
-    if ui
-        .add_enabled(
-            output_dimensions.is_ok(),
-            egui::Button::new("Preview output"),
-        )
-        .clicked()
-    {
-        view.preview(tx);
-    }
-    if let Some((_, length)) = &view.output {
-        ui.label(format!("Encoded size: {length} bytes"));
-        ui.selectable_value(&mut view.show_output, false, "Edited canvas");
-        ui.selectable_value(&mut view.show_output, true, "Encoded output");
-    } else {
-        ui.label("Preview to calculate encoded size.");
-    }
-    ui.small("Preview does not save a file or a draft. JPEG flattens transparency onto white.");
-    ui.separator();
-    ui.horizontal(|ui| {
-        ui.label("Save location");
-        if ui
-            .add_enabled(view.folder_picker.is_none(), egui::Button::new("Change…"))
-            .on_hover_text("Choose a folder; keep the current filename")
-            .clicked()
-        {
-            view.choose_folder(ui.ctx());
+        ExportGroup::Canvas => {
+            caption(ui, "Canvas");
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(!view.show_output, "Edited")
+                    .on_hover_text("Show the edited canvas")
+                    .clicked()
+                {
+                    view.show_output = false;
+                }
+                let valid = view.export_view().is_some_and(|bar| bar.error.is_none());
+                if ui
+                    .add_enabled(valid, egui::Button::selectable(view.show_output, "Encoded"))
+                    .on_hover_text("Preview the encoded output without saving a file or draft")
+                    .clicked()
+                {
+                    if view.output.is_some() {
+                        view.show_output = true;
+                    } else {
+                        view.preview(tx);
+                    }
+                }
+            });
         }
-    });
-    if ui
-        .add(egui::TextEdit::singleline(&mut view.destination).desired_width(ui.available_width()))
-        .on_hover_text(&view.destination)
-        .changed()
-    {
-        view.output_notice = None;
-        view.error = None;
-    }
-    ui.small("A new copy never replaces a file. Saving does not save or discard your draft.");
-    ui.small("Copy uses the lossless edited canvas, regardless of export quality.");
-    if let Some(path) = view
-        .presented
-        .as_ref()
-        .and_then(|p| p.original_export_path.as_ref())
-    {
-        let extension = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or_default();
-        let matching = match view.export_options.format {
-            ExportFormat::Png => extension.eq_ignore_ascii_case("png"),
-            ExportFormat::Jpeg => {
-                extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
-            }
-            ExportFormat::Webp => extension.eq_ignore_ascii_case("webp"),
-        };
-        ui.separator();
-        if ui
-            .add_enabled(
-                matching && output_dimensions.is_ok(),
-                egui::Button::new("Replace original…"),
-            )
-            .on_hover_text(path.display().to_string())
-            .clicked()
-        {
-            view.begin_replace();
-        }
-        ui.small("Replaces this screenshot’s saved file and History image. Use its original file format.");
     }
 }
 
@@ -3940,7 +4703,6 @@ fn layer_action_enabled(view: &View, action: LayerAction, target_id: Option<&str
         || view.closed
         || view.close_requested
         || view.confirm_discard
-        || view.confirm_replace.is_some()
     {
         return false;
     }
@@ -4994,13 +5756,11 @@ mod tests {
             frame(&mut view, vec![key(egui::Key::P, modifiers)]);
             assert_eq!(view.section, Section::Layers);
         }
-        for blocked in 0..5 {
+        for blocked in 0..4 {
             view.pending = blocked == 0;
             view.close_requested = blocked == 1;
             view.confirm_discard = blocked == 2;
-            view.confirm_replace =
-                (blocked == 3).then(|| (PathBuf::from("original.png"), view.export_options));
-            view.closed = blocked == 4;
+            view.closed = blocked == 3;
             frame(&mut view, vec![key(egui::Key::P, egui::Modifiers::NONE)]);
             assert_eq!(view.section, Section::Layers);
         }
@@ -5030,12 +5790,16 @@ mod tests {
     }
 
     #[test]
-    fn pinned_export_actions_fit_every_section_and_preserve_job_gates() {
+    fn export_bar_spans_every_section_and_preserves_job_gates() {
         let ctx = egui::Context::default();
         let tokens = crate::tokens::load().remove("light-mustard").unwrap();
-        let mut view = View::default();
+        let mut view = View {
+            artifact_id: "shot".into(),
+            default_directory: "/exports".into(),
+            default_stem: "edited".into(),
+            ..View::default()
+        };
         view.receive(&ctx, Ok(presented(true)));
-        view.destination = "/exports/edited.png".into();
         view.export_options.size = ExportSize::Custom {
             width: 13,
             height: 7,
@@ -5054,17 +5818,16 @@ mod tests {
             output.textures_delta.clear();
             output
         };
-        let position = |output: &egui::FullOutput, label| {
-            output
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.job.text == label => {
-                        Some(text.pos + text.galley.rect.center().to_vec2())
-                    }
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("missing action {label}"))
+        let find = |output: &egui::FullOutput, label: &str| {
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.pos + text.galley.rect.center().to_vec2())
+                }
+                _ => None,
+            })
+        };
+        let position = |output: &egui::FullOutput, label: &str| {
+            find(output, label).unwrap_or_else(|| panic!("missing action {label}"))
         };
         let click = |view: &mut View, size, pos| {
             frame(view, size, vec![egui::Event::PointerMoved(pos)]);
@@ -5082,30 +5845,31 @@ mod tests {
             }
         };
         for size in [egui::vec2(1000., 900.), egui::vec2(760., 540.)] {
-            for section in [
-                Section::Geometry,
-                Section::Layers,
-                Section::Draw,
-                Section::Output,
-            ] {
+            for section in [Section::Geometry, Section::Layers, Section::Draw] {
                 view.section = section;
                 frame(&mut view, size, vec![]);
                 let output = frame(&mut view, size, vec![]);
-                let copy = position(&output, "Copy");
-                let save = position(&output, "Save new copy");
+                let copy = position(&output, "Copy image");
+                let save = position(&output, "Save");
+                assert!(
+                    find(&output, "Save as new file").is_none(),
+                    "a first save is always a new file"
+                );
                 for pos in [copy, save] {
-                    assert!(pos.x > size.x - 230. && pos.x < size.x);
+                    assert!(pos.x > 0. && pos.x < size.x);
                     assert!(pos.y > size.y - 80. && pos.y < size.y);
                 }
+                assert!(save.x > size.x - 120., "Save is the rightmost action");
                 click(&mut view, size, save);
-                let Job::SaveNew {
-                    destination,
-                    options,
-                } = rx.try_recv().unwrap()
-                else {
+                let Job::Save { plan, options } = rx.try_recv().unwrap() else {
                     panic!()
                 };
-                assert_eq!(destination, PathBuf::from("/exports/edited.png"));
+                assert_eq!(
+                    plan,
+                    SavePlan::NewFile {
+                        path: PathBuf::from("/exports/edited.png")
+                    }
+                );
                 assert_eq!(
                     options.size,
                     ExportSize::Custom {
@@ -5113,21 +5877,24 @@ mod tests {
                         height: 7
                     }
                 );
+                assert!(view.export_job);
                 click(&mut view, size, copy);
                 assert!(
                     rx.try_recv().is_err(),
                     "copy cannot queue behind an accepted save"
                 );
                 view.pending = false;
+                view.export_job = false;
                 click(&mut view, size, copy);
                 assert!(matches!(rx.try_recv(), Ok(Job::Copy)));
                 view.pending = false;
+                view.export_job = false;
             }
         }
         let size = egui::vec2(760., 540.);
         let output = frame(&mut view, size, vec![]);
-        let save = position(&output, "Save new copy");
-        let copy = position(&output, "Copy");
+        let save = position(&output, "Save");
+        let copy = position(&output, "Copy image");
         view.export_options.size = ExportSize::Custom {
             width: 0,
             height: 7,
@@ -5135,6 +5902,14 @@ mod tests {
         view.custom_export_size = [0, 7];
         click(&mut view, size, save);
         assert!(rx.try_recv().is_err(), "invalid dimensions disable save");
+        let output = frame(&mut view, size, vec![]);
+        assert!(
+            find(
+                &output,
+                "Output dimensions must be from 1 through 16,384 pixels."
+            )
+            .is_some()
+        );
         click(&mut view, size, copy);
         assert!(
             matches!(rx.try_recv(), Ok(Job::Copy)),
@@ -5148,7 +5923,12 @@ mod tests {
 
         view.confirm_discard = false;
         view.section = Section::Geometry;
-        let notice = "Saved copy to /exports/a-long-filename-for-the-edited-image.png. History was not updated: the destination is unavailable.";
+        view.export_options.size = ExportSize::Custom {
+            width: 13,
+            height: 7,
+        };
+        view.custom_export_size = [13, 7];
+        let notice = "Saved /exports/a-long-filename-for-the-edited-image.png. History was not updated: the destination is unavailable.";
         view.output_notice = Some(notice.into());
         let output = frame(&mut view, size, vec![]);
         let pos = position(&output, notice);
@@ -5164,9 +5944,127 @@ mod tests {
         ).count();
         assert_eq!(
             messages, 2,
-            "one footer label and one complete hover tooltip"
+            "one status label and one complete hover tooltip"
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn export_bar_overwrites_saved_source_by_default_and_switch_saves_a_copy() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let source = data.path().join("Shot.png");
+        fs::write(&source, b"png").unwrap();
+        let mut view = View {
+            artifact_id: "shot".into(),
+            default_directory: "/exports".into(),
+            default_stem: "unused".into(),
+            ..View::default()
+        };
+        let mut current = presented(false);
+        current.original_export_path = Some(source.clone());
+        view.receive(&ctx, Ok(current));
+        assert_eq!(view.filename, "Shot");
+        let (tx, rx) = mpsc::channel();
+        let size = egui::vec2(1000., 700.);
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ui| show(ui, &tokens, view, &tx),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let position = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {label}"))
+        };
+        let click = |view: &mut View, pos| {
+            frame(view, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    view,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        pressed,
+                        button: egui::PointerButton::Primary,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            frame(view, vec![])
+        };
+        frame(&mut view, vec![]);
+        let output = frame(&mut view, vec![]);
+        position(
+            &output,
+            "Save keeps original quality as PNG and overwrites the original.",
+        );
+        click(&mut view, position(&output, "Save"));
+        let Job::Save { plan, .. } = rx.try_recv().unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            plan,
+            SavePlan::Overwrite {
+                artifact_id: "shot".into(),
+                path: source.clone()
+            }
+        );
+        view.pending = false;
+        view.export_job = false;
+
+        let output = click(&mut view, position(&output, "Save as new file"));
+        assert_eq!(view.filename, "Shot-edited");
+        position(
+            &output,
+            "Save writes a new PNG at original quality and leaves the original untouched.",
+        );
+        click(&mut view, position(&output, "Save"));
+        let Job::Save { plan, .. } = rx.try_recv().unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            plan,
+            SavePlan::NewFile {
+                path: data.path().join("Shot-edited.png")
+            }
+        );
+        view.pending = false;
+        view.export_job = false;
+
+        // A format that differs from the source always saves a copy and hides the switch.
+        click(&mut view, position(&output, "Save as new file"));
+        assert_eq!(view.filename, "Shot");
+        view.export_options.format = ExportFormat::Webp;
+        frame(&mut view, vec![]);
+        let output = frame(&mut view, vec![]);
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.job.text == "Save as new file")));
+        position(&output, ".webp");
+        click(&mut view, position(&output, "Save"));
+        let Job::Save { plan, .. } = rx.try_recv().unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            plan,
+            SavePlan::NewFile {
+                path: data.path().join("Shot.webp")
+            }
+        );
     }
 
     #[test]
@@ -5188,7 +6086,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| show_output(ui, &tokens, view, &tx),
+                |ui| show_export_settings(ui, &tokens, view, &tx),
             );
             output.textures_delta.clear();
             output
@@ -5259,7 +6157,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| show_output(ui, &tokens, view, &tx),
+                |ui| show_export_settings(ui, &tokens, view, &tx),
             );
             output.textures_delta.clear();
             output
@@ -6126,7 +7024,6 @@ mod tests {
             pixels: Arc::new(RgbaImage::new(7, 3)),
             original_export_path: None,
             initial_text_size: 24.,
-            replaced_original: false,
             font_families: captures_app::editor_fonts::bundled().families,
             text_style_presets: captures_app::editor_text::TEXT_STYLE_PRESETS.into(),
             output: None,
@@ -8823,12 +9720,23 @@ mod tests {
     #[test]
     fn folder_selection_preserves_filename_and_cancelled_or_stale_results_preserve_state() {
         let ctx = egui::Context::default();
-        let mut view = View::default();
+        let mut view = View {
+            default_directory: "old folder".into(),
+            default_stem: "capture.é".into(),
+            ..View::default()
+        };
         view.receive(&ctx, Ok(presented(true)));
+        view.export_options.format = ExportFormat::Webp;
         let frame = view.presented.as_ref().unwrap().pixels.clone();
         let document = view.presented.as_ref().unwrap().document.clone();
+        let destination = |view: &View| {
+            view.export_target
+                .as_ref()
+                .unwrap()
+                .destination(ExportFormat::Webp)
+        };
         let old_path = PathBuf::from("old folder").join("capture.é.webp");
-        view.destination = old_path.to_string_lossy().into_owned();
+        assert_eq!(destination(&view), old_path);
         view.output_notice = Some("Previous result".into());
         let (tx, rx) = mpsc::channel();
         view.folder_picker = Some(rx);
@@ -8837,7 +9745,7 @@ mod tests {
         tx.send(None).unwrap();
         view.receive_folder();
         assert!(view.folder_picker.is_none());
-        assert_eq!(PathBuf::from(&view.destination), old_path);
+        assert_eq!(destination(&view), old_path);
         assert_eq!(view.output_notice.as_deref(), Some("Previous result"));
 
         let (tx, rx) = mpsc::channel();
@@ -8845,13 +9753,14 @@ mod tests {
         drop(tx);
         view.receive_folder();
         assert!(view.error.is_some() && view.folder_picker.is_none());
-        assert_eq!(PathBuf::from(&view.destination), old_path);
+        assert_eq!(destination(&view), old_path);
         let (tx, rx) = mpsc::channel();
         view.folder_picker = Some(rx);
         tx.send(Some(PathBuf::from("chosen folder"))).unwrap();
         view.receive_folder();
         let chosen = PathBuf::from("chosen folder").join("capture.é.webp");
-        assert_eq!(PathBuf::from(&view.destination), chosen);
+        assert_eq!(destination(&view), chosen);
+        assert_eq!(view.filename, "capture.é");
         assert!(view.output_notice.is_none() && view.error.is_none() && !view.pending);
         assert!(view.unsaved() && view.presented.as_ref().unwrap().can_undo);
         assert!(Arc::ptr_eq(
@@ -8868,7 +9777,7 @@ mod tests {
         view.closed = true;
         tx.send(Some(PathBuf::from("stale folder"))).unwrap();
         view.receive_folder();
-        assert_eq!(PathBuf::from(&view.destination), chosen);
+        assert_eq!(destination(&view), chosen);
         assert!(view.closed && view.folder_picker.is_none());
     }
 
@@ -9051,11 +9960,11 @@ mod tests {
         assert!(Arc::ptr_eq(&session_pixels, &preview.pixels));
         editor.view.lock().unwrap().receive(&ctx, Ok(preview));
 
-        let destination = data.path().join("exports/asymmetric.png");
+        let destination = data.path().join("exports").join("asymmetric.png");
         {
             let mut view = editor.view.lock().unwrap();
-            view.destination = destination.to_string_lossy().into_owned();
-            view.save_new(&editor.tx);
+            view.update_export_target(|target, _| target.set_stem("asymmetric"));
+            view.save(&editor.tx);
         }
         let saved = editor
             .rx
@@ -9147,50 +10056,6 @@ mod tests {
     }
 
     #[test]
-    fn replacement_confirmation_freezes_target_and_options_and_cancels_on_state_change() {
-        let ctx = egui::Context::default();
-        let mut view = View::default();
-        let (tx, rx) = mpsc::channel();
-        view.receive(&ctx, Ok(presented(false)));
-        view.begin_replace();
-        assert!(view.confirm_replace.is_none());
-        view.presented.as_mut().unwrap().original_export_path =
-            Some("/exports/original.png".into());
-        view.begin_replace();
-        view.destination = "/different/file.png".into();
-        view.export_options.format = ExportFormat::Webp;
-        view.begin_replace(); // A second request does not replace the first confirmation.
-        assert!(rx.try_recv().is_err() && !view.pending);
-        view.confirm_replacement(&tx);
-        let Job::SaveOriginal {
-            destination,
-            options,
-        } = rx.try_recv().unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(destination, PathBuf::from("/exports/original.png"));
-        assert_eq!(options.format, ExportFormat::Png);
-        view.receive(&ctx, Err("source no longer exists".into()));
-        view.begin_replace();
-        assert!(view.confirm_replace.is_some());
-        view.request_close();
-        view.confirm_replacement(&tx);
-        assert!(rx.try_recv().is_err());
-        let mut view = View::default();
-        let mut current = presented(false);
-        current.original_export_path = Some("/exports/current.png".into());
-        view.receive(&ctx, Ok(current));
-        view.begin_replace();
-        view.receive(&ctx, Ok(presented(false)));
-        view.confirm_replacement(&tx);
-        assert!(
-            rx.try_recv().is_err(),
-            "a stale response cancels unaccepted replacement"
-        );
-    }
-
-    #[test]
     fn replace_original_worker_preserves_editor_and_refreshes_same_history_item() {
         let (data, id) = fixture();
         let root = data.path().join("history");
@@ -9238,9 +10103,9 @@ mod tests {
             .clone();
         {
             let mut view = editor.view.lock().unwrap();
-            view.begin_replace();
             assert!(view.output.is_some());
-            view.confirm_replacement(&editor.tx);
+            // Save overwrites the saved original by default, without a second step.
+            view.save(&editor.tx);
         }
         receive(&editor, &ctx);
         assert!(editor.take_history_changed() && editor.take_original_replaced());
@@ -9257,11 +10122,14 @@ mod tests {
         let view = editor.view.lock().unwrap();
         assert!(view.output.is_some() && view.presented.as_ref().unwrap().can_undo);
         assert_eq!(view.presented.as_ref().unwrap().document, document);
-        assert!(
-            view.output_notice
-                .as_ref()
-                .unwrap()
-                .starts_with("Replaced original at")
+        assert_eq!(
+            view.output_notice.as_deref(),
+            Some("Saved changes to the original")
+        );
+        assert_eq!(view.last_saved.as_deref(), Some(destination.as_path()));
+        assert_eq!(
+            view.original_bytes,
+            Some(fs::metadata(&destination).unwrap().len())
         );
     }
 
@@ -9283,11 +10151,11 @@ mod tests {
         receive(&editor, &ctx);
         editor.view.lock().unwrap().submit(&editor.tx, crop());
         receive(&editor, &ctx);
-        let destination = data.path().join("exports/edited.png");
+        let destination = data.path().join("exports").join("edited.png");
         {
             let mut view = editor.view.lock().unwrap();
-            view.destination = destination.to_string_lossy().into_owned();
-            view.save_new(&editor.tx);
+            view.update_export_target(|target, _| target.set_stem("edited"));
+            view.save(&editor.tx);
         }
         receive(&editor, &ctx);
         assert!(editor.take_history_changed());
@@ -9302,18 +10170,48 @@ mod tests {
         {
             let mut view = editor.view.lock().unwrap();
             assert!(view.unsaved() && view.presented.as_ref().unwrap().can_undo);
-            assert!(
-                view.output_notice
-                    .as_ref()
-                    .unwrap()
-                    .contains("Saved copy to")
+            assert_eq!(
+                view.output_notice.as_deref(),
+                Some(format!("Saved {}", destination.display()).as_str())
             );
-            view.save_new(&editor.tx); // Same name must fail, not silently overwrite.
+            assert_eq!(view.last_saved.as_deref(), Some(destination.as_path()));
+            // The saved file becomes the original: the next Save overwrites it.
+            let Some(ExportSource { path, .. }) = &view.export_target.as_ref().unwrap().source
+            else {
+                panic!("saved file was not adopted")
+            };
+            assert_eq!(path, &destination);
+            view.save(&editor.tx);
+        }
+        receive(&editor, &ctx);
+        assert!(editor.take_history_changed());
+        assert!(
+            !editor.take_original_replaced(),
+            "the editor's own original was not touched"
+        );
+        assert_eq!(fs::read(&destination).unwrap(), bytes);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+        {
+            let mut view = editor.view.lock().unwrap();
+            assert_eq!(
+                view.output_notice.as_deref(),
+                Some("Saved changes to the original")
+            );
+            // Save as new file with the same name must fail, not silently overwrite.
+            view.update_export_target(|target, format| {
+                target.set_save_as_new(true, format);
+                target.set_stem("edited");
+            });
+            view.save(&editor.tx);
         }
         receive(&editor, &ctx);
         {
             let view = editor.view.lock().unwrap();
-            assert!(view.error.is_some() && view.unsaved() && !view.pending && !view.closed);
+            assert_eq!(
+                view.export_error.as_deref(),
+                Some("edited.png already exists. Choose another filename.")
+            );
+            assert!(view.error.is_none() && view.unsaved() && !view.pending && !view.closed);
             assert!(view.output_notice.is_none());
         }
         assert!(!editor.take_history_changed());
@@ -9324,11 +10222,15 @@ mod tests {
         // The retained session can publish even if History becomes unavailable.
         fs::rename(&root, data.path().join("previous-history")).unwrap();
         fs::write(&root, b"blocked").unwrap();
-        let recovered = data.path().join("exports/recovered.png");
+        let recovered = data.path().join("exports").join("recovered.png");
         {
             let mut view = editor.view.lock().unwrap();
-            view.destination = recovered.to_string_lossy().into_owned();
-            view.save_new(&editor.tx);
+            view.update_export_target(|target, _| target.set_stem("recovered"));
+            assert!(
+                view.export_error.is_none(),
+                "editing the filename clears the error"
+            );
+            view.save(&editor.tx);
             view.request_close(); // A pending export must complete before close handling.
         }
         receive(&editor, &ctx);
@@ -9337,6 +10239,10 @@ mod tests {
             assert!(view.error.is_none() && view.unsaved() && !view.closed && view.close_requested);
             let notice = view.output_notice.as_ref().unwrap();
             assert!(notice.contains("recovered.png") && notice.contains("History was not updated"));
+            assert!(
+                view.export_target.as_ref().unwrap().save_as_new,
+                "a file without History is not adopted as the overwrite target"
+            );
         }
         assert_eq!(fs::read(recovered).unwrap(), bytes);
         assert!(!editor.take_history_changed());
@@ -9412,7 +10318,8 @@ mod tests {
         receive(&editor, &ctx);
         {
             let mut view = editor.view.lock().unwrap();
-            assert_eq!(view.error.as_deref(), Some("Clipboard unavailable"));
+            assert_eq!(view.export_error.as_deref(), Some("Clipboard unavailable"));
+            assert!(view.error.is_none() && view.copied_until.is_none());
             assert!(
                 view.output_notice.is_none() && view.unsaved() && !view.pending && !view.closed
             );
@@ -9431,9 +10338,13 @@ mod tests {
         assert!(!editor.take_history_changed());
         let view = editor.view.lock().unwrap();
         assert!(view.error.is_none() && view.unsaved() && view.close_requested && !view.closed);
-        assert_eq!(
-            view.output_notice.as_deref(),
-            Some("Copied edited pixels to the clipboard.")
+        assert!(
+            view.export_error.is_none(),
+            "a successful retry clears the failure"
+        );
+        assert!(
+            view.copied_until.is_some() && view.output_notice.is_none(),
+            "Copy confirms on its own button, not in the save status"
         );
         assert_eq!(view.presented.as_ref().unwrap().document, before);
         assert!(view.presented.as_ref().unwrap().can_undo);
@@ -9450,10 +10361,7 @@ mod tests {
             view.submit(&editor.tx, Request::Undo);
         }
         receive(&editor, &ctx);
-        assert!(
-            editor.view.lock().unwrap().output_notice.is_none(),
-            "an edit invalidates the copied confirmation"
-        );
+        assert!(editor.view.lock().unwrap().output_notice.is_none());
     }
 
     #[test]
@@ -9474,11 +10382,13 @@ mod tests {
         );
         receive(&editor, &ctx);
         editor.view.lock().unwrap().submit(&editor.tx, crop());
-        let destination = data.path().join("exports/queued.png");
+        let destination = data.path().join("exports").join("queued.png");
         editor
             .tx
-            .send(Job::SaveNew {
-                destination: destination.clone(),
+            .send(Job::Save {
+                plan: SavePlan::NewFile {
+                    path: destination.clone(),
+                },
                 options: View::default().export_options,
             })
             .unwrap();

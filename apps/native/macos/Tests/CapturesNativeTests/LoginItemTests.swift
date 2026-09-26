@@ -153,6 +153,12 @@ final class LoginItemTests: XCTestCase {
 
     func testPreferencesShowGifCardMicrophoneAndHighlightSectionInView() throws {
         let (root, controller) = try preferencesFixture(service: nil)
+        // Settings load on the store's worker before the cards are built, so a
+        // single main-queue drain can run first on a slow runner.
+        let deadline = Date().addingTimeInterval(2)
+        while !labels(root).contains("Palette colors"), Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
         drainMainQueue()
         let text = labels(root)
         for title in ["Default microphone", "Frames per second", "Maximum width", "Palette colors"] {

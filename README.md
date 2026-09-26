@@ -506,9 +506,11 @@ canvas-size and draft editor with undo/redo. Both native hosts place their scrol
 inspector to the right of the canvas and center the image in Fit mode without
 upscaling small captures. Their workbench layout still differs from the shipping
 Tauri editor. Both editor windows resize down to 760×540, with scrollable inspector
-controls and a wrapping viewport footer on macOS. Copy image and Save new copy
-stay available below the inspector in every section; format, size, destination and
-confirmed original replacement remain in Output. **Draw crop** selects directly on the
+controls and a wrapping viewport footer on macOS. A shipping-style export bar spans
+the bottom of both editors in every section: an **Export settings** disclosure whose
+summary reads like `PNG · 1920 × 1080 · ≈ 240 KB`, the filename with a format suffix
+menu, **Saving to** with **Change…**, **Copy image** (briefly **Copied**), a
+**Save as new file** switch and **Save**. **Draw crop** selects directly on the
 preview with free or preset aspect ratios and Shift ratio locking. Apply commits
 the selection; Cancel or Escape leaves the document unchanged. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
@@ -527,17 +529,21 @@ expanding the canvas when needed. Imports respect EXIF orientation, are undoable
 and keep their own draft pixels so reopening does not require the source file.
 Supported RGB/grayscale ICC profiles convert to sRGB; unsupported profiles and
 PNG gamma/chromaticity-only or CICP metadata require conversion to sRGB first.
-Its Output panel previews PNG/JPEG/WebP quality and size limits, reports encoded
-bytes, and switches between the edited canvas and encoded output without saving.
-**Save new copy** exports to an editable destination path without replacing an
-existing file, adds a distinct History entry, and preserves the current draft.
-If History cannot be updated, the saved file's path remains available for recovery.
-Both hosts also offer **Replace original…** for an already-saved screenshot, with
-confirmation of its exact path. It atomically replaces that file and updates the
-same History item, retaining its date. Missing files, changed History targets and mismatched formats
-are rejected. The editable document, draft, undo and output preview are retained;
-Undo affects the editor, not the saved file. A copied export does not become this
-editor's replacement target; reopen that copy from History to edit it separately.
+Export settings hold output size, save quality (Preserve, Compress or a maximum
+file size) and **Est. size**, which re-encodes automatically a moment after edits
+or option changes and shows the % change from the original; an encoded-output
+toggle previews the result on the canvas without saving. As in the shipping app,
+**Save** overwrites a screenshot's saved file by default, atomically replacing it and
+updating the same History item (its date is kept) after re-checking that file and
+entry. Turning on **Save as new file**, editing the filename or choosing another
+folder saves a new file instead, and a format that differs from the original always
+does; new files never replace an existing file and add a distinct History entry.
+A capture without a saved file writes its first Save to the output folder. The saved
+file then becomes what Save overwrites, and **Show in Folder** appears. If History
+cannot be updated, the saved file's path remains available for recovery. The status
+line under the filename explains what Save will do and warns when JPEG will fill in
+transparent areas. The editable document, draft, undo and output preview are
+retained; Undo affects the editor, not the saved file.
 Closing can save or keep the previous draft; explicit Discard edits restores the
 current History image. Failed draft saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.
@@ -546,15 +552,14 @@ window. **Draw crop** also uses the shared aspect presets and Shift ratio lockin
 the candidate stays separate from the document until Apply, and Cancel/Escape
 restores the prior fields. Numeric crop fields and the overlay stay synchronized.
 It includes native image-layer controls, lossless rotate/flip actions, and
-PNG/JPEG/WebP output previews
-that report exact encoded size without saving. Both native Output panels offer
+PNG/JPEG/WebP output previews without saving. Both native export settings offer
 **Tiny, Smaller, Balanced, High and Highest** compression presets alongside custom
 values. Highest PNG preserves pixels with lossless packing; JPEG/WebP presets are lossy.
 Both hosts also offer **Original, 75%, 50% and Custom** output dimensions, with an
 aspect lock for custom sizes. Preview/save resize only the exported pixels and the
 published History image; the editable document, draft and full-resolution clipboard are unchanged.
-Its **Save new copy** controls choose
-a folder and filename, publish without replacing files, and preserve the draft. AppKit
+Its export bar uses the same shared save model and status copy as the
+Windows/Linux candidate, and preserves the draft. AppKit
 also imports one still image at a time as a new image layer using its color-managed
 system decoder. It normalizes imported pixels to straight-alpha sRGB RGBA8 and retains
 them in the draft without depending on the source file. ImageIO-supported sources use

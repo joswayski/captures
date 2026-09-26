@@ -169,13 +169,18 @@ RGB/grayscale ICC imports convert to sRGB with straight alpha preserved; untagge
 images assume sRGB. Unsupported/malformed ICC profiles (including CMYK), PNG
 gamma/chromaticity-only metadata and CICP return recoverable errors asking for an
 sRGB conversion first. Import normalizes to 8-bit RGBA, not HDR/wide-gamut editing.
-The Output panel offers PNG/JPEG/WebP, Preserve/Compress/Maximum quality, custom
-PNG palette sizes and an optional hard byte limit. Preview output runs the real
-shared encoder and decoder on the worker, reports the exact byte count, and
-switches between edited and encoded pixels. Changing options or editing clears
-stale output; encoding errors retain the draft and allow retry. Preview does not
-write files or change undo/redo. Save new copy and lossless edited-image Copy pixels
-are connected. Linux enables arboard's
+The bottom export bar's **Export settings** disclosure offers output size,
+Preserve/Compress/Maximum quality, custom PNG palette sizes and an optional hard
+byte limit; the format is the filename's suffix menu. **Est. size** re-encodes on a
+background thread after a 220 ms debounce (never on the session worker) and shows
+the % change from the original. **Encoded** runs the real shared encoder and decoder
+on the worker and shows the encoded pixels; changing options or editing clears
+stale output, and encoding errors retain the draft and allow retry. **Save** follows
+the shipping model through `captures_app::editor_export`: overwrite a saved
+original by default (History entry and path re-checked), or save a new file when
+**Save as new file** is on, the name/folder changed or the format differs. The
+saved file becomes the next overwrite target, and **Show in Folder** opens its
+folder. Lossless edited-image **Copy image** pixels are connected. Linux enables arboard's
 native Wayland data-control backend before its X11 fallback. Compositors without
 `ext-data-control-v1` or `wlr-data-control` return a recoverable clipboard error.
 This does not enable Wayland capture or close editor/input parity.
