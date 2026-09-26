@@ -124,22 +124,21 @@ def main():
         return values
 
     def menu_action(label):
-        labels = ["New Capture…", "Show Recording Controls", "Screenshot Region",
-                  "Screenshot Window", "Screenshot Display", "Capture History…",
-                  "Open Save Location", "Preferences", "Quit Captures"]
+        # Enabled shipping tray rows in order. Keyboard navigation skips the
+        # separators and the disabled "Check for Updates…" row.
+        labels = ["New Capture…", "Screenshot Region", "Screenshot Window",
+                  "Screenshot Display", "Record Region", "Record Window", "Record Display",
+                  "Capture History…", "Open Save Location", "Preferences", "Send Feedback…",
+                  "Quit Captures"]
         panel_ids = run("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel").decode().split()
         tray = next(window for window in panel_ids if int(window_geometry(window)["WIDTH"]) >= 24)
         geometry = window_geometry(tray)
         run("xdotool", "mousemove", "--window", tray, str(int(geometry["WIDTH"]) // 2),
             str(int(geometry["HEIGHT"]) // 2), "click", "3", "sleep", ".4")
-        popup_ids = run("xdotool", "search", "--onlyvisible", "--class", ".*").decode().split()
-        popup = next(window for window in popup_ids
-                     if b"_MENU" in run("xprop", "-id", window, "_NET_WM_WINDOW_TYPE"))
-        popup_geometry = window_geometry(popup)
-        run("xdotool", "mousemove", "--window", popup,
-            str(int(popup_geometry["WIDTH"]) // 2),
-            str(int((labels.index(label) + .5) * int(popup_geometry["HEIGHT"]) / len(labels))),
-            "click", "1")
+        wait(lambda: any(b"_MENU" in run("xprop", "-id", window, "_NET_WM_WINDOW_TYPE")
+                         for window in run("xdotool", "search", "--onlyvisible", "--class", ".*")
+                         .decode().split()), f"tray popup for {label}")
+        run("xdotool", "key", "--delay", "60", *(["Down"] * (labels.index(label) + 1)), "Return")
 
     def manifest():
         files = list((output / "recording-recovery").glob("*/manifest.json"))
@@ -709,9 +708,12 @@ pcm.!pulse {
             hud = wait(lambda: windows("Captures Recording Controls"), "paused HUD")[0]
             click(hud, 398, 54)
             wait(lambda: not windows("Captures Recording Controls"), "paused HUD hidden")
-            menu_action("Show Recording Controls")
+            # Like shipping activation/New Capture, any tray action restores
+            # hidden controls instead of starting another capture.
+            menu_action("New Capture…")
             hud = wait(lambda: windows("Captures Recording Controls"),
                        "real tray action restores paused HUD")[0]
+            assert not windows("Captures Capture Controls"), "restoring must not start a capture"
             assert (manifest()["state"] == "paused"
                     and manifest()["session_id"] == before["session_id"])
             assert windows("Captures Recording Region") == [guide]
