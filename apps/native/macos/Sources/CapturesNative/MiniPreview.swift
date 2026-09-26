@@ -445,7 +445,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     /// The last copy of this capture failed ("Clipboard unavailable").
     var copyFailed = false { didSet { updateWarning() } }
     /// The shown warning chip, for tests and accessibility checks.
-    var warningText: String? { warningLabel.isHidden ? nil : warningLabel.stringValue }
+    /// The warning shipping picks for this card, whether or not hover chrome
+    /// currently covers the metadata row it sits in.
+    var warningText: String? { warningLabel.stringValue.isEmpty ? nil : warningLabel.stringValue }
     /// Locked while an exit plays: no hover, focus or clicks.
     private(set) var isExiting = false
     /// The capture highlight is still fading.
