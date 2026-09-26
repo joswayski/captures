@@ -5,8 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Worker-only feedback. context returns {app_version, os, os_version, arch}
- * without network access. submit {draft: {message, contact: string|null, category}}
+/* Worker-only feedback. copy returns the shared form copy and limits
+ * (captures_app::feedback). context returns {app_version, os, os_version, arch,
+ * system_label} without network access. submit {draft: {message, contact: string|null, category}}
  * sends only those fields and the displayed context, after explicit user consent.
  * No capture, log, or diagnostic attachments. Success/error envelopes and owned
  * UTF-8 pointer rules match captures_app_request_v1; free with
