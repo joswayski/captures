@@ -23,6 +23,8 @@ pub struct Item<'a> {
     pub selected: bool,
     pub confirming_delete: bool,
     pub busy: Option<CardAction>,
+    /// An action showing its shipping success label ("✓ Restored").
+    pub done: Option<CardAction>,
 }
 
 /// Card input, by index into the rendered item slice.
@@ -536,22 +538,24 @@ fn card(
             ),
             Vec2::new(width, height),
         );
-        let label = if item.busy == Some(action) {
-            action.busy_label()
+        let done = item
+            .done
+            .filter(|done| *done == action)
+            .and_then(CardAction::done_label);
+        let (label, icon) = if let Some(done) = done {
+            (done, Some(Glyph::Named("check")))
+        } else if item.busy == Some(action) {
+            (action.busy_label(), action.icon().map(Glyph::for_icon))
         } else {
-            action.label()
+            (action.label(), action.icon().map(Glyph::for_icon))
         };
-        let response = button(
+        let mut response = button(
             ui,
             t,
             button_rect,
             id.with(("action", slot)),
             label,
-            match action {
-                CardAction::Edit => Some(Glyph::Edit),
-                CardAction::SaveImage | CardAction::SaveFile => Some(Glyph::Save),
-                CardAction::Copy | CardAction::ShowInFolder => None,
-            },
+            icon,
             if action == CardAction::Edit {
                 ButtonStyle::Primary
             } else {
@@ -559,6 +563,9 @@ fn card(
             },
             idle,
         );
+        if let Some(tooltip) = action.tooltip() {
+            response = response.on_hover_text(tooltip);
+        }
         if response.clicked() {
             events.push(Event::Action(index, action));
         }
@@ -680,6 +687,18 @@ enum Glyph {
     Save,
     Trash,
     History,
+    /// Any other shared shipping icon (`captures_app::icons`).
+    Named(&'static str),
+}
+
+impl Glyph {
+    fn for_icon(name: &'static str) -> Self {
+        match name {
+            "edit" => Self::Edit,
+            "save" => Self::Save,
+            name => Self::Named(name),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -873,6 +892,12 @@ fn glyph(painter: &egui::Painter, glyph: Glyph, rect: Rect, stroke: Stroke) {
             painter.circle_stroke(p(12., 12.), 9. * rect.width() / 24., stroke);
             path(&[(3., 3.), (3., 8.), (8., 8.)]);
             path(&[(12., 7.), (12., 12.), (15., 14.)]);
+        }
+        Glyph::Named(name) => {
+            for line in captures_app::icons::polylines(name).unwrap_or_default() {
+                let points = line.iter().map(|[x, y]| p(*x, *y)).collect();
+                painter.add(egui::Shape::line(points, stroke));
+            }
         }
     }
 }

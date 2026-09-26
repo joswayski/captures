@@ -15,6 +15,8 @@ use crate::{preview::format_file_size, recording_timeline::format_recording_time
 
 /// Shipping two-step Delete / Delete all revert to their idle state after 4 s.
 pub const CONFIRM_TIMEOUT_MS: u64 = 4_000;
+/// Shipping shows "✓ Restored" (and "Saved") feedback for 2.5 s.
+pub const ACTION_FEEDBACK_MS: u64 = 2_500;
 /// `.history-grid`: `repeat(auto-fill, minmax(252px, 1fr))` with `gap: var(--s-6)`.
 pub const GRID_MIN_CARD_WIDTH: f64 = 252.0;
 pub const GRID_GAP: f64 = 16.0;
@@ -91,6 +93,8 @@ pub fn clear_error(error: &str) -> String {
 #[serde(rename_all = "snake_case")]
 pub enum CardAction {
     Edit,
+    /// Shipping History Restore: bring a screenshot back as a floating preview.
+    Restore,
     Copy,
     SaveImage,
     SaveFile,
@@ -98,9 +102,20 @@ pub enum CardAction {
 }
 
 impl CardAction {
+    /// Every action, in ABI order.
+    pub const ALL: [Self; 6] = [
+        Self::Edit,
+        Self::Restore,
+        Self::Copy,
+        Self::SaveImage,
+        Self::SaveFile,
+        Self::ShowInFolder,
+    ];
+
     pub const fn label(self) -> &'static str {
         match self {
             Self::Edit => "Edit",
+            Self::Restore => "Restore",
             Self::Copy => "Copy image",
             Self::SaveImage => "Save image",
             Self::SaveFile => "Save file",
@@ -112,9 +127,37 @@ impl CardAction {
     pub const fn busy_label(self) -> &'static str {
         match self {
             Self::Edit => "Opening…",
+            Self::Restore => "Restoring…",
             Self::Copy => "Copying…",
             Self::SaveImage | Self::SaveFile => "Saving…",
             Self::ShowInFolder => "Showing…",
+        }
+    }
+
+    /// Shipping success label, shown with the check icon for
+    /// [`ACTION_FEEDBACK_MS`] ("✓ Restored"). Other actions have none.
+    pub const fn done_label(self) -> Option<&'static str> {
+        match self {
+            Self::Restore => Some("Restored"),
+            _ => None,
+        }
+    }
+
+    /// Shipping `title` tooltip on the card button.
+    pub const fn tooltip(self) -> Option<&'static str> {
+        match self {
+            Self::Restore => Some("Bring this screenshot back as a floating preview"),
+            _ => None,
+        }
+    }
+
+    /// Leading shipping icon ([`crate::icons`] name) on the card button.
+    pub const fn icon(self) -> Option<&'static str> {
+        match self {
+            Self::Edit => Some("edit"),
+            Self::Restore => Some("restore"),
+            Self::SaveImage | Self::SaveFile => Some("save"),
+            Self::Copy | Self::ShowInFolder => None,
         }
     }
 }
@@ -167,17 +210,19 @@ where
     }
     let (actions, menu) = match (recording, missing) {
         (_, true) => (Vec::new(), Vec::new()),
+        // Shipping screenshot cards show Edit and Restore; Save image and
+        // Show in Folder stay reachable from the native secondary-click menu.
         (false, false) => {
-            let export = if saved {
-                CardAction::ShowInFolder
-            } else {
-                CardAction::SaveImage
-            };
-            let mut menu = vec![CardAction::Edit, CardAction::Copy, CardAction::SaveImage];
+            let mut menu = vec![
+                CardAction::Edit,
+                CardAction::Restore,
+                CardAction::Copy,
+                CardAction::SaveImage,
+            ];
             if saved {
                 menu.push(CardAction::ShowInFolder);
             }
-            (vec![CardAction::Edit, export], menu)
+            (vec![CardAction::Edit, CardAction::Restore], menu)
         }
         (true, false) => {
             let export = if saved {
@@ -406,14 +451,20 @@ mod tests {
         assert_eq!(card.open_label, Some("Open screenshot in editor"));
         assert_eq!(card.delete_label, "Delete from History");
         assert!(card.delete_requires_confirmation);
-        assert_eq!(card.actions, [CardAction::Edit, CardAction::SaveImage]);
+        assert_eq!(card.actions, [CardAction::Edit, CardAction::Restore]);
         assert_eq!(
             card.menu,
-            [CardAction::Edit, CardAction::Copy, CardAction::SaveImage]
+            [
+                CardAction::Edit,
+                CardAction::Restore,
+                CardAction::Copy,
+                CardAction::SaveImage
+            ]
         );
         screenshot.saved_path = Some("/tmp/export.png".into());
         let saved = card_in(&screenshot, false, &utc);
-        assert_eq!(saved.actions, [CardAction::Edit, CardAction::ShowInFolder]);
+        // Shipping keeps Restore after export; Show in Folder is menu-only.
+        assert_eq!(saved.actions, [CardAction::Edit, CardAction::Restore]);
         assert_eq!(saved.menu.last(), Some(&CardAction::ShowInFolder));
         let offset = FixedOffset::west_opt(7 * 3600).unwrap();
         assert_eq!(
@@ -454,6 +505,36 @@ mod tests {
         assert_eq!(gif.details, "1920 × 1080 · 1.2 MB · 0:00");
         assert_eq!(gif.image_label, "GIF recording poster");
         assert_eq!(gif.open_label, Some("Open GIF in editor"));
+    }
+
+    #[test]
+    fn restore_matches_the_shipping_history_button() {
+        let restore = CardAction::Restore;
+        assert_eq!(restore.label(), "Restore");
+        assert_eq!(restore.busy_label(), "Restoring…");
+        assert_eq!(restore.done_label(), Some("Restored"));
+        assert_eq!(
+            restore.tooltip(),
+            Some("Bring this screenshot back as a floating preview")
+        );
+        assert_eq!(ACTION_FEEDBACK_MS, 2_500);
+        for action in CardAction::ALL {
+            if let Some(icon) = action.icon() {
+                assert!(
+                    crate::icons::paths(icon).is_some(),
+                    "{icon} is not a shipping icon"
+                );
+            }
+            if action != CardAction::Restore {
+                assert_eq!(action.done_label(), None);
+                assert_eq!(action.tooltip(), None);
+            }
+        }
+        // Recordings never offer Restore (shipping rejects non-screenshots).
+        for kind in [ArtifactKind::Video, ArtifactKind::Gif] {
+            let card = card(&entry(kind), false);
+            assert!(!card.actions.contains(&restore) && !card.menu.contains(&restore));
+        }
     }
 
     #[test]

@@ -274,26 +274,27 @@ fn response(request: *const c_char) -> Value {
         }
         Ok(Request::HistoryCopy) => {
             use captures_app::history_view::CardAction;
-            let actions = [
-                CardAction::Edit,
-                CardAction::Copy,
-                CardAction::SaveImage,
-                CardAction::SaveFile,
-                CardAction::ShowInFolder,
-            ]
-            .into_iter()
-            .map(|action| {
-                (
-                    json!(action).as_str().unwrap_or_default().to_owned(),
-                    json!({"label":action.label(),"busy":action.busy_label()}),
-                )
-            })
-            .collect::<serde_json::Map<_, _>>();
+            let actions = CardAction::ALL
+                .into_iter()
+                .map(|action| {
+                    (
+                        json!(action).as_str().unwrap_or_default().to_owned(),
+                        json!({
+                            "label":action.label(),
+                            "busy":action.busy_label(),
+                            "done":action.done_label(),
+                            "tooltip":action.tooltip(),
+                            "icon":action.icon(),
+                        }),
+                    )
+                })
+                .collect::<serde_json::Map<_, _>>();
             json!({
                 "ok":true,
                 "copy":captures_app::history_view::copy(),
                 "actions":actions,
                 "confirm_timeout_ms":captures_app::history_view::CONFIRM_TIMEOUT_MS,
+                "feedback_ms":captures_app::history_view::ACTION_FEEDBACK_MS,
             })
         }
         // A malformed entry yields null for that card only.
@@ -455,6 +456,16 @@ mod tests {
         assert_eq!(copy["actions"]["edit"]["label"], "Edit");
         assert_eq!(copy["actions"]["save_file"]["busy"], "Saving…");
         assert_eq!(copy["actions"]["show_in_folder"]["label"], "Show in Folder");
+        assert_eq!(copy["actions"]["show_in_folder"]["done"], Value::Null);
+        assert_eq!(copy["actions"]["restore"]["label"], "Restore");
+        assert_eq!(copy["actions"]["restore"]["busy"], "Restoring…");
+        assert_eq!(copy["actions"]["restore"]["done"], "Restored");
+        assert_eq!(
+            copy["actions"]["restore"]["tooltip"],
+            "Bring this screenshot back as a floating preview"
+        );
+        assert_eq!(copy["actions"]["restore"]["icon"], "restore");
+        assert_eq!(copy["feedback_ms"], 2_500);
 
         let entry = |kind: &str, id: &str| {
             json!({"id":id,"kind":kind,"preview_url":"","full_url":"","width":640,
@@ -470,7 +481,7 @@ mod tests {
         let cards = cards["cards"].as_array().unwrap();
         assert_eq!(cards.len(), 3);
         assert_eq!(cards[0]["details"], "640 × 480 · 2.0 KB");
-        assert_eq!(cards[0]["actions"], json!(["edit", "save_image"]));
+        assert_eq!(cards[0]["actions"], json!(["edit", "restore"]));
         assert_eq!(cards[0]["warning"], Value::Null);
         assert_eq!(cards[1]["missing"], true);
         assert_eq!(cards[1]["actions"], json!([]));
