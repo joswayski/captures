@@ -1115,7 +1115,9 @@ Native recording microphone mute now shares one `RecordingSession` operation
 across AppKit and wgpu. Running changes durably complete the accepted segment,
 persist only `audio.microphone_muted`, then reopen with the same target/options;
 paused changes stay paused, unchanged values do not rotate, and stale generation,
-invalid-state, missing-device and reopen-failure paths preserve recovery media.
+invalid-state, missing-device and reopen-failure paths preserve recovery media. A
+reopen failure leaves the take paused with the error on the HUD (see the failure
+and retry slice below).
 Both 430×102 HUDs expose Mute/Unmute names, selected muted state, lifecycle busy
 gating and an explicit mic-less explanation. Status: macOS AppKit and Windows are
 implemented / unverified on physical hosts; Linux X11 is verified on the private
@@ -1413,6 +1415,48 @@ running publication, paused countdown cancellation, selection Escape, asymmetric
 saved pixels, same-session continuity, final decode and recovery cleanup. AppKit CI
 renders/tests the enabled HUD; real macOS/Windows capture and Wayland remain open,
 so this does not close the Recording HUD parity gate.
+
+The recording HUD failure and retry slice ports the shipping `RecordingHud` failure
+states to both hosts through `captures_app::recording_hud` (AppKit calls it through
+`captures_recording_hud_request_v1`). That policy owns each state's enabled
+controls, accessible names, tooltip copy, status label/dot, `recordingErrorMessage`
+cleanup, the inline error line and tooltip placement. Behavior now matches shipping:
+
+- **Start failure.** When the engine cannot start a take (for example a missing
+  selected microphone or denied screen access), the HUD stays up in its Failed
+  state: a static subtle dot, "FAILED", the error on one signal-text line below
+  the controls, and only **Retry recording** and Delete enabled. The region guide
+  is removed and Escape is released. Retry restarts the countdown at once, with no
+  "Restart recording?" question, and a repeat failure returns to the same state.
+  Delete still asks "Delete recording?". Shipping leaves Hide enabled here, but its
+  command refuses a failed take, so native hosts disable it instead.
+- **Resume or microphone change failure.** `RecordingSession` now leaves the take
+  paused with its completed segments when the next segment cannot open, instead of
+  failing it. The HUD shows the error inline so the take can be resumed again or
+  saved. Cancellation (a stale generation or a locked session) still saves the take.
+- **Saving.** Stop keeps the HUD up as "SAVING…" with the info dot, a frozen timer
+  and every control disabled until publication. Finalize or encode failures still
+  close the HUD and keep the recovery bundle, as shipping does, so the retry for a
+  failed save is History's recording recovery, not the HUD.
+- **Inline error line.** Engine warnings (a disconnected microphone, unwritable
+  desktop audio) and HUD action failures (screenshot start, discard) move from the
+  privacy line to shipping's `.recording-hud-error` line, and the privacy notice stays.
+  The line clears when the next HUD action starts. A warning shows once per change,
+  and a new take starts clear.
+- **Styled tooltips.** A fixed-glass tooltip replaces system/egui hover text. It uses
+  shipping copy ("Stop and save", "Retry recording", "Hide controls"…) and appears
+  under the hovered or focused button, disabled buttons included, with no delay. It
+  fades and slides 3 pt over `--dur-1`, and the last three right-align.
+- wgpu also keeps the HUD window alive, with controls disabled, while pausing,
+  resuming or changing the microphone. Previously the window closed and reopened.
+
+Status: Linux X11 is verified on the private Xvfb/PulseAudio desktop.
+`x11_recording_smoke.py --start-failure` covers the failed HUD, the inline error,
+disabled controls, the tooltip, a failing and a succeeding Retry and Delete.
+`--device-change explicit` now covers a paused take with the inline error that is
+then saved. macOS AppKit has XCTest coverage but no physical-host run, and Windows
+is implemented but unverified. Wayland stays gated. Onboarding/selector permission
+flows are separate slices, so this does not close the Recording HUD gate.
 
 The screenshot-editor shared-core prerequisite models the persisted layered
 document separately from the bitmap renderer and ports initialization, bounded

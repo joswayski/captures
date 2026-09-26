@@ -101,6 +101,16 @@ env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 CAPTURES_TEST_PRIVATE_X11=1 \
 This needs `xvfb`, `xauth`, `hsetroot`, FFmpeg and FFprobe. It is not physical
 Windows/macOS, audio-device, multi-display or Wayland acceptance.
 
+Failures follow the shipping HUD. If the engine cannot start a take (for example
+the selected microphone is missing), the HUD stays up as **Failed** with the error
+on one line below the controls, and offers **Retry recording** (no confirmation) and
+Delete. If resume or a microphone change cannot reopen the engine, the take stays
+paused with that error, ready to resume or save. Stop shows **Saving…** until the
+take is published. A failed save still closes the HUD and keeps the recovery bundle.
+Engine warnings share the error line, which clears when the next HUD action starts.
+HUD buttons use the shipping fixed-glass tooltips, which appear immediately on hover
+or focus. `x11_recording_smoke.py --start-failure` exercises these states on X11.
+
 The native recording Hide slice removes the AppKit or wgpu HUD without changing
 the accepted session, timer, pause/microphone state, capture generation or media.
 A 6.2-second click-through fixed-glass notice explains restoration; no collapsed

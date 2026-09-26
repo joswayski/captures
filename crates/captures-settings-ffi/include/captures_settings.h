@@ -29,6 +29,22 @@ char *captures_feedback_request_v1(const char *request_json);
  * captures_app_request_v1; free with captures_settings_free_v1. */
 char *captures_update_notice_request_v1(const char *request_json);
 
+/* Pure recording HUD policy (shipping RecordingHud); safe on the UI thread.
+ * present {state: RecordingState, busy?, has_microphone?, microphone_muted?,
+ * hide_available?} returns {status_label, dot, dot_token, dot_halo, pulsing,
+ * timer_running, show_meter, restart_confirms, controls: [{control: "stop"|
+ * "pause_resume"|"restart"|"screenshot"|"microphone"|"delete"|"hide", label,
+ * tooltip, icon, enabled, selected, tooltip_right_aligned}]} in shipping order.
+ * error_message {message} returns {message} cleaned like recordingErrorMessage.
+ * error_line {line?: {message, warning}, event: {event: "session_changed"|
+ * "action_started"|"action_failed" (message)|"warning" (warning|null)},
+ * session_error?} returns {line, text: string|null, changed}; keep the returned
+ * line for the next event. tooltip_frame {anchor, text_width, text_height,
+ * right_aligned, progress 0...1, bounds} takes top-left rects and returns the
+ * styled tooltip rect. Envelopes follow captures_app_request_v1; free with
+ * captures_settings_free_v1. */
+char *captures_recording_hud_request_v1(const char *request_json);
+
 /* Event-loop-thread-only native capture-launch shortcuts. One owner per process.
  * JSON requests: configure {settings: AppSettings}, enabled {enabled: bool},
  * next, close. Envelopes follow captures_app_request_v1. next returns

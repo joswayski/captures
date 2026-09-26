@@ -21,6 +21,7 @@ pub mod onboarding;
 pub mod preview;
 pub mod preview_drag;
 pub mod recording_editor;
+pub mod recording_hud;
 pub mod recording_timeline;
 pub mod region;
 pub mod selection;

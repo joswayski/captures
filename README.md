@@ -282,6 +282,9 @@ the accepted take. Escape cancels only that selector or its screenshot countdown
 successful screenshots use the normal native History, preview and auto-copy paths.
 AppKit and Windows can exclude native capture UI. X11 temporarily hides the HUD and
 guide from the screenshot, but cannot keep the selector out of the ongoing recording.
+As in the Preview, a take that cannot start keeps the HUD open with the error and
+offers **Retry recording** or Delete. A resume that cannot reopen the microphone
+leaves the take paused so it can still be saved.
 The Windows/Linux candidate's **Edit recording** opens a decoded frame preview
 with source-relative scrubbing, draggable trim handles, numeric trim/crop controls, custom output dimensions
 and MP4/GIF **Save new copy**. Crop dimensions start aspect-locked; unlock to change

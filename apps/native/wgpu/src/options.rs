@@ -8,7 +8,7 @@ pub const USAGE: &str = "Captures wgpu native host\n\
   --update-tray top|bottom|none (update scene only; stub status source)\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
-  --capture-controls-recording --hud-state unmuted|muted|busy|no-microphone\n\
+  --capture-controls-recording --hud-state unmuted|muted|busy|no-microphone|saving|failed\n\
   --settings-file PATH\n\
   --floating (HUD/preview only) --reduced-motion\n\
   --screenshot FILE.png --screenshot-after SECONDS";
@@ -38,6 +38,8 @@ pub enum HudState {
     Muted,
     Busy,
     NoMicrophone,
+    Saving,
+    Failed,
 }
 
 impl Scene {
@@ -188,6 +190,8 @@ impl Options {
                         "muted" => HudState::Muted,
                         "busy" => HudState::Busy,
                         "no-microphone" => HudState::NoMicrophone,
+                        "saving" => HudState::Saving,
+                        "failed" => HudState::Failed,
                         _ => return Err("Unknown HUD state".into()),
                     }
                 }
@@ -429,6 +433,12 @@ mod tests {
                 .unwrap()
                 .hud_state,
             HudState::Muted
+        );
+        assert_eq!(
+            parse(&["--scene", "hud", "--hud-state", "failed"])
+                .unwrap()
+                .hud_state,
+            HudState::Failed
         );
         assert!(parse(&["--hud-state", "unknown"]).is_err());
         assert_eq!(

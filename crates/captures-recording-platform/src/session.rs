@@ -120,6 +120,8 @@ impl RecordingSession {
     /// the host's capture-generation cancellation gate before and after the
     /// blocking engine start. A cancelled initial start discards its bundle;
     /// cancelled resume leaves completed segments paused for stop/finalization.
+    /// An engine that cannot open fails an initial start (hosts offer Retry
+    /// recording) but leaves a resumed take paused with the error.
     pub fn start(
         &mut self,
         exclude_captures_app: bool,
@@ -161,6 +163,13 @@ impl RecordingSession {
             exclude_captures_app,
         ) {
             Ok(segment) => segment,
+            // Like the shipping app, a resume or microphone change whose engine
+            // cannot open (for example an unplugged microphone) leaves the take
+            // paused with its completed media, so it can be retried or saved.
+            Err(error) if self.manifest.state == RecordingState::Paused => {
+                self.started_at_ms = None;
+                return Err(error);
+            }
             Err(error) => return Err(self.fail(error)),
         };
         if !is_current() {
@@ -803,6 +812,65 @@ mod tests {
     }
 
     #[test]
+    fn failed_initial_start_can_be_retried_from_a_fresh_countdown() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut session =
+            RecordingSession::prepare(root.path().into(), options(&display), display).unwrap();
+        let error = session
+            .start_with(
+                false,
+                || true,
+                |_, _, _, _| Err("no microphone device is available".into()),
+            )
+            .unwrap_err();
+        assert_eq!(error, "no microphone device is available");
+        let failed = session.snapshot();
+        assert_eq!(failed.state, RecordingState::Failed);
+        assert_eq!(failed.error.as_deref(), Some(error.as_str()));
+        assert_eq!(
+            session.store.load(&session.manifest.session_id).unwrap(),
+            session.manifest
+        );
+
+        // Shipping "Retry recording" restarts the failed take's countdown.
+        let retried = session.restart().unwrap();
+        assert_eq!(retried.state, RecordingState::Countdown);
+        assert_eq!(retried.error, None);
+        assert_eq!(session.manifest.last_error, None);
+        assert!(session.manifest.segments.is_empty());
+    }
+
+    #[test]
+    fn resume_engine_failure_keeps_the_take_paused_with_its_media() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut session =
+            RecordingSession::prepare(root.path().into(), options(&display), display).unwrap();
+        session
+            .transition(RecordingState::Recording, now_ms().saturating_sub(700))
+            .unwrap();
+        session.pause().unwrap();
+        let before = session.manifest.clone();
+        let error = session
+            .start_with(
+                false,
+                || true,
+                |_, _, _, _| Err("no microphone device is available".into()),
+            )
+            .unwrap_err();
+        assert_eq!(error, "no microphone device is available");
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.state, RecordingState::Paused);
+        assert_eq!(snapshot.error, None);
+        assert_eq!(session.manifest, before);
+        assert_eq!(session.store.load(&before.session_id).unwrap(), before);
+        assert!(session.active.is_none() && session.started_at_ms.is_none());
+        // The paused take can still be saved or discarded.
+        assert_eq!(session.stop().unwrap().state, RecordingState::Finalizing);
+    }
+
+    #[test]
     fn paused_microphone_mute_is_durable_and_survives_resume_cancellation_and_restart() {
         let root = tempfile::tempdir().unwrap();
         let display = display();
@@ -956,7 +1024,9 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error, "replacement microphone could not open");
-        assert_eq!(session.snapshot().state, RecordingState::Failed);
+        // Shipping keeps the take paused so the user can retry or save it.
+        assert_eq!(session.snapshot().state, RecordingState::Paused);
+        assert_eq!(session.snapshot().error, None);
         assert!(session.snapshot().options.audio.microphone_muted);
         assert_eq!(session.manifest.segments.len(), 1);
         assert_eq!(std::fs::read(media).unwrap(), b"accepted media");
