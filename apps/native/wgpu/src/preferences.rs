@@ -552,6 +552,13 @@ impl Preferences {
         self.io.flush();
     }
 
+    /// The update notice's Hide / What's new toggle persists like shipping.
+    pub fn set_show_update_changelog(&mut self, show: bool) {
+        if !self.value.is_null() {
+            self.set(&["show_update_changelog"], json!(show));
+        }
+    }
+
     /// Tray "Send Feedback…": show the feedback form in Preferences.
     pub fn open_feedback(&mut self, ctx: &egui::Context) {
         self.feedback.open(ctx);

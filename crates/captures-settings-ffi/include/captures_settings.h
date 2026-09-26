@@ -15,6 +15,20 @@
  * Never call on the UI thread or serialize behind capture/recording work. */
 char *captures_feedback_request_v1(const char *request_json);
 
+/* Pure, allocation-returning update notice helpers; safe on the UI thread.
+ * No network, download or install happens here (no signed updater yet).
+ * present {status: UpdateStatus|null, view?: {show_changelog, action_error,
+ * installing}} returns the shared copy/presentation both hosts render.
+ * fixture {name} returns {status} for workbench fixtures; stub {status, event:
+ * "install"|"check"|"tick"} returns {status: UpdateStatus|null, tick_ms} from
+ * the deterministic simulated source (null status closes the notice).
+ * placement {monitor, work_area, tray|null, menu_bar_at_top, card_width,
+ * card_height} takes top-left logical rectangles {x, y, width, height} and
+ * returns {placement: {x, y, width, height, caret: "none"|"top"|"bottom",
+ * caret_x}, card: rect relative to the window}. Envelopes follow
+ * captures_app_request_v1; free with captures_settings_free_v1. */
+char *captures_update_notice_request_v1(const char *request_json);
+
 /* Event-loop-thread-only native capture-launch shortcuts. One owner per process.
  * JSON requests: configure {settings: AppSettings}, enabled {enabled: bool},
  * next, close. Envelopes follow captures_app_request_v1. next returns

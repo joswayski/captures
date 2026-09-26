@@ -12,6 +12,7 @@ mod region;
 mod selection;
 mod shortcuts;
 mod tray_notice;
+mod update_notice;
 mod window;
 
 use captures_settings::AppSettings;
