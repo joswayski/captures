@@ -267,6 +267,8 @@ struct View {
     progress: Option<ExportProgress>,
     status: Option<String>,
     error: Option<String>,
+    /// The last new copy this editor saved, for shipping's Show in Folder.
+    saved_path: Option<PathBuf>,
     probe_emitted: Option<ProbeRects>,
 }
 
@@ -836,8 +838,9 @@ impl View {
                             .as_ref()
                             .is_some_and(|p| p.export.format == ExportFormat::Gif);
                         let (status, warning) = match saved {
-                            SavedRecording::Saved { artifact, .. } => {
+                            SavedRecording::Saved { path, artifact } => {
                                 self.history_changed = true;
+                                self.saved_path = Some(path);
                                 (
                                     recording_editor_ui::saved_message(
                                         gif,
@@ -847,7 +850,9 @@ impl View {
                                 )
                             }
                             SavedRecording::SavedWithoutHistory { path, warning } => {
-                                (format!("Saved new copy: {}", path.display()), Some(warning))
+                                let status = format!("Saved new copy: {}", path.display());
+                                self.saved_path = Some(path);
+                                (status, Some(warning))
                             }
                         };
                         if let Some(p) = &self.presented {
@@ -2774,6 +2779,7 @@ fn show_save_actions(
                     } else {
                         let cancel = CancelToken::default();
                         view.cancel = Some(cancel.clone());
+                        view.saved_path = None;
                         let request = RecordingSaveRequest {
                             destination: view.destination(),
                             export: view.presented.as_ref().unwrap().export.clone(),
@@ -2806,6 +2812,21 @@ fn show_save_actions(
                     probe(ui, "Replace original…", replace.rect);
                     if replace.clicked() {
                         view.begin_replace();
+                    }
+                    // `.recording-show-in-folder`: after a save, until the next one.
+                    if let Some(path) = view.saved_path.clone() {
+                        let reveal = ui
+                            .add(
+                                egui::Button::new("Show in Folder")
+                                    .min_size(egui::vec2(0., tokens.number("h-md"))),
+                            )
+                            .on_hover_text(path.display().to_string());
+                        probe(ui, "Show in Folder", reveal.rect);
+                        if reveal.clicked()
+                            && let Err(error) = crate::reveal::reveal(&path)
+                        {
+                            view.error = Some(format!("Could not show the saved copy: {error}"));
+                        }
                     }
                 }
             });
@@ -5955,6 +5976,7 @@ mod tests {
                 exact: true,
             });
             view.thumbnail_error = Some("source missing".into());
+            view.saved_path = Some("/exports/saved.mp4".into());
             view.start_ms = 1550;
             view.end_ms = 1551;
             let accepted = &mut view.presented.as_mut().unwrap().edit;
@@ -5981,6 +6003,7 @@ mod tests {
                             "Loop preview",
                             "Fit",
                             "100%",
+                            "Show in Folder",
                             "Replace original…",
                             "Apply edits",
                             "Save new copy",
