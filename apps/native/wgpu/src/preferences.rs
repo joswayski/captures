@@ -246,7 +246,7 @@ pub struct Preferences {
     shortcut_recorder: Option<ShortcutRecorder>,
     shortcut_input: shortcut_input::Bridge,
     suppress_shortcut_commands: bool,
-    feedback: crate::feedback::Feedback,
+    feedback: crate::feedback::FeedbackWindow,
     login_root: Option<PathBuf>,
     login_enabled: Option<bool>,
     login_pending: bool,
@@ -343,7 +343,7 @@ impl Preferences {
             shortcut_recorder: None,
             shortcut_input,
             suppress_shortcut_commands: false,
-            feedback: crate::feedback::Feedback::default(),
+            feedback: crate::feedback::FeedbackWindow::default(),
             login_root: None,
             login_enabled: None,
             login_pending: false,
@@ -572,9 +572,19 @@ impl Preferences {
         self.highlight.as_ref().map(|highlight| highlight.target)
     }
 
-    /// Tray "Send Feedback…": show the feedback form in Preferences.
+    /// Tray "Send Feedback…" and the About card: open the feedback window.
     pub fn open_feedback(&mut self, ctx: &egui::Context) {
         self.feedback.open(ctx);
+    }
+
+    /// Register the feedback window (while open) on every root pass.
+    pub fn feedback_viewport(&mut self, ctx: &egui::Context, t: &Tokens, live: bool) {
+        self.feedback.show(ctx, t, live);
+    }
+
+    #[cfg(test)]
+    pub fn feedback_open(&self) -> bool {
+        self.feedback.is_open()
     }
 
     pub fn persisted_generation(&self) -> u64 {
@@ -729,7 +739,6 @@ impl Preferences {
         ui.spacing_mut().item_spacing.y = 1.;
         for (index, section) in preferences::SECTIONS.iter().enumerate() {
             if widgets::nav_item(ui, t, section.title, self.active_section == index).clicked() {
-                self.feedback.open = false;
                 self.section_jump = Some(index);
                 self.active_section = index;
             }
@@ -758,15 +767,6 @@ impl Preferences {
 
     /// Returns true when the user requests the history window.
     pub fn ui(&mut self, ui: &mut egui::Ui, t: &Tokens, live: bool) -> bool {
-        if self.feedback.open {
-            // The feedback form keeps the panel margin it was designed with
-            // (egui's 8 pt live central panel, the fixture's `--s-8`).
-            let margin = if live { 8. } else { t.number("s-8") };
-            egui::Frame::new()
-                .inner_margin(margin as i8)
-                .show(ui, |ui| self.feedback.ui(ui, t, live));
-            return false;
-        }
         self.live = live;
         self.receive_shortcut_input();
         self.keyboard(ui);
@@ -2650,6 +2650,46 @@ mod tests {
             frame(&mut prefs);
             assert_eq!(prefs.highlighted_target(), None, "highlight expires");
         }
+    }
+
+    #[test]
+    fn feedback_opens_its_own_window_beside_preferences() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        captures_settings::save(&path, &AppSettings::default()).unwrap();
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut prefs = Preferences::new(ctx.clone(), path, None, None);
+        prefs.value = serde_json::to_value(AppSettings::default()).unwrap();
+        prefs.load_error = None;
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let frame = |prefs: &mut Preferences| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900., 500.),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    prefs.feedback_viewport(ui.ctx(), &tokens, true);
+                    prefs.ui(ui, &tokens, true);
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let feedback = crate::feedback::viewport_id();
+        assert!(!frame(&mut prefs).viewport_output.contains_key(&feedback));
+        prefs.open_feedback(&ctx);
+        assert!(prefs.feedback_open());
+        let output = frame(&mut prefs);
+        let window = &output.viewport_output[&feedback];
+        assert_eq!(window.builder.title.as_deref(), Some("Send Feedback"));
+        assert_eq!(window.builder.min_inner_size, Some(egui::vec2(460., 460.)));
+        // Preferences stays where it was; its sidebar no longer hides feedback.
+        assert!(prefs.feedback_open());
     }
 
     #[test]
