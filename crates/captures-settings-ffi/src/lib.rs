@@ -208,7 +208,7 @@ enum Request {
     },
     HistoryCopy,
     HistoryCards {
-        cards: Vec<HistoryCardInput>,
+        cards: Vec<Value>,
     },
     HistoryGrid {
         width: f64,
@@ -262,16 +262,40 @@ fn response(request: *const c_char) -> Value {
         Ok(Request::OnboardingPresentation { state }) => {
             json!({"ok":true,"presentation":state.presentation()})
         }
-        Ok(Request::HistoryCopy) => json!({
-            "ok":true,
-            "copy":captures_app::history_view::copy(),
-            "confirm_timeout_ms":captures_app::history_view::CONFIRM_TIMEOUT_MS,
-        }),
+        Ok(Request::HistoryCopy) => {
+            use captures_app::history_view::CardAction;
+            let actions = [
+                CardAction::Edit,
+                CardAction::Copy,
+                CardAction::SaveImage,
+                CardAction::SaveFile,
+                CardAction::ShowInFolder,
+            ]
+            .into_iter()
+            .map(|action| {
+                (
+                    json!(action).as_str().unwrap_or_default().to_owned(),
+                    json!({"label":action.label(),"busy":action.busy_label()}),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+            json!({
+                "ok":true,
+                "copy":captures_app::history_view::copy(),
+                "actions":actions,
+                "confirm_timeout_ms":captures_app::history_view::CONFIRM_TIMEOUT_MS,
+            })
+        }
+        // A malformed entry yields null for that card only.
         Ok(Request::HistoryCards { cards }) => json!({
             "ok":true,
             "cards":cards
-                .iter()
-                .map(|input| captures_app::history_view::card(&input.entry, input.missing))
+                .into_iter()
+                .map(|input| {
+                    serde_json::from_value::<HistoryCardInput>(input)
+                        .ok()
+                        .map(|input| captures_app::history_view::card(&input.entry, input.missing))
+                })
                 .collect::<Vec<_>>(),
         }),
         Ok(Request::HistoryGrid { width }) => {
@@ -413,7 +437,11 @@ mod tests {
         assert_eq!(copy["copy"]["title"], "Capture History");
         assert_eq!(copy["copy"]["eyebrow"], "On this device");
         assert_eq!(copy["copy"]["delete_all_confirm"], "Delete all forever");
+        assert_eq!(copy["copy"]["recovery_title"], "Interrupted recordings");
         assert_eq!(copy["confirm_timeout_ms"], 4_000);
+        assert_eq!(copy["actions"]["edit"]["label"], "Edit");
+        assert_eq!(copy["actions"]["save_file"]["busy"], "Saving…");
+        assert_eq!(copy["actions"]["show_in_folder"]["label"], "Show in Folder");
 
         let entry = |kind: &str, id: &str| {
             json!({"id":id,"kind":kind,"preview_url":"","full_url":"","width":640,
@@ -445,10 +473,12 @@ mod tests {
             grid["grid"]["card_height"],
             captures_app::history_view::CARD_HEIGHT
         );
-        assert_eq!(
-            settings_request(json!({"operation":"history_cards","cards":[{"entry":{}}]}))["ok"],
-            false
-        );
+        let partial = settings_request(json!({"operation":"history_cards","cards":[
+            {"entry":{}}, {"entry":entry("screenshot","s")},
+        ]}));
+        assert_eq!(partial["ok"], true);
+        assert_eq!(partial["cards"][0], Value::Null);
+        assert_eq!(partial["cards"][1]["kind_label"], "Screenshot");
     }
 
     #[test]

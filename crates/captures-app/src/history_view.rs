@@ -47,6 +47,8 @@ pub struct Copy {
     pub cancel: &'static str,
     pub cancel_label: &'static str,
     pub missing: &'static str,
+    pub recovery_title: &'static str,
+    pub recovery_help: &'static str,
 }
 
 pub const COPY: Copy = Copy {
@@ -67,6 +69,8 @@ pub const COPY: Copy = Copy {
     cancel: "Cancel",
     cancel_label: "Cancel delete all captures",
     missing: "File missing",
+    recovery_title: "Interrupted recordings",
+    recovery_help: "These recordings stopped before Captures could finish saving them. Recover one to add its playable segments to Capture History, or discard it.",
 };
 
 pub fn copy() -> &'static Copy {

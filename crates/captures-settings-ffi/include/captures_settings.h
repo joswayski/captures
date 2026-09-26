@@ -817,10 +817,11 @@ void captures_recording_free_v1(CapturesRecordingSession *handle);
  * {"ok":true,"copy":{...}}; onboarding_presentation takes {"state":{...}}
  * and returns {"ok":true,"presentation":{...}} without any I/O.
  * History presentation is I/O-free: history_copy returns
- * {"ok":true,"copy":{...},"confirm_timeout_ms":n}; history_cards takes
- * {"cards":[{"entry":HistoryEntry,"missing":bool},...]} (extra keys ignored)
- * and returns {"ok":true,"cards":[{date,details,warning,actions,menu,...}]} in
- * order, formatted in the local time zone; history_grid takes {"width":n} and
+ * {"ok":true,"copy":{...},"actions":{id:{label,busy}},"confirm_timeout_ms":n};
+ * history_cards takes {"cards":[{"entry":HistoryEntry,"missing":bool},...]}
+ * (extra keys ignored) and returns {"ok":true,"cards":[{date,details,warning,
+ * actions,menu,...}|null]} in order (null for a malformed entry), formatted in
+ * the local time zone; history_grid takes {"width":n} and
  * returns {"ok":true,"grid":{columns,card_width,card_height,gap}}.
  * Theme accepts {"operation":"theme","accent":"#rgb","signal":"#rrggbb",
  * "light":true} and returns {"ok":true,"colors":{...}}.
