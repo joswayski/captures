@@ -33,6 +33,7 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         ],
         "close" => &["m6 6 12 12M18 6 6 18"],
         "check" => &["m5 12 4 4L19 6"],
+        "restore" => &["M4 12a8 8 0 1 0 2.3-5.7L4 8", "M4 4v4h4"],
         "copy" => &[
             "M10 8h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z",
             "M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2",
@@ -513,6 +514,7 @@ mod tests {
             "hide-controls",
             "close",
             "check",
+            "restore",
             "copy",
             "save",
             "folder",

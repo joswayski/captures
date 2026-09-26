@@ -196,6 +196,43 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(transport.cleanupCount, 1)
     }
 
+    func testHistoryRestoreJoinsTheStackOnceWithoutACaptureGeneration() throws {
+        _ = NSApplication.shared
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in self.solidImage(.blue) })
+        defer { controller.close() }
+        var outcomes: [String] = []
+        func record(_ outcome: MiniPreviewRestoreOutcome) {
+            switch outcome {
+            case .shown: outcomes.append("shown")
+            case .alreadyShowing: outcomes.append("already")
+            case .cancelled: outcomes.append("cancelled")
+            case .failed: outcomes.append("failed")
+            }
+        }
+        let captured = artifact(id: "captured", previewPath: "/captured.png")
+        let generation = try XCTUnwrap(controller.beginCapture(settings: previewSettings()))
+        controller.present(captured, on: screenID(), settings: previewSettings(), generation: generation)
+        try waitUntil { controller.decodedArtifactIDs == ["captured"] }
+
+        let restored = artifact(id: "restored", previewPath: "/restored.png")
+        controller.restore(restored, on: nil, settings: previewSettings(), completion: record)
+        try waitUntil { outcomes == ["shown"] }
+        XCTAssertEqual(controller.presentedArtifactIDs, ["captured", "restored"], "Restore lands in front")
+        XCTAssertTrue(controller.isPanelVisible)
+        controller.restore(captured, on: nil, settings: previewSettings(), completion: record)
+        XCTAssertEqual(outcomes, ["shown", "already"])
+        XCTAssertEqual(controller.presentedArtifactIDs, ["captured", "restored"], "an existing card never moves")
+
+        controller.dismiss("restored")
+        controller.restore(restored, on: nil, settings: previewSettings(), completion: record)
+        controller.dismiss("restored")
+        try waitUntil { outcomes.count == 3 }
+        XCTAssertEqual(outcomes.last, "cancelled")
+        XCTAssertEqual(controller.presentedArtifactIDs, ["captured"])
+        // Restore never begins a capture: the next capture still arrives.
+        XCTAssertNotNil(controller.beginCapture(settings: previewSettings()))
+    }
+
     func testStaleAsyncDragPreparationCannotAttachToReplacementIdentity() throws {
         _ = NSApplication.shared
         let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in self.solidImage(.blue) })

@@ -582,6 +582,13 @@ struct PreviewRenderCard {
     hover_y: f64,
 }
 
+/// How [`MiniPreviews::restore_artifact`] proceeds.
+enum RestoreStart {
+    AlreadyShowing,
+    /// Decode this preview for the new card.
+    Decode(PreviewGuard, PathBuf),
+}
+
 struct MiniPreviews {
     visibility: captures_app::preview::ThumbnailVisibility,
     stack: captures_app::preview::PreviewStack,
@@ -684,6 +691,17 @@ impl MiniPreviews {
             self.visibility.restore_capture(capture_generation);
             return Err("Mini-preview artifact was already present in the stack.".into());
         }
+        let guard = self.insert_card(artifact, false, 0.);
+        if target.is_some() {
+            self.stack_target = target;
+        }
+        self.waiting_artifact = Some(artifact_id);
+        Ok(Some((guard, artifact.preview_path.clone())))
+    }
+
+    /// Add the card for an artifact already inserted into `stack`.
+    fn insert_card(&mut self, artifact: &Artifact, editor_open: bool, now_ms: f64) -> PreviewGuard {
+        let artifact_id = artifact.entry.id.clone();
         self.next_generation = self.next_generation.wrapping_add(1);
         let generation = self.next_generation;
         self.cards.insert(
@@ -703,20 +721,44 @@ impl MiniPreviews {
                 saved_at: None,
                 rejected_at: None,
                 arrived_at: None,
-                editor: captures_app::preview_chrome::EditorPresence::new(false, 0.),
+                editor: captures_app::preview_chrome::EditorPresence::new(editor_open, now_ms),
             },
         );
-        if target.is_some() {
+        PreviewGuard {
+            artifact_id,
+            generation,
+        }
+    }
+
+    /// Shipping History Restore (`restore_history_artifact`): bring a
+    /// screenshot back as the front card without a capture generation or
+    /// clipboard copy. A card already in the stack stays where it is, like
+    /// shipping, which never duplicates or reorders it. An empty stack opens
+    /// on `target`; otherwise the pile keeps its display and position.
+    fn restore_artifact(
+        &mut self,
+        artifact: &Artifact,
+        settings: &AppSettings,
+        target: Option<CaptureTarget>,
+        editor_open: bool,
+    ) -> Result<RestoreStart, String> {
+        if self.cards.contains_key(&artifact.entry.id) {
+            return Ok(RestoreStart::AlreadyShowing);
+        }
+        // The per-frame settings sync applies show/placement changes.
+        if self.stack.ids().is_empty() {
+            let target = target.filter(|target| target.preview_bounds.is_some());
+            if target.is_none() && settings.show_mini_previews {
+                return Err("Mini-preview positioning is unavailable for this display.".into());
+            }
             self.stack_target = target;
         }
-        self.waiting_artifact = Some(artifact_id.clone());
-        Ok(Some((
-            PreviewGuard {
-                artifact_id,
-                generation,
-            },
-            artifact.preview_path.clone(),
-        )))
+        if !self.stack.insert(artifact.entry.id.clone()) {
+            return Ok(RestoreStart::AlreadyShowing);
+        }
+        let now_ms = crate::motion::elapsed_ms(self.epoch, Instant::now());
+        let guard = self.insert_card(artifact, editor_open, now_ms);
+        Ok(RestoreStart::Decode(guard, artifact.preview_path.clone()))
     }
 
     fn accepts(&self, artifact_id: &str, generation: u64) -> bool {
@@ -907,6 +949,10 @@ pub struct Live {
     history_loaded: bool,
     history_scroll_to: Option<String>,
     card_busy: Option<(String, captures_app::history_view::CardAction)>,
+    /// History Restore waiting for its preview card to decode ("Restoring…").
+    card_restoring: Option<PreviewGuard>,
+    /// Shipping "✓ Restored" feedback, shown for `ACTION_FEEDBACK_MS`.
+    card_restored: Option<(String, Instant)>,
     status: String,
     error: Option<String>,
     pending: usize,
@@ -1201,6 +1247,8 @@ impl Live {
             history_loaded: false,
             history_scroll_to: None,
             card_busy: None,
+            card_restoring: None,
+            card_restored: None,
             status: "Loading capture workspace…".into(),
             error: None,
             pending: 0,
@@ -3825,6 +3873,7 @@ impl Live {
                     blurred,
                 } if self.previews.accepts(&artifact_id, generation) => match result {
                     Ok(decoded) => {
+                        self.finish_restore(&artifact_id, generation, true);
                         self.previews.mark_ready(&artifact_id);
                         let card = self
                             .previews
@@ -3852,11 +3901,17 @@ impl Live {
                         ctx.request_repaint();
                     }
                     Err(error) => {
+                        self.finish_restore(&artifact_id, generation, false);
                         self.previews.dismiss(&artifact_id, generation);
                         self.error = Some(format!("Could not load mini preview: {error}"));
                     }
                 },
-                Reply::PreviewDecoded { .. } => {}
+                // A card dismissed before it decoded ends its Restore quietly.
+                Reply::PreviewDecoded {
+                    generation,
+                    artifact_id,
+                    ..
+                } => self.finish_restore(&artifact_id, generation, false),
             }
         }
         self.start_next_media();
@@ -5603,7 +5658,8 @@ impl Live {
             self.card_busy = None;
         }
         let copy = captures_app::history_view::copy();
-        let busy = self.pending > 0 || self.recovery.blocking();
+        let busy = self.pending > 0 || self.recovery.blocking() || self.card_restoring.is_some();
+        let restored = self.restored_feedback(ui.ctx(), now);
         let margin = |name: &str| t.number(name) as i8;
         let mut header_event = None;
         egui::Panel::top("live-header")
@@ -5781,7 +5837,17 @@ impl Live {
                                     .card_busy
                                     .as_ref()
                                     .filter(|(busy, _)| busy == id)
-                                    .map(|(_, action)| *action),
+                                    .map(|(_, action)| *action)
+                                    .or_else(|| {
+                                        self.card_restoring
+                                            .as_ref()
+                                            .filter(|guard| guard.artifact_id == id)
+                                            .map(|_| {
+                                                captures_app::history_view::CardAction::Restore
+                                            })
+                                    }),
+                                done: (restored.as_deref() == Some(id))
+                                    .then_some(captures_app::history_view::CardAction::Restore),
                             }
                         })
                         .collect();
@@ -5804,10 +5870,11 @@ impl Live {
                                 &ids[slot],
                                 captures_app::history_view::CardAction::Edit,
                                 settings(),
+                                frame,
                             );
                         }
                         crate::history::Event::Action(slot, action) => {
-                            self.card_action(ui.ctx(), &ids[slot], action, settings());
+                            self.card_action(ui.ctx(), &ids[slot], action, settings(), frame);
                         }
                         crate::history::Event::Delete(slot) => self.delete_card(&ids[slot], now),
                     }
@@ -5853,10 +5920,24 @@ impl Live {
                             &id,
                             captures_app::history_view::CardAction::Edit,
                             settings(),
+                            frame,
                         );
                     }
                 }
             });
+    }
+
+    /// The card still showing "✓ Restored", waking once when it expires.
+    fn restored_feedback(&mut self, ctx: &egui::Context, now: Instant) -> Option<String> {
+        let duration = Duration::from_millis(captures_app::history_view::ACTION_FEEDBACK_MS);
+        let (id, at) = self.card_restored.as_ref()?;
+        let elapsed = now.saturating_duration_since(*at);
+        if elapsed >= duration {
+            self.card_restored = None;
+            return None;
+        }
+        ctx.request_repaint_after(duration - elapsed);
+        Some(id.clone())
     }
 
     /// Revert shipping two-step confirmations after four seconds.
@@ -5962,9 +6043,10 @@ impl Live {
         id: &str,
         action: captures_app::history_view::CardAction,
         settings: Result<AppSettings, String>,
+        frame: &eframe::Frame,
     ) {
         use captures_app::history_view::CardAction;
-        if self.pending > 0 || self.recovery.blocking() {
+        if self.pending > 0 || self.recovery.blocking() || self.card_restoring.is_some() {
             return;
         }
         let Some(entry) = self
@@ -6002,6 +6084,13 @@ impl Live {
                 }
                 Err(error) => self.error = Some(error),
             },
+            CardAction::Restore => match settings {
+                Ok(settings) => {
+                    let target = capture_target(frame, &self.displays, self.display_id.as_deref());
+                    self.restore(ctx, &entry.id, &settings, target);
+                }
+                Err(error) => self.error = Some(error),
+            },
             CardAction::SaveImage | CardAction::SaveFile => match settings {
                 Ok(settings) => {
                     self.card_busy = Some((id.to_owned(), action));
@@ -6022,6 +6111,60 @@ impl Live {
                 }
                 Err(error) => self.error = Some(error),
             },
+        }
+    }
+
+    /// Shipping History Restore: reopen a screenshot through the mini-preview
+    /// stack. An empty stack opens on the workspace's selected display.
+    fn restore(
+        &mut self,
+        ctx: &egui::Context,
+        id: &str,
+        settings: &AppSettings,
+        target: Option<CaptureTarget>,
+    ) {
+        let Some(index) = self.artifact_index(id) else {
+            return;
+        };
+        let artifact = &self.artifacts[index];
+        if artifact.entry.kind.is_recording() {
+            return;
+        }
+        self.error = None;
+        self.card_restored = None;
+        let editor_open = self.editors.get(id).is_some_and(|editor| !editor.closed());
+        match self
+            .previews
+            .restore_artifact(artifact, settings, target, editor_open)
+        {
+            Ok(RestoreStart::AlreadyShowing) => {
+                self.card_restored = Some((id.to_owned(), Instant::now()));
+            }
+            Ok(RestoreStart::Decode(guard, path)) => {
+                let _ = self.tx.send(Job::DecodePreview {
+                    generation: guard.generation,
+                    artifact_id: guard.artifact_id.clone(),
+                    path,
+                });
+                self.card_restoring = Some(guard);
+            }
+            Err(error) => self.error = Some(error),
+        }
+        request_hidden_root_paint(ctx);
+        ctx.request_repaint();
+    }
+
+    /// A preview decode finished; end the matching Restore.
+    fn finish_restore(&mut self, artifact_id: &str, generation: u64, shown: bool) {
+        if self
+            .card_restoring
+            .as_ref()
+            .is_some_and(|guard| guard.artifact_id == artifact_id && guard.generation == generation)
+        {
+            self.card_restoring = None;
+            if shown {
+                self.card_restored = Some((artifact_id.to_owned(), Instant::now()));
+            }
         }
     }
 
@@ -8141,6 +8284,120 @@ mod tests {
         assert!(live.confirm_clear_history.is_none());
         assert!(live.clearing_history);
         assert_eq!(live.pending, 1);
+        live.flush();
+    }
+
+    #[test]
+    fn history_restore_reopens_a_screenshot_preview_once() {
+        use captures_app::history_view::CardAction;
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [10, 20, 30, 255]);
+        let id = artifact.entry.id.clone();
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.flush();
+        let (jobs, requests) = mpsc::channel();
+        live.tx = jobs;
+        let (results, replies) = mpsc::channel();
+        live.rx = replies;
+        live.pending = 0;
+        let mut recording = Artifact {
+            entry: artifact.entry.clone(),
+            image_path: artifact.image_path.clone(),
+            preview_path: artifact.preview_path.clone(),
+        };
+        recording.entry.id = "recording".into();
+        recording.entry.kind = captures_history::ArtifactKind::Video;
+        live.artifacts.push(artifact);
+        live.artifacts.push(recording);
+        let settings = AppSettings::default();
+        let decoded = |generation, artifact_id: &str| Reply::PreviewDecoded {
+            generation,
+            artifact_id: artifact_id.to_owned(),
+            result: Ok(Decoded {
+                image: egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+            }),
+            blurred: None,
+        };
+        let decode_job = || match requests.try_recv() {
+            Ok(Job::DecodePreview {
+                generation,
+                artifact_id,
+                ..
+            }) => (generation, artifact_id),
+            _ => panic!("no preview decode"),
+        };
+        ctx.begin_pass(Default::default());
+
+        // Recordings are never restored (shipping rejects them).
+        live.restore(&ctx, "recording", &settings, Some(preview_target()));
+        assert!(live.previews.stack.ids().is_empty());
+        // An empty stack needs a display to open on.
+        live.restore(&ctx, &id, &settings, None);
+        assert!(live.previews.stack.ids().is_empty());
+        assert!(live.error.is_some());
+        assert!(requests.try_recv().is_err());
+
+        live.restore(&ctx, &id, &settings, Some(preview_target()));
+        assert!(live.error.is_none());
+        assert_eq!(live.previews.stack.ids(), std::slice::from_ref(&id));
+        let (generation, artifact_id) = decode_job();
+        assert_eq!(artifact_id, id);
+        assert_eq!(
+            live.card_restoring.as_ref().map(|guard| guard.generation),
+            Some(generation)
+        );
+        // Card actions wait for the restore; no clipboard copy is queued.
+        live.card_action(&ctx, &id, CardAction::Restore, Ok(settings.clone()), &frame);
+        assert!(requests.try_recv().is_err());
+        results.send(decoded(generation, &id)).unwrap();
+        live.logic(&ctx, &mut frame);
+        assert!(live.card_restoring.is_none());
+        assert!(live.previews.cards[&id].texture.is_some());
+        let now = Instant::now();
+        assert_eq!(live.restored_feedback(&ctx, now), Some(id.clone()));
+        let expiry = Duration::from_millis(captures_app::history_view::ACTION_FEEDBACK_MS);
+        assert_eq!(live.restored_feedback(&ctx, now + expiry), None);
+
+        // Restoring a card that is already showing neither duplicates nor
+        // reorders it, and still confirms "Restored".
+        live.restore(&ctx, &id, &settings, None);
+        assert_eq!(live.previews.stack.ids(), std::slice::from_ref(&id));
+        assert!(live.card_restoring.is_none() && live.card_restored.is_some());
+        assert!(requests.try_recv().is_err());
+
+        // A card dismissed before it decodes ends the restore without feedback.
+        let generation = live.previews.cards[&id].generation;
+        assert!(live.previews.dismiss(&id, generation));
+        live.card_restored = None;
+        live.restore(&ctx, &id, &settings, Some(preview_target()));
+        let (generation, _) = decode_job();
+        assert!(live.previews.dismiss(&id, generation));
+        results.send(decoded(generation, &id)).unwrap();
+        live.logic(&ctx, &mut frame);
+        assert!(live.card_restoring.is_none() && live.card_restored.is_none());
+        assert!(live.previews.cards.is_empty());
+
+        // A decode failure reports the error and leaves no card behind.
+        live.restore(&ctx, &id, &settings, Some(preview_target()));
+        let (generation, _) = decode_job();
+        results
+            .send(Reply::PreviewDecoded {
+                generation,
+                artifact_id: id.clone(),
+                result: Err("unreadable".into()),
+                blurred: None,
+            })
+            .unwrap();
+        live.logic(&ctx, &mut frame);
+        assert!(live.card_restoring.is_none() && live.card_restored.is_none());
+        assert!(live.previews.stack.ids().is_empty());
+        assert!(
+            live.error
+                .as_deref()
+                .is_some_and(|error| error.contains("unreadable"))
+        );
         live.flush();
     }
 
