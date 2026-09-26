@@ -2671,6 +2671,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func clearSavedResult() {
         lastSavedPath = nil
         exportNotice = nil; exportNoticeToken += 1
+        // The footer echoes a failed save; a new name or folder retires it too.
+        if let exportError, status.stringValue == exportError {
+            status.stringValue = ""; status.textColor = tokens.color("text-muted")
+        }
         exportError = nil
         publishExportBar()
     }
