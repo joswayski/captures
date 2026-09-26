@@ -66,7 +66,9 @@ final class HistoryClearTests: XCTestCase {
             func button(_ title: String) throws -> NSButton {
                 try XCTUnwrap(root.subviews.compactMap { $0 as? NSButton }.first { $0.title == title })
             }
-            func labels() -> [String] { root.subviews.compactMap { ($0 as? NSTextField)?.stringValue } }
+            func labels() -> [String] {
+                root.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isHidden }.map(\.stringValue)
+            }
             func actions(_ row: Int) -> [String] {
                 grid.card(at: row)?.actionButtons.filter { !$0.isHidden }.map(\.title) ?? []
             }
@@ -126,12 +128,15 @@ final class HistoryClearTests: XCTestCase {
             }
             transport.remove(kind: "gif")
             try button("Refresh").performClick(nil)
+            // The filtered-empty copy lives in the grid area: Refresh also reloads
+            // displays, and that status message lands after History's.
             try waitUntil { grid.numberOfRows == 0 && labels().contains("No captures match this filter.") }
             XCTAssertEqual(grid.selectedRow, -1)
             XCTAssertFalse(try button("GIF 0").isEnabled)
             XCTAssertEqual(try button("GIF 0").state, .on)
             try button("All 4").performClick(nil)
             try waitUntil { grid.numberOfRows == 4 }
+            XCTAssertFalse(labels().contains("No captures match this filter."))
             XCTAssertEqual(transport.clearCount, 0, "filtering never deletes files")
         }
     }

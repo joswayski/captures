@@ -196,6 +196,9 @@ final class LiveCaptureController: NSObject {
     private var grid: HistoryGridView!
     private var historyScroll: NSScrollView!
     private var emptyState: HistoryEmptyView!
+    /// Shipping filtered-empty copy, shown in the grid area (not the shared
+    /// status line, which display and save messages also write).
+    private var filteredEmptyLabel: NSTextField!
     private var toolbarDivider: Surface!
     private var deleteAllButton: HistoryButton!
     private var deleteAllCancelButton: HistoryButton!
@@ -320,6 +323,12 @@ final class LiveCaptureController: NSObject {
         emptyState = HistoryEmptyView(tokens: tokens)
         emptyState.show(title: copy.loading, body: nil)
         root.addSubview(emptyState)
+        filteredEmptyLabel = NSTextField(labelWithString: "")
+        filteredEmptyLabel.font = .systemFont(ofSize: tokens.number("text-md"))
+        filteredEmptyLabel.textColor = tokens.color("text-subtle")
+        filteredEmptyLabel.lineBreakMode = .byTruncatingTail
+        filteredEmptyLabel.isHidden = true
+        root.addSubview(filteredEmptyLabel)
 
         recoveryPanel = Surface(frame: NSRect(x: 28, y: 246, width: 944, height: 176))
         recoveryPanel.wantsLayer = true
@@ -384,6 +393,8 @@ final class LiveCaptureController: NSObject {
         historyScroll.frame = NSRect(x: 28, y: y, width: width, height: max(0, root.bounds.height - y - 16))
         grid.tile(force: true)
         emptyState.frame = historyScroll.frame
+        filteredEmptyLabel.frame = NSRect(x: historyScroll.frame.minX, y: historyScroll.frame.minY,
+                                          width: width, height: 20)
     }
 
     /// Delete all sits at the header's bottom right, with Cancel while armed.
@@ -725,6 +736,9 @@ final class LiveCaptureController: NSObject {
         } else {
             emptyState.isHidden = true
         }
+        let filteredEmpty = historyLoaded && !artifacts.isEmpty && historyRows.isEmpty
+        filteredEmptyLabel.stringValue = filteredEmpty ? copy.filteredEmpty : ""
+        filteredEmptyLabel.isHidden = !filteredEmpty
     }
 
     private func thumbnailKey(_ artifact: CaptureArtifact) -> String {
