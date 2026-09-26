@@ -167,6 +167,23 @@ bool captures_startup_notice_placement_v1(CapturesTrayNoticeRect monitor,
     bool menu_bar_at_top, uint32_t fallback_edge,
     CapturesTrayNoticePlacement *output);
 
+/* Shipping New Capture menu copy and policy (captures-app::capture_menu).
+ * Operations: "copy" (static labels, FPS/resolution options, toggles, guidance),
+ * "menu" {mode "screenshot"|"recording", auto_start, can_exclude_controls,
+ * controls_excluded, state {starting, switching_display, error}, options
+ * {show_cursor, highlight_clicks, system_audio}, available {cursor_control,
+ * click_highlights, system_audio}} -> visibility note (lead/emphasis/trail/hint,
+ * Preferences target or null), confirm note, primary button and toggle status;
+ * "toggle" {changed, show_cursor, highlight_clicks} -> coupled cursor/clicks;
+ * "microphones" {available, loading, selected, devices [{id, name}]};
+ * "display_identity" {name, width, height, recording_fps?}. Standard owned
+ * {ok,result}/{ok,error} envelope; free with captures_settings_free_v1. */
+char *captures_capture_menu_v1(const char *request_json);
+/* Guidance-chip pointer ducking (28 pt approach pad, 12 pt leave slack). Pointer
+ * and chip bounds share one top-left logical space. No allocation. */
+bool captures_capture_guidance_pointer_over_v1(double x, double y, double left,
+    double top, double right, double bottom, bool currently_over);
+
 /* Owned shared visibility state, not a native window. Serialize all calls on
  * one handle (normally the UI thread). Free exactly once after callers stop;
  * NULL is permitted by free and returns false from every other handle call.

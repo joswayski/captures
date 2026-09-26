@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use captures_app::capture_menu::PreferenceTarget;
 use captures_app::{
     Artifact, Request, Response,
     capture_flow::CaptureFlow,
@@ -398,6 +399,10 @@ enum SelectorMessage {
     SwitchControlsDisplay {
         generation: u64,
         display_id: String,
+    },
+    OpenPreference {
+        generation: u64,
+        target: PreferenceTarget,
     },
     Cancel {
         generation: u64,
@@ -897,6 +902,10 @@ pub struct Live {
     requested_capture: Option<CaptureRequest>,
     restore_root_visible: bool,
     permission_recovery_requested: bool,
+    /// A capture-menu note link asked the workbench to open Preferences here.
+    preference_target_requested: Option<PreferenceTarget>,
+    /// A start or display switch failed while New Capture stayed open.
+    controls_error: Option<String>,
     permission_recovery_visible: bool,
 }
 
@@ -1168,6 +1177,8 @@ impl Live {
             requested_capture: None,
             restore_root_visible: true,
             permission_recovery_requested: false,
+            preference_target_requested: None,
+            controls_error: None,
             permission_recovery_visible: false,
         };
         live.load_history();
@@ -1321,6 +1332,14 @@ impl Live {
 
     pub fn take_permission_recovery_requested(&mut self) -> bool {
         std::mem::take(&mut self.permission_recovery_requested)
+    }
+
+    pub fn preference_target_pending(&self) -> bool {
+        self.preference_target_requested.is_some()
+    }
+
+    pub fn take_preference_target_requested(&mut self) -> Option<PreferenceTarget> {
+        self.preference_target_requested.take()
     }
 
     pub fn set_permission_recovery_visible(&mut self, visible: bool) {
@@ -1497,6 +1516,7 @@ impl Live {
             CaptureRequest::NewCapture | CaptureRequest::Recording(_) => {
                 self.selector_scope_generation.store(0, Ordering::Release);
                 self.capture_phase = Some(CapturePhase::ControlsPreparing);
+                self.controls_error = None;
                 self.controls_freeze = settings.freeze_screen;
                 self.controls_auto_start = settings.auto_start_on_selection;
                 self.controls_countdown_seconds = settings.screenshot_countdown_seconds;
@@ -1858,6 +1878,21 @@ impl Live {
                     let Some(flow) = &self.flow else { continue };
                     flow.cancel();
                 }
+                SelectorMessage::OpenPreference { generation, target }
+                    if accepts_selector_action(
+                        self.flow.as_ref().map(CaptureFlow::generation),
+                        generation,
+                        self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+                        self.capture_phase,
+                        SelectorKind::Controls,
+                    ) =>
+                {
+                    // Shipping `openCapturePreference`: dismiss the menu, then
+                    // show Preferences at the linked row.
+                    let Some(flow) = &self.flow else { continue };
+                    flow.cancel();
+                    self.preference_target_requested = Some(target);
+                }
                 SelectorMessage::ConfirmRegion { generation, rect }
                     if accepts_selector_action(
                         self.flow.as_ref().map(CaptureFlow::generation),
@@ -1956,6 +1991,7 @@ impl Live {
                             Some(self.recording_toolchain_error.clone().unwrap_or_else(|| {
                                 "FFmpeg and ffprobe verification is still in progress.".into()
                             }));
+                        self.controls_error.clone_from(&self.error);
                         continue;
                     }
                     let Some(display) = self
@@ -2171,6 +2207,7 @@ impl Live {
                         self.selector_scope_generation
                             .store(generation, Ordering::Release);
                         self.error = Some("The selected display is no longer available.".into());
+                        self.controls_error.clone_from(&self.error);
                         continue;
                     }
                     self.display_id = Some(display_id);
@@ -2211,6 +2248,7 @@ impl Live {
                 | SelectorMessage::CancelDeleteRecording { .. }
                 | SelectorMessage::HideRecordingControls { .. }
                 | SelectorMessage::SwitchControlsDisplay { .. }
+                | SelectorMessage::OpenPreference { .. }
                 | SelectorMessage::Cancel { .. } => {}
             }
         }
@@ -4786,6 +4824,7 @@ impl Live {
             let sender = self.selector_tx.clone();
             let texture = self.window_texture.clone();
             let auto_start = self.controls_auto_start;
+            let controls_error = self.controls_error.clone();
             let displays = self.displays.clone();
             let recording_unavailable_reason = (!self.recording_toolchain_ready).then(|| {
                 self.recording_toolchain_error
@@ -4829,6 +4868,7 @@ impl Live {
                             auto_start,
                             recording_available: recording_unavailable_reason.is_none(),
                             recording_unavailable_reason: recording_unavailable_reason.as_deref(),
+                            error: controls_error.as_deref(),
                         },
                         |point| session.hit_test(point),
                     );
@@ -4851,6 +4891,9 @@ impl Live {
                                     generation,
                                     display_id,
                                 }
+                            }
+                            capture_controls::Action::OpenPreference(target) => {
+                                SelectorMessage::OpenPreference { generation, target }
                             }
                             capture_controls::Action::Cancel => SelectorMessage::Cancel {
                                 generation,

@@ -1,3 +1,4 @@
+mod capture_menu;
 mod editor;
 mod feedback;
 mod icons;

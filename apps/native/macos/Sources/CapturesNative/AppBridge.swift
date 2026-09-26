@@ -349,6 +349,10 @@ final class NativeWindowSession {
 struct DisplayItem {
     let id: String
     let title: String
+    /// OS display name and descriptor size, for the Full screen identity pill.
+    let name: String
+    let width: Int
+    let height: Int
     let descriptor: [String: Any]
     init?(_ value: [String: Any]) {
         guard let id = value["id"] as? String, let name = value["name"] as? String,
@@ -356,6 +360,7 @@ struct DisplayItem {
               value["x"] is NSNumber, value["y"] is NSNumber,
               value["scale_factor"] is NSNumber, value["is_primary"] is Bool else { return nil }
         self.id = id
+        self.name = name; self.width = width.intValue; self.height = height.intValue
         descriptor = value
         let primary = value["is_primary"] as? Bool == true ? " · Main" : ""
         title = "\(name) · \(width.intValue) × \(height.intValue)\(primary)"
