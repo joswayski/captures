@@ -1724,39 +1724,56 @@ fn field_label(ui: &mut egui::Ui, tokens: &Tokens, label: &str) {
     ui.label(text(tokens, label, "text-xs", "text-subtle"));
 }
 
-/// A shipping `CustomSelect` rendered as an egui combo box. Items carry their
-/// shipping descriptions as hover text and are probed as `name/label`.
+/// A shipping `CustomSelect` whose listbox shows each option's description.
+/// The trigger is probed as `name` and each row as `name/label`.
 fn select<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
+    tokens: &Tokens,
     name: &str,
     width: f32,
     value: &mut T,
     options: &[(T, String, &str)],
 ) -> bool {
-    let selected = options
+    select_styled(
+        ui,
+        tokens,
+        name,
+        width,
+        value,
+        options,
+        crate::primitives::SelectStyle::Field,
+    )
+}
+
+fn select_styled<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    name: &str,
+    width: f32,
+    value: &mut T,
+    options: &[(T, String, &str)],
+    style: crate::primitives::SelectStyle,
+) -> bool {
+    let choices: Vec<_> = options
         .iter()
-        .find(|(option, _, _)| option == value)
-        .map_or_else(String::new, |(_, label, _)| label.clone());
-    let mut changed = false;
-    let response = egui::ComboBox::from_id_salt(("recording-select", name))
-        .selected_text(selected)
-        .width(width)
-        .height(480.)
-        .truncate()
-        .show_ui(ui, |ui| {
-            for (option, label, description) in options {
-                let mut response = ui.selectable_value(value, *option, label.as_str());
-                if !description.is_empty() {
-                    response = response.on_hover_text(*description);
-                }
-                probe(ui, &format!("{name}/{label}"), response.rect);
-                changed |= response.changed();
-            }
+        .map(|(option, label, description)| {
+            crate::primitives::SelectOption::new(*option, label.as_str()).description(description)
         })
-        .response;
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, name));
-    probe(ui, name, response.rect);
-    changed
+        .collect();
+    let output = crate::primitives::Select::new(("recording-select", name), name, width)
+        .style(style)
+        .show(ui, tokens, &choices, value);
+    for ((_, label, _), row) in options.iter().zip(&output.rows) {
+        probe(ui, &format!("{name}/{label}"), *row);
+    }
+    probe(ui, name, output.response.rect);
+    match output.chosen {
+        Some(chosen) => {
+            *value = chosen;
+            true
+        }
+        None => false,
+    }
 }
 
 /// `.recording-preview-loop`-style quiet toggle for the preview toolbar.
@@ -2736,29 +2753,19 @@ fn show_filename(
     );
     let mut format_ui = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(format_rect.shrink(2.))
+            .max_rect(format_rect.shrink2(egui::vec2(1., 1.)))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
-    {
-        let visuals = format_ui.visuals_mut();
-        for widget in [
-            &mut visuals.widgets.inactive,
-            &mut visuals.widgets.hovered,
-            &mut visuals.widgets.active,
-            &mut visuals.widgets.open,
-        ] {
-            widget.bg_stroke = egui::Stroke::NONE;
-        }
-        visuals.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-    }
     let old = view.gif;
     let mut gif = view.gif;
-    select(
+    select_styled(
         &mut format_ui,
+        tokens,
         "Format",
-        format_rect.width() - 12.,
+        format_rect.width() - 2.,
         &mut gif,
         &[(false, ".mp4".into(), "MP4"), (true, ".gif".into(), "GIF")],
+        crate::primitives::SelectStyle::Inline,
     );
     if gif != old {
         view.gif = gif;
@@ -3455,6 +3462,7 @@ fn show_gif_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             let width = columns[0].available_width();
             if select(
                 &mut columns[0],
+                tokens,
                 "Frame rate",
                 width,
                 &mut fps,
@@ -3468,6 +3476,7 @@ fn show_gif_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             let width = columns[1].available_width();
             if select(
                 &mut columns[1],
+                tokens,
                 "Maximum width",
                 width,
                 &mut maximum,
@@ -3628,7 +3637,15 @@ fn show_crop_card(
         let width = ui.available_width().min(430.);
         let options = ResolutionChoice::ALL
             .map(|choice| (choice, choice.label(base.0, base.1), choice.description()));
-        if select(ui, "Output resolution", width, &mut choice, &options) && choice != current {
+        if select(
+            ui,
+            tokens,
+            "Output resolution",
+            width,
+            &mut choice,
+            &options,
+        ) && choice != current
+        {
             match choice {
                 ResolutionChoice::Custom => {
                     view.output_size =
@@ -3698,7 +3715,7 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
                 (current, current.label().to_owned(), current.description()),
             );
         }
-        if select(ui, "Quality mode", width, &mut mode, &options) && mode != current {
+        if select(ui, tokens, "Quality mode", width, &mut mode, &options) && mode != current {
             match mode {
                 QualityMode::Preserve => {
                     view.maximum_size = false;
@@ -3727,7 +3744,7 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
                     recording_editor_ui::quality_description(preset),
                 )
             });
-            if select(ui, "Quality", width, &mut quality, &options) {
+            if select(ui, tokens, "Quality", width, &mut quality, &options) {
                 view.quality = quality;
                 view.compress_quality = Some(quality);
             }
@@ -3744,6 +3761,7 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
                 let mut unit = view.maximum_unit;
                 select(
                     ui,
+                    tokens,
                     "File size unit",
                     64.,
                     &mut unit,

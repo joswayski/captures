@@ -925,7 +925,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let cropHeight = NSTextField()
     private var cropFieldLabels: [NSTextField] = []
     private let outputModeLabel = NSTextField(labelWithString: "Output resolution")
-    private let outputMode = NSPopUpButton()
+    private let outputMode = ClosurePopUpButton()
     private let outputWidthLabel = NSTextField(labelWithString: "Width")
     private let outputHeightLabel = NSTextField(labelWithString: "Height")
     private let outputWidth = NSTextField()
@@ -967,21 +967,21 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let systemAudio = NSButton(checkboxWithTitle: "System audio", target: nil, action: nil)
     private let microphoneAudio = NSButton(checkboxWithTitle: "Microphone", target: nil, action: nil)
     private let monoOutput = NSButton(checkboxWithTitle: "Convert to mono", target: nil, action: nil)
-    private let format = NSPopUpButton()
+    private let format = ClosurePopUpButton()
     private let qualityPanel = Surface()
     private let qualityTitle = NSTextField(labelWithString: "Save quality")
     private let qualityModeLabel = NSTextField(labelWithString: "Quality mode")
-    private let qualityMode = NSPopUpButton()
+    private let qualityMode = ClosurePopUpButton()
     private let qualityModeHelp = NSTextField(wrappingLabelWithString: "")
     private let qualityLabel = NSTextField(labelWithString: "Quality")
-    private let quality = NSPopUpButton()
+    private let quality = ClosurePopUpButton()
     private let gifFrameRateLabel = NSTextField(labelWithString: "Frame rate")
-    private let gifFrameRate = NSPopUpButton()
+    private let gifFrameRate = ClosurePopUpButton()
     private let gifMaximumWidthLabel = NSTextField(labelWithString: "Maximum width")
-    private let gifMaximumWidthControl = NSPopUpButton()
+    private let gifMaximumWidthControl = ClosurePopUpButton()
     private let maximumSizeLabel = NSTextField(labelWithString: "Maximum file size")
     private let maximumSizeValue = NSTextField()
-    private let maximumSizeUnits = NSPopUpButton()
+    private let maximumSizeUnits = ClosurePopUpButton()
     private let maximumSizeInvalid = NSTextField(labelWithString: "Enter at least 100 KB (decimal units).")
     private let maximumSizeWarning = NSTextField(wrappingLabelWithString:
         "Preserve quality with a hard limit. Save fails if no retry fits; the original stays unchanged.")
@@ -1396,6 +1396,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         style(gifTitle, size: "text-lg", color: "text", weight: .semibold, parent: gifPanel)
         style(gifFrameRateLabel, size: "text-xs", color: "text-subtle", parent: gifPanel)
         style(gifMaximumWidthLabel, size: "text-xs", color: "text-subtle", parent: gifPanel)
+        // Shipping `CustomSelect` triggers; the filename format sits inside its field.
+        for popUp in [outputMode, format, qualityMode, quality, gifFrameRate, gifMaximumWidthControl,
+                       maximumSizeUnits] {
+            popUp.tokens = tokens
+        }
+        format.selectStyle = .inline
         gifFrameRate.addItems(withTitles: ["8 FPS", "10 FPS", "12 FPS", "15 FPS",
                                               "20 FPS", "24 FPS", "30 FPS"])
         gifFrameRate.selectItem(withTitle: "15 FPS")

@@ -346,58 +346,6 @@ pub fn icon_button(ui: &mut egui::Ui, t: &Tokens, glyph: &str, label: &str) -> R
     response
 }
 
-/// Shipping `.custom-select` trigger styling applied to an egui ComboBox.
-pub fn select<R>(
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    id: impl std::hash::Hash + std::fmt::Debug,
-    width: f32,
-    selected: &str,
-    add: impl FnOnce(&mut egui::Ui) -> R,
-) -> Option<R> {
-    ui.scope(|ui| {
-        let visuals = ui.visuals_mut();
-        let radius = (t.number("r-md") as u8).into();
-        for (widget, border) in [
-            (&mut visuals.widgets.inactive, "control-border"),
-            (&mut visuals.widgets.hovered, "border-strong"),
-            (&mut visuals.widgets.active, "theme-accent"),
-            (&mut visuals.widgets.open, "theme-accent"),
-        ] {
-            widget.bg_fill = t.color("surface-field");
-            widget.weak_bg_fill = t.color("surface-field");
-            widget.bg_stroke = Stroke::new(1., t.color(border));
-            widget.fg_stroke = Stroke::new(1.5, t.color("text-subtle"));
-            widget.corner_radius = radius;
-            widget.expansion = 0.;
-        }
-        visuals.window_fill = t.color("surface-overlay");
-        visuals.window_stroke = Stroke::new(1., t.color("border"));
-        ui.spacing_mut().button_padding.x = t.number("s-4");
-        egui::ComboBox::from_id_salt(id)
-            .width(width)
-            .height(260.)
-            .icon(|ui, rect, visuals, _open| {
-                // The shipping 16-unit chevron `m4 6 4 4 4-4` in `--text-subtle`.
-                let glyph = Rect::from_center_size(rect.center(), Vec2::splat(14.));
-                let s = glyph.width() / 16.;
-                let p = |x: f32, y: f32| glyph.min + vec2(x * s, y * s);
-                ui.painter().add(egui::Shape::line(
-                    vec![p(4., 6.), p(8., 10.), p(12., 6.)],
-                    Stroke::new(1.7 * s, visuals.fg_stroke.color),
-                ));
-            })
-            .selected_text(
-                egui::RichText::new(selected)
-                    .size(t.number("text-sm"))
-                    .color(t.color("text")),
-            )
-            .show_ui(ui, add)
-            .inner
-    })
-    .inner
-}
-
 /// One `.theme-option` chip. `palette` is (accent, signal); None paints the
 /// custom rainbow swatch.
 pub fn theme_chip(

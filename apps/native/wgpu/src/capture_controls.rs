@@ -437,27 +437,48 @@ impl CaptureControls {
                                     if content_rect.width() <= 800. {
                                         selected = truncate_label(&selected, 14);
                                     }
-                                    egui::ComboBox::from_id_salt("capture-controls-display")
-                                        .selected_text(selected)
-                                        .show_ui(ui, |ui| {
-                                            for display in view.displays {
-                                                ui.selectable_value(
-                                                    &mut display_id,
-                                                    display.id.clone(),
-                                                    format!(
-                                                        "{} — {}×{}{}",
-                                                        display_label(display),
-                                                        display.width,
-                                                        display.height,
-                                                        if display.is_primary {
-                                                            " (Primary)"
-                                                        } else {
-                                                            ""
-                                                        }
-                                                    ),
-                                                );
-                                            }
-                                        });
+                                    let labels: Vec<String> = view
+                                        .displays
+                                        .iter()
+                                        .map(|display| {
+                                            format!(
+                                                "{} — {}×{}{}",
+                                                display_label(display),
+                                                display.width,
+                                                display.height,
+                                                if display.is_primary {
+                                                    " (Primary)"
+                                                } else {
+                                                    ""
+                                                }
+                                            )
+                                        })
+                                        .collect();
+                                    let choices: Vec<_> = view
+                                        .displays
+                                        .iter()
+                                        .zip(&labels)
+                                        .map(|(display, label)| {
+                                            crate::primitives::SelectOption::new(
+                                                display.id.clone(),
+                                                label.as_str(),
+                                            )
+                                        })
+                                        .collect();
+                                    let height = ui.spacing().interact_size.y;
+                                    if let Some(chosen) = crate::primitives::Select::new(
+                                        "capture-controls-display",
+                                        "Display",
+                                        ui.spacing().combo_width,
+                                    )
+                                    .style(crate::primitives::SelectStyle::Glass)
+                                    .height(height)
+                                    .trigger_text(&selected)
+                                    .show(ui, tokens, &choices, &display_id)
+                                    .chosen
+                                    {
+                                        display_id = chosen;
+                                    }
                                     if display_id != view.display.id {
                                         action = Some(Action::SwitchDisplay(display_id));
                                     }
@@ -631,40 +652,46 @@ impl CaptureControls {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = tokens.number("s-4");
             field(ui, tokens, capture_menu::FIELD_FPS, 76., |ui| {
-                egui::ComboBox::from_id_salt("recording-fps")
-                    .width(ui.available_width())
-                    .selected_text(self.recording.frames_per_second.to_string())
-                    .show_ui(ui, |ui| {
-                        for fps in capture_menu::FPS_OPTIONS {
-                            ui.selectable_value(
-                                &mut self.recording.frames_per_second,
-                                fps,
-                                fps.to_string(),
-                            );
-                        }
-                    })
-                    .response
-                    .on_hover_text(capture_menu::FPS_ACCESSIBILITY_LABEL);
+                let labels = capture_menu::FPS_OPTIONS.map(|fps| fps.to_string());
+                let choices: Vec<_> = capture_menu::FPS_OPTIONS
+                    .iter()
+                    .zip(&labels)
+                    .map(|(fps, label)| crate::primitives::SelectOption::new(*fps, label.as_str()))
+                    .collect();
+                if let Some(fps) = crate::primitives::Select::new(
+                    "recording-fps",
+                    capture_menu::FPS_ACCESSIBILITY_LABEL,
+                    ui.available_width(),
+                )
+                .style(crate::primitives::SelectStyle::Glass)
+                .show(ui, tokens, &choices, &self.recording.frames_per_second)
+                .chosen
+                {
+                    self.recording.frames_per_second = fps;
+                }
             });
             field(ui, tokens, capture_menu::FIELD_MAX_RESOLUTION, 132., |ui| {
-                egui::ComboBox::from_id_salt("recording-resolution")
-                    .width(ui.available_width())
-                    .selected_text(resolution_label(self.recording.max_resolution))
-                    .show_ui(ui, |ui| {
-                        for resolution in [
-                            MaxResolution::Original,
-                            MaxResolution::P1080,
-                            MaxResolution::P720,
-                        ] {
-                            ui.selectable_value(
-                                &mut self.recording.max_resolution,
-                                resolution,
-                                resolution_label(resolution),
-                            );
-                        }
-                    })
-                    .response
-                    .on_hover_text(capture_menu::MAX_RESOLUTION_ACCESSIBILITY_LABEL);
+                let choices: Vec<_> = [
+                    MaxResolution::Original,
+                    MaxResolution::P1080,
+                    MaxResolution::P720,
+                ]
+                .into_iter()
+                .map(|resolution| {
+                    crate::primitives::SelectOption::new(resolution, resolution_label(resolution))
+                })
+                .collect();
+                if let Some(resolution) = crate::primitives::Select::new(
+                    "recording-resolution",
+                    capture_menu::MAX_RESOLUTION_ACCESSIBILITY_LABEL,
+                    ui.available_width(),
+                )
+                .style(crate::primitives::SelectStyle::Glass)
+                .show(ui, tokens, &choices, &self.recording.max_resolution)
+                .chosen
+                {
+                    self.recording.max_resolution = resolution;
+                }
             });
             for (toggle, width, available) in [
                 (
@@ -701,12 +728,12 @@ impl CaptureControls {
             }
             let width = ui.available_width().clamp(120., 240.);
             field(ui, tokens, capture_menu::FIELD_MICROPHONE, width, |ui| {
-                self.show_microphone_select(ui, capabilities.microphone);
+                self.show_microphone_select(ui, tokens, capabilities.microphone);
             });
         });
     }
 
-    fn show_microphone_select(&mut self, ui: &mut egui::Ui, available: bool) {
+    fn show_microphone_select(&mut self, ui: &mut egui::Ui, tokens: &Tokens, available: bool) {
         let devices = self
             .microphones
             .iter()
@@ -728,18 +755,26 @@ impl CaptureControls {
         let mut choice = self.recording.microphone_device_id.clone();
         let width = ui.available_width();
         ui.add_enabled_ui(available && !self.microphones_loading, |ui| {
-            egui::ComboBox::from_id_salt("recording-microphone")
-                .width(width)
-                .selected_text(truncate_label(&label, 22))
-                .show_ui(ui, |ui| {
-                    for entry in &entries {
-                        ui.add_enabled_ui(entry.enabled, |ui| {
-                            ui.selectable_value(&mut choice, entry.id.clone(), &entry.label);
-                        });
-                    }
+            let choices: Vec<_> = entries
+                .iter()
+                .map(|entry| {
+                    crate::primitives::SelectOption::new(entry.id.clone(), entry.label.as_str())
+                        .disabled(!entry.enabled)
                 })
-                .response
-                .on_hover_text(capture_menu::FIELD_MICROPHONE);
+                .collect();
+            let trigger = truncate_label(&label, 22);
+            if let Some(id) = crate::primitives::Select::new(
+                "recording-microphone",
+                capture_menu::FIELD_MICROPHONE,
+                width,
+            )
+            .style(crate::primitives::SelectStyle::Glass)
+            .trigger_text(&trigger)
+            .show(ui, tokens, &choices, &choice)
+            .chosen
+            {
+                choice = id;
+            }
         });
         self.recording.microphone_device_id = choice;
     }

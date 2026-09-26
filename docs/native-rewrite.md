@@ -105,6 +105,15 @@ on hover) over a transparent track. wgpu sets this globally as overlay bars so n
 layout reflows; AppKit uses a token `NSScroller` that keeps the system scroller style,
 so overlay scrollers still fade when idle, and the recovery list no longer forces
 legacy scrollers. Preview stacks hide their scroll bar like `.thumbnail-stack`.
+Selects share one primitive per host. wgpu draws the `CustomSelect` field trigger
+(media palette in the capture menu, borderless for the recording filename format)
+and a token listbox with option descriptions, placed and driven by shared
+`captures_app::controls::select` (ArrowUp/Down, Home/End, Enter/Space, Escape), in
+Preferences, the capture menu, the region aspect picker, the recording editor and
+the History display picker. AppKit's token `ClosurePopUpButton` trigger replaces the
+capture menu's glass popups and the recording editor's stock popups; its native
+menu keeps AppKit keyboard handling (no Home/End) and shows descriptions as a second
+line. Screenshot editor selects remain stock on both hosts.
 Physical focus-visibility and scroller checks on macOS and Windows remain open.
 
 Direct region and window overlays (shortcut, tray and screenshot-during-recording)

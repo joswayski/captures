@@ -73,4 +73,36 @@ final class PrimitivesTests: XCTestCase {
         restyleTokenScrollers(in: root, dark)
         XCTAssertTrue(vertical.tokens?.color("text") == dark.color("text"))
     }
+
+    func testTokenSelectDescribesItemsAndKeepsPlainTitles() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let frame = NSRect(x: 0, y: 0, width: 300, height: 120)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame)
+        window.contentView = root
+        let select = ClosurePopUpButton(frame: NSRect(x: 20, y: 20, width: 200, height: 32), pullsDown: false)
+        select.tokens = tokens
+        select.addItems(withTitles: ["Preserve quality", "Compress"])
+        select.item(at: 1)?.toolTip = "Smaller file with Tiny through Highest quality presets."
+        root.addSubview(select)
+        XCTAssertEqual(select.focusRingType, .none, "the token ring replaces the system ring")
+        XCTAssertEqual(select.selectStyle, .field)
+        var changed: [Int] = []
+        select.bindChange { changed.append($0) }
+        select.describeItems()
+        XCTAssertFalse(select.item(at: 0)?.attributedTitle?.string.contains("\n") ?? false,
+                       "items without a description stay plain")
+        let described = try XCTUnwrap(select.item(at: 1)?.attributedTitle?.string)
+        XCTAssertEqual(described, "Compress\nSmaller file with Tiny through Highest quality presets.")
+        select.restoreItems()
+        XCTAssertEqual(select.item(at: 1)?.title, "Compress", "titles and accessibility names are unchanged")
+        XCTAssertFalse(select.item(at: 1)?.attributedTitle?.string.contains("\n") ?? false)
+        select.selectItem(at: 1); select.selectedValue()
+        XCTAssertEqual(changed, [1])
+        XCTAssertEqual(select.titleOfSelectedItem, "Compress")
+        window.display()
+    }
 }

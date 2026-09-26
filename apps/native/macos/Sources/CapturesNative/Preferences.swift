@@ -48,46 +48,6 @@ final class NativeLoginItemService: LoginItemServicing {
     }
 }
 
-final class ClosurePopUpButton: NSPopUpButton {
-    var tokens: Tokens!
-    var change: ((Int) -> Void)?
-    @objc func selectedValue() { change?(indexOfSelectedItem) }
-
-    /// Shipping `.custom-select-trigger`: a field with the selected label and a chevron.
-    override func draw(_ dirtyRect: NSRect) {
-        let radius = tokens.number("r-md")
-        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
-        let alpha: CGFloat = isEnabled ? 1 : 0.5
-        tokens.color("surface-field").withAlphaComponent(alpha).setFill(); outline.fill()
-        let focused = window?.firstResponder === self
-        tokens.color(focused ? "theme-accent" : "control-border").withAlphaComponent(alpha).setStroke()
-        outline.lineWidth = 1; outline.stroke()
-        if focused { drawFocusRing(tokens, in: bounds, radius: radius) }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
-            .foregroundColor: tokens.color("text").withAlphaComponent(alpha),
-        ]
-        let padding = tokens.number("s-4")
-        let text = titleOfSelectedItem ?? title
-        let size = (text as NSString).size(withAttributes: attributes)
-        let textRect = NSRect(x: padding, y: (bounds.height - size.height) / 2,
-            width: max(0, bounds.width - padding * 2 - 14 - tokens.number("s-3")), height: size.height)
-        (text as NSString).draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
-            attributes: attributes)
-        // The shipping 16-unit chevron `m4 6 4 4 4-4`, independent of flipping.
-        let glyph = NSRect(x: bounds.width - padding - 14, y: (bounds.height - 14) / 2, width: 14, height: 14)
-        let scale = glyph.width / 16
-        func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
-            let down = glyph.minY + y * scale
-            return NSPoint(x: glyph.minX + x * scale, y: isFlipped ? down : bounds.height - down)
-        }
-        let chevron = NSBezierPath()
-        chevron.move(to: point(4, 6)); chevron.line(to: point(8, 10)); chevron.line(to: point(12, 6))
-        chevron.lineWidth = 1.7 * scale; chevron.lineCapStyle = .round; chevron.lineJoinStyle = .round
-        tokens.color("text-subtle").withAlphaComponent(alpha).setStroke(); chevron.stroke()
-    }
-}
-
 final class ClosureColorWell: NSColorWell {
     var change: ((NSColor) -> Void)?
     @objc func selectedColor() { change?(color) }
