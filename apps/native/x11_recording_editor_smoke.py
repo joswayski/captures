@@ -1155,8 +1155,16 @@ def main():
                 assert red, "red source preview"
                 left, right = min(x for x, _ in red), max(x for x, _ in red)
                 top, bottom = min(y for _, y in red), max(y for _, y in red)
+                # Count only white enclosed by red in its row and column: the
+                # preview's rounded corners reveal the (light) viewport there.
+                rows, columns = {}, {}
+                for x, y in red:
+                    low, high = rows.get(y, (x, x)); rows[y] = (min(low, x), max(high, x))
+                    low, high = columns.get(x, (y, y)); columns[x] = (min(low, y), max(high, y))
                 white = [(x, y) for y in range(top, bottom + 1) for x in range(left, right + 1)
-                         if min(pixels[(y * 960 + x) * 3:(y * 960 + x) * 3 + 3]) > 210]
+                         if min(pixels[(y * 960 + x) * 3:(y * 960 + x) * 3 + 3]) > 210
+                         and y in rows and rows[y][0] < x < rows[y][1]
+                         and x in columns and columns[x][0] < y < columns[x][1]]
                 if not white:
                     return (0, 0)
                 return (max(x for x, _ in white) - min(x for x, _ in white) + 1,
