@@ -2460,20 +2460,32 @@ final class ScreenshotEditorTests: XCTestCase {
             let opacityField = try field("Layer opacity", in: layerPanel)
             XCTAssertLessThan(opacityLabel.frame.minY, opacityField.frame.minY,
                               "top-down layer controls place labels above fields")
+            // Shipping Layers heading: title, count pill and Add image layer.
+            XCTAssertEqual(try field("Layer count", in: layerPanel).stringValue, "3")
+            XCTAssertEqual(try button("Add image layer", in: layerPanel).toolTip, "Add image layer")
             let table = try XCTUnwrap(descendants(in: layerPanel).compactMap { $0 as? NSTableView }.first)
             controller.root.layoutSubtreeIfNeeded(); table.layoutSubtreeIfNeeded()
             let combinedStateCell = try XCTUnwrap(table.view(atColumn: 0, row: 1,
                 makeIfNecessary: true) as? NSTableCellView)
             combinedStateCell.layoutSubtreeIfNeeded()
-            let combinedState = try XCTUnwrap(combinedStateCell.subviews.compactMap {
+            // Shipping rows: name, muted kind, and eye/lock quick actions that
+            // show Hidden and Locked instead of metadata text.
+            let kindLabel = try XCTUnwrap(combinedStateCell.subviews.compactMap {
                 $0 as? NSTextField
             }.first { $0 !== combinedStateCell.textField })
-            XCTAssertEqual(combinedState.stringValue, "Image · Hidden · Locked")
-            XCTAssertLessThanOrEqual(combinedState.frame.maxX, combinedStateCell.visibleRect.maxX - 8,
-                                     "metadata respects the clipped cell's visible trailing inset")
-            XCTAssertLessThanOrEqual(combinedState.intrinsicContentSize.width,
-                                     combinedState.frame.width,
-                                     "combined Hidden and Locked metadata is not truncated")
+            XCTAssertEqual(kindLabel.stringValue, "Image")
+            XCTAssertEqual(combinedStateCell.textField?.stringValue, "Hidden locked reference")
+            XCTAssertEqual(combinedStateCell.textField?.alphaValue ?? 1, 0.42, accuracy: 0.001,
+                           "hidden layers fade like shipping")
+            let quick = combinedStateCell.subviews.compactMap { $0 as? CaptureButton }
+            XCTAssertEqual(quick.map { $0.accessibilityLabel() ?? "" },
+                           ["Show Hidden locked reference", "Unlock Hidden locked reference"])
+            XCTAssertTrue(quick.allSatisfy(\.selected), "hidden and locked states read as active")
+            XCTAssertEqual(quick.map { $0.toolTip ?? "" }, ["Show layer", "Unlock layer"])
+            for control in quick {
+                XCTAssertLessThanOrEqual(control.frame.maxX, combinedStateCell.visibleRect.maxX,
+                                         "quick actions respect the clipped cell's visible edge")
+            }
             XCTAssertLessThanOrEqual(table.rect(ofRow: 2).maxY, table.visibleRect.maxY,
                                      "the initial three-layer fixture does not expose a partial row")
             try render(controller.root, name: "screenshot-editor-layers-\(appearance)")

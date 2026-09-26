@@ -316,10 +316,16 @@ struct NativeEditorLayer: Equatable {
     let selectionOutline: [CGPoint]?
     let annotation: NativeAnnotationStyle?
     let textStyle: NativeTextStyle?
+    /// Shipping Layers-row copy from the snapshot's `layer_rows`
+    /// (`captures_app::editor_chrome`), with local fallbacks for older fixtures.
+    let rowName: String
+    let rowKind: String
+    let rowIcon: String
 
     init?(_ value: [String: Any], annotation: [String: Any]? = nil,
           textShadow: [String: Any]? = nil,
-          selectionOutline: [[String: Any]]? = nil) {
+          selectionOutline: [[String: Any]]? = nil,
+          row: [String: Any]? = nil) {
         guard let id = value["id"] as? String, !id.isEmpty,
               let rawKind = value["kind"] as? String,
               let kind = Kind(rawValue: rawKind),
@@ -344,11 +350,34 @@ struct NativeEditorLayer: Equatable {
             guard points.count == 4 else { return nil }
             self.selectionOutline = points
         } else { self.selectionOutline = nil }
+        let baseName: String
         switch kind {
-        case .image: name = (value["name"] as? String) ?? "Image"
-        case .text: name = "Text"
-        case .shape: name = "Shape"
-        case .path: name = "Drawing"
+        case .image: baseName = (value["name"] as? String) ?? "Image"
+        case .text: baseName = "Text"
+        case .shape: baseName = "Shape"
+        case .path: baseName = "Drawing"
+        }
+        name = baseName
+        rowName = row?["name"] as? String ?? baseName
+        rowKind = row?["kind"] as? String ?? Self.fallbackKind(kind)
+        rowIcon = row?["icon"] as? String ?? Self.fallbackIcon(kind)
+    }
+
+    private static func fallbackKind(_ kind: Kind) -> String {
+        switch kind {
+        case .image: return "Image"
+        case .text: return "Text"
+        case .shape: return "Shape"
+        case .path: return "Drawing"
+        }
+    }
+
+    private static func fallbackIcon(_ kind: Kind) -> String {
+        switch kind {
+        case .image: return "image"
+        case .text: return "text"
+        case .shape: return "rectangle"
+        case .path: return "pen"
         }
     }
 }
@@ -488,11 +517,13 @@ struct NativeEditorSnapshot: Equatable {
         let annotations = value["annotation_controls"] as? [String: [String: Any]] ?? [:]
         let textShadows = value["text_shadow_styles"] as? [String: [String: Any]] ?? [:]
         let outlines = value["selection_outlines"] as? [String: [[String: Any]]] ?? [:]
+        let rows = value["layer_rows"] as? [String: [String: Any]] ?? [:]
         let layers = elements.compactMap { element in
             let id = element["id"] as? String
             return NativeEditorLayer(element, annotation: id.flatMap { annotations[$0] },
                                      textShadow: id.flatMap { textShadows[$0] },
-                                     selectionOutline: id.flatMap { outlines[$0] })
+                                     selectionOutline: id.flatMap { outlines[$0] },
+                                     row: id.flatMap { rows[$0] })
         }
         guard layers.count == elements.count else { return nil }
         guard let documentData = try? JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]) else {

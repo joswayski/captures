@@ -36,29 +36,55 @@ struct ScreenshotEditorState: Equatable {
     mutating func close() { generation += 1; artifactID = nil; snapshot = nil; busy = false }
 }
 
+/// Shipping `.screenshot-layer-list li` in the native 32pt row: kind icon,
+/// shipping layer name, muted kind label and eye/lock quick actions.
 private final class EditorLayerCell: NSTableCellView {
     let titleLabel: NSTextField
     let detailLabel: NSTextField
+    let iconName: String
+    let visibilityButton: CaptureButton
+    let lockButton: CaptureButton
+    private let tokens: Tokens
 
-    init(title: NSTextField, detail: NSTextField) {
-        titleLabel = title; detailLabel = detail
+    init(title: NSTextField, detail: NSTextField, iconName: String, tokens: Tokens,
+         visibility: CaptureButton, lock: CaptureButton) {
+        titleLabel = title; detailLabel = detail; self.iconName = iconName; self.tokens = tokens
+        visibilityButton = visibility; lockButton = lock
         super.init(frame: .zero)
-        addSubview(title); addSubview(detail); textField = title
+        addSubview(title); addSubview(detail); addSubview(visibility); addSubview(lock)
+        textField = title
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
 
     override func layout() {
         super.layout()
         let inset: CGFloat = 8
         let gap: CGFloat = 8
-        let trailingEdge = min(bounds.maxX, visibleRect.maxX) - inset
-        let detailWidth = min(detailLabel.intrinsicContentSize.width,
-                              max(0, trailingEdge - inset))
-        detailLabel.frame = NSRect(x: trailingEdge - detailWidth, y: 4,
-                                   width: detailWidth, height: 22)
-        titleLabel.frame = NSRect(x: inset, y: 4,
-                                  width: max(0, detailLabel.frame.minX - inset - gap), height: 22)
+        let trailingEdge = min(bounds.maxX, visibleRect.maxX) - 4
+        lockButton.frame = NSRect(x: trailingEdge - 22, y: (bounds.height - 26) / 2, width: 22, height: 26)
+        visibilityButton.frame = NSRect(x: lockButton.frame.minX - 22, y: lockButton.frame.minY,
+                                        width: 22, height: 26)
+        let actionsLeft = visibilityButton.frame.minX - 4
+        let titleLeft = inset + 16 + gap
+        let titleWidth = titleLabel.intrinsicContentSize.width
+        let detailWidth = detailLabel.intrinsicContentSize.width
+        // The name has priority; the kind shows when both fit.
+        let showDetail = titleLeft + titleWidth + gap + detailWidth <= actionsLeft
+        detailLabel.isHidden = !showDetail
+        detailLabel.frame = NSRect(x: actionsLeft - detailWidth, y: (bounds.height - 16) / 2,
+                                   width: showDetail ? detailWidth : 0, height: 16)
+        let titleRight = showDetail ? detailLabel.frame.minX - gap : actionsLeft - gap
+        titleLabel.frame = NSRect(x: titleLeft, y: (bounds.height - 18) / 2,
+                                  width: max(0, titleRight - titleLeft), height: 18)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        tokens.color("text-muted").withAlphaComponent(titleLabel.alphaValue).setStroke()
+        ShippingIcons.stroke(iconName, in: NSRect(x: 8, y: (bounds.height - 16) / 2, width: 16, height: 16))
     }
 }
 
@@ -858,6 +884,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let geometryContent = Surface()
     private let layersPanel = Surface()
     private let layerContent = Surface()
+    private let layerCount = NSTextField(labelWithString: "0")
+    private let layerHeadingRule = Surface()
+    private var addLayerButton: CaptureButton!
+    private var drawHeading: NSTextField?
     private var annotationControls: EditorAnnotationControls!
     private let rotationSnap = NSTextField()
     private var rotationSnapLabel: NSTextField!
@@ -1408,8 +1438,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let inner = control - 2
         let sliderPad = tokens.number(layout.showHistory ? "s-4" : "s-3")
         let zoomViews: [(NSView, CGFloat)] = [
-            (fitButton, zoomButton), (zoomOutButton, zoomButton), (zoomSlider, layout.sliderWidth),
-            (zoomInButton, zoomButton), (zoomPreset, layout.presetWidth),
+            (fitButton as NSView, zoomButton), (zoomOutButton! as NSView, zoomButton),
+            (zoomSlider as NSView, layout.sliderWidth), (zoomInButton! as NSView, zoomButton),
+            (zoomPreset as NSView, layout.presetWidth),
         ]
         for (index, entry) in zoomViews.enumerated() {
             let (view, viewWidth) = entry
@@ -1862,8 +1893,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             self?.publishBackgroundFields(); self?.updateControls()
         }
 
-        undoButton = headerIcon("undo", label: EditorChrome.text("header", "undo")) { [weak self] in self?.undoDocument() }
-        redoButton = headerIcon("redo", label: EditorChrome.text("header", "redo")) { [weak self] in self?.redoDocument() }
+        undoButton = headerIcon("undo", label: EditorChrome.text("header", "undo")) {
+            [weak self] in self?.undoDocument()
+        }
+        redoButton = headerIcon("redo", label: EditorChrome.text("header", "redo")) {
+            [weak self] in self?.redoDocument()
+        }
 
         zoomGroup.layer?.cornerRadius = tokens.number("r-lg")
         zoomGroup.layer?.borderWidth = 1
@@ -2009,7 +2044,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
         let content = Surface(frame: NSRect(x: 0, y: 0, width: 252, height: 390))
         scroll.documentView = content; drawPanel.addSubview(scroll)
-        panelLabel("Draw", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
+        drawHeading = panelLabel("Draw", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
                    size: 16, weight: .semibold, parent: content)
         panelLabel("Draw annotations, or click with Wand to remove pixels from an image.",
                    frame: NSRect(x: 0, y: 28, width: 252, height: 42), muted: true,
@@ -2409,7 +2444,34 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func buildLayersPanel() {
-        let panelScroll = NSScrollView(frame: layersPanel.bounds)
+        // Shipping `.screenshot-layers-heading`: title, count pill and Add image layer.
+        let headingHeight: CGFloat = 30
+        let title = NSTextField(labelWithString: EditorChrome.text("layers", "title"))
+        title.font = .systemFont(ofSize: tokens.number("text-md"), weight: .semibold)
+        title.frame = NSRect(x: 0, y: 6, width: 56, height: 18)
+        title.textColor = tokens.color("text")
+        title.sizeToFit(); title.frame.origin.y = (headingHeight - title.frame.height) / 2
+        layersPanel.addSubview(title)
+        layerCount.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
+        layerCount.alignment = .center
+        layerCount.wantsLayer = true
+        layerCount.layer?.cornerRadius = 9.5
+        layerCount.frame = NSRect(x: title.frame.maxX + tokens.number("s-3"), y: (headingHeight - 19) / 2,
+                                  width: 19, height: 19)
+        layerCount.setAccessibilityLabel("Layer count")
+        layersPanel.addSubview(layerCount)
+        addLayerButton = button("", frame: NSRect(x: 272 - 30, y: 0, width: 30, height: 30),
+                                parent: layersPanel) { [weak self] in self?.chooseImage() }
+        addLayerButton.quiet = true; addLayerButton.icon = .shipping("plus")
+        addLayerButton.autoresizingMask = [.minXMargin]
+        addLayerButton.setAccessibilityLabel(EditorChrome.text("layers", "add"))
+        addLayerButton.toolTip = EditorChrome.text("layers", "add")
+        layerHeadingRule.wantsLayer = true
+        layerHeadingRule.frame = NSRect(x: 0, y: headingHeight - 1, width: 272, height: 1)
+        layerHeadingRule.autoresizingMask = [.width]
+        layersPanel.addSubview(layerHeadingRule)
+        let panelScroll = NSScrollView(frame: NSRect(x: 0, y: headingHeight, width: layersPanel.bounds.width,
+                                                     height: max(0, layersPanel.bounds.height - headingHeight)))
         panelScroll.autoresizingMask = [.width, .height]
         panelScroll.hasVerticalScroller = true; panelScroll.scrollerStyle = .overlay
         panelScroll.drawsBackground = false
@@ -2648,6 +2710,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func publishDrawToolControls() {
         guard let drawTool, drawTool.indexOfSelectedItem >= 0 else { return }
         let shape = EditorDrawOverlay.Shape.allCases[drawTool.indexOfSelectedItem]
+        // Shipping's properties heading names the active tool.
+        drawHeading?.stringValue = EditorChrome.toolLabel(
+            shape == .text ? "t" : shape == .arrow ? "a" : shape.rawValue)
         let wand = shape == .wand
         let brush = shape.isBackgroundBrush
         let creatingText = shape == .text
@@ -4687,6 +4752,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publishCropSelection()
         publishCreateTextDefaults()
         reconcileLayerSelection(snapshot.layers)
+        publishLayerCount(snapshot.layers.count)
         window.title = snapshot.unsavedChanges ? "Edit screenshot — Unsaved" : "Edit screenshot"
         // New pixels or dimensions: refresh the summary and re-estimate the export.
         refreshExportBar()
@@ -4722,6 +4788,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         draftMenuButton?.isEnabled = ready
         draftDiscardButton?.isEnabled = ready
         addImagesButton?.isEnabled = ready && !importLoading
+        addLayerButton?.isEnabled = ready && !importLoading
         sectionControl?.isEnabled = ready
         outputFormat?.isEnabled = ready; outputQuality?.isEnabled = ready
         exportDisclosure?.isEnabled = state.snapshot != nil
@@ -4839,14 +4906,50 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let layers = state.snapshot?.layers, layers.indices.contains(row) else { return nil }
         let layer = layers[row]
-        let title = NSTextField(labelWithString: layer.name)
-        title.lineBreakMode = .byTruncatingTail; title.toolTip = layer.name
+        let title = NSTextField(labelWithString: layer.rowName)
+        title.lineBreakMode = .byTruncatingTail; title.toolTip = layer.rowName
+        title.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
         title.textColor = tokens.color("text")
-        let detail = NSTextField(labelWithString:
-            "\(layer.kind.rawValue.capitalized)\(layer.visible ? "" : " · Hidden")\(layer.locked ? " · Locked" : "")")
-        detail.alignment = .right; detail.font = .systemFont(ofSize: 10)
-        detail.textColor = tokens.color("text-muted"); detail.toolTip = detail.stringValue
-        return EditorLayerCell(title: title, detail: detail)
+        let detail = NSTextField(labelWithString: layer.rowKind)
+        detail.alignment = .right; detail.font = .systemFont(ofSize: tokens.number("text-xs"))
+        detail.textColor = tokens.color("text-subtle"); detail.toolTip = layer.rowKind
+        // Shipping fades hidden layers' name and preview.
+        if !layer.visible { title.alphaValue = 0.42; detail.alphaValue = 0.42 }
+        let id = layer.id
+        let visibility = CaptureButton("", frame: .zero, tokens: tokens) { [weak self] in
+            self?.toggleVisibility(id: id)
+        }
+        visibility.icon = .shipping(layer.visible ? "eye" : "eye-off")
+        visibility.setAccessibilityLabel("\(layer.visible ? "Hide" : "Show") \(layer.rowName)")
+        visibility.toolTip = EditorChrome.text("layers", layer.visible ? "hide" : "show")
+        let lock = CaptureButton("", frame: .zero, tokens: tokens) { [weak self] in
+            self?.toggleLock(id: id)
+        }
+        lock.icon = .shipping(layer.locked ? "lock" : "unlock")
+        lock.setAccessibilityLabel("\(layer.locked ? "Unlock" : "Lock") \(layer.rowName)")
+        lock.toolTip = EditorChrome.text("layers", layer.locked ? "unlock" : "lock")
+        for (control, on) in [(visibility, !layer.visible), (lock, layer.locked)] {
+            control.quiet = true; control.iconSide = 14
+            control.cornerRadius = tokens.number("r-sm"); control.selected = on
+            control.isEnabled = state.snapshot != nil && !state.busy && inlineTextInput == nil
+        }
+        return EditorLayerCell(title: title, detail: detail, iconName: layer.rowIcon, tokens: tokens,
+                               visibility: visibility, lock: lock)
+    }
+
+    /// Row quick actions target their own layer; lock also selects it, like shipping.
+    private func toggleVisibility(id: String) {
+        guard let layer = state.snapshot?.layers.first(where: { $0.id == id }) else { return }
+        layerCommand(layer, edit: ["action": "visibility", "visible": !layer.visible],
+                     message: layer.visible ? "Hiding layer…" : "Showing layer…",
+                     preferredSelection: selectedLayerID)
+    }
+
+    private func toggleLock(id: String) {
+        guard let layer = state.snapshot?.layers.first(where: { $0.id == id }) else { return }
+        layerCommand(layer, edit: ["action": "lock", "locked": !layer.locked],
+                     message: layer.locked ? "Unlocking layer…" : "Locking layer…",
+                     preferredSelection: id)
     }
 
     private func restyle(_ tokens: Tokens) {
@@ -4891,6 +4994,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         preview.superview?.layer?.borderColor = tokens.color("border").cgColor
     }
 
+    private func publishLayerCount(_ count: Int) {
+        layerCount.stringValue = "\(count)"
+        layerCount.frame.size.width = max(19, ceil(layerCount.attributedStringValue.size().width) + 8)
+    }
+
     private func restyleChrome() {
         let raised = tokens.color("surface-raised").cgColor
         let border = tokens.color("border-subtle").cgColor
@@ -4914,9 +5022,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         railTip.layer?.backgroundColor = tokens.color("glass-strong").cgColor
         railTip.layer?.borderColor = tokens.color("glass-border").cgColor
         railTip.textColor = tokens.color("glass-text")
+        layerCount.textColor = tokens.color("text-subtle")
+        layerCount.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        layerHeadingRule.layer?.backgroundColor = border
         let controls: [CaptureButton?] = [trimButton, backgroundButton, undoButton, redoButton, fitButton,
                                           zoomOutButton, zoomInButton, addImagesButton, draftMenuButton,
-                                          recenterButton, draftDiscardButton, draftDismissButton]
+                                          recenterButton, draftDiscardButton, draftDismissButton, addLayerButton]
         for control in controls.compactMap({ $0 }) { control.tokens = tokens; control.needsDisplay = true }
     }
 

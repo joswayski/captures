@@ -68,6 +68,12 @@ enum EditorChrome {
         request(["operation": "shapes_tooltip", "current": current]) as? String ?? "Shapes"
     }
 
+    /// The inspector heading for a tool key (rail keys, shape keys, or
+    /// "pen"/"wand"/"erase"/"restore"), like shipping's `toolLabel`.
+    static func toolLabel(_ key: String) -> String {
+        request(["operation": "tool_label", "key": key]) as? String ?? "Properties"
+    }
+
     static func zoomLabel(_ percent: Double) -> String {
         request(["operation": "zoom_label", "percent": percent]) as? String ?? "\(percent)%"
     }
