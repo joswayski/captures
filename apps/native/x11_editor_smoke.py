@@ -105,6 +105,8 @@ def main():
                         help="Exercise percentage/custom export dimensions without changing the document")
     parser.add_argument("--overwrite-only", action="store_true",
                         help="Exercise confirmed original replacement, History identity and retained drafts")
+    parser.add_argument("--canvas-interactions-only", action="store_true",
+                        help="Exercise image file drop guides, Expand canvas and line curve editing")
     parser.add_argument("--external-image-only", action="store_true",
                         help="Open external images, preserve per-file errors and safely reopen drafts/sources")
     args = parser.parse_args()
@@ -1534,6 +1536,141 @@ def main():
                            "draft-reopen-exact-pixels", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native polygons: previews, cancellation, silhouettes, undo/redo, minimum, draft")
+            return
+
+        if args.canvas_interactions_only:
+            accent = (255, 202, 40)
+            stroke = (255, 59, 92)
+
+            def settled_pixel(name, point, expected, tolerance=3):
+                # Pixel checks poll fresh screenshots until the frame settles.
+                def matches():
+                    shot(editor, name)
+                    try:
+                        document_pixel(name, *point, expected, tolerance)
+                        return True
+                    except AssertionError:
+                        return False
+                wait(matches, f"{name} pixel {point} settles to {expected}")
+
+            def document_drag(start, end, double=False):
+                start, end = document_point(start), document_point(end)
+                run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                    "sleep", ".2", "mousedown", "1", "sleep", ".2", "mousemove", "--sync",
+                    "--window", editor, *map(str, (start[0] + (end[0] - start[0]) // 2,
+                                                   start[1] + (end[1] - start[1]) // 2)),
+                    "sleep", ".1", "mousemove", "--sync", "--window", editor, *map(str, end),
+                    "sleep", ".3", "mouseup", "1", "sleep", ".3")
+
+            def document_double_click(point):
+                x, y = document_point(point)
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y),
+                    "sleep", ".3", "click", "--repeat", "2", "--delay", "90", "1", "sleep", ".3")
+
+            def document_json():
+                return json.loads(draft.read_text())["document"]
+
+            resize_editor(1200, 701)
+            save(640, 360, 0, 0)
+
+            # Curve: draw a line, drag its middle starter dot, then remove and
+            # re-add points by double-clicking.
+            draw_tool("line")
+            document_drag((180, 150), (580, 150))
+            line = save_layers(lambda values: len(values) == 2, "line created")[-1]
+            assert line["shape"] == "line" and line["controls"] == []
+            toolbar_click("layers")
+            shot(editor, "curve-starters")
+            document_drag((380, 150), (380, 230))
+            curved = save_layers(lambda values: len(values[-1]["controls"]) == 3,
+                                 "starter drag curves the line")[-1]
+            assert curved["id"] == line["id"]
+            assert [(round(c["x"]), round(c["y"])) for c in curved["controls"]] == [
+                (280, 150), (380, 230), (480, 150)], curved["controls"]
+            # The smooth path passes through the midpoints between controls.
+            settled_pixel("curve-dragged", (330, 190), stroke, 8)
+            document_double_click((380, 230))
+            save_layers(lambda values: len(values[-1]["controls"]) == 2,
+                        "double-click removes a curve point")
+            toolbar_click("undo")
+            save_layers(lambda values: len(values[-1]["controls"]) == 3, "curve point undo")
+            toolbar_click("redo")
+            save_layers(lambda values: len(values[-1]["controls"]) == 2, "curve point redo")
+
+            # Expand canvas: a second line hangs past the right edge.
+            draw_tool("line")
+            document_drag((520, 300), (720, 300))
+            hanging = save_layers(lambda values: len(values) == 3, "hanging line created")[-1]
+            assert hanging["endX"] > 640
+            toolbar_click("layers")
+            shot(editor, "expand-idle")
+            right, center_y = document_point((640, 300))
+            click(editor, right + 22, center_y)
+            save_until(lambda: document_json()["width"] > 640, "Expand canvas grows the canvas")
+            expanded = document_json()
+            assert expanded["height"] == 360 and expanded["width"] >= 721, expanded["width"]
+            assert expanded["elements"][0]["x"] == 0, "right growth never shifts layers"
+            shot(editor, "expand-applied")
+            toolbar_click("undo")
+            save_until(lambda: document_json()["width"] == 640, "Expand canvas is one undo step")
+            toolbar_click("redo")
+            save_until(lambda: document_json()["width"] == expanded["width"], "Expand canvas redo")
+
+            # Drop: a real XDND source offers a PNG while the pointer sits near the
+            # capture's top edge, then drops it above the capture.
+            dropped = output / "Dropped image.png"
+            # Untagged sRGB, like the external-image fixtures.
+            run("convert", "-size", "100x50", "xc:#8a2be2", "-strip", "PNG32:" + str(dropped))
+            x, y = document_point((320, 8))
+            run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y), "sleep", ".3")
+            source = subprocess.Popen(
+                ["/usr/bin/python3", str(Path(__file__).with_name("x11_drag_source.py")),
+                 "--target", str(editor), "--file", str(dropped),
+                 "--log", str(output / "drag-source.jsonl")],
+                env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            children.append(source)
+            assert source.stdout.readline().strip() == "entered"
+            run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y + 1),
+                "sleep", ".3")
+            source.stdin.write("position\n")
+            source.stdin.flush()
+            # The shipping top-edge bar paints the accent over the capture's edge.
+            settled_pixel("drop-hover-top", (320, 1), accent, 3)
+            source.stdin.write("drop\n")
+            source.stdin.flush()
+            assert source.stdout.readline().strip() == "done"
+            source.wait(timeout=10)
+            events = [json.loads(line)["event"] for line in
+                      (output / "drag-source.jsonl").read_text().splitlines()]
+            assert "converted" in events and events[-1] == "finished", events
+            save_until(lambda: len(document_json()["elements"]) == 4, "dropped image imported")
+            placed = document_json()
+            image = placed["elements"][-1]
+            assert image["kind"] == "image" and image["name"] == "Dropped image.png"
+            # Placed above: fully outside, so the canvas grows once and shifts down.
+            assert placed["height"] == 410 and (image["x"], image["y"]) == (270, 0), (
+                placed["height"], image["x"], image["y"])
+            settled_pixel("drop-placed", (320, 25), (138, 43, 226), 2)
+            toolbar_click("undo")
+            save_until(lambda: len(document_json()["elements"]) == 3, "drop is one undo step")
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "canvas draft closes")
+            editor = reopen()
+            reopened = document_json()
+            assert reopened["width"] == expanded["width"]
+            assert len(reopened["elements"][1]["controls"]) == 2, "curve survives the draft"
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "canvas suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["curve-starter-drag", "curve-point-double-click-remove", "curve-undo-redo",
+                           "expand-canvas-action", "expand-canvas-single-undo", "xdnd-drop-guide-top",
+                           "xdnd-drop-placed-above", "drop-single-undo", "curve-draft-reopen",
+                           "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native canvas interactions: curve dots, Expand canvas, XDND drop guide and import")
             return
 
         if args.output_size_only:

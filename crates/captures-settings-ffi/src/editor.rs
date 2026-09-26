@@ -608,6 +608,11 @@ enum CanvasQuery {
         point: Point,
         radius: f64,
     },
+    CurvePreview {
+        id: String,
+        handle: canvas::CurveHandle,
+        point: Point,
+    },
 }
 
 /// Canvas-interaction geometry from an immutable published document: the
@@ -648,14 +653,29 @@ pub unsafe extern "C" fn captures_editor_canvas_query_v1(
                     _ => None,
                 });
                 let Some(shape) = shape.filter(|shape| canvas::is_curveable(shape)) else {
-                    return Ok(json!({"handle": null, "hint": null, "on_path": false}));
+                    return Ok(
+                        json!({"handle": null, "hint": null, "on_path": false, "closest": null}),
+                    );
                 };
-                let (_, _, distance) = canvas::closest_point_on_curve(shape, point);
+                let (closest, _, distance) = canvas::closest_point_on_curve(shape, point);
                 Ok(json!({
                     "handle": canvas::hit_test_curve_handle(shape, point, radius),
                     "hint": canvas::curve_hover_hint(shape, point, radius),
                     "on_path": distance <= canvas::curve_path_hit_radius(shape, radius),
+                    "closest": closest,
                 }))
+            }
+            CanvasQuery::CurvePreview { id, handle, point } => {
+                let mut shape = document
+                    .elements
+                    .into_iter()
+                    .find_map(|element| match element {
+                        Element::Shape(shape) if shape.base.id == id => Some(shape),
+                        _ => None,
+                    })
+                    .ok_or("The selected layer no longer exists.")?;
+                canvas::apply_curve_edit(&mut shape, canvas::CurveEdit::Move { handle, point })?;
+                Ok(json!(canvas::curve_handles(&shape)))
             }
         }
     }))
@@ -1826,6 +1846,19 @@ mod tests {
             ));
             assert_eq!(hit["result"]["handle"], json!({"kind": "start"}));
             assert_eq!(hit["result"]["hint"], "Drag to move endpoint");
+            let preview = CString::new(
+                json!({"operation": "curve_preview", "id": line,
+                       "handle": {"kind": "starter_control", "index": 1},
+                       "point": {"x": 10., "y": 9.}})
+                .to_string(),
+            )
+            .unwrap();
+            let moved = take_json(captures_editor_canvas_query_v1(
+                document.as_ptr(),
+                preview.as_ptr(),
+            ));
+            assert_eq!(moved["result"]["controls"][1], json!({"x": 10., "y": 9.}));
+            assert_eq!(moved["result"]["slider"], false);
             let invalid = take_json(captures_editor_canvas_query_v1(
                 document.as_ptr(),
                 c"{\"operation\":\"unknown\"}".as_ptr(),

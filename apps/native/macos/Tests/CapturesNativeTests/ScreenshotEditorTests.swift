@@ -3014,7 +3014,7 @@ final class ScreenshotEditorTests: XCTestCase {
         wait(for: [opened], timeout: 5)
         let imported = expectation(description: "import")
         var importedLayerID: String?
-        worker.importImage(decoded, selectedID: nil) { result in
+        worker.importImage(decoded, selectedID: nil, point: nil) { result in
             let value = try? result.get()
             importedLayerID = value?.layerID
             XCTAssertTrue(value?.presentation.snapshot.unsavedChanges == true)
@@ -6422,7 +6422,8 @@ final class ScreenshotEditorTests: XCTestCase {
                           mergeDownIDs: [String] = [],
                           canMergeVisible: Bool = false,
                           canFlatten: Bool = false,
-                          activeTextInput: [String: Any]? = nil) -> NativeEditorSnapshot {
+                          activeTextInput: [String: Any]? = nil,
+                          extra: [String: Any] = [:]) -> NativeEditorSnapshot {
         var value: [String: Any] = [
             "artifact_id": id, "document": ["width": width, "height": height,
                                                   "elements": layers],
@@ -6458,6 +6459,7 @@ final class ScreenshotEditorTests: XCTestCase {
             "active_text_input": activeTextInput ?? NSNull(),
         ]
         if let originalExportPath { value["original_export_path"] = originalExportPath }
+        value.merge(extra) { _, new in new }
         return NativeEditorSnapshot(value)!
     }
 
@@ -6763,7 +6765,7 @@ private final class FakeEditorWorker: EditorWorking {
     var encodes: [[String: Any]] = []
     var saves: [[String: Any]] = []
     var originalSaves: [[String: Any]] = []
-    var imports: [(image: EditorDecodedImage, selectedID: String?)] = []
+    var imports: [(image: EditorDecodedImage, selectedID: String?, point: CGPoint?)] = []
     var openArtifactIDs: [String] = []
     var closeCount = 0
     var draftsRoot: String?
@@ -6886,9 +6888,9 @@ private final class FakeEditorWorker: EditorWorking {
         completion(estimateResult)
     }
 
-    func importImage(_ image: EditorDecodedImage, selectedID: String?,
+    func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void) {
-        imports.append((image, selectedID))
+        imports.append((image, selectedID, point))
         if failImport {
             completion(.failure(AppBridgeError.backend(failureMessage))); return
         }
@@ -6922,5 +6924,248 @@ private extension CGImage {
             bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue), provider: provider,
             decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+    }
+}
+
+// MARK: - Canvas interactions: drop guides, Expand canvas and curve editing
+
+extension ScreenshotEditorTests {
+    private func curveHandlesValue(slider: Bool = true, bend: Double = 0,
+                                   controls: [[String: Double]] = []) -> [String: Any] {
+        ["start": ["x": 180.0, "y": 150.0], "end": ["x": 580.0, "y": 150.0], "controls": controls,
+         "starters": controls.isEmpty ? [["x": 280.0, "y": 150.0], ["x": 380.0, "y": 150.0],
+                                         ["x": 480.0, "y": 150.0]] : [],
+         "bend_percent": bend, "slider": slider,
+         "straighten_label": "Straighten line",
+         "path": [["x": 180.0, "y": 150.0], ["x": 580.0, "y": 150.0]]]
+    }
+
+    private func expandValue() -> [String: Any] {
+        ["edges": ["right"], "rect": ["x": 0.0, "y": 0.0, "width": 725.0, "height": 360.0],
+         "gaps": [["x": 640.0, "y": 294.0, "width": 85.0, "height": 12.0]],
+         "bounds": ["x": 515.0, "y": 294.0, "width": 210.0, "height": 12.0],
+         "anchor": ["x": 640.0, "y": 300.0], "anchor_edge": "right"]
+    }
+
+    private func fittedController(_ worker: FakeEditorWorker,
+                                  decoder: @escaping (URL) throws -> EditorDecodedImage = { _ in
+                                      throw AppBridgeError.invalidResponse
+                                  }) -> ScreenshotEditorController {
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker,
+                                                    imageDecoder: decoder)
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        controller.window.setContentSize(NSSize(width: 1000, height: 600))
+        controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+        return controller
+    }
+
+    func testCanvasSnapshotParsesCurveHandlesAndExpandPreviewsLeniently() throws {
+        let parsed = snapshot(id: "shot", layers: [shapeLayer(id: "line", x: 180, y: 150)], extra: [
+            "curve_handles": ["line": curveHandlesValue(), "broken": ["start": "nope"]],
+            "canvas_expand": ["line": expandValue(), "broken": ["edges": ["sideways"]]],
+        ])
+        let handles = try XCTUnwrap(parsed.curveHandles["line"])
+        XCTAssertEqual(handles.starters.count, 3)
+        XCTAssertTrue(handles.slider)
+        XCTAssertEqual(handles.straightenLabel, "Straighten line")
+        XCTAssertNil(parsed.curveHandles["broken"])
+        let expand = try XCTUnwrap(parsed.canvasExpand["line"])
+        XCTAssertEqual(expand.edges, [.right])
+        XCTAssertEqual(expand.anchor(inset: 22), CGPoint(x: 662, y: 300))
+        XCTAssertNil(parsed.canvasExpand["broken"])
+        XCTAssertTrue(snapshot(id: "legacy").curveHandles.isEmpty, "older fixtures omit the fields")
+    }
+
+    func testRealCanvasQueriesReturnSharedDropGuidesAndCurveHits() throws {
+        let document: [String: Any] = ["width": 640.0, "height": 360.0, "background": NSNull(), "elements": [[
+            "kind": "shape", "id": "line", "x": 180.0, "y": 150.0, "locked": false, "visible": true,
+            "opacity": 100.0, "blendMode": "source-over", "shape": "line", "endX": 580.0, "endY": 150.0,
+            "controls": [], "style": ["color": "#ff3b5c", "fill": NSNull(), "strokeWidth": 8.0],
+        ]]]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]),
+                          as: UTF8.self)
+        let guide = try NativeEditorCanvas.dropGuide(documentJSON: json, selectedID: nil,
+                                                     point: CGPoint(x: 320, y: 4))
+        XCTAssertEqual(guide.placement, "top")
+        XCTAssertEqual(guide.label, "Place above")
+        XCTAssertEqual(guide.target, CGRect(x: 0, y: 0, width: 640, height: 360))
+        let fallback = try NativeEditorCanvas.dropGuide(documentJSON: json, selectedID: nil, point: nil)
+        XCTAssertEqual(fallback.label, "Place below")
+        let hit = try NativeEditorCanvas.curveHit(documentJSON: json, layerID: "line",
+                                                  point: CGPoint(x: 380, y: 152), radius: 10)
+        XCTAssertEqual(hit.handleKind, "starter_control")
+        XCTAssertEqual(hit.handleIndex, 1)
+        XCTAssertEqual(hit.hint, "Drag a dot to curve · Double-click the path to add points")
+        let path = try NativeEditorCanvas.curveHit(documentJSON: json, layerID: "line",
+                                                   point: CGPoint(x: 230, y: 151), radius: 10)
+        XCTAssertNil(path.handle)
+        XCTAssertTrue(path.onPath)
+        XCTAssertEqual(path.hint, "Double-click to add a curve point")
+        let moved = try NativeEditorCanvas.curvePreview(documentJSON: json, layerID: "line",
+            handle: ["kind": "starter_control", "index": 1], point: CGPoint(x: 380, y: 230))
+        XCTAssertEqual(moved.controls.count, 3)
+        XCTAssertEqual(moved.controls[1], CGPoint(x: 380, y: 230))
+        XCTAssertFalse(moved.slider)
+        XCTAssertTrue(NativeEditorCanvas.isSupportedImage(URL(fileURLWithPath: "/tmp/a.PNG")))
+        XCTAssertFalse(NativeEditorCanvas.isSupportedImage(URL(fileURLWithPath: "/tmp/notes.txt")))
+    }
+
+    func testSelectionOverlayCurveDotsDragOnceOnReleaseAndClicksNeverEdit() throws {
+        let overlay = EditorSelectionOverlay(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        overlay.canvasSize = NSSize(width: 400, height: 200)
+        overlay.selectionEnabled = true
+        overlay.selectedLayerID = "line"
+        let handles = try XCTUnwrap(NativeCurveHandles(curveHandlesValue()))
+        overlay.curveHandles = handles
+        var queries: [(String, CGPoint)] = []
+        overlay.curveHitTest = { id, point, _ in
+            queries.append((id, point))
+            return NativeCurveHit(handle: ["kind": "starter_control", "index": 1], hint: nil,
+                                  onPath: true, closest: point)
+        }
+        var previews = 0
+        overlay.curvePreviewer = { _, _, _ in previews += 1; return handles }
+        var edits: [(String, [String: Any])] = []
+        overlay.onCurve = { id, edit in edits.append((id, edit)) }
+        overlay.begin(at: CGPoint(x: 200, y: 100))
+        XCTAssertEqual(queries.first?.0, "line")
+        XCTAssertEqual(overlay.curvePreview, handles)
+        overlay.drag(to: CGPoint(x: 201, y: 101))
+        XCTAssertEqual(previews, 0, "sub-threshold movement keeps the dots still")
+        overlay.drag(to: CGPoint(x: 200, y: 140))
+        XCTAssertEqual(previews, 1)
+        XCTAssertTrue(edits.isEmpty, "dragging previews without committing")
+        overlay.end(at: CGPoint(x: 200, y: 140))
+        XCTAssertEqual(edits.count, 1)
+        let edit = try XCTUnwrap(edits.first)
+        XCTAssertEqual(edit.0, "line")
+        XCTAssertEqual(edit.1["kind"] as? String, "move")
+        XCTAssertEqual((edit.1["handle"] as? [String: Any])?["index"] as? Int, 1)
+        XCTAssertEqual((edit.1["point"] as? [String: Double])?["y"], 140)
+        XCTAssertNil(overlay.curvePreview)
+        overlay.begin(at: CGPoint(x: 200, y: 100)); overlay.end(at: CGPoint(x: 201, y: 100))
+        XCTAssertEqual(edits.count, 1, "a click on a dot never edits")
+        overlay.begin(at: CGPoint(x: 200, y: 100)); overlay.cancelGesture()
+        overlay.end(at: CGPoint(x: 200, y: 160))
+        XCTAssertEqual(edits.count, 1, "Escape cancels the drag")
+    }
+
+    func testExpandCanvasActionSitsPastTheOverflowEdgeAndSubmitsOneEdit() throws {
+        _ = NSApplication.shared
+        let base = layer(id: "background", name: "Original", x: 0, y: 0, visible: true, locked: true, opacity: 100)
+        let worker = FakeEditorWorker(snapshot: snapshot(
+            id: "shot", layers: [base, shapeLayer(id: "hanging", x: 520, y: 300)],
+            extra: ["canvas_expand": ["hanging": expandValue()]]))
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        try showLayers(in: controller.root)
+        let layerList = try table("Screenshot layers", in: controller.root)
+        layerList.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        let action = try XCTUnwrap(controller.expandCanvasButton)
+        let overlay = controller.selectionOverlay
+        XCTAssertFalse(action.isHidden)
+        XCTAssertEqual(action.title, "Expand canvas")
+        XCTAssertTrue(overlay.bounds.insetBy(dx: 3, dy: 3).contains(action.frame))
+        let image = overlay.presentedImageRect, scale = image.width / 640
+        XCTAssertEqual(action.frame.midY, image.minY + 300 * scale, accuracy: 1)
+        let expectedX = min(image.maxX + 22, overlay.bounds.maxX - 4 - action.frame.width / 2)
+        XCTAssertEqual(action.frame.midX, expectedX, accuracy: 1)
+        overlay.updateHover(at: CGPoint(x: action.frame.midX, y: action.frame.midY))
+        XCTAssertTrue(overlay.expandArmed, "hovering the action shows the ghost")
+        overlay.updateHover(at: nil)
+        XCTAssertFalse(overlay.expandArmed)
+        action.performClick(nil)
+        waitUntil { worker.requests.count == 1 && !controller.state.busy }
+        let request = try XCTUnwrap(worker.requests.last)
+        XCTAssertEqual(request["operation"] as? String, "layer")
+        XCTAssertEqual(request["id"] as? String, "hanging")
+        XCTAssertEqual((request["edit"] as? [String: Any])?["action"] as? String, "expand_canvas")
+        layerList.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        XCTAssertTrue(action.isHidden, "fitting layers show no action")
+    }
+
+    func testCurveInspectorCommitsBendOnReleaseAndStraightensMultiPointStrokes() throws {
+        _ = NSApplication.shared
+        let base = layer(id: "background", name: "Original", x: 0, y: 0, visible: true, locked: true, opacity: 100)
+        let straight = snapshot(id: "shot", layers: [base, shapeLayer(id: "line", x: 180, y: 150)],
+                                extra: ["curve_handles": ["line": curveHandlesValue()]])
+        let worker = FakeEditorWorker(snapshot: straight)
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        try showLayers(in: controller.root)
+        let layerList = try table("Screenshot layers", in: controller.root)
+        layerList.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        let curve = try XCTUnwrap(controller.curveControls)
+        XCTAssertFalse(curve.isHidden)
+        XCTAssertFalse(curve.bendSlider.isHidden)
+        XCTAssertTrue(curve.straightenButton.isHidden)
+        XCTAssertNotNil(controller.selectionOverlay.curveHandles)
+        curve.bendSlider.doubleValue = 40
+        _ = curve.bendSlider.sendAction(curve.bendSlider.action, to: curve.bendSlider.target)
+        waitUntil { worker.requests.count == 1 && !controller.state.busy }
+        var edit = try XCTUnwrap((worker.requests.last?["edit"] as? [String: Any])?["edit"] as? [String: Any])
+        XCTAssertEqual(edit["kind"] as? String, "bend")
+        XCTAssertEqual(edit["bend"] as? Double, 0.4)
+        worker.response = { _ in
+            self.snapshot(id: "shot", layers: [base, self.shapeLayer(id: "line", x: 180, y: 150)],
+                          extra: ["curve_handles": ["line": self.curveHandlesValue(
+                            slider: false, controls: [["x": 280, "y": 150], ["x": 380, "y": 230],
+                                                      ["x": 480, "y": 150]])]])
+        }
+        curve.bendSlider.doubleValue = 40
+        _ = curve.bendSlider.sendAction(curve.bendSlider.action, to: curve.bendSlider.target)
+        waitUntil { worker.requests.count == 2 && !controller.state.busy }
+        XCTAssertTrue(curve.bendSlider.isHidden)
+        XCTAssertFalse(curve.straightenButton.isHidden)
+        XCTAssertEqual(curve.straightenButton.title, "Straighten line")
+        curve.straightenButton.performClick(nil)
+        waitUntil { worker.requests.count == 3 && !controller.state.busy }
+        edit = try XCTUnwrap((worker.requests.last?["edit"] as? [String: Any])?["edit"] as? [String: Any])
+        XCTAssertEqual(edit["kind"] as? String, "straighten")
+    }
+
+    func testFileDropShowsTheSharedGuideAndImportsAtThePointerSample() throws {
+        _ = NSApplication.shared
+        let background: [String: Any] = [
+            "kind": "image", "id": "capture-background", "name": "Original screenshot",
+            "x": 0.0, "y": 0.0, "visible": true, "locked": true, "opacity": 100.0,
+            "blendMode": "source-over", "source": "background", "src": "draft-asset:original",
+            "width": 640.0, "height": 360.0, "naturalWidth": 640.0, "naturalHeight": 360.0,
+        ]
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [background]))
+        var decoded: [URL] = []
+        let controller = fittedController(worker) { url in
+            decoded.append(url)
+            return EditorDecodedImage(data: Data(repeating: 255, count: 16), width: 2, height: 2,
+                                      bytesPerRow: 8, name: url.lastPathComponent)
+        }
+        defer { controller.window.orderOut(nil) }
+        let image = controller.selectionOverlay.presentedImageRect
+        let nearTop = NSPoint(x: image.midX, y: image.minY + 2)
+        let png = URL(fileURLWithPath: "/tmp/dropped.png")
+        XCTAssertTrue(controller.handleFileDrop(.hover, urls: [png], at: nearTop))
+        XCTAssertTrue(controller.dropGuideView.active)
+        XCTAssertFalse(controller.dropGuideView.isHidden)
+        let guide = try XCTUnwrap(controller.dropGuideView.guide)
+        XCTAssertEqual(guide.label, "Place above")
+        XCTAssertEqual(controller.dropGuideView.toastLabel, "Place above")
+        XCTAssertTrue(controller.handleFileDrop(.exit, urls: [], at: .zero))
+        XCTAssertTrue(controller.dropGuideView.isHidden)
+
+        XCTAssertFalse(controller.handleFileDrop(.drop, urls: [URL(fileURLWithPath: "/tmp/notes.txt")],
+                                                 at: nearTop))
+        XCTAssertTrue(worker.imports.isEmpty && decoded.isEmpty)
+        XCTAssertTrue(labels(in: controller.root).contains("Drop PNG, JPEG, WebP, or TIFF image files."))
+
+        XCTAssertTrue(controller.handleFileDrop(.hover, urls: [png], at: nearTop))
+        XCTAssertTrue(controller.handleFileDrop(.drop, urls: [png, URL(fileURLWithPath: "/tmp/b.jpg")],
+                                                at: nearTop))
+        XCTAssertTrue(controller.dropGuideView.isHidden)
+        waitUntil { worker.imports.count == 2 && !controller.state.busy }
+        XCTAssertEqual(decoded.map(\.lastPathComponent), ["dropped.png", "b.jpg"])
+        let first = try XCTUnwrap(worker.imports.first?.point)
+        XCTAssertEqual(first.x, guide.point.x, accuracy: 0.001)
+        XCTAssertEqual(first.y, guide.point.y, accuracy: 0.001)
+        XCTAssertNil(worker.imports.last?.point, "later files stack below the previous import")
     }
 }

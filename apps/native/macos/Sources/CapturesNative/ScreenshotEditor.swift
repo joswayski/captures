@@ -140,6 +140,34 @@ class EditorViewportGestureView: NSView {
         if newSize != frame.size { cancelViewportPan() }
         super.setFrameSize(newSize)
     }
+
+    /// Image file drops onto the canvas. Every visible canvas gesture view
+    /// forwards to one controller handler with points in its own coordinates.
+    enum FileDropPhase { case hover, exit, drop }
+    var fileDropHandler: ((FileDropPhase, [URL], NSPoint) -> Bool)? {
+        didSet { if fileDropHandler != nil { registerForDraggedTypes([.fileURL]) } else { unregisterDraggedTypes() } }
+    }
+    private func draggedFileURLs(_ sender: NSDraggingInfo) -> [URL] {
+        sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+    }
+    private func fileDrag(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let urls = draggedFileURLs(sender)
+        guard !urls.isEmpty, let fileDropHandler,
+              fileDropHandler(.hover, urls, convert(sender.draggingLocation, from: nil)) else { return [] }
+        return .copy
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { fileDrag(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { fileDrag(sender) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { _ = fileDropHandler?(.exit, [], .zero) }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { fileDropHandler != nil }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = draggedFileURLs(sender)
+        guard !urls.isEmpty, let fileDropHandler else { return false }
+        return fileDropHandler(.drop, urls, convert(sender.draggingLocation, from: nil))
+    }
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) { _ = fileDropHandler?(.exit, [], .zero) }
+
     override var acceptsFirstResponder: Bool { true }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { cancelViewportPan() }
@@ -558,7 +586,9 @@ final class EditorDrawOverlay: EditorViewportGestureView {
 
 final class EditorSelectionOverlay: EditorViewportGestureView {
     var canvasSize = NSSize.zero { didSet { cancelGesture(); needsDisplay = true } }
-    var selectionEnabled = false { didSet { if !selectionEnabled { cancelGesture() }; isHidden = !selectionEnabled } }
+    var selectionEnabled = false {
+        didSet { if !selectionEnabled { cancelGesture() }; isHidden = !selectionEnabled; layoutExpandButton() }
+    }
     var selectedOutline: [CGPoint]? { didSet { needsDisplay = true } }
     var selectedLayerID: String? { didSet { if selectedLayerID != oldValue { cancelGesture() }; needsDisplay = true } }
     var documentJSON: String? { didSet { if documentJSON != oldValue { cancelGesture() } } }
@@ -569,6 +599,9 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var rotationEnabled = false { didSet { if !rotationEnabled { cancelGesture() }; needsDisplay = true } }
     var resizeEnabled = false { didSet { if !resizeEnabled { cancelGesture() }; needsDisplay = true } }
     var strokeColor = NSColor.controlAccentColor { didSet { needsDisplay = true } }
+    var dotFill = NSColor.windowBackgroundColor { didSet { needsDisplay = true } }
+    var hintFill = NSColor(white: 0.08, alpha: 0.9) { didSet { needsDisplay = true } }
+    var hintText = NSColor.white { didSet { needsDisplay = true } }
     var imageRect: (() -> NSRect)?
     var hitTestLayer: ((CGPoint, Double) throws -> String?)?
     var outlineForLayer: ((String) -> [CGPoint]?)?
@@ -578,6 +611,28 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var onResize: ((String, String, CGPoint, Double, Bool) -> Void)?
     var onDoubleClick: ((CGPoint, Double) -> Bool)?
     var onError: ((Error) -> Void)?
+    /// Curve dots for the selected visible, unlocked line/arrow.
+    var curveHandles: NativeCurveHandles? { didSet { needsDisplay = true } }
+    var curveHitTest: ((String, CGPoint, Double) -> NativeCurveHit?)?
+    var curvePreviewer: ((String, [String: AnyHashable], CGPoint) -> NativeCurveHandles?)?
+    var onCurve: ((String, [String: Any]) -> Void)?
+    var hoverHintProvider: ((CGPoint, Double) -> String?)?
+    /// The selected layer's overflow preview and its Expand canvas action.
+    var expandPreview: NativeCanvasExpand? { didSet { layoutExpandButton(); needsDisplay = true } }
+    var expandButton: CaptureButton? {
+        didSet {
+            oldValue?.removeFromSuperview()
+            if let expandButton { addSubview(expandButton) }
+            layoutExpandButton()
+        }
+    }
+    private(set) var expandArmed = false
+    private(set) var hoverHint: String?
+    private var hoverPoint: CGPoint?
+    private var curveLayerID: String?
+    private var curveHandle: [String: AnyHashable]?
+    private(set) var curvePreview: NativeCurveHandles?
+    private var hoverTracking: NSTrackingArea?
     private(set) var startPoint: CGPoint?
     private(set) var currentPoint: CGPoint?
     private var hitLayerID: String?
@@ -612,6 +667,48 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     override func setFrameSize(_ newSize: NSSize) {
         if newSize != frame.size { cancelGesture() }
         super.setFrameSize(newSize)
+        layoutExpandButton()
+    }
+    override func updateTrackingAreas() {
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited,
+                                                         .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area); hoverTracking = area
+        super.updateTrackingAreas()
+    }
+    override func mouseMoved(with event: NSEvent) {
+        updateHover(at: convert(event.locationInWindow, from: nil))
+    }
+    override func mouseExited(with event: NSEvent) { updateHover(at: nil) }
+    /// Curve hints near the pointer and the armed Expand canvas ghost.
+    func updateHover(at point: CGPoint?) {
+        let armed = point.map { expandButton?.isHidden == false && expandButton?.frame.contains($0) == true } ?? false
+        var hint: String?
+        if let point, startPoint == nil, !armed, presentedImageRect.contains(point), canvasSize.width > 0 {
+            let scale = presentedImageRect.width / canvasSize.width
+            hint = hoverHintProvider?(canvasPoint(for: point), 10 / scale)
+        }
+        if armed != expandArmed || hint != hoverHint || (hint != nil && point != hoverPoint) {
+            expandArmed = armed; hoverHint = hint; hoverPoint = point; needsDisplay = true
+        }
+    }
+    /// Place the action outside the largest overflow gap, kept inside the view.
+    func layoutExpandButton() {
+        guard let expandButton else { return }
+        guard let expandPreview, selectionEnabled, startPoint == nil, canvasSize.width > 0 else {
+            expandButton.isHidden = true; expandArmed = false; return
+        }
+        let image = presentedImageRect, scale = image.width / canvasSize.width
+        let anchor = expandPreview.anchor(inset: NativeEditorCanvas.expandInset / max(0.01, scale))
+        let center = CGPoint(x: image.minX + anchor.x * scale, y: image.minY + anchor.y * scale)
+        let size = expandButton.frame.size
+        let inner = bounds.insetBy(dx: 4, dy: 4)
+        guard inner.width >= size.width, inner.height >= size.height else { expandButton.isHidden = true; return }
+        expandButton.frame.origin = CGPoint(
+            x: min(max(center.x - size.width / 2, inner.minX), inner.maxX - size.width),
+            y: min(max(center.y - size.height / 2, inner.minY), inner.maxY - size.height))
+        expandButton.isHidden = false
     }
     var presentedImageRect: NSRect {
         if let imageRect { return imageRect() }
@@ -647,16 +744,25 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         }
         do {
             let scale = presentedImageRect.width / canvasSize.width
+            var result: (NativeEditorResizeDrag?, Int?) = (nil, nil)
             if resizeEnabled, let id = selectedLayerID, let documentJSON {
-                let result = try NativeEditorResizeDrag.begin(documentJSON: documentJSON, layerID: id,
+                result = try NativeEditorResizeDrag.begin(documentJSON: documentJSON, layerID: id,
                     point: documentPoint, displayScale: scale)
-                if let drag = result.0, let handle = result.1 {
-                    resizeDrag = drag; resizeHandle = handle
-                    startPoint = point; currentPoint = point
-                    lockResizeAspect = snap && handle.isMultiple(of: 2)
-                    resizePreview = drag.preview(current: documentPoint, lockAspect: lockResizeAspect)
-                    needsDisplay = true; return
-                }
+            }
+            // Shipping priority: corner resize, then curve dots, then edge resize.
+            let corner = result.1?.isMultiple(of: 2) ?? false
+            if !corner, curveHandles != nil, let id = selectedLayerID,
+               let hit = curveHitTest?(id, documentPoint, 10 / scale), let handle = hit.handle {
+                curveLayerID = id; curveHandle = handle; curvePreview = curveHandles
+                startPoint = point; currentPoint = point; hoverHint = nil
+                expandButton?.isHidden = true; needsDisplay = true; return
+            }
+            if let drag = result.0, let handle = result.1 {
+                resizeDrag = drag; resizeHandle = handle
+                startPoint = point; currentPoint = point
+                lockResizeAspect = snap && handle.isMultiple(of: 2)
+                resizePreview = drag.preview(current: documentPoint, lockAspect: lockResizeAspect)
+                needsDisplay = true; return
             }
             hitLayerID = try hitTestLayer?(documentPoint, 8 / scale)
             if let id = hitLayerID {
@@ -670,7 +776,11 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     }
     func drag(to point: CGPoint, snap: Bool? = nil) {
         guard let startPoint else { return }; currentPoint = point
-        if rotatingLayerID != nil, let outline = rotationStartOutline {
+        if let id = curveLayerID, let handle = curveHandle {
+            if hypot(point.x - startPoint.x, point.y - startPoint.y) >= 3 {
+                curvePreview = curvePreviewer?(id, handle, canvasPoint(for: point)) ?? curvePreview
+            }
+        } else if rotatingLayerID != nil, let outline = rotationStartOutline {
             if let snap { snapRotation = snap }
             rotationPreview = NativeEditorRotationPreview(outline: outline, radians: rotationStartRadians,
                 start: canvasPoint(for: startPoint), current: canvasPoint(for: point), snap: snapRotation,
@@ -695,6 +805,16 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     }
     func end(at point: CGPoint, snap: Bool? = nil) {
         guard let start = startPoint else { return }
+        if let id = curveLayerID, let handle = curveHandle {
+            let distance = hypot(point.x - start.x, point.y - start.y)
+            let current = canvasPoint(for: point)
+            cancelGesture()
+            if distance >= 3 {
+                onCurve?(id, ["kind": "move", "handle": handle as [String: Any],
+                              "point": ["x": Double(current.x), "y": Double(current.y)]])
+            }
+            return
+        }
         if let id = rotatingLayerID {
             drag(to: point, snap: snap)
             let angle = rotationPreview?.radians
@@ -726,6 +846,8 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         rotationStartOutline = nil; rotatingLayerID = nil; rotationPreview = nil; needsDisplay = true
         resizeDrag = nil; resizeHandle = nil; resizePreview = nil; lockResizeAspect = false
         moveDrag = nil; movePreview = nil
+        curveLayerID = nil; curveHandle = nil; curvePreview = nil
+        layoutExpandButton()
     }
     override func mouseDown(with event: NSEvent) {
         if beginViewportPan(event) { cancelGesture(); return }
@@ -749,6 +871,10 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     override func resignFirstResponder() -> Bool { cancelGesture(); return super.resignFirstResponder() }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        drawSelection()
+        drawCanvasInteractions()
+    }
+    private func drawSelection() {
         guard canvasSize.width > 0, canvasSize.height > 0,
               let outline = resizePreview?.outline ?? movePreview?.outline ?? rotationPreview?.outline
                 ?? (startPoint == nil ? selectedOutline : transientOutline),
@@ -779,7 +905,8 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         }
         if resizeEnabled, startPoint == nil || resizeDrag != nil {
             strokeColor.setFill()
-            for point in resizeHandlePoints {
+            // Lines/arrows keep corner grips only so curve dots stay easy to grab.
+            for (index, point) in resizeHandlePoints.enumerated() where curveHandles == nil || index.isMultiple(of: 2) {
                 let center = CGPoint(x: image.minX + point.x * scale, y: image.minY + point.y * scale)
                 NSBezierPath(rect: NSRect(x: center.x - 4, y: center.y - 4, width: 8, height: 8)).fill()
             }
@@ -793,6 +920,67 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             let center = map(geometry.handle), radius: CGFloat = 5
             strokeColor.setFill(); NSBezierPath(ovalIn: NSRect(x: center.x-radius, y: center.y-radius,
                                                                width: radius*2, height: radius*2)).fill()
+        }
+    }
+    /// Overflow tint and armed ghost, curve dots (live while dragging) and the
+    /// floating curve hint.
+    private func drawCanvasInteractions() {
+        guard canvasSize.width > 0, canvasSize.height > 0 else { return }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: bounds).addClip()
+        let image = presentedImageRect, scale = image.width / canvasSize.width
+        let map: (CGPoint) -> CGPoint = { CGPoint(x: image.minX + $0.x * scale, y: image.minY + $0.y * scale) }
+        let mapRect: (CGRect) -> CGRect = {
+            CGRect(x: image.minX + $0.minX * scale, y: image.minY + $0.minY * scale,
+                   width: $0.width * scale, height: $0.height * scale)
+        }
+        if let expandPreview, expandButton?.isHidden == false {
+            for gap in expandPreview.gaps {
+                let rect = mapRect(gap)
+                strokeColor.withAlphaComponent(0.16).setFill(); NSBezierPath(rect: rect).fill()
+                let border = NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5))
+                strokeColor.withAlphaComponent(0.5).setStroke(); border.lineWidth = 1; border.stroke()
+            }
+            if expandArmed {
+                let ghost = mapRect(expandPreview.rect)
+                let outline = NSBezierPath(roundedRect: ghost, xRadius: 3, yRadius: 3)
+                outline.lineWidth = 1.5; outline.setLineDash([6, 4], count: 2, phase: 0)
+                strokeColor.withAlphaComponent(0.42).setStroke(); outline.stroke()
+                for edge in expandPreview.edges {
+                    EditorDropGuideView.drawEdgeGlow(ghost, edge: edge, accent: strokeColor)
+                }
+            }
+        }
+        if let handles = curvePreview ?? (startPoint == nil ? curveHandles : nil) {
+            if curvePreview != nil, handles.path.count >= 2 {
+                let path = NSBezierPath()
+                for (index, point) in handles.path.enumerated() {
+                    index == 0 ? path.move(to: map(point)) : path.line(to: map(point))
+                }
+                strokeColor.withAlphaComponent(0.85).setStroke(); path.lineWidth = 1.5; path.stroke()
+            }
+            func dot(_ point: CGPoint, radius: CGFloat, filled: Bool) {
+                let center = map(point)
+                let oval = NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius,
+                                                       width: radius * 2, height: radius * 2))
+                (filled ? strokeColor : dotFill).setFill(); oval.fill()
+                strokeColor.setStroke(); oval.lineWidth = filled ? 2 : 1.5; oval.stroke()
+            }
+            handles.starters.forEach { dot($0, radius: 4.5, filled: false) }
+            handles.controls.forEach { dot($0, radius: 5, filled: true) }
+            [handles.start, handles.end].forEach { dot($0, radius: 4.5, filled: false) }
+        }
+        if let hoverHint, let hoverPoint, startPoint == nil {
+            let font = NSFont.systemFont(ofSize: 11)
+            let text = hoverHint as NSString
+            let size = text.size(withAttributes: [.font: font])
+            let bubble = CGRect(x: hoverPoint.x + 14, y: hoverPoint.y + 18,
+                                width: ceil(size.width) + 16, height: ceil(size.height) + 8)
+            let plate = NSBezierPath(roundedRect: bubble, xRadius: 6, yRadius: 6)
+            hintFill.setFill(); plate.fill()
+            text.draw(at: CGPoint(x: bubble.minX + 8, y: bubble.minY + 4),
+                      withAttributes: [.font: font, .foregroundColor: hintText])
         }
     }
 }
@@ -889,6 +1077,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var addLayerButton: CaptureButton!
     private var drawHeading: NSTextField?
     private var annotationControls: EditorAnnotationControls!
+    private(set) var curveControls: EditorCurveControls!
+    private var annotationControlsHeight: CGFloat = 0
+    let dropGuideView = EditorDropGuideView()
+    private(set) var expandCanvasButton: CaptureButton!
+    /// Remaining files from one drop; each imports after the previous one.
+    private var pendingDropURLs: [URL] = []
     private let rotationSnap = NSTextField()
     private var rotationSnapLabel: NSTextField!
     private let drawPanel = Surface()
@@ -1111,7 +1305,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                                         qos: .userInitiated)
     private var importToken = 0
     private var importLoading = false
-    private var pendingImport: (image: EditorDecodedImage, generation: Int, artifactID: String)?
+    private var pendingImport: (image: EditorDecodedImage, generation: Int, artifactID: String, point: CGPoint?)?
 
     private enum Section {
         static let geometry = 0
@@ -1692,8 +1886,28 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                     displayScale: scale, lockAspect: lockAspect)
         }
         selectionOverlay.onDoubleClick = { [weak self] point, tolerance in
-            self?.beginExistingTextInput(at: point, tolerance: tolerance) ?? false
+            guard let self else { return false }
+            if self.curveDoubleClick(at: point, radius: tolerance * 10 / 8) { return true }
+            return self.beginExistingTextInput(at: point, tolerance: tolerance)
         }
+        selectionOverlay.curveHitTest = { [weak self] id, point, radius in
+            guard let json = self?.state.snapshot?.documentJSON else { return nil }
+            return try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: id, point: point, radius: radius)
+        }
+        selectionOverlay.curvePreviewer = { [weak self] id, handle, point in
+            guard let json = self?.state.snapshot?.documentJSON else { return nil }
+            return try? NativeEditorCanvas.curvePreview(documentJSON: json, layerID: id, handle: handle, point: point)
+        }
+        selectionOverlay.onCurve = { [weak self] id, edit in self?.curveCanvasLayer(id, edit: edit) }
+        selectionOverlay.hoverHintProvider = { [weak self] point, radius in
+            self?.curveHoverHint(at: point, radius: radius)
+        }
+        expandCanvasButton = CaptureButton(NativeEditorCanvas.expandCanvas,
+                                           frame: NSRect(x: 0, y: 0, width: 118, height: 28),
+                                           tokens: tokens) { [weak self] in self?.expandSelectedCanvas() }
+        expandCanvasButton.primary = true
+        expandCanvasButton.setAccessibilityLabel(NativeEditorCanvas.expandCanvas)
+        selectionOverlay.expandButton = expandCanvasButton
         selectionOverlay.onError = { [weak self] error in self?.showError("Layer interaction failed: \(error.localizedDescription)") }
         viewportInput.addSubview(selectionOverlay)
         cropOverlay.frame = viewportInput.bounds
@@ -1703,6 +1917,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cropOverlay.onChange = { [weak self] rect in self?.setCropFields(rect) }
         cropOverlay.onCancel = { [weak self] in self?.cancelCrop() }
         viewportInput.addSubview(cropOverlay)
+        dropGuideView.frame = viewportInput.bounds
+        dropGuideView.autoresizingMask = [.width, .height]
+        dropGuideView.isHidden = true
+        dropGuideView.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
+        viewportInput.addSubview(dropGuideView)
         inlineTextScroll.isHidden = true
         inlineTextScroll.borderType = .lineBorder
         inlineTextScroll.hasVerticalScroller = true
@@ -2617,11 +2836,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         annotationControls.reportError = { [weak self] message in self?.showError(message) }
         annotationControls.resized = { [weak self] height in
-            self?.rotationSnapLabel.frame.origin.y = 558 + height
-            self?.rotationSnap.frame.origin.y = 582 + height
-            self?.layerContent.frame.size.height = 620 + height
+            self?.annotationControlsHeight = height
+            self?.layoutLayerInspectorTail()
         }
         layerContent.addSubview(annotationControls)
+        curveControls = EditorCurveControls(tokens: tokens)
+        curveControls.apply = { [weak self] edit in
+            guard let self, let id = self.selectedLayer?.id else { return }
+            self.curveCanvasLayer(id, edit: edit)
+        }
+        curveControls.resized = { [weak self] _ in self?.layoutLayerInspectorTail() }
+        layerContent.addSubview(curveControls)
+        layoutLayerInspectorTail()
     }
 
     @objc private func changeSection() {
@@ -3996,6 +4222,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func configureViewportGestures(_ view: EditorViewportGestureView) {
+        view.fileDropHandler = { [weak self, weak view] phase, urls, point in
+            guard let self, let view else { return false }
+            return self.handleFileDrop(phase, urls: urls, at: view.convert(point, to: self.viewportInput))
+        }
         view.onViewportZoom = { [weak self] factor, anchor in self?.scaleViewport(by: factor, anchor: anchor) }
         view.onViewportPan = { [weak self] delta in self?.panViewport(by: delta) }
         view.onViewportPanBegan = { [weak self] in self?.cancelDrawing() }
@@ -4186,6 +4416,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publishZoomPreset()
         drawOverlay.needsDisplay = true; selectionOverlay.needsDisplay = true
         cropOverlay.needsDisplay = true
+        selectionOverlay.layoutExpandButton(); dropGuideView.needsDisplay = true
     }
 
     private func publishTextInputPresentation(_ presentation: EditorPresentation) {
@@ -4308,7 +4539,104 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             && state.snapshot != nil && !state.busy && inputResolved && !importLoading
     }
 
-    private func selectCanvasLayer(_ id: String?) {
+    /// Annotation style, then Curve, then the rotation snap field.
+    private func layoutLayerInspectorTail() {
+        guard let curveControls else { return }
+        curveControls.frame.origin = CGPoint(x: 0, y: 550 + annotationControlsHeight
+                                             + (annotationControlsHeight > 0 ? 8 : 0))
+        let curve = curveControls.isHidden ? 0 : curveControls.frame.height + 8
+        let tail = annotationControlsHeight + curve
+        rotationSnapLabel.frame.origin.y = 558 + tail
+        rotationSnap.frame.origin.y = 582 + tail
+        layerContent.frame.size.height = 620 + tail
+    }
+
+    private func curveCanvasLayer(_ id: String, edit: [String: Any]) {
+        guard !state.busy, let layer = state.snapshot?.layers.first(where: { $0.id == id }),
+              !layer.locked else { return }
+        command(["operation": "layer", "id": id, "edit": ["action": "curve", "edit": edit]],
+                message: "Editing curve…", preferredSelection: id)
+    }
+
+    private func expandSelectedCanvas() {
+        guard !state.busy, let id = selectedLayer?.id, state.snapshot?.canvasExpand[id] != nil else { return }
+        command(["operation": "layer", "id": id, "edit": ["action": "expand_canvas"]],
+                message: "Expanding canvas…", preferredSelection: id)
+    }
+
+    /// Shipping double-click on a line/arrow: remove a control dot, add a point
+    /// on the selected path, or select an unselected path and add a point.
+    private func curveDoubleClick(at point: CGPoint, radius: Double) -> Bool {
+        guard !state.busy, let json = state.snapshot?.documentJSON else { return false }
+        if let layer = selectedLayer, layer.visible, !layer.locked, state.snapshot?.curveHandles[layer.id] != nil,
+           let hit = try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: layer.id,
+                                                      point: point, radius: radius) {
+            if hit.handleKind == "control", let index = hit.handleIndex {
+                curveCanvasLayer(layer.id, edit: ["kind": "remove", "index": index]); return true
+            }
+            if hit.handle != nil { return true }
+            if hit.onPath, let closest = hit.closest {
+                curveCanvasLayer(layer.id, edit: ["kind": "insert",
+                    "point": ["x": Double(closest.x), "y": Double(closest.y)]])
+                return true
+            }
+        }
+        guard let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
+              id != selectedLayer?.id, state.snapshot?.curveHandles[id] != nil,
+              let hit = try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: id, point: point, radius: radius),
+              hit.onPath, let closest = hit.closest else { return false }
+        curveCanvasLayer(id, edit: ["kind": "insert", "point": ["x": Double(closest.x), "y": Double(closest.y)]])
+        return true
+    }
+
+    private func curveHoverHint(at point: CGPoint, radius: Double) -> String? {
+        guard !state.busy, let json = state.snapshot?.documentJSON else { return nil }
+        if let layer = selectedLayer, layer.visible, !layer.locked, state.snapshot?.curveHandles[layer.id] != nil,
+           let hint = (try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: layer.id,
+                                                        point: point, radius: radius))?.hint {
+            return hint
+        }
+        guard let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
+              id != selectedLayer?.id, state.snapshot?.curveHandles[id] != nil,
+              let hit = try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: id, point: point, radius: radius),
+              hit.onPath else { return nil }
+        return "Click to select · double-click path to add curve points"
+    }
+
+    /// File drags over any canvas gesture view. Points are in viewport coordinates.
+    func handleFileDrop(_ phase: EditorViewportGestureView.FileDropPhase, urls: [URL], at point: NSPoint) -> Bool {
+        switch phase {
+        case .exit:
+            dropGuideView.active = false; dropGuideView.guide = nil
+            return true
+        case .hover:
+            guard let snapshot = state.snapshot, state.artifactID != nil, inlineTextInput == nil else {
+                dropGuideView.active = false; dropGuideView.guide = nil; return false
+            }
+            let image = presentedImageRect
+            let documentPoint = image.contains(point) && image.width > 0
+                ? CGPoint(x: (point.x - image.minX) * snapshot.width / image.width,
+                          y: (point.y - image.minY) * snapshot.height / image.height) : nil
+            dropGuideView.canvasSize = NSSize(width: snapshot.width, height: snapshot.height)
+            dropGuideView.guide = try? NativeEditorCanvas.dropGuide(documentJSON: snapshot.documentJSON,
+                selectedID: selectedLayerID, point: documentPoint)
+            dropGuideView.active = true
+            return true
+        case .drop:
+            let guide = dropGuideView.guide
+            dropGuideView.active = false; dropGuideView.guide = nil
+            guard let artifactID = state.artifactID, state.snapshot != nil, inlineTextInput == nil,
+                  !importLoading else { return false }
+            let images = urls.filter(NativeEditorCanvas.isSupportedImage)
+            guard let first = images.first else { showError(NativeEditorCanvas.dropUnsupported); return false }
+            selectionOverlay.cancelGesture()
+            importToken += 1
+            pendingDropURLs = Array(images.dropFirst())
+            decodeImport(first, point: guide?.point, token: importToken,
+                         generation: state.generation, artifactID: artifactID)
+            return true
+        }
+    }
         guard !state.busy else { return }
         selectedLayerID = id
         if let id, let index = state.snapshot?.layers.firstIndex(where: { $0.id == id }) { selectedLayerIndex = index }
@@ -4356,34 +4684,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         importToken += 1
         let token = importToken
         let generation = state.generation
+        pendingDropURLs = []
         let completion: (URL?) -> Void = { [weak self] url in
             DispatchQueue.main.async {
-                guard let self, self.importToken == token,
-                      self.state.generation == generation,
-                      self.state.artifactID == artifactID,
-                      let url else { return }
-                self.importLoading = true
-                self.status.textColor = self.tokens.color("text-muted")
-                self.status.stringValue = "Reading image…"
-                self.updateControls()
-                let decoder = self.imageDecoder
-                Self.imageDecodeQueue.async {
-                    let result = Result { try decoder(url) }
-                    DispatchQueue.main.async {
-                        guard self.importToken == token,
-                              self.state.generation == generation,
-                              self.state.artifactID == artifactID else { return }
-                        switch result {
-                        case .success(let image):
-                            self.pendingImport = (image, generation, artifactID)
-                            self.submitPendingImportIfReady()
-                        case .failure(let error):
-                            self.importLoading = false
-                            self.showError("Couldn’t import image: \(error.localizedDescription)")
-                            self.updateControls()
-                        }
-                    }
-                }
+                guard let self, let url else { return }
+                self.decodeImport(url, point: nil, token: token, generation: generation, artifactID: artifactID)
             }
         }
         if let imagePicker {
@@ -4393,6 +4698,35 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let panel = Self.imagePanel()
         panel.beginSheetModal(for: window) { response in
             completion(response == .OK ? panel.url : nil)
+        }
+    }
+
+    /// Decode off the main thread, then import as one undoable edit. A drop
+    /// point places the image where the drop guide showed.
+    private func decodeImport(_ url: URL, point: CGPoint?, token: Int, generation: Int, artifactID: String) {
+        guard importToken == token, state.generation == generation, state.artifactID == artifactID else { return }
+        importLoading = true
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Reading image…"
+        updateControls()
+        let decoder = imageDecoder
+        Self.imageDecodeQueue.async {
+            let result = Result { try decoder(url) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.importToken == token,
+                      self.state.generation == generation,
+                      self.state.artifactID == artifactID else { return }
+                switch result {
+                case .success(let image):
+                    self.pendingImport = (image, generation, artifactID, point)
+                    self.submitPendingImportIfReady()
+                case .failure(let error):
+                    self.importLoading = false
+                    self.pendingDropURLs = []
+                    self.showError("Couldn’t import image: \(error.localizedDescription)")
+                    self.updateControls()
+                }
+            }
         }
     }
 
@@ -4421,7 +4755,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         status.textColor = tokens.color("text-muted")
         status.stringValue = "Adding image layer…"
         updateControls()
-        worker.importImage(pendingImport.image, selectedID: selectedID) { [weak self] result in
+        worker.importImage(pendingImport.image, selectedID: selectedID, point: pendingImport.point) { [weak self] result in
             guard let self, self.importToken == token else { return }
             self.importLoading = false
             switch result {
@@ -4433,8 +4767,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.publish(imported.presentation, resetCrop: false)
                 self.status.textColor = self.tokens.color("text-muted")
                 self.status.stringValue = "Image added. Unsaved changes."
+                if !self.pendingDropURLs.isEmpty, let artifactID = self.state.artifactID {
+                    // Later files in one drop stack below the layer just added.
+                    let next = self.pendingDropURLs.removeFirst()
+                    self.updateControls()
+                    self.decodeImport(next, point: nil, token: token,
+                                      generation: self.state.generation, artifactID: artifactID)
+                    return
+                }
             case .failure(let error):
                 guard self.state.fail(generation: generation) else { return }
+                self.pendingDropURLs = []
                 self.showError("Couldn’t import image: \(error.localizedDescription)")
             }
             self.updateControls()
@@ -4445,6 +4788,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         importToken += 1
         importLoading = false
         pendingImport = nil
+        pendingDropURLs = []
     }
 
     private func toggleLock() {
@@ -4868,6 +5212,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         combineLayers?.item(at: 2)?.isEnabled = combineReady && state.snapshot?.canMergeVisible == true
         combineLayers?.item(at: 3)?.isEnabled = combineReady && state.snapshot?.canFlatten == true
         annotationControls?.setReady(ready)
+        curveControls?.setReady(ready)
         let layer = ready ? selectedLayer : nil
         let image = layer?.kind == .image
         rotationSnap.isEnabled = layer != nil
@@ -4929,6 +5274,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.selectedRotation = selectedLayer?.rotation ?? 0
         selectionOverlay.rotationEnabled = selectedLayer?.visible == true && selectedLayer?.locked == false
         selectionOverlay.resizeEnabled = selectedLayer?.visible == true && selectedLayer?.locked == false
+        let curve = selectedLayer.flatMap { state.snapshot?.curveHandles[$0.id] }
+        selectionOverlay.curveHandles = selectionOverlay.resizeEnabled ? curve : nil
+        selectionOverlay.expandPreview = selectedLayer.flatMap { state.snapshot?.canvasExpand[$0.id] }
+        curveControls?.setHandles(selectedLayer?.locked == false ? curve : nil)
         guard let layer = selectedLayer else {
             [layerName, layerOpacity, layerX, layerY].forEach { $0.stringValue = "" }
             updateControls(); return
@@ -5037,6 +5386,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.strokeColor = tokens.color("theme-accent")
         drawOverlay.brushOutlineColor = tokens.color("text")
         selectionOverlay.strokeColor = tokens.color("theme-accent")
+        selectionOverlay.dotFill = tokens.color("surface-raised")
+        selectionOverlay.hintFill = tokens.color("glass-strong")
+        selectionOverlay.hintText = tokens.color("glass-text")
+        dropGuideView.accent = tokens.color("theme-accent")
+        dropGuideView.glassFill = tokens.color("glass-strong")
+        dropGuideView.glassText = tokens.color("glass-text")
         drawOverlay.needsDisplay = true
         preview.superview?.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         preview.superview?.layer?.borderColor = tokens.color("border").cgColor

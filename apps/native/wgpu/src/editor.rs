@@ -47,6 +47,7 @@ use std::{fs::File, io::Cursor};
 
 use crate::tokens::Tokens;
 
+mod canvas;
 mod chrome;
 mod drawing_preview;
 mod text_input;
@@ -61,6 +62,8 @@ enum Job {
     Import {
         path: PathBuf,
         selected_id: Option<String>,
+        /// Document-space drop sample; `None` uses the default placement.
+        point: Option<Point>,
     },
     Preview(ExportOptions),
     Copy,
@@ -450,6 +453,10 @@ struct View {
     folder_picker: Option<Receiver<Option<PathBuf>>>,
     output_notice: Option<String>,
     import_picker: Option<Receiver<Option<PathBuf>>>,
+    /// Image files dragged over or dropped on the canvas.
+    drop: canvas::DropState,
+    /// Curve slider value while dragging, committed once on release.
+    curve_bend: Option<(String, f64)>,
     history_changed: bool,
     original_replaced: bool,
     selected_layer: Option<String>,
@@ -543,6 +550,8 @@ impl Default for View {
             folder_picker: None,
             output_notice: None,
             import_picker: None,
+            drop: canvas::DropState::default(),
+            curve_bend: None,
             history_changed: false,
             original_replaced: false,
             selected_layer: None,
@@ -1109,6 +1118,7 @@ impl View {
                     Job::Import {
                         path,
                         selected_id: self.selected_layer.clone(),
+                        point: None,
                     },
                 );
             }
@@ -1238,6 +1248,12 @@ enum LayerGestureKind {
         lock_aspect: bool,
         display_scale: f64,
     },
+    /// Dragging a line/arrow endpoint, curve dot or starter dot.
+    Curve {
+        id: String,
+        handle: captures_app::editor_canvas::CurveHandle,
+        shape: Box<ShapeElement>,
+    },
 }
 
 #[derive(Clone)]
@@ -1362,7 +1378,11 @@ impl Editor {
                             }
                             Ok(presented)
                         }),
-                    Job::Import { path, selected_id } => session
+                    Job::Import {
+                        path,
+                        selected_id,
+                        point,
+                    } => session
                         .as_mut()
                         .ok_or_else(|| "Editor is unavailable.".to_owned())
                         .and_then(|session| {
@@ -1374,7 +1394,7 @@ impl Editor {
                                     .to_string_lossy()
                                     .into_owned(),
                                 selected_id,
-                                point: None,
+                                point,
                             })?;
                             let mut presented = Presented::from_session(session);
                             presented.created_layer = Some(id);
@@ -1500,6 +1520,9 @@ impl Editor {
         }
         self.view.lock().unwrap().drain_inline(&self.tx);
         if self.view.lock().unwrap().receive_import(&self.tx) {
+            ctx.request_repaint_of(self.viewport);
+        }
+        if canvas::drain_drops(&mut self.view.lock().unwrap(), &self.tx) {
             ctx.request_repaint_of(self.viewport);
         }
     }
@@ -1838,6 +1861,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             let fit = fitted_image_rect(available, size);
             let intercepted = handle_viewport_input(ui, view, available);
             let preview = viewport_rect(view.viewport, fit, size).unwrap_or(fit);
+            canvas::receive_drops(ui.ctx(), view, Some(preview));
             ui.allocate_rect(available, egui::Sense::hover());
             ui.painter()
                 .with_clip_rect(available.intersect(ui.clip_rect()))
@@ -1866,9 +1890,19 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             {
                 show_layer_canvas(ui, tokens, view, tx, available, preview, intercepted);
             }
+            if view.section == Section::Layers
+                && view.crop_previous.is_none()
+                && !view.close_requested
+                && !view.confirm_discard
+                && !view.drop.hovering
+            {
+                canvas::show_expand(ui, tokens, view, tx, available, preview);
+            }
+            canvas::paint_drop_guide(ui, tokens, view, available, preview);
             text_input::show(ui, tokens, view, available, preview);
             chrome::recenter(ui, tokens, view, available, preview);
         } else if view.pending {
+            canvas::receive_drops(ui.ctx(), view, None);
             ui.centered_and_justified(|ui| {
                 ui.spinner();
             });
@@ -1879,6 +1913,9 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         }
     });
     view.drain_inline(tx);
+    if canvas::drain_drops(view, tx) {
+        ui.ctx().request_repaint();
+    }
 }
 
 fn fitted_image_rect(available: egui::Rect, image: egui::Vec2) -> egui::Rect {
@@ -2340,6 +2377,10 @@ fn show_layer_canvas(
             && preview.contains(position)
         {
             let point = image_point(position, preview, bounds);
+            if canvas::double_click(view, tx, &document, point, 10. / display_scale) {
+                view.cancel_layer_gesture();
+                return;
+            }
             match document.hit_test(point, 8. / display_scale) {
                 Ok(Some(Element::Text(text))) => {
                     view.begin_inline(
@@ -2363,9 +2404,11 @@ fn show_layer_canvas(
             match kind {
                 LayerGestureKind::Rotate { snap, .. } => *snap = shift,
                 LayerGestureKind::Resize { lock_aspect, .. } => *lock_aspect = shift,
-                LayerGestureKind::Move { .. } => {}
+                LayerGestureKind::Move { .. } | LayerGestureKind::Curve { .. } => {}
             }
         }
+        let expand_button =
+            canvas::expand_button_rect(ui, tokens, view, available, preview).map(|value| value.2);
         // Process in order: hover after release must not change the committed
         // delta, and a press/release in one frame must still be a plain click.
         for event in ui.input(|input| input.events.clone()) {
@@ -2378,7 +2421,10 @@ fn show_layer_canvas(
                     ..
                 } if !view.pending => {
                     view.cancel_layer_gesture();
-                    if !available.contains(pos) || !preview.contains(pos) {
+                    if !available.contains(pos)
+                        || !preview.contains(pos)
+                        || expand_button.is_some_and(|button| button.contains(pos))
+                    {
                         continue;
                     }
                     let point = image_point(pos, preview, bounds);
@@ -2417,6 +2463,48 @@ fn show_layer_canvas(
                                 initial_radians,
                                 snap: modifiers.shift,
                             },
+                            start: point,
+                            current: point,
+                            preview,
+                        });
+                        view.error = None;
+                        continue;
+                    }
+                    // Shipping priority: corner resize, then curve handles, then
+                    // edge resize, so thin strokes keep their dots grabbable.
+                    let curve = selected.and_then(|element| {
+                        let Element::Shape(shape) = element else {
+                            return None;
+                        };
+                        if !shape.base.visible || shape.base.locked {
+                            return None;
+                        }
+                        let corner = element
+                            .resize_handle_at(point, 8. / display_scale)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|handle| {
+                                matches!(
+                                    handle,
+                                    ResizeHandle::Nw
+                                        | ResizeHandle::Ne
+                                        | ResizeHandle::Se
+                                        | ResizeHandle::Sw
+                                )
+                            });
+                        if corner {
+                            return None;
+                        }
+                        captures_app::editor_canvas::hit_test_curve_handle(
+                            shape,
+                            point,
+                            10. / display_scale,
+                        )
+                        .map(|handle| (shape.base.id.clone(), handle, Box::new(shape.clone())))
+                    });
+                    if let Some((id, handle, shape)) = curve {
+                        view.layer_gesture = Some(LayerGesture {
+                            kind: LayerGestureKind::Curve { id, handle, shape },
                             start: point,
                             current: point,
                             preview,
@@ -2580,6 +2668,21 @@ fn show_layer_canvas(
                                 );
                             }
                         }
+                        LayerGestureKind::Curve { id, handle, .. } => {
+                            let distance = ((end.x - gesture.start.x) * display_scale)
+                                .hypot((end.y - gesture.start.y) * display_scale);
+                            if distance >= 3. {
+                                canvas::submit_curve(
+                                    view,
+                                    tx,
+                                    id,
+                                    captures_app::editor_canvas::CurveEdit::Move {
+                                        handle,
+                                        point: end,
+                                    },
+                                );
+                            }
+                        }
                         LayerGestureKind::Resize {
                             id,
                             handle,
@@ -2723,6 +2826,23 @@ fn show_layer_canvas(
                     guides.as_slice(),
                     true,
                 ),
+                LayerGestureKind::Curve { shape, handle, .. } => {
+                    let mut next = (**shape).clone();
+                    let _ = captures_app::editor_canvas::apply_curve_edit(
+                        &mut next,
+                        captures_app::editor_canvas::CurveEdit::Move {
+                            handle: *handle,
+                            point: gesture.current,
+                        },
+                    );
+                    (
+                        Element::Shape(next).selection_outline().ok(),
+                        Point { x: 0., y: 0. },
+                        None,
+                        &[][..],
+                        false,
+                    )
+                }
             }
         } else {
             let selected = view.selected_layer.as_ref().and_then(|id| {
@@ -2787,8 +2907,10 @@ fn show_layer_canvas(
                 egui::Stroke::new(1., tokens.color("theme-accent")),
             );
         }
+        // Lines/arrows keep corner grips only so curve dots stay easy to grab.
+        let curve = canvas::selected_curve(view);
         if show_grips {
-            for point in [
+            for (index, point) in [
                 outline[0],
                 Point {
                     x: (outline[0].x + outline[1].x) / 2.,
@@ -2809,7 +2931,13 @@ fn show_layer_canvas(
                     x: (outline[3].x + outline[0].x) / 2.,
                     y: (outline[3].y + outline[0].y) / 2.,
                 },
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if curve.is_some() && index % 2 == 1 {
+                    continue;
+                }
                 painter.rect(
                     egui::Rect::from_center_size(project(point), egui::vec2(8., 8.)),
                     1.,
@@ -2829,6 +2957,43 @@ fn show_layer_canvas(
             painter.line_segment([anchor, grip], stroke);
             painter.circle(grip, 4.5, tokens.color("surface-raised"), stroke);
         }
+    }
+    let painter = ui
+        .painter()
+        .with_clip_rect(available.intersect(ui.clip_rect()));
+    let project = |point: Point| {
+        egui::pos2(
+            preview.left() + (point.x / bounds.width) as f32 * preview.width(),
+            preview.top() + (point.y / bounds.height) as f32 * preview.height(),
+        )
+    };
+    match &view.layer_gesture {
+        Some(LayerGesture {
+            kind: LayerGestureKind::Curve { shape, handle, .. },
+            current,
+            ..
+        }) => {
+            if let Some(handles) = canvas::curve_drag_preview(shape, *handle, *current) {
+                canvas::paint_curve_handles(&painter, tokens, &handles, project, true);
+            }
+        }
+        None => {
+            if let Some((_, handles)) = canvas::selected_curve(view) {
+                canvas::paint_curve_handles(&painter, tokens, &handles, project, false);
+            }
+            if let Some(pointer) = response.hover_pos()
+                && preview.contains(pointer)
+                && let Some(hint) = canvas::hover_hint(
+                    view,
+                    &document,
+                    image_point(pointer, preview, bounds),
+                    10. / display_scale,
+                )
+            {
+                canvas::paint_hover_tip(ui, tokens, pointer, hint);
+            }
+        }
+        Some(_) => {}
     }
 }
 
@@ -4766,16 +4931,21 @@ fn show_layers(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
     }
     match element {
         Element::Text(_) => {}
-        Element::Shape(shape) => show_annotation(
-            ui,
-            view,
-            tx,
-            &shape.style,
-            matches!(
-                shape.shape.as_str(),
-                "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
-            ),
-        ),
+        Element::Shape(shape) => {
+            show_annotation(
+                ui,
+                view,
+                tx,
+                &shape.style,
+                matches!(
+                    shape.shape.as_str(),
+                    "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
+                ),
+            );
+            if !shape.base.locked {
+                canvas::show_curve_controls(ui, view, tx, shape);
+            }
+        }
         Element::Path(path) => show_annotation(ui, view, tx, &path.style, false),
         _ => {
             ui.small("Hidden and locked images can transform.");
@@ -9243,7 +9413,7 @@ mod tests {
         view.pending = false;
         assert!(view.receive_import(&jobs));
         assert!(
-            matches!(queued.recv().unwrap(), Job::Import { path, selected_id }
+            matches!(queued.recv().unwrap(), Job::Import { path, selected_id, point: None }
             if path == Path::new("photo.png") && selected_id.as_deref() == Some("capture-background"))
         );
         assert!(view.pending && view.import_picker.is_none());
@@ -9464,6 +9634,7 @@ mod tests {
             Job::Import {
                 path,
                 selected_id: None,
+                point: None,
             },
         );
         editor.flush(&ctx).unwrap();
@@ -9515,6 +9686,7 @@ mod tests {
             Job::Import {
                 path: path.clone(),
                 selected_id: Some("capture-background".into()),
+                point: None,
             },
         );
         receive(&editor, &ctx);
@@ -9562,6 +9734,7 @@ mod tests {
             Job::Import {
                 path,
                 selected_id: None,
+                point: None,
             },
         );
         receive(&editor, &ctx);
@@ -9725,6 +9898,373 @@ mod tests {
         failed_open.request_close();
         failed_open.receive(&ctx, Err("missing screenshot".into()));
         assert!(failed_open.closed);
+    }
+
+    fn canvas_view(
+        ctx: &egui::Context,
+        start: Point,
+        end: Point,
+        shape: OpenShapeKind,
+    ) -> (View, String) {
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(200, 100));
+        let document = Arc::make_mut(&mut value.document);
+        document.width = 200.;
+        document.height = 100.;
+        if let Element::Image(image) = &mut document.elements[0] {
+            image.width = 200.;
+            image.height = 100.;
+        }
+        let id = document
+            .create_open_shape(OpenShapeCreate {
+                shape,
+                start,
+                end,
+                style: ElementStyle::default(),
+                opacity: 100.,
+            })
+            .unwrap();
+        let mut view = View::default();
+        view.receive(ctx, Ok(value));
+        view.pending = false;
+        view.section = Section::Layers;
+        view.select_layer(Some(id.clone()));
+        (view, id)
+    }
+
+    fn run_canvas(
+        ctx: &egui::Context,
+        view: &mut View,
+        tx: &Sender<Job>,
+        raw: egui::RawInput,
+        preview: egui::Rect,
+    ) {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                focused: true,
+                ..raw
+            },
+            |_| {
+                let mut ui = egui::Ui::new(
+                    ctx.clone(),
+                    egui::Id::unique("canvas-interaction-test"),
+                    egui::UiBuilder::new().max_rect(screen),
+                );
+                let tokens = crate::tokens::load().into_values().next().unwrap();
+                canvas::receive_drops(ctx, view, Some(preview));
+                show_layer_canvas(&mut ui, &tokens, view, tx, screen, preview, false);
+                canvas::show_expand(&mut ui, &tokens, view, tx, screen, preview);
+                canvas::paint_drop_guide(&ui, &tokens, view, screen, preview);
+            },
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn curve_dots_drag_once_on_release_and_double_clicks_add_or_remove_points() {
+        use captures_app::editor_canvas::{CurveEdit, CurveHandle};
+        let ctx = egui::Context::default();
+        let (mut view, id) = canvas_view(
+            &ctx,
+            Point { x: 20., y: 50. },
+            Point { x: 180., y: 50. },
+            OpenShapeKind::Line,
+        );
+        let (tx, rx) = mpsc::channel();
+        // 200×100 document shown at half scale.
+        let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(100., 50.));
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let events = |events| egui::RawInput {
+            events,
+            ..Default::default()
+        };
+        // The middle starter dot sits at document (100, 50).
+        let starter = egui::pos2(150., 125.);
+        run_canvas(
+            &ctx,
+            &mut view,
+            &tx,
+            events(vec![button(starter, true)]),
+            preview,
+        );
+        assert!(matches!(
+            view.layer_gesture.as_ref().map(|gesture| &gesture.kind),
+            Some(LayerGestureKind::Curve {
+                handle: CurveHandle::StarterControl { index: 1 },
+                ..
+            })
+        ));
+        run_canvas(
+            &ctx,
+            &mut view,
+            &tx,
+            events(vec![egui::Event::PointerMoved(egui::pos2(150., 140.))]),
+            preview,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "dragging previews without committing"
+        );
+        run_canvas(
+            &ctx,
+            &mut view,
+            &tx,
+            events(vec![button(egui::pos2(150., 140.), false)]),
+            preview,
+        );
+        match rx.try_recv().unwrap() {
+            Job::Apply(Request::Layer {
+                id: layer,
+                edit:
+                    LayerEdit::Curve {
+                        edit: CurveEdit::Move { handle, point },
+                    },
+            }) => {
+                assert_eq!(layer, id);
+                assert_eq!(handle, CurveHandle::StarterControl { index: 1 });
+                assert_eq!(point, Point { x: 100., y: 80. });
+            }
+            _ => panic!("expected one curve move"),
+        }
+        assert!(rx.try_recv().is_err());
+        assert_eq!(view.pending_layer_selection.as_deref(), Some(id.as_str()));
+
+        // A click on a starter without movement never edits.
+        view.pending = false;
+        run_canvas(
+            &ctx,
+            &mut view,
+            &tx,
+            events(vec![button(starter, true)]),
+            preview,
+        );
+        run_canvas(
+            &ctx,
+            &mut view,
+            &tx,
+            events(vec![button(starter, false)]),
+            preview,
+        );
+        assert!(rx.try_recv().is_err());
+
+        // Double-click on the path inserts a point; on a control removes it.
+        view.pending = false;
+        let document = view.presented.as_ref().unwrap().document.clone();
+        assert!(canvas::double_click(
+            &mut view,
+            &tx,
+            &document,
+            Point { x: 80., y: 51. },
+            6.
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Job::Apply(Request::Layer {
+                edit: LayerEdit::Curve {
+                    edit: CurveEdit::Insert { .. }
+                },
+                ..
+            })
+        ));
+        view.pending = false;
+        assert!(!canvas::double_click(
+            &mut view,
+            &tx,
+            &document,
+            Point { x: 60., y: 95. },
+            6.
+        ));
+        let mut curved = (*document).clone();
+        curved
+            .edit_layer(
+                &id,
+                LayerEdit::Curve {
+                    edit: CurveEdit::Bend { bend: 0.2 },
+                },
+            )
+            .unwrap();
+        Arc::make_mut(&mut view.presented.as_mut().unwrap().document).elements =
+            curved.elements.clone();
+        assert!(canvas::double_click(
+            &mut view,
+            &tx,
+            &curved,
+            Point { x: 100., y: 82. },
+            6.
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Job::Apply(Request::Layer {
+                edit: LayerEdit::Curve {
+                    edit: CurveEdit::Remove { index: 0 }
+                },
+                ..
+            })
+        ));
+        assert_eq!(
+            canvas::hover_hint(&view, &curved, Point { x: 100., y: 82. }, 6.),
+            Some("Double-click to remove curve point")
+        );
+    }
+
+    #[test]
+    fn expand_canvas_action_submits_one_edit_and_blocks_the_canvas_press() {
+        let ctx = egui::Context::default();
+        // The arrow hangs past the right edge of the 200×100 canvas.
+        let (mut view, id) = canvas_view(
+            &ctx,
+            Point { x: 120., y: 50. },
+            Point { x: 260., y: 50. },
+            OpenShapeKind::Arrow,
+        );
+        let (tx, rx) = mpsc::channel();
+        let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(100., 50.));
+        let expand = canvas::expand_preview(&view).unwrap();
+        assert_eq!(expand.0, id);
+        assert_eq!(
+            expand.1.anchor_edge,
+            captures_app::editor_canvas::CanvasEdge::Right
+        );
+        let mut button = None;
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let tokens = crate::tokens::load().into_values().next().unwrap();
+            button = canvas::expand_button_rect(ui, &tokens, &view, screen, preview);
+        });
+        output.textures_delta.clear();
+        let (_, _, rect) = button.unwrap();
+        // Right of the canvas, 22 px outside its edge.
+        assert!((rect.center().x - 222.).abs() < 0.5, "{rect:?}");
+        let click = |pressed| egui::Event::PointerButton {
+            pos: rect.center(),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let raw = |events| egui::RawInput {
+            events,
+            ..Default::default()
+        };
+        run_canvas(
+            &ctx,
+            &mut view,
+            &tx,
+            raw(vec![egui::Event::PointerMoved(rect.center())]),
+            preview,
+        );
+        run_canvas(&ctx, &mut view, &tx, raw(vec![click(true)]), preview);
+        run_canvas(&ctx, &mut view, &tx, raw(vec![click(false)]), preview);
+        match rx.try_recv().unwrap() {
+            Job::Apply(Request::Layer {
+                id: layer,
+                edit: LayerEdit::ExpandCanvas,
+            }) => assert_eq!(layer, id),
+            _ => panic!("expected expand_canvas"),
+        }
+        assert!(rx.try_recv().is_err() && view.layer_gesture.is_none());
+    }
+
+    #[derive(Debug)]
+    struct TestDrop(PathBuf);
+
+    impl egui::DroppedFile for TestDrop {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            Err("tests never read dropped bytes".into())
+        }
+    }
+
+    #[test]
+    fn file_drops_queue_images_at_the_pointer_and_import_one_at_a_time() {
+        let ctx = egui::Context::default();
+        let (mut view, id) = canvas_view(
+            &ctx,
+            Point { x: 20., y: 50. },
+            Point { x: 60., y: 50. },
+            OpenShapeKind::Line,
+        );
+        let (tx, rx) = mpsc::channel();
+        let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(100., 50.));
+        let over = egui::pos2(150., 101.);
+        run_canvas(
+            &ctx,
+            &mut view,
+            &tx,
+            egui::RawInput {
+                events: vec![egui::Event::PointerMoved(over)],
+                hovered_files: vec![egui::HoveredFile {
+                    path: Some("shot.png".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            preview,
+        );
+        assert!(view.drop.hovering);
+        let guide = canvas::drop_guide(&view, Some(Point { x: 100., y: 2. })).unwrap();
+        assert_eq!(guide.label, "Place above");
+        let drop = |paths: &[&str]| egui::RawInput {
+            dropped_files: paths
+                .iter()
+                .map(|path| Arc::new(TestDrop(PathBuf::from(path))) as egui::DroppedFileHandle)
+                .collect(),
+            ..Default::default()
+        };
+        run_canvas(&ctx, &mut view, &tx, drop(&["notes.txt"]), preview);
+        assert_eq!(
+            view.error.as_deref(),
+            Some(captures_app::editor_session::DROP_UNSUPPORTED)
+        );
+        assert!(view.drop.queue.is_empty() && !view.drop.hovering);
+        run_canvas(
+            &ctx,
+            &mut view,
+            &tx,
+            drop(&["a.PNG", "skip.gif", "b.webp"]),
+            preview,
+        );
+        assert_eq!(view.drop.queue.len(), 2);
+        assert_eq!(view.drop.queue[0].1, Some(Point { x: 100., y: 2. }));
+        assert_eq!(view.drop.queue[1].1, None);
+        view.pending = true;
+        assert!(!canvas::drain_drops(&mut view, &tx));
+        view.pending = false;
+        assert!(canvas::drain_drops(&mut view, &tx));
+        match rx.try_recv().unwrap() {
+            Job::Import {
+                path,
+                selected_id,
+                point,
+            } => {
+                assert_eq!(path, Path::new("a.PNG"));
+                assert_eq!(selected_id.as_deref(), Some(id.as_str()));
+                assert_eq!(point, Some(Point { x: 100., y: 2. }));
+            }
+            _ => panic!("expected an import"),
+        }
+        // One edit in flight: the second file waits for the first response.
+        assert!(!canvas::drain_drops(&mut view, &tx));
+        view.pending = false;
+        assert!(canvas::drain_drops(&mut view, &tx));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Job::Import { point: None, .. }
+        ));
+        // Closing drops any queued files.
+        view.drop.queue.push_back(("c.png".into(), None));
+        view.pending = false;
+        view.close_requested = true;
+        assert!(!canvas::drain_drops(&mut view, &tx) && view.drop.queue.is_empty());
     }
 
     fn fixture() -> (tempfile::TempDir, String) {

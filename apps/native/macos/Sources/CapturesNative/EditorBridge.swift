@@ -494,6 +494,10 @@ struct NativeEditorSnapshot: Equatable {
     let layers: [NativeEditorLayer]
     /// Stable, sorted JSON used by pointer-down hit testing without touching the session.
     let documentJSON: String
+    /// Curve dots and Curve/Straighten state per line/arrow layer ID.
+    let curveHandles: [String: NativeCurveHandles]
+    /// Overflow ghost and Expand canvas action per layer past the canvas edge.
+    let canvasExpand: [String: NativeCanvasExpand]
 
     init?(_ value: [String: Any]) {
         guard let artifactID = value["artifact_id"] as? String,
@@ -590,6 +594,11 @@ struct NativeEditorSnapshot: Equatable {
         textStylePresets = parsedPresets.filter { fontFamilies[$0.fontFamily] != nil }
         self.layers = Array(layers.reversed())
         self.documentJSON = String(decoding: documentData, as: UTF8.self)
+        // Older host-only fixtures predate these shared snapshot fields.
+        curveHandles = (value["curve_handles"] as? [String: [String: Any]] ?? [:])
+            .compactMapValues(NativeCurveHandles.init)
+        canvasExpand = (value["canvas_expand"] as? [String: [String: Any]] ?? [:])
+            .compactMapValues(NativeCanvasExpand.init)
     }
 }
 
@@ -975,10 +984,12 @@ private final class NativeEditorSession {
         }
     }
 
-    func importImage(_ image: EditorDecodedImage, selectedID: String?) throws
+    func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint? = nil) throws
         -> EditorImportPresentation {
         var request: [String: Any] = ["name": image.name]
         if let selectedID { request["selected_id"] = selectedID }
+        // A drop sample places the image where the drop guide showed.
+        if let point { request["point"] = ["x": Double(point.x), "y": Double(point.y)] }
         let requestData = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
         guard let width = UInt32(exactly: image.width), let height = UInt32(exactly: image.height),
               width > 0, height > 0 else { throw AppBridgeError.invalidResponse }
@@ -1024,7 +1035,7 @@ protocol EditorWorking: AnyObject {
               completion: @escaping (Result<EditorExportSaved, Error>) -> Void)
     func estimate(_ request: [String: Any],
                   completion: @escaping (Result<EditorEstimate, Error>) -> Void)
-    func importImage(_ image: EditorDecodedImage, selectedID: String?,
+    func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void)
     func close()
     func prepareForTermination(textInput: EditorTerminationTextInput?) -> Result<Void, Error>
@@ -1181,7 +1192,7 @@ final class EditorWorker: EditorWorking {
         }
     }
 
-    func importImage(_ image: EditorDecodedImage, selectedID: String?,
+    func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void) {
         let storage = storage
         Self.queue.async {
@@ -1192,7 +1203,7 @@ final class EditorWorker: EditorWorking {
                 guard storage.snapshot?.activeTextInput == nil else {
                     throw AppBridgeError.backend("Finish or cancel inline text before importing an image.")
                 }
-                let imported = try session.importImage(image, selectedID: selectedID)
+                let imported = try session.importImage(image, selectedID: selectedID, point: point)
                 storage.snapshot = imported.presentation.snapshot
                 return imported
             }

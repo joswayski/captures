@@ -453,7 +453,9 @@ char *captures_editor_hit_test_document_v1(const char *document_json,
  * focus} (document-space rects {x,y,width,height}); pass the same point to
  * captures_editor_import_image_v1 to land where the guide shows.
  * curve {id, point, radius} returns {handle: {kind: "start"|"end"|"control"|
- * "starter_control", index?}|null, hint: string|null, on_path} for a line/arrow.
+ * "starter_control", index?}|null, hint: string|null, on_path, closest: {x,y}|null}
+ * for a line/arrow. curve_preview {id, handle, point} returns the curve handles
+ * the layer would have after dragging `handle` to `point` (live drag preview).
  * Snapshots also carry curve_handles {layerId: {start,end,controls,starters,
  * bend_percent,slider,straighten_label,path}} and canvas_expand {layerId: {edges,
  * rect,gaps,bounds,anchor,anchor_edge}}. Layer edits add curve {edit: {kind:
