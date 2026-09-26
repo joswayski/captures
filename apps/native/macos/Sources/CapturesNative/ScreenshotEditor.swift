@@ -1148,6 +1148,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectedLayerID = nil; selectedLayerIndex = 0; preferredLayerID = nil
         editedImage = nil; invalidateOutput(); preview.image = nil; window.title = "Edit screenshot"
         status.stringValue = "Opening screenshot…"; updateControls()
+        fitWindowToScreen()
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         let draftsRoot = URL(fileURLWithPath: historyRoot).deletingLastPathComponent()
             .appendingPathComponent("editor-drafts", isDirectory: true).path
@@ -1266,6 +1267,21 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func windowDidResize(_ notification: Notification) { layoutEditor() }
+
+    /// The default 1000×780 content is taller than some displays' visible
+    /// frames. Shrink to the screen up front (never below the minimum size) so
+    /// the frame-based layout keeps the export bar pinned inside the window
+    /// instead of depending on AppKit constraining the frame after ordering in.
+    private func fitWindowToScreen() {
+        guard let visible = (window.screen ?? NSScreen.main)?.visibleFrame,
+              visible.width > 0, visible.height > 0 else { return }
+        let available = window.contentRect(forFrameRect: visible).size
+        let current = root.bounds.size
+        let fitted = NSSize(width: max(window.contentMinSize.width, min(current.width, available.width)),
+                            height: max(window.contentMinSize.height, min(current.height, available.height)))
+        guard fitted != current else { return }
+        window.setContentSize(fitted)
+    }
 
     /// Collapsed export bar height, plus the fixed settings area while open.
     var exportBarHeight: CGFloat { exportSettingsOpen ? 208 : 80 }

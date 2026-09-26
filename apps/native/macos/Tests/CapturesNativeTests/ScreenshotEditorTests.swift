@@ -639,22 +639,36 @@ final class ScreenshotEditorTests: XCTestCase {
             let inspector = try XCTUnwrap(descendants(in: controller.root)
                 .first { $0.accessibilityLabel() == "Geometry controls" })
             let undo = try button("Undo", in: controller.root)
-            XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1000, height: 780),
-                           "the export bar adds its height below the historical 1000×700 layout")
+            // The export bar adds 80pt below the historical 1000×700 layout,
+            // but a display whose visible frame is shorter keeps the whole
+            // window, export bar included, on screen.
+            let visible = try XCTUnwrap((controller.window.screen ?? NSScreen.main)?.visibleFrame)
+            let defaultHeight = min(780, controller.window.contentRect(forFrameRect: visible).height)
+            XCTAssertEqual(controller.root.bounds.width, 1000)
+            XCTAssertEqual(controller.root.bounds.height, defaultHeight, accuracy: 1)
+            let bar = try XCTUnwrap(descendants(in: controller.root).first { $0.accessibilityLabel() == "Export bar" })
+            XCTAssertEqual(bar.frame.maxY, controller.root.bounds.height)
+            XCTAssertEqual(bar.frame.height, 80)
             // Exercise both axes without exceeding the CI display's height.
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             waitUntil { input.bounds.size == NSSize(width: 300, height: 238) }
-            controller.window.setContentSize(NSSize(width: 1200, height: 680))
+            controller.window.setContentSize(NSSize(width: 1200, height: 600))
             controller.root.layoutSubtreeIfNeeded()
-            waitUntil { controller.presentedImageRect == NSRect(x: 50, y: 27, width: 640, height: 360) }
-            XCTAssertEqual(input.bounds.size, NSSize(width: 740, height: 414))
-            XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1200, height: 680))
+            // 740×334 is shorter than the 640×360 screenshot: Fit scales it
+            // by 334/360 and centres it horizontally.
+            waitUntil { input.bounds.size == NSSize(width: 740, height: 334)
+                && abs(controller.presentedImageRect.height - 334) < 1e-7 }
+            XCTAssertEqual(input.bounds.size, NSSize(width: 740, height: 334))
+            XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1200, height: 600))
             XCTAssertEqual(section.frame.minX, 888)
-            XCTAssertEqual(inspector.frame, NSRect(x: 888, y: 66, width: 272, height: 310))
-            XCTAssertEqual(undo.frame.origin, NSPoint(x: 888, y: 390))
-            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 50, y: 27, width: 640, height: 360))
-            let bar = try XCTUnwrap(descendants(in: controller.root).first { $0.accessibilityLabel() == "Export bar" })
-            XCTAssertEqual(bar.frame, NSRect(x: 0, y: 600, width: 1200, height: 80))
+            XCTAssertEqual(inspector.frame, NSRect(x: 888, y: 66, width: 272, height: 230))
+            XCTAssertEqual(undo.frame.origin, NSPoint(x: 888, y: 310))
+            let fitWidth: CGFloat = 640 * 334 / 360
+            XCTAssertEqual(controller.presentedImageRect.minX, (740 - fitWidth) / 2, accuracy: 1e-7)
+            XCTAssertEqual(controller.presentedImageRect.minY, 0, accuracy: 1e-7)
+            XCTAssertEqual(controller.presentedImageRect.width, fitWidth, accuracy: 1e-7)
+            XCTAssertEqual(controller.presentedImageRect.height, 334, accuracy: 1e-7)
+            XCTAssertEqual(bar.frame, NSRect(x: 0, y: 520, width: 1200, height: 80))
             for control in descendants(in: controller.root) where
                 ["Canvas zoom", "Canvas zoom preset", "Edited canvas dimensions", "Screenshot editor status"]
                     .contains(control.accessibilityLabel() ?? "") {
@@ -803,7 +817,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controller.cropOverlay.croppingEnabled)
         controller.windowDidResize(Notification(name: NSWindow.didResizeNotification, object: controller.window))
         XCTAssertTrue(controller.cropOverlay.croppingEnabled, "same-size notifications preserve the gesture")
-        controller.window.setContentSize(NSSize(width: 1100, height: 660))
+        controller.window.setContentSize(NSSize(width: 1100, height: 580))
         waitUntil { !controller.cropOverlay.croppingEnabled }
         XCTAssertEqual(try field("Crop X", in: controller.root).stringValue, "0")
         XCTAssertEqual(try field("Crop width", in: controller.root).stringValue, "640")
@@ -815,13 +829,14 @@ final class ScreenshotEditorTests: XCTestCase {
         try showDraw(in: controller.root)
         controller.drawOverlay.begin(at: NSPoint(x: 120, y: 140))
         XCTAssertNotNil(controller.drawOverlay.startPoint)
-        controller.window.setContentSize(NSSize(width: 1200, height: 680))
+        controller.window.setContentSize(NSSize(width: 1200, height: 600))
         waitUntil { controller.drawOverlay.startPoint == nil && input.bounds.width == 740
             && controller.presentedImageRect.midX == 370 + CGFloat(viewport.panX) }
         controller.drawOverlay.end(at: NSPoint(x: 260, y: 220))
         XCTAssertEqual(controller.viewport, viewport)
         XCTAssertEqual(controller.presentedImageRect.midX, 370 + CGFloat(viewport.panX), accuracy: 1e-7)
-        XCTAssertEqual(controller.presentedImageRect.midY, 207 + CGFloat(viewport.panY), accuracy: 1e-7)
+        // 1200×600 leaves a 740×334 viewport above the 80pt export bar.
+        XCTAssertEqual(controller.presentedImageRect.midY, 167 + CGFloat(viewport.panY), accuracy: 1e-7)
         let point = NSPoint(x: 160, y: 180)
         let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
             location: controller.drawOverlay.convert(point, to: nil), modifierFlags: [.command],
@@ -829,7 +844,7 @@ final class ScreenshotEditorTests: XCTestCase {
             eventNumber: 0, clickCount: 1, pressure: 1))
         controller.drawOverlay.mouseDown(with: down)
         XCTAssertTrue(controller.drawOverlay.isViewportPanning)
-        controller.window.setContentSize(NSSize(width: 1000, height: 780))
+        controller.window.setContentSize(NSSize(width: 1000, height: 600))
         waitUntil { !controller.drawOverlay.isViewportPanning }
         XCTAssertEqual(controller.viewport, viewport)
         XCTAssertEqual(controller.state.snapshot, original)
@@ -2139,7 +2154,7 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = NSApplication.shared
         let original = layer(id: "original", name: "Original", x: 0, y: 0,
                              visible: true, locked: true, opacity: 100)
-        let created = shapeLayer(id: "fresh-shape", x: 142.222, y: -99.556)
+        let created = shapeLayer(id: "fresh-shape", x: 142.222, y: -64)
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: 1280, height: 640,
                                                           unsaved: true, layers: [original]))
         worker.response = { request in
@@ -2151,8 +2166,8 @@ final class ScreenshotEditorTests: XCTestCase {
                                                      worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        controller.window.setContentSize(NSSize(width: 1000, height: 680))
-        XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1000, height: 680))
+        controller.window.setContentSize(NSSize(width: 1000, height: 600))
+        XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1000, height: 600))
         try showOutput(in: controller.root)
         try button("Preview output", in: controller.root).performClick(nil)
         let outputMode = try segmented("Output preview image", in: controller.root)
@@ -2162,12 +2177,14 @@ final class ScreenshotEditorTests: XCTestCase {
         let tool = try popup("Drawing tool", in: controller.root)
         tool.selectItem(at: 1); _ = tool.sendAction(tool.action, to: tool.target)
         let overlay = controller.drawOverlay
+        // A 540×334 viewport fits the 1280×640 canvas by width (scale 27/64),
+        // leaving 32pt of whitespace above and below it.
         XCTAssertEqual(overlay.presentedImageRect,
-                       NSRect(x: 0, y: 72, width: 540, height: 270))
-        overlay.begin(at: NSPoint(x: 500, y: 300))
-        overlay.drag(to: NSPoint(x: 60, y: 30))
+                       NSRect(x: 0, y: 32, width: 540, height: 270))
+        overlay.begin(at: NSPoint(x: 500, y: 275))
+        overlay.drag(to: NSPoint(x: 60, y: 5))
         XCTAssertTrue(worker.requests.isEmpty, "transient drawing never mutates the document")
-        overlay.end(at: NSPoint(x: 60, y: 30))
+        overlay.end(at: NSPoint(x: 60, y: 5))
 
         let request = try XCTUnwrap(worker.requests.last)
         XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
@@ -2175,9 +2192,9 @@ final class ScreenshotEditorTests: XCTestCase {
         let start = try XCTUnwrap(request["start"] as? [String: CGFloat])
         let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
         XCTAssertEqual(try XCTUnwrap(start["x"]), 1_185.185, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(start["y"]), 540.444, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(start["y"]), 576, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(end["x"]), 142.222, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(end["y"]), -99.556, accuracy: 0.001,
+        XCTAssertEqual(try XCTUnwrap(end["y"]), -64, accuracy: 0.001,
                        "preview whitespace maps to off-canvas document coordinates")
         XCTAssertEqual((request["style"] as? [String: Any])?["color"] as? String, "#FF3B5C")
         XCTAssertEqual(request["opacity"] as? Double, 100)
@@ -2227,8 +2244,8 @@ final class ScreenshotEditorTests: XCTestCase {
             let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-            controller.window.setContentSize(NSSize(width: 1000, height: 680))
-            XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1000, height: 680))
+            controller.window.setContentSize(NSSize(width: 1000, height: 600))
+            XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1000, height: 600))
             try showDraw(in: controller.root)
             let tool = try popup("Drawing tool", in: controller.root)
             tool.selectItem(withTitle: title); _ = tool.sendAction(tool.action, to: tool.target)
@@ -2239,15 +2256,15 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(geometry.points.count, count)
             XCTAssertEqual(geometry.points[0].x, 50, accuracy: 0.00001)
             XCTAssertEqual(geometry.points[0].y, 20, accuracy: 0.00001)
-            overlay.begin(at: NSPoint(x: 500, y: 300)); overlay.drag(to: NSPoint(x: 60, y: 30))
+            overlay.begin(at: NSPoint(x: 500, y: 275)); overlay.drag(to: NSPoint(x: 60, y: 5))
             XCTAssertTrue(worker.requests.isEmpty)
-            overlay.end(at: NSPoint(x: 60, y: 30))
+            overlay.end(at: NSPoint(x: 60, y: 5))
             XCTAssertEqual(worker.requests.count, 1)
             let request = try XCTUnwrap(worker.requests.last)
             XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
             XCTAssertEqual(request["shape"] as? String, title.lowercased())
             let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
-            XCTAssertEqual(try XCTUnwrap(end["y"]), -99.556, accuracy: 0.001)
+            XCTAssertEqual(try XCTUnwrap(end["y"]), -64, accuracy: 0.001)
             overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 300, y: 350))
             overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 400, y: 200))
             overlay.begin(at: NSPoint(x: 200, y: 200)); overlay.drag(to: NSPoint(x: 260, y: 260))

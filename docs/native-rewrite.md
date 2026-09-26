@@ -1740,7 +1740,7 @@ acceptance remains open on all hosts.
 Both hosts replace the pinned Copy/Save footer and Output section with the
 shipping-style bottom export bar, available in Geometry, Layers and Draw at every
 size down to 760×540 (the default AppKit window grows to 1000×780 to keep the
-canvas area). The collapsed bar shows an **Export settings** disclosure with a
+canvas area, shrinking to fit shorter displays' visible frames). The collapsed bar shows an **Export settings** disclosure with a
 `PNG · 1920 × 1080 · ≈ 240 KB` summary, **Saving to** with **Change…**, the filename
 with a format-suffix menu, **Copy image** (four-second **Copied** confirmation),
 a **Save as new file** switch, primary **Save**, **Show in Folder** after a save and a
