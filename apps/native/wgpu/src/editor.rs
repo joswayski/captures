@@ -5725,8 +5725,10 @@ mod tests {
                 assert!(bar.controls.right() <= width);
             }
         }
-        // "Screenshot editor Original screenshot" does not fit at 760px.
-        assert!(layout(760., 0).title.width() < layout(1180., 0).title.width());
+        // Whether the title fits at 760px depends on the platform font (it does
+        // not under DejaVu Sans, it does under Segoe UI); at 400px the zoom
+        // controls leave too little room for any font, so the title must shrink.
+        assert!(layout(400., 0).title.width() < layout(1180., 0).title.width());
     }
 
     #[test]

@@ -6339,39 +6339,49 @@ mod tests {
             scale_factor: 1.,
             is_primary: true,
         }];
-        let mut display_id = Some("0".into());
         let side = tokens.number("s-8");
-        let mut layout = (egui::Rect::NOTHING, egui::Rect::NOTHING);
-        for _ in 0..2 {
-            // The first pass loads the fonts.
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    // The root window's fixed minimum size.
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1000., 720.),
-                    )),
-                    ..Default::default()
-                },
-                |ui| {
-                    egui::Panel::top("live-header")
-                        .frame(egui::Frame::new().inner_margin(side))
-                        .show(ui, |ui| {
-                            let available = ui.max_rect();
-                            let (_, row) = capture_actions(ui, &displays, &mut display_id, true);
-                            layout = (available, row);
-                        });
-                },
-            );
-            output.textures_delta.clear();
-        }
-        let (available, row) = layout;
+        let layout = |width: f32| {
+            let mut display_id = Some("0".into());
+            let mut layout = (egui::Rect::NOTHING, egui::Rect::NOTHING);
+            for _ in 0..2 {
+                // The first pass loads the fonts.
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 720.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::Panel::top("live-header")
+                            .frame(egui::Frame::new().inner_margin(side))
+                            .show(ui, |ui| {
+                                let available = ui.max_rect();
+                                let (_, row) =
+                                    capture_actions(ui, &displays, &mut display_id, true);
+                                layout = (available, row);
+                            });
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            layout
+        };
+        // The root window's fixed minimum size: whether the row wraps here
+        // depends on the platform font, but it never runs past the margin.
+        let (available, row) = layout(1000.);
         assert_eq!(available.right(), 1000. - side);
         assert!(
             row.right() <= available.right(),
             "row {row:?} runs past {available:?}"
         );
-        // The actions need more than one line here, so the row wrapped.
+        // Narrower than the actions in any font: the row must wrap.
+        let (available, row) = layout(700.);
+        assert!(
+            row.right() <= available.right(),
+            "row {row:?} runs past {available:?}"
+        );
         assert!(row.height() > 2. * tokens.number("h-md"));
     }
 
