@@ -65,8 +65,9 @@ final class RecordingHUDTests: XCTestCase {
             XCTAssertEqual(meter.accessibilityValue() as? String, "0%, off")
             XCTAssertEqual(fill.frame.width, 0)
             XCTAssertFalse(microphone.isEnabled)
-            XCTAssertEqual(microphone.toolTip,
+            XCTAssertEqual(microphone.accessibilityLabel(),
                 "Microphone unavailable because no microphone was selected")
+            XCTAssertNil(microphone.toolTip, "the styled HUD tooltip replaces the system one")
             let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
             XCTAssertEqual(buttons.filter(\.signal).compactMap { $0.accessibilityLabel() },
                 ["Stop recording"])
@@ -214,7 +215,10 @@ final class RecordingHUDTests: XCTestCase {
         XCTAssertEqual(status.accessibilityLabel(), "Paused")
         let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
         let delete = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Delete recording" })
-        XCTAssertEqual(delete.toolTip, "Delete recording")
+        XCTAssertNil(delete.toolTip)
+        let hover = try hoverEvent()
+        delete.mouseEntered(with: hover)
+        XCTAssertEqual(hud.visibleTooltip, "Delete recording")
         XCTAssertFalse(buttons.contains { $0.accessibilityLabel() == "Discard recording" })
     }
 
@@ -249,6 +253,146 @@ final class RecordingHUDTests: XCTestCase {
         window.contentView = notice
         defer { window.close() }
         try render(notice, window: window, name: "recording-controls-hidden-notice")
+    }
+
+    func testFailedStartShowsRetryDeleteAndTheInlineError() throws {
+        _ = NSApplication.shared
+        for appearance in ["dark", "light"] {
+            let tokens = try XCTUnwrap(Tokens.variants["\(appearance)-mustard"])
+            let hud = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102),
+                tokens: tokens)
+            let window = NSWindow(contentRect: hud.bounds, styleMask: [.borderless],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hud; defer { window.close() }
+            hud.setMicrophone(muted: false, available: true)
+            XCTAssertTrue(hud.restartConfirms, "a running take asks before restarting")
+            hud.setFailed(error: "Error: no microphone device is available",
+                sessionError: "no microphone device is available", elapsedMilliseconds: 0)
+
+            let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
+            XCTAssertEqual(buttons.filter(\.isEnabled).compactMap { $0.accessibilityLabel() },
+                ["Retry recording", "Delete recording"])
+            XCTAssertFalse(buttons.contains { $0.accessibilityLabel() == "Restart recording" })
+            XCTAssertFalse(hud.restartConfirms, "shipping retries a failed take without asking")
+            XCTAssertEqual(hud.state, "failed")
+            XCTAssertFalse(hud.dotPulsing)
+            let fields = hud.subviews.compactMap { $0 as? NSTextField }
+            let status = try XCTUnwrap(fields.first { $0.stringValue == "FAILED" })
+            XCTAssertEqual(status.accessibilityLabel(), "Failed")
+            let error = try XCTUnwrap(fields.first { $0.stringValue == "no microphone device is available" })
+            XCTAssertFalse(error.isHidden)
+            XCTAssertEqual(error.maximumNumberOfLines, 1)
+            XCTAssertGreaterThan(error.frame.minY, buttons[0].frame.maxY, "the error sits below the controls")
+            XCTAssertTrue(hud.subviews.allSatisfy { $0.frame.maxX <= 430 && $0.frame.maxY <= 102 })
+            XCTAssertTrue(fields.contains { $0.stringValue == "These controls won’t show in recordings" },
+                "the privacy line stays above the error")
+            try render(hud, window: window, name: "recording-hud-\(appearance)-failed")
+
+            var retried = false
+            hud.restart = { retried = true }
+            try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Retry recording" })
+                .performClick(nil)
+            XCTAssertTrue(retried)
+            // A new action clears the host error; the session's own failure remains.
+            hud.actionStarted()
+            XCTAssertEqual(hud.errorText, "no microphone device is available")
+            hud.setPaused(false, elapsedMilliseconds: 0)
+            XCTAssertNil(hud.errorText, "a successful retry has no error line")
+            XCTAssertTrue(hud.restartConfirms)
+        }
+    }
+
+    func testSavingDisablesControlsAndFreezesTheTimer() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let hud = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102), tokens: tokens)
+        let window = NSWindow(contentRect: hud.bounds, styleMask: [.borderless],
+            backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hud; defer { window.close() }
+        hud.setMicrophone(muted: false, available: true)
+        hud.setPaused(true, elapsedMilliseconds: 94_000)
+        hud.setSaving()
+        XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 0)
+        let fields = hud.subviews.compactMap { $0 as? NSTextField }
+        XCTAssertTrue(fields.contains { $0.stringValue == "SAVING…" })
+        XCTAssertTrue(fields.contains { $0.stringValue == "1:34" })
+        XCTAssertEqual(hud.policy?.dotToken, "info")
+        try render(hud, window: window, name: "recording-hud-dark-saving")
+    }
+
+    func testWarningsUseTheInlineErrorLineOncePerChange() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let hud = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102), tokens: tokens)
+        let privacy = "These controls won’t show in recordings"
+        let disconnected = "The selected microphone disconnected. Video and desktop audio are still recording."
+        hud.setWarning(disconnected)
+        XCTAssertEqual(hud.errorText, disconnected)
+        XCTAssertTrue(hud.subviews.compactMap { ($0 as? NSTextField)?.stringValue }.contains(privacy),
+            "warnings no longer replace the privacy line")
+        hud.actionStarted()
+        XCTAssertNil(hud.errorText)
+        hud.setWarning(disconnected)
+        XCTAssertNil(hud.errorText, "an unchanged warning does not come back")
+        hud.setWarning(nil)
+        hud.setWarning("Desktop audio could not be written.")
+        XCTAssertEqual(hud.errorText, "Desktop audio could not be written.")
+        hud.showActionError("Error: the screenshot could not start")
+        XCTAssertEqual(hud.errorText, "The screenshot could not start")
+        hud.resetErrors()
+        XCTAssertNil(hud.errorText)
+    }
+
+    func testStyledTooltipsFollowShippingCopyPlacementAndDisabledButtons() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let hud = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102), tokens: tokens)
+        let window = NSWindow(contentRect: hud.bounds, styleMask: [.borderless],
+            backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hud; defer { window.close() }
+        let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
+        XCTAssertTrue(buttons.allSatisfy { $0.toolTip == nil })
+        let tooltip = try XCTUnwrap(hud.subviews.first { $0 is RecordingHUDTooltipView })
+        let event = try hoverEvent()
+        let expected = ["Stop recording": "Stop and save", "Pause recording": "Pause recording",
+                        "Restart recording": "Restart recording",
+                        "Take a region screenshot": "Take a region screenshot",
+                        "Delete recording": "Delete recording",
+                        "Hide recording controls": "Hide controls"]
+        for button in buttons {
+            guard let label = button.accessibilityLabel() else { continue }
+            button.mouseEntered(with: event)
+            if let copy = expected[label] {
+                XCTAssertEqual(hud.visibleTooltip, copy, label)
+            }
+            XCTAssertGreaterThanOrEqual(tooltip.frame.minY, button.frame.maxY - 1, label)
+            XCTAssertLessThanOrEqual(tooltip.frame.maxY, 102.5, label)
+            XCTAssertGreaterThanOrEqual(tooltip.frame.minX, 0, label)
+            XCTAssertLessThanOrEqual(tooltip.frame.maxX, 430, label)
+            button.mouseExited(with: event)
+        }
+        // The microphone is disabled without a device but still explains itself.
+        let microphone = try XCTUnwrap(buttons.first { !$0.isEnabled })
+        microphone.mouseEntered(with: event)
+        XCTAssertEqual(hud.visibleTooltip, "Mute microphone")
+        let hide = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Hide recording controls" })
+        hide.mouseEntered(with: event)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(tooltip.frame.maxX, hide.frame.maxX, accuracy: 0.5,
+            "the last three tooltips right-align like shipping")
+        try render(hud, window: window, name: "recording-hud-dark-tooltip")
+        hide.mouseExited(with: event)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertNil(hud.visibleTooltip)
+    }
+
+    private func hoverEvent() throws -> NSEvent {
+        try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseEntered, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            eventNumber: 0, trackingNumber: 0, userData: nil))
     }
 
     private func render(_ view: NSView, window: NSWindow, name: String) throws {

@@ -871,14 +871,21 @@ impl Workbench {
             ui,
             t,
             recording_hud::View {
-                paused: self.paused,
+                state: match self.options.hud_state {
+                    HudState::Failed => captures_recording::RecordingState::Failed,
+                    HudState::Saving => captures_recording::RecordingState::Finalizing,
+                    _ if self.paused => captures_recording::RecordingState::Paused,
+                    _ => captures_recording::RecordingState::Recording,
+                },
                 busy: self.options.hud_state == HudState::Busy,
                 has_microphone: self.options.hud_state != HudState::NoMicrophone,
                 microphone_muted: self.options.hud_state == HudState::Muted,
                 microphone_peak: 0.625,
                 elapsed_ms: 24_000,
                 notice: "These controls won’t show in recordings",
-                warning: false,
+                // A fixture engine failure, as the live HUD shows it inline.
+                error: (self.options.hud_state == HudState::Failed)
+                    .then_some("No microphone device is available"),
                 hide_available: false,
                 reduced_motion: self.options.reduced_motion,
             },

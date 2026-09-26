@@ -382,6 +382,12 @@ Pass `--hide-controls-only` to `x11_recording_smoke.py` for focused running/paus
 Xfce SNI tray, configured New Capture shortcut restoration, tray-host-loss recovery,
 finalized media decode and recovery cleanup.
 
+Pass `--start-failure` (needs the PulseAudio tools listed below) to start a take with the
+selected microphone missing. It checks the failed HUD, inline error, disabled controls,
+the Retry recording tooltip, a failing and then a succeeding Retry recording with no
+confirmation, and a confirmed Delete. `--device-change explicit` checks that a resume
+without the microphone stays paused with the inline error and still saves.
+
 Pass `--ready-notice-only --appearance dark` to that recording smoke (and repeat with `light`) to exercise
 real recording finalization followed by notice save failure/retry, byte-identical
 export, missing-file reveal, expiry with a hidden root, dismissal and cleanup

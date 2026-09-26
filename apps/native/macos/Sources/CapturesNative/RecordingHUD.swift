@@ -1,4 +1,5 @@
 import AppKit
+import CCapturesSettings
 
 enum RecordingHUDColorToken: String, CaseIterable {
     case glassStrong = "glass-strong"
@@ -9,6 +10,132 @@ enum RecordingHUDColorToken: String, CaseIterable {
     case themeAccent = "theme-accent"
     case themeSignal = "theme-signal"
     case themeSignalSurface = "theme-signal-surface"
+    case themeSignalText = "theme-signal-text"
+    case info = "info"
+}
+
+/// The shared shipping HUD policy (`captures_recording_hud_request_v1`): control
+/// states and copy, status label/dot, the inline error line and tooltip placement.
+enum RecordingHUDPolicy {
+    struct Control: Equatable {
+        let id: String
+        let label: String
+        let tooltip: String
+        let enabled: Bool
+        let selected: Bool
+        let tooltipRightAligned: Bool
+    }
+
+    struct View: Equatable {
+        let statusLabel: String
+        let dotToken: String
+        let dotHalo: Bool
+        let pulsing: Bool
+        let timerRunning: Bool
+        let showMeter: Bool
+        let restartConfirms: Bool
+        let controls: [String: Control]
+    }
+
+    static func request(_ object: [String: Any]) -> [String: Any]? {
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
+        let pointer = String(decoding: data, as: UTF8.self).withCString {
+            captures_recording_hud_request_v1($0)
+        }
+        guard let pointer else { return nil }
+        defer { captures_settings_free_v1(pointer) }
+        guard let response = try? JSONSerialization.jsonObject(
+                with: Data(bytes: pointer, count: strlen(pointer))) as? [String: Any],
+              response["ok"] as? Bool == true else { return nil }
+        return response["result"] as? [String: Any]
+    }
+
+    static func present(state: String, busy: Bool, hasMicrophone: Bool, microphoneMuted: Bool,
+                        hideAvailable: Bool = true) -> View? {
+        guard let result = request([
+            "operation": "present", "state": state, "busy": busy,
+            "has_microphone": hasMicrophone, "microphone_muted": microphoneMuted,
+            "hide_available": hideAvailable,
+        ]), let controls = result["controls"] as? [[String: Any]] else { return nil }
+        var byID: [String: Control] = [:]
+        for control in controls {
+            guard let id = control["control"] as? String else { return nil }
+            byID[id] = Control(id: id, label: control.string("label"),
+                tooltip: control.string("tooltip"),
+                enabled: control["enabled"] as? Bool == true,
+                selected: control["selected"] as? Bool == true,
+                tooltipRightAligned: control["tooltip_right_aligned"] as? Bool == true)
+        }
+        return View(statusLabel: result.string("status_label"),
+            dotToken: result.string("dot_token", "theme-signal"),
+            dotHalo: result["dot_halo"] as? Bool != false,
+            pulsing: result["pulsing"] as? Bool == true,
+            timerRunning: result["timer_running"] as? Bool == true,
+            showMeter: result["show_meter"] as? Bool == true,
+            restartConfirms: result["restart_confirms"] as? Bool != false,
+            controls: byID)
+    }
+
+    /// Apply one error-line event; returns the new state and the text to show.
+    static func errorLine(_ line: [String: Any], event: [String: Any],
+                          sessionError: String?) -> (line: [String: Any], text: String?) {
+        var object: [String: Any] = ["operation": "error_line", "line": line, "event": event]
+        if let sessionError { object["session_error"] = sessionError }
+        guard let result = request(object), let next = result["line"] as? [String: Any] else {
+            return (line, nil)
+        }
+        return (next, result["text"] as? String)
+    }
+
+    /// Flipped HUD coordinates in and out.
+    static func tooltipFrame(anchor: NSRect, textSize: NSSize, rightAligned: Bool,
+                             progress: Double, bounds: NSRect) -> NSRect? {
+        func rect(_ value: NSRect) -> [String: Double] {
+            ["x": Double(value.minX), "y": Double(value.minY),
+             "width": Double(value.width), "height": Double(value.height)]
+        }
+        guard let result = request([
+            "operation": "tooltip_frame", "anchor": rect(anchor),
+            "text_width": Double(textSize.width), "text_height": Double(textSize.height),
+            "right_aligned": rightAligned, "progress": progress, "bounds": rect(bounds),
+        ]), let x = result["x"] as? Double, let y = result["y"] as? Double,
+              let width = result["width"] as? Double, let height = result["height"] as? Double
+        else { return nil }
+        return NSRect(x: x, y: y, width: width, height: height)
+    }
+}
+
+/// Shipping `.recording-tooltip > [role="tooltip"]`: a fixed-glass pill with an
+/// xs medium label. It never takes the mouse.
+final class RecordingHUDTooltipView: NSView {
+    let label = NSTextField(labelWithString: "")
+    override var isFlipped: Bool { true }
+
+    init(tokens: Tokens) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
+        layer?.borderColor = tokens.color(RecordingHUDColorToken.glassBorder.rawValue).cgColor
+        layer?.borderWidth = 1
+        layer?.cornerRadius = tokens.number("r-sm")
+        label.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+        label.textColor = tokens.color(RecordingHUDColorToken.glassText.rawValue)
+        label.alignment = .center
+        label.lineBreakMode = .byTruncatingTail
+        addSubview(label)
+        isHidden = true
+        alphaValue = 0
+        setAccessibilityElement(false)
+        label.setAccessibilityElement(false)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        label.frame = bounds.insetBy(dx: 9, dy: 6)
+    }
 }
 
 final class RecordingHUDView: NSView {
@@ -18,20 +145,37 @@ final class RecordingHUDView: NSView {
     private let timerLabel = NSTextField(labelWithString: "0:00")
     private let statusLabel = NSTextField(labelWithString: "")
     private let noticeLabel = NSTextField(labelWithString: "These controls won’t show in recordings")
+    /// Shipping `.recording-hud-error`: one signal line below the controls.
+    private let errorLabel = NSTextField(labelWithString: "")
+    private let tooltipView: RecordingHUDTooltipView
+    private let stopButton: CaptureButton
     private let pauseButton: CaptureButton
+    private let restartButton: CaptureButton
+    private let screenshotButton: CaptureButton
     private let microphoneButton: CaptureButton
+    private let trashButton: CaptureButton
+    private let hideButton: CaptureButton
     private let meterTrack = NSView()
     private let meterFill = NSView()
     private let meterLabel = NSTextField(labelWithString: "OFF")
     private var meterLevel = 0.0
     private var lifecycleButtons: [CaptureButton] = []
+    private var controlIDs: [ObjectIdentifier: String] = [:]
+    private var tooltips: [ObjectIdentifier: (text: String, rightAligned: Bool)] = [:]
+    private weak var tooltipOwner: CaptureButton?
     private var lifecycleActionsEnabled = true
     private var elapsedMilliseconds: UInt64 = 0
     private var resumedAt: Date?
     private var timer: Timer?
+    private var errorState: [String: Any] = [:]
+    private var sessionError: String?
+    /// "recording", "paused", "finalizing" or "failed" (shared RecordingState names).
+    private(set) var state = "recording"
     private(set) var paused = false
     private(set) var microphoneMuted = false
     private(set) var microphoneAvailable = false
+    private(set) var policy: RecordingHUDPolicy.View?
+    private(set) var errorText: String?
     var pauseOrResume: () -> Void = {}
     var toggleMicrophone: () -> Void = {}
     var restart: () -> Void = {}
@@ -42,13 +186,30 @@ final class RecordingHUDView: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// A failed take retries at once; a running take asks first (shared policy).
+    var restartConfirms: Bool { policy?.restartConfirms ?? true }
+    /// The styled tooltip currently shown, for tests and accessibility checks.
+    var visibleTooltip: String? { tooltipView.isHidden ? nil : tooltipView.label.stringValue }
+
     init(frame: NSRect, tokens: Tokens, excludedFromCapture: Bool = true) {
         self.tokens = tokens
         defaultNotice = excludedFromCapture
             ? "These controls won’t show in recordings"
             : "These controls will show in recordings · Use Hide controls to keep them out"
-        pauseButton = CaptureButton("", frame: .zero, tokens: tokens, glass: true) {}
-        microphoneButton = CaptureButton("", frame: .zero, tokens: tokens, glass: true) {}
+        func button(_ icon: CaptureButtonIcon, x: CGFloat) -> CaptureButton {
+            let button = CaptureButton("", frame: NSRect(x: x, y: 39, width: 38, height: 34),
+                tokens: tokens, glass: true) {}
+            button.icon = icon
+            return button
+        }
+        stopButton = button(.stopSquare, x: 104)
+        pauseButton = button(.shipping("pause"), x: 144)
+        restartButton = button(.shipping("restart"), x: 184)
+        screenshotButton = button(.shipping("capture"), x: 224)
+        microphoneButton = button(.shipping("microphone"), x: 304)
+        trashButton = button(.shipping("trash"), x: 344)
+        hideButton = button(.shipping("hide-controls"), x: 384)
+        tooltipView = RecordingHUDTooltipView(tokens: tokens)
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
@@ -65,7 +226,7 @@ final class RecordingHUDView: NSView {
         noticeLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         noticeLabel.lineBreakMode = .byTruncatingTail
         addSubview(noticeLabel)
-        showNotice(defaultNotice, warning: false)
+        showNotice(defaultNotice)
 
         statusDot.frame = NSRect(x: 17, y: 43, width: 10, height: 10)
         statusDot.wantsLayer = true; statusDot.layer?.cornerRadius = 5
@@ -84,19 +245,24 @@ final class RecordingHUDView: NSView {
         statusLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         addSubview(statusLabel)
 
-        let stop = hudButton(.stopSquare, x: 104, help: "Stop and save") { [weak self] in self?.stop() }
-        stop.signal = true; stop.setAccessibilityLabel("Stop recording")
-        pauseButton.frame = NSRect(x: 144, y: 39, width: 38, height: 34)
+        stopButton.signal = true
+        stopButton.actionBlock = { [weak self] in self?.stop() }
         pauseButton.actionBlock = { [weak self] in self?.pauseOrResume() }
-        pauseButton.setAccessibilityLabel("Pause recording"); addSubview(pauseButton)
-        let restart = hudButton(.shipping("restart"), x: 184, help: "Restart recording") {
-            [weak self] in self?.restart()
+        restartButton.actionBlock = { [weak self] in self?.restart() }
+        screenshotButton.actionBlock = { [weak self] in self?.screenshot() }
+        microphoneButton.actionBlock = { [weak self] in self?.toggleMicrophone() }
+        trashButton.actionBlock = { [weak self] in self?.discard() }
+        hideButton.actionBlock = { [weak self] in self?.hide() }
+        for (button, id) in [(stopButton, "stop"), (pauseButton, "pause_resume"),
+                             (restartButton, "restart"), (screenshotButton, "screenshot"),
+                             (microphoneButton, "microphone"), (trashButton, "delete"),
+                             (hideButton, "hide")] {
+            controlIDs[ObjectIdentifier(button)] = id
+            button.highlightChanged = { [weak self] button, highlighted in
+                self?.setTooltip(for: button, visible: highlighted)
+            }
+            addSubview(button)
         }
-        restart.setAccessibilityLabel("Restart recording")
-        let screenshot = hudButton(.shipping("capture"), x: 224, help: "Take a region screenshot") {
-            [weak self] in self?.screenshot()
-        }
-        screenshot.setAccessibilityLabel("Take a region screenshot")
         meterTrack.frame = NSRect(x: 267, y: 58, width: 32, height: 6)
         meterTrack.wantsLayer = true
         meterTrack.layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassActive.rawValue).cgColor
@@ -116,36 +282,34 @@ final class RecordingHUDView: NSView {
         meterTrack.setAccessibilityElement(true)
         meterTrack.setAccessibilityRole(.progressIndicator)
         meterTrack.setAccessibilityLabel("Microphone level")
-        microphoneButton.frame = NSRect(x: 304, y: 39, width: 38, height: 34)
-        microphoneButton.actionBlock = { [weak self] in self?.toggleMicrophone() }
-        addSubview(microphoneButton)
-        let trash = hudButton(.shipping("trash"), x: 344, help: "Delete recording") { [weak self] in self?.discard() }
-        trash.setAccessibilityLabel("Delete recording")
-        lifecycleButtons = [stop, pauseButton, restart, screenshot, microphoneButton, trash]
-        let hide = hudButton(.shipping("hide-controls"), x: 384, help: "Hide controls") {
-            [weak self] in self?.hide()
-        }
-        hide.setAccessibilityLabel("Hide recording controls")
-        lifecycleButtons.append(hide)
+        lifecycleButtons = [stopButton, pauseButton, restartButton, screenshotButton,
+                            microphoneButton, trashButton, hideButton]
         for case let button as CaptureButton in subviews { button.hudControl = true }
+
+        // Shipping `.recording-hud-error`: 2xs signal text, one line, ellipsis.
+        errorLabel.frame = NSRect(x: 16, y: 79, width: 398, height: 15)
+        errorLabel.alignment = .center
+        errorLabel.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
+        errorLabel.textColor = tokens.color(RecordingHUDColorToken.themeSignalText.rawValue)
+        errorLabel.lineBreakMode = .byTruncatingTail
+        errorLabel.maximumNumberOfLines = 1
+        errorLabel.isHidden = true
+        errorLabel.setAccessibilityRole(.staticText)
+        addSubview(errorLabel)
+        addSubview(tooltipView)
         setPaused(false, elapsedMilliseconds: 0)
         setMicrophone(muted: false, available: false)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    private func hudButton(_ icon: CaptureButtonIcon, x: CGFloat, help: String,
-                           action: @escaping () -> Void) -> CaptureButton {
-        let button = CaptureButton("", frame: NSRect(x: x, y: 39, width: 38, height: 34),
-            tokens: tokens, glass: true, action: action)
-        button.icon = icon
-        button.toolTip = help; addSubview(button); return button
-    }
-
     /// Shipping `recording-pulse`: 1.6 s, opacity 0.6 and scale 0.84 at the midpoint.
     private func setDotPulsing(_ pulsing: Bool) {
         guard let layer = statusDot.layer else { return }
+        let wanted = pulsing && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        // Status polls refresh the HUD every second; keep a running pulse in phase.
+        guard wanted != (layer.animation(forKey: "recording-pulse") != nil) else { return }
         layer.removeAnimation(forKey: "recording-pulse")
-        guard pulsing, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        guard wanted else { return }
         let opacity = CAKeyframeAnimation(keyPath: "opacity")
         opacity.values = [1, 0.6, 1]
         let scale = CAKeyframeAnimation(keyPath: "transform.scale")
@@ -160,43 +324,160 @@ final class RecordingHUDView: NSView {
     var dotPulsing: Bool { statusDot.layer?.animation(forKey: "recording-pulse") != nil }
 
     func setPaused(_ paused: Bool, elapsedMilliseconds: UInt64) {
-        if self.paused != paused { setMicrophoneLevel(0) }
-        self.paused = paused; self.elapsedMilliseconds = elapsedMilliseconds
-        resumedAt = paused ? nil : Date()
-        let status = recordingStatusLabel(paused: paused)
-        // Shipping CSS uppercases the status label; assistive tech reads its copy.
-        statusLabel.stringValue = status.uppercased(); statusLabel.setAccessibilityLabel(status)
-        updateMeterLabel()
-        let statusToken: RecordingHUDColorToken = paused ? .themeAccent : .themeSignal
-        statusDot.layer?.backgroundColor = tokens.color(statusToken.rawValue).cgColor
-        statusDot.layer?.shadowColor = tokens.color(statusToken.rawValue).withAlphaComponent(0.16).cgColor
-        setDotPulsing(!paused)
-        pauseButton.icon = .shipping(paused ? "resume" : "pause")
-        pauseButton.setAccessibilityLabel(paused ? "Resume recording" : "Pause recording")
-        updateTimer()
-        timer?.invalidate()
-        guard !paused else { timer = nil; return }
-        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.updateTimer() }
-        self.timer = timer; RunLoop.main.add(timer, forMode: .common)
+        setState(paused ? "paused" : "recording", elapsedMilliseconds: elapsedMilliseconds)
     }
 
+    /// Shipping keeps the HUD up as "Saving…" with a frozen timer while finalizing.
+    func setSaving() {
+        let running = resumedAt.map { UInt64(max(0, Date().timeIntervalSince($0)) * 1_000) } ?? 0
+        setState("finalizing", elapsedMilliseconds: elapsedMilliseconds + running)
+    }
+
+    /// The engine could not start the take: Retry recording and Delete remain.
+    func setFailed(error: String, sessionError: String?, elapsedMilliseconds: UInt64) {
+        self.sessionError = sessionError
+        setState("failed", elapsedMilliseconds: elapsedMilliseconds)
+        applyError(["event": "action_failed", "message": error])
+    }
+
+    private func setState(_ state: String, elapsedMilliseconds: UInt64) {
+        let paused = state == "paused"
+        let changed = self.paused != paused || self.state != state
+        if state != "failed" { sessionError = nil }
+        self.state = state; self.paused = paused
+        // Reset the meter after the new state is stored so its label reads it.
+        if changed { setMicrophoneLevel(0) }
+        self.elapsedMilliseconds = elapsedMilliseconds
+        refreshControls()
+        let running = policy?.timerRunning ?? (state == "recording")
+        resumedAt = running ? Date() : nil
+        pauseButton.icon = .shipping(paused ? "resume" : "pause")
+        updateTimer()
+        timer?.invalidate()
+        guard running else { timer = nil; applyError(nil); return }
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.updateTimer() }
+        self.timer = timer; RunLoop.main.add(timer, forMode: .common)
+        applyError(nil)
+    }
+
+    /// Re-evaluate every control from the shared shipping policy.
+    private func refreshControls() {
+        guard let view = RecordingHUDPolicy.present(state: state, busy: !lifecycleActionsEnabled,
+            hasMicrophone: microphoneAvailable, microphoneMuted: microphoneMuted) else { return }
+        policy = view
+        // Shipping CSS uppercases the status label; assistive tech reads its copy.
+        statusLabel.stringValue = view.statusLabel.uppercased()
+        statusLabel.setAccessibilityLabel(view.statusLabel)
+        let dot = tokens.color(view.dotToken)
+        statusDot.layer?.backgroundColor = dot.cgColor
+        statusDot.layer?.shadowColor = view.dotHalo ? dot.withAlphaComponent(0.16).cgColor : nil
+        setDotPulsing(view.pulsing)
+        for button in lifecycleButtons {
+            guard let id = controlIDs[ObjectIdentifier(button)], let control = view.controls[id] else {
+                continue
+            }
+            button.isEnabled = control.enabled
+            button.selected = control.selected
+            button.setAccessibilityLabel(control.label)
+            // The styled tooltip replaces the delayed system tooltip.
+            button.toolTip = nil
+            tooltips[ObjectIdentifier(button)] = (control.tooltip, control.tooltipRightAligned)
+            button.needsDisplay = true
+        }
+        microphoneButton.setAccessibilityValue(microphoneMuted ? 1 : 0)
+        if let owner = tooltipOwner { setTooltip(for: owner, visible: true, animated: false) }
+    }
+
+    /// Shipping shows the tooltip under a hovered or focused button, disabled ones
+    /// included, with no delay; it fades and slides 3 pt over `--dur-1`.
+    private func setTooltip(for button: CaptureButton, visible: Bool, animated: Bool = true) {
+        // Offscreen (tests, hidden panels) there is nothing to animate.
+        let duration = animated && window?.isVisible == true
+            ? Double(tokens.number("dur-1")) / 1000 : 0
+        guard visible, let tooltip = tooltips[ObjectIdentifier(button)] else {
+            guard tooltipOwner === button else { return }
+            tooltipOwner = nil
+            guard duration > 0 else {
+                tooltipView.alphaValue = 0; tooltipView.isHidden = true
+                return
+            }
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = duration
+                tooltipView.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                guard let self, self.tooltipOwner == nil else { return }
+                self.tooltipView.isHidden = true
+            })
+            return
+        }
+        tooltipOwner = button
+        tooltipView.label.stringValue = tooltip.text
+        let textSize = tooltipView.label.intrinsicContentSize
+        guard let hidden = RecordingHUDPolicy.tooltipFrame(anchor: button.frame, textSize: textSize,
+                  rightAligned: tooltip.rightAligned, progress: 0, bounds: bounds),
+              let shown = RecordingHUDPolicy.tooltipFrame(anchor: button.frame, textSize: textSize,
+                  rightAligned: tooltip.rightAligned, progress: 1, bounds: bounds) else { return }
+        let wasHidden = tooltipView.isHidden || tooltipView.alphaValue == 0
+        tooltipView.isHidden = false
+        tooltipView.needsLayout = true
+        guard duration > 0 else {
+            tooltipView.frame = shown; tooltipView.alphaValue = 1
+            return
+        }
+        if wasHidden { tooltipView.frame = hidden; tooltipView.alphaValue = 0 }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            tooltipView.animator().frame = shown
+            tooltipView.animator().alphaValue = 1
+        }
+    }
+
+    /// Engine warnings (microphone or desktop audio) appear on the inline error
+    /// line once per change, like shipping's `recording-warning` event.
     func setWarning(_ warning: String?) {
-        showNotice(warning ?? defaultNotice, warning: warning != nil)
-        noticeLabel.toolTip = warning
+        let value: Any = warning.map { $0 as Any } ?? NSNull()
+        applyError(["event": "warning", "warning": value])
+    }
+
+    /// A HUD action failed; shipping shows it on the inline error line.
+    func showActionError(_ message: String) {
+        applyError(["event": "action_failed", "message": message])
+    }
+
+    /// Shipping clears the error line whenever a HUD action starts.
+    func actionStarted() { applyError(["event": "action_started"]) }
+
+    /// A new take starts with no error line.
+    func resetErrors() { sessionError = nil; applyError(["event": "session_changed"]) }
+
+    private func applyError(_ event: [String: Any]?) {
+        if let event {
+            let result = RecordingHUDPolicy.errorLine(errorState, event: event,
+                sessionError: sessionError)
+            errorState = result.line
+            errorText = result.text
+        } else {
+            errorText = (errorState["message"] as? String) ?? sessionError.flatMap { error in
+                RecordingHUDPolicy.request(["operation": "error_message", "message": error])?
+                    .string("message")
+            }
+        }
+        errorLabel.stringValue = errorText ?? ""
+        errorLabel.setAccessibilityLabel(errorText)
+        errorLabel.isHidden = errorText == nil
     }
 
     /// Shipping `.recording-hud-privacy`: subtle 2xs text with **will**/**won’t** in bold glass text.
-    private func showNotice(_ text: String, warning: Bool) {
-        let noticeToken: RecordingHUDColorToken = warning ? .themeSignal : .glassTextSubtle
+    private func showNotice(_ text: String) {
         let size = tokens.number("text-2xs")
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center; paragraph.lineBreakMode = .byTruncatingTail
         let attributed = NSMutableAttributedString(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: size, weight: .medium),
-            .foregroundColor: tokens.color(noticeToken.rawValue),
+            .foregroundColor: tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue),
             .paragraphStyle: paragraph,
         ])
-        if !warning, let range = ["won’t", "will"].lazy
+        if let range = ["won’t", "will"].lazy
             .map({ (text as NSString).range(of: " \($0) ") })
             .first(where: { $0.location != NSNotFound }) {
             attributed.addAttributes([
@@ -215,19 +496,13 @@ final class RecordingHUDView: NSView {
         microphoneButton.icon = .shipping(muted ? "microphone-muted" : "microphone")
         // Shipping hides the level meter entirely without a selected microphone.
         meterTrack.isHidden = !available; meterLabel.isHidden = !available
-        microphoneButton.selected = muted
-        microphoneButton.isEnabled = available && lifecycleActionsEnabled
-        let action = muted ? "Unmute microphone" : "Mute microphone"
-        let unavailable = "Microphone unavailable because no microphone was selected"
-        microphoneButton.toolTip = available ? action : unavailable
-        microphoneButton.setAccessibilityLabel(available ? action : unavailable)
-        microphoneButton.setAccessibilityValue(muted ? 1 : 0)
-        microphoneButton.needsDisplay = true
+        refreshControls()
         updateMeterLabel()
     }
 
     func setMicrophoneLevel(_ peak: Double) {
-        let level = !paused && !microphoneMuted && microphoneAvailable && lifecycleActionsEnabled
+        let level = state == "recording" && !microphoneMuted && microphoneAvailable
+            && lifecycleActionsEnabled
             ? min(1, max(0, peak.isFinite ? peak : 0)) : 0
         meterLevel = level
         meterFill.frame.size.width = meterTrack.bounds.width * level
@@ -236,7 +511,8 @@ final class RecordingHUDView: NSView {
 
     private func updateMeterLabel() {
         let state = !microphoneAvailable ? "off" : paused ? "paused"
-            : microphoneMuted ? "muted" : !lifecycleActionsEnabled ? "busy" : "recording"
+            : microphoneMuted ? "muted"
+            : !lifecycleActionsEnabled || self.state != "recording" ? "busy" : "recording"
         meterLabel.stringValue = state == "recording" ? "\(Int((meterLevel * 100).rounded()))%" : state.uppercased()
         let value = "\(Int((meterLevel * 100).rounded()))%, \(state)"
         meterTrack.setAccessibilityValue(value)
@@ -246,11 +522,7 @@ final class RecordingHUDView: NSView {
     func setLifecycleActionsEnabled(_ enabled: Bool) {
         lifecycleActionsEnabled = enabled
         if !enabled { setMicrophoneLevel(0) }
-        lifecycleButtons.forEach {
-            $0.isEnabled = enabled
-            $0.needsDisplay = true
-        }
-        microphoneButton.isEnabled = enabled && microphoneAvailable
+        refreshControls()
         updateMeterLabel()
     }
 
@@ -266,7 +538,8 @@ final class RecordingHUDView: NSView {
     deinit { timer?.invalidate() }
 }
 
-/// Shipping `recordingStatusLabel` copy for the states this HUD renders.
+/// Shipping `recordingStatusLabel` copy for the running states (shared policy
+/// supplies the rest).
 func recordingStatusLabel(paused: Bool) -> String { paused ? "Paused" : "Recording" }
 
 /// Mirrors `captures_app::recording_timeline::format_recording_time` and the

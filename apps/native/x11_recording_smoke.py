@@ -43,8 +43,10 @@ def main():
     parser.add_argument("--appearance", choices=("dark", "light"), default="dark")
     parser.add_argument("--virtual-microphone", action="store_true",
                         help="use a disposable PulseAudio microphone to verify live meter and mute segments")
+    parser.add_argument("--start-failure", action="store_true",
+                        help="start with the selected microphone missing: failed HUD, Retry recording and Delete")
     args = parser.parse_args()
-    if args.device_change:
+    if args.device_change or args.start_failure:
         args.virtual_microphone = True
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -114,6 +116,16 @@ def main():
             "mousemove", "--sync", "--window", window, str(x - 1), str(y),
             "mousemove_relative", "--sync", "1", "0", "sleep", ".15", "mousedown", "1",
             "sleep", ".15", "mouseup", "1")
+
+    def error_line_pixels(window):
+        # Shipping `.recording-hud-error`: signal-text pixels below the HUD card.
+        pixels = run("import", "-window", window, "-crop", "398x18+16+76", "-depth", "8", "rgb:-")
+        return sum(pixels[index] > 150 and pixels[index] - pixels[index + 1] > 40
+                   for index in range(0, len(pixels), 3))
+
+    def tooltip_band(window):
+        # Styled tooltips paint in the transparent band below the HUD card.
+        return run("import", "-window", window, "-crop", "260x24+100+72", "-depth", "8", "rgb:-")
 
     def window_geometry(window):
         values = {}
@@ -265,19 +277,26 @@ def main():
             spawn("pulseaudio", ["pulseaudio", "--daemonize=no", "--exit-idle-time=-1"])
             wait(lambda: subprocess.run(["pactl", "info"], env=env, capture_output=True).returncode == 0,
                  "PulseAudio virtual microphone server")
-            microphone_module = run("pactl", "load-module", "module-null-sink", "sink_name=captures",
-                "sink_properties=device.description=CapturesVirtualMicrophone").decode().strip()
-            run("pactl", "set-default-source", "captures.monitor")
             tone = output / "microphone-tone.wav"
             run("ffmpeg", "-v", "error", "-f", "lavfi", "-i",
                 "sine=frequency=730:sample_rate=48000", "-af", "volume=4", "-t", "120", str(tone))
-            spawn("microphone-tone", ["paplay", "--device=captures", str(tone)])
+
+            def load_microphone():
+                module = run("pactl", "load-module", "module-null-sink", "sink_name=captures",
+                    "sink_properties=device.description=CapturesVirtualMicrophone").decode().strip()
+                run("pactl", "set-default-source", "captures.monitor")
+                spawn("microphone-tone", ["paplay", "--device=captures", str(tone)])
+                return module
+
+            # A start failure begins with the selected microphone missing.
+            microphone_module = None if args.start_failure else load_microphone()
             if args.device_change:
                 run("pactl", "load-module", "module-null-sink", "sink_name=captures_b")
                 second_tone = output / "microphone-b.wav"
                 run("ffmpeg", "-v", "error", "-f", "lavfi", "-i",
                     "sine=frequency=1310:sample_rate=48000", "-af", "volume=4", "-t", "120", str(second_tone))
                 spawn("microphone-b", ["paplay", "--device=captures_b", str(second_tone)])
+            if args.device_change or args.start_failure:
                 # CPAL 0.16 enumerates built-in ALSA names, not arbitrary PCM hints.
                 # Keep "default" following the server, but pin the private "pulse"
                 # endpoint to A. Missing A must not become the new default B.
@@ -313,7 +332,8 @@ pcm.!pulse {
                           "video_shortcut": "Ctrl+Alt+R", "window_shortcut": "Ctrl+Alt+W",
                           "display_shortcut": "Ctrl+Alt+D",
                           "highlight_clicks": False, "capture_system_audio": False,
-                          "microphone_device_id": "microphone:pulse" if args.device_change == "explicit"
+                          "microphone_device_id": "microphone:pulse"
+                              if args.device_change == "explicit" or args.start_failure
                               else "default" if args.virtual_microphone else None,
                           # Shipping shows the saved notice only when the
                           # recording editor opened after recording closes.
@@ -339,6 +359,80 @@ pcm.!pulse {
         guide = wait(lambda: windows("Captures Recording Region"), "countdown region guide")[0]
         shot(countdown, "recording-countdown")
         run("xdotool", "key", "ctrl+alt+d")
+        if args.start_failure:
+            def failed_hud(description):
+                wait(lambda: (value := manifest()) and value["state"] == "failed", description)
+                hud = wait(lambda: windows("Captures Recording Controls"), f"{description} HUD")[0]
+                wait(lambda: error_line_pixels(hud) > 20, f"{description} inline error")
+                return hud
+
+            # Shipping keeps the HUD on a failed start: grey dot, "Failed", the
+            # engine error inline, and only Retry recording and Delete enabled.
+            hud = failed_hud("missing microphone fails the start")
+            session_id = manifest()["session_id"]
+            assert not manifest()["segments"] and manifest()["last_error"]
+            assert not windows("Captures Recording Region"), "failed takes remove the region guide"
+            assert not windows("Captures"), "the workspace stays hidden behind the failed HUD"
+            time.sleep(.3)
+            shot(hud, "hud-start-failed")
+            # Stop, Pause and Screenshot are disabled on a failed take.
+            for x in (142, 178, 254):
+                click(hud, x, 54)
+            time.sleep(.6)
+            assert manifest()["state"] == "failed" and manifest()["session_id"] == session_id
+            assert not windows("Captures Capture Controls") and not history()
+            # The styled tooltip appears under Retry on hover, without a delay.
+            run("xdotool", "mousemove", "--sync", "0", "0", "sleep", ".3")
+            bare = tooltip_band(hud)
+            run("xdotool", "mousemove", "--sync", "--window", hud, "218", "54")
+            wait(lambda: tooltip_band(hud) != bare, "Retry recording tooltip")
+            time.sleep(.2)
+            shot(hud, "hud-retry-tooltip")
+
+            # Retry recording restarts at once (no "Restart recording?") and
+            # fails again while the microphone is still missing.
+            click(hud, 218, 54)
+            wait(lambda: windows("Captures Recording Countdown"), "retry countdown")
+            assert not windows("Restart recording?"), "a failed take retries without confirmation"
+            assert not windows("Captures Recording Controls"), "the HUD hides for the countdown"
+            hud = failed_hud("retry with the microphone still missing")
+            assert manifest()["session_id"] == session_id
+
+            # With the microphone back, Retry records and publishes the take.
+            microphone_module = load_microphone()
+            time.sleep(.5)
+            click(hud, 218, 54)
+            wait(lambda: windows("Captures Recording Countdown"), "second retry countdown")
+            hud = running_hud()
+            assert manifest()["session_id"] == session_id
+            assert error_line_pixels(hud) == 0, "a successful retry clears the inline error"
+            shot(hud, "hud-retried-running")
+            time.sleep(1)
+            click(hud, 142, 54)
+            finished(1)
+            entry = json.loads(next(iter(history())).read_text())
+            assert entry["kind"] == "video" and entry["has_microphone_audio"], entry
+            published = history()
+
+            # Delete removes a failed take after the shipping confirmation.
+            run("pactl", "unload-module", microphone_module)
+            run("xdotool", "key", "ctrl+alt+w")
+            select_recording("failure-selector")
+            hud = failed_hud("second missing-microphone start")
+            click(hud, 358, 54)
+            confirmation = wait(lambda: windows("Delete recording?"), "failed delete confirmation")[0]
+            click(confirmation, 104, 115)
+            finished(1)
+            assert history() == published
+            (output / "acceptance-start-failure.json").write_text(json.dumps({
+                "failed_hud": True, "inline_error": True, "disabled_controls": True,
+                "styled_tooltip": True, "retry_without_confirmation": True,
+                "repeated_failure": True, "retry_publication": True, "failed_delete": True,
+                "scope": "Private X11/PulseAudio missing microphone; not physical devices",
+            }, indent=2))
+            print("PASS native recording start failure: failed HUD, inline error, tooltip, "
+                  "Retry recording (failing and succeeding) and Delete", flush=True)
+            return
         hud = running_hud()
         shot(hud, "hud-running")
         if args.device_change:
@@ -400,21 +494,26 @@ pcm.!pulse {
                 result = {"first_hz": first_frequency, "resumed_hz": second_frequency,
                           "saved_audio_matches": True, "options_remain_default": True}
             else:
-                wait(lambda: manifest()["state"] == "failed", "explicit missing microphone refuses resume")
-                wait(lambda: not windows("Captures Recording Controls"), "failed take retires HUD")
-                root = wait(lambda: windows("Captures"), "failed take restores workspace")[0]
+                # Shipping keeps the take paused with the error on the HUD, so the
+                # user can retry or save what was already recorded.
+                wait(lambda: error_line_pixels(hud) > 20, "explicit missing microphone inline error")
                 value = manifest()
-                assert value["last_error"] and not history()
-                assert value["segments"][0]["complete"] and first.read_bytes() == first_bytes
+                assert value["state"] == "paused" and not value["last_error"] and not history()
+                assert windows("Captures Recording Controls") == [hud], "the paused HUD stays up"
+                assert len(value["segments"]) == 1 and value["segments"][0]["complete"]
+                assert first.read_bytes() == first_bytes
                 assert first_video.read_bytes() == first_video_bytes
                 assert value["options"]["audio"]["microphone_device_id"] == "microphone:pulse"
-                assert not any(segment["complete"] for segment in value["segments"][1:])
-                wait(lambda: int(run("import", "-window", root, "-format", "%k", "info:")) > 32,
-                     "painted microphone failure workspace")
-                time.sleep(.3) # allow the independently queued recovery list to paint
-                shot(root, "explicit-microphone-unavailable")
+                time.sleep(.3)
+                shot(hud, "explicit-microphone-unavailable")
+                click(hud, 142, 54)
+                finished(1)
+                entry = json.loads(next(iter(history())).read_text())
+                assert entry["kind"] == "video" and entry["has_microphone_audio"], entry
+                media = next(iter(history())).parent / "media.mp4"
+                assert abs(tone_frequency(media) - 730) < 10
                 result = {"first_hz": first_frequency, "no_default_fallback": True,
-                          "completed_media_preserved": True, "error": value["last_error"]}
+                          "paused_with_inline_error": True, "completed_media_saved": True}
             result["scope"] = "Private X11/PulseAudio reopen only; not physical unplug or hot switching"
             (output / f"acceptance-device-{args.device_change}.json").write_text(json.dumps(result, indent=2))
             print(f"PASS microphone {args.device_change} device reopen: {result}", flush=True)

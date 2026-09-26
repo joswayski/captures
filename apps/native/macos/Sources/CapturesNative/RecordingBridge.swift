@@ -45,6 +45,8 @@ struct NativeRecordingSnapshot: Equatable {
     let microphoneMuted: Bool
     let region: CGRect?
     let warning: String?
+    /// The session's own failure, when it is Failed (shipping `snapshot.error`).
+    let error: String?
 
     init?(_ value: [String: Any]) {
         guard let id = value["id"] as? String,
@@ -65,6 +67,7 @@ struct NativeRecordingSnapshot: Equatable {
             region = nil
         }
         warning = value["warning"] as? String
+        error = value["error"] as? String
     }
 }
 
