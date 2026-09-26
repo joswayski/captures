@@ -109,6 +109,46 @@ final class RegionSelectionTests: XCTestCase {
         }
     }
 
+    func testDirectMarqueeUsesShippingShadeHairlinesAndBadgeWithoutHandles() throws {
+        _ = NSApplication.shared
+        let frame = NSRect(x: 0, y: 0, width: 800, height: 560)
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let view = RegionSelectionView(frame: frame, image: nil, tokens: Tokens.variants["dark-mustard"]!,
+            autoStart: true, confirm: { _ in }, cancel: {})
+        window.contentView = view
+        view.begin(NSPoint(x: 100, y: 80)); view.drag(NSPoint(x: 420, y: 260))
+        window.display(); view.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try render(view, window: window, name: "region-dark-direct-drag")
+        func alpha(_ x: CGFloat, _ y: CGFloat) throws -> CGFloat {
+            let px = Int(x * CGFloat(bitmap.pixelsWide) / view.bounds.width)
+            let py = Int(y * CGFloat(bitmap.pixelsHigh) / view.bounds.height)
+            return try XCTUnwrap(bitmap.colorAt(x: px, y: py)).alphaComponent
+        }
+        XCTAssertEqual(try alpha(50, 300), 0.2, accuracy: 0.03, "the lighter shipping region shade")
+        XCTAssertEqual(try alpha(250, 170), 0, accuracy: 0.01, "the selection stays clear")
+        XCTAssertEqual(try alpha(104, 77.5), 0.2, accuracy: 0.03, "no corner handle outside the box")
+        XCTAssertEqual(try alpha(103, 83), 0, accuracy: 0.05, "no corner handle inside the box")
+        XCTAssertEqual(try alpha(99.5, 170), 1 - 0.8 * 0.55, accuracy: 0.05, "dark outer hairline over the shade")
+        XCTAssertGreaterThan(try alpha(100.75, 170), 0.95, "1.5 pt accent border")
+        // The 1 pt inner hairline spans 101.5–102.5: a whole 2x pixel or half a 1x pixel.
+        let inner = try alpha(102, 170)
+        XCTAssertTrue(inner > 0.1 && inner < 0.35, "light 28% inner hairline, got \(inner)")
+
+        let badge = try XCTUnwrap(view.subviews.compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == "320 × 180" })
+        XCTAssertFalse(badge.isHidden)
+        XCTAssertEqual(badge.frame.minX, 101.5, accuracy: 0.01, "left-aligned inside the border")
+        XCTAssertEqual(badge.frame.minY, 51.5, accuracy: 0.01, "30 pt above the box")
+        view.end()
+        view.begin(NSPoint(x: 500, y: 10)); view.drag(NSPoint(x: 700, y: 200))
+        XCTAssertEqual(badge.frame.minY, 11.5 + Tokens.variants["dark-mustard"]!.number("s-3"), accuracy: 0.01,
+            "near the top of the screen the badge moves inside the box")
+    }
+
     private func render(_ view: NSView, window: NSWindow, name: String) throws {
         window.display(); view.layoutSubtreeIfNeeded()
         guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { return }

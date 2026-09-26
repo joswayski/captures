@@ -64,6 +64,77 @@ struct WindowSelectionTarget: Equatable {
         if !app.isEmpty { return app }
         return "Window"
     }
+
+    /// Shipping `.window-target span`: the window title, else the app, else "Window".
+    var chipTitle: String {
+        let window = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !window.isEmpty { return window }
+        let app = appName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return app.isEmpty ? "Window" : app
+    }
+}
+
+/// Visible display corner radius, mirroring `captures-macos-window`: the
+/// screen's bezel outline first, then the legacy private radius. Each private
+/// selector is used only when NSScreen responds to it.
+enum DisplayCornerRadius {
+    static func points(for screen: NSScreen) -> CGFloat {
+        let bezel = NSSelectorFromString("bezelPath")
+        if screen.responds(to: bezel),
+           let path = screen.perform(bezel)?.takeUnretainedValue() as? NSBezierPath {
+            let bezelRadius = halfPoints(radius(outline: outlinePoints(path), frame: screen.frame))
+            if bezelRadius > 0 { return bezelRadius }
+        }
+        if let name = ["_displayCornerRadius", "_cornerRadius"].first(where: {
+               screen.responds(to: NSSelectorFromString($0)) }),
+           let value = screen.value(forKey: name) as? NSNumber {
+            return halfPoints(CGFloat(value.doubleValue))
+        }
+        return 0
+    }
+
+    static func halfPoints(_ value: CGFloat) -> CGFloat {
+        value.isFinite && value > 0 ? (value * 2).rounded() / 2 : 0
+    }
+
+    /// On-path points only; control points are ignored so squircles are not
+    /// mistaken for a smaller radius.
+    static func outlinePoints(_ path: NSBezierPath) -> [NSPoint] {
+        var result: [NSPoint] = []
+        var associated = [NSPoint](repeating: .zero, count: 3)
+        for index in 0..<path.elementCount {
+            let kind = associated.withUnsafeMutableBufferPointer {
+                path.element(at: index, associatedPoints: $0.baseAddress)
+            }
+            switch kind.rawValue {
+            case 0, 1: result.append(associated[0]) // move, line
+            case 2: result.append(associated[2]) // cubic curve
+            case 4: result.append(associated[1]) // quadratic curve
+            default: break
+            }
+        }
+        return result
+    }
+
+    /// How far the outline's axis-aligned spines stop short of its bounds.
+    static func radius(outline points: [NSPoint], frame: NSRect) -> CGFloat {
+        guard let minX = points.map(\.x).min(), let maxX = points.map(\.x).max(),
+              let minY = points.map(\.y).min(), let maxY = points.map(\.y).max() else { return 0 }
+        let spine: CGFloat = 0.5
+        let left = points.filter { $0.x <= minX + spine }.map(\.y)
+        let right = points.filter { $0.x >= maxX - spine }.map(\.y)
+        let top = points.filter { $0.y >= maxY - spine }.map(\.x)
+        let bottom = points.filter { $0.y <= minY + spine }.map(\.x)
+        let insets: [CGFloat] = [
+            maxY - (left.max() ?? maxY), (left.min() ?? minY) - minY,
+            maxY - (right.max() ?? maxY), (right.min() ?? minY) - minY,
+            (top.min() ?? minX) - minX, maxX - (top.max() ?? maxX),
+            (bottom.min() ?? minX) - minX, maxX - (bottom.max() ?? maxX),
+        ]
+        let longest = insets.filter(\.isFinite).max() ?? 0
+        let allowed = min(frame.width, frame.height) / 2
+        return longest > 0 && allowed.isFinite ? min(longest, allowed) : 0
+    }
 }
 
 enum WindowSelectionChoice: Equatable {
@@ -100,6 +171,7 @@ final class WindowSelectionView: NSView {
     private let tokens: Tokens
     private let autoStart: Bool
     private let targets: [WindowSelectionTarget]
+    private let displayCornerRadius: CGFloat
     private let hitTest: HitTest
     private let canvas = WindowSelectionCanvas()
     private let toolbar = NSView()
@@ -107,6 +179,8 @@ final class WindowSelectionView: NSView {
     private let hint: NSTextField
     private var captureButton: CaptureButton!
     private(set) var hoveredIndex: Int64 = -1
+    /// Shipping leaves the screen clear until the pointer resolves a target.
+    private(set) var hasHoverTarget = false
     private(set) var selectedIndex: Int64?
     var confirm: (WindowSelectionChoice) -> Void
     var cancel: () -> Void
@@ -114,9 +188,10 @@ final class WindowSelectionView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     init(frame: NSRect, image: CGImage?, targets: [WindowSelectionTarget], tokens: Tokens,
-         autoStart: Bool, hitTest: @escaping HitTest,
+         autoStart: Bool, displayCornerRadius: CGFloat = 0, hitTest: @escaping HitTest,
          confirm: @escaping (WindowSelectionChoice) -> Void, cancel: @escaping () -> Void) {
         self.tokens = tokens; self.autoStart = autoStart; self.targets = targets
+        self.displayCornerRadius = max(0, displayCornerRadius)
         self.hitTest = hitTest; self.confirm = confirm; self.cancel = cancel
         hint = NSTextField(labelWithString: CaptureGuidanceCopy.directHint(
             CaptureGuidanceCopy.windowTitle, CaptureGuidanceCopy.hint, confirm: !autoStart))
@@ -143,6 +218,8 @@ final class WindowSelectionView: NSView {
         toolbar.layer?.cornerRadius = tokens.number("r-xl")
         toolbar.layer?.borderWidth = 1; toolbar.layer?.borderColor = tokens.color("glass-border").cgColor
         addSubview(toolbar)
+        // The shipping direct overlay has no toolbar: a click commits.
+        toolbar.isHidden = autoStart
 
         targetName.frame = NSRect(x: gap, y: gap, width: toolbarWidth - 232, height: controlHeight)
         targetName.font = .systemFont(ofSize: tokens.number("text-md"), weight: .medium)
@@ -189,7 +266,7 @@ final class WindowSelectionView: NSView {
               let index = hitTest(CapturesSelectionPoint(x: point.x, y: point.y)),
               index == -1 || (index >= 0 && index < Int64(targets.count))
         else { return false }
-        hoveredIndex = index; update()
+        hoveredIndex = index; hasHoverTarget = true; update()
         return true
     }
 
@@ -231,25 +308,59 @@ final class WindowSelectionView: NSView {
         return targets[index].name
     }
 
-    fileprivate func drawSelection() {
-        let veil = NSBezierPath(rect: bounds)
-        if case .window(let index, _) = activeChoice {
-            let target = targets[index]
-            veil.append(NSBezierPath(roundedRect: target.rect,
-                xRadius: target.cornerRadius, yRadius: target.cornerRadius))
-        }
-        veil.windingRule = .evenOdd; tokens.color("glass-veil").setFill(); veil.fill()
+    /// The glass chip shipping shows for the hovered target, if any.
+    var hoverChipText: String? {
+        guard hasHoverTarget else { return nil }
+        guard case .window(let index, _) = activeChoice else { return "Entire display" }
+        return targets[index].chipTitle
+    }
 
-        let border: NSBezierPath
+    fileprivate func drawSelection() {
+        guard hasHoverTarget else { return }
+        let accent = tokens.color("theme-accent")
         if case .window(let index, _) = activeChoice {
             let target = targets[index]
-            border = NSBezierPath(roundedRect: target.rect,
-                xRadius: target.cornerRadius, yRadius: target.cornerRadius)
+            let radius = min(target.cornerRadius, target.rect.width / 2, target.rect.height / 2)
+            let hole = NSBezierPath(roundedRect: target.rect, xRadius: radius, yRadius: radius)
+            let veil = NSBezierPath(rect: bounds)
+            veil.append(hole)
+            veil.windingRule = .evenOdd; tokens.color("capture-shade-window").setFill(); veil.fill()
+            accent.withAlphaComponent(0.14).setFill(); hole.fill()
+            // An outer 2 pt ring, so it never covers the window's own edge.
+            let ring = NSBezierPath(roundedRect: target.rect.insetBy(dx: -1, dy: -1),
+                xRadius: radius + 1, yRadius: radius + 1)
+            ring.lineWidth = 2; accent.setStroke(); ring.stroke()
+            NSGraphicsContext.saveGraphicsState()
+            hole.addClip()
+            let margin = tokens.number("s-2")
+            drawChip(target.chipTitle, at: NSPoint(x: target.rect.minX + margin, y: target.rect.minY + margin),
+                maxWidth: target.rect.width - 8)
+            NSGraphicsContext.restoreGraphicsState()
         } else {
-            border = NSBezierPath(rect: bounds.insetBy(dx: 2, dy: 2))
+            // `.capture-display-outline`: inset 2 pt ring following the display corners.
+            let radius = max(0, displayCornerRadius - 1)
+            let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: radius, yRadius: radius)
+            outline.lineWidth = 2; accent.setStroke(); outline.stroke()
+            let inset = tokens.number("s-4")
+            drawChip("Entire display", at: NSPoint(x: inset, y: inset), maxWidth: min(360, bounds.width - 8))
         }
-        tokens.color("theme-accent").setStroke()
-        border.lineWidth = tokens.number("s-1") * 0.75; border.stroke()
+    }
+
+    /// Shipping glass chip: one ellipsized `--text-xs` medium line.
+    private func drawChip(_ text: String, at origin: NSPoint, maxWidth: CGFloat) {
+        let style = NSMutableParagraphStyle(); style.lineBreakMode = .byTruncatingTail
+        let string = NSAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .medium),
+            .foregroundColor: tokens.color("glass-text"), .paragraphStyle: style,
+        ])
+        let padX = tokens.number("s-3"), padY = tokens.number("s-2")
+        let size = string.size()
+        let textWidth = max(0, min(ceil(size.width), maxWidth - padX * 2))
+        let chip = NSRect(x: origin.x, y: origin.y, width: textWidth + padX * 2, height: ceil(size.height) + padY * 2)
+        tokens.color("glass-strong").setFill()
+        NSBezierPath(roundedRect: chip, xRadius: tokens.number("r-sm"), yRadius: tokens.number("r-sm")).fill()
+        string.draw(with: NSRect(x: chip.minX + padX, y: chip.minY + padY, width: textWidth, height: ceil(size.height)),
+            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
     }
 }
 
@@ -261,7 +372,8 @@ final class WindowSelectionPanel: NSPanel {
          autoStart: Bool, hitTest: @escaping WindowSelectionView.HitTest,
          confirm: @escaping (WindowSelectionChoice) -> Void, cancel: @escaping () -> Void) {
         selector = WindowSelectionView(frame: NSRect(origin: .zero, size: screen.frame.size), image: image,
-            targets: targets, tokens: tokens, autoStart: autoStart, hitTest: hitTest,
+            targets: targets, tokens: tokens, autoStart: autoStart,
+            displayCornerRadius: DisplayCornerRadius.points(for: screen), hitTest: hitTest,
             confirm: confirm, cancel: cancel)
         super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear; hasShadow = false
