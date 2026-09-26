@@ -23,9 +23,11 @@ explicit test file. Malformed/newer files report an error instead of resetting
 them. `--exercise` uses disposable data. No installed Preview settings are imported.
 
 Without `--live`, capture, recording, history, and editor scenes use fixtures. Saving a
-default is not an engine integration: microphone discovery,
-login items, feedback and update actions remain visibly unavailable. Full
-Preferences visual/input parity and the other checklist gates remain open.
+default is not an engine integration: fixture login items, feedback submission and
+update actions remain visibly unavailable, with copy that says why. Both hosts draw
+the shipping Preferences layout, controls and copy, shared through
+`captures-app::preferences`; physical input, screen-reader and Windows/Wayland
+acceptance and the other checklist gates remain open.
 
 Preferences records all seven stored shortcut fields using the shared Rust
 key/modifier, display, cancellation and validation policy. Escape (including

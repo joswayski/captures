@@ -79,7 +79,7 @@ def main():
 
                     click(196, 14)  # Preferences, then About/scroll-to-end.
                     click(90, 319)
-                    click(823, 426)
+                    click(847, 488)
                     screenshot("empty")
                     click(269, 633)  # Empty Send is disabled.
                     assert requests.empty(), "opening/empty Send performed a network request"
@@ -94,7 +94,7 @@ def main():
                     assert requests.empty(), "pending request allowed a second send"
                     click(273, 62)  # Back preserves both draft and pending operation.
                     click(90, 319)
-                    click(823, 426)
+                    click(847, 488)
                     release.set()
                     time.sleep(.7)
                     screenshot("error")

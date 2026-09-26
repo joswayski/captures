@@ -6,6 +6,7 @@ use std::{
 };
 
 use captures_app::capture_menu::{self, PreferenceTarget};
+use captures_app::preferences;
 use captures_app::shortcuts::{
     ShortcutKeyEvent, ShortcutPlatform, ShortcutRecording, record_shortcut, shortcut_display_tokens,
 };
@@ -14,31 +15,9 @@ use eframe::egui::{self, RichText, Stroke};
 use serde_json::{Value, json};
 
 use crate::{
-    shortcut_input,
+    preferences_widgets as widgets, shortcut_input,
     tokens::{self, Tokens},
 };
-
-const SECTIONS: [&str; 7] = [
-    "Appearance",
-    "Capture",
-    "Shortcuts",
-    "Recording",
-    "GIF export",
-    "Updates",
-    "About",
-];
-const THEMES: [(&str, &str, &str); 10] = [
-    ("mustard", "Mustard", "Captures mustard and signal red"),
-    ("ember", "Ember", "Warm orange and electric pink"),
-    ("rose", "Rose", "Bright rose and coral"),
-    ("violet", "Violet", "Orchid violet and raspberry"),
-    ("cobalt", "Cobalt", "True blue and coral"),
-    ("aqua", "Aqua", "Clear cyan and watermelon"),
-    ("mint", "Mint", "Fresh mint and vermilion"),
-    ("lime", "Lime", "Crisp lime and vermilion"),
-    ("mono", "Mono", "Vercel-like black and white"),
-    ("custom", "Custom", "Build your own RGB palette"),
-];
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum ShortcutField {
@@ -62,28 +41,19 @@ const SHORTCUT_FIELDS: [ShortcutField; 7] = [
 ];
 
 impl ShortcutField {
+    fn index(self) -> usize {
+        SHORTCUT_FIELDS
+            .iter()
+            .position(|field| *field == self)
+            .expect("listed shortcut field")
+    }
+
     fn label(self) -> &'static str {
-        match self {
-            Self::NewCapture => "New Capture",
-            Self::Region => "Region",
-            Self::Window => "Window",
-            Self::Display => "Full Screen",
-            Self::RecordRegion => "Record Region",
-            Self::RecordWindow => "Record Window",
-            Self::RecordDisplay => "Record Full Screen",
-        }
+        preferences::SHORTCUT_ROWS[self.index()].0
     }
 
     fn path(self) -> &'static [&'static str] {
-        match self {
-            Self::NewCapture => &["new_capture_shortcut"],
-            Self::Region => &["region_shortcut"],
-            Self::Window => &["window_shortcut"],
-            Self::Display => &["display_shortcut"],
-            Self::RecordRegion => &["recording", "video_shortcut"],
-            Self::RecordWindow => &["recording", "window_shortcut"],
-            Self::RecordDisplay => &["recording", "display_shortcut"],
-        }
+        preferences::SHORTCUT_ROWS[self.index()].1
     }
 }
 
@@ -259,7 +229,11 @@ pub struct Preferences {
     overrides: Option<(Option<String>, Option<String>)>,
     find_open: bool,
     query: String,
-    matches: Vec<egui::Rect>,
+    matches: Vec<(egui::Rect, egui::layers::ShapeIdx)>,
+    find_rows: Vec<FindRow>,
+    card_tops: Vec<f32>,
+    live: bool,
+    keyboard_settings_error: Option<String>,
     match_index: usize,
     find_jump: bool,
     section_jump: Option<usize>,
@@ -292,6 +266,16 @@ pub struct Preferences {
     microphones_rx: Option<Receiver<Vec<(String, String)>>>,
     /// Capture-menu deep link: scroll to this row once and highlight it.
     highlight: Option<PreferenceHighlight>,
+}
+
+/// Labelled select choices: the persisted value and its display label.
+type Options = Vec<(Value, String)>;
+
+/// One find target: its text, rect and a background slot for the match wash.
+struct FindRow {
+    text: String,
+    rect: egui::Rect,
+    background: egui::layers::ShapeIdx,
 }
 
 struct PreferenceHighlight {
@@ -343,6 +327,10 @@ impl Preferences {
             find_open: false,
             query: String::new(),
             matches: vec![],
+            find_rows: vec![],
+            card_tops: vec![],
+            live: false,
+            keyboard_settings_error: None,
             match_index: 0,
             find_jump: false,
             section_jump: None,
@@ -733,15 +721,14 @@ impl Preferences {
         }
     }
 
+    /// Shipping `.preferences-nav`: the brand, then one entry per card with the
+    /// card in view highlighted.
     pub fn sidebar(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        for (index, title) in SECTIONS.iter().enumerate() {
-            let response = ui.add_sized(
-                [ui.available_width(), t.number("h-md")],
-                egui::Button::new(*title)
-                    .frame(false)
-                    .selected(self.active_section == index),
-            );
-            if response.clicked() {
+        widgets::brand(ui, t);
+        ui.add_space(t.number("s-6"));
+        ui.spacing_mut().item_spacing.y = 1.;
+        for (index, section) in preferences::SECTIONS.iter().enumerate() {
+            if widgets::nav_item(ui, t, section.title, self.active_section == index).clicked() {
                 self.feedback.open = false;
                 self.section_jump = Some(index);
                 self.active_section = index;
@@ -749,95 +736,145 @@ impl Preferences {
         }
     }
 
+    /// The sidebar panel frame: sunken, padded, with a subtle right border.
+    pub fn sidebar_frame(t: &Tokens) -> egui::Frame {
+        egui::Frame::new()
+            .fill(t.color("surface-sunken"))
+            .inner_margin(egui::Margin::symmetric(
+                t.number("s-5") as i8,
+                t.number("s-6") as i8,
+            ))
+    }
+
+    /// Paints the shipping `border-right: 1px solid var(--border-subtle)`.
+    pub fn sidebar_border(ui: &egui::Ui, t: &Tokens) {
+        let rect = ui.max_rect();
+        ui.painter().vline(
+            rect.right() + t.number("s-5") - 0.5,
+            (rect.top() - t.number("s-6"))..=(rect.bottom() + t.number("s-6")),
+            Stroke::new(1., t.color("border-subtle")),
+        );
+    }
+
     /// Returns true when the user requests the history window.
     pub fn ui(&mut self, ui: &mut egui::Ui, t: &Tokens, live: bool) -> bool {
         if self.feedback.open {
-            self.feedback.ui(ui, t, live);
+            // The feedback form keeps the panel margin it was designed with
+            // (egui's 8 pt live central panel, the fixture's `--s-8`).
+            let margin = if live { 8. } else { t.number("s-8") };
+            egui::Frame::new()
+                .inner_margin(margin as i8)
+                .show(ui, |ui| self.feedback.ui(ui, t, live));
             return false;
         }
+        self.live = live;
         self.receive_shortcut_input();
         self.keyboard(ui);
-        let mut history = false;
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.heading("Preferences");
-                ui.label(
-                    RichText::new("Changes save automatically.")
-                        .small()
-                        .color(t.color("text-muted")),
-                );
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                history = ui.button("Capture History…").clicked();
-                if self.saving {
-                    ui.label("Saving changes…");
-                } else if self.saved_until.is_some_and(|until| Instant::now() < until) {
-                    ui.colored_label(t.color("positive-text"), "✓ Changes saved");
-                }
-            });
-        });
+        ui.spacing_mut().item_spacing.y = 0.;
+        let history = self.header(ui, t);
         if let Some(error) = self.load_error.clone() {
-            ui.colored_label(
-                t.color("danger-text"),
-                format!("Couldn’t load preferences: {error}"),
-            );
-            ui.label("The file was left unchanged. Correct it, then retry.");
-            if ui.button("Retry loading").clicked() {
-                let _ = self.io.tx.send(Command::Load);
-            }
+            egui::Frame::new()
+                .inner_margin(t.number("s-8") as i8)
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = t.number("s-4");
+                    ui.colored_label(t.color("danger-text"), preferences::load_error(&error));
+                    ui.label("The file was left unchanged. Correct it, then retry.");
+                    if widgets::button(ui, t, "Retry loading", false).clicked() {
+                        let _ = self.io.tx.send(Command::Load);
+                    }
+                });
             return history;
         }
         if self.value.is_null() {
-            ui.label("Loading preferences…");
+            ui.centered_and_justified(|ui| {
+                ui.label(RichText::new(preferences::LOADING).color(t.color("text-subtle")));
+            });
             return history;
         }
-        if let Some(error) = self.save_error.clone() {
-            ui.horizontal_wrapped(|ui| {
-                ui.colored_label(
-                    t.color("danger-text"),
-                    format!("Couldn’t save changes: {error}"),
-                );
-                if ui.button("Retry").clicked() {
-                    self.changed();
-                }
-            });
-        }
-        if self.find_open {
-            self.find_bar(ui);
-        }
-        ui.add_space(t.number("s-6"));
-        egui::ScrollArea::vertical()
+        let margin = egui::Margin {
+            left: t.number("s-8") as i8,
+            right: t.number("s-8") as i8,
+            top: t.number("s-8") as i8,
+            bottom: t.number("s-12") as i8,
+        };
+        let output = egui::ScrollArea::vertical()
             .id_salt("preferences-scroll")
+            .auto_shrink(false)
             .show(ui, |ui| {
-                ui.set_max_width(664.);
-                self.matches.clear();
-                self.appearance(ui, t);
-                self.capture(ui, t);
-                self.shortcuts(ui, t);
-                self.recording(ui, t);
-                self.gif(ui, t);
-                self.updates(ui, t);
-                self.about(ui, t);
-                self.match_index = self.match_index.min(self.matches.len().saturating_sub(1));
-                for (index, rect) in self.matches.iter().enumerate() {
-                    ui.painter().rect_stroke(
-                        *rect,
-                        t.number("r-sm"),
-                        Stroke::new(
-                            if index == self.match_index { 2. } else { 1. },
-                            t.color("theme-accent"),
-                        ),
-                        egui::StrokeKind::Inside,
-                    );
-                }
-                if self.find_jump {
-                    if let Some(rect) = self.matches.get(self.match_index) {
-                        ui.scroll_to_rect(*rect, Some(egui::Align::Center));
-                    }
-                    self.find_jump = false;
-                }
-                ui.add_space(t.number("s-12"));
+                egui::Frame::new().inner_margin(margin).show(ui, |ui| {
+                    ui.set_max_width(720. - 2. * t.number("s-8"));
+                    ui.spacing_mut().item_spacing.y = 0.;
+                    self.find_rows.clear();
+                    self.card_tops.clear();
+                    self.appearance(ui, t);
+                    self.capture(ui, t);
+                    self.shortcuts(ui, t);
+                    self.recording(ui, t);
+                    self.gif(ui, t);
+                    self.updates(ui, t);
+                    self.about(ui, t);
+                    self.paint_find(ui, t);
+                });
             });
+        let viewport = output.inner_rect;
+        let at_end = output.state.offset.y + viewport.height() >= output.content_size.y - 1.;
+        self.active_section = preferences::visible_section(
+            &self.card_tops,
+            viewport.top() + 80.,
+            at_end && output.state.offset.y > 0.,
+        );
+        history
+    }
+
+    /// Shipping `.preferences-header`: title, autosave note, History action,
+    /// save status and (when open) the find bar, over a subtle rule.
+    fn header(&mut self, ui: &mut egui::Ui, t: &Tokens) -> bool {
+        let mut history = false;
+        let header = egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(
+                t.number("s-8") as i8,
+                t.number("s-6") as i8,
+            ))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.;
+                        ui.label(RichText::new(preferences::TITLE).size(t.number("text-xl")));
+                        ui.label(
+                            RichText::new(preferences::SUBTITLE)
+                                .size(t.number("text-sm"))
+                                .color(t.color("text-subtle")),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = t.number("s-4");
+                        if let Some(error) = self.save_error.clone() {
+                            if widgets::button(ui, t, "Retry", false).clicked() {
+                                self.changed();
+                            }
+                            widgets::status_pill(ui, t, "error", &preferences::save_error(&error));
+                        } else if self.saving {
+                            widgets::status_pill(ui, t, "saving", preferences::SAVING);
+                        } else if self.saved_until.is_some_and(|until| Instant::now() < until) {
+                            widgets::status_pill(ui, t, "saved", preferences::SAVED);
+                        }
+                        history =
+                            widgets::button(ui, t, preferences::HISTORY_ACTION, true).clicked();
+                    });
+                });
+                if self.find_open && !self.value.is_null() {
+                    ui.add_space(t.number("s-6"));
+                    self.find_bar(ui, t);
+                }
+            })
+            .response;
+        let rect = header.rect;
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom() - 0.5,
+            Stroke::new(1., t.color("border-subtle")),
+        );
         history
     }
 
@@ -852,14 +889,14 @@ impl Preferences {
         if self.find_open
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
-            self.find_open = false;
-            self.query.clear();
+            self.close_find();
         }
+        let in_find = ui.memory(|m| m.has_focus(egui::Id::unique("settings-find")));
         if self.find_open
             && ui.input(|i| {
                 i.key_pressed(egui::Key::F3)
                     || (i.key_pressed(egui::Key::G) && i.modifiers.command)
-                    || i.key_pressed(egui::Key::Enter)
+                    || (in_find && i.key_pressed(egui::Key::Enter))
             })
         {
             self.step_match(if ui.input(|i| i.modifiers.shift) {
@@ -869,48 +906,73 @@ impl Preferences {
             });
         }
     }
-    fn find_bar(&mut self, ui: &mut egui::Ui) {
+
+    fn close_find(&mut self) {
+        self.find_open = false;
+        self.query.clear();
+        self.matches.clear();
+    }
+
+    /// Shipping `.preferences-find`: field, count, previous/next and close.
+    fn find_bar(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         ui.horizontal(|ui| {
-            if ui
-                .add(
+            ui.spacing_mut().item_spacing.x = t.number("s-3");
+            let side = t.number("h-md");
+            let reserved = 5.5 * t.number("text-md") + 3. * side + 4. * t.number("s-3");
+            let response = field_scope(ui, t, |ui| {
+                ui.add(
                     egui::TextEdit::singleline(&mut self.query)
                         .id(egui::Id::unique("settings-find"))
-                        .hint_text("Find settings")
-                        .desired_width(300.),
+                        .hint_text(preferences::FIND_PLACEHOLDER)
+                        .margin(egui::vec2(t.number("s-4"), t.number("s-2")))
+                        .desired_width((ui.available_width() - reserved).max(120.))
+                        .min_size(egui::vec2(0., side))
+                        .align(egui::Align2::LEFT_CENTER),
                 )
-                .changed()
-            {
+            });
+            if response.changed() {
                 self.match_index = 0;
                 self.find_jump = true;
                 ui.ctx().request_repaint();
             }
-            ui.label(if self.query.trim().is_empty() {
-                String::new()
-            } else if self.matches.is_empty() {
-                "No results".into()
-            } else {
-                format!("{} of {}", self.match_index + 1, self.matches.len())
-            });
+            let count =
+                preferences::find_count_label(&self.query, self.matches.len(), self.match_index);
+            ui.allocate_ui_with_layout(
+                egui::vec2(5.5 * t.number("text-md"), side),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.label(
+                        RichText::new(count)
+                            .size(t.number("text-sm"))
+                            .color(t.color("text-subtle")),
+                    );
+                },
+            );
+            let any = !self.matches.is_empty();
             if ui
-                .add_enabled(!self.matches.is_empty(), egui::Button::new("↑"))
-                .on_hover_text("Previous match")
+                .add_enabled_ui(any, |ui| {
+                    widgets::icon_button(ui, t, "chevron-up", preferences::FIND_PREVIOUS)
+                })
+                .inner
                 .clicked()
             {
                 self.step_match(-1);
             }
             if ui
-                .add_enabled(!self.matches.is_empty(), egui::Button::new("↓"))
-                .on_hover_text("Next match")
+                .add_enabled_ui(any, |ui| {
+                    widgets::icon_button(ui, t, "chevron-down", preferences::FIND_NEXT)
+                })
+                .inner
                 .clicked()
             {
                 self.step_match(1);
             }
-            if ui.button("×").on_hover_text("Close find").clicked() {
-                self.find_open = false;
-                self.query.clear();
+            if widgets::icon_button(ui, t, "close", preferences::FIND_CLOSE).clicked() {
+                self.close_find();
             }
         });
     }
+
     fn step_match(&mut self, delta: isize) {
         if !self.matches.is_empty() {
             self.match_index = (self.match_index as isize + delta)
@@ -918,146 +980,252 @@ impl Preferences {
             self.find_jump = true;
         }
     }
-    fn remember(&mut self, text: &str, response: &egui::Response) {
-        let query = self.query.trim().to_lowercase();
-        if self.find_open && !query.is_empty() && text.to_lowercase().contains(&query) {
-            self.matches.push(response.rect);
+
+    /// Registers one find target (shipping `PREFERENCE_FIND_SELECTOR`) whose
+    /// background shape can later show the match wash.
+    fn remember(&mut self, text: String, rect: egui::Rect, background: egui::layers::ShapeIdx) {
+        self.find_rows.push(FindRow {
+            text,
+            rect,
+            background,
+        });
+    }
+
+    /// Shipping `.preference-find-match` wash and `.preference-find-current` ring.
+    fn paint_find(&mut self, ui: &egui::Ui, t: &Tokens) {
+        self.matches = if self.find_open {
+            self.find_rows
+                .iter()
+                .filter(|row| preferences::find_matches(&row.text, &self.query))
+                .map(|row| (row.rect, row.background))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.match_index = self.match_index.min(self.matches.len().saturating_sub(1));
+        let inset = t.number("s-3");
+        for (index, (rect, background)) in self.matches.iter().enumerate() {
+            let stroke = if index == self.match_index {
+                Stroke::new(2., t.color("theme-accent").gamma_multiply(0.62))
+            } else {
+                Stroke::NONE
+            };
+            ui.painter().set(
+                *background,
+                egui::epaint::RectShape::new(
+                    rect.expand(inset),
+                    t.number("r-lg"),
+                    t.color("surface-selected"),
+                    stroke,
+                    egui::StrokeKind::Outside,
+                ),
+            );
+        }
+        if self.find_jump {
+            if let Some((rect, _)) = self.matches.get(self.match_index) {
+                ui.scroll_to_rect(*rect, Some(egui::Align::Center));
+            }
+            self.find_jump = false;
         }
     }
+
     fn card(
         &mut self,
         ui: &mut egui::Ui,
         t: &Tokens,
         index: usize,
-        title: &str,
-        description: &str,
         add: impl FnOnce(&mut Self, &mut egui::Ui),
     ) {
+        let description = preferences::SECTIONS[index].description.to_owned();
+        self.card_described(ui, t, index, &description, add);
+    }
+
+    fn card_described(
+        &mut self,
+        ui: &mut egui::Ui,
+        t: &Tokens,
+        index: usize,
+        description_text: &str,
+        add: impl FnOnce(&mut Self, &mut egui::Ui),
+    ) {
+        let section = preferences::SECTIONS[index];
         let response = egui::Frame::new()
             .fill(t.color("surface-raised"))
             .stroke(Stroke::new(1., t.color("border-subtle")))
             .corner_radius(t.number("r-xl") as u8)
             .inner_margin(t.number("s-6") as i8)
+            .shadow(widgets::shadow_sm(ui.visuals().dark_mode))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 0.;
+                let background = ui.painter().add(egui::Shape::Noop);
                 let heading = ui
                     .vertical(|ui| {
-                        ui.label(RichText::new(title).size(t.number("text-lg")).strong());
-                        ui.label(
-                            RichText::new(description)
-                                .small()
-                                .color(t.color("text-subtle")),
-                        );
+                        ui.label(RichText::new(section.title).size(t.number("text-lg")));
+                        ui.add_space(t.number("s-2"));
+                        description(ui, t, description_text, None);
                     })
                     .response;
-                self.remember(&format!("{title} {description}"), &heading);
-                ui.add_space(t.number("s-4"));
+                self.remember(
+                    format!("{} {description_text}", section.title),
+                    heading.rect,
+                    background,
+                );
+                ui.add_space(t.number("s-5") + t.number("s-1"));
                 add(self, ui);
             })
             .response;
+        self.card_tops.push(response.rect.top());
         if self.section_jump == Some(index) {
-            response.scroll_to_me(Some(egui::Align::Min));
+            // Shipping `scroll-margin-top: var(--s-6)`.
+            let mut target = response.rect;
+            target.min.y -= t.number("s-6");
+            ui.scroll_to_rect(target, Some(egui::Align::Min));
             self.section_jump = None;
-        }
-        if response
-            .rect
-            .contains(ui.clip_rect().center_top() + egui::vec2(0., 24.))
-        {
-            self.active_section = index;
         }
         ui.add_space(t.number("s-6"));
     }
+
+    /// Shipping `.settings-card > * + *` rule between rows.
+    fn divider(ui: &mut egui::Ui, t: &Tokens) {
+        ui.add_space(t.number("s-5"));
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.), egui::Sense::hover());
+        ui.painter().hline(
+            rect.x_range(),
+            rect.center().y,
+            Stroke::new(1., t.color("border-subtle")),
+        );
+        ui.add_space(t.number("s-5"));
+    }
+
+    /// Shipping `.setting-row-inline`: copy on the left and `control` in a
+    /// right-aligned column of `control_size`, both centered on the row.
+    /// Returns the row rect and its background shape (used for the deep-link
+    /// and find highlights).
+    #[allow(clippy::too_many_arguments)]
     fn row(
         &mut self,
         ui: &mut egui::Ui,
+        t: &Tokens,
         title: &str,
         desc: &str,
+        emphasis: Option<preferences::Emphasized>,
+        control_size: egui::Vec2,
         control: impl FnOnce(&mut Self, &mut egui::Ui),
-    ) -> egui::Response {
-        let response = ui
-            .horizontal(|ui| {
-                let width = (ui.available_width() - 240.).max(150.);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(width, 0.),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.label(title);
-                        if !desc.is_empty() {
-                            ui.small(desc);
-                        }
-                    },
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    control(self, ui)
-                });
-            })
-            .response;
-        self.remember(&format!("{title} {desc}"), &response);
-        response
-    }
-    fn toggle(&mut self, ui: &mut egui::Ui, path: &[&str], title: &str, desc: &str, enabled: bool) {
+    ) -> (egui::Rect, egui::layers::ShapeIdx) {
         let background = ui.painter().add(egui::Shape::Noop);
-        let row = ui.add_enabled_ui(enabled, |ui| {
-            self.row(ui, title, desc, |this, ui| {
-                let mut value = at(&this.value, path)
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(34., 20.), egui::Sense::click());
-                let response = response.on_hover_text(title);
-                response.widget_info(|| {
-                    egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, value, title)
-                });
-                if response.clicked() {
-                    value = !value;
-                    this.set(path, json!(value));
-                }
-                let visuals = ui.style().interact(&response);
-                let background = if value {
-                    ui.visuals().text_color()
-                } else {
-                    visuals.bg_fill
-                };
-                ui.painter().rect(
-                    rect,
-                    10.,
-                    background,
-                    visuals.bg_stroke,
-                    egui::StrokeKind::Inside,
-                );
-                ui.painter().circle_filled(
-                    egui::pos2(
-                        if value {
-                            rect.right() - 10.
-                        } else {
-                            rect.left() + 10.
-                        },
-                        rect.center().y,
-                    ),
-                    7.,
-                    if value {
-                        ui.visuals().panel_fill
-                    } else {
-                        ui.visuals().text_color()
-                    },
-                );
-                if response.has_focus() {
-                    ui.painter().rect_stroke(
-                        rect.expand(2.),
-                        12.,
-                        ui.visuals().selection.stroke,
-                        egui::StrokeKind::Outside,
-                    );
-                }
-            })
+        let full = ui.available_width();
+        let copy_width = (full - control_size.x - t.number("s-6")).max(150.);
+        let title_galley = ui.painter().layout(
+            title.to_owned(),
+            egui::FontId::proportional(t.number("text-md")),
+            t.color("text"),
+            copy_width,
+        );
+        let has_description = !desc.is_empty() || emphasis.is_some();
+        let description_galley = has_description.then(|| {
+            ui.painter()
+                .layout_job(description_job(t, desc, emphasis, copy_width))
         });
-        self.highlight_row(ui, path, &row.inner, background);
+        let copy_height = title_galley.size().y
+            + description_galley
+                .as_ref()
+                .map_or(0., |galley| 3. + galley.size().y);
+        let height = copy_height.max(control_size.y);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(full, height), egui::Sense::hover());
+        let top = rect.top() + (height - copy_height) / 2.;
+        let title_height = title_galley.size().y;
+        ui.painter()
+            .galley(egui::pos2(rect.left(), top), title_galley, t.color("text"));
+        if let Some(galley) = description_galley {
+            ui.painter().galley(
+                egui::pos2(rect.left(), top + title_height + 3.),
+                galley,
+                t.color("text-subtle"),
+            );
+        }
+        let control_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.right() - control_size.x, rect.top()),
+            rect.max,
+        );
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(control_rect)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+            |ui| control(self, ui),
+        );
+        let text = emphasis.map_or_else(|| desc.to_owned(), |e| e.text());
+        self.remember(format!("{title} {text}"), rect, background);
+        (rect, background)
     }
+
+    /// Shipping `.check-row.switch-row`: the whole row toggles the switch.
+    fn toggle(
+        &mut self,
+        ui: &mut egui::Ui,
+        t: &Tokens,
+        path: &[&str],
+        title: &str,
+        desc: &str,
+        enabled: bool,
+    ) {
+        self.toggle_with(ui, t, path, title, desc, None, enabled);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn toggle_with(
+        &mut self,
+        ui: &mut egui::Ui,
+        t: &Tokens,
+        path: &[&str],
+        title: &str,
+        desc: &str,
+        emphasis: Option<preferences::Emphasized>,
+        enabled: bool,
+    ) {
+        let value = at(&self.value, path)
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        ui.add_enabled_ui(enabled, |ui| {
+            let mut switch_rect = egui::Rect::NOTHING;
+            let (rect, background) = self.row(
+                ui,
+                t,
+                title,
+                desc,
+                emphasis,
+                egui::vec2(32., 19.),
+                |_, ui| {
+                    switch_rect = ui
+                        .allocate_exact_size(egui::vec2(32., 19.), egui::Sense::hover())
+                        .0;
+                },
+            );
+            let response = ui
+                .interact(
+                    rect,
+                    ui.scope_id().with(("preference-toggle", path)),
+                    egui::Sense::click(),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if response.clicked() {
+                self.set(path, json!(!value));
+            }
+            let value = at(&self.value, path)
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            widgets::paint_switch(ui, t, switch_rect, &response, value, title);
+            self.highlight_row(ui, t, path, rect, background);
+        });
+    }
+
     fn highlight_row(
         &mut self,
         ui: &egui::Ui,
+        t: &Tokens,
         path: &[&str],
-        row: &egui::Response,
+        row: egui::Rect,
         background: egui::layers::ShapeIdx,
     ) {
         let Some(highlight) = self
@@ -1073,89 +1241,250 @@ impl Preferences {
             return;
         }
         if !highlight.scrolled {
-            row.scroll_to_me(Some(egui::Align::Center));
+            ui.scroll_to_rect(row, Some(egui::Align::Center));
             highlight.scrolled = true;
         }
         // Shipping `.preference-target-highlight`: selected wash, accent ring.
-        let accent = ui.visuals().selection.stroke.color;
         ui.painter().set(
             background,
             egui::epaint::RectShape::new(
-                row.rect.expand(8.),
-                10.,
-                ui.visuals().selection.bg_fill,
-                Stroke::new(2., accent.gamma_multiply(0.62)),
+                row.expand(t.number("s-4")),
+                t.number("r-lg"),
+                t.color("surface-selected"),
+                Stroke::new(2., t.color("theme-accent").gamma_multiply(0.62)),
                 egui::StrokeKind::Outside,
             ),
         );
         ui.ctx().request_repaint_after(remaining);
     }
-    fn combo(
+
+    /// A shipping `CustomSelect` row, or a stacked grid cell when `width` is set.
+    fn select_control(
         &mut self,
         ui: &mut egui::Ui,
+        t: &Tokens,
         path: &[&str],
-        title: &str,
-        desc: &str,
+        width: f32,
         options: &[(Value, String)],
     ) {
         let old = at(&self.value, path).cloned().unwrap_or(Value::Null);
         let mut value = old.clone();
-        self.row(ui, title, desc, |_, ui| {
-            egui::ComboBox::from_id_salt(path.join("."))
-                .width(160.)
-                .selected_text(
-                    options
-                        .iter()
-                        .find(|(v, _)| v == &value)
-                        .map(|(_, s)| s.clone())
-                        .unwrap_or_else(|| value.to_string()),
-                )
-                .show_ui(ui, |ui| {
-                    for (v, label) in options {
-                        ui.selectable_value(&mut value, v.clone(), label);
-                    }
-                });
+        let selected = options
+            .iter()
+            .find(|(v, _)| v == &value)
+            .map(|(_, s)| s.clone())
+            .unwrap_or_else(|| value.to_string());
+        widgets::select(ui, t, path.join("."), width, &selected, |ui| {
+            for (v, label) in options {
+                ui.selectable_value(&mut value, v.clone(), label);
+            }
         });
         if value != old {
             self.set(path, value);
         }
     }
+
+    fn combo(&mut self, ui: &mut egui::Ui, t: &Tokens, path: &[&str], options: &[(Value, String)]) {
+        let key = path.join(".");
+        let copy = preferences::row(&key);
+        self.row(
+            ui,
+            t,
+            copy.title,
+            copy.description,
+            None,
+            egui::vec2(160., t.number("h-md")),
+            |this, ui| {
+                this.select_control(ui, t, path, 160., options);
+            },
+        );
+    }
+
+    /// Shipping `.setting-grid`: stacked title-over-select cells.
+    fn select_grid(&mut self, ui: &mut egui::Ui, t: &Tokens, cells: &[(&[&str], Options)]) {
+        let gap = t.number("s-5");
+        let width = (ui.available_width() - gap * (cells.len() as f32 - 1.)) / cells.len() as f32;
+        let background = ui.painter().add(egui::Shape::Noop);
+        let response = ui
+            .with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                for (path, options) in cells {
+                    let copy = preferences::row(&path.join("."));
+                    let cell_background = ui.painter().add(egui::Shape::Noop);
+                    let cell = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(width, 0.),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                ui.set_width(width);
+                                ui.spacing_mut().item_spacing.y = 0.;
+                                ui.label(RichText::new(copy.title).size(t.number("text-md")));
+                                ui.add_space(t.number("s-3"));
+                                self.select_control(ui, t, path, width, options);
+                            },
+                        )
+                        .response;
+                    self.remember(copy.title.to_owned(), cell.rect, cell_background);
+                }
+            })
+            .response;
+        let _ = (background, response);
+    }
+
     fn appearance(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui, t, 0, "Appearance", "One look across every Captures window. Capture overlays stay dark so they read on any desktop.", |this, ui| {
-            this.row(ui, "Interface theme", "Follow the system setting, or lock Captures to light or dark.", |this, ui| {
-                ui.horizontal(|ui| for (id,label) in [("system","System"),("light","Light"),("dark","Dark")] {
-                    if ui.selectable_label(string_at(&this.value,&["appearance"]) == id, label).clicked() { this.set(&["appearance"], json!(id)); }
-                });
-            });
-            ui.separator();
-            let label = ui.label("Accent color"); this.remember("Accent color capture action selection focus", &label);
-            ui.small("Used for the capture action, selection, and focus. Status colors keep their meaning.");
-            let width = (ui.available_width() - ui.spacing().item_spacing.x * 4.) / 5.;
-            for chunk in THEMES.chunks(5) {
-                ui.horizontal(|ui| for (id,name,description) in chunk {
-                    let selected = string_at(&this.value, &["theme"]) == *id;
-                    let response = ui.add_sized([width, 34.], egui::Button::new(format!("     {name}")).frame(selected));
-                    let swatch = egui::Rect::from_min_size(response.rect.left_center() + egui::vec2(6.,-9.), egui::vec2(18.,18.));
-                    let palette = this.variants.get(&format!("dark-{id}")).unwrap_or(t);
-                    ui.painter().rect_filled(swatch, t.number("r-sm"), palette.color("theme-accent"));
-                    ui.painter().add(egui::Shape::convex_polygon(vec![swatch.right_top(), swatch.right_bottom(), swatch.left_bottom()], palette.color("theme-signal"), Stroke::NONE));
-                    if response.clicked() { this.set(&["theme"], json!(id)); }
-                    this.remember(&format!("{name} {description}"), &response);
-                    response.on_hover_text(*description);
+        self.card(ui, t, 0, |this, ui| {
+            let copy = preferences::row("appearance");
+            let selected = string_at(&this.value, &["appearance"]);
+            let mut chosen = None;
+            this.row(
+                ui,
+                t,
+                copy.title,
+                copy.description,
+                None,
+                egui::vec2(200., t.number("h-sm") + 8.),
+                |_, ui| {
+                    chosen = widgets::segmented(
+                        ui,
+                        t,
+                        copy.title,
+                        &preferences::APPEARANCE_MODES,
+                        &selected,
+                    );
+                },
+            );
+            if let Some(mode) = chosen {
+                this.set(&["appearance"], json!(mode));
+            }
+            Self::divider(ui, t);
+            let copy = preferences::row("theme");
+            let background = ui.painter().add(egui::Shape::Noop);
+            let heading = ui
+                .vertical(|ui| {
+                    ui.label(RichText::new(copy.title).size(t.number("text-md")));
+                    ui.add_space(3.);
+                    description(ui, t, copy.description, None);
+                })
+                .response;
+            this.remember(
+                format!("{} {}", copy.title, copy.description),
+                heading.rect,
+                background,
+            );
+            ui.add_space(t.number("s-4"));
+            let gap = t.number("s-2");
+            let columns = preferences::THEME_COLUMNS;
+            let width = (ui.available_width() - gap * (columns as f32 - 1.)) / columns as f32;
+            let mode = if ui.visuals().dark_mode {
+                "dark"
+            } else {
+                "light"
+            };
+            let theme = string_at(&this.value, &["theme"]);
+            for (row, chunk) in preferences::THEMES.chunks(columns).enumerate() {
+                if row > 0 {
+                    ui.add_space(gap);
+                }
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for choice in chunk {
+                        let palette = (choice.id != "custom").then(|| {
+                            let palette = this
+                                .variants
+                                .get(&format!("{mode}-{}", choice.id))
+                                .unwrap_or(t);
+                            (palette.color("theme-accent"), palette.color("theme-signal"))
+                        });
+                        let background = ui.painter().add(egui::Shape::Noop);
+                        let response = widgets::theme_chip(
+                            ui,
+                            t,
+                            width,
+                            choice.name,
+                            &preferences::theme_accessibility_label(choice),
+                            palette,
+                            theme == choice.id,
+                        )
+                        .on_hover_text(choice.description);
+                        if response.clicked() {
+                            this.set(&["theme"], json!(choice.id));
+                        }
+                        this.remember(
+                            format!("{} {}", choice.name, choice.description),
+                            response.rect,
+                            background,
+                        );
+                    }
                 });
             }
             if string_at(&this.value, &["theme"]) == "custom" {
-                ui.separator();
-                ui.horizontal(|ui| { ui.strong("Custom colors"); if ui.button("Reset colors").clicked() {
-                    this.custom_accent = "#32d3ff".into(); this.custom_signal = "#ff4fc3".into(); this.commit_colors();
-                }});
-                ui.small("Open either RGB picker or enter a hex value. Supporting shades stay readable.");
-                this.color_editor(ui, "Accent", "accent");
-                this.color_editor(ui, "Recording signal", "signal");
+                Self::divider(ui, t);
+                this.custom_theme_editor(ui, t);
             }
         });
     }
-    fn color_editor(&mut self, ui: &mut egui::Ui, title: &str, key: &str) {
+
+    /// Shipping `.custom-theme-editor`: heading, Reset colors and two fields.
+    fn custom_theme_editor(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        let copy = &preferences::CUSTOM_THEME;
+        let background = ui.painter().add(egui::Shape::Noop);
+        let response = egui::Frame::new()
+            .fill(t.color("surface-canvas"))
+            .stroke(Stroke::new(1., t.color("border")))
+            .corner_radius(t.number("r-lg") as u8)
+            .inner_margin(t.number("s-5") as i8)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 0.;
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_max_width(44. * t.number("text-sm") * 0.55);
+                        ui.label(RichText::new(copy.title).size(t.number("text-md")));
+                        ui.add_space(3.);
+                        description(ui, t, copy.description, None);
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                        if widgets::button_sized(ui, t, copy.reset, false, t.number("h-sm"))
+                            .clicked()
+                        {
+                            let defaults = captures_settings::CustomThemeSettings::default();
+                            self.custom_accent = defaults.accent;
+                            self.custom_signal = defaults.signal;
+                            self.commit_colors();
+                        }
+                    });
+                });
+                ui.add_space(t.number("s-5"));
+                let gap = t.number("s-4");
+                let width = (ui.available_width() - gap) / 2.;
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for (key, label, detail) in copy.fields {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(width, 0.),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| self.color_field(ui, t, key, label, detail, width),
+                        );
+                    }
+                });
+            })
+            .response;
+        let text = copy.fields.iter().fold(
+            format!("{} {}", copy.title, copy.description),
+            |text, (_, label, detail)| format!("{text} {label} {detail}"),
+        );
+        self.remember(text, response.rect, background);
+    }
+
+    fn color_field(
+        &mut self,
+        ui: &mut egui::Ui,
+        t: &Tokens,
+        key: &str,
+        title: &str,
+        detail: &str,
+        width: f32,
+    ) {
         let old = string_at(&self.value, &["custom_theme", key]);
         let normalized = normalize_hex_color(&old).unwrap_or_else(|_| "#000000".into());
         let mut rgb = [0u8; 3];
@@ -1163,39 +1492,69 @@ impl Preferences {
             *value =
                 u8::from_str_radix(&normalized[1 + i * 2..3 + i * 2], 16).expect("normalized hex");
         }
-        let response = ui
-            .horizontal(|ui| {
-                ui.label(title);
-                if ui.color_edit_button_srgb(&mut rgb).changed() {
-                    let hex = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
-                    if key == "accent" {
-                        self.custom_accent = hex;
-                    } else {
-                        self.custom_signal = hex;
+        egui::Frame::new()
+            .fill(t.color("surface-raised"))
+            .stroke(Stroke::new(1., t.color("border-subtle")))
+            .corner_radius(t.number("r-md") as u8)
+            .inner_margin(t.number("s-4") as i8)
+            .show(ui, |ui| {
+                ui.set_width(width - 2. * t.number("s-4"));
+                ui.spacing_mut().item_spacing.y = 0.;
+                ui.label(RichText::new(title).size(t.number("text-sm")));
+                ui.add_space(t.number("s-3"));
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = t.number("s-3");
+                    ui.spacing_mut().interact_size = egui::vec2(36., t.number("h-md"));
+                    if ui
+                        .color_edit_button_srgb(&mut rgb)
+                        .on_hover_text(format!("{title} color picker"))
+                        .changed()
+                    {
+                        let hex = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+                        if key == "accent" {
+                            self.custom_accent = hex;
+                        } else {
+                            self.custom_signal = hex;
+                        }
+                        self.commit_colors();
                     }
-                    self.commit_colors();
-                }
-                let field = if key == "accent" {
-                    &mut self.custom_accent
-                } else {
-                    &mut self.custom_signal
-                };
-                let response = ui.add(egui::TextEdit::singleline(field).desired_width(130.));
-                let escape = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape));
-                if escape {
-                    *field = old.clone();
-                    response.surrender_focus();
-                } else if response.lost_focus()
-                    || response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                {
-                    *field = normalize_hex_color(field).unwrap_or(old);
-                    response.surrender_focus();
-                    self.commit_colors();
-                }
-            })
-            .response;
-        self.remember(title, &response);
+                    let field = if key == "accent" {
+                        &mut self.custom_accent
+                    } else {
+                        &mut self.custom_signal
+                    };
+                    let response = field_scope(ui, t, |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(field)
+                                .font(egui::FontId::monospace(t.number("text-xs")))
+                                .margin(egui::vec2(t.number("s-3"), t.number("s-1")))
+                                .desired_width(ui.available_width())
+                                .min_size(egui::vec2(0., t.number("h-md")))
+                                .align(egui::Align2::LEFT_CENTER),
+                        )
+                    });
+                    let escape =
+                        response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+                    if escape {
+                        *field = old.clone();
+                        response.surrender_focus();
+                    } else if response.lost_focus()
+                        || response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    {
+                        *field = normalize_hex_color(field).unwrap_or(old);
+                        response.surrender_focus();
+                        self.commit_colors();
+                    }
+                });
+                ui.add_space(t.number("s-3"));
+                ui.label(
+                    RichText::new(detail)
+                        .size(t.number("text-xs"))
+                        .color(t.color("text-subtle")),
+                );
+            });
     }
+
     fn commit_colors(&mut self) {
         if let (Ok(accent), Ok(signal)) = (
             normalize_hex_color(&self.custom_accent),
@@ -1207,47 +1566,183 @@ impl Preferences {
             }
         }
     }
+
     fn capture(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui,t,1,"Capture","Where captures go and what happens right after you take one.",|this,ui| {
-            let response = ui.label("Save captures to"); this.remember("Save captures to folder output directory", &response);
-            ui.horizontal(|ui| {
-                let mut path = string_at(&this.value,&["output_directory"]);
-                if ui.add(egui::TextEdit::singleline(&mut path).desired_width(ui.available_width()-100.)).changed() { this.set(&["output_directory"],json!(path)); }
-                if ui.add_enabled(!this.folder_open,egui::Button::new("Choose…")).clicked() {
-                    this.folder_open = true;
-                    let out = this.out.clone(); let ctx = ui.ctx().clone();
-                    thread::spawn(move || { let result = rfd::FileDialog::new().set_title("Choose capture folder").pick_folder(); let _=out.send(Message::Folder(result)); ctx.request_repaint_of(egui::ViewportId::ROOT); });
-                }
-            });
-            ui.separator();
-            this.toggle(ui,&["auto_copy_to_clipboard"],"Automatically copy captures to the clipboard","Turn this off to preserve existing text or other clipboard contents.",true);
-            ui.separator();
-            this.toggle(ui,&["auto_start_on_selection"],"Start capture as soon as a target is selected","Drawing a region, choosing a window, or clicking Full screen immediately starts the capture. When this is off, press Enter in the capture menu to confirm.",true);
-            ui.separator();
-            this.toggle(ui,&["show_mini_previews"],"Show mini previews after screenshots","Turn this off to keep the quick-access preview stack hidden.",true);
+        self.card(ui, t, 1, |this, ui| {
+            let copy = preferences::row("output_directory");
+            let background = ui.painter().add(egui::Shape::Noop);
+            let response = ui
+                .vertical(|ui| {
+                    ui.label(RichText::new(copy.title).size(t.number("text-md")));
+                    ui.add_space(t.number("s-4"));
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = t.number("s-4");
+                        let mut path = string_at(&this.value, &["output_directory"]);
+                        let choose = 2. * t.number("s-5") + 7. * t.number("text-sm");
+                        let changed = field_scope(ui, t, |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut path)
+                                    .font(egui::FontId::monospace(t.number("text-sm")))
+                                    .margin(egui::vec2(t.number("s-4"), t.number("s-2")))
+                                    .desired_width(ui.available_width() - choose - t.number("s-4"))
+                                    .min_size(egui::vec2(0., t.number("h-md")))
+                                    .align(egui::Align2::LEFT_CENTER),
+                            )
+                        })
+                        .changed();
+                        if changed {
+                            this.set(&["output_directory"], json!(path));
+                        }
+                        if ui
+                            .add_enabled_ui(!this.folder_open, |ui| {
+                                widgets::button(ui, t, "Choose…", false)
+                            })
+                            .inner
+                            .clicked()
+                        {
+                            this.folder_open = true;
+                            let out = this.out.clone();
+                            let ctx = ui.ctx().clone();
+                            thread::spawn(move || {
+                                let result = rfd::FileDialog::new()
+                                    .set_title("Choose capture folder")
+                                    .pick_folder();
+                                let _ = out.send(Message::Folder(result));
+                                ctx.request_repaint_of(egui::ViewportId::ROOT);
+                            });
+                        }
+                    });
+                })
+                .response;
+            this.remember(
+                format!("{} folder output directory", copy.title),
+                response.rect,
+                background,
+            );
+            for key in [
+                "auto_copy_to_clipboard",
+                "auto_start_on_selection",
+                "show_mini_previews",
+            ] {
+                Self::divider(ui, t);
+                let copy = preferences::row(key);
+                this.toggle(ui, t, &[key], copy.title, copy.description, true);
+            }
+            Self::divider(ui, t);
             let previews = this.value["show_mini_previews"].as_bool().unwrap_or(false);
-            ui.add_enabled_ui(previews,|ui| this.combo(ui,&["mini_preview_placement"],"Mini preview position","Choose a screen corner. The stack opens away from it.",&choices(&[("bottom_left","Bottom left"),("bottom_right","Bottom right"),("top_left","Top left"),("top_right","Top right")])));
-            ui.separator();
-            let include_previews = this.value["include_mini_previews_in_captures"].as_bool().unwrap_or(false);
-            this.toggle(ui,&["include_mini_previews_in_captures"],"Show mini previews in screenshots and recordings",if !previews { "Mini previews are off, so they won’t show in screenshots or recordings." } else if include_previews { "Mini previews will show in screenshots and recordings. Turn this off to keep them out." } else { "Mini previews won’t show in screenshots or recordings." },previews);
-            ui.separator();
-            let include_controls = this.value["include_recording_controls_in_captures"].as_bool().unwrap_or(false);
-            this.toggle(ui,&["include_recording_controls_in_captures"],"Show recording controls in screenshots and recordings",if cfg!(target_os="linux") { "This desktop session cannot keep recording controls out of screenshots and recordings. Use Hide controls on the recording bar to keep them off-screen." } else if include_controls { "Recording controls will show in screenshots and recordings. Turn this off to keep them out." } else { "Recording controls won’t show in screenshots or recordings." },!cfg!(target_os="linux"));
-            ui.separator();
-            this.toggle(ui,&["freeze_screen"],"Freeze screen when capturing","Holds hover states, tooltips, menus, and motion still while you choose a region or window. Turn this off to select from the live desktop.",true);
-            ui.separator();
-            this.toggle(ui,&["show_cursor_in_screenshots"],"Show cursor in screenshots","Includes the pointer in still captures. Freeze screen only holds the desktop still; it does not add the cursor by itself.",true);
-            ui.separator();
-            this.combo(ui,&["screenshot_format"],"Screenshot format","Used when you save or export. Capture History keeps a lossless PNG until then.",&choices(&[("png","PNG"),("jpeg","JPEG"),("webp","WebP")]));
-            ui.separator();
-            this.combo(ui,&["screenshot_countdown_seconds"],"Screenshot countdown","Wait before capturing so you can open menus or hover states. Press Esc to cancel.",&countdowns());
+            let copy = preferences::row("mini_preview_placement");
+            let placement = string_at(&this.value, &["mini_preview_placement"]);
+            let mut chosen = None;
+            this.row(
+                ui,
+                t,
+                copy.title,
+                copy.description,
+                None,
+                egui::vec2(108., 94.),
+                |_, ui| {
+                    ui.add_enabled_ui(previews, |ui| {
+                        chosen = widgets::corner_picker(
+                            ui,
+                            t,
+                            &preferences::MINI_PREVIEW_PLACEMENTS,
+                            &placement,
+                            preferences::mini_preview_placement_name(&placement),
+                        );
+                    });
+                },
+            );
+            if let Some(value) = chosen {
+                this.set(&["mini_preview_placement"], json!(value));
+            }
+            Self::divider(ui, t);
+            let include_previews = this.value["include_mini_previews_in_captures"]
+                .as_bool()
+                .unwrap_or(false);
+            let copy = preferences::row("include_mini_previews_in_captures");
+            this.toggle(
+                ui,
+                t,
+                &["include_mini_previews_in_captures"],
+                copy.title,
+                preferences::mini_previews_in_captures_description(previews, include_previews),
+                previews,
+            );
+            Self::divider(ui, t);
+            let include_controls = this.value["include_recording_controls_in_captures"]
+                .as_bool()
+                .unwrap_or(false);
+            let can_exclude = !cfg!(target_os = "linux");
+            let copy = preferences::row("include_recording_controls_in_captures");
+            this.toggle_with(
+                ui,
+                t,
+                &["include_recording_controls_in_captures"],
+                copy.title,
+                "",
+                Some(preferences::recording_controls_description(
+                    can_exclude,
+                    include_controls,
+                )),
+                can_exclude,
+            );
+            for key in ["freeze_screen", "show_cursor_in_screenshots"] {
+                Self::divider(ui, t);
+                let copy = preferences::row(key);
+                this.toggle(ui, t, &[key], copy.title, copy.description, true);
+            }
+            Self::divider(ui, t);
+            this.combo(
+                ui,
+                t,
+                &["screenshot_format"],
+                &choices(&preferences::SCREENSHOT_FORMATS),
+            );
+            Self::divider(ui, t);
+            this.combo(ui, t, &["screenshot_countdown_seconds"], &countdowns());
         });
     }
+
     fn shortcuts(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui,t,2,"Shortcuts","Select a shortcut, then press the key combination you want. Press Esc to cancel recording.",|this,ui| {
+        let help = preferences::shortcut_help(shortcut_platform());
+        let mut intro = format!("{} {}", preferences::SECTIONS[2].description, help.intro);
+        if !self.live {
+            intro = format!("{intro} {}", preferences::FIXTURE_SHORTCUTS_NOTE);
+        }
+        self.card_described(ui, t, 2, &intro, |this, ui| {
+            let live = this.live;
+            let mut open = false;
+            this.row(
+                ui,
+                t,
+                help.system_title,
+                help.system_body,
+                None,
+                egui::vec2(80., t.number("h-md")),
+                |_, ui| {
+                    open = ui
+                        .add_enabled_ui(live, |ui| {
+                            widgets::button(ui, t, help.system_action, false)
+                        })
+                        .inner
+                        .clicked();
+                },
+            );
+            if open {
+                this.keyboard_settings_error =
+                    preferences::open_keyboard_settings(shortcut_platform()).err();
+            }
+            if let Some(error) = &this.keyboard_settings_error {
+                ui.add_space(t.number("s-2"));
+                ui.colored_label(
+                    t.color("danger-text"),
+                    RichText::new(error).size(t.number("text-xs")),
+                );
+            }
+            Self::divider(ui, t);
             for (index, field) in SHORTCUT_FIELDS.into_iter().enumerate() {
                 if index > 0 {
-                    ui.separator();
+                    ui.add_space(t.number("s-2"));
                 }
                 ui.scope_builder(
                     egui::UiBuilder::new().scope_id(shortcut_scope_id(field)),
@@ -1277,44 +1772,67 @@ impl Preferences {
                     .and_then(|recorder| recorder.error.clone())
             })
             .flatten();
-        self.row(ui, field.label(), "", |this, ui| {
-            let response = ui
-                .vertical(|ui| {
-                    ui.set_width(230.);
-                    let response = shortcut_recorder(ui, t, field.label(), &keys, recording);
-                    if let Some(error) = &error {
-                        ui.colored_label(t.color("danger-text"), error);
-                    }
-                    response
-                })
-                .inner;
-            let started = response.clicked() && !recording;
-            if started {
-                this.shortcut_recorder = Some(ShortcutRecorder::new(field));
-                this.shortcut_input.start();
-                response.request_focus();
-            }
-            let active = this
-                .shortcut_recorder
-                .as_ref()
-                .is_some_and(|recorder| recorder.field == field);
-            if shortcut_recording_lost_focus(active, started, response.has_focus()) {
-                this.cancel_shortcut_recording();
-            } else if active || this.suppress_shortcut_commands {
-                ui.input_mut(|input| {
-                    input.events.retain(|event| {
-                        !matches!(
-                            event,
-                            egui::Event::Key { .. }
-                                | egui::Event::Copy
-                                | egui::Event::Cut
-                                | egui::Event::Paste(_)
-                                | egui::Event::Text(_)
-                        )
+        let width = (ui.available_width() * 0.45).clamp(180., 260.);
+        let height = t.number("h-md")
+            + if error.is_some() {
+                t.number("s-2") + 16.
+            } else {
+                0.
+            };
+        self.row(
+            ui,
+            t,
+            field.label(),
+            "",
+            None,
+            egui::vec2(width, height),
+            |this, ui| {
+                let response = ui
+                    .allocate_ui_with_layout(
+                        egui::vec2(width, height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            let response =
+                                shortcut_recorder(ui, t, field.label(), &keys, recording, width);
+                            if let Some(error) = &error {
+                                ui.add_space(t.number("s-2"));
+                                ui.colored_label(
+                                    t.color("danger-text"),
+                                    RichText::new(error).size(t.number("text-xs")),
+                                );
+                            }
+                            response
+                        },
+                    )
+                    .inner;
+                let started = response.clicked() && !recording;
+                if started {
+                    this.shortcut_recorder = Some(ShortcutRecorder::new(field));
+                    this.shortcut_input.start();
+                    response.request_focus();
+                }
+                let active = this
+                    .shortcut_recorder
+                    .as_ref()
+                    .is_some_and(|recorder| recorder.field == field);
+                if shortcut_recording_lost_focus(active, started, response.has_focus()) {
+                    this.cancel_shortcut_recording();
+                } else if active || this.suppress_shortcut_commands {
+                    ui.input_mut(|input| {
+                        input.events.retain(|event| {
+                            !matches!(
+                                event,
+                                egui::Event::Key { .. }
+                                    | egui::Event::Copy
+                                    | egui::Event::Cut
+                                    | egui::Event::Paste(_)
+                                    | egui::Event::Text(_)
+                            )
+                        });
                     });
-                });
-            }
-        });
+                }
+            },
+        );
     }
 
     fn receive_shortcut_input(&mut self) {
@@ -1402,17 +1920,43 @@ impl Preferences {
         self.shortcut_input.stop();
     }
     fn recording(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui,t,3,"Recording","Defaults for new screen recordings. You can still change them in the capture menu.",|this,ui| {
-            this.combo(ui,&["recording","video_format"],"Recording format","Recordings are captured as H.264 MP4. GIF and WebM are converted when you save or export.",&choices(&[("mp4","MP4"),("gif","GIF"),("webm","WebM")]));
-            ui.separator();
-            this.combo(ui,&["recording","video_fps"],"Frames per second","",&numbers(&[60,30,15]," FPS"));
-            this.combo(ui,&["recording","video_max_resolution"],"Maximum resolution","",&choices(&[("original","Original"),("p1080","1080p"),("p720","720p")]));
-            ui.separator();
-            this.combo(ui,&["recording","countdown_seconds"],"Countdown","Delay before a recording starts.",&countdowns());
-            ui.separator();
-            this.microphone_combo(ui);
-            for (key,title,desc) in [("capture_system_audio","Record desktop audio","Records sound playing through the system output."),("mono_audio","Export recording audio in mono",""),("show_cursor","Show cursor in recordings",""),("highlight_clicks","Show clicks in recordings",""),("open_editor_after_recording","Open the editor after recording","The recording is kept in Capture History for 30 days, so closing the editor never loses it.")] {
-                ui.separator(); this.toggle(ui,&["recording",key],title,desc,true);
+        self.card(ui, t, 3, |this, ui| {
+            this.combo(
+                ui,
+                t,
+                &["recording", "video_format"],
+                &choices(&preferences::RECORDING_FORMATS),
+            );
+            Self::divider(ui, t);
+            this.select_grid(
+                ui,
+                t,
+                &[
+                    (
+                        &["recording", "video_fps"],
+                        numbers(&preferences::RECORDING_FPS, preferences::fps_label),
+                    ),
+                    (
+                        &["recording", "video_max_resolution"],
+                        choices(&preferences::RESOLUTIONS),
+                    ),
+                ],
+            );
+            Self::divider(ui, t);
+            this.combo(ui, t, &["recording", "countdown_seconds"], &countdowns());
+            Self::divider(ui, t);
+            this.microphone_combo(ui, t);
+            for key in preferences::RECORDING_TOGGLES {
+                Self::divider(ui, t);
+                let copy = preferences::row(&format!("recording.{key}"));
+                this.toggle(
+                    ui,
+                    t,
+                    &["recording", key],
+                    copy.title,
+                    copy.description,
+                    true,
+                );
             }
         });
     }
@@ -1420,7 +1964,7 @@ impl Preferences {
     /// device that is not connected stays selectable by its id. Devices are
     /// enumerated off the UI thread the first time the menu opens, because
     /// ALSA/PulseAudio probing can be slow or start an audio daemon.
-    fn microphone_combo(&mut self, ui: &mut egui::Ui) {
+    fn microphone_combo(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         if let Some(devices) = self
             .microphones_rx
             .as_ref()
@@ -1433,7 +1977,7 @@ impl Preferences {
         let saved = at(&self.value, &path)
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let mut options = vec![(None, "Off".to_owned())];
+        let mut options = vec![(None, preferences::MICROPHONE_OFF.to_owned())];
         options.extend(
             self.microphones
                 .iter()
@@ -1448,30 +1992,30 @@ impl Preferences {
         let loading = self.microphones.is_none();
         let mut open_requested = false;
         let mut chosen = None;
+        let selected = options.iter().find(|(id, _)| *id == saved).map_or_else(
+            || preferences::MICROPHONE_OFF.to_owned(),
+            |(_, label)| label.clone(),
+        );
+        let copy = preferences::row("recording.microphone_device_id");
         self.row(
             ui,
-            "Default microphone",
-            "Used when a recording starts with microphone audio.",
+            t,
+            copy.title,
+            copy.description,
+            None,
+            egui::vec2(160., t.number("h-md")),
             |_, ui| {
-                egui::ComboBox::from_id_salt(path.join("."))
-                    .width(160.)
-                    .selected_text(
-                        options
-                            .iter()
-                            .find(|(id, _)| *id == saved)
-                            .map_or_else(|| "Off".to_owned(), |(_, label)| label.clone()),
-                    )
-                    .show_ui(ui, |ui| {
-                        open_requested = true;
-                        for (id, label) in &options {
-                            if ui.selectable_label(*id == saved, label).clicked() {
-                                chosen = Some(id.clone());
-                            }
+                widgets::select(ui, t, path.join("."), 160., &selected, |ui| {
+                    open_requested = true;
+                    for (id, label) in &options {
+                        if ui.selectable_label(*id == saved, label).clicked() {
+                            chosen = Some(id.clone());
                         }
-                        if loading {
-                            ui.add_enabled(false, egui::Label::new("Finding microphones…"));
-                        }
-                    });
+                    }
+                    if loading {
+                        ui.add_enabled(false, egui::Label::new(preferences::MICROPHONES_LOADING));
+                    }
+                });
             },
         );
         if open_requested && loading && self.microphones_rx.is_none() {
@@ -1495,76 +2039,147 @@ impl Preferences {
     }
 
     fn gif(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(
+        self.card(ui, t, 4, |this, ui| {
+            this.select_grid(
+                ui,
+                t,
+                &[
+                    (
+                        &["recording", "gif_fps"],
+                        numbers(&preferences::GIF_FPS, preferences::fps_label),
+                    ),
+                    (
+                        &["recording", "gif_max_width"],
+                        numbers(&preferences::GIF_MAX_WIDTHS, preferences::width_label),
+                    ),
+                    (
+                        &["recording", "gif_max_colors"],
+                        numbers(&preferences::GIF_PALETTE_COLORS, |v| v.to_string()),
+                    ),
+                ],
+            );
+        });
+    }
+
+    /// Shipping `.settings-utility-row`: copy and one secondary action.
+    fn utility_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        t: &Tokens,
+        title: &str,
+        detail: &str,
+        action: &str,
+        enabled: bool,
+    ) -> bool {
+        let mut clicked = false;
+        let reserve =
+            2. * t.number("s-5") + action.chars().count() as f32 * 0.6 * t.number("text-sm");
+        self.row(
             ui,
             t,
-            4,
-            "GIF export",
-            "Starting point when a recording is exported as an animated GIF.",
-            |this, ui| {
-                this.combo(
-                    ui,
-                    &["recording", "gif_fps"],
-                    "Frames per second",
-                    "",
-                    &numbers(&[8, 10, 12, 15, 20, 24, 30], " FPS"),
-                );
-                this.combo(
-                    ui,
-                    &["recording", "gif_max_width"],
-                    "Maximum width",
-                    "",
-                    &numbers(&[320, 480, 640, 800, 1200], " px"),
-                );
-                this.combo(
-                    ui,
-                    &["recording", "gif_max_colors"],
-                    "Palette colors",
-                    "",
-                    &numbers(&[64, 96, 128, 256], ""),
-                );
+            title,
+            detail,
+            None,
+            egui::vec2(reserve, t.number("h-md")),
+            |_, ui| {
+                clicked = ui
+                    .add_enabled_ui(enabled, |ui| widgets::button(ui, t, action, false))
+                    .inner
+                    .clicked();
             },
         );
+        clicked
     }
+
     fn updates(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(
-            ui,
-            t,
-            5,
-            "Updates",
-            "Experimental native build — signed Preview updates are not connected yet.",
-            |this, ui| {
-                this.toggle(
-                    ui,
-                    &["show_update_changelog"],
-                    "Show what’s new on update notices",
-                    "Lists every Preview since the version you have. Turn this off for a compact Update now prompt.",
-                    true,
-                );
-                ui.add_enabled(false, egui::Button::new("Check for updates"));
-            },
-        );
+        self.card(ui, t, 5, |this, ui| {
+            this.utility_row(
+                ui,
+                t,
+                preferences::UPDATES_TITLE,
+                preferences::UPDATES_DETAIL,
+                preferences::UPDATES_ACTION,
+                false,
+            );
+            Self::divider(ui, t);
+            let copy = preferences::row("show_update_changelog");
+            this.toggle(
+                ui,
+                t,
+                &["show_update_changelog"],
+                copy.title,
+                copy.description,
+                true,
+            );
+        });
     }
+
     fn about(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui,t,6,"About","Captures is in active development. Telling us what breaks is the fastest way to fix it.",|this,ui| {
-            this.row(ui,"Send feedback","Report a bug or share an idea.",|this,ui| {
-                if ui.button("Open").clicked() { this.feedback.open(ui.ctx()); }
-            });
-            ui.separator();
-            this.row(ui,"Launch native Captures at login","Start this development profile hidden when you sign in.",|this,ui| {
-                let label = if this.login_pending { "Checking…" } else if this.login_error.is_some() { "Retry" }
-                    else if this.login_enabled == Some(true) { "On" } else { "Off" };
-                let enabled = this.login_root.is_some() && !this.login_pending;
-                let response = ui.add_enabled(enabled,
-                    egui::Button::new(label).selected(this.login_enabled == Some(true)));
-                response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox,
-                    enabled, this.login_enabled == Some(true), "Launch native Captures at login"));
-                if response.clicked() {
-                    this.request_login_item(if this.login_error.is_some() { None } else { Some(this.login_enabled != Some(true)) });
+        self.card(ui, t, 6, |this, ui| {
+            if this.utility_row(
+                ui,
+                t,
+                preferences::FEEDBACK_TITLE,
+                preferences::FEEDBACK_DETAIL,
+                preferences::FEEDBACK_ACTION,
+                true,
+            ) {
+                this.feedback.open(ui.ctx());
+            }
+            Self::divider(ui, t);
+            let detail = if let Some(error) = &this.login_error {
+                preferences::login_item_error(error)
+            } else if this.login_root.is_none() {
+                preferences::login_item_unavailable(shortcut_platform()).to_owned()
+            } else if this.login_pending {
+                preferences::LOGIN_ITEM_CHECKING.to_owned()
+            } else {
+                preferences::LOGIN_ITEM_DETAIL.to_owned()
+            };
+            if this.login_error.is_some() {
+                if this.utility_row(
+                    ui,
+                    t,
+                    preferences::LOGIN_ITEM_TITLE,
+                    &detail,
+                    preferences::LOGIN_ITEM_RETRY,
+                    !this.login_pending,
+                ) {
+                    this.request_login_item(None);
                 }
+                return;
+            }
+            let enabled = this.login_root.is_some() && !this.login_pending;
+            let on = this.login_enabled == Some(true);
+            ui.add_enabled_ui(enabled, |ui| {
+                let mut switch_rect = egui::Rect::NOTHING;
+                let (rect, _) = this.row(
+                    ui,
+                    t,
+                    preferences::LOGIN_ITEM_TITLE,
+                    &detail,
+                    None,
+                    egui::vec2(32., 19.),
+                    |_, ui| {
+                        switch_rect = ui
+                            .allocate_exact_size(egui::vec2(32., 19.), egui::Sense::hover())
+                            .0;
+                    },
+                );
+                let response =
+                    ui.interact(rect, ui.scope_id().with("login-item"), egui::Sense::click());
+                if response.clicked() {
+                    this.request_login_item(Some(!on));
+                }
+                widgets::paint_switch(
+                    ui,
+                    t,
+                    switch_rect,
+                    &response,
+                    on,
+                    preferences::LOGIN_ITEM_TITLE,
+                );
             });
-            if let Some(error) = &this.login_error { ui.colored_label(t.color("danger-text"), error); }
-            if this.login_root.is_none() { ui.small("Available in a live Windows or X11 development profile. Wayland hidden startup is not supported."); }
         });
     }
 }
@@ -1610,9 +2225,10 @@ fn shortcut_recorder(
     label: &str,
     keys: &[String],
     recording: bool,
+    width: f32,
 ) -> egui::Response {
     let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(230., t.number("h-md")), egui::Sense::click());
+        ui.allocate_exact_size(egui::vec2(width, t.number("h-md")), egui::Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Button, true, recording, label)
     });
@@ -1643,7 +2259,7 @@ fn shortcut_recorder(
     let mut x = rect.left() + t.number("s-4");
     if keys.is_empty() {
         let prompt = painter.layout_no_wrap(
-            "Press shortcut…".into(),
+            preferences::SHORTCUT_PROMPT.into(),
             egui::FontId::proportional(t.number("text-sm")),
             t.color("text-faint"),
         );
@@ -1654,15 +2270,34 @@ fn shortcut_recorder(
         );
         return response;
     }
+    // Shipping `kbd` chips; long chords tighten spacing, then shrink the
+    // text (to 80%) rather than dropping keys.
+    let base = t.number("text-2xs");
+    let measure = |size: f32| -> Vec<f32> {
+        keys.iter()
+            .map(|key| {
+                painter
+                    .layout_no_wrap(
+                        key.clone(),
+                        egui::FontId::proportional(size),
+                        t.color("text-muted"),
+                    )
+                    .size()
+                    .x
+            })
+            .collect()
+    };
+    let available = rect.width() - 2. * t.number("s-4");
+    let (scale, padding, gap) = fit_chips(&measure(base), available);
     for key in keys {
         let text = painter.layout_no_wrap(
             key.clone(),
-            egui::FontId::proportional(t.number("text-2xs")),
+            egui::FontId::proportional(base * scale),
             t.color("text-muted"),
         );
-        let size = egui::vec2((text.size().x + 10.).max(20.), text.size().y + 6.);
+        let size = egui::vec2((text.size().x + 2. * padding).max(20.), text.size().y + 6.);
         let chip = egui::Rect::from_min_size(egui::pos2(x, rect.center().y - size.y / 2.), size);
-        if chip.right() > rect.right() - t.number("s-4") {
+        if chip.right() > rect.right() - t.number("s-4") + 0.5 {
             break;
         }
         let chip_radius = t.number("r-xs");
@@ -1686,9 +2321,81 @@ fn shortcut_recorder(
             text,
             t.color("text-muted"),
         );
-        x = chip.right() + t.number("s-3");
+        x = chip.right() + gap;
     }
     response
+}
+
+/// Chip text scale, horizontal padding and gap so every key fits `available`:
+/// shipping 5 pt padding and 6 pt gaps, then 4/4, then text down to 80%.
+fn fit_chips(text_widths: &[f32], available: f32) -> (f32, f32, f32) {
+    let total = |scale: f32, padding: f32, gap: f32| {
+        text_widths
+            .iter()
+            .map(|width| (width * scale + 2. * padding).max(20.))
+            .sum::<f32>()
+            + gap * text_widths.len().saturating_sub(1) as f32
+    };
+    if total(1., 5., 6.) <= available {
+        return (1., 5., 6.);
+    }
+    if total(1., 4., 4.) <= available {
+        return (1., 4., 4.);
+    }
+    let mut scale = 1.;
+    while scale > 0.8 && total(scale, 4., 4.) > available {
+        scale -= 0.02;
+    }
+    (scale.max(0.8), 4., 4.)
+}
+
+/// Shipping `.setting-copy small`: `--text-sm` in `--text-subtle`, at most
+/// 52ch wide, with an optional `<strong>` word in `--text`.
+fn description_job(
+    t: &Tokens,
+    text: &str,
+    emphasis: Option<preferences::Emphasized>,
+    available: f32,
+) -> egui::text::LayoutJob {
+    let size = t.number("text-sm");
+    let subtle = egui::TextFormat::simple(egui::FontId::proportional(size), t.color("text-subtle"));
+    let strong = egui::TextFormat::simple(egui::FontId::proportional(size), t.color("text"));
+    let mut job = egui::text::LayoutJob::default();
+    match emphasis {
+        Some(parts) => {
+            job.append(parts.lead, 0., subtle.clone());
+            job.append(parts.emphasis, 0., strong);
+            job.append(parts.trail, 0., subtle);
+        }
+        None => job.append(text, 0., subtle),
+    }
+    job.wrap.max_width = (52. * size * 0.56).min(available);
+    job
+}
+
+fn description(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    text: &str,
+    emphasis: Option<preferences::Emphasized>,
+) {
+    let job = description_job(t, text, emphasis, ui.available_width());
+    ui.label(job);
+}
+
+/// Shipping text fields: `--surface-field`, `--control-border`, accent focus.
+fn field_scope<R>(ui: &mut egui::Ui, t: &Tokens, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.scope(|ui| {
+        let visuals = ui.visuals_mut();
+        visuals.extreme_bg_color = t.color("surface-field");
+        visuals.text_edit_bg_color = Some(t.color("surface-field"));
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1., t.color("control-border"));
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1., t.color("border-strong"));
+        visuals.selection.stroke = Stroke::new(1., t.color("theme-accent"));
+        ui.spacing_mut().button_padding.x = t.number("s-4");
+        add(ui)
+    })
+    .inner
 }
 
 fn choices(values: &[(&str, &str)]) -> Vec<(Value, String)> {
@@ -1697,24 +2404,12 @@ fn choices(values: &[(&str, &str)]) -> Vec<(Value, String)> {
         .map(|(v, s)| (json!(v), (*s).into()))
         .collect()
 }
-fn numbers(values: &[u16], suffix: &str) -> Vec<(Value, String)> {
-    values
-        .iter()
-        .map(|v| (json!(v), format!("{v}{suffix}")))
-        .collect()
+fn numbers(values: &[u16], label: impl Fn(u16) -> String) -> Vec<(Value, String)> {
+    values.iter().map(|v| (json!(v), label(*v))).collect()
 }
 fn countdowns() -> Vec<(Value, String)> {
-    (0..=10)
-        .map(|v| {
-            (
-                json!(v),
-                match v {
-                    0 => "Off".into(),
-                    1 => "1 second".into(),
-                    _ => format!("{v} seconds"),
-                },
-            )
-        })
+    preferences::COUNTDOWN_SECONDS
+        .map(|v| (json!(v), preferences::countdown_label(v)))
         .collect()
 }
 fn at<'a>(v: &'a Value, path: &[&str]) -> Option<&'a Value> {
@@ -1880,6 +2575,20 @@ mod tests {
     }
 
     #[test]
+    fn long_chords_tighten_then_shrink_chips_instead_of_dropping_keys() {
+        assert_eq!(fit_chips(&[20., 22.], 200.), (1., 5., 6.));
+        let widths = [18., 24., 16., 30., 110.];
+        let (scale, padding, gap) = fit_chips(&widths, 228.);
+        assert!((0.8..1.).contains(&scale));
+        let total: f32 = widths
+            .iter()
+            .map(|w| (w * scale + 2. * padding).max(20.))
+            .sum::<f32>()
+            + gap * 4.;
+        assert!(total <= 228.);
+    }
+
+    #[test]
     fn recorder_focus_is_acquired_before_blur_can_cancel() {
         assert!(!shortcut_recording_lost_focus(true, true, false));
         assert!(!shortcut_recording_lost_focus(true, false, true));
@@ -1941,6 +2650,76 @@ mod tests {
             frame(&mut prefs);
             assert_eq!(prefs.highlighted_target(), None, "highlight expires");
         }
+    }
+
+    #[test]
+    fn cards_find_and_whole_row_switches_follow_shipping() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        captures_settings::save(&path, &AppSettings::default()).unwrap();
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), path, None, None);
+        prefs.value = serde_json::to_value(AppSettings::default()).unwrap();
+        prefs.load_error = None;
+        let tokens = crate::tokens::load()["light-mustard"].clone();
+        let frame = |prefs: &mut Preferences, events: Vec<egui::Event>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(820., 6000.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    prefs.ui(ui, &tokens, false);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        frame(&mut prefs, vec![]);
+        assert_eq!(prefs.card_tops.len(), preferences::SECTIONS.len());
+        assert!(prefs.card_tops.windows(2).all(|pair| pair[0] < pair[1]));
+        for section in preferences::SECTIONS {
+            assert!(
+                prefs
+                    .find_rows
+                    .iter()
+                    .any(|row| row.text.starts_with(section.title)),
+                "{} card header is a find target",
+                section.title
+            );
+        }
+
+        prefs.find_open = true;
+        prefs.query = "freeze screen when".into();
+        frame(&mut prefs, vec![]);
+        assert_eq!(prefs.matches.len(), 1);
+        assert_eq!(
+            preferences::find_count_label(&prefs.query, prefs.matches.len(), prefs.match_index),
+            "1 of 1"
+        );
+
+        // Clicking the copy (not just the switch) toggles, like the shipping label.
+        let row = prefs
+            .find_rows
+            .iter()
+            .find(|row| row.text.starts_with("Freeze screen when capturing"))
+            .unwrap()
+            .rect;
+        let point = egui::pos2(row.left() + 20., row.center().y);
+        assert!(prefs.value["freeze_screen"].as_bool().unwrap());
+        frame(&mut prefs, vec![egui::Event::PointerMoved(point)]);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(&mut prefs, vec![button(true)]);
+        frame(&mut prefs, vec![button(false)]);
+        assert!(!prefs.value["freeze_screen"].as_bool().unwrap());
     }
 
     #[test]
