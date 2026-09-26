@@ -204,6 +204,12 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private let liveCaptureAvailable: Bool
     private let loginItemService: LoginItemServicing?
     private var settings: [String: Any] = [:]
+    /// Default microphone choices, enumerated off the main thread once.
+    private var microphones: [NativeMicrophoneDevice]?
+    private var microphonesLoading = false
+    /// Refreshed in place when devices arrive: rebuilding every card would
+    /// reset controls in use, such as an in-progress shortcut recording.
+    private weak var microphonePopUp: ClosurePopUpButton?
     private var scroll = NSScrollView()
     private var document = Surface()
     private var status = NSTextField(labelWithString: "Loading preferences…")
@@ -226,6 +232,10 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
                             ("recording", "Recording"), ("gif", "GIF export"),
                             ("updates", "Updates"), ("about", "About")]
     private var sectionViews: [String: NSView] = [:]
+    /// Nav entries, highlighted for the section in view (shipping scroll-spy).
+    private var navButtons: [String: CaptureButton] = [:]
+    private(set) var activeSection = "appearance"
+    private var scrollObserver: NSObjectProtocol?
     private var searchable: [(NSView, String)] = []
     private var loginItemEnabled: Bool?
     private var loginItemPending = false
@@ -291,6 +301,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
                 self?.reveal(section.0)
             }
             button.alignment = .left; button.setAccessibilityRole(.button); nav.addSubview(button)
+            navButtons[section.0] = button
         }
         addLabel("Preferences", frame: NSRect(x: 224, y: 18, width: 220, height: 28), size: 20, weight: .semibold, parent: root)
         addLabel("Changes save automatically.", frame: NSRect(x: 224, y: 43, width: 240, height: 20), size: 12, muted: true, parent: root)
@@ -306,6 +317,25 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         scroll.autoresizingMask = [.width, .height]; scroll.hasVerticalScroller = true; scroll.drawsBackground = false
         document = Surface(frame: NSRect(x: 0, y: 0, width: scroll.bounds.width, height: 400))
         scroll.documentView = document; root.addSubview(scroll)
+        scroll.contentView.postsBoundsChangedNotifications = true
+        scrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
+        ) { [weak self] _ in self?.updateActiveSection() }
+        updateActiveSection()
+    }
+
+    /// The last section whose card top has scrolled past the top of the view,
+    /// or the final section once the document reaches its end.
+    func updateActiveSection() {
+        let visible = scroll.contentView.bounds
+        let atEnd = visible.maxY >= document.frame.height - 1
+        let active = atEnd ? sections.last?.0 : sections.last(where: {
+            (sectionViews[$0.0]?.frame.minY ?? .infinity) <= visible.minY + 80
+        })?.0
+        activeSection = active ?? sections[0].0
+        for (id, button) in navButtons {
+            button.selected = id == activeSection; button.needsDisplay = true
+        }
     }
 
     private func rebuildCards() {
@@ -317,6 +347,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         document.frame.size = NSSize(width: scroll.contentSize.width, height: y + 42)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: min(oldY, max(0, y - scroll.contentSize.height))))
         updateFind()
+        updateActiveSection()
     }
 
     private func card(_ id: String, title: String, description: String, y: CGFloat, height: CGFloat) -> Surface {
@@ -578,6 +609,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     deinit {
         if let monitor = shortcutEventMonitor { NSEvent.removeMonitor(monitor) }
         if let observer = shortcutFocusObserver { NotificationCenter.default.removeObserver(observer) }
+        if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
     }
 
     static func domCode(for event: NSEvent) -> String {
@@ -622,7 +654,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         recordingMenu("Maximum resolution", detail: "", key: "video_max_resolution", values: ["original", "p1080", "p720"], y: 204, parent: card)
         recordingMenu("Countdown", detail: "Delay before a recording starts.", key: "countdown_seconds", values: Array(0...10), y: 262, parent: card)
         toggleRecording("Record desktop audio", detail: "Records sound playing through the system output.", key: "capture_system_audio", y: 320, parent: card)
-        disabledRow("Default microphone", detail: "Choose a microphone in New Capture.", y: 366, parent: card)
+        microphoneMenu(y: 366, parent: card)
         toggleRecording("Show cursor in recordings", key: "show_cursor", y: 412, parent: card)
         toggleRecording("Open the editor after recording", detail: "The recording is kept in Capture History for 30 days, so closing the editor never loses it.", key: "open_editor_after_recording", y: 458, parent: card)
         toggleRecording("Export recording audio in mono", key: "mono_audio", y: 504, parent: card)
@@ -631,10 +663,76 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     private func gifCard(_ y: CGFloat) -> CGFloat {
-        let card = card("gif", title: "GIF export", description: "GIF-specific export defaults. GIFs do not include recorded audio.", y: y, height: 210)
-        disabledRow("GIF quality", detail: "Available when the native encoder is connected.", y: 88, parent: card)
-        disabledRow("GIF dimensions", detail: "Uses the recording size for now.", y: 146, parent: card)
+        let card = card("gif", title: "GIF export", description: "Starting point when a recording is exported as an animated GIF.", y: y, height: 262)
+        recordingChoiceMenu("Frames per second", key: "gif_fps",
+            values: [8, 10, 12, 15, 20, 24, 30], titles: { "\($0) FPS" }, y: 88, parent: card)
+        recordingChoiceMenu("Maximum width", key: "gif_max_width",
+            values: [320, 480, 640, 800, 1200], titles: { "\($0) px" }, y: 146, parent: card)
+        recordingChoiceMenu("Palette colors", key: "gif_max_colors",
+            values: [64, 96, 128, 256], titles: { "\($0)" }, y: 204, parent: card)
         return y + card.frame.height + 22
+    }
+
+    /// Shipping Default microphone select: Off, then each input device. A saved
+    /// device that is not connected stays selectable by its id.
+    private func microphoneMenu(y: CGFloat, parent: NSView) {
+        rowTitle("Default microphone", detail: "Used when a recording starts with microphone audio.", y: y, parent: parent)
+        let menu = ClosurePopUpButton(frame: NSRect(x: 528, y: y + 7, width: 150, height: 30), pullsDown: false)
+        menu.tokens = tokens
+        menu.setAccessibilityLabel("Default microphone")
+        menu.target = menu; menu.action = #selector(ClosurePopUpButton.selectedValue); parent.addSubview(menu)
+        microphonePopUp = menu
+        fillMicrophoneMenu(menu)
+        loadMicrophonesIfNeeded()
+    }
+
+    private func fillMicrophoneMenu(_ menu: ClosurePopUpButton) {
+        let saved = (settings["recording"] as? [String: Any])?["microphone_device_id"] as? String
+        var options: [(id: String?, title: String)] = [(nil, "Off")]
+        options += (microphones ?? []).map { (id: Optional($0.id), title: $0.name) }
+        if let saved, !options.contains(where: { $0.id == saved }) { options.append((id: saved, title: saved)) }
+        menu.menu?.removeAllItems()
+        // Add items individually: devices can share a display name.
+        for option in options { menu.menu?.addItem(NSMenuItem(title: option.title, action: nil, keyEquivalent: "")) }
+        menu.selectItem(at: options.firstIndex { $0.id == saved } ?? 0)
+        menu.change = { [weak self] index in
+            guard let self, options.indices.contains(index) else { return }
+            var recording = self.settings["recording"] as? [String: Any] ?? [:]
+            if let id = options[index].id { recording["microphone_device_id"] = id }
+            else { recording["microphone_device_id"] = NSNull() }
+            self.settings["recording"] = recording; self.changed(rerender: false)
+        }
+    }
+
+    private func loadMicrophonesIfNeeded() {
+        guard microphones == nil, !microphonesLoading else { return }
+        microphonesLoading = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let devices = (try? NativeRecordingInfo.microphoneDevices()) ?? []
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.microphones = devices; self.microphonesLoading = false
+                if let menu = self.microphonePopUp { self.fillMicrophoneMenu(menu) }
+            }
+        }
+    }
+
+    private func recordingChoiceMenu(_ title: String, key: String, values: [Int],
+                                     titles: (Int) -> String, y: CGFloat, parent: NSView) {
+        rowTitle(title, detail: "", y: y, parent: parent)
+        let current = (settings["recording"] as? [String: Any])?[key] as? Int
+        let menu = ClosurePopUpButton(frame: NSRect(x: 528, y: y + 7, width: 150, height: 30), pullsDown: false)
+        menu.tokens = tokens
+        for value in values { menu.menu?.addItem(NSMenuItem(title: titles(value), action: nil, keyEquivalent: "")) }
+        menu.selectItem(at: current.flatMap { values.firstIndex(of: $0) } ?? 0)
+        menu.setAccessibilityLabel(title)
+        menu.change = { [weak self] index in
+            guard let self, values.indices.contains(index) else { return }
+            var recording = self.settings["recording"] as? [String: Any] ?? [:]
+            recording[key] = values[index]; self.settings["recording"] = recording
+            self.changed(rerender: false)
+        }
+        menu.target = menu; menu.action = #selector(ClosurePopUpButton.selectedValue); parent.addSubview(menu)
     }
     private func updatesCard(_ y: CGFloat) -> CGFloat {
         let card = card("updates", title: "Updates", description: "Experimental native build — signed Preview updates are not connected yet.", y: y, height: 150)
@@ -738,12 +836,6 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         menu.addItems(withTitles: values.map { $0.replacingOccurrences(of: "_", with: " ").capitalized })
         menu.selectItem(at: values.firstIndex(of: selected) ?? 0); menu.setAccessibilityLabel(title)
         menu.change = change; menu.target = menu; menu.action = #selector(ClosurePopUpButton.selectedValue); parent.addSubview(menu); return menu
-    }
-
-    private func disabledRow(_ title: String, detail: String, y: CGFloat, parent: NSView) {
-        rowTitle(title, detail: detail, y: y, parent: parent)
-        let button = actionButton("Unavailable", x: 558, y: y + 7, width: 120, parent: parent) {}
-        button.isEnabled = false; button.alphaValue = 0.55
     }
 
     private func colorField(_ label: String, value: String, key: String, x: CGFloat, y: CGFloat, parent: NSView) {

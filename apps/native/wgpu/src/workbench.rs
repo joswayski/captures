@@ -101,6 +101,7 @@ pub struct Workbench {
     action_rx: Receiver<Result<(), String>>,
     action_error: Option<String>,
     quitting: bool,
+    update_notice: crate::update_notice::FixtureHost,
     // Keep election alive until every other host field has been destroyed.
     instance: Option<captures_app::instance::Instance>,
 }
@@ -221,6 +222,12 @@ impl Workbench {
             crate::capture_controls::CaptureControls::fixture()
         };
         let root_hidden = options.live && options.scene == Scene::Idle;
+        let update_notice = crate::update_notice::FixtureHost::new(
+            options.update_state.as_deref().unwrap_or("available"),
+            options
+                .update_tray
+                .unwrap_or(crate::update_notice::FixtureTray::Top),
+        );
         let launched_with_media = !options.open_media.is_empty();
         let (startup_notice_tx, startup_notice_rx) = mpsc::channel();
         let this = Self {
@@ -282,6 +289,7 @@ impl Workbench {
             action_rx,
             action_error: None,
             quitting: false,
+            update_notice,
         };
         this.schedule(&cc.egui_ctx);
         this
@@ -872,6 +880,7 @@ impl Workbench {
                 notice: "These controls won’t show in recordings",
                 warning: false,
                 hide_available: false,
+                reduced_motion: self.options.reduced_motion,
             },
         ) {
             match action {
@@ -1073,6 +1082,8 @@ impl Workbench {
                     fixture_window_hit_test(windows, shell, display, point)
                 });
             }
+            // Reachable by navigating from another scene's exercise run.
+            Scene::Update => {}
             Scene::Idle | Scene::Countdown => unreachable!("exercises rejected by options"),
         }
         emit(
@@ -1776,12 +1787,17 @@ impl eframe::App for Workbench {
                         }
                     }
                 }
+                Scene::Update => self.update_notice.controls(ui, &t),
                 Scene::Countdown => {
                     crate::countdown::show(ui, &t, 3, crate::countdown::Kind::Screenshot, false)
                 }
                 Scene::Idle => {}
             }
         });
+        if self.options.scene == Scene::Update {
+            self.update_notice
+                .show(&ctx, &t, &mut self.preferences_state);
+        }
         // Take only this native viewport's framebuffer; never capture the desktop.
         if self.options.screenshot.is_some()
             && !self.screenshot_requested
