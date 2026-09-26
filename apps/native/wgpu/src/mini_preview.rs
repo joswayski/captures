@@ -102,6 +102,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
     let radius = tokens.number("thumbnail-card-radius");
 
     if view.collapsed {
+        paint_capture_glow(ui, tokens, card, radius, view.highlight);
         ui.painter()
             .rect_filled(card, radius, tokens.color("glass-raised"));
         paint_media(ui, card, radius, view.texture, None, 0., 0.);
@@ -256,6 +257,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             .as_shape(card, radius),
         );
     }
+    paint_capture_glow(ui, tokens, card, radius, view.highlight);
     ui.painter()
         .rect_filled(card, radius, tokens.color("glass-raised"));
     let media = media_hover_progress(ui, tokens, &view, reveal);
@@ -461,8 +463,26 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
     action
 }
 
-/// `thumbnail-capture-highlight`: `0 0 0 1px rgba(accent, .85), 0 0 18px
-/// rgba(accent, .24)` fading out after a card arrives.
+/// `thumbnail-capture-highlight`'s `0 0 18px rgba(accent, .24)` glow. Paint
+/// it before the card: the blurred rect also covers the card's interior,
+/// which the opaque card then hides, leaving the glow outside only.
+fn paint_capture_glow(ui: &egui::Ui, tokens: &Tokens, card: egui::Rect, radius: f32, opacity: f32) {
+    if opacity <= 0. {
+        return;
+    }
+    ui.painter().add(
+        egui::Shadow {
+            offset: [0, 0],
+            blur: 18,
+            spread: 0,
+            color: tokens.color("theme-accent").gamma_multiply(0.24 * opacity),
+        }
+        .as_shape(card, radius),
+    );
+}
+
+/// `thumbnail-capture-highlight`'s `0 0 0 1px rgba(accent, .85)` outline over
+/// the card, fading out after it arrives.
 fn paint_capture_highlight(
     ui: &egui::Ui,
     tokens: &Tokens,
@@ -473,20 +493,13 @@ fn paint_capture_highlight(
     if opacity <= 0. {
         return;
     }
-    let accent = tokens.color("theme-accent");
-    ui.painter().add(
-        egui::Shadow {
-            offset: [0, 0],
-            blur: 18,
-            spread: 0,
-            color: accent.gamma_multiply(0.24 * opacity),
-        }
-        .as_shape(card, radius),
-    );
     ui.painter().rect_stroke(
         card,
         radius,
-        Stroke::new(1., accent.gamma_multiply(0.85 * opacity)),
+        Stroke::new(
+            1.,
+            tokens.color("theme-accent").gamma_multiply(0.85 * opacity),
+        ),
         egui::StrokeKind::Inside,
     );
 }
