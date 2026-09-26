@@ -373,9 +373,9 @@ impl Workbench {
                 }
             }
             TrayAction::SendFeedback => {
-                self.live_preferences = true;
+                // Shipping opens feedback in its own window; the resident
+                // window stays as it is (possibly hidden).
                 self.preferences_state.open_feedback(ctx);
-                self.show_root(ctx);
             }
             TrayAction::History => {
                 self.live_preferences = false;
@@ -1562,6 +1562,8 @@ impl eframe::App for Workbench {
         }
         let t = self.tokens(&ctx);
         ui.set_style(ctx.style_of(ctx.theme()));
+        self.preferences_state
+            .feedback_viewport(&ctx, &t, self.live.is_some());
         if self.live.is_some() && !self.preferences_state.onboarding_complete() {
             egui::CentralPanel::default().show(ui, |ui| {
                 self.setup_ui(ui, &t);

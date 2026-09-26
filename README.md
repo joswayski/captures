@@ -446,7 +446,8 @@ default handlers; [local opt-in instructions](DEVELOPMENT.md#native-development-
 include removal. Signing, distribution and physical file-manager acceptance remain
 open; these are not replacement downloads. TIFF is supported by in-editor import,
 not this external-open path.
-Native Preferences also includes an optional feedback form. Sending shares only
+Native Preferences (and the tray/menu bar Send Feedback…) opens an optional
+feedback form in its own window, matching the shipping layout. Sending shares only
 the message, optional contact, category, and displayed app/system details with
 captur.es; it never attaches captures, files, or diagnostics. Fixture mode cannot
 send feedback, and failed requests preserve the draft for retry.

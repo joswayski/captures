@@ -5,14 +5,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Worker-only feedback. context returns {app_version, os, os_version, arch}
- * without network access. submit {draft: {message, contact: string|null, category}}
+/* Worker-only feedback, except copy: it returns the shared form copy and limits
+ * (captures_app::feedback) without I/O, so hosts may read it on any thread.
+ * context returns {app_version, os, os_version, arch, system_label} without
+ * network access. submit {draft: {message, contact: string|null, category}}
  * sends only those fields and the displayed context, after explicit user consent.
  * No capture, log, or diagnostic attachments. Success/error envelopes and owned
  * UTF-8 pointer rules match captures_app_request_v1; free with
  * captures_settings_free_v1. A process-wide client enforces submission cooldown.
  * HTTP has a 20-second timeout; callers may also wait for serialized submissions.
- * Never call on the UI thread or serialize behind capture/recording work. */
+ * Never call context/submit on the UI thread or serialize behind capture/recording work. */
 char *captures_feedback_request_v1(const char *request_json);
 
 /* Pure, allocation-returning update notice helpers; safe on the UI thread.

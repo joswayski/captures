@@ -499,7 +499,17 @@ def main():
                 time.sleep(.25)
                 card_top = 52 if placement.startswith("top") else 28
                 crop = f"1x1+80+{card_top + 72}"
-                idle_pixel = run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-")
+                def sample():
+                    return run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-")
+
+                def settled():
+                    # The card's arrival animation may still be running: sample
+                    # only once two reads 100ms apart agree.
+                    first = sample()
+                    time.sleep(.1)
+                    return first if sample() == first else None
+
+                idle_pixel = wait(settled, "settled idle preview pixel")
                 shot(preview, f"{prefix}-chrome-idle")
                 run("xdotool", "mousemove", "--sync", "--window", preview, "60", str(card_top + 72))
                 time.sleep(.25)
@@ -508,8 +518,7 @@ def main():
                     "hover must dim only the media", list(idle_pixel), list(hover_pixel))
                 shot(preview, f"{prefix}-chrome-hover")
                 run("xdotool", "mousemove", "--sync", "640", "440")
-                time.sleep(.25)
-                assert run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-") == idle_pixel
+                wait(lambda: sample() == idle_pixel, "preview media returns to idle after hover")
                 if args.drag_only:
                     # Reject our own source without importing it into an editor.
                     # Record the real 420ms shake and settled pointer recovery.

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Native feedback input on private X11; a rejecting loopback proxy prevents delivery.
+"""Native feedback window input on private X11; a rejecting loopback proxy prevents delivery.
+
+The form reports control rectangles through CAPTURES_NATIVE_LAYOUT_PROBE, so
+clicks follow the layout instead of fixed coordinates.
 
 No production feedback is sent. Requires Xvfb, Openbox, xdotool, xclip and
 ImageMagick. Shared HTTP success/cooldown tests use disposable loopback servers.
@@ -63,51 +66,110 @@ def main():
                 for appearance in ("dark", "light"):
                     release.clear()
                     write_completed_settings(output / f"{appearance}.json")
-                    app = spawn([str(binary), "--live", "--history-root", str(output / "history"),
-                        "--settings-file", str(output / f"{appearance}.json"), "--appearance", appearance])
-                    window = run("xdotool", "search", "--sync", "--onlyvisible", "--pid", str(app.pid), "--name", "^Captures$").decode().splitlines()[0]
+                    layout_path = output / f"{appearance}-app.jsonl"
+                    with layout_path.open("w") as layout_out:
+                        app = subprocess.Popen([str(binary), "--live", "--history-root", str(output / "history"),
+                            "--settings-file", str(output / f"{appearance}.json"), "--appearance", appearance],
+                            env={**env, "CAPTURES_NATIVE_LAYOUT_PROBE": "1"}, stdout=layout_out, stderr=log)
+                    children.append(app)
+                    root = run("xdotool", "search", "--sync", "--onlyvisible", "--pid", str(app.pid), "--name", "^Captures$").decode().splitlines()[0]
                     time.sleep(1)
+                    layout = {"offset": 0, "controls": {}}
 
-                    def click(x, y):
+                    def controls():
+                        # The form reports named rectangles (window points) as
+                        # `feedback-layout` events whenever its layout changes.
+                        with layout_path.open() as log_in:
+                            log_in.seek(layout["offset"])
+                            while (line := log_in.readline()).endswith("\n"):
+                                layout["offset"] += len(line.encode())
+                                try:
+                                    event = json.loads(line)
+                                except ValueError:
+                                    continue
+                                if event.get("event") == "feedback-layout":
+                                    layout["controls"] = event["detail"]["controls"]
+                        return layout["controls"]
+
+                    def click(window, x, y):
                         run("xdotool", "windowactivate", "--sync", window,
                             "mousemove", "--window", window, str(x - 1), str(y),
                             "mousemove_relative", "1", "0", "sleep", ".1", "click", "1")
                         time.sleep(.2)
 
-                    def screenshot(name):
+                    def open_feedback():
+                        # Preferences > About > Send feedback "Open" (measured
+                        # from the X11 sandbox root with its lifecycle-error panel).
+                        click(root, 196, 14)
+                        click(root, 90, 321)
+                        time.sleep(.5)
+                        click(root, 847, 501)
+                        window = run("xdotool", "search", "--sync", "--onlyvisible", "--name", "^Send Feedback$").decode().splitlines()[-1]
+                        # Shipping's 640×700 window; keep it fully on the 900 px screen.
+                        run("xdotool", "windowmove", "--sync", window, "0", "0")
+                        deadline = time.monotonic() + 10
+                        while "Send" not in controls():
+                            assert time.monotonic() < deadline, "feedback layout probe"
+                            time.sleep(.1)
+                        return window
+
+                    def control(window, name):
+                        # The footer scrolls with the form, like shipping: wheel
+                        # the page until the named control is fully visible.
+                        for _ in range(40):
+                            rects = controls()
+                            x0, y0, x1, y1 = rects[name]
+                            page = rects["Page"]
+                            if y0 >= page[1] and y1 <= page[3]:
+                                return (x0 + x1) // 2, (y0 + y1) // 2
+                            run("xdotool", "mousemove", "--window", window, str((page[0] + page[2]) // 2),
+                                str((page[1] + page[3]) // 2), "click", "4" if y0 < page[1] else "5")
+                            time.sleep(.2)
+                        raise AssertionError(f"{name} never scrolled into view: {controls()}")
+
+                    def press(window, name):
+                        click(window, *control(window, name))
+
+                    def screenshot(window, name):
                         run("import", "-window", window, str(output / f"feedback-{appearance}-{name}.png"))
 
-                    click(196, 14)  # Preferences, then About/scroll-to-end.
-                    click(90, 319)
-                    click(847, 488)
-                    screenshot("empty")
-                    click(269, 633)  # Empty Send is disabled.
+                    window = open_feedback()
+                    screenshot(window, "empty")
+                    press(window, "Send")  # Empty Send is disabled.
                     assert requests.empty(), "opening/empty Send performed a network request"
-                    click(283, 222)  # Idea.
-                    click(380, 355)
+                    press(window, "Category.Idea")
+                    press(window, "Message")
                     message = "The selector overlaps the toolbar on my second display."
                     run("xdotool", "type", "--clearmodifiers", "--delay", "5", message)
-                    click(269, 633)
+                    press(window, "Send")
                     assert requests.get(timeout=5) == "CONNECT captur.es:443 HTTP/1.1"
-                    screenshot("sending")
-                    click(269, 633)  # Duplicate Send while pending.
+                    screenshot(window, "sending")
+                    press(window, "Send")  # Duplicate Send while pending.
                     assert requests.empty(), "pending request allowed a second send"
-                    click(273, 62)  # Back preserves both draft and pending operation.
-                    click(90, 319)
-                    click(847, 488)
+                    # Closing the window keeps both the draft and the pending send.
+                    run("xdotool", "windowactivate", "--sync", window, "key", "alt+F4")
+                    deadline = time.monotonic() + 10
+                    while subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "^Send Feedback$"],
+                                         env=env, stdout=subprocess.DEVNULL, stderr=log).returncode == 0:
+                        assert time.monotonic() < deadline, "feedback window did not close"
+                        time.sleep(.1)
+                    assert app.poll() is None, "closing feedback quit Captures"
+                    window = open_feedback()
                     release.set()
                     time.sleep(.7)
-                    screenshot("error")
-                    click(380, 355)
+                    assert "Status" in controls(), "offline failure has no status"
+                    screenshot(window, "error")
+                    press(window, "Message")
                     run("xdotool", "key", "ctrl+a", "ctrl+c")
-                    assert run("xclip", "-selection", "clipboard", "-o").decode() == message, "error/navigation lost the draft"
-                    click(269, 633)  # Failure can retry immediately.
+                    assert run("xclip", "-selection", "clipboard", "-o").decode() == message, "error/close lost the draft"
+                    press(window, "Send")  # Failure can retry immediately.
                     assert requests.get(timeout=5) == "CONNECT captur.es:443 HTTP/1.1"
                     time.sleep(.5)
-                    run("xdotool", "key", "alt+F4")
+                    screenshot(window, "retry")
+                    run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
                     assert app.wait(timeout=10) == 0
                     assert not list((output / "history").glob("*/metadata.json")), "feedback created capture media"
-                    print(f"PASS {appearance}: no startup/empty send, explicit submission, busy gate, retained draft, offline retry, clean exit", flush=True)
+                    print(f"PASS {appearance}: own window, no startup/empty send, explicit submission, busy gate, draft kept across close, offline retry, clean exit", flush=True)
                 (output / "acceptance.json").write_text(json.dumps({
                     "passed": True, "appearances": ["dark", "light"],
                     "productionFeedbackSent": False,

@@ -1087,6 +1087,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     if changed {
                         self.resolvedTokens = self.makeTokens()
                         self.liveStyleRevision += 1
+                        self.feedbackController?.restyle(self.tokens)
                     }
                     self.window.appearance = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
                 }, settingsChanged: { [weak self] settings in
@@ -1462,7 +1463,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             feedbackController = FeedbackController(tokens: tokens, live: options.live)
         }
         feedbackController?.restyle(tokens)
-        feedbackController?.present(on: window)
+        // Shipping opens feedback in its own window, not over Preferences.
+        feedbackController?.present()
     }
 
     private func openOutputFolder() {
