@@ -688,7 +688,29 @@ final class RecordingCropOverlay: NSView {
         let border = NSBezierPath(rect: selection)
         tokens.color(editingEnabled ? "theme-accent" : "text-faint").setStroke()
         border.lineWidth = 2; border.stroke()
+        // `.editor-crop-box > span`: the source-pixel size in an accent pill.
+        let sizeText = displayedSizeLabel as NSString
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: tokens.number("text-2xs"),
+                                                     weight: .semibold),
+            .foregroundColor: tokens.color("theme-accent-ink"),
+        ]
+        let textSize = sizeText.size(withAttributes: attributes)
+        let padding = tokens.number("s-3")
+        let pill = NSRect(x: selection.midX - textSize.width / 2 - padding,
+                          y: selection.minY + padding,
+                          width: textSize.width + padding * 2, height: textSize.height + 6)
+        if selection.contains(pill) {
+            tokens.color("theme-accent").setFill()
+            NSBezierPath(roundedRect: pill, xRadius: tokens.number("r-xs"),
+                         yRadius: tokens.number("r-xs")).fill()
+            sizeText.draw(at: NSPoint(x: pill.minX + padding, y: pill.minY + 3),
+                          withAttributes: attributes)
+        }
     }
+
+    /// The crop box's size badge text, in source pixels.
+    var displayedSizeLabel: String { "\(crop.width) × \(crop.height)" }
 }
 
 private extension NativeRecordingCropDragHandle {

@@ -1504,6 +1504,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(overlay.isFlipped)
         XCTAssertEqual(overlay.fittedImageRect, NSRect(x: 12, y: 12, width: 400, height: 200))
         XCTAssertEqual(overlay.displayedCropRect, NSRect(x: 52, y: 32, width: 200, height: 100))
+        XCTAssertEqual(overlay.displayedSizeLabel, "200 × 100", "shipping's crop size badge")
 
         var staged: [NativeRecordingCropRect] = []
         overlay.onStage = { staged.append($0) }

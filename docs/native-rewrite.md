@@ -744,7 +744,7 @@ capped-save pixels can differ. Requested/fallback seek positions are not decoded
 PTS; output cadence can select neighboring frames. Physical macOS, Windows and
 Wayland input, accessibility and mixed-DPI acceptance remain open.
 Both hosts now render the shipping editor's page: an **Edit recording** (or **Edit
-GIF**) header, a Preview card whose toolbar holds Sound, Compare, **Loop preview** and a
+GIF**) header with the dropped-frames caution when the source lost frames, a Preview card whose toolbar holds Sound, Compare, **Loop preview** and a
 Fit | 100% segment above a sunken viewport with an accent overlay Play/Pause circle,
 then a timeline card (range summary, "… selected", filmstrip with dimmed exclusions,
 accent grips and a playhead; clicking the track seeks; Start/End fields, **Reset trim**
@@ -761,6 +761,7 @@ operation, **Show in Folder** after a successful copy, **Replace original…**, 
 edits** and **Save new copy**. Shipping copy and formatting come from
 `captures_app::recording_editor_ui` (AppKit: `captures_recording_editor_ui_v1`): titles,
 `formatEditorTime`, trim summary, `formatFileSize`, the Est. size states and delta,
+the dropped-frames warning (from the snapshot's additive `dropped_frames`),
 stage labels, saved messages, filename validation and every menu's labels and
 descriptions. As in shipping, Preserve quality is offered only for MP4: choosing GIF
 moves Preserve to Compress at the remembered preset (Highest by default), while an

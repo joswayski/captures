@@ -1618,7 +1618,28 @@ fn show_crop_overlay(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, image:
         egui::Stroke::new(tokens.number("s-1"), tokens.color("theme-accent")),
         egui::StrokeKind::Inside,
     );
-    for (_, center, _) in handle_positions(view.crop.unwrap()) {
+    // `.editor-crop-box > span`: the source-pixel size in an accent pill.
+    let crop = view.crop.unwrap();
+    let galley = ui.painter().layout_no_wrap(
+        format!("{} × {}", crop.width, crop.height),
+        egui::FontId::proportional(tokens.number("text-2xs")),
+        tokens.color("theme-accent-ink"),
+    );
+    let pill = egui::Align2::CENTER_TOP.anchor_size(
+        selected.center_top() + egui::vec2(0., tokens.number("s-3")),
+        galley.size() + egui::vec2(tokens.number("s-3") * 2., 6.),
+    );
+    if selected.contains_rect(pill) {
+        ui.painter()
+            .rect_filled(pill, tokens.number("r-xs"), tokens.color("theme-accent"));
+        ui.painter().galley(
+            pill.min + egui::vec2(tokens.number("s-3"), 3.),
+            galley,
+            egui::Color32::PLACEHOLDER,
+        );
+        probe(ui, "Crop size", pill);
+    }
+    for (_, center, _) in handle_positions(crop) {
         let handle = egui::Rect::from_center_size(center, egui::Vec2::splat(tokens.number("s-4")));
         ui.painter()
             .rect_filled(handle, tokens.number("r-xs"), tokens.color("theme-accent"));
@@ -4700,6 +4721,11 @@ mod tests {
         view.source_texture = Some(view.texture.as_ref().unwrap().clone());
         view.adjusting_crop = true;
         let output = render(&mut view, vec![]);
+        assert!(
+            output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.job.text == "200 × 100")),
+            "the crop box shows its source-pixel size like shipping"
+        );
         let (before, clip) = image(&output, id);
         let origin = before.min + egui::vec2(100., 60.);
         assert!(clip.contains(origin));
