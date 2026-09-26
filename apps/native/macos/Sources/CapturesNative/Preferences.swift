@@ -48,46 +48,6 @@ final class NativeLoginItemService: LoginItemServicing {
     }
 }
 
-final class ClosurePopUpButton: NSPopUpButton {
-    var tokens: Tokens!
-    var change: ((Int) -> Void)?
-    @objc func selectedValue() { change?(indexOfSelectedItem) }
-
-    /// Shipping `.custom-select-trigger`: a field with the selected label and a chevron.
-    override func draw(_ dirtyRect: NSRect) {
-        let radius = tokens.number("r-md")
-        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
-        let alpha: CGFloat = isEnabled ? 1 : 0.5
-        tokens.color("surface-field").withAlphaComponent(alpha).setFill(); outline.fill()
-        let focused = window?.firstResponder === self
-        tokens.color(focused ? "theme-accent" : "control-border").withAlphaComponent(alpha).setStroke()
-        outline.lineWidth = 1; outline.stroke()
-        if focused { drawPreferenceFocusRing(tokens, in: bounds.insetBy(dx: -1, dy: -1), radius: radius + 1) }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
-            .foregroundColor: tokens.color("text").withAlphaComponent(alpha),
-        ]
-        let padding = tokens.number("s-4")
-        let text = titleOfSelectedItem ?? title
-        let size = (text as NSString).size(withAttributes: attributes)
-        let textRect = NSRect(x: padding, y: (bounds.height - size.height) / 2,
-            width: max(0, bounds.width - padding * 2 - 14 - tokens.number("s-3")), height: size.height)
-        (text as NSString).draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
-            attributes: attributes)
-        // The shipping 16-unit chevron `m4 6 4 4 4-4`, independent of flipping.
-        let glyph = NSRect(x: bounds.width - padding - 14, y: (bounds.height - 14) / 2, width: 14, height: 14)
-        let scale = glyph.width / 16
-        func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
-            let down = glyph.minY + y * scale
-            return NSPoint(x: glyph.minX + x * scale, y: isFlipped ? down : bounds.height - down)
-        }
-        let chevron = NSBezierPath()
-        chevron.move(to: point(4, 6)); chevron.line(to: point(8, 10)); chevron.line(to: point(12, 6))
-        chevron.lineWidth = 1.7 * scale; chevron.lineCapStyle = .round; chevron.lineJoinStyle = .round
-        tokens.color("text-subtle").withAlphaComponent(alpha).setStroke(); chevron.stroke()
-    }
-}
-
 final class ClosureColorWell: NSColorWell {
     var change: ((NSColor) -> Void)?
     @objc func selectedColor() { change?(color) }
@@ -209,7 +169,7 @@ final class ShortcutRecorderButton: NSButton {
         let focused = recording || window?.firstResponder === self
         tokens.color(focused ? "theme-accent" : "control-border").setStroke()
         outline.lineWidth = 1; outline.stroke()
-        if focused { drawPreferenceFocusRing(tokens, in: bounds.insetBy(dx: -1, dy: -1), radius: radius + 1) }
+        if focused { drawFocusRing(tokens, in: bounds.insetBy(dx: -1, dy: -1), radius: radius + 1) }
         guard !keys.isEmpty else {
             let prompt = PreferencesPolicy.text("shortcuts.prompt")
             let attributes: [NSAttributedString.Key: Any] = [
@@ -367,14 +327,6 @@ enum PreferencesPolicy {
     }
 }
 
-/// `--focus-ring-tight` drawn just inside `rect`.
-func drawPreferenceFocusRing(_ tokens: Tokens, in rect: NSRect, radius: CGFloat) {
-    let ring = NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: radius, yRadius: radius)
-    ring.lineWidth = 2
-    tokens.color("theme-accent").withAlphaComponent(0.55).setStroke()
-    ring.stroke()
-}
-
 /// Hover tracking shared by the Preferences controls.
 class PreferenceHoverButton: NSButton {
     private(set) var hovered = false
@@ -435,7 +387,7 @@ final class PreferenceNavButton: PreferenceHoverButton {
         let size = (title as NSString).size(withAttributes: attributes)
         (title as NSString).draw(at: NSPoint(x: tokens.number("s-4"), y: (bounds.height - size.height) / 2),
             withAttributes: attributes)
-        if isFocused { drawPreferenceFocusRing(tokens, in: bounds, radius: radius) }
+        if isFocused { drawFocusRing(tokens, in: bounds, radius: radius) }
     }
 }
 
@@ -472,7 +424,7 @@ final class PreferenceSwitchButton: PreferenceHoverButton {
         let knob = NSRect(x: track.minX + 3 + (isOn ? 13 : 0), y: track.midY - 6.5, width: 13, height: 13)
         tokens.color(isOn ? "theme-accent-ink" : "text-subtle").withAlphaComponent(alpha).setFill()
         NSBezierPath(ovalIn: knob).fill()
-        if isFocused { drawPreferenceFocusRing(tokens, in: track.insetBy(dx: -2, dy: -2), radius: 11) }
+        if isFocused { drawFocusRing(tokens, in: track.insetBy(dx: -2, dy: -2), radius: 11) }
     }
 }
 
@@ -510,7 +462,7 @@ final class PreferenceSegmentButton: PreferenceHoverButton {
         let size = (title as NSString).size(withAttributes: attributes)
         (title as NSString).draw(at: NSPoint(x: (bounds.width - size.width) / 2,
             y: (bounds.height - size.height) / 2), withAttributes: attributes)
-        if isFocused { drawPreferenceFocusRing(tokens, in: bounds, radius: radius) }
+        if isFocused { drawFocusRing(tokens, in: bounds, radius: radius) }
     }
 }
 
@@ -581,7 +533,7 @@ final class ThemeChipButton: PreferenceHoverButton {
             ShippingIcons.stroke("check", in: NSRect(x: bounds.maxX - gap - 11,
                 y: (bounds.height - 11) / 2, width: 11, height: 11))
         }
-        if isFocused { drawPreferenceFocusRing(tokens, in: bounds, radius: radius) }
+        if isFocused { drawFocusRing(tokens, in: bounds, radius: radius) }
     }
 }
 
@@ -832,6 +784,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         scroll = NSScrollView(frame: NSRect(x: width, y: Self.headerHeight + 1, width: root.bounds.width - width,
             height: root.bounds.height - Self.headerHeight - 1))
         scroll.autoresizingMask = [.width, .height]; scroll.hasVerticalScroller = true; scroll.drawsBackground = false
+        scroll.useTokenScrollers(tokens)
         document = Surface(frame: NSRect(x: 0, y: 0, width: scroll.bounds.width, height: 400))
         scroll.documentView = document; root.addSubview(scroll)
         scroll.contentView.postsBoundsChangedNotifications = true

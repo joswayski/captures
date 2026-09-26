@@ -300,6 +300,7 @@ fn control_button(
     let label = control.label;
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     if response.has_focus() {
+        crate::primitives::focus_indicated(ui.ctx());
         ui.painter().rect_stroke(
             response.rect,
             tokens.number("r-sm") as u8,

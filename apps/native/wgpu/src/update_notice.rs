@@ -388,10 +388,13 @@ pub fn show(
                 if let Some(empty) = &notes.empty {
                     ui.label(text(tokens, empty, "text-sm", "text-subtle"));
                 }
-                egui::ScrollArea::vertical()
-                    .id_salt("update-notes")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                crate::primitives::scroll_area(
+                    ui,
+                    tokens,
+                    egui::ScrollArea::vertical()
+                        .id_salt("update-notes")
+                        .auto_shrink([false, false]),
+                    |ui| {
                         for (index, group) in notes.groups.iter().enumerate() {
                             if index > 0 {
                                 ui.add_space(tokens.number("s-2"));
@@ -439,7 +442,8 @@ pub fn show(
                                 });
                             }
                         }
-                    });
+                    },
+                );
             });
         }
         if let Some(download) = &presentation.download {
