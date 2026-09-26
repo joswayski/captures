@@ -1593,14 +1593,20 @@ impl eframe::App for Workbench {
             if self.live_preferences {
                 egui::Panel::left("live-preferences-sidebar")
                     .exact_size(196.)
+                    .resizable(false)
+                    .show_separator_line(false)
+                    .frame(Preferences::sidebar_frame(&t))
                     .show(ui, |ui| {
+                        Preferences::sidebar_border(ui, &t);
                         self.preferences_state.sidebar(ui, &t);
                     });
-                egui::CentralPanel::default().show(ui, |ui| {
-                    if self.preferences_state.ui(ui, &t, true) {
-                        self.live_preferences = false;
-                    }
-                });
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().fill(t.color("surface-canvas")))
+                    .show(ui, |ui| {
+                        if self.preferences_state.ui(ui, &t, true) {
+                            self.live_preferences = false;
+                        }
+                    });
             } else {
                 live.ui(ui, &t, frame, || self.preferences_state.snapshot());
             }
@@ -1642,21 +1648,26 @@ impl eframe::App for Workbench {
                 Scene::CaptureControls | Scene::Region | Scene::Window
             )
         {
+            let preferences = self.options.scene == Scene::Preferences;
             egui::Panel::left("navigation")
                 .exact_size(196.)
                 .resizable(false)
-                .frame(
+                .show_separator_line(!preferences)
+                .frame(if preferences {
+                    Preferences::sidebar_frame(&t)
+                } else {
                     egui::Frame::new()
                         .fill(t.color("surface-sunken"))
-                        .inner_margin(t.number("s-5") as i8),
-                )
+                        .inner_margin(t.number("s-5") as i8)
+                })
                 .show(ui, |ui| {
-                    ui.add_space(t.number("s-5"));
-                    ui.heading("Captures");
-                    ui.add_space(t.number("s-8"));
-                    if self.options.scene == Scene::Preferences {
+                    if preferences {
+                        Preferences::sidebar_border(ui, &t);
                         self.preferences_state.sidebar(ui, &t);
                     } else {
+                        ui.add_space(t.number("s-5"));
+                        ui.heading("Captures");
+                        ui.add_space(t.number("s-8"));
                         for scene in Scene::VISIBLE {
                             if ui
                                 .add_sized(
@@ -1682,7 +1693,7 @@ impl eframe::App for Workbench {
                 if self.options.floating
                     || matches!(
                         self.options.scene,
-                        Scene::CaptureControls | Scene::Region | Scene::Window
+                        Scene::CaptureControls | Scene::Region | Scene::Window | Scene::Preferences
                     )
                 {
                     0

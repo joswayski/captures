@@ -1118,12 +1118,13 @@ def main():
 
                 def open_shortcuts():
                     click(root, 196, 18)
-                    click(root, 98, 144)
+                    click(root, 98, 189)
                     time.sleep(.4)
 
                 # Measured live root-client positions, not fixture coordinates.
                 # Both normal and focused states retain the same row geometry.
-                rows = [242, 304, 366, 428, 490, 552, 614]
+                rows = [317, 353, 389, 425, 461, 497, 533]
+                recorder_x = 745  # Recorders are right-aligned, as in shipping.
                 paths = [("new_capture_shortcut",), ("region_shortcut",),
                          ("window_shortcut",), ("display_shortcut",),
                          ("recording", "video_shortcut"), ("recording", "window_shortcut"),
@@ -1141,7 +1142,7 @@ def main():
 
                 def record(index, chord, expected):
                     before = stored_keys()
-                    click(root, 400, rows[index])
+                    click(root, recorder_x, rows[index])
                     run("xdotool", "key", chord)
                     wait(lambda: stored_keys()[index] == expected, f"persist {paths[index]} = {expected}")
                     after = stored_keys()
@@ -1157,7 +1158,7 @@ def main():
                 # callback (without releasing the OS grab) cannot pass this.
                 record(1, "ctrl+shift+F7", "Control+Shift+F7")
                 baseline = stored_keys()
-                click(root, 400, rows[0])
+                click(root, recorder_x, rows[0])
                 run("xdotool", "keydown", "ctrl", "sleep", ".2")
                 shot(root, "shortcuts-dark-recording")
                 run("xdotool", "keyup", "ctrl", "key", "p", "sleep", ".2")
@@ -1169,7 +1170,7 @@ def main():
                 other_app = spawn("editor-focus", ["xmessage", "-title", "Recorder focus fixture",
                     "-geometry", "220x70+1040+250", "Recorder blur target"])
                 other = wait(lambda: windows("Recorder focus fixture"), "recorder blur target")[0]
-                click(root, 400, rows[0])
+                click(root, recorder_x, rows[0])
                 run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
                 time.sleep(.3)
                 run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
@@ -1179,7 +1180,7 @@ def main():
 
                 # The existing Region chord is deliverable to another recorder,
                 # but the settings validator must reject that duplicate.
-                click(root, 400, rows[2])
+                click(root, recorder_x, rows[2])
                 run("xdotool", "key", "ctrl+shift+F7", "sleep", ".5")
                 shot(root, "shortcuts-duplicate-error")
                 assert stored_keys() == baseline, "duplicate shortcut was persisted"
@@ -1212,7 +1213,7 @@ def main():
                 run("xdotool", "key", "Escape")
                 wait(lambda: not windows(SELECTOR) and windows("Captures"), "navigation shortcut cancel")
                 open_shortcuts()
-                click(root, 400, rows[0])
+                click(root, recorder_x, rows[0])
                 click(root, 80, 18)  # Leaving Preferences must cancel the recorder.
                 run("xdotool", "key", "ctrl+q")
                 assert editor.wait(timeout=10) == 0, "stale recorder swallowed workspace Quit"
