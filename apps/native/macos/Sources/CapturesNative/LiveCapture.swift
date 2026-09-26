@@ -821,11 +821,30 @@ final class LiveCaptureController: NSObject {
         switch action {
         case .edit:
             guard !historyRoot.isEmpty, cards[artifact.id]?.missing != true else { return }
-            presentEditor(artifact, requiresCurrentSelection: false)
+            // Shipping History Edit restores the floating preview first
+            // (`restore_history_artifact`), then opens the editor; a failed
+            // restore opens nothing.
+            guard !artifact.isRecording, let miniPreviews else {
+                presentEditor(artifact, requiresCurrentSelection: false); return
+            }
+            cardBusy = (artifact.id, action); updateActions()
+            restore(artifact, with: miniPreviews) { [weak self] outcome in
+                guard let self else { return }
+                if self.cardBusy?.id == artifact.id, self.cardBusy?.action == .edit { self.cardBusy = nil }
+                switch outcome {
+                case .shown, .alreadyShowing, .cancelled:
+                    self.presentEditor(artifact, requiresCurrentSelection: false)
+                case .failed(let error):
+                    self.showError("Couldn’t restore screenshot", error)
+                }
+                self.updateActions()
+            }
         case .restore:
             guard !artifact.isRecording, let miniPreviews else { return }
             cardBusy = (artifact.id, action); setRestoredCard(nil); updateActions()
-            restore(artifact, with: miniPreviews)
+            restore(artifact, with: miniPreviews) { [weak self] outcome in
+                self?.finishRestore(artifact.id, outcome)
+            }
         case .copy:
             guard !artifact.isRecording else { return }
             copyImage(at: artifact.imagePath, artifactID: artifact.id)
@@ -839,20 +858,20 @@ final class LiveCaptureController: NSObject {
 
     /// Shipping History Restore: reopen a screenshot through the mini-preview
     /// stack, with no clipboard copy. An empty stack opens on the selected display.
-    private func restore(_ artifact: CaptureArtifact, with previews: MiniPreviewController) {
+    /// Shared by Restore and Edit; `completion` runs on the main queue.
+    private func restore(_ artifact: CaptureArtifact, with previews: MiniPreviewController,
+                         completion: @escaping (MiniPreviewRestoreOutcome) -> Void) {
         let index = displayMenu.indexOfSelectedItem
         let screenID = displays.indices.contains(index)
             ? displays[index].id : window.screen.flatMap(MiniPreviewController.displayID(for:))
-        run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self, weak previews] result in
-            guard let self else { return }
+        run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak previews] result in
             switch result {
             case .success(let preferences):
-                guard let previews else { self.finishRestore(artifact.id, .cancelled); return }
-                previews.restore(artifact, on: screenID, settings: preferences.miniPreviewSettings) {
-                    [weak self] outcome in self?.finishRestore(artifact.id, outcome)
-                }
+                guard let previews else { completion(.cancelled); return }
+                previews.restore(artifact, on: screenID, settings: preferences.miniPreviewSettings,
+                                 completion: completion)
             case .failure(let error):
-                self.finishRestore(artifact.id, .failed(error))
+                completion(.failed(error))
             }
         }
     }
@@ -2353,7 +2372,7 @@ final class LiveCaptureController: NSObject {
                             reportError: { [weak self] message in self?.reportError(message) },
                             didSaveCopy: { [weak self] in self?.loadHistory() },
                             didReplaceOriginal: { [weak self] artifactID in
-                                self?.miniPreviews?.dismiss(artifactID)
+                                self?.miniPreviews?.dismiss(artifactID, exit: nil)
                                 self?.loadHistory(select: artifactID)
                             })
                         self.recordingEditor?.didClose = { [weak self] artifactID in
@@ -2379,7 +2398,7 @@ final class LiveCaptureController: NSObject {
                         reportError: { [weak self] message in self?.reportError(message) },
                         didSaveCopy: { [weak self] in self?.loadHistory() },
                         didReplaceOriginal: { [weak self] artifactID in
-                            self?.miniPreviews?.dismiss(artifactID)
+                            self?.miniPreviews?.dismiss(artifactID, exit: nil)
                             self?.loadHistory(select: artifactID)
                         })
                     // Mini previews show "In editor" while this window shows their capture.
@@ -2447,10 +2466,13 @@ final class LiveCaptureController: NSObject {
                 let copied = pasteboard.setData(png, forType: .png)
                 self.status.stringValue = copied
                     ? "Copied the selected image." : "Couldn’t copy the selected image."
+                self.miniPreviews?.recordCopyResult(artifactID: artifactID, succeeded: copied)
                 if copied {
                     self.miniPreviews?.recordClipboardCopy(artifactID: artifactID, pasteboard: pasteboard)
                 }
-            case .failure(let error): self.showError("Couldn’t copy image", error)
+            case .failure(let error):
+                self.miniPreviews?.recordCopyResult(artifactID: artifactID, succeeded: false)
+                self.showError("Couldn’t copy image", error)
             }
         }
     }

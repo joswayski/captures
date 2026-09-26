@@ -209,6 +209,48 @@ final class HistoryClearTests: XCTestCase {
         XCTAssertEqual(transport.deletedIDs, [], "Restore never changes History")
     }
 
+    func testEditRestoresTheFloatingPreviewBeforeOpeningTheEditor() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = PreviewView.fixtureImage(scale: 1)
+        let path = directory.appendingPathComponent("fixture.png")
+        try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])).write(to: path)
+        let settingsPath = directory.appendingPathComponent("settings.json").path
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 600)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame); window.contentView = root
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
+            failPartway: false, kinds: ["screenshot", "video"])
+        let loader = RestoreImageLoader(NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height)))
+        let previews = MiniPreviewController(tokens: tokens, imageLoader: { try loader.load($0) })
+        defer { previews.close() }
+        let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
+            historyRoot: directory.path, settingsPath: settingsPath, transport: transport,
+            recoveryWorker: EmptyRecoveryWorker(), miniPreviews: previews, showPreferences: {})
+        defer { withExtendedLifetime(controller) {} }
+        window.makeKeyAndOrderFront(nil)
+        let grid = try historyGrid(root)
+        try waitUntil { grid.numberOfRows == 2 && grid.visibleCards.count == 2 }
+        let edit = try XCTUnwrap(grid.card(at: 0)?.actionButtons[0])
+        XCTAssertEqual(edit.title, "Edit")
+        XCTAssertTrue(previews.presentedArtifactIDs.isEmpty)
+
+        // Shipping History Edit calls restore_history_artifact first: the
+        // screenshot comes back as the front preview, without Restore's
+        // "Restored" feedback or a clipboard copy, then the editor opens.
+        edit.performClick(nil)
+        try waitUntil { previews.decodedArtifactIDs == ["item-0"] }
+        XCTAssertTrue(previews.isPanelVisible)
+        XCTAssertEqual(grid.card(at: 0)?.actionButtons[1].title, "Restore")
+        XCTAssertFalse(previews.isClipboardCurrent(for: "item-0"))
+        XCTAssertEqual(transport.deletedIDs, [], "Edit never changes History")
+    }
+
     func testCardDeleteNeedsSecondClickExceptMissingRecordings() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

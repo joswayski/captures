@@ -6571,6 +6571,13 @@ impl Live {
                     );
                 }
                 Ok(settings) => {
+                    // Shipping History Edit restores the floating preview
+                    // (`restore_history_artifact`) before opening the editor;
+                    // a failed restore opens nothing.
+                    let target = capture_target(frame, &self.displays, self.display_id.as_deref());
+                    if !self.restore_for_edit(ctx, id, &settings, target) {
+                        return;
+                    }
                     let mode = entry.mode.unwrap_or(captures_capture::CaptureMode::Region);
                     self.open_screenshot_editor(
                         ctx,
@@ -6649,6 +6656,43 @@ impl Live {
         }
         request_hidden_root_paint(ctx);
         ctx.request_repaint();
+    }
+
+    /// History Edit's restore: the same stack insertion as Restore, without
+    /// its busy state or "Restored" feedback. Returns whether the editor may
+    /// open (the card is showing, decoding, or already in the stack).
+    fn restore_for_edit(
+        &mut self,
+        ctx: &egui::Context,
+        id: &str,
+        settings: &AppSettings,
+        target: Option<CaptureTarget>,
+    ) -> bool {
+        let Some(index) = self.artifact_index(id) else {
+            return false;
+        };
+        let artifact = &self.artifacts[index];
+        let editor_open = self.editors.get(id).is_some_and(|editor| !editor.closed());
+        match self
+            .previews
+            .restore_artifact(artifact, settings, target, editor_open)
+        {
+            Ok(RestoreStart::AlreadyShowing) => true,
+            Ok(RestoreStart::Decode(guard, path)) => {
+                let _ = self.tx.send(Job::DecodePreview {
+                    generation: guard.generation,
+                    artifact_id: guard.artifact_id,
+                    path,
+                });
+                request_hidden_root_paint(ctx);
+                ctx.request_repaint();
+                true
+            }
+            Err(error) => {
+                self.error = Some(error);
+                false
+            }
+        }
     }
 
     /// A preview decode finished; end the matching Restore.
@@ -9039,6 +9083,78 @@ mod tests {
                 .as_deref()
                 .is_some_and(|error| error.contains("unreadable"))
         );
+        live.flush();
+    }
+
+    #[test]
+    fn history_edit_restores_the_preview_before_opening_the_editor() {
+        use captures_app::history_view::CardAction;
+        let root = tempfile::tempdir().unwrap();
+        let shown = preview_artifact(root.path(), [10, 20, 30, 255]);
+        let edited = preview_artifact(root.path(), [30, 20, 10, 255]);
+        let (shown_id, edited_id) = (shown.entry.id.clone(), edited.entry.id.clone());
+        let ctx = egui::Context::default();
+        let frame = eframe::Frame::_new_kittest();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.flush();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live.recovery.blocking() {
+            live.recovery.receive();
+            assert!(
+                Instant::now() < deadline,
+                "initial recovery list did not settle"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let (jobs, requests) = mpsc::channel();
+        live.tx = jobs;
+        live.pending = 0;
+        live.artifacts = vec![shown, edited];
+        let settings = AppSettings::default();
+        ctx.begin_pass(Default::default());
+
+        // An empty stack has no display to open on here: nothing opens.
+        live.card_action(
+            &ctx,
+            &edited_id,
+            CardAction::Edit,
+            Ok(settings.clone()),
+            &frame,
+        );
+        assert!(live.editors.is_empty() && live.error.is_some());
+        assert!(live.previews.stack.ids().is_empty());
+
+        // With a pile on screen, Edit brings the capture back as the front
+        // card, then opens its editor, without Restore's busy state.
+        live.error = None;
+        assert!(matches!(
+            live.previews.restore_artifact(
+                &live.artifacts[0],
+                &settings,
+                Some(preview_target()),
+                false
+            ),
+            Ok(RestoreStart::Decode(..))
+        ));
+        live.card_action(
+            &ctx,
+            &edited_id,
+            CardAction::Edit,
+            Ok(settings.clone()),
+            &frame,
+        );
+        assert_eq!(live.previews.stack.ids(), [shown_id, edited_id.clone()]);
+        assert!(matches!(
+            requests.try_recv(),
+            Ok(Job::DecodePreview { artifact_id, .. }) if artifact_id == edited_id
+        ));
+        assert!(live.editors.contains_key(&edited_id));
+        assert!(live.card_restoring.is_none() && live.card_restored.is_none());
+
+        // Editing again neither duplicates nor reorders the card.
+        live.card_action(&ctx, &edited_id, CardAction::Edit, Ok(settings), &frame);
+        assert_eq!(live.previews.stack.ids().len(), 2);
+        assert!(requests.try_recv().is_err());
         live.flush();
     }
 
