@@ -163,9 +163,8 @@ final class ShortcutRecorderButton: NSButton {
         // Shipping `kbd`: `--text-2xs` semibold chips with 5 pt padding.
         let baseSize = tokens.number("text-2xs")
         let gap: CGFloat = 4
-        let minimumPadding: CGFloat = 4
         let minimumFontSize: CGFloat = 9
-        func layout(_ size: CGFloat) -> (NSFont, [NSRect], CGFloat) {
+        func layout(_ size: CGFloat, minimumPadding: CGFloat = 4) -> (NSFont, [NSRect], CGFloat) {
             let font = NSFont.systemFont(ofSize: size, weight: .semibold)
             let widths = values.map { ceil(($0 as NSString).size(withAttributes: [.font: font]).width) }
             let remaining = available - widths.reduce(0, +)
@@ -188,6 +187,12 @@ final class ShortcutRecorderButton: NSButton {
         while result.2 > available, size - 0.25 >= minimumFontSize {
             size -= 0.25
             result = layout(size)
+        }
+        // At the smallest legible size, tighten chip padding before overflowing.
+        var padding: CGFloat = 4
+        while result.2 > available, padding - 0.5 >= 2 {
+            padding -= 0.5
+            result = layout(size, minimumPadding: padding)
         }
         return (result.0, result.1)
     }
