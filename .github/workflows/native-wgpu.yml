@@ -166,6 +166,9 @@ jobs:
           for device in default explicit; do
             /usr/bin/python3 apps/native/x11_recording_smoke.py --device-change "$device" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-device-$device"
           done
+      - name: Exercise the failed-start HUD, Retry recording and Delete on private X11
+        if: matrix.suite == 'capture'
+        run: /usr/bin/python3 apps/native/x11_recording_smoke.py --start-failure --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-start-failure
       - name: Capture regions while a native recording continues on private X11
         if: matrix.suite == 'capture'
         run: /usr/bin/python3 apps/native/x11_recording_smoke.py --screenshot-only --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-screenshot
