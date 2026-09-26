@@ -169,13 +169,18 @@ RGB/grayscale ICC imports convert to sRGB with straight alpha preserved; untagge
 images assume sRGB. Unsupported/malformed ICC profiles (including CMYK), PNG
 gamma/chromaticity-only metadata and CICP return recoverable errors asking for an
 sRGB conversion first. Import normalizes to 8-bit RGBA, not HDR/wide-gamut editing.
-The Output panel offers PNG/JPEG/WebP, Preserve/Compress/Maximum quality, custom
-PNG palette sizes and an optional hard byte limit. Preview output runs the real
-shared encoder and decoder on the worker, reports the exact byte count, and
-switches between edited and encoded pixels. Changing options or editing clears
-stale output; encoding errors retain the draft and allow retry. Preview does not
-write files or change undo/redo. Save new copy and lossless edited-image Copy pixels
-are connected. Linux enables arboard's
+The bottom export bar's **Export settings** disclosure offers output size,
+Preserve/Compress/Maximum quality, custom PNG palette sizes and an optional hard
+byte limit; the format is the filename's suffix menu. **Est. size** re-encodes on a
+background thread after a 220 ms debounce (never on the session worker) and shows
+the % change from the original. **Encoded** runs the real shared encoder and decoder
+on the worker and shows the encoded pixels; changing options or editing clears
+stale output, and encoding errors retain the draft and allow retry. **Save** follows
+the shipping model through `captures_app::editor_export`: overwrite a saved
+original by default (History entry and path re-checked), or save a new file when
+**Save as new file** is on, the name/folder changed or the format differs. The
+saved file becomes the next overwrite target, and **Show in Folder** opens its
+folder. Lossless edited-image **Copy image** pixels are connected. Linux enables arboard's
 native Wayland data-control backend before its X11 fallback. Compositors without
 `ext-data-control-v1` or `wlr-data-control` return a recoverable clipboard error.
 This does not enable Wayland capture or close editor/input parity.
@@ -279,7 +284,7 @@ quits so the process cannot be stranded. Opening the output folder also requires
 | --- | --- | --- |
 | Preferences | Persisted appearance/presets/custom colors, capture/media defaults, folder picker, Find, save errors/retry | OS integrations, full font/visual/input parity |
 | History | Empty/100/1,000 rows, filters, virtualized scrolling, selection, image-backed rows | Real files, open/delete, thumbnail cache pressure: rows intentionally share one synthetic texture |
-| HUD | Running/paused/muted/busy/no-microphone fixture matching the bounded live controls; fixed glass palette even in light mode; live Hide/temporary notice/restore | Screenshot during recording |
+| HUD | Running/paused/muted/busy/no-microphone/saving/failed fixture matching the bounded live controls; fixed glass palette even in light mode; live Hide/temporary notice/restore | Screenshot during recording |
 | Preview | Cold/reused texture, fade/settle, reset mid-animation, explicit Reduce motion, optional transparent native window | **Not the shipping dust effect**: no isolated-chip blur, dust trajectories, source treatment or pile/drag/hit-region parity |
 | Editor | 2048×1152 synthetic image, clipped canvas, pan/zoom/rotate, separate outline/text layers, editable text field | Real document, layer editing/undo/export; outlines/text do not rotate with the image |
 | Capture Controls | Unified Screenshot/Record and Region/Window/Full screen controls over one prepared session; recording options, frozen/live previews, aspect/display pickers, keyboard confirm/cancel and draggable toolbar | Fixture uses synthetic pixels; real recording editing/export is a separate History action |

@@ -241,6 +241,11 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private var loginItemPending = false
     private var loginItemError: String?
     private var loginItemGeneration = 0
+    /// Capture-menu deep link: the setting row to reveal and highlight.
+    private(set) var highlightedSetting: String?
+    private var highlightRevealed = false
+    private var highlightGeneration = 0
+    private weak var highlightView: NSView?
 
     init(root: Surface, store: SettingsStore, tokens: @escaping () -> Tokens,
          appearanceChanged: @escaping (String, String, [String: Any]) -> Void,
@@ -348,6 +353,43 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         scroll.contentView.scroll(to: NSPoint(x: 0, y: min(oldY, max(0, y - scroll.contentSize.height))))
         updateFind()
         updateActiveSection()
+        if !rebuilding { revealHighlightIfNeeded() }
+    }
+
+    /// Shipping `preferences-target`: scroll a setting row to the middle of the
+    /// view and highlight it for `PREFERENCE_HIGHLIGHT` (2.4 s).
+    func revealSetting(_ key: String) {
+        highlightedSetting = key; highlightRevealed = false
+        highlightGeneration += 1
+        let generation = highlightGeneration
+        if !settings.isEmpty { rebuildCards() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + CaptureMenuPolicy.copy.highlightSeconds) {
+            [weak self] in
+            guard let self, self.highlightGeneration == generation else { return }
+            self.highlightedSetting = nil
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = Double(self.tokens.number("dur-3")) / 1000
+                self.highlightView?.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                guard let self, self.highlightedSetting == nil else { return }
+                self.highlightView?.removeFromSuperview()
+            })
+        }
+    }
+
+    /// The highlighted row's frame in the scrolled document, if shown.
+    var highlightedRowFrame: NSRect? {
+        guard let view = highlightView, let parent = view.superview else { return nil }
+        return parent.convert(view.frame, to: document)
+    }
+
+    private func revealHighlightIfNeeded() {
+        guard !highlightRevealed, let target = highlightedRowFrame else { return }
+        highlightRevealed = true
+        let visible = scroll.contentSize.height
+        let maxY = max(0, document.frame.height - visible)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: min(maxY, max(0, target.midY - visible / 2))))
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 
     private func card(_ id: String, title: String, description: String, y: CGFloat, height: CGFloat) -> Surface {
@@ -793,6 +835,18 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     private func toggle(_ title: String, detail: String, key: String, y: CGFloat, parent: NSView, enabled: Bool = true) {
+        if key == highlightedSetting {
+            // Shipping `.preference-target-highlight`: selected wash and accent ring.
+            let highlight = Surface(frame: NSRect(x: 12, y: y - 8, width: parent.bounds.width - 24, height: 64))
+            highlight.identifier = NSUserInterfaceItemIdentifier("preferences-highlight.\(key)")
+            highlight.wantsLayer = true
+            highlight.layer?.cornerRadius = tokens.number("r-lg")
+            highlight.layer?.backgroundColor = tokens.color("surface-selected").cgColor
+            highlight.layer?.borderWidth = 2
+            highlight.layer?.borderColor = tokens.color("theme-accent").withAlphaComponent(0.62).cgColor
+            highlight.setAccessibilityElement(false)
+            parent.addSubview(highlight); highlightView = highlight
+        }
         rowTitle(title, detail: detail, y: y, parent: parent)
         let button = actionButton(settings.bool(key) ? "On" : "Off", x: 600, y: y + 8, width: 78, parent: parent) { [weak self] in
             guard let self else { return }; self.set(!self.settings.bool(key), for: key, rerender: true)
@@ -972,6 +1026,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         buildShell()
         rebuildCards()
         scroll.contentView.scroll(to: NSPoint(x: 0, y: oldY))
+        revealHighlightIfNeeded()
         if let query { showFind(); findField?.stringValue = query; updateFind() }
         else if let focused {
             func restore(_ view: NSView) -> NSView? {

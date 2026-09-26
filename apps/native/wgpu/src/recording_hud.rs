@@ -1,3 +1,5 @@
+use captures_app::recording_hud::{Control, ControlView};
+use captures_recording::RecordingState;
 use eframe::egui::{self, Align, Layout, Rect, RichText, Stroke, StrokeKind, Vec2};
 
 use crate::tokens::Tokens;
@@ -21,15 +23,19 @@ enum Icon {
     Shipping(&'static str),
 }
 
+#[derive(Clone, Copy)]
 pub struct View<'a> {
-    pub paused: bool,
+    /// Lifecycle state the HUD presents (running, paused, saving or failed).
+    pub state: RecordingState,
     pub busy: bool,
     pub has_microphone: bool,
     pub microphone_muted: bool,
     pub microphone_peak: f32,
     pub elapsed_ms: u64,
+    /// The one-line capture privacy notice above the controls.
     pub notice: &'a str,
-    pub warning: bool,
+    /// Shipping `.recording-hud-error`: one signal line below the card.
+    pub error: Option<&'a str>,
     pub hide_available: bool,
     pub reduced_motion: bool,
 }
@@ -40,6 +46,14 @@ fn control_rects_id() -> egui::Id {
 
 pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action> {
     let mut action = None;
+    let policy = captures_app::recording_hud::present(&captures_app::recording_hud::Input {
+        state: view.state,
+        busy: view.busy,
+        has_microphone: view.has_microphone,
+        microphone_muted: view.microphone_muted,
+        hide_available: view.hide_available,
+    });
+    let bounds = ui.max_rect();
     // Shipping `startHudDrag`: the HUD background moves the window, controls never do.
     // Registered first so every control sits above it in hit testing.
     let background = ui.interact(
@@ -74,195 +88,133 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         widget.bg_stroke = Stroke::NONE;
         widget.corner_radius = (tokens.number("r-sm") as u8).into();
     }
+    let mut tooltip = None;
     ui.add_space(6.);
-    ui.horizontal(|ui| {
-        ui.add_space(6.);
-        egui::Frame::new()
-            .fill(tokens.color("glass-strong"))
-            .stroke(Stroke::new(1., tokens.color("glass-border")))
-            .corner_radius(tokens.number("r-xl") as u8)
-            .inner_margin(egui::Margin::symmetric(12, 8))
-            .show(ui, |ui| {
-                ui.set_width(394.);
-                ui.spacing_mut().item_spacing = Vec2::new(4., 6.);
-                ui.with_layout(Layout::top_down(Align::Center), |ui| {
-                    ui.add(
-                        egui::Label::new(notice_job(tokens, view.notice, view.warning))
-                            .wrap_mode(egui::TextWrapMode::Truncate),
-                    );
-                    ui.horizontal(|ui| {
-                        ui.allocate_ui_with_layout(
-                            Vec2::new(103., 32.),
-                            Layout::left_to_right(Align::Center),
-                            |ui| {
-                                let (status_rect, _) =
-                                    ui.allocate_exact_size(Vec2::splat(18.), egui::Sense::hover());
-                                paint_status_dot(
-                                    ui,
-                                    status_rect.center(),
-                                    tokens.color(if view.paused {
-                                        "theme-accent"
-                                    } else {
-                                        "theme-signal"
-                                    }),
-                                    pulse_phase(
-                                        ui.input(|input| input.time),
-                                        view.paused || view.reduced_motion,
-                                    ),
-                                );
-                                ui.vertical_centered_justified(|ui| {
-                                    ui.monospace(
-                                        captures_app::recording_timeline::format_recording_time(
-                                            view.elapsed_ms,
+    let card = ui
+        .horizontal(|ui| {
+            ui.add_space(6.);
+            egui::Frame::new()
+                .fill(tokens.color("glass-strong"))
+                .stroke(Stroke::new(1., tokens.color("glass-border")))
+                .corner_radius(tokens.number("r-xl") as u8)
+                .inner_margin(egui::Margin::symmetric(12, 8))
+                .show(ui, |ui| {
+                    ui.set_width(394.);
+                    ui.spacing_mut().item_spacing = Vec2::new(4., 6.);
+                    ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                        ui.add(
+                            egui::Label::new(notice_job(tokens, view.notice))
+                                .wrap_mode(egui::TextWrapMode::Truncate),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.allocate_ui_with_layout(
+                                Vec2::new(103., 32.),
+                                Layout::left_to_right(Align::Center),
+                                |ui| {
+                                    let (status_rect, _) = ui.allocate_exact_size(
+                                        Vec2::splat(18.),
+                                        egui::Sense::hover(),
+                                    );
+                                    paint_status_dot(
+                                        ui,
+                                        status_rect.center(),
+                                        tokens.color(policy.dot_token),
+                                        policy.dot_halo,
+                                        pulse_phase(
+                                            ui.input(|input| input.time),
+                                            !policy.pulsing || view.reduced_motion,
                                         ),
                                     );
-                                    // Shipping CSS uppercases the status label.
-                                    ui.label(
-                                        RichText::new(status_label(view.paused).to_uppercase())
-                                            .small()
-                                            .color(tokens.color("glass-text-muted")),
-                                    );
-                                });
-                            },
-                        );
-                        if control(
-                            ui,
-                            Icon::Stop,
-                            "Stop and save recording",
-                            true,
-                            !view.busy,
-                            false,
-                            tokens,
-                        )
-                        .clicked()
-                        {
-                            action = Some(Action::Stop);
-                        }
-                        if control(
-                            ui,
-                            Icon::Shipping(if view.paused { "resume" } else { "pause" }),
-                            if view.paused {
-                                "Resume recording"
-                            } else {
-                                "Pause recording"
-                            },
-                            false,
-                            !view.busy,
-                            false,
-                            tokens,
-                        )
-                        .clicked()
-                        {
-                            action = Some(if view.paused {
-                                Action::Resume
-                            } else {
-                                Action::Pause
-                            });
-                        }
-                        if control(
-                            ui,
-                            Icon::Shipping("restart"),
-                            "Restart recording",
-                            false,
-                            !view.busy,
-                            false,
-                            tokens,
-                        )
-                        .clicked()
-                        {
-                            action = Some(Action::Restart);
-                        }
-                        if control(
-                            ui,
-                            Icon::Shipping("capture"),
-                            "Take a region screenshot",
-                            false,
-                            !view.busy,
-                            false,
-                            tokens,
-                        )
-                        .clicked()
-                        {
-                            action = Some(Action::Screenshot);
-                        }
-                        // Shipping hides the level meter without a selected microphone; the
-                        // slot stays reserved so controls keep their positions on both hosts.
-                        if view.has_microphone {
-                            microphone_meter(ui, tokens, &view);
-                        } else {
-                            ui.add_space(tokens.number("s-9"));
-                        }
-                        let microphone_label = if view.microphone_muted {
-                            "Unmute microphone"
-                        } else {
-                            "Mute microphone"
-                        };
-                        if view.has_microphone {
-                            if control(
-                                ui,
-                                Icon::Shipping(if view.microphone_muted {
-                                    "microphone-muted"
-                                } else {
-                                    "microphone"
-                                }),
-                                microphone_label,
-                                false,
-                                !view.busy,
-                                view.microphone_muted,
-                                tokens,
-                            )
-                            .clicked()
-                            {
-                                action = Some(Action::SetMicrophoneMuted(!view.microphone_muted));
-                            }
-                        } else {
-                            unavailable(
-                                ui,
-                                Icon::Shipping("microphone"),
-                                "Microphone unavailable: no microphone selected",
-                                "Select a microphone before starting a recording",
+                                    ui.vertical_centered_justified(|ui| {
+                                        ui.monospace(
+                                            captures_app::recording_timeline::format_recording_time(
+                                                view.elapsed_ms,
+                                            ),
+                                        );
+                                        // Shipping CSS uppercases the status label.
+                                        ui.label(
+                                            RichText::new(policy.status_label.to_uppercase())
+                                                .small()
+                                                .color(tokens.color("glass-text-muted")),
+                                        );
+                                    });
+                                },
                             );
-                        }
-                        if control(
-                            ui,
-                            Icon::Shipping("trash"),
-                            "Delete recording",
-                            false,
-                            !view.busy,
-                            false,
-                            tokens,
-                        )
-                        .clicked()
-                        {
-                            action = Some(Action::Discard);
-                        }
-                        if control(
-                            ui,
-                            Icon::Shipping("hide-controls"),
-                            if view.hide_available {
-                                "Hide recording controls"
-                            } else {
-                                "Hide unavailable because no tray restore path is available"
-                            },
-                            false,
-                            !view.busy && view.hide_available,
-                            false,
-                            tokens,
-                        )
-                        .clicked()
-                        {
-                            action = Some(Action::Hide);
-                        }
+                            for control in &policy.controls {
+                                if control.control == Control::Microphone {
+                                    // Shipping hides the level meter without a selected
+                                    // microphone; the slot stays reserved so controls keep
+                                    // their positions on both hosts.
+                                    if policy.show_meter {
+                                        microphone_meter(ui, tokens, &view);
+                                    } else {
+                                        ui.add_space(tokens.number("s-9"));
+                                    }
+                                }
+                                let (response, progress) = control_button(ui, control, tokens);
+                                if progress > 0. {
+                                    tooltip = Some((response.rect, control.clone(), progress));
+                                }
+                                if response.clicked() {
+                                    action = Some(action_for(control.control, &view));
+                                }
+                            }
+                        });
                     });
-                });
-            });
-    });
+                })
+                .response
+                .rect
+        })
+        .inner;
+    if let Some(error) = view.error {
+        // Shipping `.recording-hud-error`: 5 px below the card, 10 px insets,
+        // one 2xs line in the signal text color with an ellipsis.
+        let top = card.bottom() + captures_app::recording_hud::ERROR_GAP as f32;
+        let inset = captures_app::recording_hud::ERROR_INSET as f32;
+        let rect = Rect::from_min_max(
+            egui::pos2(card.left() + inset, top),
+            egui::pos2(
+                card.right() - inset,
+                (top + tokens.number("text-2xs") * 1.6).min(bounds.bottom()),
+            ),
+        );
+        ui.put(
+            rect,
+            egui::Label::new(
+                RichText::new(error)
+                    .size(tokens.number("text-2xs"))
+                    .color(tokens.color("theme-signal-text")),
+            )
+            .truncate(),
+        );
+    }
+    if let Some((anchor, control, progress)) = tooltip {
+        paint_tooltip(ui, tokens, anchor, &control, progress, bounds);
+    }
     action
+}
+
+fn action_for(control: Control, view: &View<'_>) -> Action {
+    match control {
+        Control::Stop => Action::Stop,
+        Control::PauseResume if view.state == RecordingState::Paused => Action::Resume,
+        Control::PauseResume => Action::Pause,
+        Control::Restart => Action::Restart,
+        Control::Screenshot => Action::Screenshot,
+        Control::Microphone => Action::SetMicrophoneMuted(!view.microphone_muted),
+        Control::Delete => Action::Discard,
+        Control::Hide => Action::Hide,
+    }
 }
 
 fn microphone_meter(ui: &mut egui::Ui, tokens: &Tokens, view: &View<'_>) {
     // Clear immediately during lifecycle changes, before a queued sample can arrive.
-    let peak = if view.paused || view.busy || !view.has_microphone || view.microphone_muted {
+    let paused = view.state == RecordingState::Paused;
+    let peak = if view.state != RecordingState::Recording
+        || view.busy
+        || !view.has_microphone
+        || view.microphone_muted
+    {
         0.
     } else {
         view.microphone_peak
@@ -271,9 +223,9 @@ fn microphone_meter(ui: &mut egui::Ui, tokens: &Tokens, view: &View<'_>) {
         "Microphone level unavailable: no microphone selected".into()
     } else if view.microphone_muted {
         "Microphone muted".into()
-    } else if view.paused {
+    } else if paused {
         "Microphone level: paused".into()
-    } else if view.busy {
+    } else if view.busy || view.state != RecordingState::Recording {
         "Microphone level: recording controls busy".into()
     } else {
         format!("Microphone level {}%", (peak * 100.).round())
@@ -303,84 +255,143 @@ fn microphone_meter(ui: &mut egui::Ui, tokens: &Tokens, view: &View<'_>) {
     response.on_hover_text(label);
 }
 
-fn control(
+/// One HUD button plus its styled tooltip progress (0 hidden … 1 shown).
+fn control_button(
     ui: &mut egui::Ui,
-    icon: Icon,
-    description: &str,
-    signal: bool,
-    enabled: bool,
-    selected: bool,
+    control: &ControlView,
     tokens: &Tokens,
-) -> egui::Response {
-    ui.scope(|ui| {
-        let mut button = egui::Button::new("").min_size(Vec2::splat(32.));
-        if signal {
-            let widgets = &mut ui.visuals_mut().widgets;
-            widgets.inactive.weak_bg_fill = tokens.color("theme-signal-surface");
-            widgets.inactive.bg_stroke =
-                Stroke::new(1., tokens.color("theme-signal").gamma_multiply(0.4));
-            widgets.hovered.weak_bg_fill = tokens.color("theme-signal");
-            widgets.active.weak_bg_fill = tokens.color("theme-signal");
-        } else if selected && enabled {
-            button = button
-                .fill(tokens.color("glass-active"))
-                .stroke(Stroke::new(
-                    1.,
-                    tokens.color("theme-accent").gamma_multiply(0.3),
-                ));
-        }
-        let response = ui.add_enabled(enabled, button).on_hover_text(description);
-        remember_control(ui, response.rect);
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, description)
-        });
-        if response.has_focus() {
-            ui.painter().rect_stroke(
-                response.rect,
-                tokens.number("r-sm") as u8,
-                Stroke::new(2., tokens.color("theme-accent")),
-                StrokeKind::Inside,
-            );
-        }
-        let color = tokens.color(if !enabled {
-            "glass-text-subtle"
-        } else if signal && !response.hovered() && !response.is_pointer_button_down_on() {
-            "theme-signal"
-        } else if selected {
-            "theme-accent"
-        } else if response.hovered() || response.is_pointer_button_down_on() {
-            "glass-text"
-        } else {
-            "glass-text-muted"
-        });
-        paint_icon(ui, response.rect, icon, color);
-        response
-    })
-    .inner
+) -> (egui::Response, f32) {
+    let signal = control.control == Control::Stop;
+    let enabled = control.enabled;
+    let selected = control.selected;
+    let icon = control.icon.map_or(Icon::Stop, Icon::Shipping);
+    let response = ui
+        .scope(|ui| {
+            let mut button = egui::Button::new("").min_size(Vec2::splat(32.));
+            if signal {
+                let widgets = &mut ui.visuals_mut().widgets;
+                widgets.inactive.weak_bg_fill = tokens.color("theme-signal-surface");
+                widgets.inactive.bg_stroke =
+                    Stroke::new(1., tokens.color("theme-signal").gamma_multiply(0.4));
+                widgets.hovered.weak_bg_fill = tokens.color("theme-signal");
+                widgets.active.weak_bg_fill = tokens.color("theme-signal");
+                if !enabled {
+                    // Shipping dims a disabled Stop (saving, failed) to 32% opacity.
+                    button = button
+                        .fill(tokens.color("theme-signal-surface").gamma_multiply(0.32))
+                        .stroke(Stroke::new(
+                            1.,
+                            tokens.color("theme-signal").gamma_multiply(0.4 * 0.32),
+                        ));
+                }
+            } else if selected && enabled {
+                button = button
+                    .fill(tokens.color("glass-active"))
+                    .stroke(Stroke::new(
+                        1.,
+                        tokens.color("theme-accent").gamma_multiply(0.3),
+                    ));
+            }
+            // The styled tooltip replaces egui's delayed hover text.
+            ui.add_enabled(enabled, button)
+        })
+        .inner;
+    remember_control(ui, response.rect);
+    let label = control.label;
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect,
+            tokens.number("r-sm") as u8,
+            Stroke::new(2., tokens.color("theme-accent")),
+            StrokeKind::Inside,
+        );
+    }
+    let hovered = enabled && (response.hovered() || response.is_pointer_button_down_on());
+    let color = tokens.color(if !enabled {
+        "glass-text-subtle"
+    } else if signal && !hovered {
+        "theme-signal"
+    } else if selected {
+        "theme-accent"
+    } else if hovered {
+        "glass-text"
+    } else {
+        "glass-text-muted"
+    });
+    paint_icon(ui, response.rect, icon, color);
+    // Shipping shows the tooltip on hover or keyboard focus, disabled buttons
+    // included, with no delay; it fades and slides in over `--dur-1`.
+    let showing = ui.rect_contains_pointer(response.rect) || response.has_focus();
+    let progress = ui.ctx().animate_bool_with_time(
+        response.id.with("tooltip"),
+        showing,
+        tokens.number("dur-1") / 1000.,
+    );
+    (response, progress)
 }
 
-fn unavailable(ui: &mut egui::Ui, icon: Icon, label: &str, description: &str) {
-    let response = ui
-        .add_enabled(
-            false,
-            egui::Button::new("")
-                .frame(false)
-                .min_size(Vec2::splat(32.)),
+/// Shipping `.recording-tooltip > [role="tooltip"]`: fixed-glass pill below the
+/// button with an xs medium label, placed by the shared policy.
+fn paint_tooltip(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    anchor: Rect,
+    control: &ControlView,
+    progress: f32,
+    bounds: Rect,
+) {
+    use captures_app::{recording_hud, tray_notice::LogicalRect};
+    let logical = |rect: Rect| {
+        LogicalRect::new(
+            f64::from(rect.left()),
+            f64::from(rect.top()),
+            f64::from(rect.width()),
+            f64::from(rect.height()),
         )
-        .on_disabled_hover_text(description);
-    remember_control(ui, response.rect);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, false, label));
-    paint_icon(
-        ui,
-        response.rect,
-        icon,
-        ui.visuals()
-            .widgets
-            .noninteractive
-            .fg_stroke
-            .color
-            .gamma_multiply(0.45),
+    };
+    let color = tokens.color("glass-text").gamma_multiply(progress);
+    let font = egui::FontId::proportional(tokens.number("text-xs"));
+    let max_text = recording_hud::TOOLTIP_MAX_WIDTH - recording_hud::TOOLTIP_PADDING_X * 2. - 2.;
+    let mut job = egui::text::LayoutJob::single_section(
+        control.tooltip.to_owned(),
+        egui::TextFormat::simple(font, color),
     );
+    job.wrap = egui::text::TextWrapping {
+        max_width: max_text as f32,
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    let galley = ui.painter().layout_job(job);
+    let frame = recording_hud::tooltip_frame(
+        logical(anchor),
+        f64::from(galley.size().x),
+        f64::from(galley.size().y),
+        control.tooltip_right_aligned,
+        f64::from(progress),
+        logical(bounds),
+    );
+    let rect = Rect::from_min_size(
+        egui::pos2(frame.x as f32, frame.y as f32),
+        Vec2::new(frame.width as f32, frame.height as f32),
+    );
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::unique("recording-hud-tooltip"),
+    ));
+    painter.rect(
+        rect,
+        tokens.number("r-sm") as u8,
+        tokens.color("glass-strong").gamma_multiply(progress),
+        Stroke::new(1., tokens.color("glass-border").gamma_multiply(progress)),
+        StrokeKind::Inside,
+    );
+    let text = egui::pos2(
+        rect.left() + (rect.width() - galley.size().x) / 2.,
+        rect.top() + (rect.height() - galley.size().y) / 2.,
+    );
+    painter.galley(text, galley, color);
 }
 
 fn remember_control(ui: &egui::Ui, rect: Rect) {
@@ -415,17 +426,13 @@ fn paint_icon(ui: &egui::Ui, rect: Rect, icon: Icon, color: egui::Color32) {
 }
 
 /// Shipping `.recording-hud-privacy`: one subtle 2xs line with **will**/**won’t** emphasized.
-fn notice_job(tokens: &Tokens, notice: &str, warning: bool) -> egui::text::LayoutJob {
+fn notice_job(tokens: &Tokens, notice: &str) -> egui::text::LayoutJob {
     let font = egui::FontId::proportional(tokens.number("text-2xs"));
     let format = |token| egui::TextFormat::simple(font.clone(), tokens.color(token));
     let mut job = egui::text::LayoutJob {
         halign: Align::Center,
         ..Default::default()
     };
-    if warning {
-        job.append(notice, 0., format("theme-signal"));
-        return job;
-    }
     let emphasis = ["won’t", "will"].iter().find_map(|word| {
         notice
             .find(&format!(" {word} "))
@@ -452,22 +459,26 @@ fn pulse_phase(time: f64, still: bool) -> f32 {
     (1. - (t * std::f32::consts::TAU).cos()) / 2.
 }
 
-fn paint_status_dot(ui: &egui::Ui, center: egui::Pos2, color: egui::Color32, phase: f32) {
+fn paint_status_dot(
+    ui: &egui::Ui,
+    center: egui::Pos2,
+    color: egui::Color32,
+    halo: bool,
+    phase: f32,
+) {
     let scale = 1. - 0.16 * phase;
     let opacity = 1. - 0.4 * phase;
-    // Shipping `box-shadow: 0 0 0 4px` halo at 16% of the dot color.
-    ui.painter().circle_filled(
-        center,
-        (5. + 4.) * scale,
-        color.gamma_multiply(0.16 * opacity),
-    );
+    // Shipping `box-shadow: 0 0 0 4px` halo at 16% of the dot color; the failed
+    // dot has none.
+    if halo {
+        ui.painter().circle_filled(
+            center,
+            (5. + 4.) * scale,
+            color.gamma_multiply(0.16 * opacity),
+        );
+    }
     ui.painter()
         .circle_filled(center, 5. * scale, color.gamma_multiply(opacity));
-}
-
-/// Shipping `recordingStatusLabel` copy for the states this HUD renders.
-fn status_label(paused: bool) -> &'static str {
-    if paused { "Paused" } else { "Recording" }
 }
 
 #[cfg(test)]
@@ -507,7 +518,6 @@ mod tests {
         let job = notice_job(
             &tokens,
             "These controls will show in recordings · Use Hide controls to keep them out",
-            false,
         );
         let colors = |job: &egui::text::LayoutJob| -> Vec<egui::Color32> {
             job.sections
@@ -520,17 +530,9 @@ mod tests {
             tokens.color("glass-text"),
         );
         assert_eq!(colors(&job), [subtle, text, subtle]);
-        let job = notice_job(&tokens, "These controls won’t show in recordings", false);
+        let job = notice_job(&tokens, "These controls won’t show in recordings");
         assert_eq!(colors(&job), [subtle, text, subtle]);
         assert_eq!(job.text, "These controls won’t show in recordings");
-        let job = notice_job(&tokens, "Microphone disconnected", true);
-        assert_eq!(job.sections.len(), 1);
-    }
-
-    #[test]
-    fn status_label_uses_shipping_copy() {
-        assert_eq!(status_label(false), "Recording");
-        assert_eq!(status_label(true), "Paused");
     }
 
     #[test]
@@ -551,14 +553,18 @@ mod tests {
                     ui,
                     &tokens,
                     &View {
-                        paused,
+                        state: if paused {
+                            RecordingState::Paused
+                        } else {
+                            RecordingState::Recording
+                        },
                         busy,
                         has_microphone,
                         microphone_muted: muted,
                         microphone_peak: peak,
                         elapsed_ms: 0,
                         notice: "",
-                        warning: false,
+                        error: None,
                         hide_available: false,
                         reduced_motion: false,
                     },
@@ -577,5 +583,94 @@ mod tests {
                 .collect();
             assert_eq!(fills, if width == 0. { vec![] } else { vec![width] });
         }
+    }
+
+    fn render(view: View<'_>) -> (Vec<egui::Shape>, Vec<String>) {
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(430., 102.))),
+                ..Default::default()
+            },
+            |ui| {
+                show(ui, &tokens, view);
+            },
+        );
+        output.textures_delta.clear();
+        let labels = output
+            .platform_output
+            .accesskit_update
+            .map(|update| {
+                update
+                    .nodes
+                    .iter()
+                    .flat_map(|(_, node)| [node.label(), node.value()])
+                    .flatten()
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        (
+            output.shapes.into_iter().map(|shape| shape.shape).collect(),
+            labels,
+        )
+    }
+
+    fn view(state: RecordingState, error: Option<&str>) -> View<'_> {
+        View {
+            state,
+            busy: false,
+            has_microphone: true,
+            microphone_muted: false,
+            microphone_peak: 0.,
+            elapsed_ms: 0,
+            notice: "These controls won’t show in recordings",
+            error,
+            hide_available: true,
+            reduced_motion: true,
+        }
+    }
+
+    #[test]
+    fn failed_hud_offers_retry_and_shows_the_inline_error() {
+        let (_, labels) = render(view(
+            RecordingState::Failed,
+            Some("No microphone device is available"),
+        ));
+        assert!(
+            labels.iter().any(|label| label == "Retry recording"),
+            "{labels:?}"
+        );
+        assert!(!labels.iter().any(|label| label == "Restart recording"));
+        assert!(
+            labels
+                .iter()
+                .any(|label| label == "No microphone device is available"),
+            "{labels:?}"
+        );
+        let (_, labels) = render(view(RecordingState::Recording, None));
+        assert!(labels.iter().any(|label| label == "Restart recording"));
+        assert!(
+            !labels
+                .iter()
+                .any(|label| label.contains("microphone device"))
+        );
+    }
+
+    #[test]
+    fn failed_dot_is_subtle_without_a_halo() {
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let (shapes, _) = render(view(RecordingState::Failed, None));
+        let subtle = tokens.color("glass-text-subtle");
+        let circles: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Circle(circle) => Some(circle.fill),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(circles, [subtle], "one subtle dot and no 16% halo");
     }
 }

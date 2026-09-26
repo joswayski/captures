@@ -1,28 +1,242 @@
 import AppKit
 import CCapturesSettings
 
-/// Shipping `CaptureGuidance` and capture-menu note copy (App.tsx), shared by
-/// New Capture and the direct region/window overlays.
+/// Shipping New Capture copy and presentation policy from
+/// `captures-app::capture_menu`, shared with the wgpu host.
+enum CaptureMenuPolicy {
+    struct Note: Equatable {
+        let lead: String
+        let emphasis: String
+        let trail: String
+        let hint: String
+        /// Preferences setting the note links to, or nil for plain text.
+        let setting: String?
+        var text: String { lead + emphasis + trail + hint }
+    }
+
+    struct Menu: Equatable {
+        let note: Note
+        let confirmText: String
+        let confirmSetting: String?
+        let primaryLabel: String
+        let primaryAccessibilityLabel: String
+        let primaryHidden: Bool
+        /// Toggle key ("show_cursor", "highlight_clicks", "system_audio") → On/Off/Unavailable.
+        let toggleStatus: [String: String]
+    }
+
+    struct Toggle: Equatable {
+        let key: String
+        let label: String
+        let accessibilityLabel: String
+        let unavailableReason: String
+    }
+
+    struct Guidance: Equatable {
+        let title: String
+        let hint: String
+    }
+
+    struct MicrophoneEntry: Equatable {
+        let id: String?
+        let label: String
+        let enabled: Bool
+    }
+
+    struct Copy {
+        let fpsLabel: String
+        let fpsAccessibilityLabel: String
+        let maxResolutionLabel: String
+        let maxResolutionAccessibilityLabel: String
+        let microphoneLabel: String
+        let fpsOptions: [Int]
+        let resolutionValues: [String]
+        let resolutionLabels: [String]
+        let toggles: [Toggle]
+        let guidance: [String: Guidance]
+        let separator: String
+        let confirm: String
+        let autoStart: String
+        let highlightSeconds: TimeInterval
+    }
+
+    static func request(_ object: [String: Any]) throws -> [String: Any] {
+        let data = try JSONSerialization.data(withJSONObject: object)
+        let response = String(decoding: data, as: UTF8.self).withCString {
+            captures_capture_menu_v1($0)
+        }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        return try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+    }
+
+    static let copy: Copy = {
+        do { return try CaptureMenuPolicy.loadCopy() } catch {
+            preconditionFailure("Capture menu copy is unavailable: \(error)")
+        }
+    }()
+
+    private static func loadCopy() throws -> Copy {
+        let value = try request(["operation": "copy"])
+        guard let fields = value["fields"] as? [String: Any],
+              let fps = fields["fps"] as? String,
+              let fpsAccessibility = fields["fps_accessibility_label"] as? String,
+              let resolution = fields["max_resolution"] as? String,
+              let resolutionAccessibility = fields["max_resolution_accessibility_label"] as? String,
+              let microphone = fields["microphone"] as? String,
+              let fpsOptions = value["fps_options"] as? [Int],
+              let resolutions = value["resolution_options"] as? [[String: Any]],
+              let toggles = value["toggles"] as? [[String: Any]],
+              let guidance = value["guidance"] as? [String: [String: Any]],
+              let separator = value["separator"] as? String,
+              let confirm = value["confirm"] as? String,
+              let autoStart = value["auto_start"] as? String,
+              let highlight = value["highlight_ms"] as? Double
+        else { throw AppBridgeError.invalidResponse }
+        let decodedToggles = toggles.compactMap { toggle -> Toggle? in
+            guard let key = toggle["key"] as? String, let label = toggle["label"] as? String,
+                  let accessibility = toggle["accessibility_label"] as? String,
+                  let reason = toggle["unavailable_reason"] as? String else { return nil }
+            return Toggle(key: key, label: label, accessibilityLabel: accessibility,
+                unavailableReason: reason)
+        }
+        var decodedGuidance: [String: Guidance] = [:]
+        for (key, entry) in guidance {
+            guard let title = entry["title"] as? String, let hint = entry["hint"] as? String else {
+                throw AppBridgeError.invalidResponse
+            }
+            decodedGuidance[key] = Guidance(title: title, hint: hint)
+        }
+        let values = resolutions.compactMap { $0["value"] as? String }
+        let labels = resolutions.compactMap { $0["label"] as? String }
+        guard decodedToggles.count == toggles.count, values.count == resolutions.count,
+              labels.count == resolutions.count else { throw AppBridgeError.invalidResponse }
+        return Copy(fpsLabel: fps, fpsAccessibilityLabel: fpsAccessibility,
+            maxResolutionLabel: resolution, maxResolutionAccessibilityLabel: resolutionAccessibility,
+            microphoneLabel: microphone, fpsOptions: fpsOptions, resolutionValues: values,
+            resolutionLabels: labels, toggles: decodedToggles, guidance: decodedGuidance,
+            separator: separator, confirm: confirm, autoStart: autoStart,
+            highlightSeconds: highlight / 1000)
+    }
+
+    static func guidance(_ key: String) -> Guidance {
+        guard let guidance = copy.guidance[key] else {
+            preconditionFailure("Missing capture guidance \(key)")
+        }
+        return guidance
+    }
+
+    static func menu(mode: UnifiedCaptureMode, autoStart: Bool, canExcludeControls: Bool,
+                     controlsExcluded: Bool, error: Bool = false,
+                     state: RecordingControlState,
+                     availability: RecordingControlAvailability?) throws -> Menu {
+        let value = try request([
+            "operation": "menu", "mode": mode == .record ? "recording" : "screenshot",
+            "auto_start": autoStart, "can_exclude_controls": canExcludeControls,
+            "controls_excluded": controlsExcluded, "state": ["error": error],
+            "options": ["show_cursor": state.showCursor, "highlight_clicks": state.highlightClicks,
+                        "system_audio": state.systemAudio],
+            "available": ["cursor_control": availability?.cursor ?? false,
+                          "click_highlights": availability?.clicks ?? false,
+                          "system_audio": availability?.systemAudio ?? false],
+        ])
+        guard let note = value["note"] as? [String: Any],
+              let lead = note["lead"] as? String, let emphasis = note["emphasis"] as? String,
+              let trail = note["trail"] as? String,
+              let confirm = value["confirm"] as? [String: Any],
+              let confirmText = confirm["text"] as? String,
+              let primary = value["primary"] as? [String: Any],
+              let label = primary["label"] as? String,
+              let accessibility = primary["accessibility_label"] as? String,
+              let hidden = primary["hidden"] as? Bool,
+              let toggles = value["toggles"] as? [[String: Any]]
+        else { throw AppBridgeError.invalidResponse }
+        var status: [String: String] = [:]
+        for toggle in toggles {
+            guard let key = toggle["key"] as? String, let text = toggle["status"] as? String else {
+                throw AppBridgeError.invalidResponse
+            }
+            status[key] = text
+        }
+        return Menu(note: Note(lead: lead, emphasis: emphasis, trail: trail,
+                hint: note["hint"] as? String ?? "",
+                setting: (note["target"] as? [String: Any])?["setting"] as? String),
+            confirmText: confirmText,
+            confirmSetting: (confirm["target"] as? [String: Any])?["setting"] as? String,
+            primaryLabel: label, primaryAccessibilityLabel: accessibility, primaryHidden: hidden,
+            toggleStatus: status)
+    }
+
+    /// Shipping cursor/clicks coupling after `changed` flipped.
+    static func coupled(changed: String, showCursor: Bool, highlightClicks: Bool) throws
+        -> (showCursor: Bool, highlightClicks: Bool) {
+        let value = try request(["operation": "toggle", "changed": changed,
+            "show_cursor": showCursor, "highlight_clicks": highlightClicks])
+        guard let cursor = value["show_cursor"] as? Bool,
+              let clicks = value["highlight_clicks"] as? Bool else {
+            throw AppBridgeError.invalidResponse
+        }
+        return (cursor, clicks)
+    }
+
+    static func microphones(available: Bool, loading: Bool, selected: String?,
+                            devices: [NativeMicrophoneDevice]) throws
+        -> (entries: [MicrophoneEntry], selectedLabel: String) {
+        let value = try request([
+            "operation": "microphones", "available": available, "loading": loading,
+            "selected": selected.map { $0 as Any } ?? NSNull(),
+            "devices": devices.map { ["id": $0.id, "name": $0.name] },
+        ])
+        guard let entries = value["entries"] as? [[String: Any]],
+              let label = value["selected_label"] as? String else {
+            throw AppBridgeError.invalidResponse
+        }
+        let decoded = entries.compactMap { entry -> MicrophoneEntry? in
+            guard let text = entry["label"] as? String,
+                  let enabled = entry["enabled"] as? Bool else { return nil }
+            return MicrophoneEntry(id: entry["id"] as? String, label: text, enabled: enabled)
+        }
+        guard decoded.count == entries.count else { throw AppBridgeError.invalidResponse }
+        return (decoded, label)
+    }
+
+    static func displayIdentity(name: String, width: Int, height: Int, recordingFPS: Int?) throws
+        -> (name: String, detail: String) {
+        var request: [String: Any] = ["operation": "display_identity", "name": name,
+                                      "width": max(0, width), "height": max(0, height)]
+        if let recordingFPS { request["recording_fps"] = recordingFPS }
+        let value = try self.request(request)
+        guard let title = value["name"] as? String, let detail = value["detail"] as? String else {
+            throw AppBridgeError.invalidResponse
+        }
+        return (title, detail)
+    }
+
+    /// Guidance ducking in flipped (top-left) view coordinates.
+    static func pointerOverGuidance(_ point: NSPoint, chip: NSRect, currentlyOver: Bool) -> Bool {
+        captures_capture_guidance_pointer_over_v1(Double(point.x), Double(point.y),
+            Double(chip.minX), Double(chip.minY), Double(chip.maxX), Double(chip.maxY),
+            currentlyOver)
+    }
+}
+
+/// Shipping `CaptureGuidance` copy, shared by New Capture and the direct
+/// region/window overlays.
 enum CaptureGuidanceCopy {
-    static let regionTitle = "Drag to select a region"
+    static var regionTitle: String { CaptureMenuPolicy.guidance("region").title }
     /// Shipping feedback after a click that selected nothing (1.8 s).
-    static let regionFeedbackTitle = "Click and drag to select a region"
-    static let regionHint = "Shift for square · Esc to cancel"
-    static let windowTitle = "Select a window to continue"
-    static let hint = "Esc to cancel"
-    static let confirm = "Press Enter to confirm"
-    static let autoStart = "Auto-capture is on. Selecting a target starts immediately."
+    static var regionFeedbackTitle: String { CaptureMenuPolicy.guidance("region_feedback").title }
+    static var regionHint: String { CaptureMenuPolicy.guidance("region").hint }
+    static var windowTitle: String { CaptureMenuPolicy.guidance("window").title }
+    static var displayTitle: String { CaptureMenuPolicy.guidance("display").title }
+    static var hint: String { CaptureMenuPolicy.guidance("window").hint }
+    static var confirm: String { CaptureMenuPolicy.copy.confirm }
+    static var autoStart: String { CaptureMenuPolicy.copy.autoStart }
 
     /// Direct overlays commit on release/click; `confirm` is only for fixtures
     /// and the manual selection mode.
     static func directHint(_ title: String, _ hint: String, confirm: Bool) -> String {
         ([title, hint] + (confirm ? [Self.confirm] : [])).joined(separator: " · ")
-    }
-
-    /// "These controls won’t show in screenshots · Press Enter to confirm".
-    static func menuNote(recording: Bool, autoStart: Bool) -> String {
-        let output = recording ? "recordings" : "screenshots"
-        return "These controls won’t show in \(output)  ·  \(autoStart ? Self.autoStart : Self.confirm)"
     }
 }
 
@@ -61,6 +275,21 @@ struct RecordingControlAvailability: Equatable {
     let microphone: Bool
 }
 
+/// Whether "these controls" are kept out of captures (capability-derived).
+struct CaptureControlsVisibility: Equatable {
+    let canExclude: Bool
+    let excluded: Bool
+
+    static let excludedByDefault = CaptureControlsVisibility(canExclude: true, excluded: true)
+}
+
+/// The Full screen target's display, for the shipping identity pill.
+struct CaptureDisplayIdentity: Equatable {
+    let name: String
+    let width: Int
+    let height: Int
+}
+
 struct UnifiedCaptureControlsState: Equatable {
     var mode: UnifiedCaptureMode
     var target: UnifiedCaptureTarget
@@ -83,7 +312,7 @@ private final class GlassPopUpButton: NSPopUpButton {
         path.stroke()
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium),
-            .foregroundColor: tokens.color("glass-text"),
+            .foregroundColor: tokens.color(isEnabled ? "glass-text" : "glass-text-subtle"),
         ]
         (title as NSString).draw(at: NSPoint(x: tokens.number("s-4"), y: 10),
             withAttributes: attributes)
@@ -96,9 +325,168 @@ private final class GlassPopUpButton: NSPopUpButton {
     }
 }
 
+/// Shipping `recording-toggle`: a 30×18 switch followed by On/Off/Unavailable,
+/// with the unavailable reason as its tooltip.
+final class RecordingSwitchButton: NSButton {
+    private let tokens: Tokens
+    let key: String
+    var isOn = false { didSet { refresh() } }
+    var status = "Off" { didSet { refresh() } }
+    var actionBlock: (() -> Void)?
+    private var hovered = false
+    private var hoverTracking: NSTrackingArea?
+
+    override var isFlipped: Bool { true }
+
+    init(frame: NSRect, tokens: Tokens, toggle: CaptureMenuPolicy.Toggle, available: Bool) {
+        self.tokens = tokens; key = toggle.key
+        super.init(frame: frame)
+        title = ""; isBordered = false; setButtonType(.momentaryPushIn)
+        target = self; action = #selector(activate)
+        isEnabled = available
+        toolTip = available ? nil : toggle.unavailableReason
+        setAccessibilityRole(.checkBox); setAccessibilityLabel(toggle.accessibilityLabel)
+        setAccessibilityHelp(available ? nil : toggle.unavailableReason)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func activate() { if isEnabled { actionBlock?() } }
+
+    private func refresh() {
+        setAccessibilityValue(isOn ? 1 : 0)
+        needsDisplay = true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(tracking); hoverTracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let track = NSRect(x: 1, y: (bounds.height - 18) / 2, width: 30, height: 18)
+        let path = NSBezierPath(roundedRect: track, xRadius: 9, yRadius: 9)
+        if isOn {
+            tokens.color("theme-accent").setFill(); path.fill()
+        } else {
+            NSColor.black.withAlphaComponent(0.35).setFill(); path.fill()
+            tokens.color("glass-border-strong").setStroke(); path.lineWidth = 1; path.stroke()
+        }
+        let knob = NSRect(x: track.minX + 3 + (isOn ? 12 : 0), y: track.midY - 6, width: 12, height: 12)
+        tokens.color(isOn ? "theme-accent-ink" : "glass-text-subtle").setFill()
+        NSBezierPath(ovalIn: knob).fill()
+        if window?.firstResponder === self {
+            let ring = NSBezierPath(roundedRect: track.insetBy(dx: -2, dy: -2), xRadius: 11, yRadius: 11)
+            tokens.color("theme-accent").setStroke(); ring.lineWidth = 1; ring.stroke()
+        }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .medium),
+            .foregroundColor: tokens.color(isEnabled && hovered ? "glass-text" : "glass-text-muted"),
+        ]
+        let size = (status as NSString).size(withAttributes: attributes)
+        (status as NSString).draw(at: NSPoint(x: track.maxX + tokens.number("s-3"),
+            y: (bounds.height - size.height) / 2), withAttributes: attributes)
+    }
+}
+
+/// Shipping `capture-selector-preferences-link`: note text with an external
+/// glyph that opens Preferences at the setting it describes.
+final class CaptureNoteLink: NSButton {
+    private let tokens: Tokens
+    private let parts: [(String, Bool)]
+    let setting: String
+    var actionBlock: (() -> Void)?
+    private var hovered = false
+    private var hoverTracking: NSTrackingArea?
+    static let padding = NSSize(width: 5, height: 2)
+    static let icon: CGFloat = 10
+
+    override var isFlipped: Bool { true }
+
+    init(parts: [(String, Bool)], setting: String, tokens: Tokens) {
+        self.parts = parts; self.setting = setting; self.tokens = tokens
+        super.init(frame: .zero)
+        title = ""; isBordered = false; setButtonType(.momentaryPushIn)
+        target = self; action = #selector(activate)
+        setAccessibilityRole(.link); setAccessibilityLabel(text)
+        frame.size = intrinsicContentSize
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    var text: String { parts.map(\.0).joined() }
+    @objc private func activate() { actionBlock?() }
+
+    private func attributed(active: Bool) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        for (text, strong) in parts {
+            result.append(NSAttributedString(string: text, attributes: [
+                .font: NSFont.systemFont(ofSize: tokens.number("text-xs"),
+                    weight: strong ? .bold : .medium),
+                .foregroundColor: tokens.color(active ? "theme-accent-text-strong"
+                    : strong ? "glass-text" : "glass-text-subtle"),
+            ]))
+        }
+        return result
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let size = attributed(active: false).size()
+        return NSSize(width: ceil(size.width) + Self.padding.width * 2 + Self.icon + 5,
+            height: ceil(size.height) + Self.padding.height * 2)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(tracking); hoverTracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let focused = window?.firstResponder === self
+        let active = hovered || focused
+        if active {
+            tokens.color("glass-hover").setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: tokens.number("r-sm"),
+                yRadius: tokens.number("r-sm")).fill()
+        }
+        if focused {
+            let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
+                xRadius: tokens.number("r-sm"), yRadius: tokens.number("r-sm"))
+            tokens.color("theme-accent").setStroke(); ring.lineWidth = 2; ring.stroke()
+        }
+        let text = attributed(active: active)
+        let size = text.size()
+        text.draw(at: NSPoint(x: Self.padding.width, y: (bounds.height - size.height) / 2))
+        // Shipping `ExternalPreferenceIcon`: an open box with an outward arrow.
+        let origin = NSPoint(x: Self.padding.width + ceil(size.width) + 5,
+            y: (bounds.height - Self.icon) / 2)
+        func at(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
+            NSPoint(x: origin.x + x * Self.icon / 16, y: origin.y + y * Self.icon / 16)
+        }
+        let glyph = NSBezierPath()
+        glyph.move(to: at(6.5, 3)); glyph.line(to: at(3, 3)); glyph.line(to: at(3, 13))
+        glyph.line(to: at(13, 13)); glyph.line(to: at(13, 9.5))
+        glyph.move(to: at(9, 3)); glyph.line(to: at(13, 3)); glyph.line(to: at(13, 7))
+        glyph.move(to: at(8.5, 7.5)); glyph.line(to: at(13, 3))
+        glyph.lineWidth = 1.2; glyph.lineCapStyle = .round; glyph.lineJoinStyle = .round
+        (active ? tokens.color("theme-accent-text-strong")
+            : tokens.color("glass-text-subtle").withAlphaComponent(0.72)).setStroke()
+        glyph.stroke()
+    }
+}
+
 final class CaptureControlsView: NSView {
     private let tokens: Tokens
     private let autoStart: Bool
+    private let visibility: CaptureControlsVisibility
     private var targetButtons: [UnifiedCaptureTarget: CaptureButton] = [:]
     private let aspectLabel = NSTextField(labelWithString: "Aspect")
     private let aspectMenu: GlassPopUpButton
@@ -107,18 +495,25 @@ final class CaptureControlsView: NSView {
     private let screenshotButton: CaptureButton
     private let recordButton: CaptureButton
     private let recordingAvailability: RecordingControlAvailability?
-    private var recordingButtons: [(CaptureButton, WritableKeyPath<RecordingControlState, Bool>)] = []
-    private let note: NSTextField
+    private var recordingSwitches: [RecordingSwitchButton] = []
+    private var fieldLabels: [NSTextField] = []
+    private var noteViews: [NSView] = []
     private let fpsMenu: GlassPopUpButton
     private let resolutionMenu: GlassPopUpButton
     private let microphoneMenu: GlassPopUpButton
     private var microphoneIDs: [String?] = []
     private var panelDragOffset: NSPoint?
+    private var captureEnabled = false
+    private(set) var menuState: CaptureMenuPolicy.Menu?
     var switchTarget: (UnifiedCaptureTarget) -> Void = { _ in }
     var switchMode: (UnifiedCaptureMode) -> Void = { _ in }
     var recordingControlsChanged: (RecordingControlState) -> Void = { _ in }
     var changeAspect: (Int) -> Void = { _ in }
     var changeDisplay: (Int) -> Void = { _ in }
+    /// Opens Preferences at a setting key (a note link); the owner dismisses the menu.
+    var openPreference: (String) -> Void = { _ in }
+    /// Internal observer (the selector's identity pill); owners use recordingControlsChanged.
+    var stateChanged: () -> Void = {}
     var confirm: () -> Void = {}
     var cancel: () -> Void = {}
     private(set) var target: UnifiedCaptureTarget = .region
@@ -127,13 +522,24 @@ final class CaptureControlsView: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// The note text the menu currently shows, for accessibility and tests.
+    var noteText: String {
+        guard let menu = menuState else { return "" }
+        return [menu.note.text, CaptureMenuPolicy.copy.separator, menu.confirmText]
+            .joined(separator: " ")
+    }
+    var noteLinks: [CaptureNoteLink] { noteViews.compactMap { $0 as? CaptureNoteLink } }
+    var primaryTitle: String { captureButton.title }
+    var primaryHidden: Bool { captureButton.isHidden }
+
     init(frame: NSRect, tokens: Tokens, autoStart: Bool, displayTitles: [String],
          selectedDisplay: Int, recordingState: RecordingControlState = RecordingControlState(
             framesPerSecond: 60, maxResolution: "original", showCursor: true,
             highlightClicks: false, systemAudio: false, microphoneDeviceID: nil),
          recordingAvailability: RecordingControlAvailability? = nil,
-         microphoneDevices: [NativeMicrophoneDevice] = []) {
-        self.tokens = tokens; self.autoStart = autoStart
+         microphoneDevices: [NativeMicrophoneDevice] = [],
+         visibility: CaptureControlsVisibility = .excludedByDefault) {
+        self.tokens = tokens; self.autoStart = autoStart; self.visibility = visibility
         self.recordingState = recordingState; self.recordingAvailability = recordingAvailability
         aspectMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
         displayMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
@@ -143,7 +549,6 @@ final class CaptureControlsView: NSView {
         captureButton = CaptureButton("Capture", frame: .zero, tokens: tokens, glass: true) {}
         screenshotButton = CaptureButton("Screenshot", frame: .zero, tokens: tokens, glass: true) {}
         recordButton = CaptureButton("Record", frame: .zero, tokens: tokens, glass: true) {}
-        note = NSTextField(labelWithString: CaptureGuidanceCopy.menuNote(recording: false, autoStart: autoStart))
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color("glass-strong").cgColor
@@ -152,13 +557,6 @@ final class CaptureControlsView: NSView {
         layer?.shadowColor = NSColor.black.cgColor; layer?.shadowOpacity = 0.44
         layer?.shadowRadius = 22; layer?.shadowOffset = NSSize(width: 0, height: -8)
         setAccessibilityRole(.group); setAccessibilityLabel("Capture controls")
-
-        note.frame = NSRect(x: 16, y: 60, width: frame.width - 32, height: 22)
-        note.alignment = .center
-        note.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
-        note.textColor = tokens.color("glass-text-subtle")
-        note.setAccessibilityLabel(note.stringValue)
-        addSubview(note)
 
         let narrow = frame.width < 820
         let close = control("×", x: 8, width: 32) { [weak self] in self?.cancel() }
@@ -234,36 +632,7 @@ final class CaptureControlsView: NSView {
         for button in subviews.compactMap({ $0 as? CaptureButton }) {
             button.escapeActionBlock = { [weak self] in self?.cancel() }
         }
-        fpsMenu.frame = NSRect(x: 16, y: 68, width: 80, height: 36)
-        fpsMenu.tokens = tokens; fpsMenu.addItems(withTitles: ["15 FPS", "30 FPS", "60 FPS"])
-        fpsMenu.selectItem(at: [15, 30, 60].firstIndex(of: recordingState.framesPerSecond) ?? 2)
-        fpsMenu.setAccessibilityLabel("Recording frames per second")
-        fpsMenu.bindChange { [weak self] index in
-            guard let self, [15, 30, 60].indices.contains(index) else { return }
-            self.recordingState.framesPerSecond = [15, 30, 60][index]
-            self.recordingControlsChanged(self.recordingState)
-        }
-        addSubview(fpsMenu)
-        resolutionMenu.frame = NSRect(x: 100, y: 68, width: 110, height: 36)
-        resolutionMenu.tokens = tokens
-        resolutionMenu.addItems(withTitles: ["Original", "1080p", "720p"])
-        resolutionMenu.selectItem(at: ["original", "p1080", "p720"]
-            .firstIndex(of: recordingState.maxResolution) ?? 0)
-        resolutionMenu.setAccessibilityLabel("Maximum recording resolution")
-        resolutionMenu.bindChange { [weak self] index in
-            guard let self, ["original", "p1080", "p720"].indices.contains(index) else { return }
-            self.recordingState.maxResolution = ["original", "p1080", "p720"][index]
-            self.recordingControlsChanged(self.recordingState)
-        }
-        addSubview(resolutionMenu)
-        addRecordingControl("Cursor", x: 214, width: 78, keyPath: \.showCursor,
-            available: recordingAvailability?.cursor ?? false)
-        addRecordingControl("Clicks", x: 296, width: 78, keyPath: \.highlightClicks,
-            available: recordingAvailability?.clicks ?? false)
-        addRecordingControl("Desktop audio", x: 378, width: 112, keyPath: \.systemAudio,
-            available: recordingAvailability?.systemAudio ?? false)
-        configureMicrophoneMenu(devices: microphoneDevices,
-            available: recordingAvailability?.microphone ?? false)
+        configureRecordingRow(microphoneDevices: microphoneDevices)
         selectTarget(.region, notify: false)
         selectMode(.screenshot, notify: false)
     }
@@ -271,7 +640,7 @@ final class CaptureControlsView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let hit = super.hitTest(point) else { return nil }
-        return hit is CaptureButton || hit is GlassPopUpButton ? hit : self
+        return hit is NSButton ? hit : self
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -308,37 +677,176 @@ final class CaptureControlsView: NSView {
         addSubview(button); return button
     }
 
-    private func addRecordingControl(_ title: String, x: CGFloat, width: CGFloat,
-                                     keyPath: WritableKeyPath<RecordingControlState, Bool>,
-                                     available: Bool) {
-        let button = CaptureButton(title, frame: NSRect(x: x, y: 68, width: width, height: 36),
-            tokens: tokens, glass: true) {}
-        button.setAccessibilityRole(.checkBox); button.setAccessibilityLabel(title)
-        button.isEnabled = available
-        button.actionBlock = { [weak self, weak button] in
-            guard let self, let button, button.isEnabled else { return }
-            self.recordingState[keyPath: keyPath].toggle()
-            self.updateRecordingControls()
+    /// Shipping `recording-options-row` columns: FPS, Max resolution, three
+    /// switches, then the microphone select taking the remaining width.
+    private static let fieldColumns: [(x: CGFloat, width: CGFloat)] = [
+        (16, 76), (100, 124), (232, 100), (340, 100), (448, 112),
+    ]
+    private static let microphoneX: CGFloat = 568
+    private static let fieldLabelY: CGFloat = 56
+    private static let fieldControlY: CGFloat = 74
+
+    private func fieldLabel(_ text: String, column: (x: CGFloat, width: CGFloat)) {
+        // Shipping `.recording-field` captions render uppercase.
+        let label = NSTextField(labelWithString: text.uppercased())
+        label.frame = NSRect(x: column.x, y: Self.fieldLabelY, width: column.width, height: 14)
+        label.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold)
+        label.textColor = tokens.color("glass-text-subtle")
+        label.lineBreakMode = .byTruncatingTail
+        label.setAccessibilityElement(false)
+        fieldLabels.append(label); addSubview(label)
+    }
+
+    private func configureRecordingRow(microphoneDevices: [NativeMicrophoneDevice]) {
+        let copy = CaptureMenuPolicy.copy
+        let columns = Self.fieldColumns
+        fieldLabel(copy.fpsLabel, column: columns[0])
+        fpsMenu.frame = NSRect(x: columns[0].x, y: Self.fieldControlY, width: columns[0].width, height: 36)
+        fpsMenu.tokens = tokens
+        fpsMenu.addItems(withTitles: copy.fpsOptions.map(String.init))
+        fpsMenu.selectItem(at: copy.fpsOptions.firstIndex(of: recordingState.framesPerSecond) ?? 0)
+        fpsMenu.setAccessibilityLabel(copy.fpsAccessibilityLabel)
+        fpsMenu.bindChange { [weak self] index in
+            guard let self, copy.fpsOptions.indices.contains(index) else { return }
+            self.recordingState.framesPerSecond = copy.fpsOptions[index]
+            self.recordingControlsChanged(self.recordingState)
+            self.stateChanged()
+        }
+        addSubview(fpsMenu)
+        fieldLabel(copy.maxResolutionLabel, column: columns[1])
+        resolutionMenu.frame = NSRect(x: columns[1].x, y: Self.fieldControlY,
+            width: columns[1].width, height: 36)
+        resolutionMenu.tokens = tokens
+        resolutionMenu.addItems(withTitles: copy.resolutionLabels)
+        resolutionMenu.selectItem(at: copy.resolutionValues
+            .firstIndex(of: recordingState.maxResolution) ?? 0)
+        resolutionMenu.setAccessibilityLabel(copy.maxResolutionAccessibilityLabel)
+        resolutionMenu.bindChange { [weak self] index in
+            guard let self, copy.resolutionValues.indices.contains(index) else { return }
+            self.recordingState.maxResolution = copy.resolutionValues[index]
             self.recordingControlsChanged(self.recordingState)
         }
-        recordingButtons.append((button, keyPath)); addSubview(button)
+        addSubview(resolutionMenu)
+        for (index, toggle) in copy.toggles.enumerated() {
+            let column = columns[min(2 + index, columns.count - 1)]
+            fieldLabel(toggle.label, column: column)
+            let available: Bool
+            switch toggle.key {
+            case "show_cursor": available = recordingAvailability?.cursor ?? false
+            case "highlight_clicks": available = recordingAvailability?.clicks ?? false
+            default: available = recordingAvailability?.systemAudio ?? false
+            }
+            let button = RecordingSwitchButton(frame: NSRect(x: column.x, y: Self.fieldControlY,
+                width: column.width, height: 36), tokens: tokens, toggle: toggle, available: available)
+            button.actionBlock = { [weak self, weak button] in
+                guard let self, let button else { return }
+                self.toggleRecordingOption(button.key)
+            }
+            recordingSwitches.append(button); addSubview(button)
+        }
+        fieldLabel(copy.microphoneLabel, column: (x: Self.microphoneX,
+            width: max(116, frame.width - Self.microphoneX - 16)))
+        configureMicrophoneMenu(devices: microphoneDevices,
+            available: recordingAvailability?.microphone ?? false)
+    }
+
+    private func toggleRecordingOption(_ key: String) {
+        switch key {
+        case "show_cursor": recordingState.showCursor.toggle()
+        case "highlight_clicks": recordingState.highlightClicks.toggle()
+        case "system_audio": recordingState.systemAudio.toggle()
+        default: return
+        }
+        if key != "system_audio",
+           let coupled = try? CaptureMenuPolicy.coupled(changed: key,
+               showCursor: recordingState.showCursor,
+               highlightClicks: recordingState.highlightClicks) {
+            recordingState.showCursor = coupled.showCursor
+            recordingState.highlightClicks = coupled.highlightClicks
+        }
+        updateRecordingControls()
+        recordingControlsChanged(recordingState)
+        stateChanged()
+    }
+
+    private func refreshMenu() {
+        menuState = try? CaptureMenuPolicy.menu(mode: mode, autoStart: autoStart,
+            canExcludeControls: visibility.canExclude, controlsExcluded: visibility.excluded,
+            state: recordingState, availability: recordingAvailability)
     }
 
     private func updateRecordingControls() {
+        refreshMenu()
         let recording = mode == .record
-        // AppKit record mode always confirms; auto-start applies to screenshots.
-        note.stringValue = CaptureGuidanceCopy.menuNote(recording: recording,
-            autoStart: autoStart && !recording)
-        note.setAccessibilityLabel(note.stringValue)
         fpsMenu.isHidden = !recording
         resolutionMenu.isHidden = !recording
         microphoneMenu.isHidden = !recording
-        for (button, keyPath) in recordingButtons {
-            button.isHidden = mode != .record
-            button.selected = mode == .record && recordingState[keyPath: keyPath]
-            button.setAccessibilityValue(button.selected ? 1 : 0)
-            button.needsDisplay = true
+        for label in fieldLabels { label.isHidden = !recording }
+        for button in recordingSwitches {
+            button.isHidden = !recording
+            let on: Bool
+            switch button.key {
+            case "show_cursor": on = recordingState.showCursor
+            case "highlight_clicks": on = recordingState.highlightClicks
+            default: on = recordingState.systemAudio
+            }
+            button.isOn = button.isEnabled && on
+            button.status = menuState?.toggleStatus[button.key] ?? (button.isEnabled ? "Off" : "Unavailable")
         }
+        updatePrimary()
+        layoutNote()
+    }
+
+    private func updatePrimary() {
+        let recording = mode == .record
+        captureButton.title = menuState?.primaryLabel ?? (recording ? "Start recording" : "Capture")
+        captureButton.icon = recording ? .record : .capture
+        captureButton.setAccessibilityLabel(menuState?.primaryAccessibilityLabel
+            ?? (recording ? "Start recording" : "Take screenshot"))
+        captureButton.isEnabled = captureEnabled
+        captureButton.isHidden = menuState?.primaryHidden ?? autoStart
+        captureButton.needsDisplay = true
+    }
+
+    /// Shipping `capture-selector-note`, centered on the panel's last row.
+    private func layoutNote() {
+        noteViews.forEach { $0.removeFromSuperview() }; noteViews = []
+        guard let menu = menuState else { return }
+        let note = menu.note
+        let noteParts: [(String, Bool)] = [(note.lead, false), (note.emphasis, true),
+            (note.trail, false), (note.hint, false)].filter { !$0.0.isEmpty }
+        noteViews.append(noteView(parts: noteParts, setting: note.setting))
+        noteViews.append(noteView(parts: [(CaptureMenuPolicy.copy.separator, false)], setting: nil))
+        noteViews.append(noteView(parts: [(menu.confirmText, false)], setting: menu.confirmSetting))
+        let gap = tokens.number("s-2")
+        let total = noteViews.reduce(CGFloat(0)) { $0 + $1.frame.width } + gap * CGFloat(noteViews.count - 1)
+        var x = max(16, (bounds.width - total) / 2)
+        let midY = bounds.height - 15
+        for view in noteViews {
+            view.frame.origin = NSPoint(x: x, y: (midY - view.frame.height / 2).rounded())
+            x += view.frame.width + gap
+            addSubview(view)
+        }
+    }
+
+    private func noteView(parts: [(String, Bool)], setting: String?) -> NSView {
+        if let setting {
+            let link = CaptureNoteLink(parts: parts, setting: setting, tokens: tokens)
+            link.actionBlock = { [weak self] in self?.openPreference(setting) }
+            return link
+        }
+        let text = NSMutableAttributedString()
+        for (part, strong) in parts {
+            text.append(NSAttributedString(string: part, attributes: [
+                .font: NSFont.systemFont(ofSize: tokens.number("text-xs"),
+                    weight: strong ? .bold : .medium),
+                .foregroundColor: tokens.color(strong ? "glass-text" : "glass-text-subtle"),
+            ]))
+        }
+        let label = NSTextField(labelWithAttributedString: text)
+        label.sizeToFit()
+        label.setAccessibilityLabel(text.string)
+        return label
     }
 
     func selectMode(_ mode: UnifiedCaptureMode, notify: Bool) {
@@ -349,19 +857,16 @@ final class CaptureControlsView: NSView {
             let x = min(max(16, frame.midX - width / 2), superview.bounds.width - width - 16)
             frame = NSRect(x: x, y: superview.bounds.height - height - 26,
                 width: width, height: height)
-            note.frame = NSRect(x: 16, y: height - 26, width: frame.width - 32, height: 22)
             captureButton.frame = mode == .record
                 ? NSRect(x: width - 162, y: 10, width: 152, height: 40)
                 : NSRect(x: width - 122, y: 10, width: 112, height: 40)
             microphoneMenu.frame.size.width = max(116, width - microphoneMenu.frame.minX - 16)
+            if let label = fieldLabels.last { label.frame.size.width = microphoneMenu.frame.width }
         }
         screenshotButton.selected = mode == .screenshot
         recordButton.selected = mode == .record
         screenshotButton.setAccessibilityValue(mode == .screenshot ? 1 : 0)
         recordButton.setAccessibilityValue(mode == .record ? 1 : 0)
-        captureButton.title = mode == .record ? "Start recording" : "Capture"
-        captureButton.icon = mode == .record ? .record : .capture
-        captureButton.setAccessibilityLabel(mode == .record ? "Start recording" : "Take screenshot")
         updateRecordingControls()
         if notify { switchMode(mode) }
     }
@@ -382,35 +887,40 @@ final class CaptureControlsView: NSView {
     func selectAspect(_ index: Int) { aspectMenu.selectItem(at: index) }
     func selectDisplay(_ index: Int) { displayMenu.selectItem(at: index) }
     func selectMicrophone(_ index: Int, notify: Bool) {
-        guard microphoneIDs.indices.contains(index), microphoneMenu.isEnabled else { return }
+        guard microphoneIDs.indices.contains(index), microphoneMenu.isEnabled,
+              microphoneMenu.item(at: index)?.isEnabled != false else { return }
         microphoneMenu.selectItem(at: index)
         recordingState.microphoneDeviceID = microphoneIDs[index]
         if notify { recordingControlsChanged(recordingState) }
     }
+    /// Tests and the selector: flip a recording switch as a click would.
+    func toggleRecordingSwitch(_ key: String) {
+        guard let button = recordingSwitches.first(where: { $0.key == key }), button.isEnabled else { return }
+        toggleRecordingOption(key)
+    }
     func setCaptureEnabled(_ enabled: Bool) {
-        captureButton.isEnabled = enabled
-        captureButton.isHidden = autoStart && mode == .screenshot
-        captureButton.needsDisplay = true
+        captureEnabled = enabled
+        updatePrimary()
     }
 
     private func configureMicrophoneMenu(devices: [NativeMicrophoneDevice], available: Bool) {
-        microphoneMenu.frame = NSRect(x: 494, y: 68,
-            width: max(116, frame.width - 510), height: 36)
+        microphoneMenu.frame = NSRect(x: Self.microphoneX, y: Self.fieldControlY,
+            width: max(116, frame.width - Self.microphoneX - 16), height: 36)
         microphoneMenu.tokens = tokens
-        microphoneMenu.setAccessibilityLabel("Microphone")
+        microphoneMenu.setAccessibilityLabel(CaptureMenuPolicy.copy.microphoneLabel)
         microphoneMenu.isEnabled = available
-        microphoneIDs = [nil]
-        var titles = [available ? "Off" : "Unavailable"]
-        if let selected = recordingState.microphoneDeviceID,
-           !devices.contains(where: { $0.id == selected }) {
-            microphoneIDs.append(selected)
-            titles.append("Selected microphone")
+        microphoneMenu.autoenablesItems = false
+        // AppKit enumerates devices before the menu opens, so it never shows
+        // the shipping "Loading microphones…" row.
+        let options = try? CaptureMenuPolicy.microphones(available: available, loading: false,
+            selected: recordingState.microphoneDeviceID, devices: devices)
+        let entries = options?.entries ?? [CaptureMenuPolicy.MicrophoneEntry(id: nil,
+            label: available ? "Off" : "Unavailable", enabled: true)]
+        microphoneIDs = entries.map(\.id)
+        microphoneMenu.addItems(withTitles: entries.map(\.label))
+        for (index, entry) in entries.enumerated() {
+            microphoneMenu.item(at: index)?.isEnabled = entry.enabled
         }
-        for device in devices where !microphoneIDs.contains(where: { $0 == device.id }) {
-            microphoneIDs.append(device.id)
-            titles.append(device.name)
-        }
-        microphoneMenu.addItems(withTitles: titles)
         let selected = microphoneIDs.firstIndex(where: {
             $0 == recordingState.microphoneDeviceID
         }) ?? 0
@@ -454,11 +964,19 @@ final class UnifiedCaptureSelectionView: NSView {
     private let guidance = Surface()
     private let guidanceTitle = NSTextField(labelWithString: "")
     private let guidanceDetail = NSTextField(labelWithString: "")
+    private let identityName = NSTextField(labelWithString: "")
+    private let identityDetail = NSTextField(labelWithString: "")
+    private let displayIdentity: CaptureDisplayIdentity?
     private let currentDisplayTitle: String
     private var regionGestureActive = false
+    /// Window mode pointer is over the desktop or shell chrome.
+    private var hoveringDisplay = false
+    private(set) var isGuidanceDucked = false
     var confirm: (WindowSelectionChoice) -> Void
     var cancel: () -> Void
     var changeDisplay: (Int) -> Void
+    /// A note link: open Preferences at this setting key.
+    var openPreference: (String) -> Void = { _ in }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -471,10 +989,12 @@ final class UnifiedCaptureSelectionView: NSView {
             framesPerSecond: 60, maxResolution: "original", showCursor: true, highlightClicks: false,
             systemAudio: false, microphoneDeviceID: nil),
          recordingAvailability: RecordingControlAvailability? = nil,
-         microphoneDevices: [NativeMicrophoneDevice] = []) {
+         microphoneDevices: [NativeMicrophoneDevice] = [],
+         visibility: CaptureControlsVisibility = .excludedByDefault,
+         displayIdentity: CaptureDisplayIdentity? = nil) {
         self.tokens = tokens; self.autoStart = autoStart; self.targets = targets
         self.hitTest = hitTest; self.confirm = confirm; self.cancel = cancel
-        self.changeDisplay = changeDisplay
+        self.changeDisplay = changeDisplay; self.displayIdentity = displayIdentity
         currentDisplayTitle = displayTitles.indices.contains(selectedDisplay)
             ? displayTitles[selectedDisplay] : "Full screen"
         region = RegionSelection(bounds: CapturesSelectionBounds(width: frame.width, height: frame.height))
@@ -483,7 +1003,7 @@ final class UnifiedCaptureSelectionView: NSView {
             y: frame.height - 112, width: controlsWidth, height: 86), tokens: tokens,
             autoStart: autoStart, displayTitles: displayTitles, selectedDisplay: selectedDisplay,
             recordingState: recordingState, recordingAvailability: recordingAvailability,
-            microphoneDevices: microphoneDevices)
+            microphoneDevices: microphoneDevices, visibility: visibility)
         super.init(frame: frame)
         wantsLayer = true; layer?.backgroundColor = NSColor.clear.cgColor
         if let image {
@@ -496,9 +1016,9 @@ final class UnifiedCaptureSelectionView: NSView {
         addSubview(canvas)
         guidance.wantsLayer = true
         guidance.layer?.backgroundColor = tokens.color("glass-strong").cgColor
-        guidance.layer?.cornerRadius = tokens.number("r-lg")
+        guidance.layer?.cornerRadius = tokens.number("r-xl")
         guidance.layer?.borderWidth = 1
-        guidance.layer?.borderColor = tokens.color("glass-border").cgColor
+        guidance.layer?.borderColor = tokens.color("glass-border-strong").cgColor
         guidanceTitle.alignment = .center
         guidanceTitle.font = .systemFont(ofSize: tokens.number("text-md"), weight: .semibold)
         guidanceTitle.textColor = tokens.color("glass-text")
@@ -507,6 +1027,20 @@ final class UnifiedCaptureSelectionView: NSView {
         guidanceDetail.textColor = tokens.color("glass-text-subtle")
         guidance.addSubview(guidanceTitle); guidance.addSubview(guidanceDetail)
         addSubview(guidance)
+        // Shipping `recording-display-identity`: shadowed text, no chip.
+        for (label, size, weight, color) in [
+            (identityName, tokens.number("text-2xl"), NSFont.Weight.semibold, "glass-text"),
+            (identityDetail, tokens.number("text-md"), NSFont.Weight.regular, "glass-text-muted"),
+        ] {
+            label.alignment = .center
+            label.font = .monospacedDigitSystemFont(ofSize: size, weight: weight)
+            label.textColor = tokens.color(color)
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.5)
+            shadow.shadowOffset = NSSize(width: 0, height: -2); shadow.shadowBlurRadius = 12
+            label.shadow = shadow
+            addSubview(label)
+        }
         selectionLabel.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .semibold)
         selectionLabel.textColor = tokens.color("glass-text")
         selectionLabel.alignment = .center; selectionLabel.wantsLayer = true
@@ -517,6 +1051,8 @@ final class UnifiedCaptureSelectionView: NSView {
         controls.switchMode = { [weak self] mode in self?.setMode(mode) }
         controls.changeAspect = { [weak self] index in self?.setAspect(index) }
         controls.changeDisplay = { [weak self] index in self?.changeDisplay(index) }
+        controls.openPreference = { [weak self] setting in self?.openPreference(setting) }
+        controls.stateChanged = { [weak self] in self?.update() }
         controls.confirm = { [weak self] in self?.confirmSelection() }
         controls.cancel = { [weak self] in self?.cancel() }
         addSubview(controls)
@@ -526,6 +1062,10 @@ final class UnifiedCaptureSelectionView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     var isGuidanceVisible: Bool { !guidance.isHidden }
+    var guidanceText: String { "\(guidanceTitle.stringValue) · \(guidanceDetail.stringValue)" }
+    var guidanceFrame: NSRect { guidance.frame }
+    var isDisplayIdentityVisible: Bool { !identityName.isHidden }
+    var displayIdentityText: String { "\(identityName.stringValue) · \(identityDetail.stringValue)" }
     var controlsState: UnifiedCaptureControlsState {
         UnifiedCaptureControlsState(mode: mode, target: target, aspectIndex: aspectIndex)
     }
@@ -542,7 +1082,9 @@ final class UnifiedCaptureSelectionView: NSView {
 
     func setTarget(_ target: UnifiedCaptureTarget) {
         self.target = target; controls.selectTarget(target, notify: false)
-        if target == .display && autoStart && mode == .screenshot { confirmSelection(); return }
+        hoveringDisplay = false
+        // Shipping auto-start applies to both Screenshot and Record.
+        if target == .display && autoStart { confirmSelection(); return }
         update()
     }
 
@@ -552,7 +1094,7 @@ final class UnifiedCaptureSelectionView: NSView {
 
     func setTargetFromShortcut(_ target: UnifiedCaptureTarget, mode: UnifiedCaptureMode = .screenshot) {
         setMode(mode)
-        hoveredWindowIndex = -1
+        hoveredWindowIndex = -1; hoveringDisplay = false
         if target != .window { selectedWindowIndex = nil }
         self.target = target
         controls.selectTarget(target, notify: false)
@@ -566,10 +1108,19 @@ final class UnifiedCaptureSelectionView: NSView {
         controls.selectAspect(index); update()
     }
 
-    func restoreControls(_ state: UnifiedCaptureControlsState) {
+    /// `armAutoStart` is false for the first restoration of a tray/shortcut
+    /// request: like keyboard target changes, that never auto-starts. A display
+    /// replacement re-arms Full screen auto-start, as shipping does.
+    func restoreControls(_ state: UnifiedCaptureControlsState, armAutoStart: Bool = true) {
         setAspect(state.aspectIndex)
         setMode(state.mode)
-        setTarget(state.target)
+        if armAutoStart {
+            setTarget(state.target)
+        } else {
+            target = state.target; hoveringDisplay = false
+            controls.selectTarget(state.target, notify: false)
+            update()
+        }
     }
 
     func beginRegion(_ point: NSPoint, shift: Bool = false) {
@@ -584,14 +1135,14 @@ final class UnifiedCaptureSelectionView: NSView {
         guard target == .region, region.mode != nil else { return }
         let created = region.mode == 0
         region.end(); update()
-        if autoStart && mode == .screenshot && created { confirmSelection() }
+        if autoStart && created { confirmSelection() }
     }
 
     @discardableResult func hoverWindow(_ point: NSPoint) -> Bool {
         guard target == .window, point.x.isFinite, point.y.isFinite,
               let index = hitTest(CapturesSelectionPoint(x: point.x, y: point.y)),
               index == -1 || (index >= 0 && index < Int64(targets.count)) else { return false }
-        hoveredWindowIndex = index; update(); return true
+        hoveredWindowIndex = index; hoveringDisplay = index < 0; update(); return true
     }
 
     func selectWindow(_ point: NSPoint) {
@@ -600,7 +1151,7 @@ final class UnifiedCaptureSelectionView: NSView {
             selectedWindowIndex = nil; setTarget(.display)
         } else {
             selectedWindowIndex = hoveredWindowIndex; update()
-            if autoStart && mode == .screenshot { confirmSelection() }
+            if autoStart { confirmSelection() }
         }
     }
 
@@ -618,10 +1169,11 @@ final class UnifiedCaptureSelectionView: NSView {
             regionGestureActive = true
             beginRegion(point, shift: event.modifierFlags.contains(.shift))
         case .window: selectWindow(point)
-        case .display: if autoStart && mode == .screenshot { confirmSelection() }
+        case .display: if autoStart { confirmSelection() }
         }
     }
     override func mouseDragged(with event: NSEvent) {
+        duckGuidance(at: convert(event.locationInWindow, from: nil))
         if target == .region && regionGestureActive {
             dragRegion(convert(event.locationInWindow, from: nil),
                 shift: event.modifierFlags.contains(.shift))
@@ -635,7 +1187,24 @@ final class UnifiedCaptureSelectionView: NSView {
         regionGestureActive = false
     }
     override func mouseMoved(with event: NSEvent) {
-        if target == .window { _ = hoverWindow(convert(event.locationInWindow, from: nil)) }
+        let point = convert(event.locationInWindow, from: nil)
+        if target == .window { _ = hoverWindow(point) }
+        duckGuidance(at: point)
+    }
+
+    /// Shipping guidance ducking: fade when the pointer nears the chip (28 pt),
+    /// restore only once it leaves the wider 40 pt zone.
+    func duckGuidance(at point: NSPoint) {
+        let ducked = !guidance.isHidden && point.x.isFinite && point.y.isFinite
+            && CaptureMenuPolicy.pointerOverGuidance(point, chip: guidance.frame,
+                currentlyOver: isGuidanceDucked)
+        guard ducked != isGuidanceDucked else { return }
+        isGuidanceDucked = ducked
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Double(tokens.number("dur-3")) / 1000
+            guidance.animator().alphaValue = ducked ? 0 : 1
+        }
+        guidance.setAccessibilityElement(!ducked)
     }
     override func flagsChanged(with event: NSEvent) {
         if target == .region {
@@ -657,44 +1226,52 @@ final class UnifiedCaptureSelectionView: NSView {
         controls.setCaptureEnabled(choice != nil)
         let label: String
         let rect: NSRect?
+        var guidanceCopy: CaptureMenuPolicy.Guidance?
         switch target {
         case .region:
-            guidance.isHidden = region.mode != nil
-            guidanceTitle.stringValue = CaptureGuidanceCopy.regionTitle
-            guidanceDetail.stringValue = CaptureGuidanceCopy.regionHint
+            guidanceCopy = CaptureMenuPolicy.guidance("region")
             label = region.capturable
                 ? "\(Int(region.rect.width.rounded())) × \(Int(region.rect.height.rounded()))" : ""
             rect = region.capturable ? region.nsRect : nil
         case .window:
             let active = hoveredWindowIndex >= 0 ? hoveredWindowIndex : selectedWindowIndex ?? -1
             if active >= 0, active < Int64(targets.count) {
-                guidance.isHidden = true
                 label = targets[Int(active)].name; rect = targets[Int(active)].rect
             } else {
-                guidance.isHidden = false
-                guidanceTitle.stringValue = CaptureGuidanceCopy.windowTitle
-                guidanceDetail.stringValue = CaptureGuidanceCopy.hint
                 label = ""; rect = nil
             }
+            // Shipping: guidance stays until a window is selected; the desktop
+            // and shell chrome switch it to the display copy.
+            if selectedWindowIndex == nil {
+                guidanceCopy = CaptureMenuPolicy.guidance(hoveringDisplay ? "display" : "window")
+            }
         case .display:
-            guidance.isHidden = false
-            let parts = currentDisplayTitle.components(separatedBy: " · ")
-            guidanceTitle.stringValue = parts.first ?? currentDisplayTitle
-            guidanceDetail.stringValue = parts.dropFirst().joined(separator: "  ·  ")
             label = ""; rect = nil
         }
-        let displayGuidance = target == .display
-        let guidanceWidth: CGFloat = displayGuidance ? 280 : 300
-        let guidanceHeight: CGFloat = displayGuidance ? 82 : 62
-        guidance.frame = NSRect(x: (bounds.width - guidanceWidth) / 2,
-            y: displayGuidance ? (bounds.height - guidanceHeight) / 2 : 26,
-            width: guidanceWidth, height: guidanceHeight)
-        guidanceTitle.frame = NSRect(x: 12, y: displayGuidance ? 18 : 10,
-            width: guidanceWidth - 24, height: 22)
-        guidanceDetail.frame = NSRect(x: 12, y: displayGuidance ? 43 : 34,
-            width: guidanceWidth - 24, height: 18)
+        // Region guidance hides while a selection gesture is active.
+        guidance.isHidden = guidanceCopy == nil || (target == .region && region.mode != nil)
+        if let guidanceCopy {
+            guidanceTitle.stringValue = guidanceCopy.title
+            guidanceDetail.stringValue = guidanceCopy.hint
+        }
+        guidanceTitle.sizeToFit(); guidanceDetail.sizeToFit()
+        let padding = NSSize(width: tokens.number("s-6"), height: tokens.number("s-4"))
+        let guidanceWidth = ceil(max(guidanceTitle.frame.width, guidanceDetail.frame.width))
+            + padding.width * 2
+        let guidanceHeight = ceil(guidanceTitle.frame.height + 2 + guidanceDetail.frame.height)
+            + padding.height * 2
+        guidance.frame = NSRect(x: ((bounds.width - guidanceWidth) / 2).rounded(),
+            y: (bounds.height * 0.16).rounded(), width: guidanceWidth, height: guidanceHeight)
+        guidanceTitle.frame = NSRect(x: padding.width, y: padding.height,
+            width: guidanceWidth - padding.width * 2, height: guidanceTitle.frame.height)
+        guidanceDetail.frame = NSRect(x: padding.width, y: guidanceTitle.frame.maxY + 2,
+            width: guidanceWidth - padding.width * 2, height: guidanceDetail.frame.height)
         guidance.setAccessibilityLabel([guidanceTitle.stringValue, guidanceDetail.stringValue]
             .filter { !$0.isEmpty }.joined(separator: ". "))
+        if guidance.isHidden && isGuidanceDucked {
+            isGuidanceDucked = false; guidance.alphaValue = 1
+        }
+        updateDisplayIdentity()
         selectionLabel.stringValue = label
         selectionLabel.isHidden = label.isEmpty
         if let rect {
@@ -709,6 +1286,32 @@ final class UnifiedCaptureSelectionView: NSView {
         }
         selectionLabel.setAccessibilityLabel(label)
         canvas.needsDisplay = true; canvas.discardCursorRects(); canvas.resetCursorRects()
+    }
+
+    /// Shipping Full screen identity: display name, then W × H and Record FPS.
+    private func updateDisplayIdentity() {
+        let visible = target == .display
+        identityName.isHidden = !visible; identityDetail.isHidden = !visible
+        guard visible else { return }
+        let fallback = currentDisplayTitle.components(separatedBy: " · ")
+        let identity = displayIdentity.flatMap {
+            try? CaptureMenuPolicy.displayIdentity(name: $0.name, width: $0.width,
+                height: $0.height,
+                recordingFPS: mode == .record ? controls.recordingState.framesPerSecond : nil)
+        } ?? (name: fallback.first ?? currentDisplayTitle,
+               detail: fallback.dropFirst().joined(separator: " · "))
+        identityName.stringValue = identity.name; identityDetail.stringValue = identity.detail
+        identityName.sizeToFit(); identityDetail.sizeToFit()
+        let gap = tokens.number("s-4")
+        let height = identityName.frame.height + gap + identityDetail.frame.height
+        let top = (bounds.height / 2 - height * 0.6).rounded()
+        let width = min(bounds.width - 32, max(280, identityName.frame.width, identityDetail.frame.width))
+        identityName.frame = NSRect(x: (bounds.width - width) / 2, y: top,
+            width: width, height: identityName.frame.height)
+        identityDetail.frame = NSRect(x: (bounds.width - width) / 2,
+            y: identityName.frame.maxY + gap, width: width, height: identityDetail.frame.height)
+        identityName.setAccessibilityLabel("\(identity.name), \(identity.detail)")
+        identityDetail.setAccessibilityElement(false)
     }
 
     fileprivate func drawSelection() {
@@ -757,13 +1360,16 @@ final class UnifiedCapturePanel: NSPanel {
             framesPerSecond: 60, maxResolution: "original", showCursor: true,
             highlightClicks: false, systemAudio: false, microphoneDeviceID: nil),
          recordingAvailability: RecordingControlAvailability? = nil,
-         microphoneDevices: [NativeMicrophoneDevice] = []) {
+         microphoneDevices: [NativeMicrophoneDevice] = [],
+         visibility: CaptureControlsVisibility = .excludedByDefault,
+         displayIdentity: CaptureDisplayIdentity? = nil) {
         selector = UnifiedCaptureSelectionView(frame: NSRect(origin: .zero, size: screen.frame.size),
             image: image, targets: targets, tokens: tokens, autoStart: autoStart,
             hitTest: hitTest, displayTitles: displayTitles, selectedDisplay: selectedDisplay,
             confirm: confirm, cancel: cancel, changeDisplay: changeDisplay,
             recordingState: recordingState, recordingAvailability: recordingAvailability,
-            microphoneDevices: microphoneDevices)
+            microphoneDevices: microphoneDevices, visibility: visibility,
+            displayIdentity: displayIdentity)
         super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         title = "Captures Capture Controls"
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear; hasShadow = false

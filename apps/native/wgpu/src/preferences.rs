@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use captures_app::capture_menu::{self, PreferenceTarget};
 use captures_app::shortcuts::{
     ShortcutKeyEvent, ShortcutPlatform, ShortcutRecording, record_shortcut, shortcut_display_tokens,
 };
@@ -289,6 +290,14 @@ pub struct Preferences {
     /// Microphones for the Default microphone select, enumerated off the UI thread.
     microphones: Option<Vec<(String, String)>>,
     microphones_rx: Option<Receiver<Vec<(String, String)>>>,
+    /// Capture-menu deep link: scroll to this row once and highlight it.
+    highlight: Option<PreferenceHighlight>,
+}
+
+struct PreferenceHighlight {
+    target: PreferenceTarget,
+    until: Instant,
+    scrolled: bool,
 }
 
 impl Preferences {
@@ -360,6 +369,7 @@ impl Preferences {
             permission_recovery_busy: None,
             system_reduced_motion: false,
             motion_pending: false,
+            highlight: None,
             microphones: None,
             microphones_rx: None,
         }
@@ -557,6 +567,21 @@ impl Preferences {
         if !self.value.is_null() {
             self.set(&["show_update_changelog"], json!(show));
         }
+    }
+
+    /// Capture-menu note links: reveal `target`'s row and highlight it briefly,
+    /// like the shipping `preferences-target` event.
+    pub fn open_target(&mut self, target: PreferenceTarget) {
+        self.highlight = Some(PreferenceHighlight {
+            target,
+            until: Instant::now() + capture_menu::PREFERENCE_HIGHLIGHT,
+            scrolled: false,
+        });
+    }
+
+    #[cfg(test)]
+    fn highlighted_target(&self) -> Option<PreferenceTarget> {
+        self.highlight.as_ref().map(|highlight| highlight.target)
     }
 
     /// Tray "Send Feedback…": show the feedback form in Preferences.
@@ -948,7 +973,7 @@ impl Preferences {
         title: &str,
         desc: &str,
         control: impl FnOnce(&mut Self, &mut egui::Ui),
-    ) {
+    ) -> egui::Response {
         let response = ui
             .horizontal(|ui| {
                 let width = (ui.available_width() - 240.).max(150.);
@@ -968,9 +993,11 @@ impl Preferences {
             })
             .response;
         self.remember(&format!("{title} {desc}"), &response);
+        response
     }
     fn toggle(&mut self, ui: &mut egui::Ui, path: &[&str], title: &str, desc: &str, enabled: bool) {
-        ui.add_enabled_ui(enabled, |ui| {
+        let background = ui.painter().add(egui::Shape::Noop);
+        let row = ui.add_enabled_ui(enabled, |ui| {
             self.row(ui, title, desc, |this, ui| {
                 let mut value = at(&this.value, path)
                     .and_then(Value::as_bool)
@@ -1024,6 +1051,44 @@ impl Preferences {
                 }
             })
         });
+        self.highlight_row(ui, path, &row.inner, background);
+    }
+    fn highlight_row(
+        &mut self,
+        ui: &egui::Ui,
+        path: &[&str],
+        row: &egui::Response,
+        background: egui::layers::ShapeIdx,
+    ) {
+        let Some(highlight) = self
+            .highlight
+            .as_mut()
+            .filter(|highlight| path == [highlight.target.setting_key()])
+        else {
+            return;
+        };
+        let remaining = highlight.until.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            self.highlight = None;
+            return;
+        }
+        if !highlight.scrolled {
+            row.scroll_to_me(Some(egui::Align::Center));
+            highlight.scrolled = true;
+        }
+        // Shipping `.preference-target-highlight`: selected wash, accent ring.
+        let accent = ui.visuals().selection.stroke.color;
+        ui.painter().set(
+            background,
+            egui::epaint::RectShape::new(
+                row.rect.expand(8.),
+                10.,
+                ui.visuals().selection.bg_fill,
+                Stroke::new(2., accent.gamma_multiply(0.62)),
+                egui::StrokeKind::Outside,
+            ),
+        );
+        ui.ctx().request_repaint_after(remaining);
     }
     fn combo(
         &mut self,
@@ -1831,6 +1896,51 @@ mod tests {
         let after = render_shortcut_button(&ctx, true, false);
         assert_eq!(after, before);
         assert!(ctx.memory(|memory| memory.has_focus(after)));
+    }
+
+    #[test]
+    fn capture_menu_target_scrolls_to_and_briefly_highlights_its_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        captures_settings::save(&path, &AppSettings::default()).unwrap();
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), path, None, None);
+        prefs.value = serde_json::to_value(AppSettings::default()).unwrap();
+        prefs.load_error = None;
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let frame = |prefs: &mut Preferences| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900., 500.),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    prefs.ui(ui, &tokens, true);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        for target in [
+            PreferenceTarget::IncludeRecordingControlsInCaptures,
+            PreferenceTarget::AutoStartOnSelection,
+        ] {
+            prefs.open_target(target);
+            frame(&mut prefs);
+            assert_eq!(prefs.highlighted_target(), Some(target));
+            assert!(
+                prefs
+                    .highlight
+                    .as_ref()
+                    .is_some_and(|highlight| highlight.scrolled),
+                "the linked row must be found and revealed"
+            );
+            prefs.highlight.as_mut().unwrap().until = Instant::now();
+            frame(&mut prefs);
+            assert_eq!(prefs.highlighted_target(), None, "highlight expires");
+        }
     }
 
     #[test]

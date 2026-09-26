@@ -870,14 +870,21 @@ impl Workbench {
             ui,
             t,
             recording_hud::View {
-                paused: self.paused,
+                state: match self.options.hud_state {
+                    HudState::Failed => captures_recording::RecordingState::Failed,
+                    HudState::Saving => captures_recording::RecordingState::Finalizing,
+                    _ if self.paused => captures_recording::RecordingState::Paused,
+                    _ => captures_recording::RecordingState::Recording,
+                },
                 busy: self.options.hud_state == HudState::Busy,
                 has_microphone: self.options.hud_state != HudState::NoMicrophone,
                 microphone_muted: self.options.hud_state == HudState::Muted,
                 microphone_peak: 0.625,
                 elapsed_ms: 24_000,
                 notice: "These controls won’t show in recordings",
-                warning: false,
+                // A fixture engine failure, as the live HUD shows it inline.
+                error: (self.options.hud_state == HudState::Failed)
+                    .then_some("No microphone device is available"),
                 hide_available: false,
                 reduced_motion: self.options.reduced_motion,
             },
@@ -1318,6 +1325,17 @@ impl eframe::App for Workbench {
             }
             live.set_recording_restore_available(self.tray.is_some(), ctx);
             live.logic(ctx, frame);
+            // Open Preferences only after the cancelled menu has restored the
+            // root, so that restoration cannot hide it again.
+            if live.preference_target_pending() {
+                if live.is_capturing() {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(16));
+                } else if let Some(target) = live.take_preference_target_requested() {
+                    self.live_preferences = true;
+                    self.preferences_state.open_target(target);
+                    self.show_root(ctx);
+                }
+            }
         }
         self.sync_shortcuts(ctx);
         if self.options.live
@@ -1728,6 +1746,7 @@ impl eframe::App for Workbench {
                             auto_start: false,
                             recording_available: true,
                             recording_unavailable_reason: None,
+                            error: None,
                         },
                         |point| fixture_window_hit_test(windows, shell, display, point),
                     ) {

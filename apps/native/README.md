@@ -101,6 +101,16 @@ env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 CAPTURES_TEST_PRIVATE_X11=1 \
 This needs `xvfb`, `xauth`, `hsetroot`, FFmpeg and FFprobe. It is not physical
 Windows/macOS, audio-device, multi-display or Wayland acceptance.
 
+Failures follow the shipping HUD. If the engine cannot start a take (for example
+the selected microphone is missing), the HUD stays up as **Failed** with the error
+on one line below the controls, and offers **Retry recording** (no confirmation) and
+Delete. If resume or a microphone change cannot reopen the engine, the take stays
+paused with that error, ready to resume or save. Stop shows **Saving…** until the
+take is published. A failed save still closes the HUD and keeps the recovery bundle.
+Engine warnings share the error line, which clears when the next HUD action starts.
+HUD buttons use the shipping fixed-glass tooltips, which appear immediately on hover
+or focus. `x11_recording_smoke.py --start-failure` exercises these states on X11.
+
 The native recording Hide slice removes the AppKit or wgpu HUD without changing
 the accepted session, timer, pause/microphone state, capture generation or media.
 A 6.2-second click-through fixed-glass notice explains restoration; no collapsed
@@ -168,11 +178,21 @@ to its prior visibility; a background capture does not reopen Preferences.
 
 One Rust `WindowSession` also accepts a region target, reusing region crop/cursor
 validation without another full-screen copy. A nonzero countdown refreshes pixels
-for all three targets. The Record control is visibly disabled: recording selector,
-HUD and editor integration remain separate slices. Existing direct screenshot
-actions remain available. Native controls are not yet full capture-menu UI/input
-parity; physical displays, platform input and
-accessibility acceptance remain open.
+for all three targets. Existing direct screenshot actions remain available.
+
+Menu copy and small policies come from `captures-app::capture_menu`, so both hosts
+share the shipping labels. The footer note reports whether "these controls" show
+in screenshots or recordings from the recording capabilities; where the platform
+can exclude them (macOS/Windows) it and the "Auto-capture is on" notice link to
+Preferences, which scrolls to and briefly highlights that row. Linux shows the note
+as plain "will show" text. Full screen shows the display name and size (plus FPS in
+Record). Record mode shows labelled FPS / Max resolution selects, Show cursor /
+Show clicks / Desktop audio switches (On/Off/Unavailable with a reason tooltip;
+clicks imply the cursor) and the microphone select. The primary button hides under
+auto-start unless a start failed. Guidance stays until a window is selected, hides
+while dragging and fades when the pointer comes within 28 points. Segmented-control
+animation/icons, the panel entrance animation and Wayland remain open; physical
+displays, platform input and accessibility acceptance remain open.
 
 Configured Region/Window/Full screen global shortcuts switch the open selector's
 target without replacing its session. Like the shipping keyboard path, every

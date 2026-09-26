@@ -771,6 +771,11 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     }
 }
 
+/// Label drawn inside a button; clicks fall through to the button.
+private final class EditorPassthroughLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 private final class EditorInlineTextView: NSTextView {
     var onEscape: (() -> Void)?
     var onBlur: (() -> Void)?
@@ -859,8 +864,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let rotationSnap = NSTextField()
     private var rotationSnapLabel: NSTextField!
     private let drawPanel = Surface()
-    private let outputPanel = Surface()
-    private let outputContent = Surface()
+    private let exportBar = Surface()
+    private let exportSettingsPanel = Surface()
     let drawOverlay = EditorDrawOverlay()
     let selectionOverlay = EditorSelectionOverlay()
     let cropOverlay = EditorCropOverlay()
@@ -882,13 +887,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let outputDimensions = NSTextField(labelWithString: "")
     private let outputFilename = NSTextField()
     private let outputLocation = NSTextField(labelWithString: "")
-    private let outputSize = NSTextField(wrappingLabelWithString: "No encoded preview yet.")
-    private var outputQualityValueLabel: NSTextField!
-    private var outputPngPaletteLabel: NSTextField!
-    private var outputByteBudgetLabel: NSTextField!
-    private var outputCompressionPresetLabel: NSTextField!
-    private var outputWidthLabel: NSTextField!
-    private var outputHeightLabel: NSTextField!
+    private let exportDisclosureTitle = EditorPassthroughLabel(labelWithString: "Export settings")
+    private let exportSummary = EditorPassthroughLabel(labelWithString: "")
+    private let exportChevron = EditorPassthroughLabel(labelWithString: "▾")
+    private let exportFilenameCaption = NSTextField(labelWithString: "Filename")
+    private let exportSavingToCaption = NSTextField(labelWithString: "Saving to")
+    private let exportStatus = NSTextField(labelWithString: "")
+    private let exportEstimateValue = NSTextField(labelWithString: "—")
+    private let exportEstimateDelta = NSTextField(labelWithString: "")
+    private let saveAsNewSwitch = NSSwitch()
+    private let saveAsNewLabel = NSTextField(labelWithString: "Save as new file")
+    /// Settings groups behind the disclosure: caption, controls with their
+    /// x offsets/widths inside the group, and the group width.
+    private var exportGroups: [String: (caption: NSTextField, views: [(NSView, CGFloat, CGFloat)], width: CGFloat)] = [:]
     private var sectionControl: NSSegmentedControl!
     private var drawTool: NSPopUpButton!
     private var lastBackgroundTool: EditorDrawOverlay.Shape = .wand
@@ -991,12 +1002,30 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var cropPrevious: [String]?
     private var resizeButton: CaptureButton!
     private var trimButton: CaptureButton!
+    private var exportDisclosure: CaptureButton!
     private var previewOutputButton: CaptureButton!
     private var copyImageButton: CaptureButton!
     private var changeOutputDirectoryButton: CaptureButton!
-    private var saveNewCopyButton: CaptureButton!
-    private var replaceOriginalButton: CaptureButton!
-    private let replaceOriginalHelp = NSTextField(wrappingLabelWithString: "")
+    private var showInFolderButton: CaptureButton!
+    private var exportSaveButton: CaptureButton!
+    /// Shared export-bar state: the opaque Rust target and its latest presentation.
+    private var exportTarget: [String: Any]?
+    private(set) var exportBarState: NativeExportBar?
+    private(set) var exportSettingsOpen = false
+    private var exportOptionsError: String?
+    private var exportError: String?
+    private var exportNotice: String?
+    private var exportNoticeToken = 0
+    private var copyConfirmed = false
+    private var copyConfirmToken = 0
+    private var saveInFlight = false
+    private let exportBarRule = Surface()
+    private(set) var lastSavedPath: String?
+    private var estimate: EditorEstimate?
+    private var estimatePending = false
+    private var estimateGeneration = 0
+    private var estimateWork: DispatchWorkItem?
+    private var originalBytes: UInt64?
     private var fields: [NSTextField] = []
     private var closeAfterCommand = false
     private var selectedLayerID: String?
@@ -1014,8 +1043,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let directoryPicker: ((NSWindow, URL?, @escaping (URL?) -> Void) -> Void)?
     private let didSaveCopy: () -> Void
     private let didReplaceOriginal: (String) -> Void
-    private let confirmReplaceOriginal: (NSWindow, String, @escaping (Bool) -> Void) -> Void
-    private var awaitingReplaceConfirmation = false
+    private let revealFiles: ([URL]) -> Void
+    /// Shipping debounce before Est. size re-encodes, and confirmation duration.
+    static let estimateDelay: TimeInterval = 0.22
+    static let exportConfirmationDuration: TimeInterval = 4
     private let writeClipboard: (Data) -> Bool
     private let imagePicker: ((NSWindow, @escaping (URL?) -> Void) -> Void)?
     private let imageDecoder: (URL) throws -> EditorDecodedImage
@@ -1029,7 +1060,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         static let geometry = 0
         static let layers = 1
         static let draw = 2
-        static let output = 3
     }
 
     init(tokens: Tokens, worker: EditorWorking = EditorWorker(), numberLocale: Locale = .current,
@@ -1037,7 +1067,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
          directoryPicker: ((NSWindow, URL?, @escaping (URL?) -> Void) -> Void)? = nil,
          didSaveCopy: @escaping () -> Void = {},
          didReplaceOriginal: @escaping (String) -> Void = { _ in },
-         confirmReplaceOriginal: ((NSWindow, String, @escaping (Bool) -> Void) -> Void)? = nil,
+         revealFiles: @escaping ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) },
          imagePicker: ((NSWindow, @escaping (URL?) -> Void) -> Void)? = nil,
          imageDecoder: @escaping (URL) throws -> EditorDecodedImage = EditorImageDecoder.decode,
          writeClipboard: @escaping (Data) -> Bool = { png in
@@ -1048,7 +1078,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
         self.directoryPicker = directoryPicker; self.didSaveCopy = didSaveCopy
         self.didReplaceOriginal = didReplaceOriginal
-        self.confirmReplaceOriginal = confirmReplaceOriginal ?? Self.presentReplaceOriginalConfirmation
+        self.revealFiles = revealFiles
         self.imagePicker = imagePicker; self.imageDecoder = imageDecoder
         self.writeClipboard = writeClipboard
         editorNumberFormatter = NumberFormatter()
@@ -1064,7 +1094,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputIntegerFormatter.usesGroupingSeparator = false
         outputIntegerFormatter.maximumFractionDigits = 0
         outputIntegerFormatter.minimum = 0
-        let bounds = NSRect(x: 0, y: 0, width: 1000, height: 700)
+        // The full-width export bar adds 80pt below the historical 1000×700 layout.
+        let bounds = NSRect(x: 0, y: 0, width: 1000, height: 780)
         root = Surface(frame: bounds)
         let editorWindow = ScreenshotEditorWindow(contentRect: bounds,
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
@@ -1111,13 +1142,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         captureMode = artifact.mode
         self.outputDirectory = outputDirectory ?? URL(fileURLWithPath: historyRoot)
             .deletingLastPathComponent().path
-        outputFilename.stringValue = defaultOutputFilename()
         outputSizeMode?.selectItem(at: 0)
         outputWidth.stringValue = ""; outputHeight.stringValue = ""
-        publishOutputLocation()
+        resetExportState(originalBytes: artifact.sizeBytes)
         selectedLayerID = nil; selectedLayerIndex = 0; preferredLayerID = nil
         editedImage = nil; invalidateOutput(); preview.image = nil; window.title = "Edit screenshot"
         status.stringValue = "Opening screenshot…"; updateControls()
+        fitWindowToScreen()
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         let draftsRoot = URL(fileURLWithPath: historyRoot).deletingLastPathComponent()
             .appendingPathComponent("editor-drafts", isDirectory: true).path
@@ -1134,6 +1165,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.createTextSize.stringValue = self.format(presentation.snapshot.initialTextSize)
                 self.publishInitialDrawingDefaults(presentation.snapshot)
                 self.publish(presentation, resetCrop: true)
+                self.startExportTarget(presentation.snapshot)
                 self.status.textColor = self.tokens.color("text-muted")
                 self.status.stringValue = presentation.snapshot.hasDraft
                     ? "Draft restored." : "Ready. Changes affect only the native editor draft."
@@ -1170,6 +1202,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         case .success:
             inlineTextInput = nil; hideInlineTextEditor()
             state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
+            estimateWork?.cancel(); estimateWork = nil; estimateGeneration += 1
             window.orderOut(nil); return true
         case .failure(let error):
             if let failure = error as? EditorTerminationFailure,
@@ -1233,12 +1266,35 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         finishInlineTextInput(commit: true)
     }
 
-    func windowDidResize(_ notification: Notification) {
+    func windowDidResize(_ notification: Notification) { layoutEditor() }
+
+    /// The default 1000×780 content is taller than some displays' visible
+    /// frames. Shrink to the screen up front (never below the minimum size) so
+    /// the frame-based layout keeps the export bar pinned inside the window
+    /// instead of depending on AppKit constraining the frame after ordering in.
+    private func fitWindowToScreen() {
+        guard let visible = (window.screen ?? NSScreen.main)?.visibleFrame,
+              visible.width > 0, visible.height > 0 else { return }
+        let available = window.contentRect(forFrameRect: visible).size
+        let current = root.bounds.size
+        let fitted = NSSize(width: max(window.contentMinSize.width, min(current.width, available.width)),
+                            height: max(window.contentMinSize.height, min(current.height, available.height)))
+        guard fitted != current else { return }
+        window.setContentSize(fitted)
+    }
+
+    /// Collapsed export bar height, plus the fixed settings area while open.
+    var exportBarHeight: CGFloat { exportSettingsOpen ? 208 : 80 }
+
+    /// Frame-based layout: the full-width export bar is pinned to the bottom;
+    /// the viewport, zoom row and inspector sit above it.
+    private func layoutEditor() {
         guard let previewPanel = viewportInput.superview else { return }
+        let bar = exportBarHeight
         // Keep the inspector width stable. Below the initial window width,
         // move dimensions to a second footer row instead of squeezing controls.
         let compact = root.bounds.width < 1000
-        let footerY = root.bounds.height - (compact ? 86 : 50)
+        let footerY = root.bounds.height - bar - (compact ? 86 : 50)
         previewPanel.frame = NSRect(x: 24 + tokens.number("s-12"), y: 90,
                                     width: root.bounds.width - 360 - tokens.number("s-12"),
                                     height: footerY - 100)
@@ -1249,6 +1305,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         dimensions.frame = compact
             ? NSRect(x: 24, y: footerY + 40, width: previewPanel.frame.width, height: 20)
             : NSRect(x: 440, y: footerY + 4, width: previewPanel.frame.maxX - 440, height: 20)
+        let inspectorX = root.bounds.width - 312
+        let statusY = root.bounds.height - bar - 16 - 96
+        sectionControl?.frame.origin.x = inspectorX
+        status.frame = NSRect(x: inspectorX, y: statusY, width: 272, height: 96)
+        saveButton?.frame.origin = NSPoint(x: inspectorX, y: statusY - 44)
+        discardButton?.frame.origin = NSPoint(x: inspectorX + 136, y: statusY - 44)
+        undoButton?.frame.origin = NSPoint(x: inspectorX, y: statusY - 98)
+        redoButton?.frame.origin = NSPoint(x: inspectorX + 144, y: statusY - 98)
+        for panel in [geometryPanel, layersPanel, drawPanel] {
+            panel.frame = NSRect(x: inspectorX, y: 66, width: 272, height: max(0, statusY - 98 - 14 - 66))
+        }
+        layoutExportBar()
         guard viewportBounds.size != viewportInput.bounds.size else { return }
         // A gesture cannot retain its old screen-to-document mapping while
         // the viewport changes. Resizing itself never submits a document edit.
@@ -1259,10 +1327,86 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateViewportGeometry()
     }
 
+    /// Disclosure and filename widths: fixed actions first, then the disclosure
+    /// grows to fit its summary, then the filename field takes what remains.
+    static func exportWidths(_ width: CGFloat) -> (disclosure: CGFloat, filename: CGFloat) {
+        let fixed: CGFloat = 72 + 96 + 148 + 96 + 5 * 8
+        let flexible = max(0, width - 32 - fixed)
+        let disclosure = min(210, max(150, flexible - 120))
+        return (disclosure, min(320, max(120, flexible - disclosure)))
+    }
+
+    private func layoutExportBar() {
+        guard exportDisclosure != nil else { return }
+        let width = root.bounds.width
+        exportBar.frame = NSRect(x: 0, y: root.bounds.height - exportBarHeight,
+                                 width: width, height: exportBarHeight)
+        exportBarRule.frame = NSRect(x: 0, y: 0, width: width, height: 1)
+        exportSettingsPanel.isHidden = !exportSettingsOpen
+        exportSettingsPanel.frame = NSRect(x: 16, y: 10, width: width - 32, height: 112)
+        layoutExportSettings()
+        let (disclosure, filename) = Self.exportWidths(width)
+        let base: CGFloat = exportSettingsOpen ? 128 : 0
+        let headingY = base + 10, rowY = base + 32
+        exportDisclosure.frame = NSRect(x: 16, y: rowY, width: disclosure, height: 36)
+        exportDisclosureTitle.frame = NSRect(x: 12, y: 3, width: disclosure - 40, height: 16)
+        exportSummary.frame = NSRect(x: 12, y: 19, width: disclosure - 40, height: 14)
+        exportChevron.frame = NSRect(x: disclosure - 26, y: 9, width: 16, height: 18)
+        outputFilename.frame = NSRect(x: 16 + disclosure + 8, y: rowY + 3, width: filename, height: 30)
+        outputFormat.frame = NSRect(x: outputFilename.frame.maxX + 8, y: rowY + 3, width: 72, height: 30)
+        copyImageButton.frame = NSRect(x: outputFormat.frame.maxX + 8, y: rowY + 1, width: 96, height: 34)
+        exportSaveButton.frame = NSRect(x: width - 16 - 96, y: rowY + 1, width: 96, height: 34)
+        saveAsNewSwitch.frame = NSRect(x: exportSaveButton.frame.minX - 8 - 140, y: rowY + 8, width: 38, height: 20)
+        saveAsNewLabel.frame = NSRect(x: saveAsNewSwitch.frame.maxX + 4, y: rowY + 9, width: 98, height: 18)
+        let headingX = outputFilename.frame.minX
+        let headingEnd = outputFormat.frame.maxX
+        exportFilenameCaption.frame = NSRect(x: headingX, y: headingY, width: 58, height: 16)
+        exportSavingToCaption.frame = NSRect(x: headingX + 60, y: headingY, width: 58, height: 16)
+        changeOutputDirectoryButton.frame = NSRect(x: headingEnd - 72, y: headingY - 4, width: 72, height: 24)
+        outputLocation.frame = NSRect(x: headingX + 120, y: headingY,
+                                      width: max(24, changeOutputDirectoryButton.frame.minX - 4 - headingX - 120),
+                                      height: 16)
+        showInFolderButton.frame = NSRect(x: width - 16 - 112, y: headingY - 4, width: 112, height: 24)
+        let statusRight = showInFolderButton.isHidden ? width - 16 : showInFolderButton.frame.minX - 8
+        exportStatus.frame = NSRect(x: headingEnd + 12, y: headingY,
+                                    width: max(0, statusRight - headingEnd - 12), height: 16)
+    }
+
+    /// Flow the visible settings groups into rows inside the fixed panel.
+    private func layoutExportSettings() {
+        let compress = outputQuality?.indexOfSelectedItem == 1
+        let visible: [String] = ["size"]
+            + (outputSizeMode?.indexOfSelectedItem == 3 ? ["custom"] : [])
+            + ["quality"]
+            + (compress ? ["preset"] : [])
+            + (compress && outputFormat?.indexOfSelectedItem == 0 ? ["palette"] : [])
+            + (outputQuality?.indexOfSelectedItem == 2 ? ["maximum"] : [])
+            + ["estimate", "preview"]
+        let available = exportSettingsPanel.bounds.width - 24
+        var x: CGFloat = 12, row: CGFloat = 0
+        for (key, group) in exportGroups {
+            let shown = visible.contains(key)
+            group.caption.isHidden = !shown
+            group.views.forEach { $0.0.isHidden = !shown }
+        }
+        for key in visible {
+            guard let group = exportGroups[key] else { continue }
+            if x > 12 && x + group.width > 12 + available { x = 12; row += 1 }
+            let captionY = 8 + row * 52
+            group.caption.frame = NSRect(x: x, y: captionY, width: group.width, height: 16)
+            for (view, offset, viewWidth) in group.views {
+                let labelLike = (view as? NSTextField).map { !$0.isEditable } ?? false
+                view.frame = NSRect(x: x + offset, y: captionY + (labelLike ? 24 : 18),
+                                    width: viewWidth, height: labelLike ? 18 : 28)
+            }
+            x += group.width + 16
+        }
+    }
+
     private func build() {
         label("Screenshot editor", frame: NSRect(x: 24, y: 20, width: 400, height: 30),
               size: 21, weight: .semibold)
-        label("Edit a recoverable draft. Only Replace original changes the source History image.",
+        label("Edits stay in a recoverable draft. Save exports the edited image.",
               frame: NSRect(x: 24, y: 54, width: 640, height: 32), muted: true)
             .autoresizingMask = [.width]
 
@@ -1403,7 +1547,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         dimensions.frame = NSRect(x: 440, y: 654, width: 224, height: 20)
         dimensions.setAccessibilityLabel("Edited canvas dimensions"); root.addSubview(dimensions)
 
-        sectionControl = NSSegmentedControl(labels: ["Geometry", "Layers", "Draw", "Output"], trackingMode: .selectOne,
+        sectionControl = NSSegmentedControl(labels: ["Geometry", "Layers", "Draw"], trackingMode: .selectOne,
                                             target: self, action: #selector(changeSection))
         sectionControl.frame = NSRect(x: 688, y: 24, width: 272, height: 28)
         sectionControl.autoresizingMask = [.minXMargin]
@@ -1414,16 +1558,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         geometryPanel.frame = NSRect(x: 688, y: 66, width: 272, height: 346)
         layersPanel.frame = geometryPanel.frame; layersPanel.isHidden = true
         drawPanel.frame = geometryPanel.frame; drawPanel.isHidden = true
-        outputPanel.frame = geometryPanel.frame; outputPanel.isHidden = true
         geometryPanel.setAccessibilityLabel("Geometry controls")
         layersPanel.setAccessibilityLabel("Layer controls")
         drawPanel.setAccessibilityLabel("Drawing controls")
-        outputPanel.setAccessibilityLabel("Output controls")
-        for panel in [geometryPanel, layersPanel, drawPanel, outputPanel] {
-            panel.autoresizingMask = [.minXMargin, .height]
-        }
+        // layoutEditor() places the inspector above the export bar.
         root.addSubview(geometryPanel); root.addSubview(layersPanel)
-        root.addSubview(drawPanel); root.addSubview(outputPanel)
+        root.addSubview(drawPanel)
 
         let geometryScroll = NSScrollView(frame: geometryPanel.bounds)
         geometryScroll.autoresizingMask = [.width, .height]
@@ -1509,7 +1649,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
         buildLayersPanel()
         buildDrawPanel()
-        buildOutputPanel()
 
         undoButton = button("Undo", frame: NSRect(x: 688, y: 426, width: 128, height: 34)) {
             [weak self] in self?.command(["operation": "undo"], message: "Undoing…")
@@ -1526,22 +1665,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         status.frame = NSRect(x: 688, y: 524, width: 272, height: 96)
         status.maximumNumberOfLines = 5; status.setAccessibilityLabel("Screenshot editor status")
         root.addSubview(status)
-        copyImageButton = button("Copy image", frame: NSRect(x: 688, y: 630, width: 100, height: 34)) {
-            [weak self] in self?.copyEditedImage()
-        }
-        copyImageButton.setAccessibilityLabel("Copy edited screenshot")
-        copyImageButton.toolTip = "Copy full-resolution edited pixels as PNG. Export options are ignored; no file or draft is saved."
-        saveNewCopyButton = button("Save new copy", frame: NSRect(x: 808, y: 630, width: 152, height: 34)) {
-            [weak self] in self?.saveNewCopy()
-        }
-        saveNewCopyButton.primary = true
-        saveNewCopyButton.toolTip = "Save a new file without replacing existing files. Configure format, filename and location in Output."
-        let bottomControls: [NSView] = [undoButton, redoButton, saveButton, discardButton, status,
-                                       copyImageButton, saveNewCopyButton]
-        for control in bottomControls {
-            control.autoresizingMask = [.minXMargin, .minYMargin]
-        }
+        buildExportBar()
         fields = [cropX, cropY, cropWidth, cropHeight, canvasWidth, canvasHeight]
+        layoutEditor()
     }
 
     private func buildDrawPanel() {
@@ -1795,127 +1921,157 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                         textShadow, textOutline, textShadowPanel, textApplyButton, textCancelButton]
     }
 
-    private func buildOutputPanel() {
-        let scroll = NSScrollView(frame: outputPanel.bounds)
-        scroll.autoresizingMask = [.width, .height]
-        scroll.hasVerticalScroller = true; scroll.drawsBackground = false
-        outputContent.frame = NSRect(x: 0, y: 0, width: 252, height: 888)
-        scroll.documentView = outputContent
-        outputPanel.addSubview(scroll)
+    /// Shipping bottom export bar: a settings disclosure with a live summary,
+    /// filename and format suffix, save location, Copy image, the "Save as new
+    /// file" switch and the primary Save.
+    private func buildExportBar() {
+        exportBar.wantsLayer = true
+        exportBar.setAccessibilityLabel("Export bar")
+        root.addSubview(exportBar)
+        exportBarRule.wantsLayer = true
+        exportBar.addSubview(exportBarRule)
+        exportSettingsPanel.wantsLayer = true
+        exportSettingsPanel.layer?.cornerRadius = tokens.number("r-xl")
+        exportSettingsPanel.layer?.borderWidth = 1
+        exportSettingsPanel.setAccessibilityLabel("Export settings")
+        exportSettingsPanel.isHidden = true
+        exportBar.addSubview(exportSettingsPanel)
 
-        panelLabel("Output preview", frame: NSRect(x: 0, y: 0, width: 252, height: 24),
-                   size: 16, weight: .semibold, parent: outputContent)
-        panelLabel("Encode without saving or changing the draft.",
-                   frame: NSRect(x: 0, y: 28, width: 252, height: 22), muted: true,
-                   parent: outputContent)
+        func caption(_ text: String) -> NSTextField {
+            let label = NSTextField(labelWithString: text)
+            label.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+            label.identifier = NSUserInterfaceItemIdentifier("editor-muted")
+            exportSettingsPanel.addSubview(label)
+            return label
+        }
+        func add(_ view: NSView) { exportSettingsPanel.addSubview(view) }
 
-        panelFieldLabel("Format", x: 0, y: 58, parent: outputContent)
-        outputFormat = NSPopUpButton(frame: NSRect(x: 0, y: 78, width: 112, height: 30))
-        outputFormat.addItems(withTitles: ["PNG", "JPEG", "WebP"])
-        outputFormat.setAccessibilityLabel("Output format")
-        outputFormat.target = self; outputFormat.action = #selector(outputOptionsChanged)
-        outputContent.addSubview(outputFormat)
+        outputSizeMode = NSPopUpButton()
+        outputSizeMode.addItems(withTitles: ["Original", "75%", "50%", "Custom"])
+        outputSizeMode.setAccessibilityLabel("Output size")
+        outputSizeMode.target = self; outputSizeMode.action = #selector(outputSizeModeChanged)
+        add(outputSizeMode)
+        outputDimensions.setAccessibilityLabel("Output dimensions")
+        outputDimensions.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
+        add(outputDimensions)
+        configure(outputWidth, frame: .zero, label: "Custom output width", parent: exportSettingsPanel)
+        configure(outputHeight, frame: .zero, label: "Custom output height", parent: exportSettingsPanel)
+        [outputWidth, outputHeight].forEach {
+            $0.formatter = outputIntegerFormatter; $0.delegate = self
+        }
+        outputAspectLock.title = "Lock"
+        outputAspectLock.state = .on
+        outputAspectLock.setAccessibilityLabel("Lock output aspect ratio")
+        outputAspectLock.target = self; outputAspectLock.action = #selector(outputAspectLockChanged)
+        add(outputAspectLock)
 
-        panelFieldLabel("Quality mode", x: 120, y: 58, parent: outputContent)
-        outputQuality = NSPopUpButton(frame: NSRect(x: 120, y: 78, width: 132, height: 30))
-        outputQuality.addItems(withTitles: ["Preserve", "Compress", "Maximum file size"])
-        outputQuality.setAccessibilityLabel("Output quality mode")
+        outputQuality = NSPopUpButton()
+        outputQuality.addItems(withTitles: ["Preserve quality", "Compress", "Maximum file size"])
+        outputQuality.setAccessibilityLabel("Save quality")
         outputQuality.target = self; outputQuality.action = #selector(outputOptionsChanged)
-        outputContent.addSubview(outputQuality)
-
-        outputQualityValueLabel = panelFieldLabel("Quality value", x: 0, y: 118,
-                                                  parent: outputContent)
-        outputPngPaletteLabel = panelFieldLabel("PNG palette", x: 132, y: 118,
-                                                parent: outputContent)
-        configure(outputQualityValue, frame: NSRect(x: 0, y: 138, width: 120, height: 30),
-                  label: "Output quality value", parent: outputContent)
-        configure(outputPngPalette, frame: NSRect(x: 132, y: 138, width: 120, height: 30),
-                  label: "PNG maximum colors", parent: outputContent)
-        outputQualityValue.stringValue = "98"
-        outputPngPalette.placeholderString = "Optional"
-
-        outputByteBudgetLabel = panelFieldLabel("Byte budget (minimum 10,000)", x: 0, y: 178,
-                                               parent: outputContent)
-        configure(outputByteBudget, frame: NSRect(x: 0, y: 198, width: 252, height: 30),
-                  label: "Output byte budget", parent: outputContent)
-        outputByteBudget.placeholderString = "Required for Maximum"
-        outputByteBudget.stringValue = "10000000"
-        outputCompressionPresetLabel = panelFieldLabel("Compression preset", x: 0, y: 178,
-                                                       parent: outputContent)
-        outputCompressionPreset.frame = NSRect(x: 0, y: 198, width: 252, height: 30)
+        add(outputQuality)
         outputCompressionPreset.addItems(withTitles: Self.outputCompressionPresets.map { $0.name })
         outputCompressionPreset.setAccessibilityLabel("Output compression preset")
         outputCompressionPreset.target = self
         outputCompressionPreset.action = #selector(outputCompressionPresetChanged)
-        outputContent.addSubview(outputCompressionPreset)
+        add(outputCompressionPreset)
+        configure(outputQualityValue, frame: .zero, label: "Output quality value", parent: exportSettingsPanel)
+        configure(outputPngPalette, frame: .zero, label: "PNG maximum colors", parent: exportSettingsPanel)
+        configure(outputByteBudget, frame: .zero, label: "Output byte budget", parent: exportSettingsPanel)
+        outputQualityValue.stringValue = "98"
+        outputPngPalette.placeholderString = "Optional"
+        outputByteBudget.placeholderString = "Required"
+        outputByteBudget.stringValue = "10000000"
         [outputQualityValue, outputPngPalette, outputByteBudget].forEach {
             $0.formatter = outputIntegerFormatter; $0.delegate = self
         }
-
-        panelFieldLabel("Output size", x: 0, y: 240, parent: outputContent)
-        outputSizeMode = NSPopUpButton(frame: NSRect(x: 0, y: 260, width: 252, height: 30))
-        outputSizeMode.addItems(withTitles: ["Original", "75%", "50%", "Custom"])
-        outputSizeMode.setAccessibilityLabel("Output size")
-        outputSizeMode.target = self; outputSizeMode.action = #selector(outputSizeModeChanged)
-        outputContent.addSubview(outputSizeMode)
-        outputWidthLabel = panelFieldLabel("Width", x: 0, y: 298, parent: outputContent)
-        outputHeightLabel = panelFieldLabel("Height", x: 132, y: 298, parent: outputContent)
-        configure(outputWidth, frame: NSRect(x: 0, y: 318, width: 120, height: 30),
-                  label: "Custom output width", parent: outputContent)
-        configure(outputHeight, frame: NSRect(x: 132, y: 318, width: 120, height: 30),
-                  label: "Custom output height", parent: outputContent)
-        [outputWidth, outputHeight].forEach {
-            $0.formatter = outputIntegerFormatter; $0.delegate = self
-        }
-        outputAspectLock.frame = NSRect(x: 0, y: 352, width: 150, height: 24)
-        outputAspectLock.state = .on
-        outputAspectLock.setAccessibilityLabel("Lock output aspect ratio")
-        outputAspectLock.target = self; outputAspectLock.action = #selector(outputAspectLockChanged)
-        outputContent.addSubview(outputAspectLock)
-        outputDimensions.frame = NSRect(x: 0, y: 376, width: 252, height: 20)
-        outputDimensions.setAccessibilityLabel("Output dimensions")
-        outputContent.addSubview(outputDimensions)
-
-        previewOutputButton = button("Preview output", frame: NSRect(x: 0, y: 402, width: 140, height: 34),
-                                     parent: outputContent) { [weak self] in self?.previewOutput() }
-        previewOutputButton.primary = true
+        exportEstimateValue.setAccessibilityLabel("Estimated size")
+        exportEstimateValue.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .semibold)
+        exportEstimateValue.toolTip = "Estimated export file size for the current format, quality, and output size"
+        add(exportEstimateValue)
+        exportEstimateDelta.setAccessibilityLabel("Estimated size change")
+        exportEstimateDelta.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+        exportEstimateDelta.toolTip = "Change versus the original image, before this export"
+        add(exportEstimateDelta)
         outputPreviewMode = NSSegmentedControl(labels: ["Edited canvas", "Encoded output"],
                                                trackingMode: .selectOne, target: self,
                                                action: #selector(changeOutputPreview))
-        outputPreviewMode.frame = NSRect(x: 0, y: 448, width: 252, height: 28)
         outputPreviewMode.selectedSegment = 0
         outputPreviewMode.setAccessibilityLabel("Output preview image")
-        outputContent.addSubview(outputPreviewMode)
-        outputSize.frame = NSRect(x: 0, y: 488, width: 252, height: 58)
-        outputSize.maximumNumberOfLines = 3
-        outputSize.setAccessibilityLabel("Encoded output size")
-        outputContent.addSubview(outputSize)
+        add(outputPreviewMode)
+        previewOutputButton = button("Preview output", frame: .zero, parent: exportSettingsPanel) {
+            [weak self] in self?.previewOutput()
+        }
+        previewOutputButton.toolTip = "Encode the output into the canvas without saving a file or draft"
+        func group(_ key: String, _ text: String, _ views: [(NSView, CGFloat, CGFloat)], _ width: CGFloat) {
+            exportGroups[key] = (caption(text), views, width)
+        }
+        group("size", "Output size", [(outputSizeMode as NSView, 0, 110), (outputDimensions as NSView, 118, 110)], 228)
+        group("custom", "Width × height", [(outputWidth as NSView, 0, 64), (outputHeight as NSView, 72, 64),
+                                           (outputAspectLock as NSView, 144, 72)], 216)
+        group("quality", "Save quality", [(outputQuality as NSView, 0, 150)], 150)
+        group("preset", "Quality", [(outputCompressionPreset as NSView, 0, 100),
+                                    (outputQualityValue as NSView, 108, 56)], 164)
+        group("palette", "PNG colors", [(outputPngPalette as NSView, 0, 90)], 90)
+        group("maximum", "Maximum file size (bytes)", [(outputByteBudget as NSView, 0, 150)], 160)
+        group("estimate", "Est. size", [(exportEstimateValue as NSView, 0, 92),
+                                        (exportEstimateDelta as NSView, 96, 56)], 152)
+        group("preview", "Canvas", [(outputPreviewMode as NSView, 0, 200),
+                                    (previewOutputButton as NSView, 208, 120)], 328)
 
-        panelLabel("Save new copy", frame: NSRect(x: 0, y: 564, width: 252, height: 24),
-                   size: 16, weight: .semibold, parent: outputContent)
-        panelLabel("Publish a new file and History item. Existing files are never replaced.",
-                   frame: NSRect(x: 0, y: 592, width: 252, height: 38), muted: true,
-                   parent: outputContent)
-        panelFieldLabel("Filename", x: 0, y: 636, parent: outputContent)
-        outputFilename.frame = NSRect(x: 0, y: 656, width: 252, height: 30)
-        outputFilename.setAccessibilityLabel("Output filename")
-        outputFilename.placeholderString = "Captures_…_edited.png"
-        outputContent.addSubview(outputFilename)
-        panelFieldLabel("Save location", x: 0, y: 694, parent: outputContent)
-        outputLocation.frame = NSRect(x: 0, y: 714, width: 166, height: 24)
+        exportDisclosure = button("", frame: .zero, parent: exportBar) { [weak self] in
+            self?.toggleExportSettings()
+        }
+        exportDisclosure.setAccessibilityLabel("Export settings")
+        exportDisclosure.toolTip = "Show export settings"
+        exportDisclosureTitle.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        exportSummary.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
+        exportSummary.lineBreakMode = .byTruncatingTail
+        exportSummary.setAccessibilityLabel("Export summary")
+        exportChevron.alignment = .center
+        [exportDisclosureTitle, exportSummary, exportChevron].forEach { exportDisclosure.addSubview($0) }
+
+        exportFilenameCaption.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+        exportSavingToCaption.font = .systemFont(ofSize: tokens.number("text-xs"))
+        exportSavingToCaption.identifier = NSUserInterfaceItemIdentifier("editor-muted")
+        outputLocation.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
         outputLocation.lineBreakMode = .byTruncatingMiddle
-        outputLocation.setAccessibilityLabel("Output save location")
-        outputContent.addSubview(outputLocation)
-        changeOutputDirectoryButton = button("Change…", frame: NSRect(x: 174, y: 710, width: 78, height: 30),
-                                             parent: outputContent) {
+        outputLocation.setAccessibilityLabel("Save location")
+        [exportFilenameCaption, exportSavingToCaption, outputLocation].forEach { exportBar.addSubview($0) }
+        changeOutputDirectoryButton = button("Change…", frame: .zero, parent: exportBar) {
             [weak self] in self?.chooseOutputDirectory()
         }
-        replaceOriginalHelp.frame = NSRect(x: 0, y: 746, width: 252, height: 42)
-        replaceOriginalHelp.maximumNumberOfLines = 2
-        replaceOriginalHelp.setAccessibilityLabel("Replace original availability")
-        outputContent.addSubview(replaceOriginalHelp)
-        replaceOriginalButton = button("Replace original…", frame: NSRect(x: 0, y: 796, width: 252, height: 34),
-                                       parent: outputContent) { [weak self] in self?.confirmReplace() }
+        changeOutputDirectoryButton.setAccessibilityLabel("Change save location")
+        outputFilename.setAccessibilityLabel("Saved filename")
+        outputFilename.placeholderString = "Filename"
+        outputFilename.delegate = self
+        exportBar.addSubview(outputFilename)
+        outputFormat = NSPopUpButton()
+        outputFormat.addItems(withTitles: [".png", ".jpg", ".webp"])
+        outputFormat.setAccessibilityLabel("Format")
+        outputFormat.target = self; outputFormat.action = #selector(outputOptionsChanged)
+        exportBar.addSubview(outputFormat)
+        copyImageButton = button("Copy image", frame: .zero, parent: exportBar) {
+            [weak self] in self?.copyEditedImage()
+        }
+        copyImageButton.toolTip = "Copy the edited image to the clipboard. Does not save a file."
+        showInFolderButton = button("Show in Folder", frame: .zero, parent: exportBar) {
+            [weak self] in self?.revealSavedFile()
+        }
+        showInFolderButton.isHidden = true
+        exportStatus.font = .systemFont(ofSize: tokens.number("text-xs"))
+        exportStatus.lineBreakMode = .byTruncatingTail
+        exportStatus.alignment = .right
+        exportStatus.setAccessibilityLabel("Export status")
+        exportBar.addSubview(exportStatus)
+        saveAsNewSwitch.setAccessibilityLabel("Save as new file")
+        saveAsNewSwitch.toolTip = "Save as a new file and leave the original untouched"
+        saveAsNewSwitch.target = self; saveAsNewSwitch.action = #selector(saveAsNewChanged)
+        exportBar.addSubview(saveAsNewSwitch)
+        saveAsNewLabel.font = .systemFont(ofSize: tokens.number("text-sm"))
+        exportBar.addSubview(saveAsNewLabel)
+        exportSaveButton = button("Save", frame: .zero, parent: exportBar) { [weak self] in self?.saveExport() }
+        exportSaveButton.primary = true
         updateOutputOptionControls()
     }
 
@@ -2033,14 +2189,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         geometryPanel.isHidden = sectionControl.selectedSegment != Section.geometry
         layersPanel.isHidden = sectionControl.selectedSegment != Section.layers
         drawPanel.isHidden = sectionControl.selectedSegment != Section.draw
-        outputPanel.isHidden = sectionControl.selectedSegment != Section.output
-        if sectionControl.selectedSegment == Section.output {
-            changeOutputPreview()
-        } else {
-            preview.image = editedImage
-            if let editedImage { viewportCanvasSize = editedImage.size }
-            updateViewportGeometry()
-        }
+        // The export bar and its encoded preview do not depend on the section.
+        changeOutputPreview()
         updateDrawing()
     }
 
@@ -2130,7 +2280,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 selected = sectionControl?.selectedSegment == Section.draw && drawOverlay.shape == shape
             }
             button.isEnabled = state.snapshot != nil && !state.busy && inlineTextInput == nil
-                && !importLoading && !awaitingReplaceConfirmation
+                && !importLoading
             button.selected = selected; button.primary = selected
             button.setAccessibilityValue(selected ? 1 : 0)
             button.menu?.items.forEach { $0.state = $0.tag == drawTool?.indexOfSelectedItem ? .on : .off }
@@ -2182,9 +2332,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     @objc private func outputOptionsChanged() {
         normalizeOutputQuality()
         synchronizeOutputCompressionPreset()
-        updateOutputFilenameExtension()
-        invalidateOutput(optionsChanged: true)
+        invalidateOutput()
         updateOutputOptionControls()
+        // A different encoding is no longer the file that was just saved.
+        exportInputsChanged(clearsSaved: true)
         updateControls()
     }
 
@@ -2194,8 +2345,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             outputHeight.stringValue = format(snapshot.height)
         }
         publishOutputDimensions()
-        invalidateOutput(optionsChanged: true)
+        invalidateOutput()
         updateOutputOptionControls()
+        exportInputsChanged(clearsSaved: false)
         updateControls()
     }
 
@@ -2247,13 +2399,22 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 }
             }
             publishOutputDimensions()
-            invalidateOutput(optionsChanged: true)
+            invalidateOutput()
+            exportInputsChanged(clearsSaved: false)
+            updateControls()
+            return
+        }
+        if field === outputFilename {
+            // Typing a name other than the source's turns on "Save as new file".
+            refreshExportBar(action: ["kind": "set_stem", "stem": field.stringValue])
+            clearSavedResult()
             updateControls()
             return
         }
         guard [outputQualityValue, outputPngPalette, outputByteBudget].contains(where: { $0 === field }) else { return }
         synchronizeOutputCompressionPreset()
-        invalidateOutput(optionsChanged: true)
+        invalidateOutput()
+        exportInputsChanged(clearsSaved: false)
         updateControls()
     }
 
@@ -2269,14 +2430,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     @objc private func changeOutputPreview() {
-        if outputPreviewMode.selectedSegment == 1, let encodedOutput {
+        // Like the shipping comparison, the encoded image shows only while the
+        // export settings are open.
+        if exportSettingsOpen, outputPreviewMode.selectedSegment == 1, let encodedOutput {
             preview.image = NSImage(cgImage: encodedOutput.image,
                                     size: NSSize(width: encodedOutput.image.width,
                                                  height: encodedOutput.image.height))
             viewportCanvasSize = NSSize(width: encodedOutput.image.width,
                                         height: encodedOutput.image.height)
         } else {
-            outputPreviewMode.selectedSegment = 0
+            if encodedOutput == nil { outputPreviewMode.selectedSegment = 0 }
             preview.image = editedImage
             if let editedImage { viewportCanvasSize = editedImage.size }
         }
@@ -2295,7 +2458,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             case .success(let output):
                 guard self.state.completeOutput(generation: generation, artifactID: artifactID) else { return }
                 self.encodedOutput = output
-                self.outputSize.stringValue = "Exact encoded size: \(self.formatInteger(output.length)) bytes"
                 self.outputPreviewMode.selectedSegment = 1
                 self.changeOutputPreview()
                 self.status.textColor = self.tokens.color("text-muted")
@@ -2312,6 +2474,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func copyEditedImage() {
         guard let artifactID = state.artifactID, let generation = state.beginCommand() else { return }
+        exportError = nil
         status.stringValue = "Copying edited image…"; updateControls()
         // Copy the published edited frame, never the selected encoded preview or
         // export budget. Encoding stays on the existing serialized editor worker.
@@ -2324,12 +2487,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 if self.writeClipboard(output.data) {
                     self.status.textColor = self.tokens.color("text-muted")
                     self.status.stringValue = "Edited image copied. No file or draft was saved."
+                    self.confirmCopy()
                 } else {
-                    self.showError("Couldn’t copy the edited image. The clipboard is unavailable; try again.")
+                    self.showExportError("Couldn’t copy the edited image. The clipboard is unavailable; try again.")
                 }
             case .failure(let error):
                 guard self.state.fail(generation: generation) else { return }
-                self.showError("Couldn’t copy the edited image: \(error.localizedDescription)")
+                self.showExportError("Couldn’t copy the edited image: \(error.localizedDescription)")
             }
             self.updateControls()
             self.submitPendingImportIfReady()
@@ -2339,15 +2503,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func chooseOutputDirectory() {
         guard let artifactID = state.artifactID else { return }
         let generation = state.generation
-        let current = outputDirectory.isEmpty ? nil
-            : URL(fileURLWithPath: outputDirectory, isDirectory: true)
+        let directory = exportBarState?.directory ?? outputDirectory
+        let current = directory.isEmpty ? nil : URL(fileURLWithPath: directory, isDirectory: true)
         let completion: (URL?) -> Void = { [weak self] selected in
             DispatchQueue.main.async {
                 guard let self, let selected,
                       self.state.generation == generation,
                       self.state.artifactID == artifactID else { return }
-                self.outputDirectory = selected.path
-                self.publishOutputLocation()
+                // A folder other than the source's turns on "Save as new file".
+                self.refreshExportBar(action: ["kind": "set_directory", "directory": selected.path])
+                self.clearSavedResult()
+                self.updateControls()
             }
         }
         if let directoryPicker {
@@ -2373,148 +2539,296 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         return panel
     }
 
-    private func saveNewCopy() {
-        guard let artifactID = state.artifactID,
-              let filename = normalizedOutputFilename(),
-              let options = outputOptions(),
-              let generation = state.beginCommand() else { return }
-        outputFilename.stringValue = filename
-        let destination = URL(fileURLWithPath: outputDirectory, isDirectory: true)
-            .appendingPathComponent(filename, isDirectory: false).path
-        let request: [String: Any] = [
-            "history_root": historyRoot,
-            "destination": destination,
-            "options": options,
-            "mode": captureMode,
+    // MARK: Export bar
+
+    private func defaultOutputStem(_ date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return "Captures_\(formatter.string(from: date))_edited"
+    }
+
+    /// Forget the previous screenshot's target, saved file and estimate.
+    private func resetExportState(originalBytes: UInt64) {
+        exportTarget = nil; exportBarState = nil
+        exportError = nil; exportNotice = nil; exportNoticeToken += 1
+        copyConfirmed = false; copyConfirmToken += 1
+        lastSavedPath = nil
+        estimate = nil; estimatePending = false; estimateGeneration += 1
+        estimateWork?.cancel(); estimateWork = nil
+        self.originalBytes = originalBytes > 0 ? originalBytes : nil
+        outputFilename.stringValue = ""
+        outputLocation.stringValue = outputDirectory; outputLocation.toolTip = outputDirectory
+        publishExportBar()
+    }
+
+    /// A saved original starts in overwrite mode beside itself; otherwise the
+    /// first Save writes a new file in the output folder.
+    private func startExportTarget(_ snapshot: NativeEditorSnapshot) {
+        let source: Any
+        if let path = snapshot.originalExportPath {
+            source = ["artifact_id": snapshot.artifactID, "path": path] as [String: Any]
+        } else {
+            source = NSNull()
+        }
+        refreshExportBar(initial: ["source": source, "default_directory": outputDirectory,
+                                   "default_stem": defaultOutputStem()])
+        scheduleEstimate()
+    }
+
+    /// Apply one target action through the shared model and republish the bar.
+    private func refreshExportBar(action: [String: Any]? = nil, initial: [String: Any]? = nil) {
+        guard let snapshot = state.snapshot else { publishExportBar(); return }
+        var request: [String: Any] = [
+            "document_size": [UInt32(max(1, snapshot.width.rounded())), UInt32(max(1, snapshot.height.rounded()))],
+            "transparent_background": snapshot.background == nil,
         ]
+        if let initial { request["init"] = initial } else if let exportTarget { request["target"] = exportTarget }
+        else { publishExportBar(); return }
+        if let action { request["action"] = action }
+        var estimateValue: [String: Any] = ["pending": estimatePending]
+        if let estimate {
+            estimateValue["bytes"] = estimate.bytes
+            if let baseline = estimate.baselineBytes { estimateValue["baseline_bytes"] = baseline }
+        }
+        request["estimate"] = estimateValue
+        let options = outputOptionsResult()
+        exportOptionsError = options.error
+        // Invalid option fields still present the target; the bar explains the fix.
+        request["options"] = options.options ?? fallbackOutputOptions()
+        do {
+            let bar = try NativeExportBar.present(request)
+            exportTarget = bar.target
+            exportBarState = bar
+        } catch {
+            exportError = "Couldn’t prepare the export: \(error.localizedDescription)"
+        }
+        publishExportBar()
+    }
+
+    /// Options that always encode, used only to present the target and copy.
+    private func fallbackOutputOptions() -> [String: Any] {
+        let formats = ["png", "jpeg", "webp"]
+        let index = max(0, min(2, outputFormat?.indexOfSelectedItem ?? 0))
+        return ["format": formats[index], "quality": "preserve", "quality_value": 100,
+                "png": [String: Any](), "size": ["mode": "original"]]
+    }
+
+    private func publishExportBar() {
+        guard exportDisclosure != nil else { return }
+        let bar = exportBarState
+        exportSummary.stringValue = bar?.summary ?? ""
+        exportDisclosure.setAccessibilityValue(bar?.summary ?? "")
+        // Typing sends set_stem with the typed text, so an edited field already matches.
+        if let bar, outputFilename.stringValue != bar.stem { outputFilename.stringValue = bar.stem }
+        let directory = bar?.directory ?? outputDirectory
+        outputLocation.stringValue = directory; outputLocation.toolTip = directory
+        if let bar {
+            let jpeg = bar.sourcePath.map { URL(fileURLWithPath: $0).pathExtension.lowercased() == "jpeg" } == true
+            outputFormat.item(at: 1)?.title = jpeg ? ".jpeg" : ".jpg"
+        }
+        saveAsNewSwitch.isHidden = bar?.formatRequiresCopy ?? true
+        saveAsNewLabel.isHidden = saveAsNewSwitch.isHidden
+        saveAsNewSwitch.state = bar?.savingCopy == false ? .off : .on
+        exportEstimateValue.stringValue = bar?.estimateLabel ?? "—"
+        exportEstimateValue.textColor = tokens.color(estimatePending ? "text-subtle" : "text")
+        exportEstimateDelta.stringValue = bar?.deltaLabel ?? ""
+        exportEstimateDelta.textColor = tokens.color((bar?.deltaPercent ?? 0) < 0 ? "positive-text" : "caution-text")
+        let copyTitle = copyConfirmed ? "✓ Copied" : "Copy image"
+        if copyImageButton.title != copyTitle { copyImageButton.title = copyTitle }
+        copyImageButton.setAccessibilityLabel(copyConfirmed ? "Copied" : "Copy image")
+        showInFolderButton.isHidden = lastSavedPath == nil
+        exportSaveButton.toolTip = bar?.hint
+        let message: (String, String)
+        if let exportError {
+            message = (exportError, "danger-text")
+        } else if let error = exportOptionsError ?? bar?.error {
+            message = (error, "danger-text")
+        } else if let exportNotice {
+            message = (exportNotice, "positive-text")
+        } else if let bar {
+            message = (bar.hint, bar.hintWarning ? "caution-text" : "text-subtle")
+        } else {
+            message = ("", "text-subtle")
+        }
+        exportStatus.stringValue = message.0
+        exportStatus.toolTip = message.0
+        exportStatus.textColor = tokens.color(message.1)
+        layoutExportBar()
+    }
+
+    /// Output option or pixel changes: refresh the summary and re-estimate.
+    private func exportInputsChanged(clearsSaved: Bool) {
+        if clearsSaved { clearSavedResult() }
+        exportError = nil
+        refreshExportBar()
+        scheduleEstimate()
+    }
+
+    /// A different file, folder or encoding is no longer the saved result.
+    private func clearSavedResult() {
+        lastSavedPath = nil
+        exportNotice = nil; exportNoticeToken += 1
+        // The footer echoes a failed save; a new name or folder retires it too.
+        if let exportError, status.stringValue == exportError {
+            status.stringValue = ""; status.textColor = tokens.color("text-muted")
+        }
+        exportError = nil
+        publishExportBar()
+    }
+
+    private func toggleExportSettings() {
+        exportSettingsOpen.toggle()
+        exportChevron.stringValue = exportSettingsOpen ? "▴" : "▾"
+        exportDisclosure.toolTip = exportSettingsOpen ? "Hide export settings" : "Show export settings"
+        exportDisclosure.setAccessibilityExpanded(exportSettingsOpen)
+        layoutEditor()
+        changeOutputPreview()
+    }
+
+    @objc private func saveAsNewChanged() {
+        refreshExportBar(action: ["kind": "set_save_as_new", "enabled": saveAsNewSwitch.state == .on])
+        clearSavedResult()
+        updateControls()
+    }
+
+    private func showExportError(_ message: String) {
+        exportError = message
+        showError(message)
+        publishExportBar()
+    }
+
+    private func confirmCopy() {
+        copyConfirmed = true
+        copyConfirmToken += 1
+        let token = copyConfirmToken
+        publishExportBar()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.exportConfirmationDuration) { [weak self] in
+            guard let self, self.copyConfirmToken == token else { return }
+            self.copyConfirmed = false
+            self.publishExportBar()
+        }
+    }
+
+    private func showExportNotice(_ notice: String) {
+        exportNotice = notice
+        exportNoticeToken += 1
+        let token = exportNoticeToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.exportConfirmationDuration) { [weak self] in
+            guard let self, self.exportNoticeToken == token else { return }
+            self.exportNotice = nil
+            self.publishExportBar()
+        }
+    }
+
+    /// Save exactly as the shared plan says: overwrite the saved original (its
+    /// History entry and path are revalidated from disk, so no extra step is
+    /// needed) or publish a new file that never replaces anything.
+    private func saveExport() {
+        guard let artifactID = state.artifactID, let bar = exportBarState else { return }
+        if let error = exportOptionsError ?? bar.error { showExportError(error); return }
+        guard let plan = bar.plan, let options = outputOptions(),
+              let generation = state.beginCommand() else { return }
+        let overwrittenID = bar.planOverwrites ? bar.planArtifactID : nil
+        let request: [String: Any] = [
+            "history_root": historyRoot, "plan": plan, "options": options, "mode": captureMode,
+        ]
+        exportError = nil; exportNotice = nil; saveInFlight = true
         status.textColor = tokens.color("text-muted")
-        status.stringValue = "Saving new copy…"; updateControls()
-        worker.saveNew(request) { [weak self] result in
+        status.stringValue = "Saving…"; updateControls(); publishExportBar()
+        worker.save(request) { [weak self] result in
             guard let self else { return }
+            self.saveInFlight = false
             switch result {
             case .success(let saved):
                 guard self.state.completeOutput(generation: generation, artifactID: artifactID) else { return }
-                switch saved {
-                case .saved(let path):
-                    self.status.textColor = self.tokens.color("text-muted")
-                    self.status.stringValue = "Saved new copy to \(path)"
+                self.lastSavedPath = saved.path
+                self.showExportNotice(saved.notice)
+                self.status.stringValue = saved.notice
+                if let warning = saved.warning {
+                    self.reportError("Saved \(saved.path), but couldn’t update History: \(warning)")
+                }
+                if let savedID = saved.artifactID {
+                    // The saved file becomes the original, as in the shipping app.
+                    if let size = saved.sizeBytes, size > 0 { self.originalBytes = size }
+                    self.refreshExportBar(action: ["kind": "adopt",
+                                                   "source": ["artifact_id": savedID, "path": saved.path]])
+                    self.scheduleEstimate()
+                } else {
+                    self.publishExportBar()
+                }
+                if let overwrittenID {
+                    self.didReplaceOriginal(overwrittenID)
+                } else if saved.artifactID != nil {
                     self.didSaveCopy()
-                case .savedWithoutHistory(let path, let warning):
-                    self.showError("Saved new copy to \(path), but couldn’t add it to History: \(warning)")
                 }
             case .failure(let error):
                 guard self.state.fail(generation: generation) else { return }
-                self.showError("Couldn’t save new copy: \(error.localizedDescription)")
+                self.showExportError(error.localizedDescription)
             }
             self.updateControls()
             self.submitPendingImportIfReady()
         }
     }
 
-    private static func presentReplaceOriginalConfirmation(window: NSWindow, path: String,
-                                                            completion: @escaping (Bool) -> Void) {
-        let alert = NSAlert()
-        alert.messageText = "Replace the original screenshot?"
-        alert.informativeText = "This replaces the file at:\n\(path)\n\nYour native draft and undo history are retained. The existing History item will show the changed image."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Replace")
-        alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window) { completion($0 == .alertFirstButtonReturn) }
+    private func revealSavedFile() {
+        guard let lastSavedPath else { return }
+        revealFiles([URL(fileURLWithPath: lastSavedPath)])
     }
 
-    private func confirmReplace() {
-        guard !awaitingReplaceConfirmation, !state.busy,
-              let artifactID = state.artifactID,
-              let destination = state.snapshot?.originalExportPath,
-              let options = outputOptions() else { return }
-        let generation = state.generation
-        awaitingReplaceConfirmation = true
-        updateControls()
-        confirmReplaceOriginal(window, destination) { [weak self] confirmed in
-            guard let self else { return }
-            self.awaitingReplaceConfirmation = false
-            guard confirmed else { self.updateControls(); return }
-            guard self.state.generation == generation, self.state.artifactID == artifactID,
-                  self.state.snapshot?.originalExportPath == destination, !self.state.busy,
-                  let commandGeneration = self.state.beginCommand() else {
-                self.showError("The screenshot changed before replacement was confirmed. Try again.")
-                self.updateControls(); return
-            }
-            self.status.textColor = self.tokens.color("text-muted")
-            self.status.stringValue = "Replacing original…"
-            self.updateControls()
-            self.worker.saveOriginal(["destination": destination, "options": options]) { [weak self] result in
-                guard let self else { return }
-                switch result {
-                case .success(let saved):
-                    guard self.state.completeOutput(generation: commandGeneration, artifactID: artifactID) else { return }
-                    switch saved {
-                    case .saved(let path):
-                        self.status.textColor = self.tokens.color("text-muted")
-                        self.status.stringValue = "Replaced original at \(path)"
-                    case .savedWithoutHistory(let path, let warning):
-                        self.showError("Replaced original at \(path), but couldn’t update History: \(warning)")
-                    }
-                    self.didReplaceOriginal(artifactID)
-                case .failure(let error):
-                    guard self.state.fail(generation: commandGeneration) else { return }
-                    self.showError("Couldn’t replace original: \(error.localizedDescription)")
-                }
-                self.updateControls()
-                self.submitPendingImportIfReady()
-            }
+    /// Re-encode exactly as Save would once edits or options settle (shipping
+    /// debounce), off the session queue so it never delays accepted edits.
+    private func scheduleEstimate() {
+        estimateWork?.cancel()
+        estimateGeneration += 1
+        guard state.snapshot != nil else { estimatePending = false; return }
+        estimatePending = true
+        let generation = estimateGeneration
+        let work = DispatchWorkItem { [weak self] in self?.runEstimate(generation: generation) }
+        estimateWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.estimateDelay, execute: work)
+        publishExportBar()
+    }
+
+    private func runEstimate(generation: Int) {
+        guard generation == estimateGeneration else { return }
+        let result = outputOptionsResult()
+        guard let options = result.options, result.error == nil, exportBarState?.error == nil else {
+            estimate = nil; estimatePending = false
+            refreshExportBar()
+            return
         }
-    }
-
-    private func defaultOutputFilename(_ date: Date = Date()) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        return "Captures_\(formatter.string(from: date))_edited.\(outputExtension)"
-    }
-
-    private var outputExtension: String {
-        ["png", "jpg", "webp"][max(0, min(2, outputFormat?.indexOfSelectedItem ?? 0))]
-    }
-
-    private func updateOutputFilenameExtension() {
-        guard !outputFilename.stringValue.isEmpty else { return }
-        let base = (outputFilename.stringValue as NSString).deletingPathExtension
-        if !base.isEmpty { outputFilename.stringValue = "\(base).\(outputExtension)" }
-    }
-
-    private func normalizedOutputFilename() -> String? {
-        let name = outputFilename.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, name != ".", name != "..",
-              (name as NSString).lastPathComponent == name else {
-            showError("Enter a filename without folders."); return nil
+        var request: [String: Any] = ["options": options]
+        request["original_bytes"] = originalBytes.map { $0 as Any } ?? NSNull()
+        worker.estimate(request) { [weak self] result in
+            guard let self, generation == self.estimateGeneration else { return }
+            self.estimatePending = false
+            self.estimate = try? result.get()
+            self.refreshExportBar()
         }
-        let base = (name as NSString).deletingPathExtension
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !base.isEmpty else { showError("Enter a filename."); return nil }
-        return "\(base).\(outputExtension)"
-    }
-
-    private func publishOutputLocation() {
-        outputLocation.stringValue = outputDirectory
-        outputLocation.toolTip = outputDirectory
     }
 
     private func outputOptions() -> [String: Any]? {
+        let result = outputOptionsResult()
+        if let error = result.error { showExportError(error) }
+        return result.options
+    }
+
+    /// Validated export options, or the message that explains the fix. No side effects.
+    private func outputOptionsResult() -> (options: [String: Any]?, error: String?) {
         let formats = ["png", "jpeg", "webp"]
         let qualities = ["preserve", "compress", "maximum"]
         guard formats.indices.contains(outputFormat.indexOfSelectedItem),
-              qualities.indices.contains(outputQuality.indexOfSelectedItem) else { return nil }
+              qualities.indices.contains(outputQuality.indexOfSelectedItem) else { return (nil, nil) }
         let format = formats[outputFormat.indexOfSelectedItem]
         let quality = qualities[outputQuality.indexOfSelectedItem]
         let qualityValue: UInt64
         if quality == "compress" {
             let minimum: UInt64 = format == "jpeg" ? 40 : 1
             guard let value = outputInteger(outputQualityValue), (minimum...100).contains(value) else {
-                showError("Output quality must be a whole number from \(minimum) through 100 for \(format.uppercased()).")
-                return nil
+                return (nil, "Output quality must be a whole number from \(minimum) through 100 for \(format.uppercased()).")
             }
             qualityValue = value
         } else {
@@ -2523,7 +2837,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         var png: [String: Any] = [:]
         if format == "png", quality == "compress", !outputPngPalette.stringValue.isEmpty {
             guard let colors = outputInteger(outputPngPalette), (1...256).contains(colors) else {
-                showError("PNG palette size must be a whole number from 1 through 256."); return nil
+                return (nil, "PNG palette size must be a whole number from 1 through 256.")
             }
             png["max_colors"] = colors
         }
@@ -2538,32 +2852,26 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             guard let width = outputInteger(outputWidth), let height = outputInteger(outputHeight),
                   (1...16_384).contains(width), (1...16_384).contains(height),
                   width <= 100_000_000 / height else {
-                showError("Custom output dimensions must be whole numbers from 1 through 16,384 and no more than 100 million pixels.")
-                return nil
+                return (nil, "Custom output dimensions must be whole numbers from 1 through 16,384 and no more than 100 million pixels.")
             }
             options["size"] = ["mode": "custom", "width": width, "height": height]
-        default: return nil
+        default: return (nil, nil)
         }
         if quality == "maximum" {
             guard let budget = outputInteger(outputByteBudget), budget >= 10_000 else {
-                showError("Enter an output byte budget of at least 10,000."); return nil
+                return (nil, "Enter a maximum file size of at least 10 KB.")
             }
             options["max_size_bytes"] = budget
         }
-        return options
+        return (options, nil)
     }
 
-    private func invalidateOutput(optionsChanged: Bool = false) {
-        let hadOutput = encodedOutput != nil
+    /// Drop the encoded preview; Est. size re-encodes on its own schedule.
+    private func invalidateOutput() {
         encodedOutput = nil
         outputPreviewMode?.selectedSegment = 0
         preview.image = editedImage
         if let editedImage { viewportCanvasSize = editedImage.size; updateViewportGeometry() }
-        if optionsChanged && hadOutput {
-            outputSize.stringValue = "Options changed. Preview output again."
-        } else if !optionsChanged {
-            outputSize.stringValue = "No encoded preview yet."
-        }
     }
 
     private func updateOutputOptionControls() {
@@ -2572,21 +2880,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let compress = outputQuality.indexOfSelectedItem == 1
         let maximum = outputQuality.indexOfSelectedItem == 2
         let pngPalette = compress && outputFormat.indexOfSelectedItem == 0
-        outputQualityValueLabel.isHidden = !compress; outputQualityValue.isHidden = !compress
-        outputPngPaletteLabel.isHidden = !pngPalette; outputPngPalette.isHidden = !pngPalette
-        outputByteBudgetLabel.isHidden = !maximum; outputByteBudget.isHidden = !maximum
-        outputCompressionPresetLabel.isHidden = !compress; outputCompressionPreset.isHidden = !compress
         outputQualityValue.isEnabled = ready && compress
         outputPngPalette.isEnabled = ready && pngPalette
         outputByteBudget.isEnabled = ready && maximum
         outputCompressionPreset.isEnabled = ready && compress
         outputSizeMode?.isEnabled = ready
         let custom = outputSizeMode?.indexOfSelectedItem == 3
-        outputWidth.isHidden = !custom; outputHeight.isHidden = !custom
-        outputWidthLabel?.isHidden = !custom; outputHeightLabel?.isHidden = !custom
-        outputAspectLock.isHidden = !custom
         outputWidth.isEnabled = ready && custom; outputHeight.isEnabled = ready && custom
         outputAspectLock.isEnabled = ready && custom
+        // Visibility follows the shared group flow inside the settings panel.
+        layoutExportSettings()
     }
 
     private func publishOutputDimensions() {
@@ -2601,14 +2904,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             guard let customWidth = outputInteger(outputWidth), let customHeight = outputInteger(outputHeight),
                   (1...16_384).contains(customWidth), (1...16_384).contains(customHeight),
                   customWidth <= 100_000_000 / customHeight else {
-                outputDimensions.stringValue = "Invalid output dimensions."
+                outputDimensions.stringValue = "Invalid size"
                 return
             }
             width = customWidth; height = customHeight
         default:
             width = UInt64(snapshot.width.rounded()); height = UInt64(snapshot.height.rounded())
         }
-        outputDimensions.stringValue = "Output: \(formatInteger(Int(width))) × \(formatInteger(Int(height))) pixels"
+        outputDimensions.stringValue = "\(formatInteger(Int(width))) × \(formatInteger(Int(height)))"
     }
 
     private static let outputCompressionPresets: [(name: String, value: UInt64)] = [
@@ -3247,7 +3550,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             let responder = window.firstResponder
             guard !(responder is NSTextView), !(responder is NSTextField),
                   !(responder is NSPopUpButton), !(responder is NSComboBox),
-                  !(responder is NSSlider), !awaitingReplaceConfirmation else { return false }
+                  !(responder is NSSlider) else { return false }
             if !command && !event.modifierFlags.contains(.option)
                 && activateToolShortcut(key.lowercased()) { return true }
             let button: CaptureButton?
@@ -3701,7 +4004,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private var layerActionsReady: Bool {
         state.snapshot != nil && !state.busy && !importLoading
-            && inlineTextInput == nil && !awaitingReplaceConfirmation && window.attachedSheet == nil
+            && inlineTextInput == nil && window.attachedSheet == nil
     }
 
     private func duplicateLayer() {
@@ -3778,7 +4081,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func layerContextMenu(row: Int) -> NSMenu? {
-        guard !awaitingReplaceConfirmation, window.attachedSheet == nil,
+        guard window.attachedSheet == nil,
               let snapshot = state.snapshot else { return nil }
         let targetID = snapshot.layers.indices.contains(row) ? snapshot.layers[row].id : nil
         let target = targetID.flatMap { id in snapshot.layers.first { $0.id == id } }
@@ -4011,6 +4314,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publishCreateTextDefaults()
         reconcileLayerSelection(snapshot.layers)
         window.title = snapshot.unsavedChanges ? "Edit screenshot — Unsaved" : "Edit screenshot"
+        // New pixels or dimensions: refresh the summary and re-estimate the export.
+        refreshExportBar()
+        scheduleEstimate()
     }
 
     private func closeNow() {
@@ -4021,6 +4327,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineTextInput = nil; hideInlineTextEditor()
         selectedLayerID = nil; preferredLayerID = nil
         state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
+        estimateWork?.cancel(); estimateWork = nil; estimateGeneration += 1
         cancelViewportPan()
         viewport = NativeEditorViewport(); viewportCanvasSize = .zero
         worker.close(); window.orderOut(nil); updateControls()
@@ -4040,27 +4347,21 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         discardButton?.isEnabled = ready && (state.snapshot?.hasDraft == true || state.snapshot?.unsavedChanges == true)
         sectionControl?.isEnabled = ready
         outputFormat?.isEnabled = ready; outputQuality?.isEnabled = ready
-        previewOutputButton?.isEnabled = ready
+        exportDisclosure?.isEnabled = state.snapshot != nil
         copyImageButton?.isEnabled = ready
         outputFilename.isEnabled = ready
         changeOutputDirectoryButton?.isEnabled = ready
-        saveNewCopyButton?.isEnabled = ready && !outputDirectory.isEmpty
-        let originalPath = state.snapshot?.originalExportPath
-        outputContent.frame.size.height = originalPath == nil ? 744 : 844
-        replaceOriginalButton?.isHidden = originalPath == nil
-        replaceOriginalHelp.isHidden = originalPath == nil
-        let matchesOriginalFormat = originalPath.map { path in
-            let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
-            return ext == outputExtension || (ext == "jpeg" && outputExtension == "jpg")
-        } ?? false
-        replaceOriginalButton?.isEnabled = ready && !awaitingReplaceConfirmation && matchesOriginalFormat
-        replaceOriginalHelp.stringValue = matchesOriginalFormat
-            ? "Replaces this screenshot’s saved file and updates its History image."
-            : "Choose the original file format to replace this screenshot."
+        showInFolderButton?.isEnabled = ready
+        saveAsNewSwitch.isEnabled = ready
+        let exportReady = exportBarState.map { $0.plan != nil && $0.error == nil } == true
+            && exportOptionsError == nil
+        exportSaveButton?.isEnabled = ready && exportReady
+        exportSaveButton?.title = saveInFlight ? "Saving…" : "Save"
+        previewOutputButton?.isEnabled = ready
         outputPreviewMode?.isEnabled = ready && encodedOutput != nil
         viewportButtons.forEach { $0.isEnabled = ready }
         zoomPreset.isEnabled = ready
-        zoomSlider.isEnabled = ready && !awaitingReplaceConfirmation
+        zoomSlider.isEnabled = ready
         updateOutputOptionControls()
         updateDrawing()
         layerTable?.isEnabled = ready
@@ -4180,7 +4481,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 ? "text-muted" : "text")
         }
         status.textColor = tokens.color("text-muted"); dimensions.textColor = tokens.color("text-muted")
-        outputSize.textColor = tokens.color("text-muted")
+        exportBar.layer?.backgroundColor = tokens.color("surface-raised").cgColor
+        exportBarRule.layer?.backgroundColor = tokens.color("border-subtle").cgColor
+        exportSettingsPanel.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        exportSettingsPanel.layer?.borderColor = tokens.color("border").cgColor
+        for label in [exportFilenameCaption, saveAsNewLabel, exportDisclosureTitle] {
+            label.textColor = tokens.color("text")
+        }
+        for label in [exportSavingToCaption, outputLocation, exportSummary, exportChevron, outputDimensions] {
+            label.textColor = tokens.color("text-subtle")
+        }
+        for group in exportGroups.values { group.caption.textColor = tokens.color("text-muted") }
+        publishExportBar()
         textEditor.backgroundColor = tokens.color("surface-sunken")
         textEditor.textColor = tokens.color("text")
         textEditor.insertionPointColor = tokens.color("text")

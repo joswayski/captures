@@ -102,6 +102,8 @@ final class CaptureButton: NSButton {
     /// A fully rounded (circular) shape, e.g. the recording preview's play control.
     var circular = false { didSet { needsDisplay = true } }
     var actionBlock: (() -> Void)?
+    /// Hover or keyboard focus changed; the recording HUD shows its styled tooltip.
+    var highlightChanged: ((CaptureButton, Bool) -> Void)?
     var enterActionBlock: (() -> Void)?
     var escapeActionBlock: (() -> Void)?
 
@@ -132,18 +134,26 @@ final class CaptureButton: NSButton {
         }
     }
 
-    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+    override func mouseEntered(with event: NSEvent) {
+        hovered = true; needsDisplay = true
+        highlightChanged?(self, true)
+    }
+    override func mouseExited(with event: NSEvent) {
+        hovered = false; needsDisplay = true
+        highlightChanged?(self, window?.firstResponder === self)
+    }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
         needsDisplay = true
+        if accepted { highlightChanged?(self, true) }
         return accepted
     }
 
     override func resignFirstResponder() -> Bool {
         let accepted = super.resignFirstResponder()
         needsDisplay = true
+        if accepted { highlightChanged?(self, hovered) }
         return accepted
     }
 
@@ -1095,7 +1105,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self?.updateShortcutState()
                 }, reportError: { [weak self] message in
                     self?.presentHostError(title: "Capture Failed", message: message)
-                }, showPermissions: { [weak self] in self?.showPermissions() }) { [weak self] in
+                }, showPermissions: { [weak self] in self?.showPermissions() },
+                showPreferenceSetting: { [weak self] setting in
+                    self?.showPreferences(revealing: setting)
+                }) { [weak self] in
                     self?.showPreferences()
                 }
             renderedLiveStyleRevision = liveStyleRevision
@@ -1373,12 +1386,15 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func showPreferences() {
+    /// `revealing`: a capture-menu note link's setting key, scrolled to and
+    /// briefly highlighted like the shipping `preferences-target` event.
+    private func showPreferences(revealing setting: String? = nil) {
         guard permissionSheet == nil else { window.makeKeyAndOrderFront(nil); return }
         guard !options.live || onboardingReady else { showOnboarding(); return }
         preferencesController?.flush()
         scene = "preferences"
         render()
+        if let setting { preferencesController?.revealSetting(setting) }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         updateShortcutState()

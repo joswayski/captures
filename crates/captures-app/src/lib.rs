@@ -2,8 +2,10 @@
 //! Images stay in owned buffers/files, never JSON/base64. No browser or host window APIs.
 
 pub mod capture_flow;
+pub mod capture_menu;
 pub mod clipboard;
 pub mod editor;
+pub mod editor_export;
 pub mod editor_fonts;
 pub mod editor_image_background;
 pub mod editor_image_decode;
@@ -19,6 +21,7 @@ pub mod preview;
 pub mod preview_drag;
 pub mod recording_editor;
 pub mod recording_editor_ui;
+pub mod recording_hud;
 pub mod recording_timeline;
 pub mod region;
 pub mod selection;
