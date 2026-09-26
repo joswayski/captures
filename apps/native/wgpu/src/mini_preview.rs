@@ -14,6 +14,8 @@ pub enum Action {
     Edit,
     Trash,
     Dismiss,
+    /// An unsaved card's Delete: the preview dissolves; History keeps it.
+    Discard,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,6 +69,14 @@ pub struct View<'a> {
     /// pointer moves after an expand or a new capture.
     pub hover_locked: bool,
     pub reduced_motion: bool,
+    /// Opacity of the `thumbnail-capture-highlight` accent outline.
+    pub highlight: f32,
+    /// Shipping warning chip beside the metadata ("Not in History",
+    /// "Clipboard unavailable").
+    pub warning: Option<&'a str>,
+    /// Multiplier on a compact card's depth shade while the stack flies
+    /// between the list and the pile (1 at rest).
+    pub depth_shade: f32,
 }
 
 pub fn reject_offset(elapsed_seconds: f32, reduced_motion: bool) -> f32 {
@@ -95,13 +105,14 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         ui.painter()
             .rect_filled(card, radius, tokens.color("glass-raised"));
         paint_media(ui, card, radius, view.texture, None, 0., 0.);
-        if view.depth > 0 {
+        if view.depth > 0 && view.depth_shade > 0. {
             ui.painter().rect_filled(
                 card,
                 radius,
-                tokens
-                    .color("glass-strong-solid")
-                    .gamma_multiply(captures_app::preview::collapsed_dim_opacity(view.depth) as f32),
+                tokens.color("glass-strong-solid").gamma_multiply(
+                    captures_app::preview::collapsed_dim_opacity(view.depth) as f32
+                        * view.depth_shade,
+                ),
             );
         }
         ui.painter().rect_stroke(
@@ -110,6 +121,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             Stroke::new(1., tokens.color("glass-border")),
             egui::StrokeKind::Inside,
         );
+        paint_capture_highlight(ui, tokens, card, radius, view.highlight);
         if view.interactive {
             let response = ui.interact(
                 card,
@@ -262,6 +274,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         Stroke::new(1., tokens.color("glass-border")),
         egui::StrokeKind::Inside,
     );
+    paint_capture_highlight(ui, tokens, card, radius, view.highlight);
     if ring > 0. {
         // `0 0 0 2px rgba(accent, .9)`: the solid ring just outside the edge.
         ui.painter().rect_stroke(
@@ -311,7 +324,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         if view.saved {
             Action::Trash
         } else {
-            Action::Dismiss
+            Action::Discard
         },
         Icon::Trash,
         enabled,
@@ -387,8 +400,12 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         });
     }
 
+    let chip_pose = clipboard_chip_pose(ui, tokens, &view);
     if view.clipboard_current {
-        clipboard_chip(ui, tokens, card, inset);
+        let chip = clipboard_chip_rect(ui, tokens, card, inset);
+        crate::motion::with_pose(ui, chip_pose, chip, |ui| {
+            clipboard_chip(ui, tokens, chip);
+        });
     }
     let label = view.message.map(str::to_owned).unwrap_or_else(|| {
         captures_app::preview::card_metadata(view.width, view.height, view.size_bytes)
@@ -417,9 +434,367 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             galley,
             tokens.color("glass-text"),
         );
+        // `.thumbnail-meta .warning`: a second chip in the accent text colour.
+        if let (None, Some(warning)) = (view.message, view.warning) {
+            let text = ui.painter().layout_no_wrap(
+                warning.to_owned(),
+                egui::FontId::proportional(tokens.number("text-2xs")),
+                tokens.color("theme-accent-text"),
+            );
+            let chip = egui::Rect::from_min_size(
+                egui::pos2(
+                    label_rect.right() + tokens.number("s-3"),
+                    label_rect.bottom() - text.size().y - tokens.number("s-2") * 2.,
+                ),
+                text.size() + egui::vec2(tokens.number("s-3") * 2., tokens.number("s-2") * 2.),
+            );
+            ui.painter()
+                .rect_filled(chip, tokens.number("r-md"), tokens.color("glass-strong"));
+            ui.painter().galley(
+                chip.min + egui::vec2(tokens.number("s-3"), tokens.number("s-2")),
+                text,
+                tokens.color("theme-accent-text"),
+            );
+        }
     }
 
     action
+}
+
+/// `thumbnail-capture-highlight`: `0 0 0 1px rgba(accent, .85), 0 0 18px
+/// rgba(accent, .24)` fading out after a card arrives.
+fn paint_capture_highlight(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    card: egui::Rect,
+    radius: f32,
+    opacity: f32,
+) {
+    if opacity <= 0. {
+        return;
+    }
+    let accent = tokens.color("theme-accent");
+    ui.painter().add(
+        egui::Shadow {
+            offset: [0, 0],
+            blur: 18,
+            spread: 0,
+            color: accent.gamma_multiply(0.24 * opacity),
+        }
+        .as_shape(card, radius),
+    );
+    ui.painter().rect_stroke(
+        card,
+        radius,
+        Stroke::new(1., accent.gamma_multiply(0.85 * opacity)),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// Shipping `clipboard-confirmation-arrive`, timed from when this card's chip
+/// appeared. Requests frames only while it plays.
+fn clipboard_chip_pose(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    view: &View<'_>,
+) -> captures_app::motion::Pose {
+    let id = ui.scope_id().with(("clipboard-chip", view.artifact_id));
+    let now = ui.input(|input| input.time);
+    let previous: Option<(bool, f64)> = ui.data(|data| data.get_temp(id));
+    let since = match previous {
+        Some((true, since)) if view.clipboard_current => since,
+        _ if view.clipboard_current => now,
+        _ => f64::NEG_INFINITY,
+    };
+    ui.data_mut(|data| data.insert_temp(id, (view.clipboard_current, since)));
+    let arrive = tokens.motion(captures_app::motion::Motion::PreviewClipboardChipArrive);
+    let elapsed = (now - since) * 1000.;
+    if arrive.running(elapsed, view.reduced_motion) {
+        ui.ctx().request_repaint();
+    }
+    arrive.pose_at(elapsed, view.reduced_motion)
+}
+
+/// A card playing its exit: painted in its held slot without chrome or input.
+pub struct ExitView<'a> {
+    pub texture: &'a egui::TextureHandle,
+    pub blurred: Option<&'a egui::TextureHandle>,
+    pub kind: captures_app::preview_motion::ExitKind,
+    /// Milliseconds into the exit's own animation (after any Clear all delay).
+    pub elapsed_ms: f64,
+    pub dust: &'a [captures_app::preview_motion::DustParticle],
+    pub right_anchor: bool,
+    pub reduced_motion: bool,
+}
+
+/// Paint an exiting card in `card`. Shipping locks the hover look (blur and
+/// half brightness) for every exit. Returns whether it is still moving.
+pub fn show_exit(ui: &mut egui::Ui, tokens: &Tokens, card: egui::Rect, view: ExitView<'_>) -> bool {
+    use captures_app::motion::Motion;
+    use captures_app::preview_motion::ExitKind;
+    let radius = tokens.number("thumbnail-card-radius");
+    let elapsed = view.elapsed_ms.max(0.);
+    let running = !view.reduced_motion && elapsed < view.kind.hold_ms();
+    match view.kind {
+        ExitKind::Dismiss | ExitKind::DeleteFallback => {
+            let motion = if view.kind == ExitKind::Dismiss {
+                Motion::PreviewDismiss
+            } else {
+                Motion::PreviewDeleteFallback
+            };
+            let mut pose = tokens.motion(motion).pose_at(elapsed, view.reduced_motion);
+            if view.right_anchor {
+                pose.translate_x = -pose.translate_x;
+            }
+            // The streak stretches and blurs the media inside its clip.
+            let streak = if view.kind == ExitKind::Dismiss {
+                tokens
+                    .motion(Motion::PreviewDismissStreak)
+                    .pose_at(elapsed, view.reduced_motion)
+            } else {
+                captures_app::motion::Pose { scale: 1., ..pose }
+            };
+            crate::motion::with_pose(ui, pose, card, |ui| {
+                ui.painter()
+                    .rect_filled(card, radius, tokens.color("glass-raised"));
+                paint_streaked_media(ui, card, radius, &view, streak);
+                ui.painter().rect_stroke(
+                    card,
+                    radius,
+                    Stroke::new(1., tokens.color("glass-border")),
+                    egui::StrokeKind::Inside,
+                );
+            });
+        }
+        ExitKind::Dust => paint_dust(ui, tokens, card, radius, &view, elapsed),
+    }
+    running
+}
+
+/// The locked hover media, stretched by `streak.scale_x` and smeared into a
+/// horizontal motion blur of `streak.blur` points: equal-weight copies, each
+/// blended at 1/k so the result is their average.
+fn paint_streaked_media(
+    ui: &egui::Ui,
+    card: egui::Rect,
+    radius: f32,
+    view: &ExitView<'_>,
+    streak: captures_app::motion::Pose,
+) {
+    use captures_app::preview_chrome::HOVER_MEDIA_BRIGHTNESS;
+    let (scale_x, scale_y) = streak.scales();
+    let rect = egui::Rect::from_center_size(
+        card.center(),
+        egui::vec2(
+            card.width() * scale_x as f32,
+            card.height() * scale_y as f32,
+        ),
+    );
+    let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(card));
+    let (texture, uv) = match view.blurred {
+        Some(blurred) => (
+            blurred.id(),
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+        ),
+        None => (
+            view.texture.id(),
+            cover_uv(view.texture.size_vec2(), card.size()),
+        ),
+    };
+    let copies = if streak.blur > 2.5 { 7 } else { 1 };
+    let spread = streak.blur as f32;
+    for copy in 0..copies {
+        let offset = if copies == 1 {
+            0.
+        } else {
+            spread * (copy as f32 / (copies - 1) as f32 * 2. - 1.)
+        };
+        let alpha = 1. / (copy + 1) as f32;
+        let value = (HOVER_MEDIA_BRIGHTNESS as f32 * alpha * 255.).round() as u8;
+        painter.add(
+            egui::epaint::RectShape::filled(
+                rect.translate(egui::vec2(offset, 0.)),
+                radius,
+                Color32::from_rgba_premultiplied(value, value, value, (alpha * 255.).round() as u8),
+            )
+            .with_texture(texture, uv),
+        );
+    }
+}
+
+/// Shipping dust delete: the frozen hover image fades under a mesh of image
+/// chips that rise and scatter from the trash control while the clip opens.
+fn paint_dust(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    card: egui::Rect,
+    radius: f32,
+    view: &ExitView<'_>,
+    elapsed: f64,
+) {
+    use captures_app::preview_chrome::HOVER_MEDIA_BRIGHTNESS;
+    use captures_app::preview_motion::{
+        DUST_LAYER_PAD, delete_frame_opacity, dust_frame, dust_visual_at,
+    };
+    let frame = dust_frame(elapsed, view.reduced_motion);
+    let border = delete_frame_opacity(tokens, elapsed, view.reduced_motion) as f32;
+    let (texture, base) = match view.blurred {
+        Some(blurred) => (
+            blurred.id(),
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+        ),
+        None => (
+            view.texture.id(),
+            cover_uv(view.texture.size_vec2(), card.size()),
+        ),
+    };
+    let tint = |alpha: f32| {
+        let value = (HOVER_MEDIA_BRIGHTNESS as f32 * alpha * 255.).round() as u8;
+        Color32::from_rgba_premultiplied(value, value, value, (alpha * 255.).round() as u8)
+    };
+    if border > 0. {
+        ui.painter().add(
+            egui::Shadow {
+                offset: [0, 6],
+                blur: 14,
+                spread: 0,
+                color: Color32::from_black_alpha((0.38 * 255. * border) as u8),
+            }
+            .as_shape(card, radius),
+        );
+    }
+    if frame.source_opacity > 0. {
+        ui.painter()
+            .with_clip_rect(ui.clip_rect().intersect(card))
+            .add(
+                egui::epaint::RectShape::filled(card, radius, tint(frame.source_opacity as f32))
+                    .with_texture(texture, base),
+            );
+    }
+    if frame.layer_opacity > 0. {
+        let pad = DUST_LAYER_PAD as f32;
+        let layer = card.min - egui::vec2(pad, pad);
+        let clip = card.expand(pad * frame.clip_open as f32);
+        let mut mesh = egui::Mesh::with_texture(texture);
+        let size = card.size();
+        for particle in view.dust {
+            let visual = dust_visual_at(particle, elapsed);
+            let alpha = (visual.opacity * frame.layer_opacity) as f32;
+            if alpha <= 0. {
+                continue;
+            }
+            let half = egui::vec2(particle.width as f32, particle.height as f32) / 2.;
+            let centre = layer
+                + egui::vec2(particle.left as f32, particle.top as f32)
+                + half
+                + egui::vec2(visual.dx as f32, visual.dy as f32);
+            let (sin, cos) = (visual.rotate.to_radians() as f32).sin_cos();
+            let scale = visual.scale as f32;
+            let uv_min = base.min
+                + egui::vec2(
+                    particle.source_left as f32 / size.x * base.width(),
+                    particle.source_top as f32 / size.y * base.height(),
+                );
+            let uv_size = egui::vec2(
+                particle.width as f32 / size.x * base.width(),
+                particle.height as f32 / size.y * base.height(),
+            );
+            let color = tint(alpha);
+            let first = mesh.vertices.len() as u32;
+            for (corner, uv) in [
+                (egui::vec2(-1., -1.), egui::vec2(0., 0.)),
+                (egui::vec2(1., -1.), egui::vec2(1., 0.)),
+                (egui::vec2(1., 1.), egui::vec2(1., 1.)),
+                (egui::vec2(-1., 1.), egui::vec2(0., 1.)),
+            ] {
+                let local = egui::vec2(corner.x * half.x, corner.y * half.y) * scale;
+                let rotated =
+                    egui::vec2(local.x * cos - local.y * sin, local.x * sin + local.y * cos);
+                mesh.vertices.push(egui::epaint::Vertex {
+                    pos: centre + rotated,
+                    uv: uv_min + egui::vec2(uv.x * uv_size.x, uv.y * uv_size.y),
+                    color,
+                });
+            }
+            mesh.indices.extend_from_slice(&[
+                first,
+                first + 1,
+                first + 2,
+                first,
+                first + 2,
+                first + 3,
+            ]);
+        }
+        ui.painter()
+            .with_clip_rect(ui.clip_rect().intersect(clip))
+            .add(egui::Shape::mesh(mesh));
+    }
+    if border > 0. {
+        ui.painter().rect_stroke(
+            card,
+            radius,
+            Stroke::new(1., Color32::from_white_alpha((0.08 * 255. * border) as u8)),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
+/// Shipping `thumbnail-stack-sparkle`: two layers of accent and white dots
+/// drifting up over a hovered collapsed pile. `elapsed_ms` counts from the
+/// hover's start; the layers loop until the hover ends.
+pub fn paint_sparkles(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    target: egui::Rect,
+    top_anchor: bool,
+    elapsed_ms: f64,
+    reduced_motion: bool,
+) -> bool {
+    use captures_app::motion::Motion;
+    use captures_app::preview_motion::{
+        SPARKLES_EARLY, SPARKLES_LATE, sparkle_center, sparkle_layer,
+    };
+    if reduced_motion {
+        return false;
+    }
+    let (x, y, width, height) = sparkle_layer(
+        (
+            f64::from(target.left()),
+            f64::from(target.top()),
+            f64::from(target.width()),
+            f64::from(target.height()),
+        ),
+        top_anchor,
+    );
+    let centre = egui::pos2((x + width / 2.) as f32, (y + height / 2.) as f32);
+    let accent = tokens.color("theme-accent");
+    for (motion, dots) in [
+        (Motion::PreviewPileSparkle, &SPARKLES_EARLY[..]),
+        (Motion::PreviewPileSparkleLate, &SPARKLES_LATE[..]),
+    ] {
+        let pose = tokens.motion(motion).pose_repeating(elapsed_ms, false);
+        if pose.opacity <= 0. {
+            continue;
+        }
+        let scale = pose.scale as f32;
+        for dot in dots {
+            let (dx, dy) = sparkle_center(dot, (x, y, width, height));
+            let point = centre
+                + (egui::pos2(dx as f32, dy as f32) - centre) * scale
+                + egui::vec2(0., pose.translate_y as f32);
+            let base = if dot.accent { accent } else { Color32::WHITE };
+            let alpha = (dot.alpha * pose.opacity) as f32;
+            // The radial gradient's soft edge, then its solid core.
+            ui.painter().circle_filled(
+                point,
+                dot.fade as f32 * scale,
+                base.gamma_multiply(alpha * 0.35),
+            );
+            ui.painter()
+                .circle_filled(point, dot.core as f32 * scale, base.gamma_multiply(alpha));
+        }
+    }
+    true
 }
 
 /// Eased 0…1 progress of the hover filter (blur and brightness) and scale,
@@ -725,8 +1100,22 @@ fn tooltip_progress(
     tween.easing.ease(f64::from(linear)) as f32
 }
 
+/// Where the clipboard chip sits: the card's bottom-right corner.
+fn clipboard_chip_rect(ui: &egui::Ui, tokens: &Tokens, card: egui::Rect, inset: f32) -> egui::Rect {
+    let text = ui.painter().layout_no_wrap(
+        "Copied to clipboard".to_owned(),
+        egui::FontId::proportional(tokens.number("text-2xs")),
+        Color32::from_rgb(0xea, 0xff, 0xf0),
+    );
+    let size = egui::vec2(
+        tokens.number("s-4") * 2. + 12. + tokens.number("s-2") + text.size().x,
+        3. * 2. + text.size().y.max(12.),
+    );
+    egui::Rect::from_min_size(card.right_bottom() - egui::vec2(inset, inset) - size, size)
+}
+
 /// Shipping `.clipboard-confirmation`: a green-edged pill at the bottom right.
-fn clipboard_chip(ui: &egui::Ui, tokens: &Tokens, card: egui::Rect, inset: f32) {
+fn clipboard_chip(ui: &egui::Ui, tokens: &Tokens, rect: egui::Rect) {
     let text = ui.painter().layout_no_wrap(
         "Copied to clipboard".to_owned(),
         egui::FontId::proportional(tokens.number("text-2xs")),
@@ -735,12 +1124,7 @@ fn clipboard_chip(ui: &egui::Ui, tokens: &Tokens, card: egui::Rect, inset: f32) 
     let padding = egui::vec2(tokens.number("s-4"), 3.);
     let icon = 12.;
     let gap = tokens.number("s-2");
-    let size = egui::vec2(
-        padding.x * 2. + icon + gap + text.size().x,
-        padding.y * 2. + text.size().y.max(icon),
-    );
-    let rect =
-        egui::Rect::from_min_size(card.right_bottom() - egui::vec2(inset, inset) - size, size);
+    let size = rect.size();
     ui.painter().rect(
         rect,
         size.y / 2.,
@@ -832,23 +1216,47 @@ pub fn show_stack_controls(
     let expanded = ui.data(|data| data.get_temp::<bool>(minimize_id.with("expanded")))
         == Some(true)
         || ui.memory(|memory| memory.has_focus(minimize_id));
-    let width = if expanded {
+    let anchored = |width: f32| {
+        if right_anchor {
+            egui::Rect::from_min_max(
+                egui::pos2(inner_x + 28. - width, y),
+                egui::pos2(inner_x + 28., y + 28.),
+            )
+        } else {
+            egui::Rect::from_min_size(egui::pos2(inner_x, y), egui::vec2(width, 28.))
+        }
+    };
+    let minimize = anchored(if expanded {
         STACK_MINIMIZE_HOVER_WIDTH as f32
     } else {
         28.
+    });
+    // Shipping morph: the width eases over 240 ms while the icon gives way to
+    // the label over 180 ms, both `--ease-out`.
+    let morph = captures_app::preview_motion::MinimizeMorph {
+        width: eased_toggle(
+            ui,
+            minimize_id.with("morph"),
+            expanded,
+            captures_app::motion::Transition::PreviewMinimizeMorph,
+            tokens,
+            reduced_motion,
+        ),
+        swap: eased_toggle(
+            ui,
+            minimize_id.with("swap"),
+            expanded,
+            captures_app::motion::Transition::PreviewMinimizeSwap,
+            tokens,
+            reduced_motion,
+        ),
     };
-    let minimize = if right_anchor {
-        egui::Rect::from_min_max(
-            egui::pos2(inner_x + 28. - width, y),
-            egui::pos2(inner_x + 28., y + 28.),
-        )
-    } else {
-        egui::Rect::from_min_size(egui::pos2(inner_x, y), egui::vec2(width, 28.))
-    };
-    let response = stack_button(
+    let painted = anchored(morph.width_between(28., STACK_MINIMIZE_HOVER_WIDTH) as f32);
+    let response = stack_button_at(
         ui,
         tokens,
         minimize,
+        painted,
         "show-less",
         STACK_MINIMIZE_LABEL,
         !expanded,
@@ -858,26 +1266,67 @@ pub fn show_stack_controls(
         ui.data_mut(|data| data.insert_temp(minimize_id.with("expanded"), hover));
         ui.ctx().request_repaint();
     }
-    if expanded {
-        ui.painter().text(
-            minimize.center(),
+    // `--thumbnail-minimize-slide`: the icon leaves toward, and the label
+    // arrives from, the pile's screen edge.
+    let slide = if right_anchor { -1. } else { 1. };
+    let clip = ui
+        .painter()
+        .with_clip_rect(painted.intersect(ui.clip_rect()));
+    let (icon_opacity, icon_x, icon_scale) = morph.icon();
+    if icon_opacity > 0. {
+        let rest = anchored(28.);
+        paint_icon(
+            &clip,
+            Icon::Stack,
+            egui::Rect::from_center_size(
+                rest.center() + egui::vec2(icon_x as f32 * slide, 0.),
+                egui::vec2(14., 14.) * icon_scale as f32,
+            ),
+            tokens
+                .color("glass-text")
+                .gamma_multiply(icon_opacity as f32),
+        );
+    }
+    let (label_opacity, label_x) = morph.label();
+    if label_opacity > 0. {
+        clip.text(
+            painted.center() + egui::vec2(label_x as f32 * slide, 0.),
             egui::Align2::CENTER_CENTER,
             STACK_MINIMIZE_HOVER_LABEL,
             egui::FontId::proportional(tokens.number("text-2xs")),
-            tokens.color("glass-text"),
-        );
-    } else {
-        paint_icon(
-            ui.painter(),
-            Icon::Stack,
-            egui::Rect::from_center_size(minimize.center(), egui::vec2(14., 14.)),
-            tokens.color("glass-text"),
+            tokens
+                .color("glass-text")
+                .gamma_multiply(label_opacity as f32),
         );
     }
     if response.clicked() {
         action = Some(StackAction::ToggleCollapsed);
     }
     action
+}
+
+/// 0…1 progress of a toggled transition, eased in its direction of travel
+/// like a CSS transition (reversing plays the curve backward from 1).
+fn eased_toggle(
+    ui: &egui::Ui,
+    id: egui::Id,
+    on: bool,
+    transition: captures_app::motion::Transition,
+    tokens: &Tokens,
+    reduced_motion: bool,
+) -> f64 {
+    let tween = tokens.transition(transition);
+    let seconds = if reduced_motion {
+        0.
+    } else {
+        tween.duration_ms as f32 / 1000.
+    };
+    let linear = f64::from(ui.ctx().animate_bool_with_time(id, on, seconds));
+    if on {
+        tween.easing.ease(linear)
+    } else {
+        1. - tween.easing.ease(1. - linear)
+    }
 }
 
 /// Shipping `.thumbnail-stack-control`: solid glass square, raised on hover
@@ -890,6 +1339,20 @@ fn stack_button(
     label: &str,
     raise_on_hover: bool,
 ) -> egui::Response {
+    stack_button_at(ui, tokens, rect, rect, id, label, raise_on_hover)
+}
+
+/// [`stack_button`] hit-tested at `rect` and painted at `paint` (the Show
+/// less pill paints its animated width but keeps the target's hit area).
+fn stack_button_at(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    rect: egui::Rect,
+    paint: egui::Rect,
+    id: &str,
+    label: &str,
+    raise_on_hover: bool,
+) -> egui::Response {
     let response = ui.interact(rect, ui.scope_id().with(id), egui::Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let (fill, border) = if response.hovered() && raise_on_hover {
@@ -898,7 +1361,7 @@ fn stack_button(
         ("glass-strong-solid", "glass-border")
     };
     ui.painter().rect(
-        rect,
+        paint,
         tokens.number("r-md"),
         tokens.color(fill),
         Stroke::new(1., tokens.color(border)),
@@ -906,7 +1369,7 @@ fn stack_button(
     );
     if response.has_focus() {
         ui.painter().rect_stroke(
-            rect.expand(2.),
+            paint.expand(2.),
             tokens.number("r-md"),
             Stroke::new(2., tokens.color("theme-accent")),
             egui::StrokeKind::Outside,
@@ -1013,7 +1476,7 @@ pub fn show_overflow_cues(
     slots
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Icon {
     Close,
     Trash,
@@ -1079,11 +1542,18 @@ fn control(
         let icon_center = label.as_ref().map_or(rect.center(), |text| {
             rect.center() - egui::vec2((text.size().x + gap) / 2., 0.)
         });
+        // `.thumbnail-main-actions svg`: a new icon pops in (Save → Saved →
+        // Show in Folder). Icon buttons keep a still glyph.
+        let pop = if tooltip.is_none() {
+            action_icon_pop(ui, tokens, id, icon)
+        } else {
+            captures_app::motion::Pose::REST
+        };
         paint_icon(
             ui.painter(),
             icon,
-            egui::Rect::from_center_size(icon_center, egui::vec2(16., 16.)),
-            color,
+            egui::Rect::from_center_size(icon_center, egui::vec2(16., 16.) * pop.scale as f32),
+            color.gamma_multiply(pop.opacity as f32),
         );
         if let Some(text) = label {
             ui.painter().galley(
@@ -1118,6 +1588,32 @@ fn control(
         crate::glass_tooltip::preview_icon(ui, tokens, rect, label, above, progress);
     }
     visible && enabled && response.clicked()
+}
+
+/// Shipping `thumbnail-action-pop`, timed from when `icon` replaced the
+/// control's previous glyph. The first glyph a control shows does not pop:
+/// shipping mounts it while the actions are still hidden.
+fn action_icon_pop(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    id: egui::Id,
+    icon: Icon,
+) -> captures_app::motion::Pose {
+    let key = id.with("icon-pop");
+    let now = ui.input(|input| input.time);
+    let since = match ui.data(|data| data.get_temp::<(Icon, f64)>(key)) {
+        Some((previous, since)) if previous == icon => since,
+        Some(_) => now,
+        None => f64::NEG_INFINITY,
+    };
+    ui.data_mut(|data| data.insert_temp(key, (icon, since)));
+    let reduced = crate::motion::reduced(ui.ctx());
+    let pop = tokens.motion(captures_app::motion::Motion::PreviewActionIconPop);
+    let elapsed = (now - since) * 1000.;
+    if pop.running(elapsed, reduced) {
+        ui.ctx().request_repaint();
+    }
+    pop.pose_at(elapsed, reduced)
 }
 
 fn paint_icon(p: &egui::Painter, icon: Icon, rect: egui::Rect, color: Color32) {
@@ -1417,6 +1913,9 @@ mod tests {
                 editor_elapsed_ms: 0.,
                 hover_locked: false,
                 reduced_motion: false,
+                highlight: 0.,
+                warning: None,
+                depth_shade: 1.,
             },
         );
         let mut output = ctx.end_pass();
@@ -1470,6 +1969,9 @@ mod tests {
                     editor_elapsed_ms: 0.,
                     hover_locked: false,
                     reduced_motion: false,
+                    highlight: 0.,
+                    warning: None,
+                    depth_shade: 1.,
                 },
             );
             let mut output = ctx.end_pass();
@@ -1559,6 +2061,9 @@ mod tests {
                     editor_elapsed_ms: 0.,
                     hover_locked: false,
                     reduced_motion: false,
+                    highlight: 0.,
+                    warning: None,
+                    depth_shade: 1.,
                 },
             );
             let mut output = ctx.end_pass();
@@ -1633,6 +2138,9 @@ mod tests {
                         editor_elapsed_ms: 0.,
                         hover_locked: false,
                         reduced_motion: false,
+                        highlight: 0.,
+                        warning: None,
+                        depth_shade: 1.,
                     },
                 );
             });
@@ -1704,7 +2212,11 @@ mod tests {
                     editor: EditorPhase::Idle,
                     editor_elapsed_ms: 0.,
                     hover_locked: false,
-                    reduced_motion: false,
+                    // The chip's arrival starts transparent; settle it.
+                    reduced_motion: true,
+                    highlight: 0.,
+                    warning: None,
+                    depth_shade: 1.,
                 },
             );
             let mut output = ctx.end_pass();
@@ -1924,6 +2436,142 @@ mod tests {
         }
     }
 
+    #[test]
+    fn show_less_pill_widens_over_the_shipping_morph() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 52.));
+        let pointer = egui::pos2(46., 26.);
+        let mut widths = Vec::new();
+        for (time, position) in [
+            (0., egui::pos2(500., 500.)),
+            (0.01, pointer),
+            (0.05, pointer),
+            (0.4, pointer),
+        ] {
+            ctx.begin_pass(egui::RawInput {
+                time: Some(time),
+                ..raw(screen, moved(position))
+            });
+            let mut ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique("show-less-morph-test"),
+                egui::UiBuilder::new().max_rect(screen),
+            );
+            show_stack_controls(&mut ui, &tokens, false, false, false);
+            let mut output = ctx.end_pass();
+            // The pill is the widest glass rect starting at the inner slot.
+            let width = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if (rect.rect.min.x - 30.).abs() < 0.5 => {
+                        Some(rect.rect.width())
+                    }
+                    _ => None,
+                })
+                .fold(0., f32::max);
+            widths.push(width);
+            output.textures_delta.clear();
+        }
+        assert_eq!(widths[0], 28.);
+        assert!(widths[2] > 28. && widths[2] < 92., "mid-morph {widths:?}");
+        assert_eq!(widths[3], 92.);
+    }
+
+    #[test]
+    fn warning_chip_follows_metadata_and_exits_paint_without_chrome() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let texture = ctx.load_texture(
+            "warning-exit",
+            egui::ColorImage::filled([4, 4], Color32::WHITE),
+            Default::default(),
+        );
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 160.));
+        ctx.begin_pass(raw(screen, moved(egui::pos2(900., 900.))));
+        let mut ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::unique("warning-test"),
+            egui::UiBuilder::new().max_rect(screen),
+        );
+        show(
+            &mut ui,
+            &tokens,
+            View {
+                artifact_id: "warning",
+                texture: &texture,
+                width: 320,
+                height: 180,
+                size_bytes: 1_024,
+                clipboard_current: false,
+                saved_feedback: false,
+                busy: None,
+                message: None,
+                can_save: true,
+                saved: false,
+                interactive: true,
+                collapsed: false,
+                stack_count: 1,
+                depth: 0,
+                desktop_pointer: None,
+                reject_offset: 0.,
+                right_anchor: false,
+                top_anchor: false,
+                blurred: None,
+                editor: EditorPhase::Idle,
+                editor_elapsed_ms: 0.,
+                hover_locked: false,
+                reduced_motion: false,
+                highlight: 1.,
+                warning: Some(preview_chrome::WARNING_CLIPBOARD_UNAVAILABLE),
+                depth_shade: 1.,
+            },
+        );
+        let mut output = ctx.end_pass();
+        let texts = painted_texts(&output);
+        assert!(
+            texts.iter().any(|text| text == "Clipboard unavailable"),
+            "{texts:?}"
+        );
+        output.textures_delta.clear();
+
+        let particles =
+            captures_app::preview_motion::dust_particles(284., 160., (320., 180.), (22.5, 22.5), 1);
+        for (kind, elapsed, mesh) in [
+            (captures_app::preview_motion::ExitKind::Dust, 1_000., true),
+            (captures_app::preview_motion::ExitKind::Dismiss, 100., false),
+        ] {
+            ctx.begin_pass(raw(screen, Vec::new()));
+            let mut ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique("exit-test"),
+                egui::UiBuilder::new().max_rect(screen),
+            );
+            assert!(show_exit(
+                &mut ui,
+                &tokens,
+                screen,
+                ExitView {
+                    texture: &texture,
+                    blurred: None,
+                    kind,
+                    elapsed_ms: elapsed,
+                    dust: &particles,
+                    right_anchor: false,
+                    reduced_motion: false,
+                },
+            ));
+            let mut output = ctx.end_pass();
+            assert!(painted_texts(&output).is_empty(), "exits paint no chrome");
+            let chips = output.shapes.iter().any(
+                |shape| matches!(&shape.shape, egui::Shape::Mesh(mesh) if mesh.vertices.len() > 4),
+            );
+            assert_eq!(chips, mesh, "{kind:?}");
+            output.textures_delta.clear();
+        }
+    }
+
     fn run_cues(
         ctx: &egui::Context,
         events: Vec<egui::Event>,
@@ -2027,6 +2675,9 @@ mod tests {
                     editor_elapsed_ms: 0.,
                     hover_locked: false,
                     reduced_motion: false,
+                    highlight: 0.,
+                    warning: None,
+                    depth_shade: 1.,
                 },
             );
             let mut output = ctx.end_pass();
@@ -2106,6 +2757,9 @@ mod tests {
                 editor_elapsed_ms: 1_000.,
                 hover_locked: case.hover_locked,
                 reduced_motion: true,
+                highlight: 0.,
+                warning: None,
+                depth_shade: 1.,
             },
         );
         let mut output = ctx.end_pass();

@@ -15,11 +15,14 @@ pub fn elapsed_ms(since: Instant, now: Instant) -> f64 {
     now.saturating_duration_since(since).as_secs_f64() * 1000.
 }
 
-/// CSS `transform: translateY() scale()` about the centre of `rect`.
+/// CSS `transform: translate() scale()` about the centre of `rect`. egui's
+/// visual transforms scale uniformly, so `scale_x` (the dismiss streak) is
+/// applied by the caller that paints the stretched media.
 pub fn transform(pose: Pose, rect: egui::Rect) -> TSTransform {
     let centre = rect.center().to_vec2();
-    TSTransform::from_translation(centre + egui::vec2(0., pose.translate_y as f32))
-        * TSTransform::from_scaling(pose.scale as f32)
+    TSTransform::from_translation(
+        centre + egui::vec2(pose.translate_x as f32, pose.translate_y as f32),
+    ) * TSTransform::from_scaling(pose.scale as f32)
         * TSTransform::from_translation(-centre)
 }
 
@@ -140,11 +143,16 @@ mod tests {
             opacity: 0.5,
             translate_y: 8.,
             scale: 0.5,
-            blur: 0.,
+            ..Pose::REST
         };
         let t = transform(pose, rect);
         assert_eq!(t * rect.center(), rect.center() + egui::vec2(0., 8.));
         assert_eq!(t * rect.min, egui::pos2(35., 38.));
+        let slid = Pose {
+            translate_x: -118.,
+            ..Pose::REST
+        };
+        assert_eq!(transform(slid, rect) * rect.min, egui::pos2(-108., 20.));
         assert_eq!(transform(Pose::REST, rect), TSTransform::IDENTITY);
     }
 
@@ -155,7 +163,7 @@ mod tests {
             opacity: 0.2,
             translate_y: 6.,
             scale: 0.98,
-            blur: 0.,
+            ..Pose::REST
         };
         let mut ids = Vec::new();
         for pose in [moving, Pose::REST] {

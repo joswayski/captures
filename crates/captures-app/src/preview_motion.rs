@@ -85,6 +85,20 @@ impl ExitKind {
     }
 }
 
+/// The survivor settle ([`Transition::PreviewStackSettle`]). Shipping writes
+/// its timing literally, so it resolves without a token table.
+pub fn settle_tween() -> Tween {
+    Tween {
+        duration_ms: 580.0,
+        easing: CubicBezier {
+            x1: 0.4,
+            y1: 0.0,
+            x2: 0.2,
+            y2: 1.0,
+        },
+    }
+}
+
 /// Clear all's start delay for chronological `index` of `count` live cards:
 /// the bottom card leaves first.
 pub fn clear_delay_ms(count: usize, index: usize, top_anchor: bool) -> f64 {
@@ -808,7 +822,9 @@ mod tests {
     }
 
     fn settle() -> Tween {
-        Transition::PreviewStackSettle.resolve(&Shipping).unwrap()
+        let settle = Transition::PreviewStackSettle.resolve(&Shipping).unwrap();
+        assert_eq!(settle, settle_tween());
+        settle
     }
 
     #[test]
