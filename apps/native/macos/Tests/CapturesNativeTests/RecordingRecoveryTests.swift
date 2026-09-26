@@ -98,12 +98,13 @@ final class RecordingRecoveryTests: XCTestCase {
             window.makeKeyAndOrderFront(nil)
             let panel = try recoveryPanel(root)
             try waitUntil { worker.listCount > 0 && !panel.isHidden }
-            XCTAssertEqual(panel.frame, NSRect(x: 28, y: 194, width: 320, height: 152))
+            // The shipping card spans the History column; its origin follows the header.
+            XCTAssertEqual(panel.frame, NSRect(x: 28, y: 192, width: 944, height: 176))
             XCTAssertTrue(root.bounds.contains(panel.frame))
             let row = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView)
             let reason = try XCTUnwrap(row.subviews.compactMap { $0 as? NSTextField }
                 .first { $0.stringValue.contains("The recording manifest is corrupt") })
-            XCTAssertGreaterThan(reason.frame.height, 49)
+            XCTAssertGreaterThan(reason.frame.height, 32, "long text wraps past two lines")
             XCTAssertEqual(reason.toolTip, reason.stringValue)
             XCTAssertEqual(reason.accessibilityHelp(), reason.stringValue)
             XCTAssertTrue(panel.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
@@ -134,7 +135,7 @@ final class RecordingRecoveryTests: XCTestCase {
             let errorContent = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView)
             let errorField = try XCTUnwrap(errorContent.subviews.compactMap { $0 as? NSTextField }
                 .first { $0.stringValue.contains("Recovery root is temporarily unavailable.") })
-            XCTAssertGreaterThan(errorField.frame.height, 49)
+            XCTAssertGreaterThan(errorField.frame.height, 32, "long text wraps past two lines")
             XCTAssertEqual(errorField.toolTip, "Couldn’t list interrupted recordings: \(longError)")
             if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
                 window.display(); root.layoutSubtreeIfNeeded()
