@@ -602,6 +602,14 @@ Eight border grips resize images, shapes and drawings. Shift keeps corner drags
 proportional; edge grips remain single-axis. Unrotated resizes snap to canvas and
 visible-layer edges with guide lines; rotated resizes retain the opposite anchor.
 Resizing uses an outline-only preview and commits on release.
+Selected lines and arrows show curve dots: drag a dot to bend the stroke, double-click
+the path to add a point and double-click a point to remove it. Layers offers a Curve
+slider for straight or single-bend strokes and Straighten for multi-point ones. Curves
+survive saves and drafts. A selected layer that hangs past the canvas shows an
+**Expand canvas** action; hovering previews the grown canvas and one click grows it as
+a single undo step. Dropping PNG, JPEG, WebP or TIFF files on the canvas adds image
+layers where the placement guide shows (Place above/left/right/below, or stacked);
+each file is one undo step.
 Canvas moves now snap painted bounds to canvas and visible-layer edges, including
 locked layers, with alignment guides. The snap range stays constant on screen;
 numeric X/Y edits remain exact and do not snap. Clicks and small pointer movements

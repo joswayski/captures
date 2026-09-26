@@ -6,6 +6,7 @@ pub mod capture_menu;
 pub mod clipboard;
 pub mod controls;
 pub mod editor;
+pub mod editor_canvas;
 pub mod editor_chrome;
 pub mod editor_export;
 pub mod editor_fonts;

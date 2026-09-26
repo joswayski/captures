@@ -3,12 +3,15 @@
 use super::region::{RegionPixels, response, text};
 use captures_app::{
     editor::{
-        ClosedShapeKind, CropDrag, DEFAULT_ROTATION_SNAP_DEGREES, Document, ElementBase,
+        ClosedShapeKind, CropDrag, DEFAULT_ROTATION_SNAP_DEGREES, Document, Element, ElementBase,
         ElementStyle, GuideOrientation, MoveDrag, Point, ResizeDrag, ShapeElement,
         arrow_fill_polygon, preview_rotation, rotation_handle, smooth_path_centerline,
     },
+    editor_canvas as canvas,
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
-    editor_session::{EditorSession, ExportOptions, ImportImage, OpenRequest, Request},
+    editor_session::{
+        EditorSession, ExportOptions, ImportImage, OpenRequest, Request, image_drop_guide,
+    },
     editor_viewport::{Viewport, wheel_zoom_factor, zoom_from_slider, zoom_slider_position},
     selection::Point as AbiPoint,
 };
@@ -585,6 +588,96 @@ pub unsafe extern "C" fn captures_editor_hit_test_document_v1(
             .map_err(|error| error.to_string())?;
         let hit = document.hit_test(Point { x, y }, tolerance)?;
         Ok::<_, String>(json!({"hit": hit.map(|element| element.base().id.as_str())}))
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    response(match result {
+        Ok(result) => json!({"ok":true,"result":result}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum CanvasQuery {
+    DropGuide {
+        selected_id: Option<String>,
+        point: Option<Point>,
+    },
+    Curve {
+        id: String,
+        point: Point,
+        radius: f64,
+    },
+    CurvePreview {
+        id: String,
+        handle: canvas::CurveHandle,
+        point: Point,
+    },
+}
+
+/// Canvas-interaction geometry from an immutable published document: the
+/// image-drop placement guide under a pointer sample, and line/arrow curve
+/// handle hits and hover hints. Geometry only; no session, render or I/O.
+///
+/// # Safety
+/// Inputs are readable NUL-terminated UTF-8 for the call. Free the owned JSON
+/// response with captures_settings_free_v1. Null/malformed input is an error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_canvas_query_v1(
+    document_json: *const c_char,
+    request_json: *const c_char,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains readable inputs during this call.
+        let document: Document = serde_json::from_str(unsafe { text(document_json) }?)
+            .map_err(|error| error.to_string())?;
+        let query: CanvasQuery = serde_json::from_str(unsafe { text(request_json) }?)
+            .map_err(|error| error.to_string())?;
+        match query {
+            CanvasQuery::DropGuide { selected_id, point } => {
+                if point.is_some_and(|point| !point.x.is_finite() || !point.y.is_finite()) {
+                    return Err("Image drop coordinates must be finite.".into());
+                }
+                Ok::<_, String>(json!(image_drop_guide(
+                    &document,
+                    selected_id.as_deref(),
+                    point
+                )))
+            }
+            CanvasQuery::Curve { id, point, radius } => {
+                if !point.x.is_finite() || !point.y.is_finite() || !radius.is_finite() {
+                    return Err("Curve hit testing requires finite input.".into());
+                }
+                let shape = document.elements.iter().find_map(|element| match element {
+                    Element::Shape(shape) if shape.base.id == id => Some(shape),
+                    _ => None,
+                });
+                let Some(shape) = shape.filter(|shape| canvas::is_curveable(shape)) else {
+                    return Ok(
+                        json!({"handle": null, "hint": null, "on_path": false, "closest": null}),
+                    );
+                };
+                let (closest, _, distance) = canvas::closest_point_on_curve(shape, point);
+                Ok(json!({
+                    "handle": canvas::hit_test_curve_handle(shape, point, radius),
+                    "hint": canvas::curve_hover_hint(shape, point, radius),
+                    "on_path": distance <= canvas::curve_path_hit_radius(shape, radius),
+                    "closest": closest,
+                }))
+            }
+            CanvasQuery::CurvePreview { id, handle, point } => {
+                let mut shape = document
+                    .elements
+                    .into_iter()
+                    .find_map(|element| match element {
+                        Element::Shape(shape) if shape.base.id == id => Some(shape),
+                        _ => None,
+                    })
+                    .ok_or("The selected layer no longer exists.")?;
+                canvas::apply_curve_edit(&mut shape, canvas::CurveEdit::Move { handle, point })?;
+                Ok(json!(canvas::curve_handles(&shape)))
+            }
+        }
     }))
     .unwrap_or_else(|_| Err("internal panic".into()));
     response(match result {
@@ -1712,6 +1805,66 @@ mod tests {
                     false
                 );
             }
+        }
+    }
+
+    #[test]
+    fn canvas_queries_return_drop_guides_and_curve_hints() {
+        let (_data, request, _) = editor_fixture();
+        // SAFETY: all inputs are retained C strings; responses/session freed once.
+        unsafe {
+            let session = open_editor(&request);
+            let created = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"create_open_shape\",\"shape\":\"arrow\",\"start\":{\"x\":1,\"y\":1},\"end\":{\"x\":20,\"y\":1}}".as_ptr(),
+            ));
+            let snapshot = &created["result"];
+            let line = snapshot["document"]["elements"][1]["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            assert_eq!(
+                snapshot["curve_handles"][&line]["straighten_label"],
+                "Straighten arrow"
+            );
+            assert_eq!(snapshot["canvas_expand"][&line]["anchor_edge"], "right");
+            let document = CString::new(snapshot["document"].to_string()).unwrap();
+            let guide = take_json(captures_editor_canvas_query_v1(
+                document.as_ptr(),
+                c"{\"operation\":\"drop_guide\",\"selected_id\":null,\"point\":{\"x\":6.9,\"y\":1.5}}".as_ptr(),
+            ));
+            assert_eq!(guide["result"]["placement"], "right");
+            assert_eq!(guide["result"]["label"], "Place right");
+            let query = CString::new(
+                json!({"operation": "curve", "id": line, "point": {"x": 1., "y": 1.}, "radius": 6.})
+                    .to_string(),
+            )
+            .unwrap();
+            let hit = take_json(captures_editor_canvas_query_v1(
+                document.as_ptr(),
+                query.as_ptr(),
+            ));
+            assert_eq!(hit["result"]["handle"], json!({"kind": "start"}));
+            assert_eq!(hit["result"]["hint"], "Drag to move endpoint");
+            let preview = CString::new(
+                json!({"operation": "curve_preview", "id": line,
+                       "handle": {"kind": "starter_control", "index": 1},
+                       "point": {"x": 10., "y": 9.}})
+                .to_string(),
+            )
+            .unwrap();
+            let moved = take_json(captures_editor_canvas_query_v1(
+                document.as_ptr(),
+                preview.as_ptr(),
+            ));
+            assert_eq!(moved["result"]["controls"][1], json!({"x": 10., "y": 9.}));
+            assert_eq!(moved["result"]["slider"], false);
+            let invalid = take_json(captures_editor_canvas_query_v1(
+                document.as_ptr(),
+                c"{\"operation\":\"unknown\"}".as_ptr(),
+            ));
+            assert_eq!(invalid["ok"], false);
+            captures_editor_free_v1(session);
         }
     }
 
