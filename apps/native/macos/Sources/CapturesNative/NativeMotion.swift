@@ -13,6 +13,18 @@ struct MotionKeyframes {
         /// Points, positive downward as in CSS.
         let translateY: Double
         let scale: Double
+        /// Points, positive rightward (the dismiss slide toward a left edge
+        /// is negative; right-anchored stacks mirror it).
+        var translateX: Double = 0
+        /// Horizontal stretch on top of `scale` (CSS `scaleX()`).
+        var scaleX: Double = 1
+        /// CSS `filter: blur()` radius, or the dismiss streak's horizontal
+        /// deviation. Hosts apply it where they can.
+        var blur: Double = 0
+
+        var isRest: Bool {
+            opacity == 1 && translateY == 0 && scale == 1 && translateX == 0 && scaleX == 1
+        }
     }
 
     let duration: Timing
@@ -48,13 +60,16 @@ struct MotionKeyframes {
             Frame(offset: (frame["offset"] as? NSNumber)?.doubleValue ?? 0,
                   opacity: (frame["opacity"] as? NSNumber)?.doubleValue ?? 1,
                   translateY: (frame["translate_y"] as? NSNumber)?.doubleValue ?? 0,
-                  scale: (frame["scale"] as? NSNumber)?.doubleValue ?? 1)
+                  scale: (frame["scale"] as? NSNumber)?.doubleValue ?? 1,
+                  translateX: (frame["translate_x"] as? NSNumber)?.doubleValue ?? 0,
+                  scaleX: (frame["scale_x"] as? NSNumber)?.doubleValue ?? 1,
+                  blur: (frame["blur"] as? NSNumber)?.doubleValue ?? 0)
         }
     }
 
     /// Offsets of the steady middle of a lifecycle (first and last resting frame).
     var restOffsets: (first: Double, last: Double) {
-        let rest = frames.filter { $0.opacity == 1 && $0.translateY == 0 && $0.scale == 1 }
+        let rest = frames.filter(\.isRest)
         return (rest.first?.offset ?? 0, rest.last?.offset ?? 1)
     }
 }
@@ -116,6 +131,16 @@ enum NativeMotion {
         return CAMediaTimingFunction(controlPoints: p[0], p[1], p[2], p[3])
     }
 
+    /// Eased progress of a timing function at `x`, for self-drawn surfaces.
+    static func ease(_ function: CAMediaTimingFunction, _ x: Double) -> Double {
+        var first: [Float] = [0, 0]
+        var second: [Float] = [0, 0]
+        function.getControlPoint(at: 1, values: &first)
+        function.getControlPoint(at: 2, values: &second)
+        return cubicBezierProgress(Double(first[0]), Double(first[1]),
+                                   Double(second[0]), Double(second[1]), x)
+    }
+
     /// A shipping transition's duration (0 under reduced motion) and timing.
     static func transition(_ name: String, tokens: Tokens,
                            reduced: Bool = NativeMotion.reduceMotion) -> (duration: Double, timing: CAMediaTimingFunction) {
@@ -126,15 +151,50 @@ enum NativeMotion {
                 timingFunction(spec.easing, tokens: tokens))
     }
 
-    /// CSS `translateY() scale()` about the layer's centre. `down` is +1 when
+    /// CSS `translate() scale()` about the layer's centre. `down` is +1 when
     /// the superlayer's y axis points down (a flipped superview), else -1.
-    static func transform(_ frame: MotionKeyframes.Frame, layer: CALayer, down: CGFloat) -> CATransform3D {
+    /// `mirrorX` flips the horizontal slide for right-anchored stacks.
+    static func transform(_ frame: MotionKeyframes.Frame, layer: CALayer, down: CGFloat,
+                          mirrorX: Bool = false) -> CATransform3D {
         let size = layer.bounds.size
         let cx = (0.5 - layer.anchorPoint.x) * size.width
         let cy = (0.5 - layer.anchorPoint.y) * size.height
-        var t = CATransform3DMakeTranslation(cx, cy + down * CGFloat(frame.translateY), 0)
-        t = CATransform3DScale(t, CGFloat(frame.scale), CGFloat(frame.scale), 1)
+        let tx = CGFloat(frame.translateX) * (mirrorX ? -1 : 1)
+        var t = CATransform3DMakeTranslation(cx + tx, cy + down * CGFloat(frame.translateY), 0)
+        t = CATransform3DScale(t, CGFloat(frame.scale * frame.scaleX), CGFloat(frame.scale), 1)
         return CATransform3DTranslate(t, -cx, -cy, 0)
+    }
+
+    /// The pose of `name` `elapsed` seconds after it starts (holding the first
+    /// keyframe through its delay and the last afterwards), for surfaces that
+    /// redraw themselves instead of handing keyframes to Core Animation.
+    static func pose(_ name: String, at elapsed: Double, tokens: Tokens,
+                     reduced: Bool = NativeMotion.reduceMotion) -> MotionKeyframes.Frame? {
+        guard let spec = catalog.keyframes[name], let first = spec.frames.first,
+              let last = spec.frames.last else { return nil }
+        let local = elapsed - spec.delayMs / 1000
+        if local < 0 { return first }
+        let duration = seconds(spec.duration, tokens: tokens)
+        if reduced || duration <= 0 { return last }
+        let progress = min(1, local / duration)
+        let p = controlPoints(spec.easing, tokens: tokens)
+        for (a, b) in zip(spec.frames, spec.frames.dropFirst()) where progress <= b.offset {
+            let span = b.offset - a.offset
+            let t = cubicBezierProgress(p[0], p[1], p[2], p[3], span <= 0 ? 1 : (progress - a.offset) / span)
+            func mix(_ x: Double, _ y: Double) -> Double { x + (y - x) * t }
+            return MotionKeyframes.Frame(offset: progress, opacity: mix(a.opacity, b.opacity),
+                                         translateY: mix(a.translateY, b.translateY),
+                                         scale: mix(a.scale, b.scale),
+                                         translateX: mix(a.translateX, b.translateX),
+                                         scaleX: mix(a.scaleX, b.scaleX), blur: mix(a.blur, b.blur))
+        }
+        return last
+    }
+
+    /// Seconds `name` runs, including its delay (0 under reduced motion).
+    static func duration(_ name: String, tokens: Tokens, reduced: Bool = NativeMotion.reduceMotion) -> Double {
+        guard let spec = catalog.keyframes[name], !reduced else { return 0 }
+        return spec.delayMs / 1000 + seconds(spec.duration, tokens: tokens)
     }
 
     /// Plays `name` (optionally only the `segment` of its keyframe offsets, for
@@ -145,19 +205,37 @@ enum NativeMotion {
     @discardableResult
     static func play(_ name: String, on view: NSView, tokens: Tokens,
                      segment: ClosedRange<Double> = 0...1, holdEnd: Bool = false,
-                     delay extraDelay: Double = 0, reduced: Bool = NativeMotion.reduceMotion) -> Double {
-        guard let spec = catalog.keyframes[name] else { return 0 }
+                     delay extraDelay: Double = 0, mirrorX: Bool = false,
+                     key: String = NativeMotion.animationKey,
+                     reduced: Bool = NativeMotion.reduceMotion) -> Double {
+        guard catalog.keyframes[name] != nil else { return 0 }
         if reduced && !holdEnd { return 0 }
         view.wantsLayer = true
         guard let layer = view.layer else { return 0 }
+        let flipped = layer.superlayer?.contentsAreFlipped() ?? view.superview?.isFlipped ?? false
+        return play(name, onLayer: layer, down: flipped ? 1 : -1, tokens: tokens, segment: segment,
+                    holdEnd: holdEnd, delay: extraDelay, mirrorX: mirrorX, key: key, reduced: reduced)
+    }
+
+    /// [`play(_:on:)`] for a bare layer. `down` is +1 when its superlayer's y
+    /// axis points down. `startedAgo` resumes an animation that began earlier
+    /// (a rebuilt view keeps its card's highlight); `repeats` loops it after
+    /// its delay, like CSS `infinite`.
+    @discardableResult
+    static func play(_ name: String, onLayer layer: CALayer, down: CGFloat, tokens: Tokens,
+                     segment: ClosedRange<Double> = 0...1, holdEnd: Bool = false,
+                     delay extraDelay: Double = 0, mirrorX: Bool = false,
+                     startedAgo: Double = 0, repeats: Bool = false,
+                     key: String = NativeMotion.animationKey,
+                     reduced: Bool = NativeMotion.reduceMotion) -> Double {
+        guard let spec = catalog.keyframes[name] else { return 0 }
+        if reduced && !holdEnd { return 0 }
         let span = segment.upperBound - segment.lowerBound
         let frames = spec.frames.filter { segment.contains($0.offset) }
         guard span > 0, frames.count >= 2 else { return 0 }
         let delay = spec.delayMs / 1000 + extraDelay
         // Shipping's reduced-motion rule keeps the delay, then a 0.01 ms run.
         let duration = reduced ? 0.00001 : seconds(spec.duration, tokens: tokens) * span
-        let flipped = layer.superlayer?.contentsAreFlipped() ?? view.superview?.isFlipped ?? false
-        let down: CGFloat = flipped ? 1 : -1
         let keyTimes = frames.map { NSNumber(value: ($0.offset - segment.lowerBound) / span) }
         let timing = timingFunction(spec.easing, tokens: tokens)
         let segments = Array(repeating: timing, count: frames.count - 1)
@@ -167,18 +245,21 @@ enum NativeMotion {
         opacity.keyTimes = keyTimes
         opacity.timingFunctions = segments
         let move = CAKeyframeAnimation(keyPath: "transform")
-        move.values = frames.map { NSValue(caTransform3D: transform($0, layer: layer, down: down)) }
+        move.values = frames.map {
+            NSValue(caTransform3D: transform($0, layer: layer, down: down, mirrorX: mirrorX))
+        }
         move.keyTimes = keyTimes
         move.timingFunctions = segments
 
         let group = CAAnimationGroup()
         group.animations = [opacity, move]
         group.duration = duration
-        group.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) + delay
+        group.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) + delay - startedAgo
         group.fillMode = holdEnd ? .both : .backwards
         group.isRemovedOnCompletion = !holdEnd
-        layer.add(group, forKey: animationKey)
-        return delay + duration
+        if repeats && !reduced { group.repeatCount = .infinity }
+        layer.add(group, forKey: key)
+        return max(0, delay + duration - startedAgo)
     }
 
     /// Removes any playing or held motion, returning the view to rest.

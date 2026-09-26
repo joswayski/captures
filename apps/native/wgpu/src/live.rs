@@ -485,9 +485,11 @@ enum PreviewMessage {
         generation: u64,
         directory: PathBuf,
     },
+    /// Close, or an unsaved card's Delete (`delete`), which dissolves.
     Dismiss {
         artifact_id: String,
         generation: u64,
+        delete: bool,
     },
     MoveStack {
         artifact_id: String,
@@ -557,6 +559,33 @@ struct PreviewCard {
     arrived_at: Option<Instant>,
     /// Whether an editor window shows this capture ("In editor" pill, ring).
     editor: captures_app::preview_chrome::EditorPresence,
+    /// The last clipboard copy of this capture failed ("Clipboard unavailable").
+    copy_failed: bool,
+}
+
+/// A card playing its exit animation after leaving the stack.
+struct ExitingCard {
+    texture: egui::TextureHandle,
+    blurred: Option<egui::TextureHandle>,
+    dust: std::sync::Arc<Vec<captures_app::preview_motion::DustParticle>>,
+}
+
+#[derive(Clone)]
+struct PreviewExitRender {
+    texture: egui::TextureHandle,
+    blurred: Option<egui::TextureHandle>,
+    kind: captures_app::preview_motion::ExitKind,
+    elapsed_ms: f64,
+    dust: std::sync::Arc<Vec<captures_app::preview_motion::DustParticle>>,
+    layout: captures_app::preview::PreviewCardLayout,
+    shift_y: f32,
+}
+
+/// The stack flying between the list and the compact pile.
+#[derive(Clone, Copy, Debug)]
+struct StackFly {
+    collapsing: bool,
+    started: Instant,
 }
 
 #[derive(Clone)]
@@ -580,6 +609,11 @@ struct PreviewRenderCard {
     arrived_at: Option<Instant>,
     layout: captures_app::preview::PreviewCardLayout,
     hover_y: f64,
+    /// Collapsed pile position, for the list ↔ pile fly.
+    pile_y: f64,
+    /// Survivor settle toward the stack anchor, points.
+    shift_y: f32,
+    copy_failed: bool,
 }
 
 /// How [`MiniPreviews::restore_artifact`] proceeds.
@@ -607,6 +641,11 @@ struct MiniPreviews {
     /// Bumped when an expand or a new card should hold card hover off until
     /// the pointer moves (shipping stale-pointer suppression).
     hover_lock_generation: u64,
+    /// Cards holding their slots while their exits play.
+    exits: captures_app::preview_motion::StackExits,
+    exiting: HashMap<String, ExitingCard>,
+    toolbar: captures_app::preview_motion::StackToolbar,
+    fly: Option<StackFly>,
 }
 
 impl Default for MiniPreviews {
@@ -626,6 +665,10 @@ impl Default for MiniPreviews {
             omission_frame: None,
             epoch: Instant::now(),
             hover_lock_generation: 0,
+            exits: Default::default(),
+            exiting: HashMap::new(),
+            toolbar: Default::default(),
+            fly: None,
         }
     }
 }
@@ -722,6 +765,7 @@ impl MiniPreviews {
                 rejected_at: None,
                 arrived_at: None,
                 editor: captures_app::preview_chrome::EditorPresence::new(editor_open, now_ms),
+                copy_failed: false,
             },
         );
         PreviewGuard {
@@ -783,10 +827,8 @@ impl MiniPreviews {
             self.waiting_artifact = None;
             self.visibility.stop_waiting_for_artifact();
         }
-        if self.stack.ids().is_empty() {
-            self.stack_target = None;
-            self.visibility.clear_stack_origin();
-        }
+        self.exits.sync(self.stack.ids());
+        self.release_empty_stack();
         true
     }
 
@@ -803,11 +845,180 @@ impl MiniPreviews {
             self.waiting_artifact = None;
             self.visibility.stop_waiting_for_artifact();
         }
-        if self.stack.ids().is_empty() {
+        self.exits.sync(self.stack.ids());
+        self.release_empty_stack();
+        removed
+    }
+
+    /// An empty stack forgets its display and dragged origin once its last
+    /// exit has played.
+    fn release_empty_stack(&mut self) {
+        if self.stack.ids().is_empty() && self.exiting.is_empty() {
             self.stack_target = None;
             self.visibility.clear_stack_origin();
         }
+    }
+
+    fn now_ms(&self) -> f64 {
+        crate::motion::elapsed_ms(self.epoch, Instant::now())
+    }
+
+    /// Start `artifact_id`'s shipping exit before it leaves the stack, when
+    /// the expanded stack is on screen and motion is allowed. The card keeps
+    /// its slot and paints its exit until [`Self::settle_exits`] drops it.
+    fn begin_exit(
+        &mut self,
+        artifact_id: &str,
+        kind: captures_app::preview_motion::ExitKind,
+        delay_ms: f64,
+        settles: bool,
+        reduced_motion: bool,
+    ) {
+        use captures_app::preview::{THUMBNAIL_CARD_HEIGHT, THUMBNAIL_PADDING, THUMBNAIL_WIDTH};
+        use captures_app::preview_motion::{self, ExitKind};
+        if reduced_motion || self.stack.is_collapsed() || self.fly.is_some() || !self.is_visible() {
+            return;
+        }
+        let Some(card) = self.cards.get(artifact_id) else {
+            return;
+        };
+        let Some(texture) = card.texture.clone() else {
+            return;
+        };
+        let dust = if kind == ExitKind::Dust {
+            let width = THUMBNAIL_WIDTH - THUMBNAIL_PADDING * 2.;
+            preview_motion::dust_particles(
+                width,
+                THUMBNAIL_CARD_HEIGHT,
+                (f64::from(card.width), f64::from(card.height)),
+                (
+                    preview_motion::delete_origin_x(
+                        width,
+                        card.saved_path.is_some(),
+                        self.placement.is_right(),
+                    ),
+                    preview_motion::DELETE_ORIGIN_Y,
+                ),
+                card.generation as u32,
+            )
+        } else {
+            Vec::new()
+        };
+        let blurred = card.blurred.clone();
+        let live = self.stack.ids().to_vec();
+        let now = self.now_ms();
+        if self.exits.begin(
+            &live,
+            artifact_id,
+            kind,
+            now,
+            delay_ms,
+            settles,
+            &preview_motion::settle_tween(),
+        ) {
+            self.exiting.insert(
+                artifact_id.to_owned(),
+                ExitingCard {
+                    texture,
+                    blurred,
+                    dust: std::sync::Arc::new(dust),
+                },
+            );
+        }
+    }
+
+    /// Close or Delete from a card: play the exit, then leave the stack. A
+    /// Close or Delete that leaves fewer than two live cards plays the
+    /// toolbar's exit.
+    fn exit_card(
+        &mut self,
+        artifact_id: &str,
+        kind: captures_app::preview_motion::ExitKind,
+        reduced_motion: bool,
+    ) -> bool {
+        self.begin_exit(artifact_id, kind, 0., true, reduced_motion);
+        let removed = self.remove(artifact_id);
+        if removed && self.stack.ids().len() < 2 {
+            let now = self.now_ms();
+            self.toolbar
+                .set(false, captures_app::preview_motion::ToolbarCause::Exit, now);
+        }
         removed
+    }
+
+    /// Clear all: every card streaks out, bottom first, without settling.
+    fn clear_with_exit(&mut self, artifact_ids: &[String], reduced_motion: bool) -> usize {
+        let live = self.stack.ids().to_vec();
+        let top_anchor = self.placement.is_top();
+        for (index, artifact_id) in live.iter().enumerate() {
+            if artifact_ids.contains(artifact_id) {
+                let delay =
+                    captures_app::preview_motion::clear_delay_ms(live.len(), index, top_anchor);
+                self.begin_exit(
+                    artifact_id,
+                    captures_app::preview_motion::ExitKind::Dismiss,
+                    delay,
+                    false,
+                    reduced_motion,
+                );
+            }
+        }
+        let removed = self.clear(artifact_ids);
+        if removed > 0 {
+            let now = self.now_ms();
+            self.toolbar.set(
+                false,
+                captures_app::preview_motion::ToolbarCause::Clear,
+                now,
+            );
+        }
+        removed
+    }
+
+    /// Drop exits and stack flights that finished. Returns whether any did.
+    fn settle_exits(&mut self, reduced_motion: bool) -> bool {
+        let now = self.now_ms();
+        let mut changed = self.exits.prune(now, reduced_motion);
+        let exits = &self.exits;
+        let before = self.exiting.len();
+        self.exiting.retain(|id, _| exits.exiting(id).is_some());
+        changed |= self.exiting.len() != before;
+        if let Some(fly) = self.fly
+            && (reduced_motion || fly.started.elapsed() >= STACK_FLY)
+        {
+            self.fly = None;
+            changed = true;
+        }
+        if changed {
+            self.release_empty_stack();
+        }
+        changed
+    }
+
+    /// Finish every exit at once (the stack collapsed or closed).
+    fn finish_exits(&mut self) {
+        self.exits.clear();
+        self.exiting.clear();
+        self.release_empty_stack();
+    }
+
+    /// Show less / expand, with the shipping fly and toolbar motion.
+    fn toggle_collapsed(&mut self, reduced_motion: bool) {
+        use captures_app::preview_motion::ToolbarCause;
+        let collapse = !self.stack.is_collapsed();
+        self.finish_exits();
+        self.stack.set_collapsed(collapse);
+        let now = self.now_ms();
+        if collapse {
+            self.toolbar.set(false, ToolbarCause::Collapse, now);
+        } else {
+            self.toolbar
+                .set(self.stack.ids().len() >= 2, ToolbarCause::Expand, now);
+        }
+        self.fly = (!reduced_motion && self.is_visible()).then(|| StackFly {
+            collapsing: collapse,
+            started: Instant::now(),
+        });
     }
 
     fn move_stack(&mut self, position: egui::Pos2) {
@@ -856,7 +1067,8 @@ impl MiniPreviews {
             self.cards
                 .values()
                 .filter(|card| card.texture.is_some())
-                .count(),
+                .count()
+                + self.exiting.len(),
             self.visibility.is_suppressed(),
             self.show,
             self.include_in_captures,
@@ -875,6 +1087,10 @@ enum SelectorKind {
 const CLIPBOARD_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// Shipping `THUMBNAIL_SAVED_FEEDBACK_MS`.
 const SAVED_FEEDBACK: Duration = Duration::from_millis(1_000);
+/// `THUMBNAIL_STACK_EXPAND_COLLAPSE_MS` ([`Transition::PreviewStackFly`]).
+///
+/// [`Transition::PreviewStackFly`]: captures_app::motion::Transition::PreviewStackFly
+const STACK_FLY: Duration = Duration::from_millis(520);
 
 /// Shipping `recording-countdown-fade-in` / `-content-in`, timed from the
 /// first paint of this countdown `key`. Requests frames only while moving.
@@ -2583,15 +2799,25 @@ impl Live {
                 PreviewMessage::Dismiss {
                     artifact_id,
                     generation,
+                    delete,
                 } => {
-                    if self.previews.dismiss(&artifact_id, generation) {
+                    let kind = if delete {
+                        captures_app::preview_motion::ExitKind::Dust
+                    } else {
+                        captures_app::preview_motion::ExitKind::Dismiss
+                    };
+                    if self.previews.accepts(&artifact_id, generation)
+                        && self
+                            .previews
+                            .exit_card(&artifact_id, kind, crate::motion::reduced(ctx))
+                    {
                         request_hidden_root_paint(ctx);
                         ctx.request_repaint();
                     }
                 }
                 PreviewMessage::ToggleCollapsed => {
-                    let collapse = !self.previews.stack.is_collapsed();
-                    self.previews.stack.set_collapsed(collapse);
+                    self.previews.toggle_collapsed(crate::motion::reduced(ctx));
+                    let collapse = self.previews.stack.is_collapsed();
                     if !collapse {
                         // Expanding leaves the pointer over a card that was
                         // never hovered; hold its chrome until it moves.
@@ -2612,7 +2838,11 @@ impl Live {
                     ctx.request_repaint();
                 }
                 PreviewMessage::ClearAll { artifact_ids } => {
-                    if self.previews.clear(&artifact_ids) > 0 {
+                    if self
+                        .previews
+                        .clear_with_exit(&artifact_ids, crate::motion::reduced(ctx))
+                        > 0
+                    {
                         request_hidden_root_paint(ctx);
                         ctx.request_repaint();
                     }
@@ -3452,6 +3682,14 @@ impl Live {
                     result,
                 } => {
                     self.pending = self.pending.saturating_sub(1);
+                    // Shipping "Clipboard unavailable": the card's last copy failed.
+                    let copied_id = preview
+                        .as_ref()
+                        .map(|preview| preview.artifact_id.clone())
+                        .or_else(|| owner.clone());
+                    if let Some(card) = copied_id.and_then(|id| self.previews.cards.get_mut(&id)) {
+                        card.copy_failed = result.is_err();
+                    }
                     if let (Ok(write), Some(owner)) = (&result, owner) {
                         self.clipboard
                             .record(write.revision, owner, write.fingerprint);
@@ -3568,8 +3806,16 @@ impl Live {
                             if let Some(guard) = &preview
                                 && let Response::PreviewTrashed { id } = response.as_ref()
                             {
-                                if *id == guard.artifact_id {
-                                    self.previews.dismiss(id, guard.generation);
+                                if *id == guard.artifact_id
+                                    && self.previews.accepts(id, guard.generation)
+                                {
+                                    // A saved card's Delete dissolves once the
+                                    // export is in the Trash.
+                                    self.previews.exit_card(
+                                        id,
+                                        captures_app::preview_motion::ExitKind::Dust,
+                                        crate::motion::reduced(ctx),
+                                    );
                                     request_hidden_root_paint(ctx);
                                 }
                                 continue;
@@ -4323,6 +4569,37 @@ impl Live {
             self.previews.include_in_captures = settings.include_mini_previews_in_captures;
             self.previews.placement = settings.mini_preview_placement;
         }
+        // Finished exits and flights leave before the stack is measured; the
+        // root wakes once for the next one to end.
+        self.previews.exits.sync(self.previews.stack.ids());
+        if self.previews.settle_exits(reduced_motion) {
+            request_hidden_root_paint(ctx);
+            ctx.request_repaint();
+        }
+        if let Some(wait) = self
+            .previews
+            .exits
+            .next_finish_in_ms(self.previews.now_ms())
+        {
+            request_hidden_root_paint(ctx);
+            ctx.request_repaint_after(Duration::from_secs_f64(wait / 1000.));
+        }
+        if let Some(fly) = self.previews.fly {
+            request_hidden_root_paint(ctx);
+            ctx.request_repaint_after(STACK_FLY.saturating_sub(fly.started.elapsed()));
+        }
+        {
+            let shown = crate::mini_preview::stack_controls_visible(
+                self.previews.stack.ids().len(),
+                self.previews.stack.is_collapsed(),
+            );
+            let now_ms = self.previews.now_ms();
+            self.previews.toolbar.set(
+                shown,
+                captures_app::preview_motion::ToolbarCause::Other,
+                now_ms,
+            );
+        }
         if !self.previews.is_visible() {
             return;
         }
@@ -4333,9 +4610,20 @@ impl Live {
             return;
         };
         let count = self.previews.stack.ids().len();
-        let collapsed = self.previews.stack.is_collapsed();
+        let fly = self.previews.fly;
+        // A collapsing stack keeps its list window until the fly lands.
+        let collapsed =
+            self.previews.stack.is_collapsed() && !fly.is_some_and(|fly| fly.collapsing);
         let placement = self.previews.placement;
         let top_anchor = placement.is_top();
+        let display = if collapsed {
+            self.previews.stack.ids().to_vec()
+        } else {
+            self.previews.exits.display_ids().to_vec()
+        };
+        let display_count = display.len().max(count);
+        let settle = captures_app::preview_motion::settle_tween();
+        let exits_now = self.previews.now_ms();
         let clipboard_owner = self
             .clipboard
             .current_artifact(crate::clipboard_revision::current());
@@ -4371,14 +4659,22 @@ impl Live {
         }
         let epoch = self.previews.epoch;
         let hover_lock_generation = self.previews.hover_lock_generation;
-        let cards = self
-            .previews
-            .stack
-            .ids()
+        let live_ids = self.previews.stack.ids().to_vec();
+        let cards = display
             .iter()
             .enumerate()
             .filter_map(|(index, artifact_id)| {
                 let card = self.previews.cards.get(artifact_id)?;
+                let live_index = live_ids.iter().position(|id| id == artifact_id)?;
+                let layout = |collapsed: bool, hovered: bool| {
+                    captures_app::preview::card_layout_in(
+                        display_count,
+                        index,
+                        collapsed,
+                        top_anchor,
+                        hovered,
+                    )
+                };
                 Some(PreviewRenderCard {
                     artifact_id: artifact_id.clone(),
                     generation: card.generation,
@@ -4399,32 +4695,81 @@ impl Live {
                         + Duration::from_secs_f64(card.editor.since_ms().max(0.) / 1000.),
                     rejected_at: card.rejected_at,
                     arrived_at: card.arrived_at,
-                    layout: self.previews.stack.card_layout(index, top_anchor)?,
-                    hover_y: self
-                        .previews
-                        .stack
-                        .card_layout_hovered(index, top_anchor, true)?
-                        .y,
+                    layout: layout(collapsed, false)?,
+                    hover_y: layout(collapsed, true)?.y,
+                    pile_y: captures_app::preview::card_layout_in(
+                        count, live_index, true, top_anchor, false,
+                    )?
+                    .y,
+                    shift_y: self.previews.exits.shift_px(
+                        artifact_id,
+                        exits_now,
+                        reduced_motion,
+                        &settle,
+                        top_anchor,
+                    ) as f32,
+                    copy_failed: card.copy_failed,
                 })
             })
             .collect::<Vec<_>>();
-        if cards.is_empty() {
+        let exiting = display
+            .iter()
+            .enumerate()
+            .filter_map(|(index, artifact_id)| {
+                let card = self.previews.exiting.get(artifact_id)?;
+                let exit = self.previews.exits.exiting(artifact_id)?;
+                Some(PreviewExitRender {
+                    texture: card.texture.clone(),
+                    blurred: card.blurred.clone(),
+                    kind: exit.kind,
+                    elapsed_ms: exit.elapsed_ms(exits_now),
+                    dust: card.dust.clone(),
+                    layout: captures_app::preview::card_layout_in(
+                        display_count,
+                        index,
+                        false,
+                        top_anchor,
+                        false,
+                    )?,
+                    shift_y: self.previews.exits.shift_px(
+                        artifact_id,
+                        exits_now,
+                        reduced_motion,
+                        &settle,
+                        top_anchor,
+                    ) as f32,
+                })
+            })
+            .collect::<Vec<_>>();
+        if cards.is_empty() && exiting.is_empty() {
             return;
         }
+        let toolbar = self.previews.toolbar;
+        let pile_geometry = captures_app::preview::thumbnail_geometry(
+            preview_bounds,
+            count.max(1),
+            true,
+            self.previews.visibility.stack_origin(),
+            placement,
+        );
         let tokens = tokens.clone();
         let drag_root = self.root.clone();
         let geometry = captures_app::preview::thumbnail_geometry(
             preview_bounds,
-            count,
+            display_count,
             collapsed,
             self.previews.visibility.stack_origin(),
             placement,
         );
         let sender = self.preview_tx.clone();
         let clear_ids = self.previews.stack.ids().to_vec();
-        let scroll_content_height = (self.previews.stack.content_height()
-            - captures_app::preview::THUMBNAIL_CONTROL_GUTTER)
-            .max(0.) as f32;
+        let content_height = if collapsed {
+            self.previews.stack.content_height()
+        } else {
+            captures_app::preview::stack_height(display_count)
+        };
+        let scroll_content_height =
+            (content_height - captures_app::preview::THUMBNAIL_CONTROL_GUTTER).max(0.) as f32;
         let save = settings.ok().map(|settings| {
             (
                 PathBuf::from(settings.output_directory),
@@ -4525,7 +4870,22 @@ impl Live {
                     None
                 };
                 let arrive = tokens.motion(captures_app::motion::Motion::PreviewCardArrive);
-                let mut show_card = |ui: &mut egui::Ui, card: &PreviewRenderCard| {
+                let highlight = tokens.motion(captures_app::motion::Motion::PreviewCaptureHighlight);
+                let frame_ms = crate::motion::elapsed_ms(epoch, Instant::now());
+                // The list ↔ pile flight, eased on the shipping curve.
+                let fly_tween = tokens.transition(captures_app::motion::Transition::PreviewStackFly);
+                let flight = fly.map(|fly| {
+                    let elapsed = crate::motion::elapsed_ms(fly.started, Instant::now());
+                    if fly_tween.running(elapsed, reduced_motion) {
+                        ui.ctx().request_repaint();
+                    }
+                    (fly.collapsing, fly_tween.progress(elapsed, reduced_motion) as f32)
+                });
+                let mut show_card = |ui: &mut egui::Ui,
+                                     card: &PreviewRenderCard,
+                                     compact: bool,
+                                     interactive: bool,
+                                     depth_shade: f32| {
                     // Shipping `thumbnail-arrive`: the card rises and fades in.
                     let arrival = card
                         .arrived_at
@@ -4557,6 +4917,21 @@ impl Live {
                             SAVED_FEEDBACK.saturating_sub(saved_at.elapsed()),
                         );
                     }
+                    // Shipping `thumbnail-capture-highlight` from the card's arrival.
+                    let outline = card.arrived_at.map_or(0., |at| {
+                        let elapsed = crate::motion::elapsed_ms(at, Instant::now());
+                        if highlight.running(elapsed, reduced_motion) {
+                            ui.ctx().request_repaint();
+                        }
+                        highlight.pose_at(elapsed, reduced_motion).opacity as f32
+                    });
+                    // Shipping writes every native capture to History first,
+                    // so only a failed copy can warn here.
+                    let warning = captures_app::preview_chrome::card_warning(
+                        card.clipboard_current,
+                        true,
+                        card.copy_failed,
+                    );
                     let action = crate::motion::with_pose(ui, arrival, card_rect, |ui| {
                         crate::mini_preview::show(
                             ui,
@@ -4573,8 +4948,8 @@ impl Live {
                                 saved_feedback: card.saved_at.is_some(),
                                 can_save: save.is_some(),
                                 saved: card.saved_path.is_some(),
-                                interactive: card.layout.interactive,
-                                collapsed,
+                                interactive: interactive && card.layout.interactive,
+                                collapsed: compact,
                                 stack_count: count,
                                 depth: card.layout.depth,
                                 desktop_pointer,
@@ -4589,6 +4964,9 @@ impl Live {
                                 ),
                                 hover_locked,
                                 reduced_motion,
+                                highlight: outline,
+                                warning,
+                                depth_shade,
                             },
                         )
                     });
@@ -4668,6 +5046,14 @@ impl Live {
                             Some(PreviewMessage::Dismiss {
                                 artifact_id: card.artifact_id.clone(),
                                 generation: card.generation,
+                                delete: false,
+                            })
+                        }
+                        Some(crate::mini_preview::Action::Discard) => {
+                            Some(PreviewMessage::Dismiss {
+                                artifact_id: card.artifact_id.clone(),
+                                generation: card.generation,
+                                delete: true,
                             })
                         }
                         None => None,
@@ -4728,7 +5114,63 @@ impl Live {
                             ),
                         );
                         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                            show_card(ui, card);
+                            show_card(ui, card, true, true, 1.);
+                        });
+                    }
+                    // Shipping sparkles drift over the hovered pile until the
+                    // pointer leaves.
+                    let sparkle_id = egui::Id::unique("mini-preview-sparkle");
+                    let now = ui.input(|input| input.time);
+                    let since = fan_open.then(|| {
+                        ui.data(|data| data.get_temp::<f64>(sparkle_id)).unwrap_or(now)
+                    });
+                    ui.data_mut(|data| match since {
+                        Some(since) => {
+                            data.insert_temp(sparkle_id, since);
+                        }
+                        None => data.remove::<f64>(sparkle_id),
+                    });
+                    if let (Some(since), Some(rect)) = (since, front_rect)
+                        && crate::mini_preview::paint_sparkles(
+                            ui,
+                            &tokens,
+                            rect,
+                            top_anchor,
+                            (now - since) * 1000.,
+                            reduced_motion,
+                        )
+                    {
+                        ui.ctx().request_repaint();
+                    }
+                } else if let Some((collapsing, progress)) = flight {
+                    // Cards fly between their list slots and the pile with the
+                    // compact look; the window keeps the list's size.
+                    let gutter = captures_app::preview::THUMBNAIL_CONTROL_GUTTER as f32;
+                    let padding = captures_app::preview::THUMBNAIL_PADDING as f32;
+                    let viewport = geometry.height as f32 - gutter;
+                    // The expanded list rests at its newest end.
+                    let scroll = if top_anchor {
+                        0.
+                    } else {
+                        (scroll_content_height - viewport).max(0.)
+                    };
+                    let pile_offset = egui::vec2(
+                        (pile_geometry.x - geometry.x) as f32,
+                        (pile_geometry.y - geometry.y) as f32,
+                    );
+                    let size = egui::vec2(
+                        (captures_app::preview::THUMBNAIL_WIDTH
+                            - captures_app::preview::THUMBNAIL_PADDING * 2.)
+                            as f32,
+                        captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
+                    );
+                    let toward_pile = if collapsing { progress } else { 1. - progress };
+                    for card in &cards {
+                        let list = egui::pos2(padding, card.layout.y as f32 - scroll);
+                        let pile = egui::pos2(padding, card.pile_y as f32) + pile_offset;
+                        let rect = egui::Rect::from_min_size(list.lerp(pile, toward_pile), size);
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                            show_card(ui, card, true, false, toward_pile);
                         });
                     }
                 } else {
@@ -4771,7 +5213,8 @@ impl Live {
                                     );
                                     for card in &cards {
                                         let y = card.layout.y as f32
-                                            - if top_anchor { gutter } else { 0. };
+                                            - if top_anchor { gutter } else { 0. }
+                                            + card.shift_y;
                                         let rect = egui::Rect::from_min_size(
                                             content.min
                                                 + egui::vec2(
@@ -4787,8 +5230,47 @@ impl Live {
                                         );
                                         ui.scope_builder(
                                             egui::UiBuilder::new().max_rect(rect),
-                                            |ui| show_card(ui, card),
+                                            |ui| show_card(ui, card, false, true, 1.),
                                         );
+                                    }
+                                    // Exiting cards hold their slots and paint
+                                    // above the survivors sliding into them.
+                                    for exit in &exiting {
+                                        let y = exit.layout.y as f32
+                                            - if top_anchor { gutter } else { 0. }
+                                            + exit.shift_y;
+                                        let rect = egui::Rect::from_min_size(
+                                            content.min
+                                                + egui::vec2(
+                                                    captures_app::preview::THUMBNAIL_PADDING as f32,
+                                                    y,
+                                                ),
+                                            egui::vec2(
+                                                (captures_app::preview::THUMBNAIL_WIDTH
+                                                    - captures_app::preview::THUMBNAIL_PADDING * 2.)
+                                                    as f32,
+                                                captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
+                                            ),
+                                        );
+                                        crate::mini_preview::show_exit(
+                                            ui,
+                                            &tokens,
+                                            rect,
+                                            crate::mini_preview::ExitView {
+                                                texture: &exit.texture,
+                                                blurred: exit.blurred.as_ref(),
+                                                kind: exit.kind,
+                                                elapsed_ms: exit.elapsed_ms,
+                                                dust: &exit.dust,
+                                                right_anchor: placement.is_right(),
+                                                reduced_motion,
+                                            },
+                                        );
+                                    }
+                                    if !exiting.is_empty() {
+                                        // Exits and the survivor settle move
+                                        // every frame until the root drops them.
+                                        ui.ctx().request_repaint();
                                     }
                                 })
                         });
@@ -4830,7 +5312,14 @@ impl Live {
                         ui.ctx().request_repaint();
                     }
                 }
-                if crate::mini_preview::stack_controls_visible(count, collapsed) {
+                // The stack toolbar enters with an expand and leaves with a
+                // collapse, the last Close or Delete, or Clear all.
+                let toolbar_pose = toolbar.pose(&tokens, frame_ms, reduced_motion);
+                if toolbar.running(&tokens, frame_ms, reduced_motion) {
+                    ui.ctx().request_repaint();
+                }
+                let toolbar_interactive = toolbar.interactive(&tokens, frame_ms, reduced_motion);
+                if let Some(pose) = toolbar_pose {
                     let gutter = captures_app::preview::THUMBNAIL_CONTROL_GUTTER as f32;
                     let padding = captures_app::preview::THUMBNAIL_PADDING as f32;
                     let controls = egui::Rect::from_min_size(
@@ -4847,14 +5336,22 @@ impl Live {
                             gutter,
                         ),
                     );
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(controls), |ui| {
-                        match crate::mini_preview::show_stack_controls(
-                            ui,
-                            &tokens,
-                            placement.is_right(),
-                            top_anchor,
-                            reduced_motion,
-                        ) {
+                    let action = ui
+                        .scope_builder(egui::UiBuilder::new().max_rect(controls), |ui| {
+                            crate::motion::with_pose(ui, pose, controls, |ui| {
+                                crate::mini_preview::show_stack_controls(
+                                    ui,
+                                    &tokens,
+                                    placement.is_right(),
+                                    top_anchor,
+                                    reduced_motion,
+                                )
+                            })
+                        })
+                        .inner;
+                    // Shipping ignores the toolbar while it enters or leaves.
+                    if toolbar_interactive {
+                        match action {
                             Some(crate::mini_preview::StackAction::ToggleCollapsed) => {
                                 message = Some(PreviewMessage::ToggleCollapsed);
                             }
@@ -4865,7 +5362,7 @@ impl Live {
                             }
                             None => {}
                         }
-                    });
+                    }
                 }
                 if let Some(message) = message {
                     let _ = sender.send(message);
@@ -6074,6 +6571,13 @@ impl Live {
                     );
                 }
                 Ok(settings) => {
+                    // Shipping History Edit restores the floating preview
+                    // (`restore_history_artifact`) before opening the editor;
+                    // a failed restore opens nothing.
+                    let target = capture_target(frame, &self.displays, self.display_id.as_deref());
+                    if !self.restore_for_edit(ctx, id, &settings, target) {
+                        return;
+                    }
                     let mode = entry.mode.unwrap_or(captures_capture::CaptureMode::Region);
                     self.open_screenshot_editor(
                         ctx,
@@ -6152,6 +6656,43 @@ impl Live {
         }
         request_hidden_root_paint(ctx);
         ctx.request_repaint();
+    }
+
+    /// History Edit's restore: the same stack insertion as Restore, without
+    /// its busy state or "Restored" feedback. Returns whether the editor may
+    /// open (the card is showing, decoding, or already in the stack).
+    fn restore_for_edit(
+        &mut self,
+        ctx: &egui::Context,
+        id: &str,
+        settings: &AppSettings,
+        target: Option<CaptureTarget>,
+    ) -> bool {
+        let Some(index) = self.artifact_index(id) else {
+            return false;
+        };
+        let artifact = &self.artifacts[index];
+        let editor_open = self.editors.get(id).is_some_and(|editor| !editor.closed());
+        match self
+            .previews
+            .restore_artifact(artifact, settings, target, editor_open)
+        {
+            Ok(RestoreStart::AlreadyShowing) => true,
+            Ok(RestoreStart::Decode(guard, path)) => {
+                let _ = self.tx.send(Job::DecodePreview {
+                    generation: guard.generation,
+                    artifact_id: guard.artifact_id,
+                    path,
+                });
+                request_hidden_root_paint(ctx);
+                ctx.request_repaint();
+                true
+            }
+            Err(error) => {
+                self.error = Some(error);
+                false
+            }
+        }
     }
 
     /// A preview decode finished; end the matching Restore.
@@ -8085,6 +8626,150 @@ mod tests {
     }
 
     #[test]
+    fn close_delete_and_clear_hold_slots_until_their_exits_end() {
+        use captures_app::preview_motion::{ExitKind, ToolbarCause};
+        let root = tempfile::tempdir().unwrap();
+        let first = preview_artifact(root.path(), [10, 20, 30, 255]);
+        let second = preview_artifact(root.path(), [30, 20, 10, 255]);
+        let third = preview_artifact(root.path(), [50, 60, 70, 255]);
+        let settings = AppSettings::default();
+        let context = egui::Context::default();
+        let texture = context.load_texture(
+            "exit-preview-test",
+            egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+            egui::TextureOptions::LINEAR,
+        );
+        let mut previews = MiniPreviews::default();
+        let mut guards = Vec::new();
+        for (frame, artifact) in [&first, &second, &third].into_iter().enumerate() {
+            previews
+                .begin_capture(&settings, Some(preview_target()), frame as u64)
+                .unwrap();
+            let (guard, _) = previews.start_artifact(artifact).unwrap().unwrap();
+            previews.mark_ready(&guard.artifact_id);
+            previews.cards.get_mut(&guard.artifact_id).unwrap().texture = Some(texture.clone());
+            guards.push(guard);
+        }
+        let ids: Vec<String> = guards
+            .iter()
+            .map(|guard| guard.artifact_id.clone())
+            .collect();
+        previews.toolbar.set(true, ToolbarCause::Other, 0.);
+
+        // Close keeps the card in its slot, out of the stack and its actions.
+        assert!(previews.exit_card(&ids[2], ExitKind::Dismiss, false));
+        assert_eq!(previews.stack.ids(), &ids[..2]);
+        assert!(!previews.accepts(&ids[2], guards[2].generation));
+        assert_eq!(previews.exits.display_ids(), &ids[..]);
+        assert!(previews.exiting.contains_key(&ids[2]));
+        assert_eq!(
+            previews.toolbar.motion().map(|(motion, _)| motion),
+            None,
+            "the toolbar still shows for two live cards"
+        );
+        assert!(
+            !previews.settle_exits(false),
+            "the 1.03 s hold is still running"
+        );
+        assert!(previews.settle_exits(true));
+        assert!(previews.exiting.is_empty());
+        assert_eq!(previews.exits.display_ids(), &ids[..2]);
+
+        // Delete dissolves from the trash control; fewer than two live cards
+        // plays the toolbar's exit.
+        previews.toolbar.set(true, ToolbarCause::Other, 0.);
+        assert!(previews.exit_card(&ids[1], ExitKind::Dust, false));
+        assert_eq!(previews.exiting[&ids[1]].dust.len(), 198);
+        assert_eq!(
+            previews.toolbar.motion().map(|(motion, _)| motion),
+            Some(captures_app::motion::Motion::PreviewToolbarExit)
+        );
+        previews.settle_exits(true);
+
+        // The last card's exit keeps the empty stack on its display.
+        assert!(previews.exit_card(&ids[0], ExitKind::Dismiss, false));
+        assert!(previews.stack.ids().is_empty());
+        assert!(previews.is_visible() && previews.stack_target.is_some());
+        previews.settle_exits(true);
+        assert!(!previews.is_visible() && previews.stack_target.is_none());
+
+        // Reduced motion never holds a slot; Clear all streaks bottom first.
+        let mut guards = Vec::new();
+        for (frame, artifact) in [&first, &second].into_iter().enumerate() {
+            previews
+                .begin_capture(&settings, Some(preview_target()), 10 + frame as u64)
+                .unwrap();
+            let (guard, _) = previews.start_artifact(artifact).unwrap().unwrap();
+            previews.mark_ready(&guard.artifact_id);
+            previews.cards.get_mut(&guard.artifact_id).unwrap().texture = Some(texture.clone());
+            guards.push(guard);
+        }
+        let ids: Vec<String> = guards
+            .iter()
+            .map(|guard| guard.artifact_id.clone())
+            .collect();
+        assert_eq!(previews.clear_with_exit(&ids, true), 2);
+        assert!(previews.exiting.is_empty() && !previews.is_visible());
+    }
+
+    #[test]
+    fn show_less_flies_to_the_pile_and_expanding_flies_back() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = AppSettings::default();
+        let context = egui::Context::default();
+        let texture = context.load_texture(
+            "fly-preview-test",
+            egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+            egui::TextureOptions::LINEAR,
+        );
+        let mut previews = MiniPreviews::default();
+        for frame in 0..2u8 {
+            let artifact = preview_artifact(root.path(), [frame * 40, 20, 30, 255]);
+            previews
+                .begin_capture(&settings, Some(preview_target()), u64::from(frame))
+                .unwrap();
+            let (guard, _) = previews.start_artifact(&artifact).unwrap().unwrap();
+            previews.mark_ready(&guard.artifact_id);
+            previews.cards.get_mut(&guard.artifact_id).unwrap().texture = Some(texture.clone());
+        }
+        previews
+            .toolbar
+            .set(true, captures_app::preview_motion::ToolbarCause::Other, 0.);
+        previews.toggle_collapsed(false);
+        assert!(previews.stack.is_collapsed());
+        assert!(previews.fly.is_some_and(|fly| fly.collapsing));
+        assert_eq!(
+            previews.toolbar.motion().map(|(motion, _)| motion),
+            Some(captures_app::motion::Motion::PreviewToolbarOut)
+        );
+        assert!(
+            !previews.settle_exits(false),
+            "the 520 ms flight is running"
+        );
+        assert!(previews.settle_exits(true));
+        assert!(previews.fly.is_none());
+        previews.toggle_collapsed(false);
+        assert!(!previews.stack.is_collapsed());
+        assert!(previews.fly.is_some_and(|fly| !fly.collapsing));
+        assert_eq!(
+            previews.toolbar.motion().map(|(motion, _)| motion),
+            Some(captures_app::motion::Motion::PreviewToolbarIn)
+        );
+        previews.toggle_collapsed(true);
+        assert!(previews.fly.is_none(), "reduced motion snaps");
+        assert_eq!(
+            STACK_FLY.as_secs_f64() * 1000.,
+            match captures_app::motion::Transition::PreviewStackFly
+                .spec()
+                .duration
+            {
+                captures_app::motion::Timing::Millis(ms) => ms,
+                captures_app::motion::Timing::Token(_) => unreachable!(),
+            }
+        );
+    }
+
+    #[test]
     fn clearing_pending_card_rejects_its_late_decode() {
         let root = tempfile::tempdir().unwrap();
         let artifact = preview_artifact(root.path(), [44, 55, 66, 255]);
@@ -8398,6 +9083,78 @@ mod tests {
                 .as_deref()
                 .is_some_and(|error| error.contains("unreadable"))
         );
+        live.flush();
+    }
+
+    #[test]
+    fn history_edit_restores_the_preview_before_opening_the_editor() {
+        use captures_app::history_view::CardAction;
+        let root = tempfile::tempdir().unwrap();
+        let shown = preview_artifact(root.path(), [10, 20, 30, 255]);
+        let edited = preview_artifact(root.path(), [30, 20, 10, 255]);
+        let (shown_id, edited_id) = (shown.entry.id.clone(), edited.entry.id.clone());
+        let ctx = egui::Context::default();
+        let frame = eframe::Frame::_new_kittest();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.flush();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live.recovery.blocking() {
+            live.recovery.receive();
+            assert!(
+                Instant::now() < deadline,
+                "initial recovery list did not settle"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let (jobs, requests) = mpsc::channel();
+        live.tx = jobs;
+        live.pending = 0;
+        live.artifacts = vec![shown, edited];
+        let settings = AppSettings::default();
+        ctx.begin_pass(Default::default());
+
+        // An empty stack has no display to open on here: nothing opens.
+        live.card_action(
+            &ctx,
+            &edited_id,
+            CardAction::Edit,
+            Ok(settings.clone()),
+            &frame,
+        );
+        assert!(live.editors.is_empty() && live.error.is_some());
+        assert!(live.previews.stack.ids().is_empty());
+
+        // With a pile on screen, Edit brings the capture back as the front
+        // card, then opens its editor, without Restore's busy state.
+        live.error = None;
+        assert!(matches!(
+            live.previews.restore_artifact(
+                &live.artifacts[0],
+                &settings,
+                Some(preview_target()),
+                false
+            ),
+            Ok(RestoreStart::Decode(..))
+        ));
+        live.card_action(
+            &ctx,
+            &edited_id,
+            CardAction::Edit,
+            Ok(settings.clone()),
+            &frame,
+        );
+        assert_eq!(live.previews.stack.ids(), [shown_id, edited_id.clone()]);
+        assert!(matches!(
+            requests.try_recv(),
+            Ok(Job::DecodePreview { artifact_id, .. }) if artifact_id == edited_id
+        ));
+        assert!(live.editors.contains_key(&edited_id));
+        assert!(live.card_restoring.is_none() && live.card_restored.is_none());
+
+        // Editing again neither duplicates nor reorders the card.
+        live.card_action(&ctx, &edited_id, CardAction::Edit, Ok(settings), &frame);
+        assert_eq!(live.previews.stack.ids().len(), 2);
+        assert!(requests.try_recv().is_err());
         live.flush();
     }
 

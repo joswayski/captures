@@ -25,7 +25,7 @@ final class MiniPreviewTests: XCTestCase {
         let panel = fixturePanel(ids: ["latest"], images: ["latest": image],
             copy: { _ in actions.append("copy") }, save: { _ in actions.append("save") },
             open: { _ in actions.append("open") }, trash: { _ in actions.append("trash") },
-            dismiss: { _ in actions.append("dismiss") })
+            dismiss: { _ in actions.append("dismiss") }, discard: { _ in actions.append("discard") })
         defer { panel.close() }
 
         XCTAssertEqual(panel.canBecomeKey, NSApp.isActive, "Keyboard focus only while Captures is active")
@@ -37,7 +37,8 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(buttons.first { $0.title == "Edit" }?.accessibilityLabel(), "Edit")
         XCTAssertTrue(buttons.allSatisfy(\.isHidden), "idle chrome must not leave click traps")
         buttons.forEach { $0.performClick(nil) }
-        XCTAssertEqual(actions, ["dismiss", "dismiss", "open", "copy", "save"])
+        // An unsaved card's Delete discards (dissolves) only the preview.
+        XCTAssertEqual(actions, ["dismiss", "discard", "open", "copy", "save"])
         try write(render(panel), name: "mini-preview-single-unsaved-edit-trash.png")
     }
 
@@ -1174,6 +1175,7 @@ final class MiniPreviewTests: XCTestCase {
                               open: @escaping (String) -> Void = { _ in },
                               trash: @escaping (String) -> Void = { _ in },
                               dismiss: @escaping (String) -> Void = { _ in },
+                              discard: @escaping (String) -> Void = { _ in },
                               setCollapsed: @escaping (Bool) -> Void = { _ in },
                               move: @escaping (NSPoint) -> Void = { _ in }) -> MiniPreviewPanel {
         let stack = NativePreviewStack()
@@ -1201,7 +1203,8 @@ final class MiniPreviewTests: XCTestCase {
             resources: resources, ids: ids, layouts: layouts, hoverLayouts: hoverLayouts, collapsed: collapsed,
             topAnchor: topAnchor, rightAnchor: placement.hasSuffix("_right"), tokens: tokens,
             copy: copy, save: save, open: open,
-            trash: trash, dismiss: dismiss, setCollapsed: setCollapsed, clearAll: {}, move: move)
+            trash: trash, dismiss: dismiss, discard: discard, setCollapsed: setCollapsed,
+            clearAll: {}, move: move)
     }
 
     private func previewSettings() -> MiniPreviewSettings {

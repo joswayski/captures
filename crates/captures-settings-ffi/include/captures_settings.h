@@ -360,6 +360,33 @@ CapturesTrayNoticeRect captures_preview_icon_tooltip_frame_v1(CapturesTrayNotice
 typedef struct { double blur, brightness, scale; } CapturesPreviewHoverMedia;
 CapturesPreviewHoverMedia captures_preview_hover_media_v1(void);
 
+/* Card warning beside the metadata: none while the clipboard holds the
+ * capture, "Not in History" when it was not written to History, else
+ * "Clipboard unavailable" after a failed copy. Static UTF-8 or NULL; never free. */
+const char *captures_preview_card_warning_v1(bool clipboard_current, bool history_saved,
+    bool copy_failed);
+
+/* Dust chips for a Delete (shipping buildThumbnailDustParticles with a
+ * deterministic seed): a JSON array of {id,left,top,width,height,cardWidth,
+ * cardHeight,sourceLeft,sourceTop,surfaceWidth,surfaceHeight,surfaceOffsetX,
+ * surfaceOffsetY,dx,dy,rotate,delayMs,durationMs} in points (left/top in the
+ * layer padded by exits.dust_pad). The origin is the Delete control's centre in
+ * the card. NULL for non-finite input. Free with captures_settings_free_v1. */
+char *captures_preview_dust_particles_v1(double card_width, double card_height,
+    double image_width, double image_height, double origin_x, double origin_y, uint32_t seed);
+
+/* Preview stack motion tables: {exits:{dismiss|dust|delete_fallback:
+ * {hold_ms,settle_delay_ms},clear_stagger_ms,clear_stagger_max_ms,dust_pad,
+ * delete_origin:{first_x,after_close_x,y}},
+ * sparkles:{reach,side,near,early|late:[{x,y,core,fade,accent,alpha}]}}.
+ * Timings and curves of the animations themselves are in the "motion"
+ * operation. Owned UTF-8; free with captures_settings_free_v1. */
+char *captures_preview_motion_tables_v1(void);
+
+/* Clear all's start delay (ms) for chronological `index` of `count` cards:
+ * the bottom card leaves first, 36 ms apart, capped at 180 ms. */
+double captures_preview_clear_delay_ms_v1(size_t count, size_t index, bool top_anchor);
+
 /* Owned immutable region session. Prepare/capture may block; use a worker after
  * hiding capture windows. Begin/retain a capture-flow guard on the event-loop
  * thread first. Freeze and cursor settings are fixed at prepare. No pixel data

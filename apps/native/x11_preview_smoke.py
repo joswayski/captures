@@ -825,7 +825,21 @@ def main():
                 if placement == "bottom_left":
                     # Frozen capture must exactly include the prior composited
                     # card, or exactly omit it, depending on the stored setting.
-                    time.sleep(.3)
+                    # Wait until the card's arrival and capture highlight have
+                    # finished: a full second of identical desktop pixels.
+                    stable = []
+
+                    def desktop_settled():
+                        stable.append((time.monotonic(), wallpaper_sample()))
+                        latest = stable[-1][1]
+                        start = next(t for t, pixels in reversed(stable) if pixels != latest) \
+                            if any(pixels != latest for _, pixels in stable) else stable[0][0]
+                        return time.monotonic() - start >= 1.0
+
+                    def wallpaper_sample():
+                        return run("import", "-window", "root", "-crop", "360x330+8+552", "-depth", "8", "rgb:-")
+
+                    wait(desktop_settled, "preview motion settles before the frozen capture")
                     before = output / f"{prefix}-before.png"
                     run("import", "-window", "root", "-crop", "360x330+8+552", str(before))
                     assert rgb(before) != wallpaper_crop(8, 552, 360, 330), "preview was not on desktop"
@@ -915,20 +929,36 @@ def main():
                         crop = "230x45+55+62" if front else (
                             "20x4+28+212" if placement.startswith("top") else "230x30+55+20")
                         return run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-")
+                    # Shipping sparkles (a dozen ~4 px dots) drift over a
+                    # hovered pile, so hovered crops allow that many changed
+                    # pixels; moving cards change far more.
+                    def changed_pixels(a, b):
+                        return sum(1 for i in range(0, len(a), 3)
+                                   if max(abs(x - y) for x, y in zip(a[i:i + 3], b[i:i + 3])) > 8)
+
+                    def unmoved(a, b):
+                        return changed_pixels(a, b) <= min(150, len(a) // 3 // 50)
+
+                    def fanned(a, b):
+                        # The top pile's 80-pixel corner strip sits outside the
+                        # sparkle layer's dots, so any change there counts.
+                        count = len(a) // 3
+                        return changed_pixels(a, b) > (count // 20 if count > 1000 else 0)
+
                     rest = fan_pixels()
                     front = fan_pixels(True)
                     fixed_frame = window_geometry(preview)
                     shot(preview, f"{prefix}-collapsed")
                     run("xdotool", "mousemove", "--window", preview, "170", "132")
-                    wait(lambda: fan_pixels() != rest, "hover fans rear cards")
+                    wait(lambda: fanned(fan_pixels(), rest), "hover fans rear cards")
                     time.sleep(.35)
                     hovered = fan_pixels()
-                    assert fan_pixels(True) == front, "hover moved the front card"
+                    assert unmoved(fan_pixels(True), front), "hover moved the front card"
                     assert window_geometry(preview) == fixed_frame, "hover moved/resized the native window"
                     shot(preview, f"{prefix}-hover-fan")
                     time.sleep(.35)
                     shot(preview, f"{prefix}-hover-settled")
-                    assert fan_pixels() == hovered, "stationary hover never settled"
+                    assert unmoved(fan_pixels(), hovered), "stationary hover never settled"
                     run("xdotool", "mousemove", "0", "0")
                     wait(lambda: fan_pixels() == rest, "leaving restores the exact rest pose")
                     before_drag = window_geometry(preview)
@@ -999,6 +1029,15 @@ def main():
                         wait(lambda: clipboard_pixels() == expected_pixels, "overflow retains actionable oldest card")
 
                     preserved = {path: (path.parent / "capture.png").read_bytes() for path in entries()}
+                    # Like shipping, the stack toolbar ignores clicks while the
+                    # expand flight plays; wait for settled pixels first.
+                    samples = []
+
+                    def stack_settled():
+                        samples.append(run("import", "-window", preview, "-depth", "8", "rgb:-"))
+                        return len(samples) >= 3 and len(set(samples[-3:])) == 1
+
+                    wait(stack_settled, "expanded stack settles before Clear all")
                     height = int(window_geometry(preview)["HEIGHT"])
                     click(preview, 298 if placement.endswith("right") else 42,
                           26 if placement.startswith("top") else height - 26, activate=False)

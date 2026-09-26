@@ -132,24 +132,36 @@ impl PreviewStack {
         top_anchor: bool,
         hovered: bool,
     ) -> Option<PreviewCardLayout> {
-        let depth = self.ids.len().checked_sub(index.checked_add(1)?)?;
-        let y = if self.collapsed {
-            let direction = if top_anchor { 1.0 } else { -1.0 };
-            collapsed_padding(self.ids.len()) + direction * collapsed_peek(depth + 1, hovered)
-        } else {
-            let (padding, slot) = if top_anchor {
-                (THUMBNAIL_CONTROL_GUTTER, depth)
-            } else {
-                (THUMBNAIL_PADDING, index)
-            };
-            padding + slot as f64 * (THUMBNAIL_CARD_HEIGHT + THUMBNAIL_GAP)
-        };
-        Some(PreviewCardLayout {
-            y,
-            depth,
-            interactive: !self.collapsed || depth == 0,
-        })
+        card_layout_in(self.ids.len(), index, self.collapsed, top_anchor, hovered)
     }
+}
+
+/// Layout of chronological `index` in a stack of `count` cards, for hosts
+/// that keep exiting cards in their slots (see `preview_motion::StackExits`).
+pub fn card_layout_in(
+    count: usize,
+    index: usize,
+    collapsed: bool,
+    top_anchor: bool,
+    hovered: bool,
+) -> Option<PreviewCardLayout> {
+    let depth = count.checked_sub(index.checked_add(1)?)?;
+    let y = if collapsed {
+        let direction = if top_anchor { 1.0 } else { -1.0 };
+        collapsed_padding(count) + direction * collapsed_peek(depth + 1, hovered)
+    } else {
+        let (padding, slot) = if top_anchor {
+            (THUMBNAIL_CONTROL_GUTTER, depth)
+        } else {
+            (THUMBNAIL_PADDING, index)
+        };
+        padding + slot as f64 * (THUMBNAIL_CARD_HEIGHT + THUMBNAIL_GAP)
+    };
+    Some(PreviewCardLayout {
+        y,
+        depth,
+        interactive: !collapsed || depth == 0,
+    })
 }
 
 /// Which edge of the visible pile stays put when the stack opens or closes.

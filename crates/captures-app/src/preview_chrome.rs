@@ -49,6 +49,30 @@ pub const EDITOR_PILL_MAX_WIDTH: f64 = 176.0;
 /// The compact control and the pill share this height (`28px`).
 pub const EDITOR_CONTROL_SIZE: f64 = 28.0;
 
+/// `.thumbnail-meta .warning`: the capture could not be written to History.
+pub const WARNING_NOT_IN_HISTORY: &str = "Not in History";
+/// `.thumbnail-meta .warning`: the automatic clipboard copy failed.
+pub const WARNING_CLIPBOARD_UNAVAILABLE: &str = "Clipboard unavailable";
+
+/// The warning chip beside a card's metadata, as shipping picks it: none
+/// while the clipboard holds this capture (the "Copied to clipboard" chip
+/// shows instead), "Not in History" first, then "Clipboard unavailable".
+pub fn card_warning(
+    clipboard_current: bool,
+    history_saved: bool,
+    copy_failed: bool,
+) -> Option<&'static str> {
+    if clipboard_current {
+        None
+    } else if !history_saved {
+        Some(WARNING_NOT_IN_HISTORY)
+    } else if copy_failed {
+        Some(WARNING_CLIPBOARD_UNAVAILABLE)
+    } else {
+        None
+    }
+}
+
 /// Where a card's editor control stands in its presence lifecycle.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EditorPhase {
@@ -339,6 +363,19 @@ pub fn icon_tooltip_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn card_warning_follows_the_shipping_precedence() {
+        assert_eq!(card_warning(false, true, false), None);
+        assert_eq!(card_warning(false, false, false), Some("Not in History"));
+        assert_eq!(card_warning(false, false, true), Some("Not in History"));
+        assert_eq!(
+            card_warning(false, true, true),
+            Some("Clipboard unavailable")
+        );
+        // The clipboard chip replaces every warning.
+        assert_eq!(card_warning(true, false, true), None);
+    }
 
     #[test]
     fn presence_matches_shipping_leave_and_linger() {

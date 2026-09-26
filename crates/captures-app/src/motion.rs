@@ -15,14 +15,19 @@
 
 use serde::Serialize;
 
-/// Transform and opacity of one keyframe. `translate_y` is in logical points,
-/// positive downward as in CSS; `scale` is about the element's centre; `blur` is
-/// a CSS `filter: blur()` radius that hosts may approximate or omit.
+/// Transform and opacity of one keyframe. `translate_x` and `translate_y` are
+/// in logical points, positive rightward and downward as in CSS; `scale` is
+/// about the element's centre and `scale_x` stretches horizontally on top of
+/// it (CSS `scaleX()`); `blur` is a CSS `filter: blur()` radius (for the
+/// dismiss streak, the horizontal `feGaussianBlur` deviation) that hosts may
+/// approximate or omit.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Pose {
     pub opacity: f64,
+    pub translate_x: f64,
     pub translate_y: f64,
     pub scale: f64,
+    pub scale_x: f64,
     pub blur: f64,
 }
 
@@ -30,8 +35,10 @@ impl Pose {
     /// The element's own style: fully visible, untransformed.
     pub const REST: Self = Self {
         opacity: 1.,
+        translate_x: 0.,
         translate_y: 0.,
         scale: 1.,
+        scale_x: 1.,
         blur: 0.,
     };
 
@@ -40,16 +47,32 @@ impl Pose {
             opacity: 0.,
             translate_y,
             scale,
-            blur: 0.,
+            ..Self::REST
         }
+    }
+
+    const fn with(opacity: f64, translate_y: f64, scale: f64) -> Self {
+        Self {
+            opacity,
+            translate_y,
+            scale,
+            ..Self::REST
+        }
+    }
+
+    /// The effective horizontal and vertical scale factors.
+    pub fn scales(self) -> (f64, f64) {
+        (self.scale * self.scale_x, self.scale)
     }
 
     fn lerp(self, other: Self, t: f64) -> Self {
         let mix = |a: f64, b: f64| a + (b - a) * t;
         Self {
             opacity: mix(self.opacity, other.opacity),
+            translate_x: mix(self.translate_x, other.translate_x),
             translate_y: mix(self.translate_y, other.translate_y),
             scale: mix(self.scale, other.scale),
+            scale_x: mix(self.scale_x, other.scale_x),
             blur: mix(self.blur, other.blur),
         }
     }
@@ -102,18 +125,7 @@ pub struct TransitionSpec {
     pub easing: Easing,
 }
 
-const POP_IN: &[Keyframe] = &[
-    frame(
-        0.,
-        Pose {
-            opacity: 0.,
-            translate_y: -4.,
-            scale: 0.985,
-            blur: 0.,
-        },
-    ),
-    frame(1., Pose::REST),
-];
+const POP_IN: &[Keyframe] = &[frame(0., Pose::hidden(-4., 0.985)), frame(1., Pose::REST)];
 
 const RESTART_EXIT: &[Keyframe] = &[frame(0., Pose::REST), frame(1., Pose::hidden(-6., 1.))];
 const STARTUP_ARRIVE: &[Keyframe] = &[frame(0., Pose::hidden(-8., 0.97)), frame(1., Pose::REST)];
@@ -135,10 +147,8 @@ const THUMBNAIL_ARRIVE: &[Keyframe] = &[
     frame(
         0.,
         Pose {
-            opacity: 0.,
-            translate_y: 24.,
-            scale: 0.975,
             blur: 3.,
+            ..Pose::hidden(24., 0.975)
         },
     ),
     frame(1., Pose::REST),
@@ -148,6 +158,132 @@ const FADE_IN: &[Keyframe] = &[frame(0., Pose::hidden(0., 1.)), frame(1., Pose::
 const FADE_OUT: &[Keyframe] = &[frame(0., Pose::REST), frame(1., Pose::hidden(0., 1.))];
 const CONTENT_IN: &[Keyframe] = &[frame(0., Pose::hidden(0., 0.94)), frame(1., Pose::REST)];
 const CONTENT_OUT: &[Keyframe] = &[frame(0., Pose::REST), frame(1., Pose::hidden(0., 1.035))];
+
+/// `thumbnail-dismiss`: fades and slides toward the pile's screen edge in the
+/// first 44 %, then holds the slot while survivors settle. `translate_x` is for
+/// a left-anchored stack; hosts mirror it for right-anchored stacks.
+const DISMISS: &[Keyframe] = &[
+    frame(0., Pose::REST),
+    frame(
+        0.44,
+        Pose {
+            translate_x: -118.,
+            ..Pose::hidden(0., 1.)
+        },
+    ),
+    frame(
+        1.,
+        Pose {
+            translate_x: -118.,
+            ..Pose::hidden(0., 1.)
+        },
+    ),
+];
+/// `thumbnail-dismiss-streak` on the media: from the locked hover look into a
+/// widening horizontal motion blur (`stdDeviation` 3.5, 8 and 14 on x).
+const DISMISS_STREAK: &[Keyframe] = &[
+    frame(
+        0.,
+        Pose {
+            blur: 2.,
+            ..Pose::with(1., 0., 1.015)
+        },
+    ),
+    frame(
+        0.18,
+        Pose {
+            scale_x: 1.04,
+            blur: 3.5,
+            ..Pose::REST
+        },
+    ),
+    frame(
+        0.48,
+        Pose {
+            scale_x: 1.09,
+            blur: 8.,
+            ..Pose::REST
+        },
+    ),
+    frame(
+        1.,
+        Pose {
+            scale_x: 1.13,
+            blur: 14.,
+            ..Pose::REST
+        },
+    ),
+];
+/// `thumbnail-delete-fallback`: the scale-and-fade delete used when dust
+/// cannot be built.
+const DELETE_FALLBACK: &[Keyframe] = &[
+    frame(
+        0.,
+        Pose {
+            blur: 2.,
+            ..Pose::with(1., 0., 1.015)
+        },
+    ),
+    frame(
+        0.55,
+        Pose {
+            blur: 3.,
+            ..Pose::with(0.2, 0., 0.9)
+        },
+    ),
+    frame(
+        1.,
+        Pose {
+            blur: 5.,
+            ..Pose::hidden(0., 0.8)
+        },
+    ),
+];
+/// `thumbnail-capture-highlight`: hold the accent outline for 1 s, then fade.
+const CAPTURE_HIGHLIGHT: &[Keyframe] = &[
+    frame(0., Pose::REST),
+    frame(0.222_22, Pose::REST),
+    frame(1., Pose::hidden(0., 1.)),
+];
+const ACTION_ICON_POP: &[Keyframe] =
+    &[frame(0., Pose::with(0.25, 0., 0.65)), frame(1., Pose::REST)];
+const CLIPBOARD_CHIP_ARRIVE: &[Keyframe] = &[
+    frame(0., Pose::hidden(4., 0.94)),
+    frame(0.28, Pose::with(1., 0., 1.03)),
+    frame(0.55, Pose::with(1., 0., 0.99)),
+    frame(1., Pose::REST),
+];
+/// `thumbnail-stack-sparkle`. Shipping eases opacity through its 30 % key but
+/// the transform only from 0 to 100 %; the 30 % transform here is that eased
+/// value (`ease-out` at 0.3), so each segment lands on the shipping curve.
+const PILE_SPARKLE: &[Keyframe] = &[
+    frame(0., Pose::hidden(6., 0.96)),
+    frame(0.3, Pose::with(0.9, -18.56, 1.0126)),
+    frame(1., Pose::hidden(-22., 1.02)),
+];
+const TOOLBAR_IN: &[Keyframe] = &[
+    frame(0., Pose::hidden(6., 0.9)),
+    frame(0.35, Pose::hidden(6., 0.9)),
+    frame(1., Pose::REST),
+];
+/// `thumbnail-stack-toolbar-out`: fade with `blur(var(--blur-dissolve))`
+/// (8 px in `shared/design.css`).
+const TOOLBAR_OUT: &[Keyframe] = &[
+    frame(0., Pose::REST),
+    frame(
+        1.,
+        Pose {
+            blur: 8.,
+            ..Pose::hidden(0., 1.)
+        },
+    ),
+];
+const TOOLBAR_EXIT: &[Keyframe] = &[
+    frame(0., Pose::REST),
+    frame(0.42, Pose::REST),
+    frame(1., Pose::hidden(6., 0.9)),
+];
+const TOOLBAR_CLEAR: &[Keyframe] = &[frame(0., Pose::REST), frame(1., Pose::hidden(6., 0.9))];
 
 /// Shipping entrance, exit and lifecycle animations the native hosts play.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -188,10 +324,46 @@ pub enum Motion {
     /// `.custom-select-listbox` and `.preferences-save-status`:
     /// `ui-pop-in var(--dur-2) var(--ease-out)`.
     PopoverIn,
+    /// `.thumbnail-exit-dismiss`: `thumbnail-dismiss 1.03s cubic-bezier(0.4,
+    /// 0, 0.2, 1) forwards`, the Close exit that holds its slot.
+    PreviewDismiss,
+    /// `.thumbnail-exit-dismiss img`: `thumbnail-dismiss-streak 0.45s
+    /// cubic-bezier(0.4, 0, 0.2, 1) forwards`.
+    PreviewDismissStreak,
+    /// `.thumbnail-exit-delete:not(.thumbnail-exit-dust)`:
+    /// `thumbnail-delete-fallback 0.68s cubic-bezier(0.4, 0, 0.2, 1)`.
+    PreviewDeleteFallback,
+    /// `.thumbnail-capture-highlight::after`: `thumbnail-capture-highlight
+    /// 4.5s linear`, the accent outline on a card that just arrived.
+    PreviewCaptureHighlight,
+    /// `.thumbnail-main-actions svg`: `thumbnail-action-pop 0.2s ease-out`
+    /// whenever a main action's icon appears or changes.
+    PreviewActionIconPop,
+    /// `.clipboard-confirmation`: `clipboard-confirmation-arrive 1.15s
+    /// var(--ease-standard) both`.
+    PreviewClipboardChipArrive,
+    /// `.thumbnail-collapsed-hit-target:hover::before`:
+    /// `thumbnail-stack-sparkle 1.8s var(--ease-out) infinite`.
+    PreviewPileSparkle,
+    /// `::after`: `thumbnail-stack-sparkle 2.2s var(--ease-out) 0.5s infinite`.
+    PreviewPileSparkleLate,
+    /// `.thumbnail-stack-toolbar-entering`: `thumbnail-stack-toolbar-in 0.52s
+    /// linear both` while the stack expands.
+    PreviewToolbarIn,
+    /// `.thumbnail-stack-toolbar-leaving`: `thumbnail-stack-toolbar-out
+    /// var(--dur-4) var(--ease-in-out) both` while the stack collapses.
+    PreviewToolbarOut,
+    /// `.thumbnail-stack-toolbar-exiting`: `thumbnail-stack-toolbar-exit 1.05s`
+    /// (the 42 % hold, then `cubic-bezier(0.33, 0, 0.2, 1)`) when a delete or
+    /// Close leaves fewer than two live previews.
+    PreviewToolbarExit,
+    /// `.thumbnail-stack-toolbar-clearing`: `thumbnail-stack-toolbar-clear
+    /// 0.45s cubic-bezier(0.4, 0, 0.2, 1) both` on Clear all.
+    PreviewToolbarClear,
 }
 
 impl Motion {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 25] = [
         Self::UpdateNoticeIn,
         Self::UpdateNoticeRestartExit,
         Self::StartupNoticeIn,
@@ -205,6 +377,18 @@ impl Motion {
         Self::CountdownOut,
         Self::CountdownContentOut,
         Self::PopoverIn,
+        Self::PreviewDismiss,
+        Self::PreviewDismissStreak,
+        Self::PreviewDeleteFallback,
+        Self::PreviewCaptureHighlight,
+        Self::PreviewActionIconPop,
+        Self::PreviewClipboardChipArrive,
+        Self::PreviewPileSparkle,
+        Self::PreviewPileSparkleLate,
+        Self::PreviewToolbarIn,
+        Self::PreviewToolbarOut,
+        Self::PreviewToolbarExit,
+        Self::PreviewToolbarClear,
     ];
 
     /// Stable name used by the settings ABI.
@@ -223,6 +407,18 @@ impl Motion {
             Self::CountdownOut => "countdown_out",
             Self::CountdownContentOut => "countdown_content_out",
             Self::PopoverIn => "popover_in",
+            Self::PreviewDismiss => "preview_dismiss",
+            Self::PreviewDismissStreak => "preview_dismiss_streak",
+            Self::PreviewDeleteFallback => "preview_delete_fallback",
+            Self::PreviewCaptureHighlight => "preview_capture_highlight",
+            Self::PreviewActionIconPop => "preview_action_icon_pop",
+            Self::PreviewClipboardChipArrive => "preview_clipboard_chip_arrive",
+            Self::PreviewPileSparkle => "preview_pile_sparkle",
+            Self::PreviewPileSparkleLate => "preview_pile_sparkle_late",
+            Self::PreviewToolbarIn => "preview_toolbar_in",
+            Self::PreviewToolbarOut => "preview_toolbar_out",
+            Self::PreviewToolbarExit => "preview_toolbar_exit",
+            Self::PreviewToolbarClear => "preview_toolbar_clear",
         }
     }
 
@@ -267,6 +463,38 @@ impl Motion {
             Self::CountdownOut => spec(Dur("dur-2"), 0., Ease("ease-in"), FADE_OUT),
             Self::CountdownContentOut => spec(Dur("dur-2"), 0., Ease("ease-in"), CONTENT_OUT),
             Self::PopoverIn => spec(Dur("dur-2"), 0., Ease("ease-out"), POP_IN),
+            Self::PreviewDismiss => spec(Millis(1_030.), 0., STANDARD_MOTION, DISMISS),
+            Self::PreviewDismissStreak => spec(Millis(450.), 0., STANDARD_MOTION, DISMISS_STREAK),
+            Self::PreviewDeleteFallback => spec(Millis(680.), 0., STANDARD_MOTION, DELETE_FALLBACK),
+            // `linear`, with the fade segment's own `cubic-bezier(0.42, 0,
+            // 0.58, 1)`; the hold segment does not move, so one curve serves.
+            Self::PreviewCaptureHighlight => spec(
+                Millis(4_500.),
+                0.,
+                Bezier([0.42, 0., 0.58, 1.]),
+                CAPTURE_HIGHLIGHT,
+            ),
+            Self::PreviewActionIconPop => spec(Millis(200.), 0., CSS_EASE_OUT, ACTION_ICON_POP),
+            Self::PreviewClipboardChipArrive => spec(
+                Millis(1_150.),
+                0.,
+                Ease("ease-standard"),
+                CLIPBOARD_CHIP_ARRIVE,
+            ),
+            Self::PreviewPileSparkle => spec(Millis(1_800.), 0., Ease("ease-out"), PILE_SPARKLE),
+            Self::PreviewPileSparkleLate => {
+                spec(Millis(2_200.), 500., Ease("ease-out"), PILE_SPARKLE)
+            }
+            Self::PreviewToolbarIn => spec(Millis(520.), 0., LINEAR, TOOLBAR_IN),
+            Self::PreviewToolbarOut => spec(Dur("dur-4"), 0., Ease("ease-in-out"), TOOLBAR_OUT),
+            // `linear` overall; the moving segment carries its own curve.
+            Self::PreviewToolbarExit => spec(
+                Millis(1_050.),
+                0.,
+                Bezier([0.33, 0., 0.2, 1.]),
+                TOOLBAR_EXIT,
+            ),
+            Self::PreviewToolbarClear => spec(Millis(450.), 0., STANDARD_MOTION, TOOLBAR_CLEAR),
         }
     }
 
@@ -317,13 +545,34 @@ pub enum Transition {
     /// `.thumbnail-editor-control`: Edit ↔ "In editor" width, padding and
     /// colour morph over `0.28s cubic-bezier(0.2, 0.8, 0.2, 1)`.
     PreviewEditorMorph,
+    /// `.thumbnail-stack-minimize`: the stack icon ↔ "Show less" pill width
+    /// over `var(--thumbnail-minimize-morph)` (240 ms) `var(--ease-out)`.
+    PreviewMinimizeMorph,
+    /// `.thumbnail-stack-minimize svg` / `-label`: the icon and label
+    /// crossfade and slide over 180 ms `var(--ease-out)`.
+    PreviewMinimizeSwap,
+    /// `.thumbnail-card.thumbnail-stack-shifting`: survivors slide into an
+    /// exiting card's slot over `0.58s cubic-bezier(0.4, 0, 0.2, 1)`.
+    PreviewStackSettle,
+    /// `thumbnail-card-expand` and the minimize run: cards fly between the
+    /// list and the compact pile over `0.52s var(--ease-standard)`.
+    PreviewStackFly,
+    /// `thumbnail-delete-frame-fade`: a dissolving card's shadow and outline
+    /// leave over `0.5s cubic-bezier(0.22, 0.1, 0.25, 1)`.
+    PreviewDeleteFrameFade,
 }
 
 /// CSS `ease` keyword.
 const CSS_EASE: Easing = Easing::Bezier([0.25, 0.1, 0.25, 1.]);
+/// CSS `ease-out` keyword (not the `--ease-out` token).
+const CSS_EASE_OUT: Easing = Easing::Bezier([0., 0., 0.58, 1.]);
+/// CSS `linear`.
+const LINEAR: Easing = Easing::Bezier([0., 0., 1., 1.]);
+/// `cubic-bezier(0.4, 0, 0.2, 1)`, shipping's preview exit and settle curve.
+const STANDARD_MOTION: Easing = Easing::Bezier([0.4, 0., 0.2, 1.]);
 
 impl Transition {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 15] = [
         Self::SegmentedIndicator,
         Self::HistoryCardHover,
         Self::Tooltip,
@@ -334,6 +583,11 @@ impl Transition {
         Self::PreviewEditorRing,
         Self::PreviewEditorRingLeave,
         Self::PreviewEditorMorph,
+        Self::PreviewMinimizeMorph,
+        Self::PreviewMinimizeSwap,
+        Self::PreviewStackSettle,
+        Self::PreviewStackFly,
+        Self::PreviewDeleteFrameFade,
     ];
 
     pub fn name(self) -> &'static str {
@@ -348,6 +602,11 @@ impl Transition {
             Self::PreviewEditorRing => "preview_editor_ring",
             Self::PreviewEditorRingLeave => "preview_editor_ring_leave",
             Self::PreviewEditorMorph => "preview_editor_morph",
+            Self::PreviewMinimizeMorph => "preview_minimize_morph",
+            Self::PreviewMinimizeSwap => "preview_minimize_swap",
+            Self::PreviewStackSettle => "preview_stack_settle",
+            Self::PreviewStackFly => "preview_stack_fly",
+            Self::PreviewDeleteFrameFade => "preview_delete_frame_fade",
         }
     }
 
@@ -363,6 +622,13 @@ impl Transition {
             Self::PreviewStackTooltip => token("dur-1", "ease-out"),
             Self::PreviewEditorRingLeave => (Timing::Millis(550.), Easing::Token("ease-standard")),
             Self::PreviewEditorMorph => (Timing::Millis(280.), Easing::Bezier([0.2, 0.8, 0.2, 1.])),
+            Self::PreviewMinimizeMorph => (Timing::Millis(240.), Easing::Token("ease-out")),
+            Self::PreviewMinimizeSwap => (Timing::Millis(180.), Easing::Token("ease-out")),
+            Self::PreviewStackSettle => (Timing::Millis(580.), STANDARD_MOTION),
+            Self::PreviewStackFly => (Timing::Millis(520.), Easing::Token("ease-standard")),
+            Self::PreviewDeleteFrameFade => {
+                (Timing::Millis(500.), Easing::Bezier([0.22, 0.1, 0.25, 1.]))
+            }
         };
         TransitionSpec { duration, easing }
     }
@@ -447,6 +713,20 @@ impl Animation {
             }
         }
         last
+    }
+
+    /// Pose of an `infinite` animation: after its delay it restarts every
+    /// duration. Under reduced motion shipping's 0.01 ms iterations rest on
+    /// the final keyframe.
+    pub fn pose_repeating(&self, elapsed_ms: f64, reduced_motion: bool) -> Pose {
+        if reduced_motion || self.duration_ms <= 0. {
+            return self.frames[self.frames.len() - 1].pose;
+        }
+        if elapsed_ms.is_nan() || elapsed_ms < self.delay_ms {
+            return self.frames[0].pose;
+        }
+        let phase = (elapsed_ms - self.delay_ms) % self.duration_ms;
+        self.pose_at(self.delay_ms + phase, false)
     }
 
     /// Pose of a lifecycle notice whose window lives `since_start_ms` after it
@@ -817,6 +1097,52 @@ mod tests {
         let mid = tween.value(10., 110., 140., false);
         assert!(mid > 60. && mid < 110.);
         assert!(!tween.running(10., true));
+    }
+
+    #[test]
+    fn preview_exits_and_micro_motion_match_shipping_keyframes() {
+        let dismiss = Motion::PreviewDismiss.resolve(&Shipping).unwrap();
+        let gone = dismiss.pose_at(0.44 * 1_030., false);
+        assert_eq!((gone.opacity, gone.translate_x), (0., -118.));
+        assert_eq!(dismiss.pose_at(1_030., false), gone, "holds its slot");
+        let streak = Motion::PreviewDismissStreak.resolve(&Shipping).unwrap();
+        let end = streak.pose_at(450., false);
+        assert_eq!((end.scales(), end.blur), ((1.13, 1.), 14.));
+        assert_eq!(streak.pose_at(0., false).scales(), (1.015, 1.015));
+        let highlight = Motion::PreviewCaptureHighlight.resolve(&Shipping).unwrap();
+        assert_eq!(highlight.pose_at(999., false).opacity, 1., "1 s hold");
+        let fading = highlight.pose_at(2_750., false).opacity;
+        assert!(fading > 0. && fading < 1.);
+        assert_eq!(highlight.pose_at(4_500., false).opacity, 0.);
+        let chip = Motion::PreviewClipboardChipArrive
+            .resolve(&Shipping)
+            .unwrap();
+        assert_eq!(chip.pose_at(0., false).translate_y, 4.);
+        assert_eq!(chip.pose_at(0.28 * 1_150., false).scale, 1.03);
+        let pop = Motion::PreviewActionIconPop.resolve(&Shipping).unwrap();
+        assert_eq!(pop.pose_at(0., false).opacity, 0.25);
+        assert_eq!(pop.pose_at(200., false), Pose::REST);
+        let toolbar = Motion::PreviewToolbarOut.resolve(&Shipping).unwrap();
+        assert_eq!(toolbar.duration_ms, 280.);
+        let catalog = catalog();
+        assert_eq!(
+            catalog["keyframes"]["preview_dismiss"]["frames"][1]["translate_x"],
+            -118.
+        );
+        assert_eq!(
+            catalog["keyframes"]["preview_dismiss_streak"]["frames"][3]["scale_x"],
+            1.13
+        );
+        assert_eq!(
+            catalog["transitions"]["preview_minimize_morph"]["duration"]["millis"],
+            240.
+        );
+        assert_eq!(
+            catalog["transitions"]["preview_stack_fly"]["easing"]["token"],
+            "ease-standard"
+        );
+        let settle = Transition::PreviewStackSettle.resolve(&Shipping).unwrap();
+        assert_eq!(settle.duration_ms, 580.);
     }
 
     #[test]
