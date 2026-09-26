@@ -550,7 +550,7 @@ def main():
             run("xdotool", "keydown", "Alt_L", "sleep", ".1", "key", "F4",
                 "sleep", ".1", "keyup", "Alt_L", "sleep", ".4")
 
-        def history_edit_point():
+        def history_edit_point(edit_y=546):
             # History cards are newest first in a three-column grid (1000 px root,
             # 24 px padding, 16 px gaps). Edit is the left action of the card body.
             entries = sorted((json.loads(path.read_text()) for path in history.glob("*/metadata.json")
@@ -559,11 +559,11 @@ def main():
             index = [entry["id"] for entry in entries].index(artifact_id)
             assert index < 3, "the edited capture must be in the first History row"
             card_width = (952 - 2 * 16) / 3
-            return round(24 + index * (card_width + 16) + 12 + (card_width - 24 - 6) / 4), 546
+            return round(24 + index * (card_width + 16) + 12 + (card_width - 24 - 6) / 4), edit_y
 
-        def reopen():
+        def reopen(edit_y=546):
             export_bar["open"] = False  # Every editor window starts collapsed.
-            click(root, *history_edit_point())  # The original capture's History card: Edit.
+            click(root, *history_edit_point(edit_y))  # The original capture's History card: Edit.
             window = wait(lambda: windows("Screenshot editor"), "reopened editor")[0]
             run("xdotool", "windowmove", "--sync", window, "100", "80")
             time.sleep(.6)
@@ -643,7 +643,8 @@ def main():
             assert not windows("Screenshot editor"), "saved draft blocks source reload"
             assert draft.read_bytes() == preserved_draft
             shot(root, "external-draft-blocked")
-            editor = reopen()  # The existing History route still restores the saved edit.
+            # The open error banner above the grid moves the cards 60px lower.
+            editor = reopen(606)  # The existing History route still restores the saved edit.
             shot(editor, "external-draft-restored")
             assert len(layers()) == 2
             click(editor, 270, 62)
