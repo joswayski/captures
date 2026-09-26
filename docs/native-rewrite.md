@@ -20,7 +20,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Area | Implemented in this tree | Work still open |
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
-| Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
+| Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; History Restore to a floating preview; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause (silent by default), opt-in Loop and accepted-mix Sound preview, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
 | Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and hover fan, explicit optional feedback | Capture-time permission recovery, remaining Preferences parity, remaining preview effects, physical setup/login and installed Open With acceptance, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, remaining viewport/output controls and Tauri design parity; remaining recording controls |
@@ -108,6 +108,26 @@ in both hosts; the wgpu dialog is a token-styled card instead of a stock egui wi
 Private-X11 onboarding smoke covers the new layout in light/dark; AppKit XCTests
 render setup/recovery states. Physical macOS TCC, Windows presentation, screen
 reader and Wayland acceptance remain open; no onboarding gate closes here.
+
+Both hosts now render the live workspace's History like the shipping
+`CaptureHistory` window instead of a list and preview pane: the "On this device"
+header and lede, counted filter pills, the Interrupted recordings card, and a
+virtualized auto-fill grid of thumbnail cards with date, "W × H · size"
+(plus duration and dropped-frame warnings), Edit and Save image/Save file →
+Show in Folder, a trash control that arms **Delete forever**, and a **File missing**
+state for recordings whose media is gone. Header **Delete all** arms
+**Delete all forever** with Cancel; both confirmations revert after four seconds
+or on Escape. Loading, empty and error states use the shipping copy.
+`captures_app::history_view` owns copy, card details/actions, the missing-media
+rule and grid metrics; AppKit reads them through the `history_copy`,
+`history_cards` and `history_grid` settings operations. Native differences: no
+card is selected on load, but explicit selection, arrow keys and Return are
+supported; secondary click lists card commands (including Copy image); shipping's
+Restore is not connected; capture controls stay above the grid. Private-X11
+history, recovery, capture and preview smokes exercise the wgpu grid; AppKit XCTests
+cover cards, filters, two-step deletion and rendered light/dark grids but have not
+run here. Physical macOS/Windows, Wayland and screen-reader acceptance remain open;
+this does not close the Viewer/history gate.
 
 Both native hosts now connect pointer dragging on the collapsed preview front
 card, separately from click-to-expand. Desktop-coordinate tracking compensates
