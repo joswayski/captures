@@ -1,3 +1,4 @@
+use captures_app::capture_menu::{self, GuidanceTarget};
 use captures_app::selection::{self, Bounds, DragMode, DragOptions, Point, Rect};
 use eframe::egui::{
     self, Align2, Color32, FontId, Pos2, RichText, Sense, Stroke, StrokeKind, TextureHandle,
@@ -114,14 +115,6 @@ impl Selector {
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             action = Some(Action::Cancel);
         }
-        if let Some(until) = self.feedback_until {
-            let remaining = until.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                self.feedback_until = None;
-            } else {
-                ui.ctx().request_repaint_after(remaining);
-            }
-        }
         action
     }
 
@@ -133,6 +126,31 @@ impl Selector {
         auto_start: bool,
         overlay_bounds: Option<Bounds>,
     ) -> Option<Action> {
+        self.show_surface_with(ui, tokens, frozen, auto_start, overlay_bounds, false)
+    }
+
+    /// New Capture's region surface: the shipping guidance chip stays up with a
+    /// settled selection, hides while dragging and ducks from the pointer.
+    pub fn show_menu_surface(
+        &mut self,
+        ui: &mut egui::Ui,
+        tokens: &Tokens,
+        frozen: Option<&TextureHandle>,
+        auto_start: bool,
+        overlay_bounds: Option<Bounds>,
+    ) -> Option<Action> {
+        self.show_surface_with(ui, tokens, frozen, auto_start, overlay_bounds, true)
+    }
+
+    fn show_surface_with(
+        &mut self,
+        ui: &mut egui::Ui,
+        tokens: &Tokens,
+        frozen: Option<&TextureHandle>,
+        auto_start: bool,
+        overlay_bounds: Option<Bounds>,
+        menu: bool,
+    ) -> Option<Action> {
         let surface = ui.max_rect();
         let bounds = overlay_bounds.unwrap_or(Bounds {
             width: surface.width().into(),
@@ -140,8 +158,26 @@ impl Selector {
         });
         let coordinates = CoordinateMap { surface, bounds };
         let response = ui.allocate_rect(surface, Sense::click_and_drag());
-        let pointer = response
-            .interact_pointer_pos()
+        // A release batched with later pointer motion (a slow frame) must
+        // settle where the button came up, not at the newest position.
+        let release = response
+            .drag_stopped()
+            .then(|| {
+                ui.input(|input| {
+                    input.events.iter().rev().find_map(|event| match event {
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            ..
+                        } => Some(*pos),
+                        _ => None,
+                    })
+                })
+            })
+            .flatten();
+        let pointer = release
+            .or_else(|| response.interact_pointer_pos())
             .map(|position| coordinates.point(position));
 
         if response.drag_started()
@@ -167,14 +203,25 @@ impl Selector {
             self.feedback_until = None;
         }
 
+        if let Some(until) = self.feedback_until {
+            let remaining = until.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                self.feedback_until = None;
+            } else {
+                ui.ctx().request_repaint_after(remaining);
+            }
+        }
         paint_surface(
             ui,
             coordinates,
             tokens,
             frozen,
             self.rect,
-            self.drag.is_some(),
-            self.feedback_until.is_some(),
+            SurfaceState {
+                dragging: self.drag.is_some(),
+                feedback: self.feedback_until.is_some(),
+                menu,
+            },
         );
         auto_confirm.then_some(Action::Confirm)
     }
@@ -382,15 +429,28 @@ fn hit_test(rect: Rect, point: Point) -> DragMode {
     }
 }
 
+#[derive(Clone, Copy)]
+struct SurfaceState {
+    dragging: bool,
+    /// The shipping 1.8 s "Click and drag" nudge after an empty click.
+    feedback: bool,
+    /// New Capture: guidance chip instead of centered direct-overlay copy.
+    menu: bool,
+}
+
 fn paint_surface(
     ui: &egui::Ui,
     coordinates: CoordinateMap,
     tokens: &Tokens,
     frozen: Option<&TextureHandle>,
     selection: Option<Rect>,
-    dragging: bool,
-    feedback: bool,
+    state: SurfaceState,
 ) {
+    let SurfaceState {
+        dragging,
+        feedback,
+        menu,
+    } = state;
     let surface = coordinates.surface;
     let painter = ui.painter();
     if let Some(texture) = frozen {
@@ -462,6 +522,8 @@ fn paint_surface(
             tokens.color("glass-strong"),
         );
         painter.galley(label_center - galley.size() / 2., galley, Color32::WHITE);
+    } else if menu {
+        painter.rect_filled(surface, 0., veil);
     } else if !dragging {
         painter.rect_filled(surface, 0., veil);
         painter.text(
@@ -484,6 +546,15 @@ fn paint_surface(
         );
     } else {
         painter.rect_filled(surface, 0., veil);
+    }
+    if menu {
+        crate::capture_controls::paint_guidance(
+            ui,
+            tokens,
+            surface,
+            capture_menu::guidance(GuidanceTarget::Region, feedback),
+            dragging,
+        );
     }
 }
 
@@ -819,6 +890,39 @@ mod tests {
             )],
             false,
         );
+    }
+
+    #[test]
+    fn release_batched_with_later_motion_settles_at_the_release_point() {
+        let ctx = egui::Context::default();
+        let mut selector = Selector::default();
+        run_input(&ctx, &mut selector, vec![], false);
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![
+                egui::Event::PointerMoved(egui::pos2(100., 100.)),
+                pointer(egui::pos2(100., 100.), true, egui::Modifiers::NONE),
+            ],
+            false,
+        );
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![egui::Event::PointerMoved(egui::pos2(300., 200.))],
+            false,
+        );
+        // A slow frame delivers the release and the next click's motion together.
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![
+                pointer(egui::pos2(300., 200.), false, egui::Modifiers::NONE),
+                egui::Event::PointerMoved(egui::pos2(500., 580.)),
+            ],
+            false,
+        );
+        assert_rect(selector.rect().unwrap(), [100., 100., 200., 100.]);
     }
 
     #[test]

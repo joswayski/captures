@@ -490,7 +490,7 @@ mod tests {
         accept(&ctx, &mut view, "original");
         view.inline.as_mut().unwrap().text = "latest for quit".into();
         view.copy(&tx);
-        view.save_new(&tx);
+        view.save(&tx);
         view.submit(&tx, Request::Undo);
         view.submit(&tx, Request::SaveDraft { updated_at_ms: 7 });
         assert!(rx.try_recv().is_err());

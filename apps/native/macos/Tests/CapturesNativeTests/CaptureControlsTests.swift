@@ -3,6 +3,16 @@ import XCTest
 import CCapturesSettings
 @testable import CapturesNative
 
+private final class CaptureMenuSettingsTransport: SettingsTransport {
+    func request(_ object: [String: Any]) throws -> [String: Any] {
+        switch object["operation"] as? String {
+        case "load": return ["ok": true, "settings": ["appearance": "dark", "theme": "mustard"]]
+        case "save": return ["ok": true, "settings": object["settings"] as? [String: Any] ?? [:]]
+        default: return ["ok": true, "path": "/fixture/settings.json"]
+        }
+    }
+}
+
 final class CaptureControlsTests: XCTestCase {
     private let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
     private let targets = [
@@ -19,12 +29,55 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertEqual(CaptureGuidanceCopy.directHint(CaptureGuidanceCopy.windowTitle,
             CaptureGuidanceCopy.hint, confirm: true),
             "Select a window to continue · Esc to cancel · Press Enter to confirm")
-        XCTAssertEqual(CaptureGuidanceCopy.menuNote(recording: false, autoStart: false),
-            "These controls won’t show in screenshots  ·  Press Enter to confirm")
-        XCTAssertEqual(CaptureGuidanceCopy.menuNote(recording: false, autoStart: true),
-            "These controls won’t show in screenshots  ·  Auto-capture is on. Selecting a target starts immediately.")
-        XCTAssertEqual(CaptureGuidanceCopy.menuNote(recording: true, autoStart: false),
-            "These controls won’t show in recordings  ·  Press Enter to confirm")
+        XCTAssertEqual(CaptureGuidanceCopy.displayTitle, "Click to capture this display")
+        let state = RecordingControlState(framesPerSecond: 60, maxResolution: "original",
+            showCursor: true, highlightClicks: false, systemAudio: false, microphoneDeviceID: nil)
+        let screenshot = try? CaptureMenuPolicy.menu(mode: .screenshot, autoStart: false,
+            canExcludeControls: true, controlsExcluded: true, state: state, availability: nil)
+        XCTAssertEqual(screenshot?.note.text, "These controls won’t show in screenshots")
+        XCTAssertEqual(screenshot?.note.emphasis, "won’t")
+        XCTAssertEqual(screenshot?.note.setting, "include_recording_controls_in_captures")
+        XCTAssertEqual(screenshot?.confirmText, "Press Enter to confirm")
+        XCTAssertNil(screenshot?.confirmSetting)
+        XCTAssertEqual(screenshot?.primaryLabel, "Capture")
+        XCTAssertEqual(screenshot?.primaryAccessibilityLabel, "Take screenshot")
+        XCTAssertEqual(screenshot?.primaryHidden, false)
+        let recording = try? CaptureMenuPolicy.menu(mode: .record, autoStart: true,
+            canExcludeControls: true, controlsExcluded: false, error: true, state: state,
+            availability: RecordingControlAvailability(cursor: true, clicks: false,
+                systemAudio: true, microphone: true))
+        XCTAssertEqual(recording?.note.text, "These controls will show in recordings")
+        XCTAssertEqual(recording?.confirmText,
+            "Auto-capture is on. Selecting a target starts immediately.")
+        XCTAssertEqual(recording?.confirmSetting, "auto_start_on_selection")
+        XCTAssertEqual(recording?.primaryLabel, "Retry recording")
+        XCTAssertEqual(recording?.primaryHidden, false, "a failed auto-start shows Retry")
+        XCTAssertEqual(recording?.toggleStatus["show_cursor"], "On")
+        XCTAssertEqual(recording?.toggleStatus["highlight_clicks"], "Unavailable")
+        XCTAssertEqual(recording?.toggleStatus["system_audio"], "Off")
+        let linux = try? CaptureMenuPolicy.menu(mode: .record, autoStart: false,
+            canExcludeControls: false, controlsExcluded: false, state: state, availability: nil)
+        XCTAssertEqual(linux?.note.text,
+            "These controls will show in recordings · Use Hide controls to keep them out")
+        XCTAssertNil(linux?.note.setting, "a platform that cannot exclude controls shows plain text")
+        XCTAssertEqual(CaptureMenuPolicy.copy.fpsOptions, [60, 30, 15])
+        XCTAssertEqual(CaptureMenuPolicy.copy.toggles.map(\.label),
+            ["Show cursor", "Show clicks", "Desktop audio"])
+        XCTAssertEqual(CaptureMenuPolicy.copy.highlightSeconds, 2.4, accuracy: 0.001)
+        let coupled = try? CaptureMenuPolicy.coupled(changed: "highlight_clicks",
+            showCursor: false, highlightClicks: true)
+        XCTAssertEqual(coupled?.showCursor, true)
+        let identity = try? CaptureMenuPolicy.displayIdentity(name: " ", width: 1512, height: 982,
+            recordingFPS: 30)
+        XCTAssertEqual(identity?.name, "Display")
+        XCTAssertEqual(identity?.detail, "1512 × 982 · 30 FPS")
+        let chip = NSRect(x: 100, y: 40, width: 200, height: 50)
+        XCTAssertTrue(CaptureMenuPolicy.pointerOverGuidance(NSPoint(x: 72, y: 50), chip: chip,
+            currentlyOver: false))
+        XCTAssertFalse(CaptureMenuPolicy.pointerOverGuidance(NSPoint(x: 71, y: 50), chip: chip,
+            currentlyOver: false))
+        XCTAssertTrue(CaptureMenuPolicy.pointerOverGuidance(NSPoint(x: 61, y: 50), chip: chip,
+            currentlyOver: true))
     }
 
     func testTargetSwitchesRetainSettledRegionAndWindowIndependently() throws {
@@ -231,20 +284,35 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertFalse(gate.accepts(replacement), "cancel must prevent a late preparation from reopening controls")
     }
 
-    func testRecordModeUsesExplicitConfirmationAndPreservesLogicalRegionCoordinates() throws {
+    func testRecordModeFollowsShippingAutoStartAndPreservesLogicalRegionCoordinates() throws {
         _ = NSApplication.shared
         var confirmed: [WindowSelectionChoice] = []
-        let view = makeView(autoStart: true, confirm: { confirmed.append($0) })
+        let automatic = makeView(autoStart: true, confirm: { confirmed.append($0) })
+        automatic.setMode(.record)
+        XCTAssertTrue(automatic.controls.primaryHidden,
+            "shipping auto-start hides Start recording as well as Capture")
+        automatic.beginRegion(NSPoint(x: 100.4, y: 49.6))
+        automatic.dragRegion(NSPoint(x: 400, y: 300)); automatic.endRegion()
+        XCTAssertEqual(confirmed.count, 1, "shipping auto-start applies to Record too")
+        confirmed.removeAll()
+        let tray = makeView(autoStart: true, confirm: { confirmed.append($0) })
+        tray.restoreControls(UnifiedCaptureControlsState(mode: .record, target: .display,
+            aspectIndex: 0), armAutoStart: false)
+        XCTAssertEqual(tray.target, .display)
+        XCTAssertTrue(confirmed.isEmpty, "a tray Record Full Screen request never auto-starts")
+        tray.confirmSelection()
+        XCTAssertEqual(confirmed, [.display], "Enter or a desktop click still starts it")
+
+        confirmed.removeAll()
+        let view = makeView(confirm: { confirmed.append($0) })
         view.setMode(.record)
         view.beginRegion(NSPoint(x: 100.4, y: 49.6))
         view.dragRegion(NSPoint(x: 900.2, y: 499.7)); view.endRegion()
-        XCTAssertTrue(confirmed.isEmpty,
-            "screenshot auto-start must not implicitly start a recording")
+        XCTAssertTrue(confirmed.isEmpty, "without auto-start Record waits for confirmation")
         let start = try XCTUnwrap(buttons(in: view.controls).first {
             $0.accessibilityLabel() == "Start recording"
         })
-        XCTAssertFalse(start.isHidden,
-            "recording always retains explicit confirmation even when screenshot auto-start is enabled")
+        XCTAssertFalse(start.isHidden)
         XCTAssertEqual(start.title, "Start recording")
         view.confirmSelection()
         XCTAssertEqual(confirmed.count, 1)
@@ -279,10 +347,17 @@ final class CaptureControlsTests: XCTestCase {
                     "is_default": true])!,
             ])
         window.contentView = view; view.setMode(.record)
-        let buttons = buttons(in: view.controls)
-        XCTAssertTrue(buttons.first { $0.accessibilityLabel() == "Cursor" }?.isEnabled == true)
-        XCTAssertTrue(buttons.first { $0.accessibilityLabel() == "Clicks" }?.isEnabled == false)
-        XCTAssertTrue(buttons.first { $0.accessibilityLabel() == "Desktop audio" }?.isEnabled == true)
+        let switches = recordingSwitches(in: view.controls)
+        let cursor = try XCTUnwrap(switches.first { $0.accessibilityLabel() == "Show cursor" })
+        let clicks = try XCTUnwrap(switches.first { $0.accessibilityLabel() == "Show clicks" })
+        let audio = try XCTUnwrap(switches.first { $0.accessibilityLabel() == "Record desktop audio" })
+        XCTAssertTrue(cursor.isEnabled); XCTAssertEqual(cursor.status, "On")
+        XCTAssertFalse(clicks.isEnabled); XCTAssertEqual(clicks.status, "Unavailable")
+        XCTAssertEqual(clicks.toolTip, "Click highlights are unavailable in this desktop session")
+        XCTAssertTrue(audio.isEnabled); XCTAssertEqual(audio.status, "On")
+        XCTAssertTrue(descendant(in: view.controls, accessibilityLabel: "Frames per second") is NSPopUpButton)
+        XCTAssertEqual((descendant(in: view.controls, accessibilityLabel: "Frames per second")
+            as? NSPopUpButton)?.itemTitles, ["60", "30", "15"])
         let microphone = try XCTUnwrap(descendant(in: view.controls,
             accessibilityLabel: "Microphone") as? NSPopUpButton)
         XCTAssertTrue(microphone.isEnabled)
@@ -431,15 +506,149 @@ final class CaptureControlsTests: XCTestCase {
         }
     }
 
+    func testNoteLinksOpenPreferencesAndFollowCapabilities() throws {
+        _ = NSApplication.shared
+        var opened: [String] = []
+        let automatic = makeView(autoStart: true)
+        automatic.openPreference = { opened.append($0) }
+        XCTAssertEqual(automatic.controls.noteLinks.map(\.setting),
+            ["include_recording_controls_in_captures", "auto_start_on_selection"])
+        XCTAssertEqual(automatic.controls.noteText,
+            "These controls won’t show in screenshots · Auto-capture is on. Selecting a target starts immediately.")
+        automatic.controls.noteLinks.forEach { $0.performClick(nil) }
+        XCTAssertEqual(opened, ["include_recording_controls_in_captures", "auto_start_on_selection"])
+        for view in automatic.controls.noteLinks {
+            XCTAssertTrue(automatic.controls.bounds.contains(view.frame), "\(view.text) clips")
+        }
+
+        let plain = makeView(visibility: CaptureControlsVisibility(canExclude: false, excluded: false))
+        XCTAssertTrue(plain.controls.noteLinks.isEmpty,
+            "Enter confirmation and non-excludable controls are plain text")
+        XCTAssertEqual(plain.controls.noteText,
+            "These controls will show in screenshots · Press Enter to confirm")
+        plain.setMode(.record)
+        XCTAssertEqual(plain.controls.noteText,
+            "These controls will show in recordings · Use Hide controls to keep them out · Press Enter to confirm")
+    }
+
+    func testRecordingSwitchesCoupleCursorAndClicksLikeShipping() throws {
+        _ = NSApplication.shared
+        let view = UnifiedCaptureSelectionView(frame: frame, image: nil, targets: targets,
+            tokens: Tokens.variants["dark-mustard"]!, autoStart: false, hitTest: { _ in 0 },
+            displayTitles: ["Main display"], selectedDisplay: 0, confirm: { _ in }, cancel: {},
+            changeDisplay: { _ in },
+            recordingState: RecordingControlState(framesPerSecond: 30, maxResolution: "p720",
+                showCursor: false, highlightClicks: false, systemAudio: false, microphoneDeviceID: nil),
+            recordingAvailability: RecordingControlAvailability(cursor: true, clicks: true,
+                systemAudio: false, microphone: false))
+        view.setMode(.record)
+        var changes: [RecordingControlState] = []
+        view.controls.recordingControlsChanged = { changes.append($0) }
+        view.controls.toggleRecordingSwitch("highlight_clicks")
+        XCTAssertEqual(changes.last?.highlightClicks, true)
+        XCTAssertEqual(changes.last?.showCursor, true, "showing clicks shows the cursor")
+        view.controls.toggleRecordingSwitch("show_cursor")
+        XCTAssertEqual(changes.last?.showCursor, false)
+        XCTAssertEqual(changes.last?.highlightClicks, false, "hiding the cursor hides clicks")
+        view.controls.toggleRecordingSwitch("system_audio")
+        XCTAssertEqual(changes.count, 2, "an unavailable switch cannot change")
+        let switches = recordingSwitches(in: view.controls)
+        XCTAssertEqual(switches.map(\.status), ["Off", "Off", "Unavailable"])
+        let microphone = try XCTUnwrap(descendant(in: view.controls,
+            accessibilityLabel: "Microphone") as? NSPopUpButton)
+        XCTAssertEqual(microphone.titleOfSelectedItem, "Unavailable")
+        XCTAssertEqual((descendant(in: view.controls, accessibilityLabel: "Maximum resolution")
+            as? NSPopUpButton)?.titleOfSelectedItem, "720p")
+    }
+
+    func testFullScreenIdentityAndGuidanceFollowShippingRules() throws {
+        _ = NSApplication.shared
+        // Keep asserted windows within the CI runner's clamped screen height.
+        let compact = NSRect(x: 0, y: 0, width: 1000, height: 600)
+        let window = NSWindow(contentRect: compact, styleMask: [.borderless],
+            backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; defer { window.close() }
+        let view = makeView(identity: CaptureDisplayIdentity(name: "Studio Display",
+            width: 5120, height: 2880), viewFrame: compact)
+        window.contentView = view
+
+        XCTAssertEqual(view.guidanceText, "Drag to select a region · Shift for square · Esc to cancel")
+        XCTAssertEqual(view.guidanceFrame.minY, (compact.height * 0.16).rounded(), accuracy: 1,
+            "the shipping chip sits 16% from the top")
+        let chip = view.guidanceFrame
+        view.duckGuidance(at: NSPoint(x: chip.minX - 20, y: chip.midY))
+        XCTAssertTrue(view.isGuidanceDucked, "the chip fades within 28 points of the pointer")
+        view.duckGuidance(at: NSPoint(x: chip.minX - 35, y: chip.midY))
+        XCTAssertTrue(view.isGuidanceDucked, "leave slack keeps a faded chip hidden")
+        view.duckGuidance(at: NSPoint(x: chip.minX - 45, y: chip.midY))
+        XCTAssertFalse(view.isGuidanceDucked)
+
+        view.setTarget(.display)
+        XCTAssertFalse(view.isGuidanceVisible, "Full screen shows the identity, not guidance")
+        XCTAssertTrue(view.isDisplayIdentityVisible)
+        XCTAssertEqual(view.displayIdentityText, "Studio Display · 5120 × 2880")
+        try render(view, window: window, name: "capture-controls-light-display-identity")
+        view.setMode(.record)
+        XCTAssertEqual(view.displayIdentityText, "Studio Display · 5120 × 2880 · 60 FPS")
+
+        view.setMode(.screenshot); view.setTarget(.window)
+        XCTAssertFalse(view.isDisplayIdentityVisible)
+        XCTAssertEqual(view.guidanceText, "Select a window to continue · Esc to cancel")
+        XCTAssertTrue(view.hoverWindow(NSPoint(x: 700, y: 400)))
+        XCTAssertEqual(view.guidanceText, "Click to capture this display · Esc to cancel")
+        XCTAssertTrue(view.hoverWindow(NSPoint(x: 100, y: 200)))
+        XCTAssertTrue(view.isGuidanceVisible, "guidance stays while only hovering a window")
+        view.selectWindow(NSPoint(x: 100, y: 200))
+        XCTAssertFalse(view.isGuidanceVisible, "guidance hides once a window is selected")
+    }
+
+    func testNoteLinkRevealsAndHighlightsItsPreferencesRow() throws {
+        _ = NSApplication.shared
+        let root = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 600))
+        let tokens = Tokens.variants["dark-mustard"]!
+        let store = try SettingsStore(path: "/fixture/settings.json",
+            transport: CaptureMenuSettingsTransport(), debounceInterval: 0)
+        let controller = PreferencesController(root: root, store: store, tokens: { tokens },
+            appearanceChanged: { _, _, _ in }, showHistory: {})
+        controller.revealSetting("include_recording_controls_in_captures")
+        let deadline = Date().addingTimeInterval(2)
+        while controller.highlightedRowFrame == nil, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        let row = try XCTUnwrap(controller.highlightedRowFrame)
+        let scroll = try XCTUnwrap(scrollView(in: root))
+        let visible = scroll.contentView.bounds
+        XCTAssertGreaterThan(visible.minY, 0, "the Capture row starts below the first viewport")
+        XCTAssertTrue(visible.contains(NSPoint(x: row.midX, y: row.midY)),
+            "the linked row is scrolled into view: \(row) in \(visible)")
+        XCTAssertEqual(controller.highlightedSetting, "include_recording_controls_in_captures")
+        withExtendedLifetime(controller) {}
+    }
+
+    private func recordingSwitches(in view: NSView) -> [RecordingSwitchButton] {
+        view.subviews.flatMap { subview in
+            (subview as? RecordingSwitchButton).map { [$0] } ?? recordingSwitches(in: subview)
+        }
+    }
+
+    private func scrollView(in view: NSView) -> NSScrollView? {
+        if let scroll = view as? NSScrollView { return scroll }
+        return view.subviews.lazy.compactMap { self.scrollView(in: $0) }.first
+    }
+
     private func makeView(appearance: String = "light", autoStart: Bool = false,
                           confirm: @escaping (WindowSelectionChoice) -> Void = { _ in },
-                          cancel: @escaping () -> Void = {}) -> UnifiedCaptureSelectionView {
-        UnifiedCaptureSelectionView(frame: frame,
+                          cancel: @escaping () -> Void = {},
+                          visibility: CaptureControlsVisibility = .excludedByDefault,
+                          identity: CaptureDisplayIdentity? = nil,
+                          viewFrame: NSRect? = nil) -> UnifiedCaptureSelectionView {
+        UnifiedCaptureSelectionView(frame: viewFrame ?? frame,
             image: PreviewView.fixtureImage(scale: 2048.0 / 284.0), targets: targets,
             tokens: Tokens.variants["\(appearance)-mustard"]!, autoStart: autoStart,
             hitTest: { point in point.x < 50 ? 1 : (point.x < 400 ? 0 : -1) },
             displayTitles: ["Main display · 1000 × 720", "External · 1920 × 1080"],
-            selectedDisplay: 0, confirm: confirm, cancel: cancel, changeDisplay: { _ in })
+            selectedDisplay: 0, confirm: confirm, cancel: cancel, changeDisplay: { _ in },
+            visibility: visibility, displayIdentity: identity)
     }
 
     private func buttons(in view: NSView) -> [CaptureButton] {

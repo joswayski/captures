@@ -1,3 +1,4 @@
+use captures_app::capture_menu::{self, DisplayIdentity, GuidanceTarget};
 use captures_app::selection::Point;
 use captures_capture::{DisplayDescriptor, WindowDescriptor};
 use eframe::egui::{
@@ -135,6 +136,30 @@ impl WindowSelector {
         view: &View<'_>,
         hit_test: impl Fn(Point) -> Option<usize>,
     ) -> Option<SelectionTarget> {
+        self.show_surface_with(ui, tokens, view, hit_test, false)
+    }
+
+    /// New Capture's window surface: the shipping guidance chip shows until a
+    /// window is selected, switches to display copy over the desktop and ducks
+    /// away from the pointer.
+    pub fn show_menu_surface(
+        &mut self,
+        ui: &mut egui::Ui,
+        tokens: &Tokens,
+        view: &View<'_>,
+        hit_test: impl Fn(Point) -> Option<usize>,
+    ) -> Option<SelectionTarget> {
+        self.show_surface_with(ui, tokens, view, hit_test, true)
+    }
+
+    fn show_surface_with(
+        &mut self,
+        ui: &mut egui::Ui,
+        tokens: &Tokens,
+        view: &View<'_>,
+        hit_test: impl Fn(Point) -> Option<usize>,
+        menu: bool,
+    ) -> Option<SelectionTarget> {
         let surface = ui.max_rect();
         let coordinates = CoordinateMap::new(surface, view.display);
         let response = ui.allocate_rect(surface, Sense::click());
@@ -167,7 +192,16 @@ impl WindowSelector {
             view,
             coordinates,
             self.presentation_target(),
-            self.selected.is_some(),
+            if menu {
+                SurfaceGuidance::Menu {
+                    hidden: matches!(self.selected, Some(SelectionTarget::Window(_))),
+                    display: self.hovered == Some(SelectionTarget::Display),
+                }
+            } else {
+                SurfaceGuidance::Direct {
+                    has_selection: self.selected.is_some(),
+                }
+            },
         );
 
         if response.clicked()
@@ -204,7 +238,14 @@ impl WindowSelector {
     }
 }
 
-pub fn show_display_surface(ui: &mut egui::Ui, tokens: &Tokens, view: &View<'_>) -> bool {
+/// New Capture's Full screen target: display outline and the shipping
+/// `recording-display-identity` (name, size and Record FPS), no guidance chip.
+pub fn show_display_surface(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &View<'_>,
+    identity: &DisplayIdentity,
+) -> bool {
     let surface = ui.max_rect();
     let coordinates = CoordinateMap::new(surface, view.display);
     let response = ui.allocate_rect(surface, Sense::click());
@@ -214,9 +255,57 @@ pub fn show_display_surface(ui: &mut egui::Ui, tokens: &Tokens, view: &View<'_>)
         view,
         coordinates,
         Some(SelectionTarget::Display),
-        true,
+        SurfaceGuidance::None,
     );
+    paint_display_identity(ui.painter(), tokens, surface, identity);
     response.clicked()
+}
+
+fn paint_display_identity(
+    painter: &egui::Painter,
+    tokens: &Tokens,
+    surface: egui::Rect,
+    identity: &DisplayIdentity,
+) {
+    let name = painter.layout_no_wrap(
+        identity.name.clone(),
+        FontId::proportional(tokens.number("text-2xl")),
+        tokens.color("glass-text"),
+    );
+    let detail = painter.layout_no_wrap(
+        identity.detail.clone(),
+        FontId::proportional(tokens.number("text-md")),
+        tokens.color("glass-text-muted"),
+    );
+    let gap = tokens.number("s-4");
+    let height = name.size().y + gap + detail.size().y;
+    // translate(-50%, -60%) around the display center.
+    let top = surface.center().y - height * 0.6;
+    let detail_top = top + height - detail.size().y;
+    for (galley, y) in [(name, top), (detail, detail_top)] {
+        let origin = Pos2::new(surface.center().x - galley.size().x / 2., y);
+        // The shipping text-shadow keeps the label legible on bright desktops.
+        painter.galley_with_override_text_color(
+            origin + egui::vec2(0., 2.),
+            galley.clone(),
+            Color32::from_black_alpha(128),
+        );
+        painter.galley(origin, galley, Color32::WHITE);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SurfaceGuidance {
+    /// Direct window overlay: persistent chip with its Enter hint.
+    Direct {
+        has_selection: bool,
+    },
+    /// New Capture: shipping chip, hidden once a window is selected.
+    Menu {
+        hidden: bool,
+        display: bool,
+    },
+    None,
 }
 
 #[derive(Clone, Copy)]
@@ -276,7 +365,7 @@ fn paint_surface(
     view: &View<'_>,
     coordinates: CoordinateMap,
     hovered: Option<SelectionTarget>,
-    has_selection: bool,
+    guidance: SurfaceGuidance,
 ) {
     let surface = coordinates.surface;
     let painter = ui.painter();
@@ -357,6 +446,27 @@ fn paint_surface(
         }
     }
 
+    let has_selection = match guidance {
+        SurfaceGuidance::Direct { has_selection } => has_selection,
+        SurfaceGuidance::Menu { hidden, display } => {
+            crate::capture_controls::paint_guidance(
+                ui,
+                tokens,
+                surface,
+                capture_menu::guidance(
+                    if display {
+                        GuidanceTarget::Display
+                    } else {
+                        GuidanceTarget::Window
+                    },
+                    false,
+                ),
+                hidden,
+            );
+            return;
+        }
+        SurfaceGuidance::None => return,
+    };
     // Shipping CaptureGuidance: shell/desktop hover switches to display copy.
     let guidance = if hovered == Some(SelectionTarget::Display) {
         "Click to capture this display"

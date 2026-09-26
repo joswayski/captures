@@ -225,7 +225,7 @@ def main():
     def fit_geometry(size=None, window=None):
         width, height = window or window_size()
         image_width, image_height = size or document_size()
-        available = (64., 133. if width == 760 else 89., width - 238., height - 8.)
+        available = (64., 89., width - 238., height - 8. - export_bar_height())
         scale = min(1., max(.02, (available[2] - available[0]) / image_width),
                     max(.02, (available[3] - available[1]) / image_height))
         center = ((available[0] + available[2]) / 2, (available[1] + available[3]) / 2)
@@ -251,7 +251,16 @@ def main():
 
     def resize_editor(width, height, *tail):
         # Full-size geometry fixtures use odd client heights so an even-height
-        # document's centered Fit origin lands on an integer device pixel.
+        # document's centered Fit origin lands on an integer device pixel. They
+        # predate the full-width export bar: add its collapsed 80px so the canvas
+        # keeps its historical geometry. The minimum size stays the minimum.
+        if height > 540:
+            height += 80
+        run("xdotool", "windowsize", "--sync", editor, str(width), str(height), *map(str, tail))
+
+    def resize_inspector_fixture(width, height, *tail):
+        # Inspector-authored fixtures keep their historical inspector height:
+        # the export bar replaces the old 80px footer below the inspector.
         run("xdotool", "windowsize", "--sync", editor, str(width), str(height), *map(str, tail))
 
     def fixture_to_document(point):
@@ -263,23 +272,94 @@ def main():
     def inspector_click(x, y):
         click(editor, inspector_x(x), y)
 
+    # The full-width export bar is below the canvas and inspector: a fixed
+    # collapsed height, plus a fixed settings area while its disclosure is open.
+    export_bar = {"open": False}
+
+    def export_bar_height():
+        return 80 + (128 if export_bar["open"] else 0)
+
+    def export_widths(width):
+        # Mirrors export_widths in the editor: fixed actions, then disclosure, then filename.
+        flexible = max(0, width - 24 - (68 + 92 + 128 + 100 + 5 * 8))
+        disclosure = min(max(flexible - 128, 160), 210)
+        return disclosure, min(max(flexible - disclosure, 128), 320)
+
+    def export_point(action):
+        width, height = window_size()
+        disclosure, stem = export_widths(width)
+        row, heading = height - 34, height - 66
+        return {
+            "settings": (12 + disclosure // 2, row),
+            "filename": (12 + disclosure + stem // 2, row),
+            "format": (12 + disclosure + stem + 8 + 34, row),
+            "copy": (12 + disclosure + stem + 8 + 68 + 8 + 46, row),
+            "new-file": (width - 164, row),
+            "save": (width - 62, row),
+            "change": (12 + disclosure + stem + 76 - 40, heading),
+            "show": (width - 57, heading),
+        }[action]
+
     def export_click(action):
-        # Pinned below the inspector: independent of section, scroll and output options.
-        inspector_click({"copy": 44, "save": 134}[action], window_size()[1] - 63)
+        # Independent of inspector section and scroll position.
+        click(editor, *export_point(action))
+
+    def export_format(label):
+        # The suffix menu opens upward from the bottom row.
+        x, y = export_point("format")
+        click(editor, x, y)
+        click(editor, x, y - 126 + 44 * ["PNG", "JPEG", "WebP"].index(label))
+
+    def export_settings(state):
+        if export_bar["open"] != state:
+            export_click("settings")
+            export_bar["open"] = state
+            time.sleep(.4)
+
+    def setting_point(x, row=0):
+        # Settings groups start 25px from the window edge; row 0 controls sit
+        # 157px above the bottom while the disclosure is open.
+        assert export_bar["open"]
+        return 25 + x, window_size()[1] - 157 + 55 * row
+
+    def setting_click(x, row=0):
+        click(editor, *setting_point(x, row))
+
+    def preview_encoded():
+        # Encode the current output into the canvas without saving anything.
+        export_settings(True)
+        setting_click(647)  # Canvas: Encoded (Preserve layout).
+        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+             "encoded output preview")
+
+    def setting_menu(x, index, count, row=0):
+        # Menus of up to three items open below the control; longer menus open
+        # above it. Items are 44px apart.
+        px, py = setting_point(x, row)
+        click(editor, px, py)
+        first = py + 39 if count <= 3 else py - 44 * count + 6
+        click(editor, px, first + 44 * index)
+
+    def setting_field(x, value, row=0):
+        setting_click(x, row)
+        run("xdotool", "key", "ctrl+a")
+        type_text(value, 60)
+        run("xdotool", "key", "Return", "sleep", ".3")
+
+    def export_filename(stem):
+        export_click("filename")
+        run("xdotool", "key", "ctrl+a")
+        type_text(stem, 30)
+        run("xdotool", "key", "Return", "sleep", ".3")
 
     # Toolbar row button centers at y=62, measured under the shipping token
     # font stack (egui's default font packed the row about 10% narrower).
+    # Without an Output tab the row also fits the 760px minimum unwrapped.
     toolbar_x = {"undo": 37, "redo": 102, "save-draft": 184, "discard": 298,
-                 "geometry": 425, "layers": 511, "output": 587, "import": 692, "draw": 792}
-
-    # At the 760px minimum the row wraps before Import image….
-    wrapped_toolbar_x = {"import": 70, "draw": 170}
+                 "geometry": 425, "layers": 511, "import": 615, "draw": 715}
 
     def toolbar_click(name):
-        if editor_width() == 760 and name in wrapped_toolbar_x:
-            click(editor, wrapped_toolbar_x[name], 106)
-        else:
-            click(editor, toolbar_x[name], 62)
+        click(editor, toolbar_x[name], 62)
 
     # Draw tool grid centers (inspector x, window y) under the token fonts.
     # The wider labels wrap the twelve tools onto five rows instead of four.
@@ -313,7 +393,8 @@ def main():
         # Rows authored against an inspector scrolled until it clamps at its end.
         # Its content used to end with a 125px development footer; without it,
         # a bottom-clamped scroll leaves every row 125px lower in the window.
-        return y + 125
+        # The export bar below the inspector adds 80px more to a taller window.
+        return y + 125 + 80
 
     def canvas_point(point):
         # Existing authored gestures describe points in the fixture screenshot.
@@ -462,7 +543,7 @@ def main():
         run("xdotool", "windowmove", "--sync", editor, "100", "80")
         time.sleep(1)
         shot(editor, "editor-original")
-        pixel("editor-original", 520, 690,
+        pixel("editor-original", 520, 600,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
 
         def type_text(value, delay=10):
@@ -507,6 +588,7 @@ def main():
                 "sleep", ".1", "keyup", "Alt_L", "sleep", ".4")
 
         def reopen(row_y=None):
+            export_bar["open"] = False  # Every editor window starts collapsed.
             click(root, 810, row_y or edit_row_y)
             window = wait(lambda: windows("Screenshot editor"), "reopened editor")[0]
             run("xdotool", "windowmove", "--sync", window, "100", "80")
@@ -730,8 +812,7 @@ def main():
             shot(editor, "combine-minimum-disabled-menu")
             run("xdotool", "key", "Escape", "sleep", ".2")
             resize_editor(1000, 801, "sleep", ".3")
-            toolbar_click("output")
-            inspector_click(65, 463)
+            preview_encoded()
             export_click("copy")
             wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
                  "flattened clipboard copy completes")
@@ -910,18 +991,20 @@ def main():
             run("xdotool", "key", "Escape", "sleep", ".3")
             assert draft.read_bytes() == before_menu, "opening/cancelling a row menu must not edit"
             resize_editor(760, 540, "sleep", ".3")
-            inspector_move(100, 202, "sleep", ".2", "mousedown", "3",
+            # Without the Output tab the toolbar no longer wraps at the minimum
+            # width, so the first layer row is 44px higher than at full size.
+            inspector_move(100, 158, "sleep", ".2", "mousedown", "3",
                            "sleep", ".15", "mouseup", "3", "sleep", ".3")
             shot(editor, "layer-context-menu-minimum")
             # Copy the first row through the actual popup. A missed opening must
             # fail this flow, not silently produce a menu-free review capture.
-            inspector_click(130, 217)
+            inspector_click(130, 173)
             assert draft.read_bytes() == before_menu
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             menu_paste = save_layers(lambda values: len(values) == 4, "context-menu copy then paste")[-1]
             assert menu_paste == dict(pasted_twice, id=menu_paste["id"],
                                       x=pasted_twice["x"] + 24, y=pasted_twice["y"] + 24,
-                                      endX=pasted_twice["endX"] + 24, endY=pasted_twice["endY"] + 24)
+                                      endX=pasted_twice["endX"] + 24, endY=pasted_twice["endY"] + 24), (menu_paste, pasted_twice)
             assert menu_paste["id"] not in {shape["id"], pasted["id"], pasted_twice["id"]}
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
@@ -952,21 +1035,17 @@ def main():
             drag((320, 250), (480, 370))
             save_layers(lambda values: len(values) == 2, "edited original fixture")
             saved_draft = draft.read_bytes()
-            toolbar_click("output")
+            # A saved source starts beside itself: same folder and name, Save overwrites.
+            export_click("filename")
+            run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+            assert run("xclip", "-selection", "clipboard", "-o").decode() == "original"
+            click(editor, 300, 20)  # Leave the field without editing it.
             shot(editor, "overwrite-controls")
-            inspector_click(85, 822)  # Replace original…, below token-font wrapped notes.
-            shot(editor, "overwrite-confirmation")
             assert source_export.read_bytes() == original
             assert json.loads(metadata_path.read_text()) == original_metadata
-            assert draft.read_bytes() == saved_draft
-            click(editor, 231, 190)  # Toolbar confirmation: cancel replacement.
-            shot(editor, "overwrite-cancelled")
-            assert source_export.read_bytes() == original
-            inspector_click(85, 822)
-            run("xdotool", "key", "Escape", "sleep", ".3")
-            assert source_export.read_bytes() == original
-            inspector_click(85, 822)
-            click(editor, 75, 190)  # Toolbar confirmation: explicit Replace, not the copy-path field.
+            # Like the shipping editor, Save replaces the source without a second step;
+            # the shared publisher revalidates this History entry and path first.
+            export_click("save")
             wait(lambda: source_export.read_bytes() != original, "original file replaced")
             wait(lambda: (artifact / "capture.png").read_bytes() != original, "same History image replaced")
             shot(editor, "overwrite-saved")
@@ -976,6 +1055,7 @@ def main():
             updated = json.loads(metadata_path.read_text())
             assert (updated["id"], updated["created_at"], updated["saved_path"]) == (
                 artifact_id, original_metadata["created_at"], str(source_export))
+            assert updated["size_bytes"] == len(source_export.read_bytes())
             assert len(list(history.glob("*/metadata.json"))) == 1
             assert draft.read_bytes() == saved_draft
             replaced = source_export.read_bytes()
@@ -984,6 +1064,31 @@ def main():
             assert source_export.read_bytes() == replaced
             toolbar_click("redo")
             save_layers(lambda values: len(values) == 2, "redo preserved after output")
+
+            # "Save as new file" suggests an -edited name beside the source and never touches it.
+            export_click("new-file")
+            shot(editor, "overwrite-new-file-switch")
+            export_click("save")
+            copy_path = output / "original-edited.png"
+            wait(copy_path.exists, "new file beside the original")
+            assert source_export.read_bytes() == replaced
+            entries = [json.loads(path.read_text()) for path in history.glob("*/metadata.json")]
+            assert len(entries) == 2
+            copy_entry = next(entry for entry in entries if entry["id"] != artifact_id)
+            assert copy_entry["saved_path"] == str(copy_path)
+            shot(editor, "overwrite-new-file-saved")
+            # The saved copy becomes the file Save overwrites, as in the shipping app.
+            toolbar_click("undo")
+            save_layers(lambda values: len(values) == 1, "undo before saving the adopted copy")
+            copied_before = copy_path.read_bytes()
+            export_click("save")
+            wait(lambda: copy_path.read_bytes() != copied_before, "adopted copy overwritten")
+            assert run("convert", str(copy_path), "-crop", "1x1+162+221", "-depth", "8", "rgb:-") == bytes((40, 110, 166))
+            assert source_export.read_bytes() == replaced
+            entries = {json.loads(path.read_text())["id"] for path in history.glob("*/metadata.json")}
+            assert entries == {artifact_id, copy_entry["id"]}
+            toolbar_click("redo")
+            save_layers(lambda values: len(values) == 2, "redo after saving the adopted copy")
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             inspector_move(180, 400, "click", "--repeat", "25", "5")
             shot(editor, "overwrite-minimum")
@@ -998,11 +1103,13 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["confirmation-before-write", "cancel-and-escape", "exact-file-pixels",
-                           "same-history-id-date", "draft-preserved", "undo-redo-preserved",
-                           "minimum-controls", "editable-draft-reopen"],
+                "checks": ["source-name-and-folder-default", "save-overwrites-source",
+                           "exact-file-pixels", "same-history-id-date", "draft-preserved",
+                           "undo-redo-preserved", "save-as-new-file-keeps-source",
+                           "saved-copy-becomes-overwrite-target", "minimum-controls",
+                           "editable-draft-reopen"],
             }, indent=2) + "\n")
-            print("PASS native overwrite: confirmation, cancel, pixels, same History, draft and undo")
+            print("PASS native overwrite: default overwrite, same History, new-file switch, adopted copy, draft and undo")
             return
 
         if args.rotation_snap_only:
@@ -1264,19 +1371,19 @@ def main():
 
         if args.output_size_only:
             run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
-            toolbar_click("output")
+            export_settings(True)
             shot(editor, "output-size-original")
             exports = output / "exports"
             exports.mkdir()
 
-            def size_export(name, expected, custom=False, section="output"):
-                inspector_click(65, 507 if custom else 463)
+            def size_export(name, expected, section=None):
                 wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
-                     "resized output preview")
-                shot(editor, f"output-size-{name}-preview")
+                     "settings applied")
+                shot(editor, f"output-size-{name}-settings")
                 path = exports / f"{name}.png"
-                field(775 if custom else 731, path)  # Token-font notes wrap one line lower.
-                toolbar_click(section)
+                export_filename(name)
+                if section is not None:
+                    toolbar_click(section)  # Save does not depend on the inspector section.
                 export_click("save")
                 wait(path.exists, f"{name} saved")
                 assert run("identify", "-format", "%wx%h", str(path)).decode() == expected
@@ -1287,101 +1394,106 @@ def main():
                 assert run("identify", "-format", "%wx%h", str(entry_path.parent / "capture.png")).decode() == expected
                 assert not draft.exists() and (artifact / "capture.png").read_bytes() == original
                 shot(editor, f"output-size-{name}-saved")
-                toolbar_click("output")
 
-            inspector_click(65, 159)
+            setting_click(54)
             shot(editor, "output-size-menu")
-            inspector_click(45, 247)  # 75%.
+            run("xdotool", "key", "Escape", "sleep", ".2")
+            setting_menu(54, 1, 4)  # 75%.
             size_export("75-percent", "480x270", section="geometry")
-            inspector_click(65, 159)
-            inspector_click(45, 291)  # 50%.
+            setting_menu(54, 2, 4)  # 50%.
             size_export("50-percent", "320x180", section="layers")
-            inspector_click(65, 159)
-            inspector_click(45, 335)  # Custom starts from 640x360, locked.
-            field(203, 96, x=40)
-            size_export("locked", "96x54", custom=True, section="draw")
-            inspector_click(170, 203)  # Unlock aspect.
-            field(203, 31, x=112)
-            size_export("unlocked", "96x31", custom=True)
+            setting_menu(54, 3, 4)  # Custom starts from 640x360, locked.
+            setting_field(237, 96)
+            size_export("locked", "96x54", section="draw")
+            setting_click(372)  # Unlock aspect.
+            setting_field(307, 31)
+            size_export("unlocked", "96x31")
             export_click("copy")  # Copy ignores output dimensions.
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "full-size copy")
             copied = output / "clipboard-original-size.png"
             copied.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
             assert run("identify", "-format", "%wx%h", str(copied)) == b"640x360"
-            field(203, 0, x=40)
+            setting_field(237, 0)
             shot(editor, "output-size-invalid")
+            export_click("save")  # Invalid dimensions keep Save disabled.
+            time.sleep(.5)
             assert len(list(exports.iterdir())) == 4
-            field(203, 96, x=40)
+            setting_field(237, 96)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "output-size-minimum")
-            toolbar_click("draw")  # Draw wraps at minimum width; no Output or scrolling.
+            export_settings(False)
+            toolbar_click("draw")  # Minimum width: no Output tab or scrolling.
             # xclip forks a selection owner; do not capture its inherited stdout pipe.
             subprocess.run(["xclip", "-selection", "clipboard", "/dev/null"], env=env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=10)
             export_click("copy")
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "minimum copy")
             copied.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
             assert run("identify", "-format", "%wx%h", str(copied)) == b"640x360"
             shot(editor, "output-size-minimum-draw-copy")
-            inspector_move(100, window_size()[1] - 27, "sleep", "1")
-            shot(editor, "output-size-minimum-copy-detail")
             close(root)
             wait(lambda: app.poll() is not None, "output size suite quits")
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["75-percent-preview-save-history", "50-percent-preview-save-history",
+                "checks": ["75-percent-save-history", "50-percent-save-history",
                            "custom-aspect-lock", "custom-independent-height", "copy-full-resolution",
-                           "invalid-dimensions", "minimum-controls", "no-draft-or-original-write",
-                           "save-from-all-sections", "copy-from-minimum-draw"],
+                           "invalid-dimensions-disable-save", "minimum-controls",
+                           "no-draft-or-original-write", "save-from-all-sections",
+                           "copy-from-minimum-draw"],
             }, indent=2) + "\n")
             print("PASS native output sizing: percentages, custom lock/unlock, History, copy, no edits")
             return
 
         if args.output_presets_only:
             run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
-            toolbar_click("output")
-            inspector_click(20, 371)  # Compress.
-            inspector_click(65, 459)
+            export_settings(True)
+            setting_menu(282, 1, 3)  # Save quality: Compress.
+            # Compress rows: size, quality, preset (374), PNG colors (546), estimate;
+            # the Canvas preview toggle wraps to the second row.
+            setting_click(422)
             shot(editor, "output-preset-menu")
-            inspector_click(45, 503)  # Tiny.
-            inspector_click(65, 551)  # Preview PNG with automatic palette selection.
+            run("xdotool", "key", "Escape", "sleep", ".2")
+            setting_menu(422, 0, 5)  # Tiny.
+            setting_click(111, row=1)  # Preview PNG with automatic palette selection.
             wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
                  "Tiny preview encoded")
             shot(editor, "output-preset-tiny-preview")
             exports = output / "exports"
             exports.mkdir()
             tiny = exports / "tiny.png"
-            field(819, tiny)  # Token-font notes wrap one line lower.
-            inspector_click(78, 819)
+            export_filename("tiny")
+            export_click("filename")
             run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
-            assert run("xclip", "-selection", "clipboard", "-o").decode() == str(tiny)
+            assert run("xclip", "-selection", "clipboard", "-o").decode() == "tiny"
             export_click("save")
             wait(tiny.exists, "Tiny PNG saved")
             shot(editor, "output-preset-tiny")
             assert int(run("identify", "-format", "%k", str(artifact / "capture.png"))) > 256
             assert int(run("identify", "-format", "%k", str(tiny))) <= 32
-            inspector_click(20, 503)  # Explicit override; Highest must clear it.
-            field(547, 2)
-            inspector_click(65, 459)
-            inspector_click(45, 679)  # Highest, not an arbitrary high numeric value.
-            inspector_click(65, 551)
+            setting_click(571)  # Explicit PNG color limit; Highest must clear it.
+            setting_field(655, 2)
+            shot(editor, "output-preset-custom-palette")
+            setting_menu(422, 4, 5)  # Highest, not an arbitrary high numeric value.
+            setting_click(111, row=1)
             wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
                  "Highest preview encoded")
             shot(editor, "output-preset-highest-preview")
             highest = exports / "highest.png"
-            field(819, highest)
-            inspector_click(78, 819)
-            run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
-            assert run("xclip", "-selection", "clipboard", "-o").decode() == str(highest)
+            export_filename("highest")
             export_click("save")
             wait(highest.exists, "Highest PNG saved")
             shot(editor, "output-preset-highest")
+            assert tiny.exists(), "a new filename never replaces the previous save"
             assert run("convert", str(highest), "-depth", "8", "rgba:-") == run(
                 "convert", str(artifact / "capture.png"), "-depth", "8", "rgba:-")
             assert not draft.exists(), "output controls and exports never save a draft"
             assert (artifact / "capture.png").read_bytes() == original
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "output-preset-minimum")
-            inspector_click(65, 503)
+            setting_click(422)
             shot(editor, "output-preset-minimum-menu")
             run("xdotool", "key", "Escape")
             close(root)
@@ -1395,6 +1507,7 @@ def main():
             }, indent=2) + "\n")
             print("PASS native output presets: Tiny palette, Highest exact pixels, no edits, minimum")
             return
+
 
         if args.text_input_only:
             save_layers(lambda values: len(values) == 1, "composition baseline")
@@ -1862,8 +1975,7 @@ def main():
             run("xdotool", "mousemove", "0", "0")
             shot(editor, "text-draft-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
-            toolbar_click("output")
-            inspector_click(65, 463)
+            preview_encoded()
             export_click("copy")
             shot(editor, "text-draft-output-copy")
             png = output / "clipboard-text.png"
@@ -1962,8 +2074,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "brush-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
-            toolbar_click("output")
-            inspector_click(65, 463)
+            preview_encoded()
             export_click("copy")
             shot(editor, "brush-output-copied")
             png = output / "clipboard-brush.png"
@@ -2025,8 +2136,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "wand-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
-            toolbar_click("output")
-            inspector_click(65, 463)  # Preview PNG before copying the edited frame.
+            preview_encoded()  # Preview PNG before copying the edited frame.
             export_click("copy")
             wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
                  "wand clipboard copy")
@@ -2070,8 +2180,7 @@ def main():
             inspector_move(180, 400, "click", "--repeat", "16", "5")
             shot(editor, "trim-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
-            toolbar_click("output")
-            inspector_click(65, 463)
+            preview_encoded()
             export_click("copy")
             png = output / "clipboard-trim.png"
             png.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
@@ -2130,8 +2239,7 @@ def main():
             inspector_move(180, 400, "click", "--repeat", "12", "5")
             shot(editor, "background-transparent-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
-            toolbar_click("output")
-            inspector_click(65, 463)  # Preview PNG, then copy the edited frame.
+            preview_encoded()  # Preview PNG, then copy the edited frame.
             export_click("copy")
             wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
                  "transparent clipboard copy completes")
@@ -2154,7 +2262,7 @@ def main():
             print("PASS native canvas backgrounds: color, rollback, transparency, undo/redo, draft, clipboard alpha")
             return
 
-        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        resize_editor(886, 700)
         # Viewport state is host-only. Exercise anchored wheel zoom and an
         # ordered middle-button pan before the coordinate-sensitive fixtures.
         shot(editor, f"viewport-before-{args.appearance}")
@@ -2252,7 +2360,7 @@ def main():
         if args.zoom_only:
             # With spare width AND height, Fit keeps the 640×360 source at 1×.
             # An uncapped fit would paint beyond both independently checked edges.
-            run("xdotool", "windowsize", "--sync", editor, "1180", "900", "sleep", ".3")
+            resize_editor(1180, 900, "sleep", ".3")
             shot(editor, "viewport-fit-no-upscale")
             surface = (245, 245, 247) if args.appearance == "light" else (16, 16, 20)
             # Client 1180×900 minus the rail, inspector and central-panel margins
@@ -2273,16 +2381,16 @@ def main():
             topbar_click("fit")  # Fit resets the viewport-center anchor.
             topbar_click("slider-min")  # Left end of the logarithmic slider: 5%.
             shot(editor, "viewport-slider-minimum")
-            # Wrapped toolbar leaves x=64..522, y=133..532, center (293,332.5).
-            # The 5% source is 32×18, starting at (277,323.5).
-            pixel("viewport-slider-minimum", 278, 325, (40, 110, 166))
-            pixel("viewport-slider-minimum", 276, 325, surface)
-            pixel("viewport-slider-minimum", 309, 325, surface)
-            pixel("viewport-slider-minimum", 278, 341, surface)
+            # The toolbar and export bar leave x=64..522, y=89..452, center
+            # (293,270.5). The 5% source is 32×18, starting at (277,261.5).
+            pixel("viewport-slider-minimum", 278, 263, (40, 110, 166))
+            pixel("viewport-slider-minimum", 276, 263, surface)
+            pixel("viewport-slider-minimum", 309, 263, surface)
+            pixel("viewport-slider-minimum", 278, 279, surface)
             topbar_click("slider-max")  # Right end: 800%, preserving the same anchor.
             shot(editor, "viewport-slider-maximum")
             pixel("viewport-slider-maximum", 66, 150, (40, 110, 166))
-            pixel("viewport-slider-maximum", 520, 530, (40, 110, 166))
+            pixel("viewport-slider-maximum", 520, 450, (40, 110, 166))
             assert not draft.exists(), "slider changes must not create a draft"
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
@@ -2422,10 +2530,10 @@ def main():
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "discard open-shape edits")
 
-        # Leave room below the annotation form for rotation-snap controls and
-        # the 80px pinned export row. This preserves the bottom-scrolled form's
-        # coordinates; the narrow/minimum-size scroll path is exercised below.
-        run("xdotool", "windowsize", "--sync", editor, "942", "923")
+        # Leave room below the annotation form for rotation-snap controls. This
+        # preserves the bottom-scrolled form's coordinates; the narrow/minimum-size
+        # scroll path is exercised below.
+        resize_editor(942, 923)
         toolbar_click("draw")
         draw_tool("rectangle")
         drag((320, 250), (480, 370))
@@ -2684,7 +2792,7 @@ def main():
         assert (artifact / "capture.png").read_bytes() == original
 
         # Keep Image transform above the pinned footer while exercising its menu.
-        resize_editor(1000, 781)
+        resize_inspector_fixture(1000, 781)
         toolbar_click("layers")  # Layers, preserving the Geometry panel's scroll position.
         shot(editor, "layers-original-locked")
         inspector_click(88, 632)
@@ -2724,7 +2832,7 @@ def main():
         assert_transformed_pixels("layers-rotate-right", False, True)
         close(editor)
         editor = reopen()
-        resize_editor(1000, 781)
+        resize_inspector_fixture(1000, 781)
         toolbar_click("layers")
         assert_transformed_pixels("layers-transform-reopened", False, True)
         transform(2, "transpose", 360, 640)
@@ -2937,7 +3045,8 @@ def main():
         outside = save_layers(lambda values: len(values) == 4, "outside shape retained")[-1]
         assert outside["shape"] == "rectangle"
         assert (outside["x"], outside["y"], outside["endX"]) == (60, 411, 120)
-        assert outside["endY"] > outside["y"] > 360
+        # The release point, not one remapped through the grown live preview.
+        assert abs(outside["endY"] - 481) < 1e-6
         stroke_extent = math.ceil(outside["style"]["strokeWidth"] / 2) + 1
         expected_height = math.ceil(max(outside["y"], outside["endY"]) + stroke_extent)
         assert saved(640, expected_height, 0, 0)
@@ -3015,45 +3124,54 @@ def main():
 
         saved_draft = draft.read_bytes()
         resize_editor(1000, 901)
-        toolbar_click("output")  # Output: encode the edited frame, not History PNG.
-        inspector_click(65, 463)
+        export_settings(True)
+        setting_click(647)  # Canvas: Encoded. Encode the edited frame, not History PNG.
+        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+             "PNG output encoded")
         shot(editor, "output-png")
         fixture_pixel("output-png", 120, 200, (229, 179, 68))
         fixture_pixel("output-png", 428, 289, (46, 158, 113))
-        inspector_click(20, 371)  # PNG Compress with an explicit palette.
-        inspector_click(20, 503)
-        field(547, 4)
-        inspector_click(65, 595)
+        setting_menu(282, 1, 3)  # PNG Compress with an explicit palette.
+        setting_click(571)
+        setting_field(655, 4)
+        setting_click(111, row=1)  # Compress wraps the Canvas toggle to the second row.
+        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+             "palette output encoded")
         shot(editor, "output-png-palette")
         fixture_pixel("output-png-palette", 428, 289, (46, 158, 113))
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
-        inspector_move(180, 400, "click", "--repeat", "8", "5")
-        shot(editor, "output-palette-minimum-scrolled")
+        shot(editor, "output-palette-minimum")
         resize_editor(1000, 901)
-        inspector_move(180, 400, "click", "--repeat", "12", "4")
-        inspector_click(85, 256)  # JPEG invalidates the PNG comparison.
-        inspector_click(20, 371)  # Compress.
-        inspector_click(65, 507)
+        export_format("JPEG")  # JPEG invalidates the PNG comparison; Compress stays.
+        setting_click(819)  # JPEG Compress fits one row: Canvas Encoded.
+        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+             "JPEG output encoded")
         shot(editor, "output-jpeg")
         fixture_pixel("output-jpeg", 428, 289, (46, 158, 113), tolerance=4)
-        inspector_click(65, 579)  # Edited canvas comparison.
+        setting_click(739)  # Edited canvas comparison.
         shot(editor, "output-edited-canvas")
         fixture_pixel("output-edited-canvas", 428, 289, (46, 158, 113))
-        inspector_click(65, 622)  # Encoded output comparison.
-        inspector_click(150, 256)  # WebP, still Compress.
-        inspector_click(65, 507)
+        setting_click(819)  # Encoded output comparison.
+        export_format("WebP")  # WebP, still Compress.
+        setting_click(819)
+        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+             "WebP output encoded")
         shot(editor, "output-webp")
         fixture_pixel("output-webp", 428, 289, (46, 158, 113), tolerance=4)
-        inspector_click(20, 415)  # Maximum file size enables the hard cap.
-        field(459, 0)
-        inspector_click(65, 507)
+        setting_menu(282, 2, 3)  # Maximum file size enables the hard cap.
+        setting_field(424, 0)
         shot(editor, "output-budget-error")
+        export_click("save")  # The status explains the limit; Save stays disabled.
+        time.sleep(.5)
         assert app.poll() is None and windows("Screenshot editor")
+        assert not (output / "exports").exists(), "an invalid limit never publishes"
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "output-budget-error-minimum")
         resize_editor(1000, 901)
-        inspector_click(20, 354)  # Preserve clears the failed budget (error adds 27px).
-        inspector_click(65, 490)  # Retry clears error without persisting a draft.
+        setting_menu(282, 0, 3)  # Preserve clears the failed budget.
+        setting_click(647)  # Retry the encoded preview without persisting a draft.
+        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+             "retried output encoded")
         shot(editor, "output-retry")
         fixture_pixel("output-retry", 428, 289, (46, 158, 113))
         assert draft.read_bytes() == saved_draft, "preview must not write a draft"
@@ -3063,22 +3181,28 @@ def main():
         initial_directory = output / "unchosen folder"
         initial_directory.mkdir()
         exported.parent.mkdir()
-        chooser.selected = exported.parent
+        export_filename("edited")
         chooser.calls.clear()
-        field(731, initial_directory / exported.name)  # Token-font notes wrap one line lower.
-        inspector_click(149, 694)
-        wait(lambda: len(chooser.calls) == 1, "folder dialog cancellation")
+        chooser.selected = initial_directory
+        export_click("change")
+        wait(lambda: len(chooser.calls) == 1, "folder dialog selection")
+        GLib.idle_add(chooser.respond, False)
+        time.sleep(.5)
+        chooser.selected = exported.parent
+        export_click("change")
+        wait(lambda: len(chooser.calls) == 2, "folder dialog cancellation")
         shot(editor, "export-folder-pending")
         export_click("save")  # Save is disabled until the folder choice completes.
         assert not list(initial_directory.iterdir()) and not list(exported.parent.iterdir())
         GLib.idle_add(chooser.respond, True)
         time.sleep(.5)
-        inspector_click(149, 694)
-        wait(lambda: len(chooser.calls) == 2, "folder dialog selection")
+        export_click("change")
+        wait(lambda: len(chooser.calls) == 3, "folder dialog selection")
         GLib.idle_add(chooser.respond, False)
         time.sleep(.5)
         for title, options in chooser.calls:
             assert title == "Choose save location" and options["directory"] and not options.get("multiple", False)
+        for _, options in chooser.calls[1:]:
             assert bytes(options["current_folder"]).rstrip(b"\0") == os.fsencode(initial_directory)
         assert not list(initial_directory.iterdir()) and not list(exported.parent.iterdir())
         assert draft.read_bytes() == saved_draft and len(list(history.glob("*/metadata.json"))) == 1
@@ -3098,10 +3222,17 @@ def main():
             assert run("convert", str(path), "-crop", "1x1+450+250", "-depth", "8", "rgb:-") == bytes((46, 158, 113))
         assert draft.read_bytes() == saved_draft, "export must not save the draft"
         shot(root, "export-history-refreshed")
-        inspector_move(180, 400, "click", "--repeat", "12", "5")
-        shot(editor, "export-saved-scrolled")
-        inspector_move(180, 400, "click", "--repeat", "20", "4")
-        export_click("save")  # Same filename must fail rather than replace.
+        shot(editor, "export-saved")
+        # The saved file becomes the file Save overwrites, in place and in History.
+        exported_inode = exported.stat().st_ino
+        export_click("save")
+        wait(lambda: exported.stat().st_ino != exported_inode, "adopted file atomically replaced")
+        assert json.loads(metadata[0].read_text())["created_at"] == entry["created_at"]
+        assert exported.read_bytes() == exported_bytes
+        assert len(list(history.glob("*/metadata.json"))) == 2
+        export_click("new-file")
+        export_filename("edited")
+        export_click("save")  # Save as new file with the same name must fail rather than replace.
         shot(editor, "export-collision")
         assert exported.read_bytes() == exported_bytes
         assert len(list(history.glob("*/metadata.json"))) == 2
@@ -3110,16 +3241,14 @@ def main():
         history.rename(output / "previous-history")
         history.write_text("blocks History creation")
         recovered = output / "exports" / "recovered.webp"
-        field(758, recovered)  # The collision error adds 27px above the panel.
-        export_click("save")  # Editing the destination clears the collision error.
+        export_filename("recovered")  # Editing the filename clears the collision error.
+        export_click("save")
         wait(recovered.exists, "file saved despite unavailable History")
         assert recovered.read_bytes() == exported_bytes
-        inspector_move(180, 400, "click", "--repeat", "20", "5")
-        shot(editor, "export-history-warning-scrolled")
+        shot(editor, "export-history-warning")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
-        inspector_move(180, 400, "click", "--repeat", "20", "5")
         shot(editor, "export-history-warning-minimum")
-        inspector_move(100, window_size()[1] - 27, "sleep", "1")
+        run("xdotool", "mousemove", "--window", editor, "560", str(window_size()[1] - 54), "sleep", "1.5")
         shot(editor, "export-history-warning-detail-minimum")
         resize_editor(1000, 901)
         history.unlink()
@@ -3127,7 +3256,6 @@ def main():
         assert draft.read_bytes() == saved_draft
         assert (artifact / "capture.png").read_bytes() == original
 
-        inspector_move(180, 400, "click", "--repeat", "20", "4")
         export_click("copy")  # Copy the edited canvas, not the History source.
         wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
              "edited clipboard copy completes")
@@ -3139,8 +3267,8 @@ def main():
             assert run("convert", str(clipboard_png), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-") == bytes(expected)
         assert draft.read_bytes() == saved_draft and len(list(history.glob("*/metadata.json"))) == 2
         assert len(list((output / "exports").iterdir())) == 2
-        inspector_move(180, 400, "click", "--repeat", "20", "5")
         shot(editor, "clipboard-copied")
+        export_settings(False)
         toolbar_click("geometry")  # Geometry restores its own scroll position.
 
         close(editor)
@@ -3216,7 +3344,8 @@ def main():
                        "image-transform-locked-hidden", "image-transform-canvas-draft-undo",
                        "output-png-jpeg-webp", "output-comparison",
                        "output-budget-error-retry", "output-no-draft-or-file-write",
-                       "output-png-palette-minimum-scroll", "export-new-copy-history",
+                       "output-png-palette-minimum", "export-new-copy-history",
+                       "export-saved-file-becomes-overwrite-target",
                        "export-collision-original-protection", "export-history-warning-recovery",
                        "folder-portal-cancel-select-filename-no-persistence",
                        "clipboard-edited-pixels-no-persistence", "clipboard-survives-editor-close"],
