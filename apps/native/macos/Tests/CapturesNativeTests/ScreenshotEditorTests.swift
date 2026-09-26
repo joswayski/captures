@@ -933,7 +933,8 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             waitUntil { controller.presentedImageRect.width == 320 }
             XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 84, width: 320, height: 180))
-            XCTAssertTrue(trim.title.isEmpty, "the minimum header keeps Trim as an icon with its tooltip")
+            XCTAssertTrue(trim.iconOnly, "the minimum header keeps Trim as an icon with its tooltip")
+            XCTAssertEqual(trim.title, "Trim edges")
             XCTAssertEqual(trim.toolTip, "Shrink the canvas to the edges of visible layers")
             for control in controller.root.subviews where !control.isHidden {
                 XCTAssertTrue(controller.root.bounds.contains(control.frame), "\(control) must fit at minimum size")

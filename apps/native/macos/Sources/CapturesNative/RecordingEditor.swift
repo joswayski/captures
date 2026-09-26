@@ -92,13 +92,13 @@ final class RecordingTrimHandle: NSView {
     override func resignFirstResponder() -> Bool {
         timeline?.endDrag()
         let accepted = super.resignFirstResponder()
-        needsDisplay = true
+        needsDisplay = true; timeline?.needsDisplay = true
         return accepted
     }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
-        needsDisplay = true
+        needsDisplay = true; timeline?.needsDisplay = true
         return accepted
     }
 
@@ -125,12 +125,54 @@ final class RecordingTrimHandle: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let timeline else { return }
+        let tokens = timeline.tokens
         let focused = window?.firstResponder === self
-        let rect = bounds.insetBy(dx: 4, dy: 2)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
-        timeline.tokens.color(enabled ? "theme-accent" : "text-faint").setFill(); path.fill()
-        timeline.tokens.color(focused ? "text" : "theme-accent-ink").setStroke()
-        path.lineWidth = focused ? 2 : 1; path.stroke()
+        // `.timeline-trim-handle`: an accent bar with two grip lines.
+        let barWidth = tokens.number("s-4")
+        let bar = NSRect(x: bounds.midX - barWidth / 2, y: 0, width: barWidth, height: bounds.height)
+        let path = NSBezierPath(roundedRect: bar, xRadius: tokens.number("r-xs"),
+                                yRadius: tokens.number("r-xs"))
+        tokens.color(enabled ? "theme-accent" : "text-faint").setFill(); path.fill()
+        tokens.color("theme-accent-ink").withAlphaComponent(0.45).setStroke()
+        for offset in [-tokens.number("s-1"), tokens.number("s-1")] {
+            let grip = NSBezierPath()
+            grip.move(to: NSPoint(x: bar.midX + offset, y: bar.midY - 7))
+            grip.line(to: NSPoint(x: bar.midX + offset, y: bar.midY + 7))
+            grip.lineWidth = 1; grip.stroke()
+        }
+        if focused {
+            let ring = NSBezierPath(roundedRect: bar.insetBy(dx: -2, dy: 1),
+                                    xRadius: tokens.number("r-xs"), yRadius: tokens.number("r-xs"))
+            tokens.color("text").setStroke(); ring.lineWidth = 2; ring.stroke()
+        }
+    }
+}
+
+/// Shipping `.timeline-track` height; the view adds a little room for the playhead cap.
+let recordingTimelineTrackHeight: CGFloat = 76
+
+/// `.recording-export-progress`: a thin accent bar on the save footer's top edge.
+final class RecordingProgressBar: NSView {
+    var tokens: Tokens? { didSet { needsDisplay = true } }
+    var doubleValue: Double = 0 { didSet { needsDisplay = true } }
+    let maxValue: Double = 1_000
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.progressIndicator)
+        setAccessibilityLabel("Recording export progress")
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let tokens else { return }
+        tokens.color("surface-sunken").setFill(); bounds.fill()
+        let fraction = CGFloat(min(max(doubleValue / maxValue, 0), 1))
+        tokens.color("theme-accent").setFill()
+        NSRect(x: 0, y: 0, width: bounds.width * fraction, height: bounds.height).fill()
     }
 }
 
@@ -140,11 +182,15 @@ final class RecordingTrimTimeline: NSView {
     fileprivate(set) var startMilliseconds: UInt64 = 0
     fileprivate(set) var endMilliseconds: UInt64 = 1
     var onStage: ((NativeRecordingTimelineEdge, UInt64) -> Void)?
+    /// Clicking the track outside the grips seeks the accepted preview there.
+    var onSeek: ((UInt64) -> Void)?
+    var seekEnabled = false
     private var drag: NativeRecordingTimelineDrag?
     private var dragEdge: NativeRecordingTimelineEdge?
     private(set) var editingEnabled = false
     private var thumbnailImage: NSImage?
     private var playbackPositionMilliseconds: UInt64?
+    private var acceptedPositionMilliseconds: UInt64?
     private(set) var thumbnailStateDescription = "Source thumbnails not loaded"
     private lazy var startHandle = RecordingTrimHandle(edge: .start, timeline: self)
     private lazy var endHandle = RecordingTrimHandle(edge: .end, timeline: self)
@@ -161,8 +207,7 @@ final class RecordingTrimTimeline: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var isFlipped: Bool { true }
     private var trackRect: NSRect {
-        NSRect(x: 10, y: thumbnailImage == nil ? max(0, bounds.height - 8) : bounds.midY - 3,
-               width: max(1, bounds.width - 20), height: 6)
+        NSRect(x: 10, y: 3, width: max(1, bounds.width - 20), height: max(1, bounds.height - 6))
     }
 
     func setValues(start: UInt64, end: UInt64, duration: UInt64) {
@@ -179,6 +224,12 @@ final class RecordingTrimTimeline: NSView {
 
     func setPlaybackPosition(_ milliseconds: UInt64?) {
         playbackPositionMilliseconds = milliseconds
+        needsDisplay = true
+    }
+
+    /// The accepted still's position, drawn as the playhead while not playing.
+    func setAcceptedPosition(_ milliseconds: UInt64?) {
+        acceptedPositionMilliseconds = milliseconds
         needsDisplay = true
     }
 
@@ -236,7 +287,7 @@ final class RecordingTrimTimeline: NSView {
         stage(edge: edge, milliseconds: UInt64(milliseconds.rounded()))
     }
 
-    func endDrag() { drag = nil; dragEdge = nil }
+    func endDrag() { drag = nil; dragEdge = nil; needsDisplay = true }
 
     func nudge(edge: NativeRecordingTimelineEdge, direction: Int, page: Bool) {
         guard editingEnabled, direction == -1 || direction == 1 else { return }
@@ -272,7 +323,8 @@ final class RecordingTrimTimeline: NSView {
     }
 
     override func setFrameSize(_ newSize: NSSize) {
-        endDrag(); super.setFrameSize(newSize); updateHandles()
+        if newSize != frame.size { endDrag() }
+        super.setFrameSize(newSize); updateHandles()
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -291,62 +343,111 @@ final class RecordingTrimTimeline: NSView {
             }
             return startDistance < endDistance ? startHandle : endHandle
         }
-        return nil
+        return seekEnabled && onSeek != nil && trackRect.contains(local) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard seekEnabled, let onSeek else { return }
+        let x = convert(event.locationInWindow, from: nil).x
+        guard durationMilliseconds > 0,
+              let time = NativeRecordingTimeline.time(atX: Double(x), trackLeft: Double(trackRect.minX),
+                  trackWidth: Double(trackRect.width),
+                  durationMilliseconds: Double(durationMilliseconds)) else { return }
+        onSeek(min(UInt64(max(0, time).rounded()), durationMilliseconds - 1))
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let track = trackRect
-        let strip = NSRect(x: track.minX, y: 2, width: track.width,
-                           height: max(1, bounds.height - 4))
-        let background = NSBezierPath(roundedRect: strip, xRadius: 4, yRadius: 4)
+        // `.timeline-track`: a sunken, bordered frame around the filmstrip.
+        let frame = bounds.insetBy(dx: 0, dy: 3)
+        let background = NSBezierPath(roundedRect: frame, xRadius: tokens.number("r-md"),
+                                      yRadius: tokens.number("r-md"))
         tokens.color("surface-sunken").setFill(); background.fill()
+        let strip = NSRect(x: track.minX, y: frame.minY + tokens.number("s-2"),
+                           width: track.width, height: max(1, frame.height - tokens.number("s-2") * 2))
+        let stripPath = NSBezierPath(roundedRect: strip, xRadius: tokens.number("r-xs"),
+                                     yRadius: tokens.number("r-xs"))
         if let thumbnailImage {
             NSGraphicsContext.saveGraphicsState()
-            background.addClip()
+            stripPath.addClip()
             let frameCount = 12
             let sourceWidth = thumbnailImage.size.width / CGFloat(frameCount)
             let targetWidth = strip.width / CGFloat(frameCount)
+            // Center-crop each frame vertically to the strip, preserving aspect.
+            let sourceHeight = min(thumbnailImage.size.height,
+                                   sourceWidth * strip.height / max(1, targetWidth))
+            let sourceY = (thumbnailImage.size.height - sourceHeight) / 2
             for index in 0..<frameCount {
                 thumbnailImage.draw(
                     in: NSRect(x: strip.minX + CGFloat(index) * targetWidth, y: strip.minY,
                                width: targetWidth + 0.5, height: strip.height),
-                    from: NSRect(x: CGFloat(index) * sourceWidth, y: 0,
-                                 width: sourceWidth, height: thumbnailImage.size.height),
+                    from: NSRect(x: CGFloat(index) * sourceWidth, y: sourceY,
+                                 width: sourceWidth, height: sourceHeight),
                     operation: .copy, fraction: 1, respectFlipped: true,
                     hints: [.interpolation: NSImageInterpolation.high])
             }
             NSGraphicsContext.restoreGraphicsState()
         } else {
+            tokens.color("n-5").setFill(); stripPath.fill()
             let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
+            let font = NSFont.systemFont(ofSize: tokens.number("text-sm"))
             (thumbnailStateDescription as NSString).draw(
-                in: NSRect(x: strip.minX + 4, y: strip.minY + 1,
-                           width: max(1, strip.width - 8), height: max(1, strip.height - 9)),
-                withAttributes: [.font: NSFont.systemFont(ofSize: 9, weight: .medium),
-                                 .foregroundColor: tokens.color("text-muted"),
+                in: NSRect(x: strip.minX + 4, y: strip.midY - font.pointSize * 0.7,
+                           width: max(1, strip.width - 8), height: font.pointSize * 1.5),
+                withAttributes: [.font: font, .foregroundColor: tokens.color("text-muted"),
                                  .paragraphStyle: paragraph])
         }
-        let selected = NSRect(x: startHandle.frame.midX, y: track.minY,
-                              width: max(0, endHandle.frame.midX - startHandle.frame.midX),
-                              height: track.height)
-        let selection = NSBezierPath(roundedRect: selected, xRadius: 3, yRadius: 3)
-        tokens.color(editingEnabled ? "theme-accent" : "text-faint")
-            .withAlphaComponent(thumbnailImage == nil ? 1 : 0.38).setFill()
-        selection.fill()
-        tokens.color(editingEnabled ? "theme-accent" : "text-faint").setStroke()
-        selection.lineWidth = 2; selection.stroke()
-        if let playbackPositionMilliseconds,
+        // `.timeline-excluded`: trimmed-away time dims toward the canvas.
+        tokens.color("surface-canvas").withAlphaComponent(0.72).setFill()
+        for area in [
+            NSRect(x: frame.minX, y: frame.minY,
+                   width: max(0, startHandle.frame.midX - frame.minX), height: frame.height),
+            NSRect(x: endHandle.frame.midX, y: frame.minY,
+                   width: max(0, frame.maxX - endHandle.frame.midX), height: frame.height),
+        ] where area.width > 0 {
+            NSBezierPath(roundedRect: area, xRadius: tokens.number("r-md"),
+                         yRadius: tokens.number("r-md")).fill()
+        }
+        tokens.color("border").setStroke(); background.lineWidth = 1; background.stroke()
+        // `.timeline-playhead`: a 2pt line with a cap over the filmstrip.
+        if let position = playbackPositionMilliseconds ?? acceptedPositionMilliseconds,
            let ratio = NativeRecordingTimeline.ratio(
-               milliseconds: Double(playbackPositionMilliseconds),
+               milliseconds: Double(min(position, durationMilliseconds)),
                durationMilliseconds: Double(durationMilliseconds)) {
             let x = track.minX + track.width * CGFloat(ratio)
-            let playhead = NSBezierPath()
-            playhead.move(to: NSPoint(x: x, y: strip.minY))
-            playhead.line(to: NSPoint(x: x, y: strip.maxY))
-            tokens.color("info-text").setStroke()
-            playhead.lineWidth = 2; playhead.stroke()
+            tokens.color("text").setFill()
+            NSRect(x: x - 1, y: 0, width: 2, height: bounds.height).fill()
+            NSBezierPath(roundedRect: NSRect(x: x - 5, y: 0, width: 10, height: 8),
+                         xRadius: 3, yRadius: 3).fill()
         }
-        tokens.color("control-border").setStroke(); background.lineWidth = 1; background.stroke()
+        // Shipping's handle time label, shown while a grip is focused or dragged.
+        var active = dragEdge
+        if active == nil, let responder = window?.firstResponder {
+            if responder === startHandle { active = .start } else if responder === endHandle { active = .end }
+        }
+        if editingEnabled, let active {
+            let handle = active == .start ? startHandle : endHandle
+            let value = active == .start ? startMilliseconds : endMilliseconds
+            let label = RecordingEditorCopy.time(value, duration: durationMilliseconds) as NSString
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: tokens.number("text-2xs"),
+                                                         weight: .semibold),
+                .foregroundColor: tokens.color("theme-accent-ink"),
+            ]
+            let size = label.size(withAttributes: attributes)
+            let padding = tokens.number("s-3")
+            let width = size.width + padding * 2
+            let x = active == .start ? handle.frame.maxX : handle.frame.minX - width
+            let pill = NSRect(x: min(max(0, x), max(0, bounds.width - width)),
+                              y: frame.minY + tokens.number("s-2"), width: width,
+                              height: size.height + 6)
+            tokens.color("theme-accent").setFill()
+            NSBezierPath(roundedRect: pill, xRadius: tokens.number("r-xs"),
+                         yRadius: tokens.number("r-xs")).fill()
+            label.draw(at: NSPoint(x: pill.minX + padding, y: pill.minY + 3),
+                       withAttributes: attributes)
+        }
     }
 }
 
@@ -416,7 +517,10 @@ final class RecordingCropOverlay: NSView {
     fileprivate var tokens: Tokens
     private let imageInset: CGFloat = 12
     var presentedImageRect: NSRect? {
-        didSet { endDrag(); updateHandles(); needsDisplay = true }
+        didSet {
+            guard presentedImageRect != oldValue else { return }
+            endDrag(); updateHandles(); needsDisplay = true
+        }
     }
     var sourceSize = NativeRecordingDimensions(width: 2, height: 2) {
         didSet { endDrag(); updateHandles(); needsDisplay = true }
@@ -611,7 +715,29 @@ final class RecordingCropOverlay: NSView {
         let border = NSBezierPath(rect: selection)
         tokens.color(editingEnabled ? "theme-accent" : "text-faint").setStroke()
         border.lineWidth = 2; border.stroke()
+        // `.editor-crop-box > span`: the source-pixel size in an accent pill.
+        let sizeText = displayedSizeLabel as NSString
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: tokens.number("text-2xs"),
+                                                     weight: .semibold),
+            .foregroundColor: tokens.color("theme-accent-ink"),
+        ]
+        let textSize = sizeText.size(withAttributes: attributes)
+        let padding = tokens.number("s-3")
+        let pill = NSRect(x: selection.midX - textSize.width / 2 - padding,
+                          y: selection.minY + padding,
+                          width: textSize.width + padding * 2, height: textSize.height + 6)
+        if selection.contains(pill) {
+            tokens.color("theme-accent").setFill()
+            NSBezierPath(roundedRect: pill, xRadius: tokens.number("r-xs"),
+                         yRadius: tokens.number("r-xs")).fill()
+            sizeText.draw(at: NSPoint(x: pill.minX + padding, y: pill.minY + 3),
+                          withAttributes: attributes)
+        }
     }
+
+    /// The crop box's size badge text, in source pixels.
+    var displayedSizeLabel: String { "\(crop.width) × \(crop.height)" }
 }
 
 private extension NativeRecordingCropDragHandle {
@@ -743,7 +869,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var gifMaximumWidth: UInt32 = 800
     private var maximumSizeEnabled = false
     private var maximumSizeUnit = RecordingFileSizeUnit.megabytes
-    private var qualityPreference = "Preserve"
+    /// The palette preset value (`preserve`, `highest` … `tiny`); Maximum keeps
+    /// the last preset so GIF palettes follow the user's quality choice.
+    private var qualityPreference = "preserve"
+    /// Preserve quality mode (MP4 default); otherwise Compress unless Maximum.
+    private var preserveQuality = true
     private var playbackLoopControl: RecordingPlaybackLoopControl?
     private var sourceFrameCache: RecordingSourceImage?
     private var sourceFrameCancel: NativeRecordingEditorCancel?
@@ -755,71 +885,120 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var terminateAfterPlayback = false
     private var switchAfterPlayback: String?
 
+    // Shipping page: a scrolling column of cards above a fixed save footer.
+    private let pageScroll = NSScrollView()
+    private let page = Surface()
+    private let footer = Surface()
+    private let footerDivider = Surface()
+    private let titleLabel = NSTextField(labelWithString: "Edit recording")
+    /// `.recording-editor-warning` for sources that dropped frames.
+    private let droppedFramesBand = Surface()
+    private let droppedFramesLabel = NSTextField(wrappingLabelWithString: "")
     private let previewPanel = Surface()
     private let previewTitle = NSTextField(labelWithString: "Preview")
+    /// Toolbar playback-mode note beside "Preview".
+    private let audioNote = NSTextField(labelWithString: "Silent playback")
+    private let previewToolbar = Surface()
+    private let previewDivider = Surface()
+    private let previewViewport = Surface()
+    private let previewSizeTrack = Surface()
     private let previewScroll = NSScrollView()
     private let previewCanvas = Surface()
     private let preview = NSImageView()
+    private let previewNote = NSTextField(labelWithString:
+        "First-attempt preview. Size-limited saves may reduce resolution, frame rate or audio quality.")
     private let comparisonView: RecordingComparisonView
     private let comparisonSlider = NSSlider(value: 50, minValue: 0, maxValue: 100,
                                              target: nil, action: nil)
     private let comparisonBeforeLabel = NSTextField(labelWithString: "Before")
-    private let comparisonAfterLabel = NSTextField(labelWithString: "After")
+    private let comparisonAfterLabel = NSTextField(labelWithString: "Encoded")
     private var comparisonButton: CaptureButton!
     private var comparisonHideButton: CaptureButton!
     private let cropOverlay: RecordingCropOverlay
     private let geometryPanel = Surface()
+    private let geometryTitle = NSTextField(labelWithString: "Crop & size")
     private let cropEnabled = NSButton(checkboxWithTitle: "Crop recording", target: nil, action: nil)
     private let cropLock = NSButton(checkboxWithTitle: "Lock aspect ratio", target: nil, action: nil)
     private let cropX = NSTextField()
     private let cropY = NSTextField()
     private let cropWidth = NSTextField()
     private let cropHeight = NSTextField()
+    private var cropFieldLabels: [NSTextField] = []
+    private let outputModeLabel = NSTextField(labelWithString: "Output resolution")
     private let outputMode = NSPopUpButton()
+    private let outputWidthLabel = NSTextField(labelWithString: "Width")
+    private let outputHeightLabel = NSTextField(labelWithString: "Height")
     private let outputWidth = NSTextField()
     private let outputHeight = NSTextField()
+    private let geometryHelp = NSTextField(wrappingLabelWithString:
+        "Apply previews even-pixel sizes for the selected format and quality.")
     private var stagedCrop: NativeRecordingCropRect?
     private var cropAspectUnlocked = false
     private var resolutionPreset = NativeRecordingResolutionPreset.original
     private var customOutput = false
+    /// Preview caption: position, source and accepted output identity.
     private let sourceLabel = NSTextField(labelWithString: "Opening recording…")
     private let seekSlider = NSSlider(value: 0, minValue: 0, maxValue: 1,
                                       target: nil, action: nil)
-    private let seekLabel = NSTextField(labelWithString: "0:00.000 / 0:00.000")
+    private let seekLabel = NSTextField(labelWithString: "0:00.000")
+    private let positionLabel = NSTextField(labelWithString: "Position")
     private let trimPanel = Surface()
+    private let trimRangeLabel = NSTextField(labelWithString: "")
+    private let trimSelectedLabel = NSTextField(labelWithString: "")
+    private let thumbnailStatusLabel = NSTextField(labelWithString: "Source thumbnails unavailable.")
+    private let trimStartLabel = NSTextField(labelWithString: "Start (ms)")
+    private let trimEndLabel = NSTextField(labelWithString: "End (ms)")
     private let trimStart = NSTextField()
     private let trimEnd = NSTextField()
     private let trimTimeline: RecordingTrimTimeline
+    private var resetTrimButton: CaptureButton!
+    private let gifPanel = Surface()
+    private let gifTitle = NSTextField(labelWithString: "GIF settings")
     private let audioPanel = Surface()
+    private let audioTitle = NSTextField(labelWithString: "Audio")
+    private let gifAudioNote = NSTextField(wrappingLabelWithString: "GIFs do not include recorded audio.")
     private let systemVolume = NSTextField()
     private let microphoneVolume = NSTextField()
-    private let systemMute = NSButton(checkboxWithTitle: "Mute", target: nil, action: nil)
-    private let microphoneMute = NSButton(checkboxWithTitle: "Mute", target: nil, action: nil)
-    private let monoOutput = NSButton(checkboxWithTitle: "Mono output", target: nil, action: nil)
-    private var systemAudioLabel: NSTextField!
-    private var microphoneAudioLabel: NSTextField!
-    private var audioNote: NSTextField!
+    private let systemVolumeSlider = NSSlider(value: 100, minValue: 0, maxValue: 200,
+                                              target: nil, action: nil)
+    private let microphoneVolumeSlider = NSSlider(value: 100, minValue: 0, maxValue: 200,
+                                                  target: nil, action: nil)
+    /// Checked includes the track, like shipping's audio rows.
+    private let systemAudio = NSButton(checkboxWithTitle: "System audio", target: nil, action: nil)
+    private let microphoneAudio = NSButton(checkboxWithTitle: "Microphone", target: nil, action: nil)
+    private let monoOutput = NSButton(checkboxWithTitle: "Convert to mono", target: nil, action: nil)
     private let format = NSPopUpButton()
+    private let qualityPanel = Surface()
+    private let qualityTitle = NSTextField(labelWithString: "Save quality")
+    private let qualityModeLabel = NSTextField(labelWithString: "Quality mode")
+    private let qualityMode = NSPopUpButton()
+    private let qualityModeHelp = NSTextField(wrappingLabelWithString: "")
+    private let qualityLabel = NSTextField(labelWithString: "Quality")
     private let quality = NSPopUpButton()
-    private let gifFrameRateLabel = NSTextField(labelWithString: "GIF FPS")
+    private let gifFrameRateLabel = NSTextField(labelWithString: "Frame rate")
     private let gifFrameRate = NSPopUpButton()
-    private let gifMaximumWidthLabel = NSTextField(labelWithString: "Max width")
+    private let gifMaximumWidthLabel = NSTextField(labelWithString: "Maximum width")
     private let gifMaximumWidthControl = NSPopUpButton()
-    private let maximumSize = NSButton(checkboxWithTitle: "Maximum file size", target: nil,
-                                       action: nil)
+    private let maximumSizeLabel = NSTextField(labelWithString: "Maximum file size")
     private let maximumSizeValue = NSTextField()
     private let maximumSizeUnits = NSPopUpButton()
-    private let maximumSizeWarning = NSTextField(labelWithString:
-        "Preview is budget-free; saved output may differ.")
-    private let destination = NSTextField()
+    private let maximumSizeInvalid = NSTextField(labelWithString: "Enter at least 100 KB (decimal units).")
+    private let maximumSizeWarning = NSTextField(wrappingLabelWithString:
+        "Preserve quality with a hard limit. Save fails if no retry fits; the original stays unchanged.")
+    private let estimateTitle = NSTextField(labelWithString: "Est. size")
+    private let estimateLabel = NSTextField(labelWithString: "—")
+    private let estimateDelta = NSTextField(labelWithString: "")
+    private let filenameLabel = NSTextField(labelWithString: "Filename")
+    private let savingToLabel = NSTextField(labelWithString: "Saving to")
+    /// The folder a new copy is saved in; the filename and format add the rest.
+    private let destination = NSTextField(labelWithString: "")
+    private let filenameField = NSTextField()
     private let status = NSTextField(wrappingLabelWithString: "")
-    private let estimateLabel = NSTextField(labelWithString: "Size not estimated")
-    private let progress = NSProgressIndicator()
+    private let progress = RecordingProgressBar()
     private var applyButton: CaptureButton!
     private var estimateButton: CaptureButton!
     private var saveButton: CaptureButton!
     private var replaceButton: CaptureButton!
-    private let replaceHelp = NSTextField(labelWithString: "")
     private var cancelButton: CaptureButton!
     private var changeButton: CaptureButton!
     private var thumbnailRetryButton: CaptureButton!
@@ -827,11 +1006,22 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var cropAdjustmentButton: CaptureButton!
     private var previewFitButton: CaptureButton!
     private var previewActualButton: CaptureButton!
-    private let playbackLoop = NSButton(checkboxWithTitle: "Loop", target: nil, action: nil)
+    private let playbackLoop = NSButton(checkboxWithTitle: "Loop preview", target: nil, action: nil)
     private let playbackSound = NSButton(checkboxWithTitle: "Sound", target: nil, action: nil)
+    private var destinationDirectory = ""
+    private var compressQuality = "highest"
+    private var estimating = false
+    private var replacing = false
+    private var layoutSignature = ""
+    private var lastPreviewImageRect = NSRect.zero
+    private var showInFolderButton: CaptureButton!
+    /// The last new copy this editor saved, for shipping's Show in Folder.
+    private var lastSavedPath: String?
 
     /// A user close of the editor window; quitting does not report closes.
     var didClose: (String) -> Void = { _ in }
+    /// Reveals a saved copy in Finder; replaceable for tests.
+    var revealFiles: ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
 
     init(tokens: Tokens, worker: RecordingEditorWorking = RecordingEditorWorker(),
          reportError: @escaping (String) -> Void = { _ in },
@@ -907,10 +1097,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         if gifMaximumWidthControl.item(withTitle: "Original") != nil {
             gifMaximumWidthControl.removeItem(withTitle: "Original")
         }
-        maximumSizeEnabled = false; maximumSize.state = .off
+        maximumSizeEnabled = false; preserveQuality = true; estimating = false; replacing = false
+        lastSavedPath = nil; droppedFramesBand.isHidden = true
         maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
         maximumSizeValue.stringValue = "10"
-        qualityPreference = "Preserve"
+        qualityPreference = "preserve"; compressQuality = "highest"
         sourceFrameCache = nil; sourceFrameCancel = nil
         cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
         previewActualSize = false
@@ -919,8 +1110,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         resolutionPreset = .original; customOutput = false
         setPreviewImage(nil)
         trimTimeline.clearThumbnails()
-        destination.stringValue = URL(fileURLWithPath: outputDirectory)
-            .appendingPathComponent("recording-edit-\(artifact.id.prefix(8)).mp4").path
+        setDestinationDirectory(outputDirectory)
+        filenameField.stringValue = Self.defaultFilenameStem()
+        titleLabel.stringValue = RecordingEditorCopy.title(
+            mimeType: artifact.kind == "gif" ? "image/gif" : "video/mp4")
         sourceLabel.stringValue = "Opening recording…"
         status.stringValue = "Decoding the first source-relative frame…"
         progress.isHidden = true
@@ -1011,7 +1204,20 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
     func windowDidMiniaturize(_ notification: Notification) { pausePlayback() }
     func controlTextDidChange(_ notification: Notification) {
+        if notification.object as? NSTextField === filenameField {
+            // Editing the name clears a prior filename error, as shipping does.
+            if status.textColor == tokens.color("danger-text") {
+                status.stringValue = ""; status.textColor = tokens.color("text-subtle")
+            }
+            updateControls(); return
+        }
         invalidateComparison()
+        if let field = notification.object as? NSTextField,
+           field === systemVolume || field === microphoneVolume {
+            syncVolumeSlider(field === systemVolume ? systemVolumeSlider : microphoneVolumeSlider,
+                             from: field)
+            estimate = nil; updateControls(); return
+        }
         if let field = notification.object as? NSTextField,
            [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) {
             estimate = nil; updateControls(); return
@@ -1029,47 +1235,92 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func buildUI() {
         root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
-        _ = label("Edit recording", size: 22, weight: .semibold)
-        let note = label("Playback uses accepted recording edits only", muted: true)
-        note.identifier = NSUserInterfaceItemIdentifier("recording-editor-note")
-        previewPanel.wantsLayer = true
-        previewPanel.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
-        previewPanel.layer?.cornerRadius = tokens.number("r-md")
-        previewTitle.font = .systemFont(ofSize: 12, weight: .semibold)
-        previewTitle.textColor = tokens.color("text")
-        previewPanel.addSubview(previewTitle)
-        previewFitButton = button("Fit") { [weak self] in self?.setPreviewActualSize(false) }
-        previewActualButton = button("100%") { [weak self] in self?.setPreviewActualSize(true) }
+        pageScroll.drawsBackground = false; pageScroll.borderType = .noBorder
+        pageScroll.hasVerticalScroller = true; pageScroll.autohidesScrollers = true
+        pageScroll.scrollerStyle = .overlay
+        pageScroll.contentView.drawsBackground = false
+        pageScroll.documentView = page
+        pageScroll.setAccessibilityLabel("Recording editor page")
+        root.addSubview(pageScroll)
+        footer.wantsLayer = true
+        footer.layer?.backgroundColor = tokens.color("surface-raised").cgColor
+        footerDivider.wantsLayer = true
+        footerDivider.layer?.backgroundColor = tokens.color("border-subtle").cgColor
+        footer.addSubview(footerDivider)
+        root.addSubview(footer)
+
+        style(titleLabel, size: "text-2xl", color: "text", weight: .semibold, parent: page)
+        titleLabel.setAccessibilityLabel("Recording editor title")
+        droppedFramesBand.wantsLayer = true
+        droppedFramesBand.layer?.backgroundColor = tokens.color("caution-surface").cgColor
+        droppedFramesBand.layer?.cornerRadius = tokens.number("r-md")
+        droppedFramesBand.isHidden = true
+        page.addSubview(droppedFramesBand)
+        style(droppedFramesLabel, size: "text-sm", color: "caution-text", parent: droppedFramesBand)
+        droppedFramesLabel.setAccessibilityLabel("Dropped frames warning")
+
+        // `.recording-editor-preview`: toolbar, sunken viewport and caption.
+        card(previewPanel, parent: page)
+        previewPanel.layer?.masksToBounds = true
+        // The viewport's rounded top edge tucks under a square toolbar band,
+        // leaving only its lower corners rounded.
+        previewViewport.wantsLayer = true
+        previewViewport.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        previewViewport.layer?.cornerRadius = tokens.number("r-xl")
+        previewPanel.addSubview(previewViewport)
+        previewToolbar.wantsLayer = true
+        previewToolbar.layer?.backgroundColor = tokens.color("surface-raised").cgColor
+        previewPanel.addSubview(previewToolbar)
+        previewDivider.wantsLayer = true
+        previewDivider.layer?.backgroundColor = tokens.color("border-subtle").cgColor
+        previewPanel.addSubview(previewDivider)
+        style(previewTitle, size: "text-md", color: "text-muted", weight: .medium, parent: previewPanel)
+        style(audioNote, size: "text-sm", color: "text-subtle", parent: previewPanel)
+        audioNote.setAccessibilityLabel("Recording preview mode")
+        audioNote.lineBreakMode = .byTruncatingTail
+        previewSizeTrack.wantsLayer = true
+        previewSizeTrack.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        previewSizeTrack.layer?.borderColor = tokens.color("border-subtle").cgColor
+        previewSizeTrack.layer?.borderWidth = 1
+        previewSizeTrack.layer?.cornerRadius = tokens.number("r-lg")
+        previewPanel.addSubview(previewSizeTrack)
+        previewFitButton = button("Fit", parent: previewSizeTrack) { [weak self] in
+            self?.setPreviewActualSize(false)
+        }
+        previewActualButton = button("100%", parent: previewSizeTrack) { [weak self] in
+            self?.setPreviewActualSize(true)
+        }
         previewFitButton.toolTip = "Fit the decoded frame within the preview."
         previewActualButton.toolTip = "One decoded image pixel per screen point. Scroll to see overflow; playback may use a reduced-size frame."
-        previewPanel.addSubview(previewFitButton); previewPanel.addSubview(previewActualButton)
         previewScroll.drawsBackground = false; previewScroll.borderType = .noBorder
         previewScroll.scrollerStyle = .overlay; previewScroll.autohidesScrollers = true
         previewScroll.contentView.drawsBackground = false
         previewScroll.contentView.postsBoundsChangedNotifications = true
         previewScroll.setAccessibilityLabel("Recording preview viewport")
         previewScroll.documentView = previewCanvas
-        previewPanel.addSubview(previewScroll)
+        previewViewport.addSubview(previewScroll)
         preview.imageScaling = .scaleProportionallyUpOrDown
         preview.setAccessibilityLabel("Decoded recording frame")
         previewCanvas.addSubview(preview)
         comparisonView.isHidden = true
         comparisonView.setAccessibilityLabel("Encoded before and after recording frame")
         previewCanvas.addSubview(comparisonView)
-        comparisonButton = button("Compare") { [weak self] in self?.compareAcceptedFrame() }
+        comparisonButton = button("Compare", parent: previewPanel) { [weak self] in
+            self?.compareAcceptedFrame()
+        }
         comparisonButton.setAccessibilityLabel("Compare encoded recording before and after")
-        comparisonButton.toolTip = "Compares the accepted source-relative position, not paused playback time. Encoding may select a neighboring frame at the output cadence."
-        comparisonHideButton = button("Hide") { [weak self] in self?.invalidateComparison() }
+        comparisonButton.toolTip = "Encode a sample at the accepted still frame, not the paused playback position. Before is spatially edited; Encoded includes compression, GIF palette and cadence. First attempt only: a Maximum-size save may differ. Encoding may select a neighboring frame at the output cadence. Apply staged edits and seek inside the accepted trim first."
+        comparisonHideButton = button("Hide", parent: previewPanel) { [weak self] in
+            self?.invalidateComparison()
+        }
         comparisonHideButton.setAccessibilityLabel("Hide recording comparison")
-        previewPanel.addSubview(comparisonButton); previewPanel.addSubview(comparisonHideButton)
         comparisonSlider.target = self; comparisonSlider.action = #selector(comparisonSplitChanged)
         comparisonSlider.setAccessibilityLabel("Recording before and after split")
         comparisonSlider.setAccessibilityHelp("Left is before encoding; right is the encoded first attempt at the accepted source-relative position. Output cadence may select a neighboring frame.")
         comparisonSlider.isHidden = true
-        comparisonBeforeLabel.textColor = tokens.color("text")
-        comparisonAfterLabel.textColor = tokens.color("text")
+        style(comparisonBeforeLabel, size: "text-xs", color: "text-subtle", parent: previewPanel)
+        style(comparisonAfterLabel, size: "text-xs", color: "text-subtle", parent: previewPanel)
         comparisonBeforeLabel.isHidden = true; comparisonAfterLabel.isHidden = true
-        previewPanel.addSubview(comparisonBeforeLabel); previewPanel.addSubview(comparisonAfterLabel)
         previewPanel.addSubview(comparisonSlider)
         cropOverlay.toolTip = "Drag inside to move. Drag a handle to resize. Arrow keys move a focused handle by 1 source pixel; Shift moves 10."
         cropOverlay.onStage = { [weak self] crop in self?.stageGraphicalCrop(crop) }
@@ -1080,24 +1331,96 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             self.updateControls()
         }
         previewCanvas.addSubview(cropOverlay)
-        root.addSubview(previewPanel)
+        // `.recording-preview-overlay-play`: an accent circle over the media.
+        playbackButton = button("Play", parent: previewViewport) { [weak self] in
+            self?.togglePlayback()
+        }
+        playbackButton.primary = true; playbackButton.circular = true
+        playbackButton.iconOnly = true; playbackButton.icon = .shipping("resume")
+        playbackButton.setAccessibilityLabel("Play silent recording preview")
+        playbackLoop.target = self; playbackLoop.action = #selector(playbackLoopChanged)
+        playbackLoop.setAccessibilityLabel("Loop recording preview")
+        playbackLoop.toolTip = "Repeat the accepted trim until paused. This changes only playback, not the saved recording."
+        playbackSound.target = self; playbackSound.action = #selector(playbackSoundChanged)
+        playbackSound.setAccessibilityLabel("Preview accepted recording audio")
+        playbackSound.toolTip = "Preview accepted MP4 audio on the default output device. Change only while stopped. This never changes the export."
+        previewPanel.addSubview(playbackLoop); previewPanel.addSubview(playbackSound)
+        style(sourceLabel, size: "text-xs", color: "text-subtle", parent: previewPanel)
+        sourceLabel.setAccessibilityLabel("Recording source details")
+        sourceLabel.lineBreakMode = .byTruncatingTail
+        style(previewNote, size: "text-xs", color: "text-faint", parent: previewPanel)
+        previewNote.lineBreakMode = .byTruncatingTail
         NotificationCenter.default.addObserver(self, selector: #selector(previewDidScroll(_:)),
             name: NSView.boundsDidChangeNotification, object: previewScroll.contentView)
 
-        geometryPanel.wantsLayer = true
-        geometryPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
-        geometryPanel.layer?.cornerRadius = tokens.number("r-md")
-        root.addSubview(geometryPanel)
-        geometryPanel.addSubview(label("Crop & output", size: 14, weight: .semibold,
-                                       parent: geometryPanel))
+        // `.recording-timeline`: summary, track and trim/position fields.
+        card(trimPanel, parent: page)
+        style(trimRangeLabel, size: "text-sm", color: "text", weight: .semibold, parent: trimPanel)
+        trimRangeLabel.setAccessibilityLabel("Recording trim range summary")
+        style(trimSelectedLabel, size: "text-sm", color: "text-subtle", parent: trimPanel)
+        trimSelectedLabel.alignment = .right
+        trimSelectedLabel.setAccessibilityLabel("Recording selected duration")
+        style(thumbnailStatusLabel, size: "text-xs", color: "text-subtle", parent: trimPanel)
+        thumbnailStatusLabel.alignment = .right
+        trimTimeline.onStage = { [weak self] edge, milliseconds in
+            guard let self else { return }
+            (edge == .start ? self.trimStart : self.trimEnd).stringValue = String(milliseconds)
+            self.invalidateComparison()
+            self.estimate = nil; self.updateControls()
+        }
+        trimTimeline.onSeek = { [weak self] milliseconds in self?.seek(to: milliseconds) }
+        trimPanel.addSubview(trimTimeline)
+        thumbnailRetryButton = button("Retry", parent: trimPanel) { [weak self] in
+            self?.generateThumbnails()
+        }
+        thumbnailRetryButton.setAccessibilityLabel("Retry recording thumbnails")
+        configureNumberField(trimStart, label: "Trim start milliseconds")
+        configureNumberField(trimEnd, label: "Trim end milliseconds")
+        for (text, field) in [(trimStartLabel, trimStart), (trimEndLabel, trimEnd)] {
+            style(text, size: "text-xs", color: "text-subtle", parent: trimPanel)
+            field.alignment = .right
+            trimPanel.addSubview(field)
+        }
+        resetTrimButton = button("Reset trim", parent: trimPanel) { [weak self] in self?.resetTrim() }
+        style(positionLabel, size: "text-xs", color: "text-subtle", parent: trimPanel)
+        seekSlider.target = self; seekSlider.action = #selector(seekChanged)
+        seekSlider.setAccessibilityLabel("Recording frame position")
+        trimPanel.addSubview(seekSlider)
+        style(seekLabel, size: "text-xs", color: "text-subtle", parent: trimPanel)
+        seekLabel.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-xs"), weight: .regular)
+        seekLabel.alignment = .right
+
+        // `.editor-output-card`: GIF settings.
+        card(gifPanel, parent: page)
+        style(gifTitle, size: "text-lg", color: "text", weight: .semibold, parent: gifPanel)
+        style(gifFrameRateLabel, size: "text-xs", color: "text-subtle", parent: gifPanel)
+        style(gifMaximumWidthLabel, size: "text-xs", color: "text-subtle", parent: gifPanel)
+        gifFrameRate.addItems(withTitles: ["8 FPS", "10 FPS", "12 FPS", "15 FPS",
+                                              "20 FPS", "24 FPS", "30 FPS"])
+        gifFrameRate.selectItem(withTitle: "15 FPS")
+        gifFrameRate.target = self; gifFrameRate.action = #selector(gifFrameRateChanged)
+        gifFrameRate.setAccessibilityLabel("GIF frame rate")
+        gifMaximumWidthControl.addItems(withTitles: ["320 px", "480 px", "640 px", "800 px",
+                                                        "1200 px"])
+        gifMaximumWidthControl.selectItem(withTitle: "800 px")
+        gifMaximumWidthControl.target = self
+        gifMaximumWidthControl.action = #selector(gifMaximumWidthChanged)
+        gifMaximumWidthControl.setAccessibilityLabel("GIF maximum width")
+        gifPanel.addSubview(gifFrameRate); gifPanel.addSubview(gifMaximumWidthControl)
+
+        // Crop & size.
+        card(geometryPanel, parent: page)
+        style(geometryTitle, size: "text-lg", color: "text", weight: .semibold, parent: geometryPanel)
         cropEnabled.target = self; cropEnabled.action = #selector(cropEnabledChanged)
         cropEnabled.setAccessibilityLabel("Crop recording")
         cropLock.target = self; cropLock.action = #selector(cropLockChanged)
         cropLock.setAccessibilityLabel("Lock recording crop aspect ratio")
         geometryPanel.addSubview(cropEnabled); geometryPanel.addSubview(cropLock)
-        cropAdjustmentButton = button("Adjust crop") { [weak self] in self?.toggleCropAdjustment() }
+        cropAdjustmentButton = button("Adjust crop", parent: geometryPanel) { [weak self] in
+            self?.toggleCropAdjustment()
+        }
         cropAdjustmentButton.setAccessibilityLabel("Adjust recording crop graphically")
-        geometryPanel.addSubview(cropAdjustmentButton)
+        cropAdjustmentButton.toolTip = "Drag the crop on the full source frame. Arrow keys move a focused handle by 1 source pixel; Shift moves 10."
         for (field, accessibilityLabel) in [
             (cropX, "Recording crop X"), (cropY, "Recording crop Y"),
             (cropWidth, "Recording crop width"), (cropHeight, "Recording crop height"),
@@ -1110,93 +1433,43 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }
             geometryPanel.addSubview(field)
         }
-        for title in ["X", "Y", "W", "H", "Output", "×"] {
-            geometryPanel.addSubview(label(title, muted: true, parent: geometryPanel))
+        cropFieldLabels = ["X", "Y", "Width", "Height"].map { title in
+            let value = NSTextField(labelWithString: title)
+            style(value, size: "text-xs", color: "text-subtle", parent: geometryPanel)
+            return value
         }
-        for preset in NativeRecordingResolutionPreset.allCases { outputMode.addItem(withTitle: preset.title) }
-        outputMode.addItem(withTitle: "Custom")
+        for value in [outputModeLabel, outputWidthLabel, outputHeightLabel] {
+            style(value, size: "text-xs", color: "text-subtle", parent: geometryPanel)
+        }
         outputMode.target = self; outputMode.action = #selector(outputModeChanged)
         outputMode.setAccessibilityLabel("Recording output size")
         geometryPanel.addSubview(outputMode)
+        rebuildOutputModeMenu(base: nil)
+        style(geometryHelp, size: "text-xs", color: "text-subtle", parent: geometryPanel)
 
-        sourceLabel.textColor = tokens.color("text-muted")
-        sourceLabel.font = .systemFont(ofSize: 12)
-        sourceLabel.setAccessibilityLabel("Recording source details")
-        root.addSubview(sourceLabel)
-        seekSlider.target = self; seekSlider.action = #selector(seekChanged)
-        seekSlider.setAccessibilityLabel("Recording frame position")
-        root.addSubview(seekSlider)
-        seekLabel.textColor = tokens.color("text-muted"); seekLabel.alignment = .right
-        root.addSubview(seekLabel)
-        playbackButton = button("Play") { [weak self] in self?.togglePlayback() }
-        playbackButton.setAccessibilityLabel("Play silent recording preview")
-        playbackLoop.target = self; playbackLoop.action = #selector(playbackLoopChanged)
-        playbackLoop.setAccessibilityLabel("Loop recording preview")
-        playbackSound.target = self; playbackSound.action = #selector(playbackSoundChanged)
-        playbackSound.setAccessibilityLabel("Preview accepted recording audio")
-        root.addSubview(playbackLoop)
-        root.addSubview(playbackSound)
-        trimPanel.wantsLayer = true; trimPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
-        trimPanel.layer?.cornerRadius = tokens.number("r-md")
-        root.addSubview(trimPanel)
-        configureNumberField(trimStart, label: "Trim start milliseconds")
-        configureNumberField(trimEnd, label: "Trim end milliseconds")
-        trimPanel.addSubview(label("Trim (milliseconds)", size: 14, weight: .semibold))
-        trimTimeline.onStage = { [weak self] edge, milliseconds in
-            guard let self else { return }
-            (edge == .start ? self.trimStart : self.trimEnd).stringValue = String(milliseconds)
-            self.invalidateComparison()
-            self.estimate = nil; self.updateControls()
+        // Save quality.
+        card(qualityPanel, parent: page)
+        style(qualityTitle, size: "text-lg", color: "text", weight: .semibold, parent: qualityPanel)
+        for value in [qualityModeLabel, qualityLabel, maximumSizeLabel, estimateTitle] {
+            style(value, size: "text-xs", color: "text-subtle", parent: qualityPanel)
         }
-        trimPanel.addSubview(trimTimeline)
-        thumbnailRetryButton = button("Retry") { [weak self] in self?.generateThumbnails() }
-        thumbnailRetryButton.setAccessibilityLabel("Retry recording thumbnails")
-        trimPanel.addSubview(thumbnailRetryButton)
-        trimPanel.addSubview(label("Start", muted: true)); trimPanel.addSubview(trimStart)
-        trimPanel.addSubview(label("End", muted: true)); trimPanel.addSubview(trimEnd)
-        applyButton = button("Apply edits") { [weak self] in self?.applyEdits() }
-        trimPanel.addSubview(applyButton)
-
-        audioPanel.wantsLayer = true
-        audioPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
-        audioPanel.layer?.cornerRadius = tokens.number("r-md")
-        root.addSubview(audioPanel)
-        audioPanel.addSubview(label("Audio", size: 14, weight: .semibold, parent: audioPanel))
-        audioNote = label("Sound preview off", muted: true, parent: audioPanel)
-        configureVolumeField(systemVolume, label: "System audio volume percent")
-        configureVolumeField(microphoneVolume, label: "Microphone volume percent")
-        systemAudioLabel = label("System", muted: true, parent: audioPanel)
-        microphoneAudioLabel = label("Microphone", muted: true, parent: audioPanel)
-        for control in [systemMute, microphoneMute, monoOutput] {
-            control.target = self; control.action = #selector(stageChanged)
-            audioPanel.addSubview(control)
-        }
-        systemMute.setAccessibilityLabel("Mute system audio")
-        microphoneMute.setAccessibilityLabel("Mute microphone")
-        monoOutput.setAccessibilityLabel("Mono audio output")
-        audioPanel.addSubview(systemVolume); audioPanel.addSubview(microphoneVolume)
-
-        format.addItems(withTitles: ["MP4", "GIF"])
-        format.target = self; format.action = #selector(formatChanged)
-        format.setAccessibilityLabel("Recording export format")
-        quality.addItems(withTitles: ["Preserve", "Highest", "High", "Standard", "Small", "Tiny"])
+        qualityMode.target = self; qualityMode.action = #selector(qualityModeChanged)
+        qualityMode.setAccessibilityLabel("Save quality")
         quality.target = self; quality.action = #selector(qualityChanged)
         quality.setAccessibilityLabel("Recording export quality")
-        gifFrameRate.addItems(withTitles: ["8 FPS", "10 FPS", "12 FPS", "15 FPS",
-                                              "20 FPS", "24 FPS", "30 FPS"])
-        gifFrameRate.selectItem(withTitle: "15 FPS")
-        gifFrameRate.target = self; gifFrameRate.action = #selector(gifFrameRateChanged)
-        gifFrameRate.setAccessibilityLabel("GIF frame rate")
-        gifFrameRateLabel.textColor = tokens.color("text-muted")
-        gifMaximumWidthControl.addItems(withTitles: ["320 px", "480 px", "640 px", "800 px",
-                                                        "1200 px"])
-        gifMaximumWidthControl.selectItem(withTitle: "800 px")
-        gifMaximumWidthControl.target = self
-        gifMaximumWidthControl.action = #selector(gifMaximumWidthChanged)
-        gifMaximumWidthControl.setAccessibilityLabel("GIF maximum width")
-        gifMaximumWidthLabel.textColor = tokens.color("text-muted")
-        maximumSize.target = self; maximumSize.action = #selector(maximumSizeChanged)
-        maximumSize.setAccessibilityLabel("Maximum recording file size")
+        let menus = RecordingEditorCopy.menus(gif: false, baseWidth: 2, baseHeight: 2)
+        for choice in menus["quality_modes"] ?? [] {
+            qualityMode.addItem(withTitle: choice.label)
+            qualityMode.lastItem?.representedObject = choice.value
+            qualityMode.lastItem?.toolTip = choice.description
+        }
+        for choice in menus["quality_presets"] ?? [] {
+            quality.addItem(withTitle: choice.label)
+            quality.lastItem?.representedObject = choice.value
+            quality.lastItem?.toolTip = choice.description
+        }
+        qualityPanel.addSubview(qualityMode); qualityPanel.addSubview(quality)
+        style(qualityModeHelp, size: "text-xs", color: "text-subtle", parent: qualityPanel)
         configureNumberField(maximumSizeValue, label: "Maximum recording file size value")
         maximumSizeValue.stringValue = "10"
         maximumSizeValue.placeholderString = "At least 100 KB"
@@ -1204,177 +1477,484 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         maximumSizeUnits.selectItem(withTitle: maximumSizeUnit.label)
         maximumSizeUnits.target = self; maximumSizeUnits.action = #selector(maximumSizeUnitChanged)
         maximumSizeUnits.setAccessibilityLabel("Maximum recording file size unit")
-        maximumSizeWarning.textColor = tokens.color("text-muted")
-        maximumSizeWarning.font = .systemFont(ofSize: 11)
+        qualityPanel.addSubview(maximumSizeValue); qualityPanel.addSubview(maximumSizeUnits)
+        style(maximumSizeInvalid, size: "text-xs", color: "danger-text", parent: qualityPanel)
+        style(maximumSizeWarning, size: "text-xs", color: "text-subtle", parent: qualityPanel)
         maximumSizeWarning.setAccessibilityLabel("Maximum recording file size preview warning")
-        destination.delegate = self; destination.setAccessibilityLabel("Recording destination")
-        root.addSubview(format); root.addSubview(quality); root.addSubview(destination)
-        root.addSubview(gifFrameRateLabel); root.addSubview(gifFrameRate)
-        root.addSubview(gifMaximumWidthLabel); root.addSubview(gifMaximumWidthControl)
-        root.addSubview(maximumSize); root.addSubview(maximumSizeValue)
-        root.addSubview(maximumSizeUnits); root.addSubview(maximumSizeWarning)
-        changeButton = button("Change…") { [weak self] in self?.chooseDestination() }
-        estimateButton = button("Estimate size") { [weak self] in self?.estimateSize() }
-        saveButton = button("Save new copy") { [weak self] in self?.saveNewCopy() }
-        saveButton.primary = true
-        replaceButton = button("Replace original…") { [weak self] in self?.confirmReplace() }
-        replaceButton.toolTip = "Replaces the saved original MP4 or GIF and its History item."
-        replaceHelp.textColor = tokens.color("text-muted")
-        replaceHelp.font = .systemFont(ofSize: 11)
-        replaceHelp.setAccessibilityLabel("Replace original availability")
-        root.addSubview(replaceHelp)
-        cancelButton = button("Cancel operation") { [weak self] in self?.cancelActiveOperation() }
-        cancelButton.signal = true
-        status.textColor = tokens.color("text-muted"); status.maximumNumberOfLines = 2
-        status.setAccessibilityLabel("Recording editor status")
-        estimateLabel.textColor = tokens.color("text-muted")
+        style(estimateLabel, size: "text-sm", color: "text", parent: qualityPanel)
+        estimateLabel.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-sm"), weight: .regular)
         estimateLabel.setAccessibilityLabel("Recording size estimate")
-        let estimateHelp = "Percentage change compares the estimated saved size with the original recording file size."
-        estimateLabel.toolTip = estimateHelp
-        estimateLabel.setAccessibilityHelp(estimateHelp)
-        progress.minValue = 0; progress.maxValue = 1000; progress.isIndeterminate = false
-        progress.setAccessibilityLabel("Recording export progress")
-        root.addSubview(status); root.addSubview(estimateLabel); root.addSubview(progress)
+        estimateLabel.toolTip = "Estimated saved file size for the current edits and settings"
+        estimateLabel.setAccessibilityHelp(estimateLabel.toolTip)
+        style(estimateDelta, size: "text-xs", color: "positive-text", weight: .semibold, parent: qualityPanel)
+        estimateDelta.alignment = .center
+        estimateDelta.wantsLayer = true
+        estimateDelta.layer?.cornerRadius = tokens.number("r-sm")
+        estimateDelta.setAccessibilityLabel("Recording size estimate change")
+        estimateDelta.toolTip = "Change versus the original recording file"
+        estimateButton = button("Estimate size", parent: qualityPanel) { [weak self] in
+            self?.estimateSize()
+        }
+        estimateButton.toolTip = "Percentage change compares the accepted estimate with the original recording file. Longer recordings use approximate encoded samples. No History entry or saved file is created."
+
+        // Audio.
+        card(audioPanel, parent: page)
+        style(audioTitle, size: "text-lg", color: "text", weight: .semibold, parent: audioPanel)
+        style(gifAudioNote, size: "text-sm", color: "caution-text", parent: audioPanel)
+        for control in [systemAudio, microphoneAudio, monoOutput] {
+            control.target = self; control.action = #selector(stageChanged)
+            audioPanel.addSubview(control)
+        }
+        systemAudio.setAccessibilityLabel("System audio")
+        microphoneAudio.setAccessibilityLabel("Microphone")
+        monoOutput.setAccessibilityLabel("Mono audio output")
+        configureVolumeField(systemVolume, label: "System audio volume percent")
+        configureVolumeField(microphoneVolume, label: "Microphone volume percent")
+        for (slider, name) in [(systemVolumeSlider, "System audio volume"),
+                               (microphoneVolumeSlider, "Microphone volume")] {
+            slider.target = self; slider.action = #selector(volumeSliderChanged(_:))
+            slider.setAccessibilityLabel(name)
+            audioPanel.addSubview(slider)
+        }
+        audioPanel.addSubview(systemVolume); audioPanel.addSubview(microphoneVolume)
+
+        // `.recording-save-footer`.
+        progress.tokens = tokens
+        progress.isHidden = true
+        footer.addSubview(progress)
+        style(filenameLabel, size: "text-xs", color: "text-subtle", parent: footer)
+        style(savingToLabel, size: "text-2xs", color: "text-faint", parent: footer)
+        style(destination, size: "text-2xs", color: "text-subtle", parent: footer)
+        destination.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
+        destination.lineBreakMode = .byTruncatingMiddle
+        destination.alignment = .right
+        destination.setAccessibilityLabel("Recording destination")
+        changeButton = button("Change…", parent: footer) { [weak self] in self?.chooseDestination() }
+        changeButton.setAccessibilityLabel("Change save location")
+        changeButton.toolTip = "Choose the folder for the new copy."
+        filenameField.delegate = self
+        filenameField.setAccessibilityLabel("Saved filename")
+        filenameField.font = .systemFont(ofSize: tokens.number("text-sm"))
+        filenameField.lineBreakMode = .byTruncatingTail
+        footer.addSubview(filenameField)
+        format.addItems(withTitles: [".mp4", ".gif"])
+        format.item(at: 0)?.toolTip = "MP4"; format.item(at: 1)?.toolTip = "GIF"
+        format.target = self; format.action = #selector(formatChanged)
+        format.setAccessibilityLabel("Recording export format")
+        footer.addSubview(format)
+        status.textColor = tokens.color("text-subtle"); status.maximumNumberOfLines = 2
+        status.font = .systemFont(ofSize: tokens.number("text-xs"))
+        status.alignment = .right
+        status.setAccessibilityLabel("Recording editor status")
+        footer.addSubview(status)
+        cancelButton = button("Cancel", parent: footer) { [weak self] in self?.cancelActiveOperation() }
+        replaceButton = button("Replace original…", parent: footer) { [weak self] in
+            self?.confirmReplace()
+        }
+        showInFolderButton = button("Show in Folder", parent: footer) { [weak self] in
+            self?.revealSavedCopy()
+        }
+        showInFolderButton.icon = .shipping("folder")
+        applyButton = button("Apply edits", parent: footer) { [weak self] in self?.applyEdits() }
+        applyButton.toolTip = "Update the preview before scrubbing or saving"
+        saveButton = button("Save new copy", parent: footer) { [weak self] in self?.saveNewCopy() }
+        saveButton.primary = true
+        saveButton.icon = .shipping("save")
+        saveButton.toolTip = "Creates a separate copy. The original and existing files are never replaced."
+    }
+
+    /// A shipping `.editor-card`: raised, hairline border, large radius.
+    private func card(_ view: Surface, parent: NSView) {
+        view.wantsLayer = true
+        view.layer?.backgroundColor = tokens.color("surface-raised").cgColor
+        view.layer?.borderColor = tokens.color("border-subtle").cgColor
+        view.layer?.borderWidth = 1
+        view.layer?.cornerRadius = tokens.number("r-xl")
+        parent.addSubview(view)
+    }
+
+    private func style(_ field: NSTextField, size: String, color: String,
+                       weight: NSFont.Weight = .regular, parent: NSView) {
+        field.font = .systemFont(ofSize: tokens.number(size), weight: weight)
+        field.textColor = tokens.color(color)
+        parent.addSubview(field)
+    }
+
+    private func rebuildOutputModeMenu(base: NativeRecordingDimensions?) {
+        let menus = RecordingEditorCopy.menus(gif: format.indexOfSelectedItem == 1,
+                                              baseWidth: base?.width ?? 0,
+                                              baseHeight: base?.height ?? 0)
+        let choices = menus["resolutions"] ?? []
+        let selected = outputMode.indexOfSelectedItem
+        if outputMode.numberOfItems != choices.count {
+            outputMode.removeAllItems()
+            choices.forEach { outputMode.addItem(withTitle: $0.label) }
+        }
+        for (index, choice) in choices.enumerated() {
+            guard let item = outputMode.item(at: index) else { continue }
+            item.title = choice.label
+            item.representedObject = choice.value
+            item.toolTip = choice.description
+        }
+        if selected >= 0, selected < outputMode.numberOfItems { outputMode.selectItem(at: selected) }
     }
 
     private func layout() {
         let width = root.bounds.width, height = root.bounds.height
         guard width > 0, height > 0 else { return }
-        root.subviews.first { ($0 as? NSTextField)?.stringValue == "Edit recording" }?.frame =
-            NSRect(x: 24, y: 18, width: width - 48, height: 28)
-        root.subviews.first { $0.identifier?.rawValue == "recording-editor-note" }?.frame =
-            NSRect(x: 24, y: 48, width: width - 48, height: 20)
-        let saveHeight: CGFloat = 150
-        let trimHeight: CGFloat = 116
-        let previewHeight = max(150, height - saveHeight - trimHeight - 116)
-        let availableWidth = width - 48
-        let geometryWidth = max(328, min(380, availableWidth * 0.42))
-        previewPanel.frame = NSRect(x: 24, y: 76,
-                                    width: availableWidth - geometryWidth - 12,
-                                    height: previewHeight)
-        previewTitle.frame = NSRect(x: 12, y: 8, width: 80, height: 20)
-        comparisonButton.frame = NSRect(x: 90, y: 5, width: 92, height: 26)
-        comparisonHideButton.frame = NSRect(x: 184, y: 5, width: 52, height: 26)
-        previewActualButton.frame = NSRect(x: previewPanel.bounds.width - 66, y: 5,
-                                           width: 54, height: 26)
-        previewFitButton.frame = NSRect(x: previewActualButton.frame.minX - 50, y: 5,
-                                        width: 46, height: 26)
-        previewScroll.frame = NSRect(x: 0, y: 34, width: previewPanel.bounds.width,
-                                     height: max(0, previewPanel.bounds.height
-                                         - (comparison == nil ? 34 : 72)))
-        let comparisonY = previewPanel.bounds.height - 37
-        comparisonBeforeLabel.frame = NSRect(x: 12, y: comparisonY + 2, width: 48, height: 20)
-        comparisonAfterLabel.frame = NSRect(x: previewPanel.bounds.width - 52,
-                                             y: comparisonY + 2, width: 44, height: 20)
-        comparisonSlider.frame = NSRect(x: 62, y: comparisonY,
-                                         width: max(0, previewPanel.bounds.width - 118), height: 24)
+        let footerHeight = layoutFooter(width: width)
+        footer.frame = NSRect(x: 0, y: max(0, height - footerHeight), width: width,
+                              height: footerHeight)
+        pageScroll.frame = NSRect(x: 0, y: 0, width: width, height: max(0, height - footerHeight))
+        let pageWidth = pageScroll.contentSize.width
+        let contentHeight = layoutPage(width: pageWidth, windowHeight: height)
+        page.frame = NSRect(x: 0, y: 0, width: pageWidth,
+                            height: max(pageScroll.contentSize.height, contentHeight))
         refreshPreviewLayout(resetScroll: false)
-        geometryPanel.frame = NSRect(x: previewPanel.frame.maxX + 12, y: 76,
-                                     width: geometryWidth, height: previewHeight)
-        let geometryLabels = geometryPanel.subviews.compactMap { $0 as? NSTextField }
-            .filter { !$0.isEditable }
-        geometryLabels.first { $0.stringValue == "Crop & output" }?.frame =
-            NSRect(x: 14, y: 12, width: 130, height: 20)
-        cropAdjustmentButton.frame = NSRect(x: geometryPanel.bounds.width - 122, y: 7,
-                                            width: 108, height: 28)
-        cropEnabled.frame = NSRect(x: 14, y: 36, width: 124, height: 24)
-        cropLock.frame = NSRect(x: 142, y: 36, width: 150, height: 24)
-        for (index, title) in ["X", "Y", "W", "H"].enumerated() {
-            let x = CGFloat(14 + index * 72)
-            geometryLabels.first { $0.stringValue == title }?.frame =
-                NSRect(x: x, y: 69, width: 14, height: 18)
-            [cropX, cropY, cropWidth, cropHeight][index].frame =
-                NSRect(x: x + 16, y: 63, width: 50, height: 28)
+    }
+
+    /// Lays out the scrolling page and returns its content height.
+    private func layoutPage(width: CGFloat, windowHeight: CGFloat) -> CGFloat {
+        let pad = tokens.number("s-8"), gap = tokens.number("s-5")
+        let side = max(pad, (width - 1_220) / 2)
+        let inner = max(0, width - side * 2)
+        var y = pad
+        titleLabel.frame = NSRect(x: side, y: y, width: inner, height: 30)
+        y += 30 + gap
+        if !droppedFramesBand.isHidden {
+            let inset = NSSize(width: tokens.number("s-5"), height: tokens.number("s-4"))
+            droppedFramesBand.frame = NSRect(x: side, y: y, width: inner, height: 20 + inset.height * 2)
+            droppedFramesLabel.frame = NSRect(x: inset.width, y: inset.height,
+                                              width: max(0, inner - inset.width * 2), height: 20)
+            y = droppedFramesBand.frame.maxY + gap
         }
-        geometryLabels.first { $0.stringValue == "Output" }?.frame =
-            NSRect(x: 14, y: 105, width: 48, height: 18)
-        geometryLabels.first { $0.stringValue == "×" }?.frame =
-            NSRect(x: 275, y: 104, width: 12, height: 18)
-        outputMode.frame = NSRect(x: 62, y: 98, width: 146, height: 28)
-        outputWidth.frame = NSRect(x: 216, y: 98, width: 56, height: 28)
-        outputHeight.frame = NSRect(x: 286, y: 98,
-                                    width: max(42, geometryPanel.bounds.width - 300), height: 28)
-        let seekY = previewPanel.frame.maxY + 10
-        sourceLabel.frame = NSRect(x: 24, y: seekY, width: width * 0.27 - 24, height: 20)
-        playbackButton.frame = NSRect(x: width * 0.27, y: seekY - 4, width: 104, height: 28)
-        seekLabel.frame = NSRect(x: width * 0.77, y: seekY, width: width * 0.2 - 24, height: 20)
-        let seekGap = tokens.number("s-2")
-        playbackLoop.frame = NSRect(x: playbackButton.frame.maxX + seekGap, y: seekY - 2,
-                                    width: 64, height: 24)
-        playbackSound.frame = NSRect(x: playbackLoop.frame.maxX + seekGap, y: seekY - 2,
-                                     width: 74, height: 24)
-        let seekX = playbackSound.frame.maxX + seekGap
-        seekSlider.frame = NSRect(x: seekX, y: seekY,
-                                  width: max(0, seekLabel.frame.minX - seekGap - seekX), height: 20)
-        let controlGap: CGFloat = 12
-        let controlsWidth = width - 48
-        let audioWidth = max(304, min(360, controlsWidth * 0.4))
-        trimPanel.frame = NSRect(x: 24, y: seekY + 30,
-                                 width: controlsWidth - audioWidth - controlGap, height: trimHeight)
-        audioPanel.frame = NSRect(x: trimPanel.frame.maxX + controlGap, y: seekY + 30,
-                                  width: audioWidth, height: trimHeight)
-        let labels = trimPanel.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isEditable }
-        labels.first { $0.stringValue == "Trim (milliseconds)" }?.frame = NSRect(x: 14, y: 12, width: 150, height: 20)
-        trimTimeline.frame = NSRect(x: 154, y: 8, width: trimPanel.bounds.width - 168, height: 28)
-        thumbnailRetryButton.frame = NSRect(x: trimPanel.bounds.width - 88, y: 40,
-                                            width: 74, height: 28)
-        labels.first { $0.stringValue == "Start" }?.frame = NSRect(x: 14, y: 82, width: 42, height: 18)
-        labels.first { $0.stringValue == "End" }?.frame = NSRect(x: 138, y: 82, width: 34, height: 18)
-        trimStart.frame = NSRect(x: 52, y: 76, width: 78, height: 28)
-        trimEnd.frame = NSRect(x: 172, y: 76, width: 78, height: 28)
-        applyButton.frame = NSRect(x: trimPanel.bounds.width - 112, y: 76, width: 98, height: 30)
-        let explanation = labels.first { $0.stringValue.hasPrefix("Apply before") }
-            ?? label("Apply before seeking or saving. Replace original is explicit.", muted: true,
-                     parent: trimPanel)
-        explanation.stringValue = thumbnailRetryAvailable
-            ? "Apply before seeking or saving."
-            : "Apply before seeking or saving. Replace original is explicit."
-        explanation.frame = NSRect(x: 14, y: 46,
-            width: trimPanel.bounds.width - (thumbnailRetryAvailable ? 116 : 28), height: 20)
 
-        let audioLabels = audioPanel.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isEditable }
-        audioLabels.first { $0.stringValue == "Audio" }?.frame = NSRect(x: 14, y: 12, width: 54, height: 20)
-        audioNote.frame = NSRect(x: 68, y: 12, width: audioPanel.bounds.width - 187, height: 20)
-        systemAudioLabel.frame = NSRect(x: 14, y: 48, width: 78, height: 18)
-        microphoneAudioLabel.frame = NSRect(x: 14, y: 82, width: 78, height: 18)
-        systemVolume.frame = NSRect(x: 94, y: 42, width: 68, height: 28)
-        microphoneVolume.frame = NSRect(x: 94, y: 76, width: 68, height: 28)
-        systemMute.frame = NSRect(x: 170, y: 44, width: 72, height: 24)
-        microphoneMute.frame = NSRect(x: 170, y: 78, width: 72, height: 24)
-        monoOutput.frame = NSRect(x: audioPanel.bounds.width - 111, y: 8, width: 101, height: 24)
+        // Preview card.
+        let toolbarHeight: CGFloat = 46
+        let viewportHeight = min(480, max(180, windowHeight * 0.46))
+        let captionTop = toolbarHeight + viewportHeight
+        let comparisonRow: CGFloat = comparison == nil ? 0 : 26
+        let noteRow: CGFloat = previewNote.isHidden ? 0 : 16
+        let captionHeight = tokens.number("s-4") + comparisonRow + 18 + noteRow + tokens.number("s-4")
+        previewPanel.frame = NSRect(x: side, y: y, width: inner,
+                                    height: captionTop + captionHeight)
+        layoutPreviewCard(width: inner, toolbarHeight: toolbarHeight,
+                          viewportHeight: viewportHeight, comparisonRow: comparisonRow)
+        y = previewPanel.frame.maxY + gap
 
-        let barY = height - saveHeight
-        status.frame = NSRect(x: 24, y: barY + 8, width: width - 48, height: 36)
-        progress.frame = NSRect(x: 174, y: barY + 48, width: width - 324, height: 16)
-        cancelButton.frame = NSRect(x: width - 140, y: barY + 38, width: 116, height: 28)
-        changeButton.frame = NSRect(x: width - 116, y: barY + 70, width: 92, height: 30)
-        gifFrameRate.frame = NSRect(x: changeButton.frame.minX - 86, y: barY + 72,
-                                    width: 78, height: 28)
-        gifFrameRateLabel.frame = NSRect(x: gifFrameRate.frame.minX - 62, y: barY + 77,
-                                         width: 58, height: 20)
-        gifMaximumWidthControl.frame = NSRect(x: gifFrameRateLabel.frame.minX - 86,
-                                              y: barY + 72, width: 78, height: 28)
-        gifMaximumWidthLabel.frame = NSRect(x: gifMaximumWidthControl.frame.minX - 72,
-                                            y: barY + 77, width: 68, height: 20)
-        let destinationEnd = format.indexOfSelectedItem == 1
-            ? gifMaximumWidthLabel.frame.minX - 8 : changeButton.frame.minX - 10
-        destination.frame = NSRect(x: 24, y: barY + 72,
-                                   width: max(0, destinationEnd - 24), height: 28)
-        format.frame = NSRect(x: 24, y: barY + 110, width: 92, height: 28)
-        quality.frame = NSRect(x: 124, y: barY + 110, width: 116, height: 28)
-        maximumSize.frame = NSRect(x: 24, y: barY + 45, width: 142, height: 24)
-        maximumSizeValue.frame = NSRect(x: 248, y: barY + 108, width: 72, height: 28)
-        maximumSizeUnits.frame = NSRect(x: 324, y: barY + 108, width: 62, height: 28)
-        maximumSizeWarning.frame = NSRect(x: 174, y: barY + 47,
-                                          width: width - 348, height: 18)
-        replaceHelp.frame = maximumSizeWarning.frame
-        replaceButton.frame = NSRect(x: width - 160, y: barY + 42, width: 136, height: 30)
-        let maximumControlsWidth = maximumSizeEnabled ? maximumSizeUnits.frame.maxX + 8 : 252
-        let estimateLabelEnd = maximumSizeEnabled ? width - 168 : width - 304
-        estimateLabel.frame = NSRect(x: maximumControlsWidth, y: barY + 114,
-                                     width: max(0, estimateLabelEnd - maximumControlsWidth), height: 20)
-        estimateButton.frame = NSRect(x: width - 296, y: barY + 106, width: 126, height: 32)
-        saveButton.frame = NSRect(x: width - 160, y: barY + 106, width: 136, height: 32)
+        // Timeline card.
+        layoutTimelineCard(width: inner)
+        trimPanel.frame.origin = NSPoint(x: side, y: y)
+        y = trimPanel.frame.maxY + gap
+
+        // GIF settings, then Crop & size beside Save quality, then Audio.
+        if !gifPanel.isHidden {
+            layoutGifCard(width: inner)
+            gifPanel.frame.origin = NSPoint(x: side, y: y)
+            y = gifPanel.frame.maxY + gap
+        }
+        let columns = inner >= 700
+        let column = columns ? (inner - gap) / 2 : inner
+        layoutGeometryCard(width: column)
+        layoutQualityCard(width: column)
+        geometryPanel.frame.origin = NSPoint(x: side, y: y)
+        if columns {
+            qualityPanel.frame.origin = NSPoint(x: side + column + gap, y: y)
+            y = max(geometryPanel.frame.maxY, qualityPanel.frame.maxY) + gap
+        } else {
+            qualityPanel.frame.origin = NSPoint(x: side, y: geometryPanel.frame.maxY + gap)
+            y = qualityPanel.frame.maxY + gap
+        }
+        if !audioPanel.isHidden {
+            layoutAudioCard(width: inner)
+            audioPanel.frame.origin = NSPoint(x: side, y: y)
+            y = audioPanel.frame.maxY + gap
+        }
+        return y - gap + pad
+    }
+
+    private func layoutPreviewCard(width: CGFloat, toolbarHeight: CGFloat,
+                                   viewportHeight: CGFloat, comparisonRow: CGFloat) {
+        let padding = tokens.number("s-5"), itemGap = tokens.number("s-4")
+        let radius = tokens.number("r-xl")
+        previewToolbar.frame = NSRect(x: 0, y: 0, width: width, height: toolbarHeight)
+        previewDivider.frame = NSRect(x: 0, y: toolbarHeight - 1, width: width, height: 1)
+        previewViewport.frame = NSRect(x: 0, y: toolbarHeight - radius, width: width,
+                                       height: viewportHeight + radius)
+        let controlY = (toolbarHeight - tokens.number("h-sm")) / 2
+        // Right to left: Fit | 100%, Loop preview, Compare/Hide, Sound.
+        var right = width - padding
+        let segmentHeight = tokens.number("h-sm") + 6
+        previewSizeTrack.frame = NSRect(x: right - 132, y: (toolbarHeight - segmentHeight) / 2,
+                                        width: 132, height: segmentHeight)
+        previewFitButton.frame = NSRect(x: 3, y: 3, width: 63, height: segmentHeight - 6)
+        previewActualButton.frame = NSRect(x: 66, y: 3, width: 63, height: segmentHeight - 6)
+        right = previewSizeTrack.frame.minX - itemGap
+        playbackLoop.frame = NSRect(x: right - 112, y: controlY, width: 112, height: tokens.number("h-sm"))
+        right = playbackLoop.frame.minX - itemGap
+        comparisonHideButton.frame = NSRect(x: right - 56, y: controlY, width: 56,
+                                            height: tokens.number("h-sm"))
+        if !comparisonHideButton.isHidden { right = comparisonHideButton.frame.minX - itemGap }
+        comparisonButton.frame = NSRect(x: right - 84, y: controlY, width: 84,
+                                        height: tokens.number("h-sm"))
+        right = comparisonButton.frame.minX - itemGap
+        playbackSound.frame = NSRect(x: right - 72, y: controlY, width: 72, height: tokens.number("h-sm"))
+        right = playbackSound.frame.minX - itemGap
+        previewTitle.frame = NSRect(x: padding, y: (toolbarHeight - 18) / 2, width: 56, height: 18)
+        audioNote.frame = NSRect(x: previewTitle.frame.maxX + itemGap, y: (toolbarHeight - 16) / 2,
+                                 width: max(0, right - previewTitle.frame.maxX - itemGap), height: 16)
+        // Viewport: the media fits inside a padded, sunken well.
+        previewScroll.frame = NSRect(x: padding, y: radius + padding,
+                                     width: max(0, width - padding * 2),
+                                     height: max(0, viewportHeight - padding * 2))
+        // Caption below the viewport.
+        var y = toolbarHeight + viewportHeight + tokens.number("s-4")
+        if comparisonRow > 0 {
+            comparisonBeforeLabel.frame = NSRect(x: padding, y: y + 4, width: 48, height: 16)
+            comparisonAfterLabel.frame = NSRect(x: width - padding - 60, y: y + 4, width: 60, height: 16)
+            comparisonAfterLabel.alignment = .right
+            comparisonSlider.frame = NSRect(x: padding + 52, y: y,
+                                            width: max(0, width - padding * 2 - 116), height: 24)
+            y += comparisonRow
+        }
+        sourceLabel.frame = NSRect(x: padding, y: y, width: max(0, width - padding * 2), height: 18)
+        y += 18
+        previewNote.frame = NSRect(x: padding, y: y, width: max(0, width - padding * 2), height: 16)
+    }
+
+    /// Positions the overlay play control over the presented media.
+    private func layoutOverlayPlay(imageRect: NSRect) {
+        let size = tokens.number("s-12") - tokens.number("s-4")
+        let visible = previewScroll.convert(imageRect.intersection(previewCanvas.visibleRect),
+                                            from: previewCanvas)
+        let viewportRect = previewViewport.convert(visible, from: previewScroll)
+        let bounds = previewViewport.convert(previewScroll.bounds, from: previewScroll)
+        var center = NSPoint(x: viewportRect.midX, y: viewportRect.midY)
+        if comparison != nil {
+            // Keep play clear of the centered comparison divider, as shipping does.
+            center.y = viewportRect.maxY - tokens.number("s-5") - tokens.number("s-10") - size / 2
+        }
+        if viewportRect.isEmpty { center = NSPoint(x: bounds.midX, y: bounds.midY) }
+        center.x = min(max(center.x, bounds.minX + size / 2), max(bounds.minX + size / 2, bounds.maxX - size / 2))
+        center.y = min(max(center.y, bounds.minY + size / 2), max(bounds.minY + size / 2, bounds.maxY - size / 2))
+        playbackButton.frame = NSRect(x: center.x - size / 2, y: center.y - size / 2,
+                                      width: size, height: size)
+    }
+
+    private func layoutTimelineCard(width: CGFloat) {
+        let padding = tokens.number("s-6"), itemGap = tokens.number("s-3")
+        let fieldHeight = tokens.number("h-sm")
+        var y = tokens.number("s-5")
+        let contentWidth = max(0, width - padding * 2)
+        trimRangeLabel.frame = NSRect(x: padding, y: y, width: contentWidth / 2, height: 18)
+        trimSelectedLabel.frame = NSRect(x: width - padding - 180, y: y, width: 180, height: 18)
+        var right = trimSelectedLabel.frame.minX - itemGap
+        thumbnailRetryButton.frame = NSRect(x: right - 64, y: y - 5, width: 64, height: 26)
+        if !thumbnailRetryButton.isHidden { right = thumbnailRetryButton.frame.minX - itemGap }
+        thumbnailStatusLabel.frame = NSRect(x: max(padding, right - 200), y: y + 1,
+                                            width: min(200, max(0, right - padding)), height: 16)
+        y += 18 + tokens.number("s-4")
+        trimTimeline.frame = NSRect(x: padding, y: y, width: contentWidth,
+                                    height: recordingTimelineTrackHeight + 6)
+        y = trimTimeline.frame.maxY + tokens.number("s-4")
+        var x = padding
+        let rowY = y
+        func place(_ view: NSView, width: CGFloat, height: CGFloat, dy: CGFloat) {
+            view.frame = NSRect(x: x, y: rowY + dy, width: width, height: height)
+            x = view.frame.maxX + itemGap
+        }
+        place(trimStartLabel, width: 60, height: 16, dy: 6)
+        place(trimStart, width: 72, height: fieldHeight, dy: 0)
+        x += tokens.number("s-3")
+        place(trimEndLabel, width: 54, height: 16, dy: 6)
+        place(trimEnd, width: 72, height: fieldHeight, dy: 0)
+        place(resetTrimButton, width: 92, height: fieldHeight, dy: 0)
+        x += tokens.number("s-5")
+        place(positionLabel, width: 52, height: 16, dy: 6)
+        let labelWidth: CGFloat = 76
+        seekLabel.frame = NSRect(x: width - padding - labelWidth, y: y + 6, width: labelWidth, height: 16)
+        seekSlider.frame = NSRect(x: x, y: y + 4, width: max(0, seekLabel.frame.minX - itemGap - x),
+                                  height: 20)
+        trimPanel.frame.size = NSSize(width: width, height: y + fieldHeight + tokens.number("s-6"))
+    }
+
+    private func layoutGifCard(width: CGFloat) {
+        let padding = tokens.number("s-6"), gap = tokens.number("s-4")
+        gifTitle.frame = NSRect(x: padding, y: padding, width: max(0, width - padding * 2), height: 20)
+        let column = max(0, (width - padding * 2 - gap) / 2)
+        let labelY = gifTitle.frame.maxY + tokens.number("s-5")
+        gifFrameRateLabel.frame = NSRect(x: padding, y: labelY, width: column, height: 16)
+        gifMaximumWidthLabel.frame = NSRect(x: padding + column + gap, y: labelY, width: column, height: 16)
+        let controlY = labelY + 16 + tokens.number("s-2")
+        gifFrameRate.frame = NSRect(x: padding, y: controlY, width: column, height: tokens.number("h-sm"))
+        gifMaximumWidthControl.frame = NSRect(x: padding + column + gap, y: controlY, width: column,
+                                              height: tokens.number("h-sm"))
+        gifPanel.frame.size = NSSize(width: width, height: gifFrameRate.frame.maxY + padding)
+    }
+
+    private func layoutGeometryCard(width: CGFloat) {
+        let padding = tokens.number("s-6"), gap = tokens.number("s-4")
+        let content = max(0, width - padding * 2)
+        let fieldHeight = tokens.number("h-sm")
+        geometryTitle.frame = NSRect(x: padding, y: padding, width: content, height: 20)
+        var y = geometryTitle.frame.maxY + tokens.number("s-5")
+        cropEnabled.frame = NSRect(x: padding, y: y, width: min(content, 160), height: 20)
+        y += 20 + tokens.number("s-5")
+        let column = max(0, (content - gap * 3) / 4)
+        for (index, field) in [cropX, cropY, cropWidth, cropHeight].enumerated() {
+            let x = padding + CGFloat(index) * (column + gap)
+            cropFieldLabels[index].frame = NSRect(x: x, y: y, width: column, height: 16)
+            field.frame = NSRect(x: x, y: y + 16 + tokens.number("s-2"), width: column,
+                                 height: fieldHeight)
+        }
+        y += 16 + tokens.number("s-2") + fieldHeight + tokens.number("s-5")
+        cropLock.frame = NSRect(x: padding, y: y + 4, width: 150, height: 20)
+        cropAdjustmentButton.frame = NSRect(x: cropLock.frame.maxX + gap, y: y, width: 112,
+                                            height: fieldHeight)
+        y += fieldHeight + tokens.number("s-5")
+        outputModeLabel.frame = NSRect(x: padding, y: y, width: content, height: 16)
+        y += 16 + tokens.number("s-2")
+        outputMode.frame = NSRect(x: padding, y: y, width: min(content, 430), height: fieldHeight)
+        y += fieldHeight + tokens.number("s-5")
+        if customOutput {
+            let half = max(0, (content - gap) / 2)
+            outputWidthLabel.frame = NSRect(x: padding, y: y, width: half, height: 16)
+            outputHeightLabel.frame = NSRect(x: padding + half + gap, y: y, width: half, height: 16)
+            y += 16 + tokens.number("s-2")
+            outputWidth.frame = NSRect(x: padding, y: y, width: half, height: fieldHeight)
+            outputHeight.frame = NSRect(x: padding + half + gap, y: y, width: half, height: fieldHeight)
+            y += fieldHeight + tokens.number("s-5")
+        }
+        geometryHelp.frame = NSRect(x: padding, y: y, width: content, height: 30)
+        geometryPanel.frame.size = NSSize(width: width, height: geometryHelp.frame.maxY + padding)
+    }
+
+    private func layoutQualityCard(width: CGFloat) {
+        let padding = tokens.number("s-6"), gap = tokens.number("s-4")
+        let content = max(0, width - padding * 2)
+        let fieldHeight = tokens.number("h-sm")
+        let controlWidth = min(content, 430)
+        qualityTitle.frame = NSRect(x: padding, y: padding, width: content, height: 20)
+        var y = qualityTitle.frame.maxY + tokens.number("s-5")
+        qualityModeLabel.frame = NSRect(x: padding, y: y, width: content, height: 16)
+        y += 16 + tokens.number("s-2")
+        qualityMode.frame = NSRect(x: padding, y: y, width: controlWidth, height: fieldHeight)
+        y += fieldHeight + tokens.number("s-3")
+        qualityModeHelp.frame = NSRect(x: padding, y: y, width: content, height: 30)
+        y += 30 + tokens.number("s-3")
+        if !quality.isHidden {
+            qualityLabel.frame = NSRect(x: padding, y: y, width: content, height: 16)
+            y += 16 + tokens.number("s-2")
+            quality.frame = NSRect(x: padding, y: y, width: controlWidth, height: fieldHeight)
+            y += fieldHeight + tokens.number("s-5")
+        }
+        if !maximumSizeValue.isHidden {
+            maximumSizeLabel.frame = NSRect(x: padding, y: y, width: content, height: 16)
+            y += 16 + tokens.number("s-2")
+            maximumSizeValue.frame = NSRect(x: padding, y: y, width: 96, height: fieldHeight)
+            maximumSizeUnits.frame = NSRect(x: maximumSizeValue.frame.maxX + gap, y: y, width: 72,
+                                            height: fieldHeight)
+            y += fieldHeight + tokens.number("s-3")
+            if !maximumSizeInvalid.isHidden {
+                maximumSizeInvalid.frame = NSRect(x: padding, y: y, width: content, height: 16)
+                y += 16 + tokens.number("s-2")
+            }
+            maximumSizeWarning.frame = NSRect(x: padding, y: y, width: content, height: 30)
+            y += 30 + tokens.number("s-3")
+        }
+        estimateTitle.frame = NSRect(x: padding, y: y, width: content, height: 16)
+        y += 16 + tokens.number("s-2")
+        let estimateWidth = min(max(56, estimateLabel.intrinsicContentSize.width + 4),
+                                max(56, content - 190))
+        estimateLabel.frame = NSRect(x: padding, y: y + 6, width: estimateWidth, height: 18)
+        var x = estimateLabel.frame.maxX + gap
+        if !estimateDelta.isHidden {
+            let deltaWidth = estimateDelta.intrinsicContentSize.width + tokens.number("s-3") * 2
+            estimateDelta.frame = NSRect(x: x, y: y + 6, width: deltaWidth, height: 18)
+            x = estimateDelta.frame.maxX + gap
+        }
+        estimateButton.frame = NSRect(x: x, y: y, width: 112, height: fieldHeight)
+        qualityPanel.frame.size = NSSize(width: width, height: y + fieldHeight + padding)
+    }
+
+    private func layoutAudioCard(width: CGFloat) {
+        let padding = tokens.number("s-6"), gap = tokens.number("s-4")
+        let content = max(0, width - padding * 2)
+        audioTitle.frame = NSRect(x: padding, y: padding, width: content, height: 20)
+        var y = audioTitle.frame.maxY + tokens.number("s-5")
+        if !gifAudioNote.isHidden {
+            gifAudioNote.frame = NSRect(x: padding, y: y, width: content, height: 18)
+            audioPanel.frame.size = NSSize(width: width, height: gifAudioNote.frame.maxY + padding)
+            return
+        }
+        for (toggle, slider, field) in [(systemAudio, systemVolumeSlider, systemVolume),
+                                        (microphoneAudio, microphoneVolumeSlider, microphoneVolume)]
+            where !toggle.isHidden {
+            toggle.frame = NSRect(x: padding, y: y + 4, width: 130, height: 20)
+            field.frame = NSRect(x: width - padding - 72, y: y, width: 72, height: tokens.number("h-sm"))
+            slider.frame = NSRect(x: toggle.frame.maxX + gap, y: y + 4,
+                                  width: max(0, field.frame.minX - gap - toggle.frame.maxX - gap),
+                                  height: 20)
+            y += tokens.number("h-sm") + tokens.number("s-4")
+        }
+        monoOutput.frame = NSRect(x: padding, y: y, width: 180, height: 20)
+        audioPanel.frame.size = NSSize(width: width, height: monoOutput.frame.maxY + padding)
+    }
+
+    /// Lays out the fixed save footer and returns its height.
+    private func layoutFooter(width: CGFloat) -> CGFloat {
+        let marginX = tokens.number("s-7"), marginY = tokens.number("s-6")
+        let gap = tokens.number("s-4"), buttonGap = tokens.number("s-3")
+        let available = max(0, width - marginX * 2)
+        let fieldHeight = tokens.number("h-md")
+        // Right to left, as shipping: Save, then the native actions and Cancel.
+        let actions: [(CaptureButton, CGFloat)] = [(saveButton, 132), (applyButton, 104),
+                                                   (replaceButton, 146), (showInFolderButton, 146),
+                                                   (cancelButton, 156)]
+        let visible = actions.filter { !$0.0.isHidden }
+        let actionsWidth = visible.reduce(CGFloat(0)) { $0 + $1.1 }
+            + buttonGap * CGFloat(max(0, visible.count - 1))
+        // Filename and actions share one row when both fit, else they stack.
+        let beside = available - actionsWidth - tokens.number("s-6")
+        let wide = beside >= 280
+        let filenameWidth = wide ? min(420, beside) : available
+        // Filename heading: label, then "Saving to <folder> Change…" on the right.
+        var y = marginY
+        filenameLabel.frame = NSRect(x: marginX, y: y, width: 64, height: 16)
+        changeButton.frame = NSRect(x: marginX + filenameWidth - 72, y: y - 2, width: 72, height: 20)
+        let folderLeft = filenameLabel.frame.maxX + gap + 56
+        destination.frame = NSRect(x: folderLeft, y: y + 1,
+                                   width: max(0, changeButton.frame.minX - gap - folderLeft),
+                                   height: 14)
+        let folderWidth = min(destination.frame.width, destination.intrinsicContentSize.width)
+        destination.frame = NSRect(x: destination.frame.maxX - folderWidth, y: y + 1,
+                                   width: folderWidth, height: 14)
+        savingToLabel.frame = NSRect(x: destination.frame.minX - 52, y: y + 1, width: 48, height: 14)
+        savingToLabel.alignment = .right
+        y += 16 + tokens.number("s-2")
+        // `.recording-filename-input`: the stem with its format attached.
+        let formatWidth: CGFloat = 84
+        filenameField.frame = NSRect(x: marginX, y: y, width: max(0, filenameWidth - formatWidth),
+                                     height: fieldHeight)
+        format.frame = NSRect(x: filenameField.frame.maxX, y: y + 2, width: formatWidth,
+                              height: fieldHeight - 4)
+        var actionsTop = marginY
+        if !wide { actionsTop = filenameField.frame.maxY + tokens.number("s-5") }
+        let actionsLeft = wide ? marginX + filenameWidth + tokens.number("s-6") : marginX
+        let actionsRight = width - marginX
+        status.frame = NSRect(x: actionsLeft, y: actionsTop, width: max(0, actionsRight - actionsLeft),
+                              height: 16)
+        let buttonsY = actionsTop + 16 + tokens.number("s-2")
+        var right = actionsRight
+        for (control, controlWidth) in actions {
+            control.frame = NSRect(x: right - controlWidth, y: buttonsY, width: controlWidth,
+                                   height: fieldHeight)
+            if !control.isHidden { right = control.frame.minX - buttonGap }
+        }
+        let height = buttonsY + fieldHeight + marginY
+        progress.frame = NSRect(x: 0, y: 0, width: width, height: 3)
+        footerDivider.frame = NSRect(x: 0, y: 0, width: width, height: 1)
+        return height
     }
 
     private func setPreviewActualSize(_ actualSize: Bool) {
@@ -1389,6 +1969,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         guard let clipView = notification.object as? NSClipView,
               clipView === previewScroll.contentView else { return }
         cropOverlay.endDrag()
+        layoutOverlayPlay(imageRect: lastPreviewImageRect)
     }
 
     private func setPreviewImage(_ image: NSImage?) {
@@ -1425,6 +2006,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             previewScroll.contentView.scroll(to: .zero)
             previewScroll.reflectScrolledClipView(previewScroll.contentView)
         }
+        lastPreviewImageRect = imageRect
+        layoutOverlayPlay(imageRect: imageRect)
     }
 
     private func publish(_ value: RecordingEditorPresentation, initialize: Bool = false) {
@@ -1441,10 +2024,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         setPreviewImage(NSImage(cgImage: value.image,
                                 size: NSSize(width: CGFloat(value.image.width),
                                              height: CGFloat(value.image.height))))
-        sourceLabel.stringValue = "\(value.snapshot.width) × \(value.snapshot.height) source frame"
+        if let mimeType = value.snapshot.source["mime_type"] as? String {
+            titleLabel.stringValue = RecordingEditorCopy.title(mimeType: mimeType)
+        }
+        let droppedWarning = RecordingEditorCopy.droppedFramesWarning(value.snapshot.droppedFrames)
+        droppedFramesLabel.stringValue = droppedWarning ?? ""
+        droppedFramesBand.isHidden = droppedWarning == nil
         seekSlider.maxValue = Double(max(1, value.snapshot.durationMilliseconds))
         seekSlider.doubleValue = Double(value.snapshot.positionMilliseconds)
-        seekLabel.stringValue = "\(time(value.snapshot.positionMilliseconds)) / \(time(value.snapshot.durationMilliseconds))"
+        seekLabel.stringValue = time(value.snapshot.positionMilliseconds)
+        trimTimeline.setAcceptedPosition(value.snapshot.positionMilliseconds)
         let start = (value.snapshot.edit["trim_start_ms"] as? NSNumber)?.uint64Value ?? 0
         let end = (value.snapshot.edit["trim_end_ms"] as? NSNumber)?.uint64Value
             ?? value.snapshot.durationMilliseconds
@@ -1455,8 +2044,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let audio = value.snapshot.edit["audio"] as? [String: Any] ?? [:]
         systemVolume.stringValue = volumePercent(audio["system_volume"])
         microphoneVolume.stringValue = volumePercent(audio["microphone_volume"])
-        systemMute.state = (audio["mute_system_audio"] as? Bool ?? false) ? .on : .off
-        microphoneMute.state = (audio["mute_microphone"] as? Bool ?? false) ? .on : .off
+        syncVolumeSlider(systemVolumeSlider, from: systemVolume)
+        syncVolumeSlider(microphoneVolumeSlider, from: microphoneVolume)
+        systemAudio.state = (audio["mute_system_audio"] as? Bool ?? false) ? .off : .on
+        microphoneAudio.state = (audio["mute_microphone"] as? Bool ?? false) ? .off : .on
         monoOutput.state = (audio["mono_output"] as? Bool ?? false) ? .on : .off
         let acceptedExport = value.snapshot.saveExport
         if let source = sourceDimensions(value.snapshot) {
@@ -1468,12 +2059,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             if initialize {
                 if let output = editOutputDimensions(value.snapshot.edit) {
                     customOutput = true
-                    outputMode.selectItem(withTitle: "Custom")
+                    outputMode.selectItem(at: NativeRecordingResolutionPreset.allCases.count)
                     outputWidth.stringValue = String(output.width)
                     outputHeight.stringValue = String(output.height)
                 } else {
                     customOutput = false; resolutionPreset = .original
-                    outputMode.selectItem(withTitle: resolutionPreset.title)
+                    outputMode.selectItem(at: Int(resolutionPreset.rawValue))
                 }
             } else if customOutput, acceptedExport["format"] as? String != "gif",
                       let output = editOutputDimensions(value.snapshot.edit) {
@@ -1482,19 +2073,22 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }
             refreshGeometryFields(source: source, preserveCustom: customOutput)
         }
-        select(format, value: acceptedExport["format"] as? String ?? "mp4")
+        format.selectItem(at: acceptedExport["format"] as? String == "gif" ? 1 : 0)
         let acceptedMaximum = (acceptedExport["max_size_bytes"] as? NSNumber)?.uint64Value
         maximumSizeEnabled = acceptedMaximum != nil
-        maximumSize.state = maximumSizeEnabled ? .on : .off
         if let acceptedMaximum {
             if maximumSizeUnit.bytes(maximumSizeValue.stringValue) != acceptedMaximum {
                 maximumSizeValue.stringValue = maximumSizeUnit.value(acceptedMaximum)
             }
-            if initialize { qualityPreference = "Preserve" }
-            select(quality, value: "preserve")
+            if initialize { qualityPreference = "preserve"; preserveQuality = false }
         } else {
-            select(quality, value: acceptedExport["quality"] as? String ?? "preserve")
-            qualityPreference = quality.titleOfSelectedItem ?? "Preserve"
+            let acceptedQuality = acceptedExport["quality"] as? String ?? "preserve"
+            preserveQuality = acceptedQuality == "preserve"
+            if !preserveQuality {
+                compressQuality = acceptedQuality
+                selectQualityPreset(acceptedQuality)
+            }
+            qualityPreference = acceptedQuality
             if initialize {
                 maximumSizeUnit = .megabytes
                 maximumSizeUnits.selectItem(withTitle: maximumSizeUnit.label)
@@ -1559,12 +2153,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         if presentation?.snapshot.hasSystemAudio == true {
             guard let volume = volume(systemVolume) else { return nil }
             audio["system_volume"] = volume
-            audio["mute_system_audio"] = systemMute.state == .on
+            audio["mute_system_audio"] = systemAudio.state != .on
         }
         if presentation?.snapshot.hasMicrophoneAudio == true {
             guard let volume = volume(microphoneVolume) else { return nil }
             audio["microphone_volume"] = volume
-            audio["mute_microphone"] = microphoneMute.state == .on
+            audio["mute_microphone"] = microphoneAudio.state != .on
         }
         audio["mono_output"] = monoOutput.state == .on
         audio["source_has_system_audio"] = presentation?.snapshot.hasSystemAudio == true
@@ -1578,8 +2172,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         var value = presentation!.snapshot.saveExport
         let gif = format.indexOfSelectedItem == 1
         value["format"] = gif ? "gif" : "mp4"
-        value["quality"] = maximumSizeEnabled
-            ? "preserve" : quality.titleOfSelectedItem?.lowercased() ?? "preserve"
+        value["quality"] = maximumSizeEnabled || preserveQuality ? "preserve" : selectedQualityPreset
         value["max_size_bytes"] = maximumSizeEnabled
             ? NSNumber(value: maximumSizeBytes ?? 0) : NSNull()
         let accepted = presentation?.snapshot.saveExport
@@ -1594,7 +2187,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private var gifMaxColors: Int {
-        switch qualityPreference.lowercased() {
+        switch qualityPreference {
         case "tiny": 64
         case "small": 96
         case "standard": 128
@@ -1626,13 +2219,18 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     @objc private func seekChanged() {
+        seek(to: UInt64(max(0, seekSlider.doubleValue).rounded()))
+    }
+
+    /// Decodes the accepted preview at `position`, from the slider or a
+    /// timeline click (shipping scrubs its video from the track).
+    private func seek(to position: UInt64) {
         invalidateComparison()
         guard !busy, !stagedDiffers else {
             seekSlider.doubleValue = Double(presentation?.snapshot.positionMilliseconds ?? 0)
             if stagedDiffers { showError("Apply staged recording changes before seeking.") }
             return
         }
-        let position = UInt64(seekSlider.doubleValue.rounded())
         let finishCropOnSuccess = cropAdjustmentActive
         if !finishCropOnSuccess { restoreAcceptedPresentation() }
         request(["operation": "seek", "position_ms": position],
@@ -1643,7 +2241,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private func request(_ object: [String: Any], activity: String,
                          finishCropOnSuccess: Bool = false) {
         guard !busy else { return }
-        let current = generation; busy = true; status.stringValue = activity
+        let current = generation; busy = true
+        status.textColor = tokens.color("text-muted"); status.stringValue = activity
         updateControls()
         worker.request(object) { [weak self] result in
             guard let self, self.generation == current else { return }
@@ -1781,9 +2380,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func updatePlaybackPosition(_ milliseconds: UInt64) {
         guard let duration = presentation?.snapshot.durationMilliseconds else { return }
-        seekSlider.doubleValue = Double(milliseconds)
-        seekLabel.stringValue = "\(time(milliseconds)) / \(time(duration))"
+        seekSlider.doubleValue = Double(min(milliseconds, duration))
+        seekLabel.stringValue = time(milliseconds)
         trimTimeline.setPlaybackPosition(milliseconds)
+        refreshCaption()
     }
 
     private func restoreAcceptedPresentation() {
@@ -1796,9 +2396,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                                     size: NSSize(width: CGFloat(presentation.image.width),
                                                  height: CGFloat(presentation.image.height))))
         }
-        sourceLabel.stringValue = "\(presentation.snapshot.width) × \(presentation.snapshot.height) source frame"
         seekSlider.doubleValue = Double(presentation.snapshot.positionMilliseconds)
-        seekLabel.stringValue = "\(time(presentation.snapshot.positionMilliseconds)) / \(time(presentation.snapshot.durationMilliseconds))"
+        seekLabel.stringValue = time(presentation.snapshot.positionMilliseconds)
+        refreshCaption()
     }
 
     private func estimateSize() {
@@ -1806,10 +2406,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
               (presentation?.snapshot.saveExport["max_size_bytes"] as? NSNumber) == nil,
               let cancel = NativeRecordingEditorCancel() else { return }
         let current = generation; busy = true; activeCancel = cancel; estimate = nil
+        estimating = true
+        status.textColor = tokens.color("text-muted")
         status.stringValue = "Estimating accepted recording settings…"; updateControls()
         worker.estimate(cancel: cancel) { [weak self] result in
             guard let self, self.generation == current else { return }
-            self.busy = false; self.activeCancel = nil
+            self.busy = false; self.activeCancel = nil; self.estimating = false
             switch result {
             case .success(let value): self.estimate = value; self.status.stringValue = "Estimate ready."
             case .failure(let error): self.showError("Size estimate failed: \(error.localizedDescription)")
@@ -1829,20 +2431,21 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             status.stringValue = "Accepted recording preview."
         }
         comparisonStatusMessage = nil
+        let wasShowing = comparison != nil
         comparison = nil
         comparisonView.comparison = nil
         comparisonView.isHidden = true
         comparisonSlider.isHidden = true
         comparisonBeforeLabel.isHidden = true; comparisonAfterLabel.isHidden = true
         comparisonHideButton?.isHidden = true
-        layoutComparisonViewport()
+        // Only a shown comparison changes the card height; skipping relayout
+        // otherwise keeps in-progress trim and crop drags intact.
+        if wasShowing { layoutComparisonViewport() }
     }
 
     private func layoutComparisonViewport() {
-        guard previewPanel.bounds.width > 0 else { return }
-        previewScroll.frame.size.height = max(0, previewPanel.bounds.height
-            - (comparison == nil ? 34 : 72))
-        refreshPreviewLayout(resetScroll: false)
+        guard root.bounds.width > 0 else { return }
+        layout()
     }
 
     private func compareAcceptedFrame() {
@@ -1956,13 +2559,18 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func saveNewCopy() {
-        guard !busy, !stagedDiffers, let export = presentation?.snapshot.saveExport,
-              !destination.stringValue.isEmpty,
+        guard !busy, !stagedDiffers, let export = presentation?.snapshot.saveExport else { return }
+        if let error = RecordingEditorCopy.filenameError(filenameField.stringValue) {
+            showError(error); return
+        }
+        guard !destinationDirectory.isEmpty,
               let cancel = NativeRecordingEditorCancel() else { return }
-        let current = generation; busy = true; activeCancel = cancel
+        let gif = export["format"] as? String == "gif"
+        let current = generation; busy = true; activeCancel = cancel; lastSavedPath = nil
         progress.doubleValue = 0; progress.isHidden = false
-        status.stringValue = "Saving new copy…"; updateControls()
-        worker.save(destination: destination.stringValue, export: export, cancel: cancel,
+        status.textColor = tokens.color("text-subtle")
+        status.stringValue = RecordingEditorCopy.stage("preparing") ?? "Preparing…"; updateControls()
+        worker.save(destination: destinationPath, export: export, cancel: cancel,
             progress: { [weak self] value in
                 guard let self, self.generation == current else { return }
                 self.progress.doubleValue = Double(value.completedPerMille)
@@ -1978,8 +2586,17 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                     }
                     switch saved {
                     case .saved(let path):
-                        self.status.stringValue = "Saved new copy: \(path)"; self.didSaveCopy()
+                        let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size]
+                            as? NSNumber
+                        self.status.textColor = self.tokens.color("positive-text")
+                        self.status.stringValue = size.flatMap {
+                            RecordingEditorCopy.saved(gif: gif, sizeBytes: $0.uint64Value)
+                        } ?? "Saved new copy: \(path)"
+                        self.status.toolTip = path
+                        self.lastSavedPath = path
+                        self.didSaveCopy()
                     case .savedWithoutHistory(let path, let warning):
+                        self.lastSavedPath = path
                         self.showError("Saved new copy: \(path). History could not be updated: \(warning)")
                     }
                 case .failure(let error): self.showError("Save failed: \(error.localizedDescription)")
@@ -2021,7 +2638,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 self.showError("Recording changed before replacement was confirmed. Try again.")
                 self.updateControls(); return
             }
-            self.busy = true; self.activeCancel = cancel
+            self.busy = true; self.activeCancel = cancel; self.replacing = true
             self.progress.doubleValue = 0; self.progress.isHidden = false
             self.status.textColor = self.tokens.color("text-muted")
             self.status.stringValue = "Preparing replacement…"
@@ -2035,6 +2652,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 guard let self, self.generation == current,
                       self.activeCancel === cancel else { return }
                 self.busy = false; self.activeCancel = nil; self.progress.isHidden = true
+                self.replacing = false
                 switch result {
                 case .success(let replaced):
                     guard replaced.path == path,
@@ -2049,9 +2667,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                     self.cropOverlay.isHidden = true; self.cropOverlay.setEditingEnabled(false)
                     self.trimTimeline.clearThumbnails(); self.thumbnailRetryAvailable = false
                     self.estimate = nil
-                    self.qualityPreference = "Preserve"
+                    self.qualityPreference = "preserve"; self.preserveQuality = true
+                    self.compressQuality = "highest"
                     self.gifFramesPerSecond = 15; self.gifMaximumWidth = 800
-                    self.maximumSizeEnabled = false; self.maximumSize.state = .off
+                    self.maximumSizeEnabled = false
                     self.resolutionPreset = .original; self.customOutput = false
                     self.stagedCrop = nil; self.cropAspectUnlocked = false
                     self.savedEdit = nil; self.savedExport = nil
@@ -2090,16 +2709,44 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private func chooseDestination() {
         guard !busy else { return }
         pickerOpen = true; updateControls()
-        let panel = NSSavePanel(); panel.title = "Save recording as new copy"
-        panel.canCreateDirectories = true; panel.nameFieldStringValue = URL(fileURLWithPath: destination.stringValue).lastPathComponent
-        panel.directoryURL = URL(fileURLWithPath: destination.stringValue).deletingLastPathComponent()
-        panel.allowedContentTypes = format.indexOfSelectedItem == 1 ? [.gif] : [.mpeg4Movie]
+        // Shipping's "Change…" picks the folder; the filename field names the file.
+        let panel = NSOpenPanel(); panel.title = "Choose save location"
+        panel.canChooseDirectories = true; panel.canChooseFiles = false
+        panel.canCreateDirectories = true; panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.directoryURL = URL(fileURLWithPath: destinationDirectory, isDirectory: true)
         panel.beginSheetModal(for: window) { [weak self] response in
             guard let self else { return }
             self.pickerOpen = false
-            if response == .OK, let url = panel.url { self.destination.stringValue = url.path }
-            self.updateControls()
+            if response == .OK, let url = panel.url { self.setDestinationDirectory(url.path) }
+            self.updateControls(); self.layout()
         }
+    }
+
+    private func revealSavedCopy() {
+        guard let lastSavedPath else { return }
+        revealFiles([URL(fileURLWithPath: lastSavedPath)])
+    }
+
+    private func setDestinationDirectory(_ path: String) {
+        destinationDirectory = path
+        destination.stringValue = path
+        destination.toolTip = path
+    }
+
+    /// `<folder>/<filename>.<mp4|gif>`, as the save footer shows it.
+    private var destinationPath: String {
+        let ext = format.indexOfSelectedItem == 1 ? "gif" : "mp4"
+        return URL(fileURLWithPath: destinationDirectory, isDirectory: true)
+            .appendingPathComponent("\(filenameField.stringValue).\(ext)").path
+    }
+
+    /// Matches the wgpu host's default `Captures_<local time>_edited` stem.
+    private static func defaultFilenameStem(now: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return "Captures_\(formatter.string(from: now))_edited"
     }
 
     @objc private func cropEnabledChanged() {
@@ -2253,7 +2900,6 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         cropOverlay.sourceSize = source; cropOverlay.crop = crop
         cropOverlay.lockAspect = !cropAspectUnlocked
         cropOverlay.isHidden = false
-        sourceLabel.stringValue = "Full source · \(time(sourceImage.positionMilliseconds))"
         status.textColor = tokens.color("text-muted")
         status.stringValue = "Adjust the source crop, then Apply edits or choose Done cropping."
     }
@@ -2269,9 +2915,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             })
         }
         cropAdjustmentPriorImage = nil
-        if let snapshot = presentation?.snapshot {
-            sourceLabel.stringValue = "\(snapshot.width) × \(snapshot.height) source frame"
-        }
+        refreshCaption()
     }
 
     private func stageGraphicalCrop(_ crop: NativeRecordingCropRect) {
@@ -2304,10 +2948,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     @objc private func formatChanged() {
-        let ext = format.indexOfSelectedItem == 1 ? "gif" : "mp4"
-        if !destination.stringValue.isEmpty {
-            destination.stringValue = URL(fileURLWithPath: destination.stringValue)
-                .deletingPathExtension().appendingPathExtension(ext).path
+        // Shipping offers Preserve quality only for MP4 and moves a GIF to
+        // Compress at the remembered preset; Maximum keeps its limit.
+        if format.indexOfSelectedItem == 1, !maximumSizeEnabled, preserveQuality {
+            preserveQuality = false
+            selectQualityPreset(compressQuality)
+            qualityPreference = compressQuality
         }
         estimate = nil; updateControls(); layout()
     }
@@ -2321,14 +2967,19 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         gifMaximumWidth = UInt32(title.split(separator: " ").first.map(String.init) ?? "800") ?? 800
         estimate = nil; updateControls()
     }
-    @objc private func maximumSizeChanged() {
-        maximumSizeEnabled = maximumSize.state == .on
-        if maximumSizeEnabled {
-            qualityPreference = quality.titleOfSelectedItem ?? qualityPreference
-            select(quality, value: "preserve")
-        } else {
-            quality.selectItem(withTitle: qualityPreference)
+    @objc private func qualityModeChanged() {
+        switch qualityMode.selectedItem?.representedObject as? String {
+        case "preserve":
+            maximumSizeEnabled = false; preserveQuality = true; qualityPreference = "preserve"
+        case "compress":
+            maximumSizeEnabled = false; preserveQuality = false
+            selectQualityPreset(compressQuality); qualityPreference = compressQuality
+        case "maximum":
+            // Maximum saves at Preserve quality and keeps the palette preset.
+            maximumSizeEnabled = true
+        default: break
         }
+        invalidateComparison()
         estimate = nil; updateControls(); layout()
     }
     @objc private func maximumSizeUnitChanged() {
@@ -2343,10 +2994,43 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         estimate = nil; updateControls(); layout()
     }
     @objc private func qualityChanged() {
-        qualityPreference = quality.titleOfSelectedItem ?? "Preserve"
+        compressQuality = selectedQualityPreset
+        qualityPreference = compressQuality
         estimate = nil; updateControls()
     }
-    @objc private func stageChanged() { estimate = nil; updateControls() }
+    @objc private func stageChanged() { invalidateComparison(); estimate = nil; updateControls() }
+
+    @objc private func volumeSliderChanged(_ sender: NSSlider) {
+        let field = sender === systemVolumeSlider ? systemVolume : microphoneVolume
+        field.stringValue = "\(Int(sender.doubleValue.rounded()))%"
+        stageChanged()
+    }
+
+    private func syncVolumeSlider(_ slider: NSSlider, from field: NSTextField) {
+        if let gain = volume(field) { slider.doubleValue = Double(gain) * 100 }
+    }
+
+    private func resetTrim() {
+        guard let duration = presentation?.snapshot.durationMilliseconds, duration > 0 else { return }
+        trimStart.stringValue = "0"; trimEnd.stringValue = String(duration)
+        invalidateComparison()
+        estimate = nil; syncTimelineFromFields(); updateControls()
+    }
+
+    /// The selected Compress preset's shared value (`highest` … `tiny`).
+    private var selectedQualityPreset: String {
+        quality.selectedItem?.representedObject as? String ?? compressQuality
+    }
+
+    private func selectQualityPreset(_ value: String) {
+        if let index = quality.itemArray.firstIndex(where: { $0.representedObject as? String == value }) {
+            quality.selectItem(at: index)
+        }
+    }
+
+    private var selectedQualityModeValue: String {
+        maximumSizeEnabled ? "maximum" : preserveQuality ? "preserve" : "compress"
+    }
 
     private var maximumSizeBytes: UInt64? {
         maximumSizeUnit.bytes(maximumSizeValue.stringValue).flatMap { $0 >= 100_000 ? $0 : nil }
@@ -2429,7 +3113,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             outputWidth.stringValue = String(output.width)
             outputHeight.stringValue = String(output.height)
         }
-        outputMode.selectItem(withTitle: customOutput ? "Custom" : resolutionPreset.title)
+        // "Original — W × H" names the crop/output base, as shipping does.
+        rebuildOutputModeMenu(base: NativeRecordingGeometry.constrain(
+            cropInputDimensions(source: source), preset: .original) ?? cropInputDimensions(source: source))
+        outputMode.selectItem(at: customOutput ? NativeRecordingResolutionPreset.allCases.count
+            : Int(resolutionPreset.rawValue))
     }
 
     private func syncTimelineFromFields() {
@@ -2448,18 +3136,35 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let validMaximum = !maximumSizeEnabled || maximumSizeBytes != nil
         let valid = pendingCropInputValid && stagedEdit != nil && stagedExport != nil
             && validMaximum
-        [trimStart, trimEnd, format, destination].forEach { $0.isEnabled = available }
-        quality.isEnabled = available && !maximumSizeEnabled
-        maximumSize.isEnabled = available
+        let gif = format.indexOfSelectedItem == 1
+        [trimStart, trimEnd, format, filenameField].forEach { $0.isEnabled = available }
+        resetTrimButton?.isEnabled = available
+        // Save quality: mode, Compress preset or Maximum limit, then Est. size.
+        let mode = selectedQualityModeValue
+        if let index = qualityMode.itemArray.firstIndex(where: {
+            $0.representedObject as? String == mode }) {
+            qualityMode.selectItem(at: index)
+        }
+        // Shipping offers Preserve quality only for MP4; an accepted Preserve
+        // GIF keeps showing its mode until changed.
+        if let preserveItem = qualityMode.itemArray.first(where: {
+            $0.representedObject as? String == "preserve" }) {
+            preserveItem.isHidden = gif && mode != "preserve"
+        }
+        qualityMode.isEnabled = available
+        qualityModeHelp.stringValue = qualityMode.selectedItem?.toolTip ?? ""
+        quality.isHidden = mode != "compress"; qualityLabel.isHidden = quality.isHidden
+        quality.isEnabled = available && mode == "compress"
+        for view in [maximumSizeLabel, maximumSizeWarning] as [NSView] {
+            view.isHidden = !maximumSizeEnabled
+        }
         maximumSizeValue.isHidden = !maximumSizeEnabled
         maximumSizeUnits.isHidden = !maximumSizeEnabled
-        maximumSizeWarning.isHidden = !maximumSizeEnabled || !progress.isHidden
+        maximumSizeInvalid.isHidden = !maximumSizeEnabled || validMaximum
         maximumSizeValue.isEnabled = available && maximumSizeEnabled
         maximumSizeUnits.isEnabled = available && maximumSizeEnabled
-        let gif = format.indexOfSelectedItem == 1
-        gifFrameRateLabel.isHidden = !gif; gifFrameRate.isHidden = !gif
+        gifPanel.isHidden = !gif
         gifFrameRate.isEnabled = available && gif
-        gifMaximumWidthLabel.isHidden = !gif; gifMaximumWidthControl.isHidden = !gif
         gifMaximumWidthControl.isEnabled = available && gif
         cropEnabled.isEnabled = available
         cropLock.isEnabled = available && stagedCrop != nil
@@ -2467,23 +3172,34 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             $0.isEnabled = available && stagedCrop != nil
         }
         outputMode.isEnabled = available
+        for view in [outputWidth, outputHeight, outputWidthLabel, outputHeightLabel] {
+            view.isHidden = !customOutput
+        }
         outputWidth.isEnabled = available && customOutput
         outputHeight.isEnabled = available && customOutput
         let hasSystem = presentation?.snapshot.hasSystemAudio == true
         let hasMicrophone = presentation?.snapshot.hasMicrophoneAudio == true
         let hasAudio = hasSystem || hasMicrophone
-        systemAudioLabel.isHidden = !hasSystem; systemVolume.isHidden = !hasSystem
-        systemMute.isHidden = !hasSystem
-        microphoneAudioLabel.isHidden = !hasMicrophone; microphoneVolume.isHidden = !hasMicrophone
-        microphoneMute.isHidden = !hasMicrophone
-        monoOutput.isHidden = !hasAudio
-        if !playbackSoundEnabled {
-            audioNote.stringValue = !hasAudio ? "No audio tracks"
-                : gif ? "GIF silent · MP4 kept"
-                : "Sound preview off"
+        audioPanel.isHidden = !hasAudio
+        gifAudioNote.isHidden = !gif
+        audioPanel.layer?.backgroundColor = tokens.color(gif ? "caution-surface" : "surface-raised").cgColor
+        audioPanel.layer?.borderColor = tokens.color(gif ? "caution-surface" : "border-subtle").cgColor
+        for view in [systemAudio, systemVolume, systemVolumeSlider] as [NSView] {
+            view.isHidden = !hasSystem || gif
+        }
+        for view in [microphoneAudio, microphoneVolume, microphoneVolumeSlider] as [NSView] {
+            view.isHidden = !hasMicrophone || gif
+        }
+        monoOutput.isHidden = !hasAudio || gif
+        // The toolbar note beside "Preview" names the playback mode.
+        if cropAdjustmentActive {
+            audioNote.stringValue = "Source crop"
+        } else if comparison != nil {
+            audioNote.stringValue = "Encoded comparison"
+        } else if !playbackSoundEnabled {
+            audioNote.stringValue = "Silent playback"
         } else if playbackAudioEnabled == true {
-            audioNote.stringValue = playbackState == .playing ? "Sound active"
-                : "Audio used"
+            audioNote.stringValue = playbackState == .playing ? "Sound active" : "Audio used"
         } else if gif {
             audioNote.stringValue = "GIF · no audio"
         } else if !hasAudio {
@@ -2493,14 +3209,19 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         } else {
             audioNote.stringValue = "Uses accepted mix"
         }
-        systemVolume.isEnabled = available && !gif && systemMute.state != .on
-        microphoneVolume.isEnabled = available && !gif && microphoneMute.state != .on
-        systemMute.isEnabled = available && !gif
-        microphoneMute.isEnabled = available && !gif
+        systemVolume.isEnabled = available && !gif && systemAudio.state == .on
+        microphoneVolume.isEnabled = available && !gif && microphoneAudio.state == .on
+        systemVolumeSlider.isEnabled = systemVolume.isEnabled
+        microphoneVolumeSlider.isEnabled = microphoneVolume.isEnabled
+        systemAudio.isEnabled = available && !gif
+        microphoneAudio.isEnabled = available && !gif
         monoOutput.isEnabled = available && !gif
         trimTimeline.setEditingEnabled(available && stagedEdit != nil)
+        trimTimeline.seekEnabled = available && valid && !stagedDiffers && !cropAdjustmentActive
         thumbnailRetryButton?.isHidden = !thumbnailRetryAvailable
         thumbnailRetryButton?.isEnabled = available && thumbnailRetryAvailable
+        thumbnailStatusLabel.isHidden = !thumbnailRetryAvailable
+        thumbnailStatusLabel.stringValue = "\(trimTimeline.thumbnailStateDescription)."
         cropAdjustmentButton?.title = cropAdjustmentActive ? "Done cropping" : "Adjust crop"
         cropAdjustmentButton?.setAccessibilityLabel(cropAdjustmentActive
             ? "Done adjusting recording crop" : "Adjust recording crop graphically")
@@ -2527,25 +3248,33 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         switch playbackState {
         case .idle:
             playbackButton?.title = "Play"
+            playbackButton?.icon = .shipping("resume")
             playbackButton?.setAccessibilityLabel(playbackSoundEnabled
                 ? "Play recording preview with sound" : "Play silent recording preview")
+            playbackButton?.toolTip = stagedDiffers ? "Apply staged edits before playing."
+                : "Play the accepted trim and mix; Sound is off by default."
             playbackButton?.isEnabled = available && valid && !stagedDiffers
                 && !cropAdjustmentActive
         case .playing:
             playbackButton?.title = "Pause"
+            playbackButton?.icon = .shipping("pause")
             playbackButton?.setAccessibilityLabel("Pause recording preview")
+            playbackButton?.toolTip = "Pause the preview."
             playbackButton?.isEnabled = true
         case .pausing:
             playbackButton?.title = "Pausing…"
+            playbackButton?.icon = .shipping("pause")
             playbackButton?.setAccessibilityLabel("Pausing recording preview")
             playbackButton?.isEnabled = false
         }
+        playbackButton?.isHidden = cropAdjustmentActive || preview.image == nil
         applyButton?.isEnabled = available && valid && stagedDiffers
         seekSlider.isEnabled = available && valid && !stagedDiffers
         changeButton?.isEnabled = available
         estimateButton?.isHidden = maximumSizeEnabled
         estimateButton?.isEnabled = available && valid && !stagedDiffers && !maximumSizeEnabled
-        saveButton?.isEnabled = available && valid && !stagedDiffers && !destination.stringValue.isEmpty
+        saveButton?.isEnabled = available && valid && !stagedDiffers
+            && !filenameField.stringValue.isEmpty
         let canReplace = eligibleOriginalPath != nil
         replaceButton?.isEnabled = available && valid && !stagedDiffers
             && !cropAdjustmentActive && canReplace
@@ -2553,29 +3282,107 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         replaceButton?.toolTip = originalPath == nil ? "No saved original file is available."
             : canReplace ? "Confirm replacement of \(eligibleOriginalPath ?? "") and its History item."
             : "Choose the saved original’s MP4 or GIF format."
-        replaceHelp.isHidden = maximumSizeEnabled || activeCancel != nil
-        replaceHelp.stringValue = originalPath == nil ? "No saved original file"
-            : canReplace ? "Replaces saved original and History item"
-            : "Choose the saved original’s MP4/GIF format"
         cancelButton?.isHidden = activeCancel == nil
-        cancelButton?.isEnabled = activeCancel != nil
-        if maximumSizeEnabled && !validMaximum {
-            estimateLabel.stringValue = "Enter at least 100 KB"
-        } else if stagedDiffers { estimateLabel.stringValue = "Apply edits to estimate size" }
-        else if let cap = (presentation?.snapshot.saveExport["max_size_bytes"] as? NSNumber)?.uint64Value {
-            estimateLabel.stringValue = "≤ \(maximumSizeUnit.value(cap)) \(maximumSizeUnit.label)"
+        cancelButton?.isEnabled = activeCancel != nil && activeCancel?.isCancelled != true
+        showInFolderButton?.isHidden = lastSavedPath == nil || activeCancel != nil
+        showInFolderButton?.toolTip = lastSavedPath
+        // Shipping's footer Cancel, named for the operation it stops.
+        let cancelTitle: String
+        if activeCancel == nil {
+            cancelTitle = "Cancel"
+        } else if thumbnailCancel === activeCancel {
+            cancelTitle = "Cancel thumbnails"
+        } else if sourceFrameCancel === activeCancel {
+            cancelTitle = "Cancel source preview"
+        } else if comparisonCancel === activeCancel {
+            cancelTitle = "Cancel comparison"
+        } else if estimating {
+            cancelTitle = "Cancel estimate"
+        } else if replacing {
+            cancelTitle = "Cancel replacement"
+        } else {
+            cancelTitle = "Cancel export"
         }
-        else if let estimate {
-            let size = "\(estimate.exact ? "" : "≈ ")\(ByteCountFormatter.string(fromByteCount: Int64(estimate.sizeBytes), countStyle: .file))"
-            let original = (presentation?.snapshot.source["size_bytes"] as? NSNumber)?.uint64Value
-                ?? 0
-            if let delta = formatRecordingFileSizeDelta(estimatedBytes: estimate.sizeBytes,
-                                                        originalBytes: original) {
-                estimateLabel.stringValue = "\(size) · \(delta)"
-            } else {
-                estimateLabel.stringValue = size
-            }
-        } else { estimateLabel.stringValue = "Size not estimated" }
+        if cancelButton?.title != cancelTitle {
+            cancelButton?.title = cancelTitle
+            cancelButton?.setAccessibilityLabel(cancelTitle)
+        }
+        // Timeline summary follows the staged trim, like shipping.
+        if let duration = presentation?.snapshot.durationMilliseconds {
+            let start = UInt64(trimStart.stringValue) ?? trimTimeline.startMilliseconds
+            let end = UInt64(trimEnd.stringValue) ?? trimTimeline.endMilliseconds
+            let summary = RecordingEditorCopy.trimSummary(start: min(start, end), end: max(start, end),
+                                                          duration: duration)
+            trimRangeLabel.stringValue = summary.range
+            trimSelectedLabel.stringValue = summary.selected
+        } else {
+            trimRangeLabel.stringValue = ""; trimSelectedLabel.stringValue = ""
+        }
+        // Est. size uses the shared presentation (pending, staged, cap, estimate).
+        var input: [String: Any] = [
+            "estimating": estimating,
+            "unapplied": stagedDiffers,
+            "invalid_maximum": maximumSizeEnabled && !validMaximum,
+            "estimate_exact": estimate?.exact ?? false,
+            "original_bytes": (presentation?.snapshot.source["size_bytes"] as? NSNumber)?.uint64Value ?? 0,
+        ]
+        if let cap = (presentation?.snapshot.saveExport["max_size_bytes"] as? NSNumber)?.uint64Value {
+            input["maximum_bytes"] = cap
+        }
+        if let estimate { input["estimate_bytes"] = estimate.sizeBytes }
+        let shown = RecordingEditorCopy.estimate(input)
+        estimateLabel.stringValue = shown.label
+        estimateLabel.textColor = tokens.color(shown.muted ? "text-subtle" : "text")
+        estimateDelta.isHidden = shown.deltaLabel == nil
+        estimateDelta.stringValue = shown.deltaLabel ?? ""
+        estimateDelta.textColor = tokens.color(shown.deltaSmaller ? "positive-text" : "danger-text")
+        estimateDelta.layer?.backgroundColor = tokens.color(
+            shown.deltaSmaller ? "positive-surface" : "danger-surface").cgColor
+        previewNote.isHidden = cropAdjustmentActive || comparison != nil
+            || !(presentation?.snapshot.export["max_size_bytes"] is NSNumber)
+        refreshCaption()
+        relayoutIfNeeded()
+    }
+
+    /// Relayout when card visibility or size changes; otherwise only the
+    /// estimate row moves, so in-progress drags keep their geometry.
+    private func relayoutIfNeeded() {
+        let flags: [Bool] = [
+            gifPanel.isHidden, audioPanel.isHidden, gifAudioNote.isHidden, customOutput,
+            quality.isHidden, maximumSizeValue.isHidden, maximumSizeInvalid.isHidden,
+            comparison != nil, previewNote.isHidden, thumbnailRetryButton?.isHidden ?? true,
+            cancelButton?.isHidden ?? true, replaceButton?.isHidden ?? true,
+            showInFolderButton?.isHidden ?? true, droppedFramesBand.isHidden,
+            systemAudio.isHidden, microphoneAudio.isHidden,
+        ]
+        let signature = flags.map { $0 ? "1" : "0" }.joined()
+        if signature != layoutSignature {
+            layoutSignature = signature
+            layout()
+        } else if qualityPanel.frame.width > 0 {
+            let origin = qualityPanel.frame.origin
+            layoutQualityCard(width: qualityPanel.frame.width)
+            qualityPanel.frame.origin = origin
+        }
+    }
+
+    private func refreshCaption() {
+        guard let snapshot = presentation?.snapshot else { return }
+        if cropAdjustmentActive {
+            let position = sourceFrameCache?.positionMilliseconds ?? snapshot.positionMilliseconds
+            sourceLabel.stringValue = "Uncropped source · \(time(position)) · \(snapshot.width) × \(snapshot.height) · Drag to stage the crop, then Apply edits."
+        } else if let comparison {
+            sourceLabel.stringValue = "Encoded · accepted \(time(comparison.positionMilliseconds)) · \(comparison.after.width) × \(comparison.after.height)"
+        } else {
+            let position = playbackPositionMilliseconds ?? snapshot.positionMilliseconds
+            let gif = snapshot.export["format"] as? String == "gif"
+            let acceptedQuality = snapshot.export["quality"] as? String ?? "preserve"
+            let qualityName = quality.itemArray
+                .first { $0.representedObject as? String == acceptedQuality }?.title
+                ?? "Preserve quality"
+            let size = preview.image?.size ?? .zero
+            sourceLabel.stringValue = "\(time(position)) / \(time(snapshot.durationMilliseconds)) · Source \(snapshot.width) × \(snapshot.height) · \(gif ? "GIF" : "MP4") \(qualityName) preview \(Int(size.width)) × \(Int(size.height))"
+        }
     }
 
     private func closeSession() {
@@ -2592,17 +3399,18 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         if gifMaximumWidthControl.item(withTitle: "Original") != nil {
             gifMaximumWidthControl.removeItem(withTitle: "Original")
         }
-        maximumSizeEnabled = false; maximumSize.state = .off
+        maximumSizeEnabled = false; preserveQuality = true; estimating = false; replacing = false
+        lastSavedPath = nil; droppedFramesBand.isHidden = true
         maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
         maximumSizeValue.stringValue = "10"
-        qualityPreference = "Preserve"
+        qualityPreference = "preserve"; compressQuality = "highest"
         sourceFrameCache = nil; sourceFrameCancel = nil
         cropAdjustmentActive = false; cropAdjustmentPriorImage = nil
         previewActualSize = false
         cropOverlay.setEditingEnabled(false); cropOverlay.isHidden = true
         playbackStopActions.removeAll(); closeAfterPlayback = false
         terminateAfterPlayback = false; switchAfterPlayback = nil
-        trimTimeline.setPlaybackPosition(nil)
+        trimTimeline.setPlaybackPosition(nil); trimTimeline.setAcceptedPosition(nil)
         trimTimeline.clearThumbnails()
         worker.close()
     }
@@ -2627,15 +3435,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         return canonical(value)
     }
 
+    /// Shipping `formatEditorTime`: milliseconds under a minute, else `m:ss`.
     private func time(_ milliseconds: UInt64) -> String {
-        String(format: "%llu:%02llu.%03llu", milliseconds / 60_000,
-               (milliseconds / 1_000) % 60, milliseconds % 1_000)
-    }
-
-    private func select(_ popup: NSPopUpButton, value: String) {
-        let title = value == "mp4" ? "MP4" : value == "gif" ? "GIF"
-            : value.prefix(1).uppercased() + String(value.dropFirst())
-        popup.selectItem(withTitle: title)
+        RecordingEditorCopy.time(milliseconds,
+                                 duration: presentation?.snapshot.durationMilliseconds ?? 0)
     }
 
     private func configureNumberField(_ field: NSTextField, label: String) {
@@ -2672,19 +3475,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         return "\(percent)%"
     }
 
-    @discardableResult private func label(_ text: String, size: CGFloat = 12,
-                                          weight: NSFont.Weight = .regular,
-                                          muted: Bool = false, parent: NSView? = nil) -> NSTextField {
-        let value = NSTextField(labelWithString: text)
-        value.font = .systemFont(ofSize: size, weight: weight)
-        value.textColor = tokens.color(muted ? "text-muted" : "text")
-        (parent ?? root).addSubview(value); return value
-    }
-
-    @discardableResult private func button(_ title: String,
+    @discardableResult private func button(_ title: String, parent: NSView,
                                             action: @escaping () -> Void) -> CaptureButton {
         let value = CaptureButton(title, frame: .zero, tokens: tokens, action: action)
-        root.addSubview(value); return value
+        parent.addSubview(value); return value
     }
 
     private static func confirmDiscardAlert() -> Bool {

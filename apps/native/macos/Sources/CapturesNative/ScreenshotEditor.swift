@@ -1439,8 +1439,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     /// Shipping `.screenshot-canvas-toolbar`. With too little room it drops the
-    /// "Canvas" label, then shows Trim and Background as icon buttons (keeping
-    /// their tooltips and accessible names), then clips like `overflow: hidden`.
+    /// "Canvas" label, then draws Trim and Background icon-only (their titles
+    /// stay the accessible names, with tooltips), then clips like `overflow: hidden`.
     private func layoutCanvasToolbar(available: CGFloat, y: CGFloat) {
         guard canvasToolbarLabels.count == 4, let trimButton, let backgroundButton else { return }
         let labels = canvasToolbarLabels
@@ -1488,10 +1488,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         canvasSplit.frame = NSRect(x: x + 2 + gap, y: (height - 16) / 2, width: 1, height: 16)
         x += split
-        trimButton.title = full ? EditorChrome.text("header", "trim") : ""
+        trimButton.iconOnly = !full
         trimButton.frame = NSRect(x: x, y: (height - 28) / 2, width: full ? trimFull : compactTool, height: 28)
         x = trimButton.frame.maxX + 2
-        backgroundButton.title = full ? Self.backgroundTitle : ""
+        backgroundButton.iconOnly = !full
         backgroundButton.frame = NSRect(x: x, y: (height - 28) / 2,
                                         width: full ? backgroundFull : compactTool, height: 28)
         backgroundCard.frame.origin = NSPoint(

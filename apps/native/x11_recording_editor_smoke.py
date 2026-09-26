@@ -56,7 +56,8 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     env = os.environ.copy()
     env.pop("WAYLAND_DISPLAY", None)
-    env.update(WGPU_BACKEND="gl", WINIT_X11_SCALE_FACTOR="1", XDG_SESSION_TYPE="x11")
+    env.update(WGPU_BACKEND="gl", WINIT_X11_SCALE_FACTOR="1", XDG_SESSION_TYPE="x11",
+               CAPTURES_NATIVE_LAYOUT_PROBE="1")
     for variable in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR"):
         path = output / variable.lower()
         path.mkdir(mode=0o700)
@@ -83,12 +84,23 @@ def main():
     def run(*command):
         return subprocess.check_output(command, env=env, timeout=40)
 
+    def file_size(size):
+        # Shipping formatFileSize: decimal units, one decimal below 100.
+        value, units = size, ["B", "KB", "MB", "GB"]
+        unit = 0
+        while value >= 1000 and unit < len(units) - 1:
+            value /= 1000
+            unit += 1
+        if unit == 0:
+            return f"{size} B"
+        return f"{value:.{0 if value >= 100 else 1}f} {units[unit]}"
+
     def expected_estimate(size, exact=True):
-        # Derive labels from measured file bytes using integer arithmetic,
+        # Derive the delta from measured file bytes using integer arithmetic,
         # independently of the UI's floating-point formatter.
         percent = ((size - len(original)) * 200 + len(original)) // (2 * len(original))
         suffix = f" · {'−' if percent < 0 else '+'}{abs(percent)}%" if percent else ""
-        return f"{'≈ ' if not exact else ''}{size} bytes{' (exact)' if exact else ''}{suffix}"
+        return f"{'≈ ' if not exact else ''}{file_size(size)}{suffix}"
 
     def windows(title):
         found = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", f"^{re.escape(title)}"],
@@ -156,9 +168,146 @@ def main():
         wait(lambda: active_window() is not None, "close target owns focus")
         run("xdotool", "key", "alt+F4", "sleep", ".5")
 
-    def dominant(path, channel, at=None):
+    # The editor reports named control rectangles (CAPTURES_NATIVE_LAYOUT_PROBE)
+    # as `recording-editor-layout` events on stdout. Interactions target those
+    # names instead of hard-coded coordinates, and scroll the page into view.
+    layout_log = {"name": "app", "offset": 0, "latest": {}, "order": []}
+    window_artifacts = {}
+
+    def refresh_layout():
+        path = output / f"{layout_log['name']}.jsonl"
+        if not path.exists():
+            return
+        with path.open() as log:
+            log.seek(layout_log["offset"])
+            while line := log.readline():
+                if not line.endswith("\n"):
+                    break
+                layout_log["offset"] += len(line.encode())
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if event.get("event") != "recording-editor-layout":
+                    continue
+                detail = event["detail"]
+                artifact = detail["artifact_id"]
+                if artifact not in layout_log["order"]:
+                    layout_log["order"].append(artifact)
+                layout_log["latest"][artifact] = detail["controls"] or {}
+
+    def switch_layout_log(name):
+        layout_log.update(name=name, offset=0, latest={}, order=[])
+        window_artifacts.clear()
+
+    def artifact_for(window):
+        if window not in window_artifacts:
+            def unclaimed():
+                refresh_layout()
+                return next((artifact for artifact in reversed(layout_log["order"])
+                             if artifact not in window_artifacts.values()), None)
+            window_artifacts[window] = wait(unclaimed, "editor layout probe")
+        return window_artifacts[window]
+
+    def controls(window):
+        refresh_layout()
+        return layout_log["latest"].get(artifact_for(window), {})
+
+    def control(window, name, prefix=False):
+        def found():
+            values = controls(window)
+            if prefix:
+                return next((values[key] for key in values if key.startswith(name)), None)
+            return values.get(name)
+        return wait(found, f"control {name}")
+
+    def visible_rect(window, name, prefix=False, whole_control=False):
+        """Scroll the page until the named control is visible, then return it."""
+        for attempt in range(60):
+            x0, y0, x1, y1, cx0, cy0, cx1, cy1 = control(window, name, prefix)
+            left, top, right, bottom = max(x0, cx0), max(y0, cy0), min(x1, cx1), min(y1, cy1)
+            # A control that fits its clip must be wholly visible: callers map
+            # fractions of the returned rect onto the control, so a clipped
+            # rect would misplace them. Taller controls (or a wheel step that
+            # keeps overshooting) settle for the visible part.
+            # Nested clips shrink as the page scrolls, so measure against the
+            # page viewport for controls inside it (not the fixed footer).
+            page = control(window, "Page")
+            vy0, vy1 = cy0, cy1
+            if cy0 >= page[5] - 1 and cy1 <= page[7] + 1:
+                vy0, vy1 = page[5], page[7]
+            fits = whole_control and y1 - y0 <= vy1 - vy0 + 1 and attempt < 30
+            whole = y0 >= vy0 - 1 and y1 <= vy1 + 1
+            if right - left >= 2 and bottom - top >= 2 and (whole or not fits):
+                return left, top, right, bottom
+            wheel = "5" if (y1 > vy1 if fits else (y0 + y1) / 2 > cy1) else "4"
+            run("xdotool", "mousemove", "--sync", "--window", window, str(page[0] + 6),
+                str((page[1] + page[3]) // 2), "click", wheel, "sleep", ".35")
+        raise AssertionError(f"{name} never scrolled into view")
+
+    def center(window, name, prefix=False):
+        left, top, right, bottom = visible_rect(window, name, prefix)
+        return (left + right) // 2, (top + bottom) // 2
+
+    def press(window, name, prefix=False):
+        idle(window)
+        click(window, *center(window, name, prefix))
+
+    def fill(window, name, value):
+        press(window, name)
+        run("xdotool", "key", "ctrl+a")
+        run("xdotool", "type", "--clearmodifiers", "--delay", "35", "--", str(value))
+        run("xdotool", "key", "Return", "sleep", ".3")
+
+    def choose(window, name, item):
+        """Open a select and click an item, matched by label prefix."""
+        press(window, name)
+        click(window, *center(window, f"{name}/{item}", prefix=True))
+
+    def set_destination(window, path):
+        # The footer edits the file stem; its folder and format add the rest.
+        assert path.parent == exports, path
+        fill(window, "Filename", path.stem)
+
+    def volume(window, track, value):
+        # The slider's numeric value box sits at its right edge.
+        x0, y0, x1, y1 = visible_rect(window, f"{track} volume")
+        click(window, x1 - 16, (y0 + y1) // 2)
+        run("xdotool", "key", "ctrl+a")
+        run("xdotool", "type", "--clearmodifiers", "--delay", "35", "--", str(value))
+        run("xdotool", "key", "Return", "sleep", ".3")
+
+    def raw_press(window, name):
+        """Click without waiting for idle, e.g. to cancel running work."""
+        x, y = center(window, name)
+        run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
+            "mousemove", "--sync", "--window", window, str(x), str(y), "sleep", ".3",
+            "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
+
+    def blur(window):
+        """Click the page gutter so no field keeps focus."""
+        page = control(window, "Page")
+        click(window, page[0] + 6, page[1] + 40)
+
+    def image_point(window, fx, fy):
+        # Fractions of a clipped rect would misplace the point, so scroll the
+        # whole image into view first.
+        x0, y0, x1, y1 = visible_rect(window, "Preview image", whole_control=True)
+        return round(x0 + (x1 - x0) * fx), round(y0 + (y1 - y0) * fy)
+
+    def region(window, name, inset=0):
+        """ImageMagick crop geometry for a visible control in window screenshots."""
+        x0, y0, x1, y1 = visible_rect(window, name)
+        x0, y0, x1, y1 = x0 + inset, y0 + inset, x1 - inset, y1 - inset
+        return f"{x1 - x0}x{y1 - y0}+{x0}+{y0}", (x0, y0, x1 - x0, y1 - y0)
+
+    def dominant(path, channel, at=None, window=None):
         if at is None:
-            pixel = run("convert", str(path), "-crop", "1x1+480+220", "-depth", "8", "rgb:-")
+            # Away from the centered play button and the fixture's white box.
+            x, y = image_point(window or editor, .75, .75)
+            # Measuring may scroll the page; retake the shot at that position.
+            run("import", "-window", window or editor, str(path))
+            pixel = run("convert", str(path), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-")
         else:
             pixel = run("ffmpeg", "-v", "error", "-ss", str(at), "-i", str(path),
                         "-frames:v", "1", "-vf", "crop=2:2:160:90", "-f", "rawvideo", "-pix_fmt", "rgb24", "-")[:3]
@@ -325,7 +474,7 @@ def main():
             gif_entry = next(value for value in opened_entries() if value["kind"] == "gif")
             gif_metadata = history / gif_entry["id"] / "metadata.json"
             gif_before_alias = gif_metadata.read_bytes()
-            field(editor, 98, 598, 1100)
+            fill(editor, "Start (ms)", 1100)
             shot(editor, "external-gif-staged")
             allowed.touch()
             wait(webm_started.exists, "WebM held while checking MP4 reference controls")
@@ -334,8 +483,8 @@ def main():
             run("xdotool", "windowmove", "--sync", mp4_editor, "80", "60",
                 "windowsize", "--sync", mp4_editor, "960", "900", "sleep", ".5")
             shot(mp4_editor, "external-mp4-decoded")
-            dominant(output / "external-mp4-decoded.png", 0)
-            click(mp4_editor, 782, 838)
+            dominant(output / "external-mp4-decoded.png", 0, window=mp4_editor)
+            press(mp4_editor, "Replace original…")
             shot(mp4_editor, "external-mp4-replace-disabled")
             webm_allowed.touch()
             entries = wait(lambda: values if len(values := opened_entries()) == 4 else None,
@@ -355,10 +504,10 @@ def main():
 
             # Saving the carried trim gives independent evidence that alias
             # focus preserved staging, rather than only reusing a window ID.
-            click(editor, 793, 882)
+            press(editor, "Apply edits")
             trimmed = exports / "external-gif-trim.mp4"
-            field(editor, 360, 838, trimmed)
-            click(editor, 899, 882)
+            set_destination(editor, trimmed)
+            press(editor, "Save new copy")
             wait(lambda: len(opened_entries()) == 5, "trimmed GIF source exported to new MP4")
             probe = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(trimmed)))
             assert abs(float(probe["format"]["duration"]) - 1.9) <= .15, probe
@@ -376,6 +525,7 @@ def main():
             # A closed canonical reference must reload the same ID. Its default
             # Preserve MP4 export must encode MP4, not rename/copy WebM bytes.
             webm_id = next(value["id"] for value in entries if value["saved_path"] == str(webm))
+            switch_layout_log("reopened")
             app = spawn("reopened", app_command + ["--open-media", str(webm)])
             root = wait(lambda: windows("Captures"), "reopened History")[0]
             editor = wait(lambda: windows("Recording editor"), "closed external WebM reopened")[0]
@@ -387,11 +537,11 @@ def main():
             assert next(value["id"] for value in opened_entries() if value["saved_path"] == str(webm)) == webm_id
             # A reference has no retained recovery copy, so Replace original is
             # disabled even though saved_path points to a writable external file.
-            click(editor, 782, 838)
+            press(editor, "Replace original…")
             shot(editor, "external-reference-replace-disabled")
             destination = exports / "webm-as-mp4.mp4"
-            field(editor, 360, 838, destination)
-            click(editor, 899, 882)
+            set_destination(editor, destination)
+            press(editor, "Save new copy")
             wait(lambda: len(opened_entries()) == 6, "WebM exported to a distinct MP4 History artifact")
             probe = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(destination)))
             assert "mp4" in probe["format"]["format_name"].split(","), probe
@@ -426,8 +576,9 @@ def main():
         run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
         if args.thumbnails:
             wait(started.exists, "initial source thumbnail request")
+            cancel_x, cancel_y = center(editor, "Cancel thumbnails")
             run("xdotool", "windowactivate", "--sync", editor, "windowfocus", "--sync", editor,
-                "mousemove", "--sync", "--window", editor, "80", "794", "sleep", ".5")
+                "mousemove", "--sync", "--window", editor, str(cancel_x), str(cancel_y), "sleep", ".5")
             run("import", "-window", editor, str(output / "thumbnails-loading.png"))
             # Deliberately bypass idle(): this cancels an accepted running job.
             run("xdotool", "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
@@ -436,17 +587,21 @@ def main():
             missing = output / "temporarily-moved.mp4"
             source.rename(missing)
             try:
-                click(editor, 250, 794)
+                press(editor, "Retry thumbnails")
                 shot(editor, "thumbnails-missing-source")
             finally:
                 missing.rename(source)
-            click(editor, 250, 794)
+            press(editor, "Retry thumbnails")
+            idle(editor)
+            track = visible_rect(editor, "Timeline track")
             shot(editor, "thumbnails-retried")
             assert started.read_text().splitlines() == ["call"] * 3
             assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
-            for x, channel in ((120, 0), (500, 1), (890, 2)):
+            for fraction, channel in ((.1, 0), (.5, 1), (.9, 2)):
+                x = round(track[0] + (track[2] - track[0]) * fraction)
+                y = (track[1] + track[3]) // 2
                 pixel = run("convert", str(output / "thumbnails-retried.png"),
-                            "-crop", f"1x1+{x}+563", "-depth", "8", "rgb:-")
+                            "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-")
                 assert len(pixel) == 3 and pixel[channel] > 90, (x, pixel)
                 assert all(pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel), (x, pixel)
         wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(), "decode")
@@ -454,23 +609,23 @@ def main():
         if args.replace_original:
             recovery = artifact / "media.mp4"
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
-            field(editor, 113, 598, 1100)
-            field(editor, 227, 598, 2300)
-            click(editor, 22, 683)
-            click(editor, 205, 683)
-            for x, value in ((51, 10), (114, 6), (208, 160), (309, 90)):
-                field(editor, x, 727, value)
-            click(editor, 22, 771)
-            field(editor, 78, 815, 81)
-            field(editor, 197, 815, 61)
-            click(editor, 793, 1082)
+            fill(editor, "Start (ms)", 1100)
+            fill(editor, "End (ms)", 2300)
+            press(editor, "Crop recording")
+            press(editor, "Lock aspect ratio")
+            for name, value in (("Crop X", 10), ("Crop Y", 6), ("Crop width", 160), ("Crop height", 90)):
+                fill(editor, name, value)
+            choose(editor, "Output resolution", "Custom")
+            fill(editor, "Output width", 81)
+            fill(editor, "Output height", 61)
+            press(editor, "Apply edits")
             shot(editor, "replace-accepted")
-            click(editor, 782, 1038)
+            press(editor, "Replace original…")
             shot(editor, "replace-confirmation")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "replace-confirmation-minimum")
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
-            click(editor, 93, 980)
+            press(editor, "Cancel replacement")
             shot(editor, "replace-declined")
             assert source.read_bytes() == original == recovery.read_bytes()
             assert metadata.read_bytes() == original_metadata
@@ -478,13 +633,15 @@ def main():
             # Gate a real export subprocess, then cancel after its start marker.
             allowed.unlink()
             calls = len(started.read_text().splitlines()) if started.exists() else 0
-            click(editor, 782, 1038)
-            click(editor, 267, 980)
+            press(editor, "Replace original…")
+            press(editor, "Replace original")
             wait(lambda: started.exists() and len(started.read_text().splitlines()) > calls, "replacement encoder started")
             # The child marker can precede the UI's progress event. Let that
             # row settle before targeting Cancel, without waiting for idle.
+            time.sleep(1)
+            cancel_x, cancel_y = center(editor, "Cancel export")
             run("xdotool", "windowactivate", "--sync", editor, "windowfocus", "--sync", editor,
-                "sleep", "1", "mousemove", "--sync", "--window", editor, "90", "994", "sleep", ".5")
+                "mousemove", "--sync", "--window", editor, str(cancel_x), str(cancel_y), "sleep", ".5")
             run("import", "-window", editor, str(output / "replace-running.png"))
             run("xdotool", "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
             shot(editor, "replace-cancelled")
@@ -493,8 +650,8 @@ def main():
             assert not list(output.glob(".captures-replace-*"))
             allowed.touch()
 
-            click(editor, 782, 1038)
-            click(editor, 267, 980)
+            press(editor, "Replace original…")
+            press(editor, "Replace original")
             wait(lambda: source.read_bytes() != original, "original replaced")
             shot(editor, "replace-rebased")
             new_bytes = source.read_bytes()
@@ -508,13 +665,13 @@ def main():
             assert len(list(history.glob("*/metadata.json"))) == 1
             # This same open editor must use the new duration/geometry for seek
             # and save; stale original dimensions or a phantom dirty state fails.
-            field(editor, 136, 520, 1000)
-            click(editor, 222, 520)
+            fill(editor, "Position (ms)", 1000)
+            press(editor, "Seek")
             shot(editor, "replace-seek")
             dominant(output / "replace-seek.png", 2)
             copy = exports / "after-replace.mp4"
-            field(editor, 350, 1038, copy)
-            click(editor, 899, 1082)
+            set_destination(editor, copy)
+            press(editor, "Save new copy")
             wait(copy.exists, "same-session save after replacement")
             wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "same-session copy published in History")
             info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(copy)))
@@ -542,72 +699,77 @@ def main():
             print("PASS replacement: confirmation, cancel, source/History rebase, real edited pixels and same-session save")
             return
         if args.comparison:
-            click(editor, 466, 57)
+            press(editor, "Compare")
             shot(editor, "comparison-mp4")
             assert started.exists(), "Compare must invoke the real media tool"
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "comparison-minimum")
-            click(editor, 478, 57)  # Hide restores the accepted still and ordinary toolbar.
+            press(editor, "Hide compare")  # Hide restores the accepted still and ordinary toolbar.
             missing = output / "temporarily-moved.mp4"
             source.rename(missing)
             try:
-                click(editor, 466, 57)
+                press(editor, "Compare")
                 shot(editor, "comparison-error-minimum")
             finally:
                 missing.rename(source)
-            click(editor, 466, 57)
+            press(editor, "Compare")
             shot(editor, "comparison-retry-minimum")
-            click(editor, 478, 57)
+            press(editor, "Hide compare")
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
             calls = len(started.read_text().splitlines())
             allowed.unlink()
-            click(editor, 466, 57)
+            press(editor, "Compare")
             wait(lambda: len(started.read_text().splitlines()) > calls, "comparison child starts")
             run("import", "-window", editor, str(output / "comparison-pending.png"))
             # Bypass idle: cancellation interrupts the running tool process.
-            run("xdotool", "mousemove", "--window", editor, "80", "794", "mousedown", "1",
+            cancel_x, cancel_y = center(editor, "Cancel comparison")
+            run("xdotool", "mousemove", "--window", editor, str(cancel_x), str(cancel_y), "mousedown", "1",
                 "sleep", ".15", "mouseup", "1")
             idle(editor)
             allowed.touch()
             shot(editor, "comparison-cancelled")
-            click(editor, 87, 882)
-            click(editor, 793, 882)
-            click(editor, 466, 57)
+            choose(editor, "Format", ".gif")
+            press(editor, "Apply edits")
+            press(editor, "Compare")
             shot(editor, "comparison-gif")
-            click(editor, 923, 57)  # 100% avoids interpolation in the pixel oracle.
-            click(editor, 161, 200)
+            press(editor, "100%")  # 100% avoids interpolation in the pixel oracle.
+            click(editor, *image_point(editor, .02, .4))
             shot(editor, "comparison-gif-encoded")
-            click(editor, 799, 200)
+            click(editor, *image_point(editor, .98, .4))
             shot(editor, "comparison-gif-before")
+            # Sample one side only: clear of the divider, the corner badges and
+            # the play button that sits below center while comparing.
+            x0, y0, x1, y1 = visible_rect(editor, "Preview image")
+            width, height = x1 - x0 - 32, y1 - y0 - 140
             colors = {}
             for side in ("before", "encoded"):
                 pixels = run("convert", str(output / f"comparison-gif-{side}.png"),
-                             "-crop", "600x340+180+105", "-depth", "8", "rgb:-")
-                assert len(pixels) == 600 * 340 * 3
+                             "-crop", f"{width}x{height}+{x0 + 16}+{y0 + 30}", "-depth", "8", "rgb:-")
+                assert len(pixels) == width * height * 3
                 colors[side] = len(set(zip(pixels[0::3], pixels[1::3], pixels[2::3])))
             assert colors["before"] > colors["encoded"] and colors["encoded"] <= 256, colors
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
-            click(editor, 668, 57)  # Fit
-            click(editor, 105, 293)
+            press(editor, "Fit")  # Fit
+            click(editor, *image_point(editor, .1, .4))
             shot(editor, "comparison-gif-minimum")
-            click(editor, 478, 57)
+            press(editor, "Hide compare")
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
-            click(editor, 33, 1082)
-            click(editor, 793, 1082)
-            click(editor, 22, 914)
-            click(editor, 793, 1082)
-            click(editor, 466, 57)
+            choose(editor, "Format", ".mp4")
+            press(editor, "Apply edits")
+            choose(editor, "Quality mode", "Maximum file size")
+            press(editor, "Apply edits")
+            press(editor, "Compare")
             shot(editor, "comparison-maximum")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "comparison-maximum-minimum")
-            click(editor, 478, 57)
+            press(editor, "Hide compare")
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
             close(editor)
             assert windows("Recording editor"), "comparison must not mark accepted Maximum edits saved"
             shot(editor, "comparison-dirty-close")
-            click(editor, 250, 994)  # Explicitly discard the unsaved Maximum setting.
+            press(editor, "Discard edits and close")  # Explicitly discard the unsaved Maximum setting.
             wait(lambda: not windows("Recording editor"), "explicit discard closes comparison editor")
             close(root)
             wait(lambda: app.poll() is not None, "comparison quit")
@@ -624,7 +786,8 @@ def main():
         estimate_expectations = {}
         if args.sound:
             def motion_click():
-                run("xdotool", "mousemove", "--window", editor, "192", "57", "sleep", ".05",
+                x, y = center(editor, "Play preview")
+                run("xdotool", "mousemove", "--window", editor, str(x), str(y), "sleep", ".05",
                     "mousedown", "1", "sleep", ".08", "mouseup", "1")
 
             def playing():
@@ -649,7 +812,7 @@ def main():
 
             silent = capture_playback("sound-default-off")
             assert silent and max(abs(v) for v in silent) < .00001, "Sound defaults off"
-            click(editor, 384, 57)
+            press(editor, "Sound")
             audible = capture_playback("sound-on")
             assert max(abs(v) for v in audible) > .05, "Sound reaches the default virtual sink"
             # Independently measure both asymmetric source tones, rather than accepting noise.
@@ -667,7 +830,7 @@ def main():
             dominant(output / "sound-ended.png", 2)
             assert max(abs(v) for v in audible[-48000:]) < .00001, "short audio drains to silence"
 
-            click(editor, 254, 57)  # Loop reopens audio only after decoder/output teardown.
+            press(editor, "Loop preview")  # Loop reopens audio only after decoder/output teardown.
             motion_click()
             wait(playing, "audible loop starts")
             def output_stream():
@@ -685,7 +848,7 @@ def main():
             assert not run("pactl", "list", "short", "sink-inputs").strip(), "Pause releases audio output"
             shot(editor, "sound-minimum-on-paused")
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
-            click(editor, 254, 57)
+            press(editor, "Loop preview")
 
             # Default-device absence is visible failure, not an implicit silent fallback.
             audio_server.terminate()
@@ -694,7 +857,7 @@ def main():
             idle(editor)
             shot(editor, "sound-device-error")
             dominant(output / "sound-device-error.png", 0)
-            click(editor, 384, 57)
+            press(editor, "Sound")
             motion_click()
             wait(playing, "explicit Sound-off retry works without an audio server")
             time.sleep(.7)
@@ -703,16 +866,17 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "sound-minimum-paused")
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
-            click(editor, 384, 57)  # Request Sound again, but GIF must not open a device.
-            click(editor, 87, 882)
-            click(editor, 793, 882)
+            press(editor, "Sound")  # Request Sound again, but GIF must not open a device.
+            choose(editor, "Format", ".gif")
+            press(editor, "Apply edits")
             idle(editor)  # Apply and Play share the Working title; finish Apply first.
             motion_click()
             wait(playing, "GIF with Sound selected stays playable without a device")
             def gif_motion():
                 path = output / "sound-gif-silent.png"
+                x, y = image_point(editor, .75, .75)  # May scroll; measure before the shot.
                 run("import", "-window", editor, str(path))
-                pixel = run("convert", str(path), "-crop", "1x1+480+220", "-depth", "8", "rgb:-")
+                pixel = run("convert", str(path), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-")
                 return len(pixel) == 3 and pixel[1] > max(pixel[0], pixel[2]) + 40
             wait(gif_motion, "silent GIF actually advances from red to green without a device")
             motion_click()
@@ -731,44 +895,44 @@ def main():
             return
         if args.gif_width:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
-            click(editor, 87, 1082)
+            choose(editor, "Format", ".gif")
             shot(editor, "gif-width-default-staged")
             dimensions = {}
             # Save the default, then increase it: reusing accepted 800px output
             # as the base would silently prevent the 1200px export.
-            for maximum, menu_y, expected in ((800, None, (800, 450)), (1200, 835, (1200, 674)), (320, 659, (320, 180))):
-                if menu_y is not None:
-                    click(editor, 358, 873)
+            for maximum, expected in ((800, (800, 450)), (1200, (1200, 674)), (320, (320, 180))):
+                if maximum != 800:
+                    press(editor, "Maximum width")
                     shot(editor, f"gif-width-menu-{maximum}")
-                    click(editor, 358, menu_y)
+                    click(editor, *center(editor, f"Maximum width/{maximum} px"))
                 destination = exports / f"width-{maximum}.gif"
-                field(editor, 360, 1038, destination)
-                click(editor, 899, 1082)
+                set_destination(editor, destination)
+                press(editor, "Save new copy")
                 assert not destination.exists(), "staged width cannot save"
-                click(editor, 793, 1082)
+                press(editor, "Apply edits")
                 shot(editor, f"gif-width-{maximum}-accepted")
-                click(editor, 899, 1082)
+                press(editor, "Save new copy")
                 wait(destination.exists, f"{maximum}px GIF export")
                 idle(editor)
                 stream = json.loads(run("ffprobe", "-v", "error", "-select_streams", "v:0",
                     "-show_entries", "stream=width,height", "-of", "json", str(destination)))["streams"][0]
                 assert (stream["width"], stream["height"]) == expected, stream
                 dimensions[str(maximum)] = stream
-            click(editor, 33, 1082)
-            click(editor, 793, 1082)
+            choose(editor, "Format", ".mp4")
+            press(editor, "Apply edits")
             mp4 = exports / "restored.mp4"
-            field(editor, 360, 1038, mp4)
-            click(editor, 899, 1082)
+            set_destination(editor, mp4)
+            press(editor, "Save new copy")
             wait(mp4.exists, "uncapped MP4 export")
             idle(editor)
             stream = json.loads(run("ffprobe", "-v", "error", "-select_streams", "v:0",
                 "-show_entries", "stream=width,height", "-of", "json", str(mp4)))["streams"][0]
             assert (stream["width"], stream["height"]) == (1600, 900), stream
-            click(editor, 87, 1082)
-            click(editor, 793, 1082)
+            choose(editor, "Format", ".gif")
+            press(editor, "Apply edits")
             restored = exports / "restored.gif"
-            field(editor, 360, 1038, restored)
-            click(editor, 899, 1082)
+            set_destination(editor, restored)
+            press(editor, "Save new copy")
             wait(restored.exists, "remembered GIF width export")
             idle(editor)
             restored_stream = json.loads(run("ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -779,7 +943,7 @@ def main():
             run("xdotool", "mousemove", "--window", editor, "450", "410",
                 "click", "--repeat", "25", "--delay", "40", "5", "sleep", ".5")
             shot(editor, "gif-width-minimum")
-            click(editor, 358, 360)  # Saved-status row reduces the scrolling viewport.
+            press(editor, "Maximum width")  # Saved-status row reduces the scrolling viewport.
             shot(editor, "gif-width-minimum-menu")
             run("xdotool", "key", "Escape")
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
@@ -797,22 +961,21 @@ def main():
             return
         if args.gif_quality:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
-            click(editor, 87, 1082)
+            choose(editor, "Format", ".gif")
             colors = {}
-            for quality, menu_y, wheel in (("tiny", 886, "5"), ("high", 798, "4")):
-                click(editor, 149, 900)
-                # The six-row quality popup scrolls; Tiny starts below its clip.
-                run("xdotool", "mousemove", "--window", editor, "149", "840",
-                    "click", "--repeat", "10", "--delay", "40", wheel, "sleep", ".4")
+            # GIF offers Compress/Maximum only, as shipping does; Compress
+            # lists the Tiny through Highest presets.
+            for quality, label in (("tiny", "Tiny"), ("high", "High")):
+                press(editor, "Quality")
                 shot(editor, f"gif-quality-menu-{quality}")
-                click(editor, 149, menu_y)
+                click(editor, *center(editor, f"Quality/{label}"))
                 destination = exports / f"{quality}.gif"
-                field(editor, 360, 1038, destination)
-                click(editor, 899, 1082)
+                set_destination(editor, destination)
+                press(editor, "Save new copy")
                 assert not destination.exists(), "staged quality cannot save"
-                click(editor, 793, 1082)
+                press(editor, "Apply edits")
                 shot(editor, f"gif-quality-{quality}-accepted")
-                click(editor, 899, 1082)
+                press(editor, "Save new copy")
                 wait(destination.exists, f"{quality} GIF export")
                 idle(editor)  # Destination publication precedes History completion.
                 pixels = run("ffmpeg", "-v", "error", "-i", str(destination), "-frames:v", "1",
@@ -835,35 +998,35 @@ def main():
             return
         if args.gif_frame_rate:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
-            click(editor, 87, 1082)
+            choose(editor, "Format", ".gif")
             shot(editor, "gif-frame-rate-default")
-            click(editor, 149, 873)
+            press(editor, "Frame rate")
             shot(editor, "gif-frame-rate-menu")
-            click(editor, 149, 571)  # 8 FPS.
+            click(editor, *center(editor, "Frame rate/8 FPS"))  # 8 FPS.
             eight = exports / "eight.gif"
-            field(editor, 360, 1038, eight)
-            click(editor, 899, 1082)
+            set_destination(editor, eight)
+            press(editor, "Save new copy")
             assert not eight.exists(), "staged format/FPS cannot save"
-            click(editor, 793, 1082)
-            click(editor, 899, 1082)
+            press(editor, "Apply edits")
+            press(editor, "Save new copy")
             wait(eight.exists, "8 FPS GIF export")
             shot(editor, "gif-frame-rate-eight")
-            click(editor, 149, 873)
-            click(editor, 149, 791)  # 24 FPS.
+            press(editor, "Frame rate")
+            click(editor, *center(editor, "Frame rate/24 FPS"))  # 24 FPS.
             twenty_four = exports / "twenty-four.gif"
-            field(editor, 360, 1038, twenty_four)
+            set_destination(editor, twenty_four)
             missing = output / "temporarily-moved.mp4"
             source.rename(missing)
             try:
-                click(editor, 793, 1082)
+                press(editor, "Apply edits")
                 shot(editor, "gif-frame-rate-failed-apply")
                 dominant(output / "gif-frame-rate-failed-apply.png", 0)
-                click(editor, 899, 1082)
+                press(editor, "Save new copy")
                 assert not twenty_four.exists(), "failed FPS Apply cannot save staged settings"
             finally:
                 missing.rename(source)
-            click(editor, 793, 1082)
-            click(editor, 899, 1082)
+            press(editor, "Apply edits")
+            press(editor, "Save new copy")
             wait(twenty_four.exists, "24 FPS GIF export after retry")
             shot(editor, "gif-frame-rate-twenty-four")
             cadences = {}
@@ -876,17 +1039,17 @@ def main():
                 dominant(path, 1, at=1.5)
                 dominant(path, 2, at=2.5)
                 cadences[str(fps)] = stream
-            click(editor, 33, 1082)
-            click(editor, 793, 1082)
+            choose(editor, "Format", ".mp4")
+            press(editor, "Apply edits")
             shot(editor, "gif-frame-rate-mp4")
-            click(editor, 87, 1082)
+            choose(editor, "Format", ".gif")
             shot(editor, "gif-frame-rate-restored")
-            click(editor, 793, 1082)
+            press(editor, "Apply edits")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             run("xdotool", "mousemove", "--window", editor, "450", "410",
                 "click", "--repeat", "25", "--delay", "40", "5", "sleep", ".5")
             shot(editor, "gif-frame-rate-minimum")
-            click(editor, 149, 387)
+            press(editor, "Frame rate")
             shot(editor, "gif-frame-rate-minimum-menu")
             run("xdotool", "key", "Escape")
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
@@ -905,28 +1068,28 @@ def main():
             return
         if args.maximum_size:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
-            click(editor, 22, 914)
+            choose(editor, "Quality mode", "Maximum file size")
             shot(editor, "maximum-initial")
-            field(editor, 40, 961, ".0999999")
-            click(editor, 793, 1082)
+            fill(editor, "Maximum file size value", ".0999999")
+            press(editor, "Apply edits")
             shot(editor, "maximum-invalid")
             assert not list(exports.iterdir())
-            field(editor, 40, 961, ".1")
-            field(editor, 240, 598, 800)
-            click(editor, 793, 1082)
+            fill(editor, "Maximum file size value", ".1")
+            fill(editor, "End (ms)", 800)
+            press(editor, "Apply edits")
             shot(editor, "maximum-accepted")
             limited = exports / "limited.mp4"
-            field(editor, 360, 1038, limited)
-            click(editor, 899, 1082)
+            set_destination(editor, limited)
+            press(editor, "Save new copy")
             wait(limited.exists, "capped MP4 export")
             assert limited.stat().st_size <= 100_000
-            click(editor, 87, 1082)
+            choose(editor, "Format", ".gif")
             shot(editor, "maximum-gif-staged")
-            click(editor, 149, 900)
-            click(editor, 149, 862)  # 30 FPS requested; budget retries can lower it.
-            click(editor, 793, 1082)
+            press(editor, "Frame rate")
+            click(editor, *center(editor, "Frame rate/30 FPS"))  # 30 FPS requested; budget retries can lower it.
+            press(editor, "Apply edits")
             shot(editor, "maximum-gif-accepted")
-            click(editor, 899, 1082)
+            press(editor, "Save new copy")
             gif = limited.with_suffix(".gif")
             wait(gif.exists, "capped GIF retry export")
             assert gif.stat().st_size <= 100_000
@@ -944,38 +1107,36 @@ def main():
             assert (saved["width"], saved["height"], saved["size_bytes"]) == (320, 180, gif.stat().st_size)
 
             cancelled = exports / "cancelled.gif"
-            field(editor, 360, 1038, cancelled)
+            set_destination(editor, cancelled)
             attempts_before = len(started.read_text().splitlines())
             allowed.unlink()
-            click(editor, 899, 1082)
+            press(editor, "Save new copy")
             wait(lambda: len(started.read_text().splitlines()) > attempts_before, "blocked export attempt")
             time.sleep(1)
             run("import", "-window", editor, str(output / "maximum-cancelling.png"))
             # Bypass idle while the worker is deliberately paused inside FFmpeg.
-            run("xdotool", "windowactivate", "--sync", editor, "windowfocus", "--sync", editor,
-                "mousemove", "--sync", "--window", editor, "60", "1011", "sleep", ".4",
-                "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
+            raw_press(editor, "Cancel export")
             idle(editor)
             allowed.touch()
             shot(editor, "maximum-cancelled")
             assert not cancelled.exists() and not list(exports.glob(".captures-*"))
-            field(editor, 211, 625, 4000)
-            click(editor, 793, 1082)
+            fill(editor, "End (ms)", 4000)
+            press(editor, "Apply edits")
             failed = exports / "unattainable.gif"
-            field(editor, 360, 1038, failed)
-            click(editor, 899, 1082)
+            set_destination(editor, failed)
+            press(editor, "Save new copy")
             idle(editor)
             shot(editor, "maximum-unattainable")
             assert not failed.exists()
             assert len(list(history.glob("*/metadata.json"))) == 3
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
-            field(editor, 211, 625, 800)
-            click(editor, 793, 1082)
+            fill(editor, "End (ms)", 800)
+            press(editor, "Apply edits")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             run("xdotool", "mousemove", "--window", editor, "450", "410",
                 "click", "--repeat", "25", "--delay", "40", "5", "sleep", ".5")
             shot(editor, "maximum-minimum")
-            click(editor, 130, 448)
+            press(editor, "File size unit")
             shot(editor, "maximum-minimum-units")
             run("xdotool", "key", "Escape")
             close(editor)
@@ -1000,8 +1161,16 @@ def main():
                 assert red, "red source preview"
                 left, right = min(x for x, _ in red), max(x for x, _ in red)
                 top, bottom = min(y for _, y in red), max(y for _, y in red)
+                # Count only white enclosed by red in its row and column: the
+                # preview's rounded corners reveal the (light) viewport there.
+                rows, columns = {}, {}
+                for x, y in red:
+                    low, high = rows.get(y, (x, x)); rows[y] = (min(low, x), max(high, x))
+                    low, high = columns.get(x, (y, y)); columns[x] = (min(low, y), max(high, y))
                 white = [(x, y) for y in range(top, bottom + 1) for x in range(left, right + 1)
-                         if min(pixels[(y * 960 + x) * 3:(y * 960 + x) * 3 + 3]) > 210]
+                         if min(pixels[(y * 960 + x) * 3:(y * 960 + x) * 3 + 3]) > 210
+                         and y in rows and rows[y][0] < x < rows[y][1]
+                         and x in columns and columns[x][0] < y < columns[x][1]]
                 if not white:
                     return (0, 0)
                 return (max(x for x, _ in white) - min(x for x, _ in white) + 1,
@@ -1013,7 +1182,7 @@ def main():
             missing = output / "temporarily-moved.mp4"
             source.rename(missing)
             try:
-                click(editor, 930, 57)
+                press(editor, "100%")
                 shot(editor, "scale-actual")
                 actual = marker_size("scale-actual")
                 assert abs(actual[0] - 45) <= 1 and abs(actual[1] - 25) <= 1, actual
@@ -1021,15 +1190,15 @@ def main():
                     "click", "--repeat", "5", "--delay", "100", "5", "sleep", ".5")
                 shot(editor, "scale-scrolled")
                 assert marker_size("scale-scrolled") == (0, 0), "inner scrolling moves source pixels"
-                click(editor, 867, 57)
+                press(editor, "Fit")
                 shot(editor, "scale-fit-again")
                 assert marker_size("scale-fit-again") == fit_size
-                click(editor, 930, 57)
+                press(editor, "100%")
                 shot(editor, "scale-actual-reset")
                 assert marker_size("scale-actual-reset") == actual, "Fit/100% resets the preview scroll"
                 run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
                 shot(editor, "scale-actual-minimum")
-                click(editor, 667, 57)
+                press(editor, "Fit")
                 shot(editor, "scale-fit-minimum")
             finally:
                 missing.rename(source)
@@ -1047,49 +1216,64 @@ def main():
             return
         if args.graphical_crop:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
-            field(editor, 136, 520, 1500)
-            click(editor, 222, 520)
-            click(editor, 22, 683)
-            click(editor, 205, 683)  # Independent dimensions.
-            for x, value in ((51, 80), (114, 40), (208, 160), (309, 80)):
-                field(editor, x, 727, value)
-            click(editor, 793, 1082)
-            shot(editor, "crop-accepted-before-source")
-            click(editor, 296, 683)
+            fill(editor, "Position (ms)", 1500)
+            press(editor, "Seek")
+            press(editor, "Crop recording")
+            press(editor, "Lock aspect ratio")  # Independent dimensions.
+            for name, value in (("Crop X", 80), ("Crop Y", 40), ("Crop width", 160), ("Crop height", 80)):
+                fill(editor, name, value)
+            press(editor, "Apply edits")
+            preview_regions = {}
+
+            def preview_shot(name):
+                # Scroll the image into view and remember where it was shot:
+                # its top quarter, clear of the play control, which dims while
+                # a staged crop awaits Apply.
+                visible_rect(editor, "Preview image", whole_control=True)
+                shot(editor, name)
+                # Measure after the shot settles so the probe matches its frame.
+                x0, y0, x1, y1 = visible_rect(editor, "Preview image", whole_control=True)
+                # Inset past the rounded, antialiased edges, which vary with
+                # the page's scroll offset.
+                x0, y0, x1 = x0 + 8, y0 + 8, x1 - 8
+                preview_regions[name] = f"{x1 - x0}x{(y1 - y0) // 4}+{x0}+{y0}"
+
+            def preview_pixels(name):
+                return run("convert", str(output / f"{name}.png"), "-crop", preview_regions[name], "rgba:-")
+
+            preview_shot("crop-accepted-before-source")
+            press(editor, "Adjust crop")
             wait(started.exists, "full-source request started")
             wait(lambda: "Working…" in run("xdotool", "getwindowname", editor).decode(),
                  "source loading controls presented")
             time.sleep(.5)
             run("import", "-window", editor, str(output / "crop-source-loading.png"))
             # Bypass idle(): Cancel must interrupt the blocked frame extraction.
-            run("xdotool", "mousemove", "--sync", "--window", editor, "85", "999",
-                "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
-            shot(editor, "crop-source-cancelled")
+            raw_press(editor, "Cancel source preview")
+            preview_shot("crop-source-cancelled")
             allowed.touch()
             missing = output / "temporarily-moved.mp4"
             source.rename(missing)
             try:
-                click(editor, 296, 683)
+                press(editor, "Adjust crop")
                 shot(editor, "crop-source-error")
             finally:
                 missing.rename(source)
-            click(editor, 296, 683)
+            press(editor, "Adjust crop")
+            # Bring the whole full-source image into view before sampling it;
+            # the crop card's button can leave the preview scrolled away.
+            x, y = image_point(editor, .9, .9)
             shot(editor, "crop-source-ready")
-
-            # Locate the actual green source image, including dimmed excluded
-            # pixels. Neutral chrome and mustard handles cannot match green.
-            rgb = run("convert", str(output / "crop-source-ready.png"), "-crop", "960x400+0+70",
-                      "-depth", "8", "rgb:-")
-            points = [(i // 3 % 960, i // 3 // 960 + 70) for i in range(0, len(rgb), 3)
-                      if rgb[i + 1] > max(rgb[i], rgb[i + 2]) + 10]
-            assert points, "full-source preview must be visible"
-            left, right = min(x for x, _ in points), max(x for x, _ in points) + 1
-            top, bottom = min(y for _, y in points), max(y for _, y in points) + 1
-            sx, sy = (right - left) / 320, (bottom - top) / 180
-            assert abs(sx - sy) < .03, (left, top, right, bottom)
+            pixel = run("convert", str(output / "crop-source-ready.png"), "-crop", f"1x1+{x}+{y}",
+                        "-depth", "8", "rgb:-")
+            assert pixel[1] > max(pixel[0], pixel[2]) + 10, ("full-source preview must be visible", pixel)
+            assert "Crop size" in controls(editor), "the crop box shows its size badge"
 
             def drag_source(start, delta):
-                x, y = round(left + start[0] * sx), round(top + start[1] * sy)
+                x0, y0, x1, y1 = visible_rect(editor, "Preview image")
+                sx, sy = (x1 - x0) / 320, (y1 - y0) / 180
+                assert abs(sx - sy) < .03, (x0, y0, x1, y1)
+                x, y = round(x0 + start[0] * sx), round(y0 + start[1] * sy)
                 dx, dy = round(delta[0] * sx), round(delta[1] * sy)
                 run("xdotool", "mousemove", "--window", editor, str(x), str(y),
                     "mousedown", "1", "sleep", ".15", "mousemove_relative", "--sync", "--",
@@ -1097,10 +1281,10 @@ def main():
 
             def crop_values():
                 values = []
-                for x in (51, 114, 208, 309):
+                for name in ("Crop X", "Crop Y", "Crop width", "Crop height"):
                     subprocess.run(["xclip", "-selection", "clipboard", "-i"], env=env,
                                    input=b"waiting", check=True, timeout=5)
-                    click(editor, x, 727)
+                    click(editor, *center(editor, name))
                     run("xdotool", "key", "ctrl+a", "ctrl+c")
                     def copied():
                         result = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
@@ -1118,27 +1302,25 @@ def main():
             assert (actual := crop_values()) == (30, 20, 160, 80), actual
             drag_source((190, 100), (30, 20))
             assert (actual := crop_values()) == (30, 20, 190, 100), actual
-            shot(editor, "crop-source-staged")
+            preview_shot("crop-source-staged")
             destination = exports / "graphical-crop.mp4"
-            field(editor, 360, 1038, destination)
-            click(editor, 899, 1082)
+            set_destination(editor, destination)
+            press(editor, "Save new copy")
             assert not destination.exists() and len(list(history.glob("*/metadata.json"))) == 1
-            click(editor, 296, 683)  # Done restores the unchanged accepted crop.
-            shot(editor, "crop-done-accepted")
-            def preview_pixels(name):
-                return run("convert", str(output / f"{name}.png"), "-crop", "960x380+0+85", "rgba:-")
-            assert preview_pixels("crop-source-cancelled") == preview_pixels("crop-accepted-before-source")
+            press(editor, "Adjust crop")  # Done restores the unchanged accepted crop.
+            preview_shot("crop-done-accepted")
+            assert preview_pixels("crop-source-cancelled") == preview_pixels("crop-accepted-before-source"), preview_regions
             assert preview_pixels("crop-done-accepted") == preview_pixels("crop-accepted-before-source")
             source.rename(missing)
             try:
-                click(editor, 296, 683)  # Cached pixels work even when source is temporarily absent.
-                shot(editor, "crop-source-cached")
+                press(editor, "Adjust crop")  # Cached pixels work even when source is temporarily absent.
+                preview_shot("crop-source-cached")
                 assert preview_pixels("crop-source-cached") == preview_pixels("crop-source-staged")
             finally:
                 missing.rename(source)
-            click(editor, 793, 1082)
+            press(editor, "Apply edits")
             shot(editor, "crop-applied")
-            click(editor, 899, 1082)
+            press(editor, "Save new copy")
             wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "graphical crop export")
             info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(destination)))
             video = next(s for s in info["streams"] if s["codec_type"] == "video")
@@ -1149,17 +1331,21 @@ def main():
             green = frame[(50 * 190 + 100) * 3:(50 * 190 + 100) * 3 + 3]
             assert len(frame) == 190 * 100 * 3 and min(white) > 210, white
             assert green[1] > max(green[0], green[2]) + 40, green
-            click(editor, 296, 683)
+            press(editor, "Adjust crop")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "crop-source-minimum")
-            click(editor, 350, 57)  # Done is accessible beside the preview at minimum size.
+            press(editor, "Done cropping (preview)")  # Done is accessible beside the preview at minimum size.
             shot(editor, "crop-done-minimum")
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
-            field(editor, 136, 520, 500)
-            click(editor, 222, 520)
-            click(editor, 296, 683)
+            fill(editor, "Position (ms)", 500)
+            press(editor, "Seek")
+            press(editor, "Adjust crop")
+            # Sample inside the staged crop; the default point is in the dimmed exclusion.
+            x, y = image_point(editor, .4, .4)
             shot(editor, "crop-source-after-seek")
-            dominant(output / "crop-source-after-seek.png", 0)
+            pixel = run("convert", str(output / "crop-source-after-seek.png"), "-crop", f"1x1+{x}+{y}",
+                        "-depth", "8", "rgb:-")
+            assert pixel[0] > 90 and pixel[0] > max(pixel[1], pixel[2]) + 40, pixel
             assert started.read_text().splitlines() == ["call"] * 4, "only cancel, failure, retry and changed-position loads"
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             close(editor)
@@ -1177,11 +1363,13 @@ def main():
             def motion_click():
                 # Pause must work during an active decoder; never wait for idle.
                 # Do not wait for a motion event when already over this button.
-                run("xdotool", "mousemove", "--window", editor, "192", "57", "sleep", ".05",
+                x, y = center(editor, "Play preview")
+                run("xdotool", "mousemove", "--window", editor, str(x), str(y), "sleep", ".05",
                     "mousedown", "1", "sleep", ".08", "mouseup", "1")
 
             def loop_click():
-                run("xdotool", "mousemove", "--window", editor, "254", "57", "sleep", ".05",
+                x, y = center(editor, "Loop preview")
+                run("xdotool", "mousemove", "--window", editor, str(x), str(y), "sleep", ".05",
                     "mousedown", "1", "sleep", ".08", "mouseup", "1")
 
             def playing():
@@ -1191,7 +1379,7 @@ def main():
                 # A fixed sleep can return an older clipboard value under load.
                 subprocess.run(["xclip", "-selection", "clipboard", "-i"], env=env,
                     input=b"waiting for playback position", check=True, timeout=5)
-                click(editor, 136, 520)
+                press(editor, "Position (ms)")
                 run("xdotool", "key", "ctrl+a", "ctrl+c")
                 def copied_position():
                     result = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
@@ -1200,12 +1388,12 @@ def main():
                     return value if result.returncode == 0 and value.isdigit() else None
                 return int(wait(copied_position, "fresh playback position clipboard value"))
 
-            field(editor, 98, 598, 1500)
-            field(editor, 240, 598, 4500)
+            fill(editor, "Start (ms)", 1500)
+            fill(editor, "End (ms)", 4500)
             motion_click()
             time.sleep(.3)
             assert not playing(), "unapplied trim gates Play"
-            click(editor, 793, 882)
+            press(editor, "Apply edits")
             shot(editor, "playback-accepted")
             dominant(output / "playback-accepted.png", 0)
             # Record real presentation rather than turning fixture PNGs into a video.
@@ -1219,8 +1407,9 @@ def main():
                 # Decoder startup is not presentation time. Observe an actual
                 # temporal transition instead of assuming fixed startup latency.
                 path = output / f"{name}.png"
+                x, y = image_point(editor, .75, .75)  # May scroll; measure before the shot.
                 run("import", "-window", editor, str(path))
-                pixel = run("convert", str(path), "-crop", "1x1+480+220", "-depth", "8", "rgb:-")
+                pixel = run("convert", str(path), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-")
                 return len(pixel) == 3 and pixel[channel] > 90 and all(
                     pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel)
             wait(lambda: motion_color(1, "playback-running"), "real playback crosses from red to green")
@@ -1231,7 +1420,7 @@ def main():
             paused_at = position()
             assert 2000 <= paused_at < 4000, paused_at
             # Leave field focus before comparing frozen frame+playhead pixels.
-            click(editor, 700, 470)
+            blur(editor)
             shot(editor, "playback-paused-stable-a")
             time.sleep(.8)
             shot(editor, "playback-paused-stable-b")
@@ -1309,10 +1498,10 @@ def main():
             assert windows("Recording editor"), "accepted unsaved edits still require discard"
             # Keep editing, then save the accepted edit (not a playback range).
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
-            click(editor, 60, 794)
+            press(editor, "Keep editing")
             destination = exports / "playback-trim.mp4"
-            field(editor, 360, 838, destination)
-            click(editor, 899, 882)
+            set_destination(editor, destination)
+            press(editor, "Save new copy")
             wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "save after playback")
             info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-of", "json", str(destination)))
             assert abs(float(info["format"]["duration"]) - 3) < .15, info
@@ -1335,50 +1524,54 @@ def main():
             print("PASS silent playback: real motion, pause/resume/EOF, failure/retry, close, accepted export and immutable source")
             return
         if args.timeline:
-            def read_time(x):
-                click(editor, x, 598)
+            def read_time(name):
+                click(editor, *center(editor, name))
                 run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
                 return int(run("xclip", "-selection", "clipboard", "-o").strip())
 
-            def drag(x, delta, cancel=False):
-                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), "563",
+            def drag(name, delta, cancel=False):
+                # Grab the probed grip itself, rather than the interval boundary.
+                x, y = center(editor, name)
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y),
                     "mousedown", "1", "sleep", ".15", "mousemove_relative", "--sync", "--",
                     str(delta), "0", "sleep", ".2")
                 if cancel:
                     run("xdotool", "key", "Escape", "mousemove_relative", "--sync", "--", "100", "0")
                 run("xdotool", "mouseup", "1", "sleep", ".2")
 
-            # Grab inside each grip, rather than at the interval boundary.
-            # Time is measured from that original pointer, not absolute x.
-            drag(55, 2)
-            assert read_time(98) == 0, "subthreshold drag cannot jump trim start"
-            drag(55, 300)
-            start = read_time(98)
+            # Time is measured from the original pointer, not absolute x; the
+            # ~850px track at 960px makes each pixel about 3.5 ms.
+            track = visible_rect(editor, "Timeline track")
+            assert 780 <= track[2] - track[0] <= 900, track
+            drag("Trim start", 2)
+            assert read_time("Start (ms)") == 0, "subthreshold drag cannot jump trim start"
+            drag("Trim start", 300)
+            start = read_time("Start (ms)")
             assert 1000 <= start <= 1100, ("start drag", start)
-            drag(938, -200)
-            end = read_time(240)
+            drag("Trim end", -200)
+            end = read_time("End (ms)")
             assert 2250 <= end <= 2400, ("end drag", end)
-            drag(355, 15, cancel=True)
-            cancelled_start = read_time(98)
+            drag("Trim start", 15, cancel=True)
+            cancelled_start = read_time("Start (ms)")
             assert 45 <= cancelled_start - start <= 60, (start, cancelled_start)
             # A click focuses a handle without changing its value. Keyboard
             # adjustment must happen once, even across egui layout passes.
-            click(editor, 370, 563)
+            press(editor, "Trim start")
             run("xdotool", "key", "Right", "sleep", ".2")
-            start = read_time(98)
+            start = read_time("Start (ms)")
             assert start == cancelled_start + 1, ("focused keyboard step", start, cancelled_start)
             shot(editor, "timeline-staged")
             dominant(output / "timeline-staged.png", 0)
             destination = exports / "timeline.mp4"
-            field(editor, 360, 838, destination)
-            click(editor, 899, 882)
+            set_destination(editor, destination)
+            press(editor, "Save new copy")
             assert not destination.exists() and len(list(history.glob("*/metadata.json"))) == 1
-            click(editor, 793, 882)
-            field(editor, 136, 520, 1500)
-            click(editor, 222, 520)
+            press(editor, "Apply edits")
+            fill(editor, "Position (ms)", 1500)
+            press(editor, "Seek")
             shot(editor, "timeline-applied")
             dominant(output / "timeline-applied.png", 1)
-            click(editor, 899, 882)
+            press(editor, "Save new copy")
             wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "timeline export published")
             info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-of", "json", str(destination)))
             expected_seconds = (end - start) / 1000
@@ -1386,9 +1579,9 @@ def main():
             assert abs(float(info["format"]["duration"]) - expected_seconds) < .15, info
             dominant(destination, 1, .1)
             dominant(destination, 2, 1.0)
-            click(editor, 87, 882)
-            click(editor, 793, 882)
-            click(editor, 899, 882)
+            choose(editor, "Format", ".gif")
+            press(editor, "Apply edits")
+            press(editor, "Save new copy")
             gif = destination.with_suffix(".gif")
             wait(lambda: len(list(history.glob("*/metadata.json"))) == 3, "timeline GIF published")
             dominant(gif, 1, .1)
@@ -1412,20 +1605,20 @@ def main():
             print("PASS recording timeline: pointer/keyboard staging, cancellation, save gate, MP4/GIF pixels, immutable source")
             return
         if args.estimate_delta:
-            click(editor, 681, 882)
+            press(editor, "Estimate size")
             shot(editor, "delta-original-zero")
-            click(editor, 87, 882)
+            choose(editor, "Format", ".gif")
             shot(editor, "delta-staged")
-            click(editor, 793, 882)
-            click(editor, 681, 882)
+            press(editor, "Apply edits")
+            press(editor, "Estimate size")
             shot(editor, "delta-sampled")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "delta-sampled-minimum")
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
-            field(editor, 98, 598, 1000)
-            field(editor, 227, 598, 4000)
-            click(editor, 793, 882)
-            click(editor, 681, 882)
+            fill(editor, "Start (ms)", 1000)
+            fill(editor, "End (ms)", 4000)
+            press(editor, "Apply edits")
+            press(editor, "Estimate size")
             shot(editor, "delta-exact")
             assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
@@ -1435,16 +1628,16 @@ def main():
             missing = output / "temporarily-moved.mp4"
             source.rename(missing)
             try:
-                click(editor, 489, 562)
+                press(editor, "Estimate size")
                 shot(editor, "delta-estimate-error-minimum")
             finally:
                 missing.rename(source)
-            click(editor, 489, 562)
+            press(editor, "Estimate size")
             shot(editor, "delta-retry-minimum")
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
             destination = exports / "delta.gif"
-            field(editor, 360, 838, destination)
-            click(editor, 899, 882)
+            set_destination(editor, destination)
+            press(editor, "Save new copy")
             wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "delta export in History")
             idle(editor)  # History publication precedes accepted save identity on the UI thread.
             size = destination.stat().st_size
@@ -1464,59 +1657,59 @@ def main():
             print(f"PASS estimate delta exports: source {len(original)} bytes, saved {size}, expected {expected}")
             return
         if args.estimate:
-            click(editor, 681, 882)
+            press(editor, "Estimate size")
             shot(editor, "estimate-original")
             estimate_expectations["estimate-original.png"] = expected_estimate(len(original))
             assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
             missing = output / "temporarily-moved.mp4"
             source.rename(missing)
             try:
-                click(editor, 681, 882)
+                press(editor, "Estimate size")
                 shot(editor, "estimate-missing-source")
             finally:
                 missing.rename(source)
-            click(editor, 681, 882)
+            press(editor, "Estimate size")
             shot(editor, "estimate-retried")
             estimate_expectations["estimate-retried.png"] = expected_estimate(len(original))
             if args.audio:
                 run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
-                field(editor, 201, 866, 50)
-                click(editor, 793, 1082)
-                click(editor, 681, 1082)
+                volume(editor, "System audio", 50)
+                press(editor, "Apply edits")
+                press(editor, "Estimate size")
                 shot(editor, "estimate-audio-approximate")
                 estimate_expectations["estimate-audio-approximate.png"] = expected_estimate(len(original), exact=False)
-                field(editor, 201, 866, 100)
-                click(editor, 793, 1082)
+                volume(editor, "System audio", 100)
+                press(editor, "Apply edits")
                 run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
         if args.crop_aspect:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
-            click(editor, 22, 683)
-            field(editor, 208, 727, source_width // 2)
+            press(editor, "Crop recording")
+            fill(editor, "Crop width", source_width // 2)
             shot(editor, "locked-width-staged")
 
             def save_crop(name, expected):
                 path = exports / f"{name}.mp4"
-                field(editor, 360, 1038, path)
-                click(editor, 899, 1082)
+                set_destination(editor, path)
+                press(editor, "Save new copy")
                 assert not path.exists(), "unapplied crop gates save"
-                click(editor, 793, 1082)
+                press(editor, "Apply edits")
                 shot(editor, f"{name}-preview")
                 count = len(list(history.glob("*/metadata.json")))
-                click(editor, 899, 1082)
+                press(editor, "Save new copy")
                 wait(lambda: len(list(history.glob("*/metadata.json"))) == count + 1, name)
                 info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)))
                 stream = next(s for s in info["streams"] if s["codec_type"] == "video")
                 assert (stream["width"], stream["height"]) == expected, (name, stream)
 
             save_crop("locked-width", (source_width // 2, source_height // 2 // 2 * 2))
-            field(editor, 309, 727, source_height)
+            fill(editor, "Crop height", source_height)
             save_crop("locked-height", (source_width, source_height))
-            click(editor, 205, 683)  # Unlock. Only width changes now.
-            field(editor, 208, 727, 160)
+            press(editor, "Lock aspect ratio")  # Unlock. Only width changes now.
+            fill(editor, "Crop width", 160)
             save_crop("unlocked-width", (160, source_height))
             # Relocking uses the current crop ratio, not the original source.
-            click(editor, 205, 683)
-            field(editor, 309, 727, source_height // 2)
+            press(editor, "Lock aspect ratio")
+            fill(editor, "Crop height", source_height // 2)
             save_crop("relocked-height", (80, source_height // 2 // 2 * 2))
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "12", "--delay", "60", "5", "sleep", ".5")
@@ -1536,25 +1729,25 @@ def main():
             return
         # Numeric fields exercise exact source-relative times, independently of
         # slider geometry and the trim start.
-        field(editor, 136, 520, 1500)
-        click(editor, 222, 520)
+        fill(editor, "Position (ms)", 1500)
+        press(editor, "Seek")
         shot(editor, "seek-green")
         dominant(output / "seek-green.png", 1)
-        field(editor, 240, 598, 1100)
-        field(editor, 98, 598, 2600)
-        click(editor, 793, 882)  # Apply edits stays in the fixed save bar.
+        fill(editor, "End (ms)", 1100)
+        fill(editor, "Start (ms)", 2600)
+        press(editor, "Apply edits")  # Apply edits stays in the fixed save bar.
         shot(editor, "invalid-trim")
         dominant(output / "invalid-trim.png", 1)
         run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
         shot(editor, "minimum-error")
         run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
-        field(editor, 98, 598, 1100)
-        field(editor, 227, 598, 2300)
-        click(editor, 793, 882)
+        fill(editor, "Start (ms)", 1100)
+        fill(editor, "End (ms)", 2300)
+        press(editor, "Apply edits")
         shot(editor, "trimmed")
         dominant(output / "trimmed.png", 1)
         if args.estimate:
-            click(editor, 681, 882)
+            press(editor, "Estimate size")
             shot(editor, "estimate-trimmed")
             assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
         close(root)
@@ -1563,11 +1756,11 @@ def main():
         close(editor)
         assert windows("Recording editor"), "dirty editor requires confirmation"
         shot(editor, "close-confirmation")
-        click(editor, 55, 794)  # Keep editing, immediately above the fixed destination row.
+        press(editor, "Keep editing")  # Keep editing, immediately above the fixed destination row.
         run("xdotool", "windowminimize", root, "sleep", ".5")
         destination = exports / "trimmed.mp4"
-        field(editor, 360, 838, destination)
-        click(editor, 899, 882)
+        set_destination(editor, destination)
+        press(editor, "Save new copy")
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "export published in History")
         info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(destination)))
         assert abs(float(info["format"]["duration"]) - 1.2) < .15, info
@@ -1575,23 +1768,24 @@ def main():
         dominant(destination, 1, .2)
         dominant(destination, 2, 1.0)
         shot(editor, "saved")
+        assert "Show in Folder" in controls(editor), "a successful copy offers Show in Folder"
         saved_bytes = destination.read_bytes()
         if args.estimate:
             estimate_expectations["estimate-trimmed.png"] = expected_estimate(len(saved_bytes))
-        click(editor, 899, 882)
+        press(editor, "Save new copy")
         shot(editor, "collision")
         assert destination.read_bytes() == saved_bytes and len(list(history.glob("*/metadata.json"))) == 2
-        click(editor, 87, 882)
+        choose(editor, "Format", ".gif")
         if args.estimate:
-            click(editor, 681, 882)  # Unapplied GIF must not reuse the MP4 estimate.
+            press(editor, "Estimate size")  # Unapplied GIF must not reuse the MP4 estimate.
             shot(editor, "estimate-staged-format")
-        click(editor, 899, 882)  # Format changes cannot save unaccepted preview settings.
+        press(editor, "Save new copy")  # Format changes cannot save unaccepted preview settings.
         assert not destination.with_suffix(".gif").exists()
-        click(editor, 793, 882)
+        press(editor, "Apply edits")
         if args.estimate:
-            click(editor, 681, 882)
+            press(editor, "Estimate size")
             shot(editor, "estimate-gif")
-        click(editor, 899, 882)
+        press(editor, "Save new copy")
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 3, "GIF published in History")
         gif = destination.with_suffix(".gif")
         if args.estimate:
@@ -1603,44 +1797,46 @@ def main():
         # Asymmetric crop and independently sized output catch ignored origins,
         # resize-only implementations, and accidental loss of the accepted trim.
         run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
-        click(editor, 22, 683)  # Crop recording.
-        click(editor, 205, 683)  # Unlock for independent asymmetric crop fields.
-        field(editor, 51, 727, 10)
-        field(editor, 114, 727, 6)
-        field(editor, 208, 727, source_width)  # Valid width alone, invalid with X=10.
-        field(editor, 309, 727, 90)
-        click(editor, 793, 1082)
+        press(editor, "Crop recording")  # Crop recording.
+        press(editor, "Lock aspect ratio")  # Unlock for independent asymmetric crop fields.
+        fill(editor, "Crop X", 10)
+        fill(editor, "Crop Y", 6)
+        fill(editor, "Crop width", source_width)  # Valid width alone, invalid with X=10.
+        fill(editor, "Crop height", 90)
+        press(editor, "Apply edits")
         shot(editor, "invalid-crop")
         dominant(output / "invalid-crop.png", 1)
         crop_destination = exports / "cropped.mp4"
-        click(editor, 33, 1082)  # MP4.
-        field(editor, 360, 1038, crop_destination)
-        click(editor, 899, 1082)  # Save remains gated while the crop is unapplied.
+        choose(editor, "Format", ".mp4")  # MP4.
+        set_destination(editor, crop_destination)
+        press(editor, "Save new copy")  # Save remains gated while the crop is unapplied.
         assert not crop_destination.exists() and len(list(history.glob("*/metadata.json"))) == 3
-        field(editor, 208, 727, 160)
-        click(editor, 22, 771)  # Custom output size.
-        field(editor, 78, 815, 81)
-        field(editor, 197, 815, 61)
+        fill(editor, "Crop width", 160)
+        choose(editor, "Output resolution", "Custom")  # Custom output size.
+        fill(editor, "Output width", 81)
+        fill(editor, "Output height", 61)
         shot(editor, "crop-staged")
-        click(editor, 793, 1082)
+        press(editor, "Apply edits")
         shot(editor, "cropped")
         dominant(output / "cropped.png", 1)
-        # Frame is 80x60 after shared even rounding, fitted into the 380px-tall
-        # preview. Both samples lie inside the translated/scaled white box;
-        # omitting the crop or either origin makes at least one sample green.
-        for x, y in ((253, 110), (353, 180)):
-            pixel = run("convert", str(output / "cropped.png"), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-")
+        # Frame is 80x60 after shared even rounding, fitted into the preview.
+        # Both samples (output pixels 8,6 and 20,12) lie inside the translated
+        # white box; omitting the crop or either origin makes one sample green.
+        samples = [image_point(editor, .1, .1), image_point(editor, .25, .2)]
+        shot(editor, "cropped-samples")
+        for x, y in samples:
+            pixel = run("convert", str(output / "cropped-samples.png"), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-")
             assert len(pixel) == 3 and min(pixel) > 210, (x, y, pixel)
         run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
         run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "12", "--delay", "60", "5", "sleep", ".5")
         shot(editor, "minimum-crop-controls")
         run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
         run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "20", "--delay", "60", "4", "sleep", ".5")
-        click(editor, 899, 1082)
+        press(editor, "Save new copy")
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 4, "cropped MP4 in History")
-        click(editor, 87, 1082)
-        click(editor, 793, 1082)
-        click(editor, 899, 1082)
+        choose(editor, "Format", ".gif")
+        press(editor, "Apply edits")
+        press(editor, "Save new copy")
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 5, "cropped GIF in History")
         for path in (crop_destination, crop_destination.with_suffix(".gif")):
             info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)))
@@ -1665,23 +1861,23 @@ def main():
         # to the even-normalized custom base (4000x600), producing 800x120.
         run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
         run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "20", "--delay", "60", "4", "sleep", ".5")
-        field(editor, 227, 598, 1300)
-        field(editor, 78, 815, 4001)
-        field(editor, 197, 815, 601)
-        click(editor, 33, 1082)
+        fill(editor, "End (ms)", 1300)
+        fill(editor, "Output width", 4001)
+        fill(editor, "Output height", 601)
+        choose(editor, "Format", ".mp4")
         large_destination = exports / "encoder-sized.mp4"
-        field(editor, 360, 1038, large_destination)
-        click(editor, 793, 1082)
+        set_destination(editor, large_destination)
+        press(editor, "Apply edits")
         shot(editor, "mp4-encoder-preview")
-        click(editor, 899, 1082)
+        press(editor, "Save new copy")
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 6, "encoder-sized MP4 in History")
-        click(editor, 87, 1082)
-        click(editor, 899, 1082)
+        choose(editor, "Format", ".gif")
+        press(editor, "Save new copy")
         assert not large_destination.with_suffix(".gif").exists()
         shot(editor, "format-staged")
-        click(editor, 793, 1082)
+        press(editor, "Apply edits")
         shot(editor, "gif-sized-preview")
-        click(editor, 899, 1082)
+        press(editor, "Save new copy")
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 7, "width-capped GIF in History")
         for path, width, height in ((large_destination, 3840, 576), (large_destination.with_suffix(".gif"), 800, 120)):
             info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)))
@@ -1701,25 +1897,25 @@ def main():
         shot(editor, "format-saved")
         audio_checks = []
         if args.audio:
-            click(editor, 22, 683)  # Remove crop and resize to expose audio rows.
-            click(editor, 22, 727)
-            field(editor, 227, 598, 2300)
-            click(editor, 33, 1082)
-            field(editor, 201, 866, 25)
-            field(editor, 231, 910, 175)
+            press(editor, "Crop recording")  # Remove crop and resize to expose audio rows.
+            choose(editor, "Output resolution", "Original")
+            fill(editor, "End (ms)", 2300)
+            choose(editor, "Format", ".mp4")
+            volume(editor, "System audio", 25)
+            volume(editor, "Microphone", 175)
             shot(editor, "audio-staged")
             pending = exports / "pending-audio.mp4"
-            field(editor, 360, 1038, pending)
-            click(editor, 899, 1082)
+            set_destination(editor, pending)
+            press(editor, "Save new copy")
             assert not pending.exists(), "unapplied audio must gate save"
-            click(editor, 793, 1082)
+            press(editor, "Apply edits")
             shot(editor, "audio-applied")
 
             def audio_export(filename):
                 path = exports / filename
                 count = len(list(history.glob("*/metadata.json")))
-                field(editor, 360, 1038, path)
-                click(editor, 899, 1082)
+                set_destination(editor, path)
+                press(editor, "Save new copy")
                 wait(lambda: len(list(history.glob("*/metadata.json"))) == count + 1, filename)
                 info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)))
                 return path, [s for s in info["streams"] if s["codec_type"] == "audio"]
@@ -1747,32 +1943,33 @@ def main():
             shot(editor, "minimum-audio-controls")
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
             run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "20", "--delay", "60", "4", "sleep", ".5")
-            click(editor, 87, 1082)
-            click(editor, 793, 1082)
+            choose(editor, "Format", ".gif")
+            press(editor, "Apply edits")
             shot(editor, "gif-audio-disabled")
-            click(editor, 244, 866)  # Disabled mute must not change the MP4 settings.
+            # GIFs show only the shipping audio note; retained MP4 settings are untouched.
+            assert "System audio" not in controls(editor), "GIF must replace the audio rows"
             _, streams = audio_export("audio-free.gif")
             assert not streams
-            click(editor, 33, 1082)
-            click(editor, 793, 1082)
+            choose(editor, "Format", ".mp4")
+            press(editor, "Apply edits")
             restored, streams = audio_export("audio-restored.mp4")
             assert len(streams) == 1 and streams[0]["channels"] == 2, streams
             assert_tones(restored, 2, ((.025, .14), (.0125, .14)))
-            click(editor, 274, 910)  # Mute microphone, retain system gain/stereo.
-            click(editor, 793, 1082)
+            press(editor, "Microphone")  # Mute microphone, retain system gain/stereo.
+            press(editor, "Apply edits")
             system_only, streams = audio_export("system-only.mp4")
             assert len(streams) == 1 and streams[0]["channels"] == 2, streams
             assert_tones(system_only, 2, ((.025, 0), (.0125, 0)))
-            click(editor, 244, 866)
-            click(editor, 274, 910)
-            click(editor, 22, 946)  # Microphone only, mono.
-            click(editor, 793, 1082)
+            press(editor, "System audio")
+            press(editor, "Microphone")
+            press(editor, "Convert to mono")  # Microphone only, mono.
+            press(editor, "Apply edits")
             microphone_only, streams = audio_export("microphone-only.mp4")
             assert len(streams) == 1 and streams[0]["channels"] == 1, streams
             assert_tones(microphone_only, 1, ((0, .14 * math.sqrt(2)),))
             shot(editor, "microphone-mono")
-            click(editor, 274, 910)  # Both muted removes the audio stream.
-            click(editor, 793, 1082)
+            press(editor, "Microphone")  # Both muted removes the audio stream.
+            press(editor, "Apply edits")
             _, streams = audio_export("muted.mp4")
             assert not streams
             shot(editor, "audio-muted")
@@ -1786,22 +1983,22 @@ def main():
         preset_checks = []
         if args.presets:
             if not args.audio:
-                click(editor, 22, 683)  # Clear previous crop/custom size.
-                click(editor, 22, 727)
-                field(editor, 227, 598, 2300)
-                click(editor, 33, 1082)
-            for name, choice_y, expected in (("720", 852, (320, 720)), ("1080", 808, (480, 1080)), ("original", 764, (640, 1440))):
-                click(editor, 300, 727)
+                press(editor, "Crop recording")  # Clear previous crop/custom size.
+                choose(editor, "Output resolution", "Original")
+                fill(editor, "End (ms)", 2300)
+                choose(editor, "Format", ".mp4")
+            for name, label, expected in (("720", "720p maximum", (320, 720)), ("1080", "1080p maximum", (480, 1080)), ("original", "Original", (640, 1440))):
+                press(editor, "Output resolution")
                 shot(editor, f"preset-{name}-menu")
-                click(editor, 280, choice_y)
+                click(editor, *center(editor, f"Output resolution/{label}", prefix=True))
                 path = exports / f"preset-{name}.mp4"
-                field(editor, 360, 1038, path)
-                click(editor, 899, 1082)
+                set_destination(editor, path)
+                press(editor, "Save new copy")
                 assert not path.exists(), "unapplied preset must gate save"
-                click(editor, 793, 1082)
+                press(editor, "Apply edits")
                 shot(editor, f"preset-{name}-preview")
                 count = len(list(history.glob("*/metadata.json")))
-                click(editor, 899, 1082)
+                press(editor, "Save new copy")
                 wait(lambda: len(list(history.glob("*/metadata.json"))) == count + 1, name)
                 info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)))
                 stream = next(s for s in info["streams"] if s["codec_type"] == "video")

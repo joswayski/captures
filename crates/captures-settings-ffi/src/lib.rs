@@ -9,6 +9,7 @@ mod preferences;
 mod preview;
 mod recording;
 mod recording_editor;
+mod recording_editor_ui;
 mod recording_geometry;
 mod recording_hud;
 mod recording_recovery;
