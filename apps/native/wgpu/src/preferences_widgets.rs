@@ -330,21 +330,7 @@ pub fn icon_button(ui: &mut egui::Ui, t: &Tokens, glyph: &str, label: &str) -> R
     );
     let color = t.color(if hovered { "text" } else { "text-subtle" });
     let glyph_rect = Rect::from_center_size(rect.center(), Vec2::splat(14.));
-    match glyph {
-        "up" | "down" => {
-            // The 16-unit shipping chevrons `m4 10 4-4 4 4` / `m4 6 4 4 4-4`.
-            let s = glyph_rect.width() / 16.;
-            let p = |x: f32, y: f32| glyph_rect.min + vec2(x * s, y * s);
-            let points = if glyph == "up" {
-                vec![p(4., 10.), p(8., 6.), p(12., 10.)]
-            } else {
-                vec![p(4., 6.), p(8., 10.), p(12., 6.)]
-            };
-            ui.painter()
-                .add(egui::Shape::line(points, Stroke::new(1.7 * s, color)));
-        }
-        name => icon(ui.painter(), name, glyph_rect, color),
-    }
+    icon(ui.painter(), glyph, glyph_rect, color);
     if response.has_focus() {
         focus_ring(ui, t, rect, radius);
     }

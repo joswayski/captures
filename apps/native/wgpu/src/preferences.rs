@@ -951,7 +951,7 @@ impl Preferences {
             let any = !self.matches.is_empty();
             if ui
                 .add_enabled_ui(any, |ui| {
-                    widgets::icon_button(ui, t, "up", preferences::FIND_PREVIOUS)
+                    widgets::icon_button(ui, t, "chevron-up", preferences::FIND_PREVIOUS)
                 })
                 .inner
                 .clicked()
@@ -960,7 +960,7 @@ impl Preferences {
             }
             if ui
                 .add_enabled_ui(any, |ui| {
-                    widgets::icon_button(ui, t, "down", preferences::FIND_NEXT)
+                    widgets::icon_button(ui, t, "chevron-down", preferences::FIND_NEXT)
                 })
                 .inner
                 .clicked()
