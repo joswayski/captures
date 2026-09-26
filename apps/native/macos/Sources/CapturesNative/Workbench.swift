@@ -43,6 +43,8 @@ final class CaptureButton: NSButton {
     var selected = false
     var glass = false
     var primary = false
+    /// Neutral high-contrast action (`--solid`), e.g. the setup primary button.
+    var solid = false { didSet { needsDisplay = true } }
     var signal = false
     var hudControl = false { didSet { updateTrackingAreas(); needsDisplay = true } }
     private var hoverTracking: NSTrackingArea?
@@ -125,6 +127,10 @@ final class CaptureButton: NSButton {
                 tokens.color(selected ? "theme-accent" : "surface-hover").setFill()
                 path.fill()
             }
+        } else if solid {
+            tokens.color(cell?.isHighlighted == true ? "solid-hover" : "solid")
+                .withAlphaComponent(isEnabled ? 1 : 0.4).setFill()
+            path.fill()
         } else {
             let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
                 : signal ? "theme-signal-surface"
@@ -140,8 +146,10 @@ final class CaptureButton: NSButton {
             path.lineWidth = 1
             path.stroke()
         }
-        let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium)
-        var foreground = tokens.color(isEnabled
+        let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: solid ? .semibold : .medium)
+        var foreground = solid
+            ? tokens.color("solid-ink").withAlphaComponent(isEnabled ? 1 : 0.4)
+            : tokens.color(isEnabled
             ? (signal ? "theme-signal"
                 : primary ? "theme-accent-ink" : glass ? "glass-text" : "text")
             : (glass ? "glass-text-subtle" : "text-faint"))
@@ -797,7 +805,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func restartAfterPermissionRequest() {
         // This first-run restart is unavailable after the workspace opens, so
         // there can be no active recording or unsaved editor to abandon.
-        guard !onboardingReady, !terminating, onboardingController?.busy == false else { return }
+        guard !onboardingReady, !terminating, onboardingController?.busy == false else {
+            onboardingView?.restartFailed()
+            return
+        }
         onboardingController?.flush()
         preferencesController?.flush()
         LiveCaptureController.flush()
@@ -825,6 +836,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     NSApp.terminate(nil)
                     return
                 }
+                onboardingView?.restartFailed()
                 presentHostError(title: "Couldn’t Restart Captures", message: restartError)
             } catch {
                 presentHostError(title: "Couldn’t Restart Captures",
