@@ -268,7 +268,8 @@ It requires a session D-Bus and a registered SNI host, such as Xfce Panel's buil
 systray. `trayer` or `tint2` alone is insufficient without an SNI bridge. If no host
 is available, or the watcher/last host disappears, the root is restored and close
 quits so the process cannot be stranded. Opening the output folder also requires
-`xdg-open` (provided by `xdg-utils`).
+`xdg-open` (provided by `xdg-utils`); Show in Folder first asks a session-bus
+`org.freedesktop.FileManager1` implementer to select the file.
 
 ## Implemented probes and deliberate gaps
 

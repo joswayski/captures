@@ -923,7 +923,17 @@ pcm.!pulse {
         run("xdotool", "key", "Return")
         hud = running_hud()
         assert manifest()["options"]["target"]["type"] == "display"
+        # Shipping asks "Delete recording?" first; Cancel keeps the take.
         click(hud, 358, 54)
+        confirmation = wait(lambda: windows("Delete recording?"), "delete confirmation")[0]
+        shot(confirmation, "delete-confirmation")
+        click(confirmation, 40, 115)
+        wait(lambda: not windows("Delete recording?"), "delete cancelled")
+        assert windows("Captures Recording Controls") and manifest() is not None, (
+            "cancelling Delete recording must keep the take")
+        click(hud, 358, 54)
+        confirmation = wait(lambda: windows("Delete recording?"), "delete confirmation")[0]
+        click(confirmation, 104, 115)
         finished(1)
         assert history() == published and media.is_file()
 

@@ -16,10 +16,12 @@ mod recording_hud;
 mod recording_recovery;
 mod recording_region;
 mod recording_saved_notice;
+mod reveal;
 #[cfg(any(target_os = "windows", test))]
 mod root_repaint;
 mod selector;
 mod shortcut_input;
+mod startup_notice;
 mod tokens;
 mod tray;
 mod ui_fonts;

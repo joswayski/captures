@@ -191,6 +191,8 @@ in a separate development settings file. Fresh native profiles show setup before
 capture or opening queued media. macOS offers explicit Screen Recording and
 optional Microphone access, Settings links, and a permission restart; Windows/X11
 do not require upfront screen access. Setup does not enable Wayland capture.
+Finishing setup, or a hidden launch into the menu bar or tray, briefly shows a
+"Captures is ready to use" notice with the New Capture shortcut.
 The native workspace now applies
 automatic copy, output folder, PNG/JPEG/WebP save-format, screenshot countdown,
 and cursor inclusion preferences. Cursor rendering matches the shipping app:
@@ -204,13 +206,15 @@ acceptance is still open; private-X11 tests check saved region/window pixels and
 simulated session cancellation. Both native hosts connect screenshot mini previews
 with Copy, Save/Reveal, Edit and nondestructive Dismiss, respecting the four
 corner placements and capture-inclusion preference. Multiple captures remain in
-a stack with expand/collapse, scrolling and Clear all; dismissing previews leaves
+a stack with expand/collapse, scrolling with Show older/newer edge cues and Clear
+all; dismissing previews leaves
 history and exports intact. Expanded cards now use the Tauri layout: full-bleed
 images and idle dimensions, hover-only corner icons and centered Copy/Save actions,
 with controls mirrored for right-side placement. Hover dims the image; blur,
-editor-presence pills, clipboard badges and animated transitions remain open.
-After export, Show in Folder shows the saved file's folder
-instead of saving another copy; a missing export leaves the capture available.
+editor-presence pills and animated transitions remain open.
+After export, Show in Folder selects the saved file in the file manager (on Linux
+through the desktop's FileManager1 service, or by opening its folder when none
+answers) instead of saving another copy; a missing export leaves the capture available.
 Edit opens that screenshot directly without reopening a hidden workspace or
 changing the selected History item; opening it again preserves its pending edits.
 Trash moves only the saved export to the OS trash, then dismisses its preview;
