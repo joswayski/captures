@@ -5407,34 +5407,18 @@ impl Live {
                 },
             );
             ui.add_space(t.number("s-5"));
-            ui.horizontal(|ui| {
-                egui::ComboBox::from_label("Display")
-                    .selected_text(self.displays.iter().find(|d| Some(&d.id) == self.display_id.as_ref()).map_or("No display", |d| d.name.as_str()))
-                    .show_ui(ui, |ui| for display in &self.displays {
-                        ui.selectable_value(&mut self.display_id, Some(display.id.clone()), format!("{} — {}×{}{}", display.name, display.width, display.height, if display.is_primary { " (Primary)" } else { "" }));
-                    });
-                if ui.button("Refresh displays").clicked() { self.send(Request::Displays); }
-                let can_start_capture = self.can_start_capture();
-                if ui.add_enabled(can_start_capture, egui::Button::new("New Capture")).clicked() {
-                    self.request_capture(CaptureRequest::NewCapture);
+            let can_start_capture = self.can_start_capture();
+            let (action, _) =
+                capture_actions(ui, &self.displays, &mut self.display_id, can_start_capture);
+            match action {
+                Some(CaptureAction::RefreshDisplays) => self.send(Request::Displays),
+                Some(CaptureAction::Capture(request)) => {
+                    self.request_capture(request);
                     self.launch_requested_capture(ui.ctx(), frame, settings());
                 }
-                if ui.add_enabled(can_start_capture, egui::Button::new("Capture display")).clicked() {
-                    self.request_capture(CaptureRequest::Display);
-                    self.launch_requested_capture(ui.ctx(), frame, settings());
-                }
-                if ui.add_enabled(can_start_capture, egui::Button::new("Capture region")).clicked() {
-                    self.request_capture(CaptureRequest::Region);
-                    self.launch_requested_capture(ui.ctx(), frame, settings());
-                }
-                if ui.add_enabled(can_start_capture, egui::Button::new("Capture window")).clicked() {
-                    self.request_capture(CaptureRequest::Window);
-                    self.launch_requested_capture(ui.ctx(), frame, settings());
-                }
-                if ui.button("Capture permissions…").clicked() {
-                    self.permission_recovery_requested = true;
-                }
-            });
+                Some(CaptureAction::Permissions) => self.permission_recovery_requested = true,
+                None => {}
+            }
             if self.can_hide == Some(false) {
                 ui.colored_label(t.color("theme-signal"), "Display, region and window capture unavailable: this Wayland backend cannot hide and verify the root window.");
             }
@@ -6269,10 +6253,127 @@ fn clipboard_matches(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CaptureAction {
+    RefreshDisplays,
+    Capture(CaptureRequest),
+    Permissions,
+}
+
+/// The History header's display and capture actions. The row wraps instead of
+/// running past the window edge, as shipping's History header reflows when it
+/// runs out of width: under the token fonts (DejaVu Sans on Linux) it is wider
+/// than the 1000px root window. Returns the clicked action and the row's rect.
+fn capture_actions(
+    ui: &mut egui::Ui,
+    displays: &[DisplayDescriptor],
+    display_id: &mut Option<String>,
+    can_start_capture: bool,
+) -> (Option<CaptureAction>, egui::Rect) {
+    let mut action = None;
+    let row = ui.horizontal_wrapped(|ui| {
+        egui::ComboBox::from_label("Display")
+            .selected_text(
+                displays
+                    .iter()
+                    .find(|d| Some(&d.id) == display_id.as_ref())
+                    .map_or("No display", |d| d.name.as_str()),
+            )
+            .show_ui(ui, |ui| {
+                for display in displays {
+                    ui.selectable_value(
+                        display_id,
+                        Some(display.id.clone()),
+                        format!(
+                            "{} — {}×{}{}",
+                            display.name,
+                            display.width,
+                            display.height,
+                            if display.is_primary { " (Primary)" } else { "" }
+                        ),
+                    );
+                }
+            });
+        if ui.button("Refresh displays").clicked() {
+            action = Some(CaptureAction::RefreshDisplays);
+        }
+        for (label, request) in [
+            ("New Capture", CaptureRequest::NewCapture),
+            ("Capture display", CaptureRequest::Display),
+            ("Capture region", CaptureRequest::Region),
+            ("Capture window", CaptureRequest::Window),
+        ] {
+            if ui
+                .add_enabled(can_start_capture, egui::Button::new(label))
+                .clicked()
+            {
+                action = Some(CaptureAction::Capture(request));
+            }
+        }
+        if ui.button("Capture permissions…").clicked() {
+            action = Some(CaptureAction::Permissions);
+        }
+    });
+    (action, row.response.rect)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn history_capture_actions_wrap_inside_the_root_window() {
+        // Token fonts (DejaVu Sans on Linux CI) are wider than egui's default.
+        let ctx = egui::Context::default();
+        crate::ui_fonts::install(&ctx);
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        tokens.apply(&ctx, true);
+        let displays = [DisplayDescriptor {
+            id: "0".into(),
+            name: "screen".into(),
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 720,
+            scale_factor: 1.,
+            is_primary: true,
+        }];
+        let mut display_id = Some("0".into());
+        let side = tokens.number("s-8");
+        let mut layout = (egui::Rect::NOTHING, egui::Rect::NOTHING);
+        for _ in 0..2 {
+            // The first pass loads the fonts.
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    // The root window's fixed minimum size.
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000., 720.),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Panel::top("live-header")
+                        .frame(egui::Frame::new().inner_margin(side))
+                        .show(ui, |ui| {
+                            let available = ui.max_rect();
+                            let (_, row) = capture_actions(ui, &displays, &mut display_id, true);
+                            layout = (available, row);
+                        });
+                },
+            );
+            output.textures_delta.clear();
+        }
+        let (available, row) = layout;
+        assert_eq!(available.right(), 1000. - side);
+        assert!(
+            row.right() <= available.right(),
+            "row {row:?} runs past {available:?}"
+        );
+        // The actions need more than one line here, so the row wrapped.
+        assert!(row.height() > 2. * tokens.number("h-md"));
+    }
 
     #[test]
     fn shared_worker_wakes_root_while_an_editor_viewport_is_active() {

@@ -131,46 +131,47 @@ exec /usr/bin/ffmpeg "$@"
                         run("import", "-window", window, str(output / f"{appearance}-{name}.png"))
 
                     screenshot("populated")
-                    click(918, 380)  # First bundle's Discard… action.
+                    # History content starts below the wrapped two-line capture action row.
+                    click(918, 424)  # First bundle's Discard… action.
                     screenshot("confirmation")
                     assert digest_tree(video) == video_before
                     run("xdotool", "key", "Escape")
                     time.sleep(.2)
                     assert digest_tree(video) == video_before
-                    click(918, 380)
-                    click(395, 410)  # Keep recording.
+                    click(918, 424)
+                    click(395, 410)  # Keep recording (centered dialog).
                     assert digest_tree(video) == video_before
-                    click(918, 380)
+                    click(918, 424)
                     click(545, 410)  # Discard permanently.
                     wait(lambda: not video.exists())
                     assert digest_tree(gif) == gif_before
                     assert digest_tree(history) == original_history
                     screenshot("discarded")
                     gate.touch()
-                    click(834, 403)  # Recover the remaining GIF.
+                    click(834, 447)  # Recover the remaining GIF.
                     wait(entered.exists)
                     screenshot("busy")
-                    click(99, 403)  # Cancel recovery while the encoder is gated.
+                    click(99, 447)  # Cancel recovery while the encoder is gated.
                     wait(lambda: not list(gif.glob(".recovery-*")))
                     gate.unlink()
                     assert digest_tree(gif) == gif_before
                     assert digest_tree(history) == original_history
                     screenshot("cancelled")
-                    click(235, 318)  # Refresh clears the previous action's error.
+                    click(235, 362)  # Refresh clears the previous action's error.
                     history.chmod(0o555)
                     try:
-                        click(834, 380)
+                        click(834, 424)
                         wait(lambda: (gif / "publication-intent-v1.json").exists())
                         time.sleep(.5)
                         assert digest_tree(history) == original_history
                         screenshot("publication-error")
                     finally:
                         history.chmod(0o755)
-                    click(235, 318)
+                    click(235, 362)
                     if appearance == "dark":
                         entered.unlink()
                         gate.touch()
-                    click(834, 380)  # Retry the same publication intent after restoring access.
+                    click(834, 424)  # Retry the same publication intent after restoring access.
                     if appearance == "dark":
                         wait(entered.exists)
                         key("Right")  # A newer History card selection must prevent automatic editor focus.
