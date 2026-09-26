@@ -87,7 +87,7 @@ def main():
                 time.sleep(.4)
                 assert not list(history.glob("*/metadata.json")), "capture/forwarding bypassed setup"
                 assert len(windows(app.pid, ".*")) == 1, "capture selector/editor opened before setup"
-                click(window, 500, 330)
+                click(window, 732, 476)  # Start capturing, right-aligned under the cards.
                 wait(lambda: settings.exists() and json.loads(settings.read_text()).get("onboarding_completed"),
                      "setup completion persisted")
                 wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "queued cold and forwarded media imported")
@@ -127,10 +127,10 @@ def main():
                 assert len(list(history.glob("*/metadata.json"))) == 2, "recovery imported queued media"
                 assert len(windows(again.pid, ".*")) == 1, "recovery launched capture/editor"
                 run("import", "-window", window, str(output / f"permission-recovery-{appearance}.png"))
-                click(window, 305, 440)  # Refresh is prompt-free and does not complete setup.
+                click(window, 546, 449)  # Refresh status (secondary) is prompt-free and does not complete setup.
                 time.sleep(.4)
                 assert settings.read_bytes() == accepted_settings, "recovery changed setup/settings"
-                click(window, 287, 484)  # Done, including when no upfront permission is required.
+                click(window, 681, 449)  # Done (primary card action), including when no upfront permission is required.
                 wait(lambda: len(list(history.glob("*/metadata.json"))) == 3, "recovery releases queued media")
                 assert recovery_media.read_bytes() == png(19, 9), "recovery changed the input"
                 time.sleep(1)
@@ -155,11 +155,11 @@ def main():
             time.sleep(.5)
             assert run("xdotool", "getwindowfocus").decode().strip() == probe, "setup stole focus"
             broken.unlink()  # User fixes the file; retry must reload and recheck.
-            click(window, 500, 384)
+            click(window, 604, 500)  # Retry setup, beside the disabled primary.
             time.sleep(.5)
             run("import", "-window", window, str(output / "onboarding-retry.png"))
             assert not broken.exists(), "retry silently completed setup"
-            click(window, 500, 330)
+            click(window, 732, 476)
             wait(lambda: broken.exists() and json.loads(broken.read_text()).get("onboarding_completed"), "completion after retry")
             run("xdotool", "key", "ctrl+q")
             assert app.wait(timeout=20) == 0
