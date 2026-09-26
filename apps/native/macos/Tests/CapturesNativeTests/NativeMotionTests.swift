@@ -115,6 +115,39 @@ final class NativeMotionTests: XCTestCase {
         XCTAssertEqual(CGPoint.zero.applying(CATransform3DGetAffineTransform(centred)).y, 8, accuracy: 1e-9)
     }
 
+    func testCountdownExitHoldsInvisibleWithoutChangingModelValues() throws {
+        let view = ScreenshotCountdownContent(frame: NSRect(x: 0, y: 0, width: 800, height: 500),
+            tokens: tokens, remaining: 3)
+        view.playExit()
+        XCTAssertTrue(NativeMotion.isPlaying(on: view))
+        let labels = view.subviews.compactMap { $0 as? NSTextField }
+        XCTAssertEqual(labels.count, 3)
+        XCTAssertTrue(labels.allSatisfy { NativeMotion.isPlaying(on: $0) })
+        XCTAssertEqual(view.layer?.opacity, 1)
+        XCTAssertEqual(view.subviews.map(\.frame), labels.map(\.frame))
+    }
+
+    func testCaptureMenuIndicatorsFollowTheSelectedSegments() throws {
+        let view = CaptureControlsView(frame: NSRect(x: 0, y: 0, width: 900, height: 154), tokens: tokens,
+            autoStart: false, displayTitles: ["Main display"], selectedDisplay: 0)
+        let buttons = view.subviews.compactMap { $0 as? CaptureButton }
+        let screenshot = try XCTUnwrap(buttons.first { $0.title == "Screenshot" })
+        let record = try XCTUnwrap(buttons.first { $0.title == "Record" })
+        let region = try XCTUnwrap(buttons.first { $0.title == "Region" })
+        XCTAssertTrue(screenshot.slidingSegment && record.slidingSegment && region.slidingSegment)
+        XCTAssertEqual(view.modeIndicator.frame, screenshot.frame.insetBy(dx: 1, dy: 1))
+        XCTAssertEqual(view.targetIndicator.frame, region.frame.insetBy(dx: 1, dy: 1))
+        let indicatorIndex = try XCTUnwrap(view.subviews.firstIndex(of: view.modeIndicator))
+        let screenshotIndex = try XCTUnwrap(view.subviews.firstIndex(of: screenshot))
+        XCTAssertLessThan(indicatorIndex, screenshotIndex, "the indicator sits under its segments")
+        // Offscreen changes jump straight to the new segment.
+        view.selectMode(.record, notify: false)
+        XCTAssertEqual(view.modeIndicator.frame, record.frame.insetBy(dx: 1, dy: 1))
+        view.selectTarget(.display, notify: false)
+        let display = try XCTUnwrap(buttons.first { $0.title == UnifiedCaptureTarget.display.title })
+        XCTAssertEqual(view.targetIndicator.frame, display.frame.insetBy(dx: 1, dy: 1))
+    }
+
     func testSavedNoticeEntranceLeavesThePanelGeometryUntouched() throws {
         let screen = try XCTUnwrap(NSScreen.main)
         let controller = RecordingSavedNoticeController(tokens: tokens)

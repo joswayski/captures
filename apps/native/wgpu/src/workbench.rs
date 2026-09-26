@@ -1288,6 +1288,11 @@ impl eframe::App for Workbench {
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let _span = crate::diagnostics::span("root-logic");
+        crate::motion::set_reduced(
+            ctx,
+            self.preferences_state
+                .reduced_motion(self.options.reduced_motion),
+        );
         crate::diagnostics::event(
             "root-pass",
             || json!({"pass":ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT)}),
@@ -1846,9 +1851,14 @@ impl eframe::App for Workbench {
                     }
                 }
                 Scene::Update => self.update_notice.controls(ui, &t),
-                Scene::Countdown => {
-                    crate::countdown::show(ui, &t, 3, crate::countdown::Kind::Screenshot, false)
-                }
+                Scene::Countdown => crate::countdown::show(
+                    ui,
+                    &t,
+                    3,
+                    crate::countdown::Kind::Screenshot,
+                    false,
+                    crate::countdown::Poses::REST,
+                ),
                 Scene::Idle => {}
             }
         });

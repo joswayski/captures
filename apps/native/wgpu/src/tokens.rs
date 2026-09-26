@@ -47,6 +47,16 @@ impl Tokens {
         motion.resolve(self).expect("build-generated motion tokens")
     }
 
+    /// A shipping transition resolved against these tokens.
+    pub fn transition(
+        &self,
+        transition: captures_app::motion::Transition,
+    ) -> captures_app::motion::Tween {
+        transition
+            .resolve(self)
+            .expect("build-generated motion tokens")
+    }
+
     pub fn glass_controls(&self, ui: &mut egui::Ui) {
         let v = ui.visuals_mut();
         v.override_text_color = Some(self.color("glass-text"));

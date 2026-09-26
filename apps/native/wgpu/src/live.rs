@@ -815,6 +815,24 @@ const CLIPBOARD_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// Shipping `THUMBNAIL_SAVED_FEEDBACK_MS`.
 const SAVED_FEEDBACK: Duration = Duration::from_millis(1_000);
 
+/// Shipping `recording-countdown-fade-in` / `-content-in`, timed from the
+/// first paint of this countdown `key`. Requests frames only while moving.
+fn countdown_entrance(
+    ctx: &egui::Context,
+    t: &Tokens,
+    key: (&'static str, u64),
+    reduced_motion: bool,
+) -> crate::countdown::Poses {
+    let id = egui::Id::unique(("countdown-entrance", key));
+    let shown = ctx.data_mut(|data| *data.get_temp_mut_or_insert_with(id, Instant::now));
+    let elapsed = crate::motion::elapsed_ms(shown, Instant::now());
+    let (poses, moving) = crate::countdown::Poses::entrance(t, elapsed, reduced_motion);
+    if moving {
+        ctx.request_repaint();
+    }
+    poses
+}
+
 /// Shipping keeps the controls-hidden notice window for 6.2 s.
 const RECORDING_HIDDEN_NOTICE_MS: f64 = 6_200.;
 
@@ -5350,12 +5368,19 @@ impl Live {
                             captures_app::capture_flow::cancel(generation);
                             ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                         }
+                        let poses = countdown_entrance(
+                            ui.ctx(),
+                            &t,
+                            ("recording-screenshot-countdown", generation),
+                            reduced_motion,
+                        );
                         crate::countdown::show(
                             ui,
                             &t,
                             clock.remaining(Instant::now()).max(1),
                             crate::countdown::Kind::Screenshot,
                             !captures_app::capture_flow::is_current(generation),
+                            poses,
                         );
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     },
@@ -5393,12 +5418,19 @@ impl Live {
                             captures_app::capture_flow::cancel(generation);
                             ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                         }
+                        let poses = countdown_entrance(
+                            ui.ctx(),
+                            &t,
+                            ("main-countdown", generation),
+                            reduced_motion,
+                        );
                         crate::countdown::show(
                             ui,
                             &t,
                             clock.remaining(Instant::now()).max(1),
                             kind,
                             !captures_app::capture_flow::is_current(generation),
+                            poses,
                         );
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     },
@@ -5427,7 +5459,16 @@ impl Live {
                         exit.target.size,
                     ),
                     move |ui, _| {
-                        crate::countdown::show(ui, &t, exit.remaining, exit.kind, true);
+                        // Shipping `.recording-countdown.exiting` fade over the linger.
+                        let now = Instant::now();
+                        let elapsed = crate::countdown::CANCEL_LINGER_MS as f64
+                            - exit.until.saturating_duration_since(now).as_secs_f64() * 1000.;
+                        let (poses, moving) =
+                            crate::countdown::Poses::exit(&t, elapsed, reduced_motion);
+                        if moving {
+                            ui.ctx().request_repaint();
+                        }
+                        crate::countdown::show(ui, &t, exit.remaining, exit.kind, true, poses);
                     },
                 );
                 ctx.request_repaint_after(exit.until - now);

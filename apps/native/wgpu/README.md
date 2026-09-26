@@ -319,8 +319,9 @@ renderer gate.
 The countdown's GPU readback was correct, but the compositor displayed no content.
 `WGPU_BACKEND=gl` rendered the live overlay correctly with picom; this is a test
 workaround, not a production backend decision. Verify transparent windows on real
-Linux and Windows GPUs. Countdown entrance/exit motion and complete visual parity
-remain open; cancellation and timing are shared Rust behavior.
+Linux and Windows GPUs. The countdown fades in and out with the shipping
+keyframes; complete visual parity remains open. Cancellation and timing are
+shared Rust behavior.
 
 ## Validate and collect evidence
 

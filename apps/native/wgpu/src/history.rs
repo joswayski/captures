@@ -337,7 +337,18 @@ pub fn grid(
                 for column in 0..layout.columns {
                     let index = row * layout.columns + column;
                     let Some(item) = items.get(index) else { break };
-                    card(ui, t, rect_for(index), item, index, enabled, &mut events);
+                    let rect = rect_for(index);
+                    // Shipping `.history-card:hover`: a 2 px lift and a stronger
+                    // border over `--dur-3` `--ease-standard`.
+                    let hover =
+                        hover_progress(ui, t, item.id, enabled && ui.rect_contains_pointer(rect));
+                    let lift = captures_app::motion::Pose {
+                        translate_y: -2. * f64::from(hover),
+                        ..captures_app::motion::Pose::REST
+                    };
+                    crate::motion::with_pose(ui, lift, rect, |ui| {
+                        card(ui, t, rect, item, index, enabled, hover, &mut events);
+                    });
                 }
             }
             if let Some(index) = scroll_to.filter(|index| *index < items.len()) {
@@ -351,6 +362,22 @@ pub fn grid(
     }
 }
 
+/// Eased 0...1 hover progress for one card. egui animates linearly and stops
+/// requesting frames once settled; the shipping easing is applied on top.
+fn hover_progress(ui: &egui::Ui, t: &Tokens, item: &str, hovered: bool) -> f32 {
+    let tween = t.transition(captures_app::motion::Transition::HistoryCardHover);
+    let seconds = if crate::motion::reduced(ui.ctx()) {
+        0.
+    } else {
+        (tween.duration_ms / 1000.) as f32
+    };
+    let linear =
+        ui.ctx()
+            .animate_bool_with_time(Id::unique(("history-card-hover", item)), hovered, seconds);
+    tween.easing.ease(f64::from(linear)) as f32
+}
+
+#[allow(clippy::too_many_arguments)]
 fn card(
     ui: &mut egui::Ui,
     t: &Tokens,
@@ -358,6 +385,7 @@ fn card(
     item: &Item<'_>,
     index: usize,
     enabled: bool,
+    hover: f32,
     events: &mut Vec<Event>,
 ) {
     let id = Id::unique(("history-card", item.id));
@@ -568,8 +596,12 @@ fn card(
 
     let stroke = if item.selected || body.has_focus() || open.has_focus() {
         Stroke::new(2., t.color("theme-accent"))
-    } else if enabled && ui.rect_contains_pointer(rect) {
-        Stroke::new(1., t.color("border-strong"))
+    } else if hover > 0. {
+        Stroke::new(
+            1.,
+            t.color("border-subtle")
+                .lerp_to_gamma(t.color("border-strong"), hover),
+        )
     } else {
         Stroke::new(1., t.color("border-subtle"))
     };
