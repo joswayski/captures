@@ -248,8 +248,9 @@ final class RecordingRecoveryTests: XCTestCase {
         // The initial History response may arrive after Recover was clicked.
         // Its programmatic selection must not count as user selection intent.
         initialHistoryGate.signal()
-        let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
-        try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
+        let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? HistoryGridView)
+        try waitUntil { table.numberOfRows == 1 }
+        XCTAssertEqual(table.selectedRow, -1, "loading History never selects a card")
         XCTAssertEqual(worker.recoverCount, 1)
         worker.completeRecover(.success(RecordingRecoveryResult(artifactID: id, warning: nil)))
         try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
@@ -289,8 +290,8 @@ final class RecordingRecoveryTests: XCTestCase {
             recoveryWorker: worker, showPreferences: {})
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
-        let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
-        try waitUntil { table.numberOfRows == 2 && table.selectedRow == 0 }
+        let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? HistoryGridView)
+        try waitUntil { table.numberOfRows == 2 }
         let panel = try recoveryPanel(root)
         let scroll = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first)
         buttons(try XCTUnwrap(scroll.documentView), title: "Recover")[0].performClick(nil)

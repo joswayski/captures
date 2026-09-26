@@ -2,16 +2,6 @@ import AppKit
 import ImageIO
 import CCapturesSettings
 
-private final class CaptureHistoryRow: NSTableRowView {
-    var tokens: Tokens!
-    override func drawSelection(in dirtyRect: NSRect) {
-        tokens.color("surface-selected").setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2),
-                     xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md")).fill()
-    }
-    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
-}
-
 enum CaptureHistoryFilter: String, CaseIterable {
     case all, screenshot, video, gif
 
@@ -80,7 +70,7 @@ struct RecordingLifecycleGate {
     mutating func end() { busy = false }
 }
 
-final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+final class LiveCaptureController: NSObject {
     private let root: Surface
     private let window: NSWindow
     private let tokens: Tokens
@@ -103,7 +93,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var displays: [DisplayItem] = []
     private var artifacts: [CaptureArtifact] = []
     private var historyFilter = CaptureHistoryFilter.all
-    private var historyFilterButtons: [(CaptureHistoryFilter, CaptureButton)] = []
+    private var historyFilterButtons: [(CaptureHistoryFilter, HistoryFilterPill)] = []
     private var historyRows: [Int] = []
     private var historyGeneration = 0
     private var recoveryDrafts: [RecordingRecoveryDraft] = []
@@ -117,9 +107,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var recoveryStage = ""
     private var recoveryActionGeneration = 0
     private var recordingRetiring = false
-    private var selectedImage: NSImage?
     private var selectedIndex: Int?
-    private var selectionGeneration = 0
     private var userSelectionGeneration = 0
     private var reloadingHistorySelection = false
     private var capturing = false
@@ -203,25 +191,37 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
     private var displayMenu: ClosurePopUpButton!
     private var refreshButton: CaptureButton!
-    private var table: NSTableView!
+    private let historyCopy = HistoryCopy.current
+    private static let thumbnailQueue = DispatchQueue(label: "es.captures.native.history-thumbnails", qos: .utility)
+    private var grid: HistoryGridView!
     private var historyScroll: NSScrollView!
+    private var emptyState: HistoryEmptyView!
+    private var toolbarDivider: Surface!
+    private var deleteAllButton: HistoryButton!
+    private var deleteAllCancelButton: HistoryButton!
+    private var historyLoaded = false
+    /// Shared card presentation and bounded thumbnail residency, by artifact ID.
+    private var cards: [String: HistoryCard] = [:]
+    private var thumbnails: [String: NSImage] = [:]
+    private var thumbnailKeys: [String: String] = [:]
+    private var thumbnailFailures: [String: String] = [:]
+    private var thumbnailRequests: Set<String> = []
+    private static let thumbnailCacheLimit = 96
+    /// Shipping two-step deletion: the armed card or Delete all, and their reverts.
+    private var confirmDeleteID: String?
+    private var confirmDeleteTimer: Timer?
+    private var confirmDeleteAll = false
+    private var confirmDeleteAllTimer: Timer?
+    private var cardBusy: (id: String, action: HistoryCardAction)?
     private var recoveryPanel: Surface!
     private var recoveryScroll: NSScrollView!
     private var recoveryStatus: NSTextField!
     private var recoveryCancelButton: CaptureButton!
     private var recoveryRetryButton: CaptureButton!
-    private var preview: NSImageView!
     private var status: NSTextField!
-    private var detail: NSTextField!
     private var captureButton: CaptureButton!
     private var regionButton: CaptureButton!
     private var windowButton: CaptureButton!
-    private var saveButton: CaptureButton!
-    private var copyButton: CaptureButton!
-    private var editButton: CaptureButton!
-    private var revealButton: CaptureButton!
-    private var deleteButton: CaptureButton!
-    private var clearHistoryButton: CaptureButton!
     private var newCaptureButton: CaptureButton!
 
     init(root: Surface, window: NSWindow, tokens: Tokens, historyRoot: String?, settingsPath: String?,
@@ -250,65 +250,103 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func build() {
-        title("Capture workspace", frame: NSRect(x: 28, y: 22, width: 360, height: 30), size: 21, weight: .semibold)
-        title("Region, window and display capture · local native history", frame: NSRect(x: 28, y: 52, width: 480, height: 20), muted: true)
+        let copy = historyCopy
+        // Shipping `.history-header`: eyebrow, title and lede; Delete all on the right.
+        let eyebrow = title(copy.eyebrow.uppercased(), frame: NSRect(x: 28, y: 24, width: 420, height: 14),
+                            size: tokens.number("text-2xs"), weight: .semibold)
+        eyebrow.textColor = tokens.color("text-subtle")
+        title(copy.title, frame: NSRect(x: 28, y: 40, width: 420, height: 36),
+              size: tokens.number("text-3xl"), weight: .semibold)
+        let lede = title(copy.lede, frame: NSRect(x: 28, y: 80, width: 600, height: 20),
+                         size: tokens.number("text-md"))
+        lede.textColor = tokens.color("text-subtle")
+        newCaptureButton = button("New Capture…", frame: NSRect(x: 708, y: 24, width: 126, height: 34)) { [weak self] in self?.newCapture() }
+        newCaptureButton.primary = true
         button("Preferences", frame: NSRect(x: 846, y: 24, width: 126, height: 34), action: showPreferences)
+        deleteAllButton = HistoryButton(copy.deleteAll, frame: .zero, tokens: tokens, style: .danger,
+                                        glyph: .trash) { [weak self] in self?.deleteAllHistory() }
+        deleteAllCancelButton = HistoryButton(copy.cancel, frame: .zero, tokens: tokens, style: .ghost) {
+            [weak self] in self?.cancelHistoryConfirmations()
+        }
+        deleteAllCancelButton.setAccessibilityLabel(copy.cancelLabel)
+        root.addSubview(deleteAllCancelButton); root.addSubview(deleteAllButton)
 
-        displayMenu = ClosurePopUpButton(frame: NSRect(x: 28, y: 90, width: 300, height: 34), pullsDown: false)
+        displayMenu = ClosurePopUpButton(frame: NSRect(x: 28, y: 118, width: 300, height: 34), pullsDown: false)
         displayMenu.tokens = tokens; displayMenu.setAccessibilityLabel("Display to capture")
         displayMenu.change = { _ in }; displayMenu.target = displayMenu; displayMenu.action = #selector(ClosurePopUpButton.selectedValue)
         root.addSubview(displayMenu)
-        refreshButton = button("Refresh", frame: NSRect(x: 340, y: 90, width: 90, height: 34)) {
+        refreshButton = button("Refresh", frame: NSRect(x: 340, y: 118, width: 90, height: 34)) {
             [weak self] in self?.loadHistory(); self?.loadDisplays()
         }
-        button("Screen access", frame: NSRect(x: 442, y: 90, width: 148, height: 34)) { [weak self] in self?.requestPermission() }
-        newCaptureButton = button("New Capture…", frame: NSRect(x: 708, y: 24, width: 126, height: 34)) { [weak self] in self?.newCapture() }
-        newCaptureButton.primary = true
-        captureButton = button("Capture display", frame: NSRect(x: 602, y: 90, width: 116, height: 34)) { [weak self] in self?.capture(.display) }
+        button("Screen access", frame: NSRect(x: 442, y: 118, width: 148, height: 34)) { [weak self] in self?.requestPermission() }
+        captureButton = button("Capture display", frame: NSRect(x: 602, y: 118, width: 116, height: 34)) { [weak self] in self?.capture(.display) }
         captureButton.selected = true
-        regionButton = button("Capture region", frame: NSRect(x: 730, y: 90, width: 116, height: 34)) { [weak self] in self?.capture(.region) }
-        windowButton = button("Capture window", frame: NSRect(x: 858, y: 90, width: 114, height: 34)) { [weak self] in self?.capture(.window) }
+        regionButton = button("Capture region", frame: NSRect(x: 730, y: 118, width: 116, height: 34)) { [weak self] in self?.capture(.region) }
+        windowButton = button("Capture window", frame: NSRect(x: 858, y: 118, width: 114, height: 34)) { [weak self] in self?.capture(.window) }
+        status = title("Loading capture history…", frame: NSRect(x: 28, y: 160, width: 944, height: 18),
+                       size: tokens.number("text-sm"), muted: true)
+        status.maximumNumberOfLines = 1
+        status.lineBreakMode = .byTruncatingTail
 
-        var filterX: CGFloat = 28
-        let filterWidths: [CGFloat] = [90, 160, 110, 100]
-        for (filter, width) in zip(CaptureHistoryFilter.allCases, filterWidths) {
-            let control = button(filter.title, frame: NSRect(x: filterX, y: 144, width: width, height: 34)) { [weak self] in
+        for filter in CaptureHistoryFilter.allCases {
+            let control = HistoryFilterPill(label: filter.title, tokens: tokens) { [weak self] in
                 guard let self else { return }
                 let previousID = self.selectedIndex.map { self.artifacts[$0].id }
                 self.userSelectionGeneration += 1
                 self.historyFilter = filter
+                self.cancelHistoryConfirmations()
                 self.reloadHistorySelection(previousID)
             }
-            control.setButtonType(.toggle)
-            historyFilterButtons.append((filter, control)); filterX += width + 8
+            historyFilterButtons.append((filter, control)); root.addSubview(control)
         }
-        historyScroll = NSScrollView(frame: NSRect(x: 28, y: 194, width: 320, height: 380))
-        historyScroll.hasVerticalScroller = true; historyScroll.drawsBackground = false
-        table = NSTableView(frame: historyScroll.bounds)
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("history")); column.width = 300
-        table.addTableColumn(column); table.headerView = nil; table.rowHeight = 62
-        table.backgroundColor = tokens.color("surface-canvas"); table.dataSource = self; table.delegate = self
-        table.setAccessibilityLabel("Capture history"); historyScroll.documentView = table
-        root.addSubview(historyScroll)
+        toolbarDivider = Surface(frame: .zero)
+        toolbarDivider.wantsLayer = true
+        toolbarDivider.layer?.backgroundColor = tokens.color("border-subtle").cgColor
+        root.addSubview(toolbarDivider)
 
-        recoveryPanel = Surface(frame: NSRect(x: 28, y: 194, width: 320, height: 152))
+        historyScroll = NSScrollView(frame: NSRect(x: 28, y: 246, width: 944, height: 300))
+        historyScroll.hasVerticalScroller = true; historyScroll.autohidesScrollers = true
+        historyScroll.drawsBackground = false
+        grid = HistoryGridView(tokens: tokens)
+        grid.frame = NSRect(origin: .zero, size: historyScroll.contentSize)
+        historyScroll.documentView = grid
+        grid.onSelectionChange = { [weak self] in self?.gridSelectionChanged() }
+        grid.onOpen = { [weak self] row in self?.performCard(row: row, action: .edit) }
+        grid.onAction = { [weak self] row, action in self?.performCard(row: row, action: action) }
+        grid.onDelete = { [weak self] row in self?.deleteCard(row: row) }
+        grid.onNeedsThumbnail = { [weak self] row in self?.loadThumbnail(row: row) }
+        grid.onCancel = { [weak self] in self?.cancelHistoryConfirmations() }
+        root.addSubview(historyScroll)
+        emptyState = HistoryEmptyView(tokens: tokens)
+        emptyState.show(title: copy.loading, body: nil)
+        root.addSubview(emptyState)
+
+        recoveryPanel = Surface(frame: NSRect(x: 28, y: 246, width: 944, height: 176))
         recoveryPanel.wantsLayer = true
         recoveryPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
-        recoveryPanel.layer?.cornerRadius = tokens.number("r-md")
-        let heading = NSTextField(labelWithString: "Interrupted recordings")
-        heading.frame = NSRect(x: 10, y: 6, width: 205, height: 20)
-        heading.font = .systemFont(ofSize: 13, weight: .semibold)
+        recoveryPanel.layer?.cornerRadius = tokens.number("r-xl")
+        recoveryPanel.layer?.borderWidth = 1
+        recoveryPanel.layer?.borderColor = tokens.color("caution-surface").cgColor
+        let heading = NSTextField(labelWithString: copy.recoveryTitle)
+        heading.frame = NSRect(x: 16, y: 12, width: 600, height: 20)
+        heading.font = .systemFont(ofSize: tokens.number("text-lg"), weight: .semibold)
         heading.textColor = tokens.color("text")
         recoveryPanel.addSubview(heading)
-        recoveryCancelButton = CaptureButton("Cancel", frame: NSRect(x: 224, y: 4, width: 86, height: 24),
+        let help = NSTextField(labelWithString: copy.recoveryHelp)
+        help.frame = NSRect(x: 16, y: 36, width: 800, height: 17)
+        help.font = .systemFont(ofSize: tokens.number("text-sm"))
+        help.textColor = tokens.color("text-subtle")
+        help.lineBreakMode = .byTruncatingTail
+        recoveryPanel.addSubview(help)
+        recoveryCancelButton = CaptureButton("Cancel", frame: NSRect(x: 842, y: 10, width: 86, height: 24),
                                              tokens: tokens) { [weak self] in self?.recoveryCancel?.cancel() }
         recoveryPanel.addSubview(recoveryCancelButton)
-        recoveryRetryButton = CaptureButton("Retry list", frame: NSRect(x: 224, y: 4, width: 86, height: 24),
+        recoveryRetryButton = CaptureButton("Retry list", frame: NSRect(x: 842, y: 10, width: 86, height: 24),
                                             tokens: tokens) { [weak self] in
             self?.recoveryActionError = nil; self?.refreshRecovery()
         }
         recoveryPanel.addSubview(recoveryRetryButton)
-        recoveryScroll = NSScrollView(frame: NSRect(x: 8, y: 45, width: 304, height: 99))
+        recoveryScroll = NSScrollView(frame: NSRect(x: 12, y: 78, width: 920, height: 90))
         recoveryScroll.hasVerticalScroller = true; recoveryScroll.drawsBackground = false
         recoveryScroll.scrollerStyle = .legacy
         recoveryScroll.setAccessibilityLabel("Interrupted recording details")
@@ -317,27 +355,58 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         recoveryStatus.font = .systemFont(ofSize: 11)
         recoveryStatus.textColor = tokens.color("text-muted")
         recoveryStatus.setAccessibilityLabel("Interrupted recording status")
-        recoveryStatus.frame = NSRect(x: 10, y: 26, width: 295, height: 17)
+        recoveryStatus.frame = NSRect(x: 16, y: 57, width: 900, height: 17)
         recoveryPanel.addSubview(recoveryStatus)
         root.addSubview(recoveryPanel)
         renderRecovery()
+        updateActions()
+    }
 
-        let previewPanel = Surface(frame: NSRect(x: 372, y: 194, width: 600, height: 354))
-        previewPanel.wantsLayer = true; previewPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
-        previewPanel.layer?.cornerRadius = tokens.number("r-xl"); previewPanel.layer?.borderWidth = 1
-        previewPanel.layer?.borderColor = tokens.color("border").cgColor; root.addSubview(previewPanel)
-        preview = NSImageView(frame: previewPanel.bounds.insetBy(dx: 16, dy: 16)); preview.imageScaling = .scaleProportionallyUpOrDown
-        preview.setAccessibilityLabel("Selected capture preview"); previewPanel.addSubview(preview)
-        detail = title("Select a capture to preview it.", frame: NSRect(x: 372, y: 560, width: 600, height: 24), muted: true)
-        editButton = button("Edit screenshot", frame: NSRect(x: 372, y: 594, width: 104, height: 34)) { [weak self] in self?.editScreenshot() }
-        saveButton = button("Save image", frame: NSRect(x: 484, y: 594, width: 104, height: 34)) { [weak self] in self?.save() }
-        copyButton = button("Copy image", frame: NSRect(x: 596, y: 594, width: 104, height: 34)) { [weak self] in self?.copyImage() }
-        revealButton = button("Show in Folder", frame: NSRect(x: 708, y: 594, width: 120, height: 34)) { [weak self] in self?.reveal() }
-        deleteButton = button("Delete from history", frame: NSRect(x: 836, y: 594, width: 136, height: 34)) { [weak self] in self?.confirmDelete() }
-        clearHistoryButton = button("Clear history…", frame: NSRect(x: 28, y: 594, width: 180, height: 34)) { [weak self] in self?.confirmClearHistory() }
-        status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
-        let limits = title("Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here for 30 days.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
-        limits.maximumNumberOfLines = 2; updateActions()
+    /// Stack the toolbar, recovery section and grid from the current root size.
+    private func layoutHistory() {
+        guard let historyScroll, let grid else { return }
+        let width = root.bounds.width - 56
+        let showToolbar = historyLoaded && !artifacts.isEmpty
+        var x: CGFloat = 28
+        for (_, pill) in historyFilterButtons {
+            pill.isHidden = !showToolbar
+            pill.frame = NSRect(x: x, y: 192, width: pill.preferredWidth, height: tokens.number("h-sm"))
+            x += pill.preferredWidth + tokens.number("s-2")
+        }
+        toolbarDivider.isHidden = !showToolbar
+        toolbarDivider.frame = NSRect(x: 28, y: 192 + tokens.number("h-sm") + tokens.number("s-5"),
+                                      width: width, height: 1)
+        var y: CGFloat = showToolbar ? toolbarDivider.frame.maxY + tokens.number("s-6") : 192
+        if !recoveryPanel.isHidden {
+            recoveryPanel.frame.origin = NSPoint(x: 28, y: y)
+            y = recoveryPanel.frame.maxY + tokens.number("s-6")
+        }
+        historyScroll.frame = NSRect(x: 28, y: y, width: width, height: max(0, root.bounds.height - y - 16))
+        grid.tile(force: true)
+        emptyState.frame = historyScroll.frame
+    }
+
+    /// Delete all sits at the header's bottom right, with Cancel while armed.
+    private func layoutHeaderActions() {
+        guard let deleteAllButton else { return }
+        let copy = historyCopy
+        let busy = historyBusy
+        deleteAllButton.isHidden = !historyLoaded || artifacts.isEmpty
+        deleteAllButton.title = clearingHistory ? copy.deleteAllBusy
+            : confirmDeleteAll ? copy.deleteAllConfirm : copy.deleteAll
+        deleteAllButton.setAccessibilityLabel(confirmDeleteAll ? copy.deleteAllConfirmLabel : copy.deleteAllLabel)
+        deleteAllButton.style = confirmDeleteAll ? .confirm : .danger
+        deleteAllButton.isEnabled = !busy && !artifacts.isEmpty
+        let font = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        func width(_ text: String) -> CGFloat { ceil((text as NSString).size(withAttributes: [.font: font]).width) }
+        let height = tokens.number("h-md"), right = root.bounds.width - 28
+        let deleteWidth = width(deleteAllButton.title) + 15 + tokens.number("s-3") + 2 * tokens.number("s-5")
+        deleteAllButton.frame = NSRect(x: right - deleteWidth, y: 70, width: deleteWidth, height: height)
+        deleteAllCancelButton.isHidden = deleteAllButton.isHidden || !confirmDeleteAll
+        deleteAllCancelButton.isEnabled = !clearingHistory
+        let cancelWidth = width(copy.cancel) + 2 * tokens.number("s-5")
+        deleteAllCancelButton.frame = NSRect(x: deleteAllButton.frame.minX - tokens.number("s-3") - cancelWidth,
+                                             y: 70, width: cancelWidth, height: height)
     }
 
     @discardableResult private func title(_ text: String, frame: NSRect, size: CGFloat = 13,
@@ -398,13 +467,20 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             ])["recordings"] as? [[String: Any]] ?? []
             let all = values + recordings
             let parsed = all.compactMap(CaptureArtifact.init)
-                .sorted { $0.createdAt > $1.createdAt }
-            guard parsed.count == all.count else { throw AppBridgeError.invalidResponse }; return parsed
+            guard parsed.count == all.count else { throw AppBridgeError.invalidResponse }
+            // Shared, I/O-free card presentation; a malformed entry has no card.
+            var cards: [String: HistoryCard] = [:]
+            for (artifact, card) in zip(parsed, (try? HistoryCard.cards(for: all)) ?? []) {
+                if let card { cards[artifact.id] = card }
+            }
+            return (parsed.sorted { $0.createdAt > $1.createdAt }, cards)
         }) { [weak self] result in
             guard let self else { return }
             defer { cleanup?() }
             guard self.historyGeneration == generation else { return }
-            switch result { case .success(let values):
+            self.historyLoaded = true
+            switch result { case .success(let (values, cards)):
+                self.cards = cards
                 let eligibleID = selectIfUserGeneration == nil || selectIfUserGeneration == self.userSelectionGeneration
                     ? id : nil
                 let previousID = eligibleID ?? self.selectedIndex.flatMap { self.artifacts.indices.contains($0) ? self.artifacts[$0].id : nil }
@@ -443,20 +519,28 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         guard let recoveryPanel else { return }
         let visible = !recoveryDrafts.isEmpty || recoveryError != nil
             || recoveryActionError != nil || recoveryBusy
+        let changed = recoveryPanel.isHidden == visible
         recoveryPanel.isHidden = !visible
-        historyScroll.frame = NSRect(x: 28, y: visible ? 354 : 194,
-                                      width: 320, height: visible ? 220 : 380)
         recoveryCancelButton.isHidden = recoveryCancel == nil
         recoveryCancelButton.isEnabled = recoveryCancel != nil && recoveryCancel?.isCancelled == false
         recoveryRetryButton.isHidden = recoveryError == nil && recoveryActionError == nil
         recoveryRetryButton.isEnabled = !recoveryLoading && !recoveryBusy
-        let content = Surface(frame: NSRect(x: 0, y: 0, width: 284, height: 114))
+        // Shipping `.recording-recovery-row`: details on the left, actions on the right.
+        let width = recoveryScroll.contentSize.width - 4
+        let textWidth = width - 260
+        let content = Surface(frame: NSRect(x: 0, y: 0, width: width, height: 86))
         var nextY: CGFloat = 0
-        for draft in recoveryDrafts {
+        for (index, draft) in recoveryDrafts.enumerated() {
             let y = nextY
+            if index > 0 {
+                let divider = Surface(frame: NSRect(x: 2, y: y, width: width - 4, height: 1))
+                divider.wantsLayer = true
+                divider.layer?.backgroundColor = tokens.color("border-subtle").cgColor
+                content.addSubview(divider)
+            }
             let title = NSTextField(labelWithString: "\(draft.kind == "gif" ? "GIF" : draft.kind == "video" ? "Video" : "Unavailable") recording")
-            title.frame = NSRect(x: 2, y: y + 2, width: 278, height: 18)
-            title.font = .systemFont(ofSize: 12, weight: .semibold)
+            title.frame = NSRect(x: 2, y: y + 8, width: textWidth, height: 18)
+            title.font = .systemFont(ofSize: tokens.number("text-md"), weight: .medium)
             title.textColor = tokens.color("text")
             content.addSubview(title)
             let date = draft.createdAtMilliseconds.map {
@@ -464,46 +548,47 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             } ?? "Unknown date"
             let details = NSTextField(labelWithString:
                 "\(date) · \(formatRecordingTime(milliseconds: draft.completedDurationMilliseconds)) recovered so far")
-            details.frame = NSRect(x: 2, y: y + 20, width: 278, height: 17)
-            details.font = .systemFont(ofSize: 10); details.textColor = tokens.color("text-muted")
+            details.frame = NSRect(x: 2, y: y + 27, width: textWidth, height: 17)
+            details.font = .systemFont(ofSize: tokens.number("text-sm")); details.textColor = tokens.color("text-muted")
             content.addSubview(details)
             if draft.status == "recoverable", draft.identity != nil {
-                let recover = CaptureButton("Recover", frame: NSRect(x: 2, y: y + 42, width: 112, height: 29),
+                let recover = CaptureButton("Recover", frame: NSRect(x: width - 244, y: y + 10, width: 112, height: 29),
                                             tokens: tokens) { [weak self] in self?.recover(draft) }
-                let discard = CaptureButton("Discard…", frame: NSRect(x: 120, y: y + 42, width: 112, height: 29),
+                let discard = CaptureButton("Discard…", frame: NSRect(x: width - 124, y: y + 10, width: 112, height: 29),
                                             tokens: tokens) { [weak self] in self?.confirmDiscard(draft) }
                 recover.isEnabled = !capturing && !clearingHistory && !recoveryBusy
                     && !recoveryLoading && !recoveryConfirmation && !recordingRetiring
                 discard.isEnabled = recover.isEnabled
                 content.addSubview(recover); content.addSubview(discard)
-                nextY += 96
+                nextY += 52
             } else {
                 let message = draft.reason ?? "This bundle cannot be recovered."
                 let reason = NSTextField(wrappingLabelWithString: message)
-                reason.font = .systemFont(ofSize: 10); reason.textColor = tokens.color("danger-text")
+                reason.font = .systemFont(ofSize: tokens.number("text-sm")); reason.textColor = tokens.color("danger-text")
                 reason.toolTip = message
                 reason.setAccessibilityHelp(message)
-                let height = textHeight(message, font: reason.font!, width: 278)
-                reason.frame = NSRect(x: 2, y: y + 39, width: 278, height: height)
+                let height = textHeight(message, font: reason.font!, width: textWidth)
+                reason.frame = NSRect(x: 2, y: y + 46, width: textWidth, height: height)
                 content.addSubview(reason)
-                nextY += max(96, 39 + height + 8)
+                nextY += 46 + height + 8
             }
         }
         if let message = recoveryError ?? recoveryActionError {
             let y = nextY
             let error = NSTextField(wrappingLabelWithString: message)
-            error.font = .systemFont(ofSize: 10); error.textColor = tokens.color("danger-text")
+            error.font = .systemFont(ofSize: tokens.number("text-sm")); error.textColor = tokens.color("danger-text")
             error.toolTip = message
             error.setAccessibilityHelp(message)
-            let height = textHeight(message, font: error.font!, width: 278)
-            error.frame = NSRect(x: 2, y: y + 2, width: 278, height: height)
+            let height = textHeight(message, font: error.font!, width: width - 4)
+            error.frame = NSRect(x: 2, y: y + 4, width: width - 4, height: height)
             content.addSubview(error)
             nextY += height + 10
         }
-        content.frame.size.height = max(114, nextY)
+        content.frame.size.height = max(86, nextY)
         recoveryScroll.documentView = content
         recoveryStatus.stringValue = recoveryBusy ? recoveryStage
             : (nextY > recoveryScroll.bounds.height ? "Scroll for full details." : "")
+        if changed { layoutHistory() }
     }
 
     private func textHeight(_ message: String, font: NSFont, width: CGFloat) -> CGFloat {
@@ -601,30 +686,147 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         reloadingHistorySelection = true
         defer { reloadingHistorySelection = false }
         historyRows = artifacts.indices.filter { historyFilter.matches(artifacts[$0]) }
-        clearSelection(); table.reloadData()
-        let rows = historyRows
+        confirmDeleteID = nil; confirmDeleteTimer?.invalidate(); confirmDeleteTimer = nil
         for (filter, control) in historyFilterButtons {
-            let count = artifacts.filter(filter.matches).count
-            control.title = "\(filter.title) \(count)"
-            control.setAccessibilityLabel("\(filter.title), \(count) captures")
-            control.selected = filter == historyFilter
-            control.state = filter == historyFilter ? .on : .off
-            control.isEnabled = filter == .all || count > 0
-            control.needsDisplay = true
+            control.count = artifacts.filter(filter.matches).count
+            control.active = filter == historyFilter
         }
-        if let row = rows.firstIndex(where: { artifacts[$0].id == previousID }) {
-            table.selectRowIndexes([row], byExtendingSelection: false)
-        } else if !rows.isEmpty {
-            table.selectRowIndexes([0], byExtendingSelection: false)
-        }
+        // Like shipping, loading or filtering never selects a card on the
+        // user's behalf; an explicit selection that is still visible survives.
+        selectedIndex = historyRows.first { artifacts[$0].id == previousID }
         status.stringValue = historyStatus(); updateActions()
+        layoutHistory()
     }
 
     private func historyStatus() -> String {
         if artifacts.isEmpty { return "No captures yet. Choose New Capture to begin." }
-        if historyRows.isEmpty { return "No captures match this filter." }
+        if historyRows.isEmpty { return historyCopy.filteredEmpty }
         return "\(historyRows.count) of \(artifacts.count) captures · \(historyFilter.title)"
     }
+
+    /// Render History cards from the current rows, presentation and thumbnails.
+    private func refreshGrid(busy: Bool) {
+        guard let grid else { return }
+        grid.enabled = !busy
+        grid.reload(historyRows.map { index in
+            let artifact = artifacts[index]
+            let key = thumbnailKey(artifact)
+            return HistoryGridItem(id: artifact.id, card: cards[artifact.id],
+                                   image: thumbnailKeys[artifact.id] == key ? thumbnails[artifact.id] : nil,
+                                   confirmingDelete: confirmDeleteID == artifact.id,
+                                   busy: cardBusy?.id == artifact.id ? cardBusy?.action : nil)
+        })
+        grid.setSelectedRow(selectedIndex.flatMap { historyRows.firstIndex(of: $0) } ?? -1, notify: false)
+        let copy = historyCopy
+        if !historyLoaded {
+            emptyState.show(title: copy.loading, body: nil); emptyState.isHidden = false
+        } else if artifacts.isEmpty && recoveryPanel.isHidden {
+            emptyState.show(title: copy.emptyTitle, body: copy.emptyBody); emptyState.isHidden = false
+        } else {
+            emptyState.isHidden = true
+        }
+    }
+
+    private func thumbnailKey(_ artifact: CaptureArtifact) -> String {
+        "\(artifact.previewPath)|\(artifact.width)x\(artifact.height)|\(artifact.sizeBytes)"
+    }
+
+    /// Decode a visible card's small preview off the main thread. Stale or
+    /// failed results for an older entry version are ignored.
+    private func loadThumbnail(row: Int) {
+        guard historyRows.indices.contains(row) else { return }
+        let artifact = artifacts[historyRows[row]]
+        let id = artifact.id, key = thumbnailKey(artifact), path = artifact.previewPath
+        guard thumbnailKeys[id] != key || thumbnails[id] == nil, thumbnailFailures[id] != key,
+              !thumbnailRequests.contains(id) else { return }
+        thumbnailRequests.insert(id)
+        Self.thumbnailQueue.async {
+            var image: NSImage?
+            if let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+               let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                   kCGImageSourceCreateThumbnailFromImageAlways: true,
+                   kCGImageSourceCreateThumbnailWithTransform: true,
+                   kCGImageSourceThumbnailMaxPixelSize: 640,
+               ] as CFDictionary) {
+                image = NSImage(cgImage: cgImage, size: NSSize(width: CGFloat(cgImage.width),
+                                                                height: CGFloat(cgImage.height)))
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.thumbnailRequests.remove(id)
+                guard let current = self.artifacts.first(where: { $0.id == id }),
+                      self.thumbnailKey(current) == key else { return }
+                guard let image else { self.thumbnailFailures[id] = key; return }
+                self.thumbnails[id] = image; self.thumbnailKeys[id] = key
+                if self.thumbnails.count > Self.thumbnailCacheLimit {
+                    let visible = Set(self.grid.visibleCards.map(\.artifactID))
+                    for cached in self.thumbnails.keys where !visible.contains(cached) && cached != id {
+                        self.thumbnails[cached] = nil; self.thumbnailKeys[cached] = nil
+                    }
+                }
+                self.updateActions()
+            }
+        }
+    }
+
+    private func gridSelectionChanged() {
+        if !reloadingHistorySelection { userSelectionGeneration += 1 }
+        let rows = historyRows
+        guard rows.indices.contains(grid.selectedRow) else { clearSelection(); return }
+        select(rows[grid.selectedRow])
+    }
+
+    private var historyBusy: Bool {
+        capturing || clearingHistory || recoveryBusy || recoveryConfirmation
+            || recordingRetiring || externalOpenPending || permissionsVisible
+    }
+
+    private func performCard(row: Int, action: HistoryCardAction) {
+        guard historyRows.indices.contains(row), !historyBusy, cardBusy == nil else { return }
+        let artifact = artifacts[historyRows[row]]
+        switch action {
+        case .edit:
+            guard !historyRoot.isEmpty, cards[artifact.id]?.missing != true else { return }
+            presentEditor(artifact, requiresCurrentSelection: false)
+        case .copy:
+            guard !artifact.isRecording else { return }
+            copyImage(at: artifact.imagePath, artifactID: artifact.id)
+        case .saveImage, .saveFile:
+            cardBusy = (artifact.id, action); updateActions()
+            save(artifact)
+        case .showInFolder:
+            reveal(artifact)
+        }
+    }
+
+    /// Shipping card trash: the first click arms "Delete forever" for four
+    /// seconds; the second deletes. A missing recording is removed at once.
+    private func deleteCard(row: Int) {
+        guard historyRows.indices.contains(row), !historyBusy, cardBusy == nil else { return }
+        let artifact = artifacts[historyRows[row]]
+        let requiresConfirmation = cards[artifact.id]?.deleteRequiresConfirmation ?? true
+        if requiresConfirmation && confirmDeleteID != artifact.id {
+            confirmDeleteAll = false; confirmDeleteAllTimer?.invalidate(); confirmDeleteAllTimer = nil
+            confirmDeleteID = artifact.id
+            confirmDeleteTimer?.invalidate()
+            confirmDeleteTimer = Timer.scheduledTimer(withTimeInterval: historyCopy.confirmTimeout, repeats: false) {
+                [weak self] _ in
+                self?.confirmDeleteID = nil; self?.confirmDeleteTimer = nil; self?.updateActions()
+            }
+            updateActions()
+            return
+        }
+        confirmDeleteID = nil; confirmDeleteTimer?.invalidate(); confirmDeleteTimer = nil
+        updateActions()
+        delete(artifact)
+    }
+
+    private func cancelHistoryConfirmations() {
+        confirmDeleteID = nil; confirmDeleteTimer?.invalidate(); confirmDeleteTimer = nil
+        confirmDeleteAll = false; confirmDeleteAllTimer?.invalidate(); confirmDeleteAllTimer = nil
+        updateActions()
+    }
+
     private func requestPermission() {
         guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
               !clearingHistory, !externalOpenPending, !permissionsVisible else { return }
@@ -1881,94 +2083,31 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         reportError(message)
     }
     private func updateActions() {
-        let selected = selectedIndex.map { artifacts.indices.contains($0) } == true
-        let selectedScreenshot = selectedIndex.map { artifacts.indices.contains($0) && !artifacts[$0].isRecording } == true
-        let busy = capturing || clearingHistory || recoveryBusy || recoveryConfirmation
-            || recordingRetiring || externalOpenPending || permissionsVisible
+        let busy = historyBusy
         refreshButton?.isEnabled = !busy
-        table?.isEnabled = !busy
         for (filter, button) in historyFilterButtons {
             button.isEnabled = !busy && (filter == .all || artifacts.contains(where: filter.matches))
         }
-        saveButton?.title = selected && !selectedScreenshot ? "Save file" : "Save image"
-        saveButton?.setAccessibilityLabel(saveButton?.title)
-        saveButton?.needsDisplay = true
-        saveButton?.isEnabled = selected && !busy
-        copyButton?.isEnabled = selectedScreenshot && selectedImage != nil && !busy
-        editButton?.title = selectedScreenshot ? "Edit screenshot" : "Edit recording"
-        editButton?.setAccessibilityLabel(editButton?.title)
-        editButton?.needsDisplay = true
-        editButton?.isEnabled = selected && selectedImage != nil && !busy
-        deleteButton?.isEnabled = selected && !busy
-        revealButton?.isEnabled = selected && selectedIndex.flatMap { artifacts[$0].savedPath } != nil
-        clearHistoryButton?.isEnabled = !artifacts.isEmpty && !busy
         captureButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
         regionButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
         windowButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
         newCaptureButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
         renderRecovery()
-    }
-
-    func numberOfRows(in tableView: NSTableView) -> Int { historyRows.count }
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        let view = CaptureHistoryRow(); view.tokens = tokens; return view
-    }
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        if !reloadingHistorySelection { userSelectionGeneration += 1 }
-        let rows = historyRows
-        guard rows.indices.contains(table.selectedRow) else { clearSelection(); return }
-        select(rows[table.selectedRow])
-    }
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let cell = NSTableCellView(); let artifact = artifacts[historyRows[row]]
-        let kind = artifact.kind == "gif" ? "GIF" : artifact.isRecording ? "Video" : "Screenshot"
-        let name = NSTextField(labelWithString: "\(kind) · \(artifact.width) × \(artifact.height)")
-        name.frame = NSRect(x: 12, y: 31, width: 280, height: 20); name.font = .systemFont(ofSize: 13, weight: .medium); name.textColor = tokens.color("text")
-        let date = NSTextField(labelWithString: artifact.createdAt); date.frame = NSRect(x: 12, y: 10, width: 280, height: 18); date.font = .systemFont(ofSize: 11); date.textColor = tokens.color("text-muted")
-        cell.addSubview(name); cell.addSubview(date); cell.textField = name; return cell
+        layoutHeaderActions()
+        refreshGrid(busy: busy)
     }
 
     private func select(_ index: Int) {
-        selectionGeneration += 1
-        let generation = selectionGeneration
-        selectedImage = nil; preview.image = nil
         guard artifacts.indices.contains(index) else { clearSelection(); return }
-        selectedIndex = index; let artifact = artifacts[index]
-        detail.stringValue = artifact.isRecording
-            ? "Loading recording poster…" : "Loading \(artifact.width) × \(artifact.height) PNG…"
+        selectedIndex = index
         updateActions()
-        run({ () throws -> NSImage in
-            guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: artifact.imagePath) as CFURL, nil),
-                  let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
-            else { throw AppBridgeError.invalidResponse }
-            return NSImage(cgImage: image, size: NSSize(width: CGFloat(image.width), height: CGFloat(image.height)))
-        }) { [weak self] result in
-            guard let self, self.selectionGeneration == generation else { return }
-            switch result { case .success(let image):
-                self.selectedImage = image; self.preview.image = image
-                self.detail.stringValue = artifact.isRecording
-                    ? "\(artifact.width) × \(artifact.height) · \(artifact.kind == "gif" ? "GIF" : "H.264 MP4") · Editor available"
-                    : "\(artifact.width) × \(artifact.height) · PNG · Editor available"
-            case .failure(let error):
-                self.showError(artifact.isRecording
-                    ? "Couldn’t decode recording poster" : "Couldn’t decode screenshot", error)
-                self.detail.stringValue = "Preview unavailable"
-            }
-            self.updateActions()
-        }
     }
     private func clearSelection() {
-        selectionGeneration += 1; selectedIndex = nil; selectedImage = nil; preview?.image = nil
-        if table.selectedRow >= 0 { table.deselectAll(nil) }
-        detail?.stringValue = artifacts.isEmpty ? "Choose New Capture to begin."
-            : historyRows.isEmpty ? "No captures match this filter." : "Select a capture to preview it."
+        selectedIndex = nil
+        if let grid, grid.selectedRow >= 0 { grid.setSelectedRow(-1, notify: false) }
         updateActions()
     }
 
-    private func save() {
-        guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]
-        save(artifact)
-    }
     /// Shipping shows the saved notice whenever a recording editor closes and
     /// the recording is still in History.
     private func recordingEditorClosed(_ artifactID: String) {
@@ -2065,11 +2204,14 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                   let path = result["path"] as? String,
                   !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { throw AppBridgeError.invalidResponse }
-            return (updated, path)
+            let card = (try? HistoryCard.cards(for: [value]))?.first ?? nil
+            return (updated, path, card)
         }) { [weak self] result in
             guard let self else { return }
+            if self.cardBusy?.id == artifact.id { self.cardBusy = nil }
             switch result { case .success(let value):
                 if let current = self.artifacts.firstIndex(where: { $0.id == artifact.id }) { self.artifacts[current] = value.0 }
+                if let card = value.2 { self.cards[artifact.id] = card }
                 self.status.stringValue = "Saved \(noun) to \(value.1)"
                 _ = self.miniPreviews?.updateSavedPath(value.1, for: artifact)
                 self.miniPreviews?.setStatus("", for: artifact.id)
@@ -2084,10 +2226,6 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 completion?(.failure(error))
             }; self.updateActions()
         }
-    }
-    private func copyImage() {
-        guard let index = selectedIndex, artifacts.indices.contains(index) else { return }
-        copyImage(at: artifacts[index].imagePath, artifactID: artifacts[index].id)
     }
     private func copyImage(at path: String, artifactID: String) {
         run({ try Data(contentsOf: URL(fileURLWithPath: path)) }) { [weak self] result in
@@ -2199,19 +2337,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             }
         }
     }
-    private func reveal() {
-        guard let index = selectedIndex, artifacts.indices.contains(index),
-              let path = artifacts[index].savedPath else { return }
+    private func reveal(_ artifact: CaptureArtifact) {
+        guard let path = artifact.savedPath else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-    }
-    private func confirmDelete() {
-        guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]
-        let alert = NSAlert()
-        alert.messageText = "Delete this \(artifact.isRecording ? "recording" : "screenshot") from history?"
-        alert.informativeText = "This removes the native history copy. Exported files stay on disk."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Delete from History"); alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window) { [weak self] response in guard response == .alertFirstButtonReturn else { return }; self?.delete(artifact) }
     }
     private func delete(_ artifact: CaptureArtifact) {
         status.stringValue = "Deleting from history…"
@@ -2221,29 +2349,35 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
 
-    private func confirmClearHistory() {
-        guard !artifacts.isEmpty, !capturing, !clearingHistory,
-              !recoveryBusy, !recoveryConfirmation else { return }
-        let alert = NSAlert(); alert.messageText = "Clear all capture history?"
-        alert.informativeText = "This deletes all screenshots, videos and GIFs in native history, including captures outside this filter. Exported files and recovery drafts stay on disk."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Delete All"); alert.addButton(withTitle: "Cancel")
-        alert.buttons[0].keyEquivalent = ""; alert.buttons[1].keyEquivalent = "\r"
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn, let self else { return }
-            self.clearingHistory = true; self.updateActions(); self.status.stringValue = "Clearing history…"
-            self.run({ [transport = self.transport, historyRoot = self.historyRoot] in
-                _ = try transport.request(["operation": "clear_history", "root": historyRoot])
-            }) { [weak self] result in
-                guard let self else { return }
-                // A failed bulk delete can still remove some entries; always reload.
-                self.loadHistory(cleanup: { [weak self] in
-                    guard let self else { return }
-                    self.clearingHistory = false; self.updateActions()
-                    if case .failure(let error) = result { self.showError("Couldn’t clear history", error) }
-                    self.processNextOpenImage()
-                })
+    /// Shipping header Delete all: the first click arms "Delete all forever"
+    /// (with Cancel) for four seconds; the second deletes every capture kind,
+    /// including captures outside the selected filter.
+    private func deleteAllHistory() {
+        guard !artifacts.isEmpty, !historyBusy else { return }
+        guard confirmDeleteAll else {
+            confirmDeleteID = nil; confirmDeleteTimer?.invalidate(); confirmDeleteTimer = nil
+            confirmDeleteAll = true
+            confirmDeleteAllTimer?.invalidate()
+            confirmDeleteAllTimer = Timer.scheduledTimer(withTimeInterval: historyCopy.confirmTimeout, repeats: false) {
+                [weak self] _ in
+                self?.confirmDeleteAll = false; self?.confirmDeleteAllTimer = nil; self?.updateActions()
             }
+            updateActions()
+            return
+        }
+        confirmDeleteAll = false; confirmDeleteAllTimer?.invalidate(); confirmDeleteAllTimer = nil
+        clearingHistory = true; updateActions(); status.stringValue = "Clearing history…"
+        run({ [transport, historyRoot] in
+            _ = try transport.request(["operation": "clear_history", "root": historyRoot])
+        }) { [weak self] result in
+            guard let self else { return }
+            // A failed bulk delete can still remove some entries; always reload.
+            self.loadHistory(cleanup: { [weak self] in
+                guard let self else { return }
+                self.clearingHistory = false; self.updateActions()
+                if case .failure(let error) = result { self.showError("Couldn’t delete capture history", error) }
+                self.processNextOpenImage()
+            })
         }
     }
 
