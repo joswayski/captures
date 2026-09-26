@@ -4436,3 +4436,141 @@ fn prior_liberation_draft_keeps_its_font_map_notice_and_export_after_rounded_is_
         encoded
     );
 }
+
+#[test]
+fn curve_and_expand_canvas_are_single_undo_steps_that_round_trip_drafts() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    editor
+        .execute(
+            serde_json::from_value(json!({
+                "operation": "create_open_shape", "shape": "line",
+                "start": {"x": 1.0, "y": 1.0}, "end": {"x": 12.0, "y": 2.0},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let line = editor.snapshot().document.elements[1].base().id.clone();
+    let snapshot = editor.snapshot();
+    let handles = &snapshot.curve_handles[line.as_str()];
+    assert_eq!((handles.starters.len(), handles.slider), (3, true));
+    // The line hangs past the 7px canvas: an idle Expand canvas preview.
+    let preview = &snapshot.canvas_expand[line.as_str()];
+    assert!(
+        preview
+            .edges
+            .contains(&captures_app::editor_canvas::CanvasEdge::Right)
+    );
+    let json = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(
+        json["curve_handles"][&line]["straighten_label"],
+        "Straighten line"
+    );
+    assert!(json["canvas_expand"][&line]["anchor"]["x"].is_number());
+    let undo_before = editor.snapshot().can_undo;
+    assert!(undo_before);
+
+    let curve = |edit: serde_json::Value| {
+        serde_json::from_value::<Request>(json!({
+            "operation": "layer", "id": line, "edit": {"action": "curve", "edit": edit},
+        }))
+        .unwrap()
+    };
+    editor
+        .execute(curve(json!({"kind": "bend", "bend": 0.5})))
+        .unwrap();
+    let curved = editor.snapshot().document.clone();
+    let Element::Shape(shape) = &curved.elements[1] else {
+        panic!("line layer")
+    };
+    assert_eq!(shape.controls.len(), 1);
+    editor
+        .execute(
+            serde_json::from_value(json!({
+                "operation": "layer", "id": line, "edit": {"action": "expand_canvas"},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let expanded = editor.snapshot().document.clone();
+    assert!(expanded.width > 7.);
+    assert!(editor.snapshot().canvas_expand.is_empty());
+    assert_eq!(
+        (
+            editor.pixels().width() as f64,
+            editor.pixels().height() as f64
+        ),
+        (expanded.width, expanded.height)
+    );
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &curved);
+    editor.execute(Request::Redo).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 41 })
+        .unwrap();
+    let reopened = open(data.path(), &id).unwrap();
+    assert_eq!(reopened.snapshot().document, &expanded);
+    assert_eq!(reopened.pixels(), editor.pixels());
+    let mut reopened = reopened;
+    reopened
+        .execute(curve(json!({"kind": "straighten"})))
+        .unwrap();
+    let Element::Shape(shape) = &reopened.snapshot().document.elements[1] else {
+        panic!("line layer")
+    };
+    assert!(shape.controls.is_empty());
+}
+
+#[test]
+fn drop_guides_place_imports_where_the_guide_shows() {
+    use captures_app::editor_session::{ImportPlacement, image_drop_guide};
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let document = editor.snapshot().document.clone();
+    let default = image_drop_guide(&document, None, None);
+    assert_eq!(
+        (default.placement, default.label),
+        (ImportPlacement::Bottom, "Place below")
+    );
+    assert_eq!(default.point, Point { x: 3.5, y: 3. });
+    let top = image_drop_guide(&document, None, Some(Point { x: 3.5, y: 0.1 }));
+    assert_eq!(
+        (top.placement, top.label),
+        (ImportPlacement::Top, "Place above")
+    );
+    assert_eq!(
+        top.target,
+        Rect {
+            x: 0.,
+            y: 0.,
+            width: 7.,
+            height: 3.
+        }
+    );
+    let before = editor.snapshot().document.clone();
+    let id = editor
+        .import_image(ImportImage {
+            pixels: RgbaImage::from_pixel(4, 2, image::Rgba([1, 2, 3, 255])),
+            name: "dropped.png".into(),
+            selected_id: None,
+            point: Some(top.point),
+        })
+        .unwrap();
+    let document = editor.snapshot().document.clone();
+    let imported = document
+        .elements
+        .iter()
+        .find(|element| element.base().id == id)
+        .unwrap();
+    // Placed above the capture: fully outside, so the canvas grows once.
+    assert_eq!(document.height, 5.);
+    assert_eq!(imported.base().y, 0.);
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &before);
+    assert!(captures_app::editor_session::is_supported_image_path(
+        Path::new("a.JPG")
+    ));
+    assert!(!captures_app::editor_session::is_supported_image_path(
+        Path::new("a.gif")
+    ));
+}

@@ -447,6 +447,19 @@ char *captures_editor_request_v1(CapturesEditorSession *session, const char *req
  * document-space corners; unsupported layers omit their outline. */
 char *captures_editor_hit_test_document_v1(const char *document_json,
     double x, double y, double tolerance);
+/* Stateless canvas-interaction geometry from a published document JSON copy.
+ * drop_guide {selected_id: string|null, point: {x,y}|null} returns the image-drop
+ * guide {placement: "top"|"right"|"bottom"|"left"|"stack", label, target, point,
+ * focus} (document-space rects {x,y,width,height}); pass the same point to
+ * captures_editor_import_image_v1 to land where the guide shows.
+ * curve {id, point, radius} returns {handle: {kind: "start"|"end"|"control"|
+ * "starter_control", index?}|null, hint: string|null, on_path} for a line/arrow.
+ * Snapshots also carry curve_handles {layerId: {start,end,controls,starters,
+ * bend_percent,slider,straighten_label,path}} and canvas_expand {layerId: {edges,
+ * rect,gaps,bounds,anchor,anchor_edge}}. Layer edits add curve {edit: {kind:
+ * "bend"|"insert"|"remove"|"move"|"straighten", ...}} and expand_canvas.
+ * Returns owned success/error JSON; free with captures_settings_free_v1. */
+char *captures_editor_canvas_query_v1(const char *document_json, const char *request_json);
 /* New-annotation shadow defaults resolved by Rust for finite stroke width 2–40.
  * No session/render/I/O. Returns owned success/error JSON; free with
  * captures_settings_free_v1. */

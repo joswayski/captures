@@ -154,7 +154,7 @@ pub fn rotation_angle(radians: f64, snap_degrees: Option<f64>) -> Option<f64> {
     Some(angle)
 }
 
-fn rotate_point(point: Point, origin: Point, radians: f64) -> Point {
+pub(crate) fn rotate_point(point: Point, origin: Point, radians: f64) -> Point {
     if radians == 0. {
         return point;
     }
@@ -947,6 +947,11 @@ impl Element {
         }
     }
 
+    /// Shipping `elementBounds`: axis-aligned painted bounds including rotation.
+    pub fn painted_bounds(&self) -> Result<Rect, String> {
+        painted_bounds(self)
+    }
+
     /// Document-space corners for native selection/move feedback. Hosts only
     /// translate/project these points; picking and rotation remain shared.
     pub fn selection_outline(&self) -> Result<[Point; 4], String> {
@@ -1222,7 +1227,7 @@ fn push_unique_number(values: &mut Vec<f64>, value: f64) {
     }
 }
 
-fn rect_center(bounds: Rect) -> Point {
+pub(crate) fn rect_center(bounds: Rect) -> Point {
     Point {
         x: bounds.x + bounds.width / 2.,
         y: bounds.y + bounds.height / 2.,
@@ -1386,6 +1391,12 @@ pub enum LayerEdit {
     Rename {
         name: String,
     },
+    /// Line/arrow curve editing (shipping curve dots, Curve and Straighten).
+    Curve {
+        edit: crate::editor_canvas::CurveEdit,
+    },
+    /// Grow the canvas to fit this layer (shipping Expand canvas).
+    ExpandCanvas,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -1906,6 +1917,12 @@ impl Document {
                     }
                 }
             }
+            LayerEdit::Curve { edit } => {
+                if !locked && let Element::Shape(shape) = &mut self.elements[index] {
+                    crate::editor_canvas::apply_curve_edit(shape, edit)?;
+                }
+            }
+            LayerEdit::ExpandCanvas => self.expand_canvas_to_fit(id)?,
         }
         Ok(())
     }
