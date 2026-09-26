@@ -9880,7 +9880,7 @@ mod tests {
         assert!(Arc::ptr_eq(&session_pixels, &preview.pixels));
         editor.view.lock().unwrap().receive(&ctx, Ok(preview));
 
-        let destination = data.path().join("exports/asymmetric.png");
+        let destination = data.path().join("exports").join("asymmetric.png");
         {
             let mut view = editor.view.lock().unwrap();
             view.update_export_target(|target, _| target.set_stem("asymmetric"));
@@ -10071,7 +10071,7 @@ mod tests {
         receive(&editor, &ctx);
         editor.view.lock().unwrap().submit(&editor.tx, crop());
         receive(&editor, &ctx);
-        let destination = data.path().join("exports/edited.png");
+        let destination = data.path().join("exports").join("edited.png");
         {
             let mut view = editor.view.lock().unwrap();
             view.update_export_target(|target, _| target.set_stem("edited"));
@@ -10142,7 +10142,7 @@ mod tests {
         // The retained session can publish even if History becomes unavailable.
         fs::rename(&root, data.path().join("previous-history")).unwrap();
         fs::write(&root, b"blocked").unwrap();
-        let recovered = data.path().join("exports/recovered.png");
+        let recovered = data.path().join("exports").join("recovered.png");
         {
             let mut view = editor.view.lock().unwrap();
             view.update_export_target(|target, _| target.set_stem("recovered"));
@@ -10302,7 +10302,7 @@ mod tests {
         );
         receive(&editor, &ctx);
         editor.view.lock().unwrap().submit(&editor.tx, crop());
-        let destination = data.path().join("exports/queued.png");
+        let destination = data.path().join("exports").join("queued.png");
         editor
             .tx
             .send(Job::Save {
