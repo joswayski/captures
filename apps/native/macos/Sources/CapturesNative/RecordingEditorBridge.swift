@@ -58,7 +58,8 @@ struct RecordingEditorProgress: Equatable {
         guard let completed = value["completed_per_mille"] as? NSNumber,
               let stage = value["stage"] as? String else { return nil }
         completedPerMille = completed.intValue
-        message = value["message"] as? String ?? stage.capitalized
+        // Shipping falls back to its stage label when progress has no message.
+        message = value["message"] as? String ?? RecordingEditorCopy.stage(stage) ?? stage.capitalized
     }
 }
 
@@ -982,5 +983,96 @@ final class RecordingPlaybackDelivery: @unchecked Sendable {
         if let next { frame(next) }
         if let result { completion(result) }
         if again { DispatchQueue.main.async { [self] in drain() } }
+    }
+}
+
+/// Shipping recording-editor copy shared with the wgpu host
+/// (`captures_recording_editor_ui_v1`). Pure and UI-thread safe.
+enum RecordingEditorCopy {
+    struct Choice: Equatable {
+        let value: String
+        let label: String
+        let description: String
+    }
+
+    struct Estimate: Equatable {
+        let label: String
+        let muted: Bool
+        let deltaLabel: String?
+        let deltaSmaller: Bool
+    }
+
+    static func request(_ object: [String: Any]) -> [String: Any]? {
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
+        let pointer: UnsafeMutablePointer<CChar>? = String(decoding: data, as: UTF8.self).withCString {
+            captures_recording_editor_ui_v1($0)
+        }
+        guard let pointer else { return nil }
+        defer { captures_settings_free_v1(pointer) }
+        return try? AppBridge.decode(Data(bytes: pointer, count: strlen(pointer)))
+    }
+
+    static func title(mimeType: String) -> String {
+        request(["operation": "title", "mime_type": mimeType])?["title"] as? String
+            ?? "Edit recording"
+    }
+
+    static func time(_ milliseconds: UInt64, duration: UInt64) -> String {
+        request(["operation": "time", "ms": milliseconds, "duration_ms": duration])?["label"]
+            as? String ?? "\(milliseconds) ms"
+    }
+
+    static func trimSummary(start: UInt64, end: UInt64, duration: UInt64)
+        -> (range: String, selected: String) {
+        let value = request(["operation": "trim_summary", "start_ms": start, "end_ms": end,
+                             "duration_ms": duration])
+        return (value?["range"] as? String ?? "", value?["selected"] as? String ?? "")
+    }
+
+    static func fileSize(_ bytes: UInt64) -> String {
+        request(["operation": "file_size", "bytes": bytes])?["label"] as? String ?? "\(bytes) B"
+    }
+
+    static func stage(_ stage: String) -> String? {
+        request(["operation": "stage", "stage": stage])?["label"] as? String
+    }
+
+    static func saved(gif: Bool, sizeBytes: UInt64) -> String? {
+        request(["operation": "saved", "gif": gif, "size_bytes": sizeBytes])?["message"] as? String
+    }
+
+    static func filenameError(_ stem: String) -> String? {
+        request(["operation": "filename_error", "stem": stem])?["error"] as? String
+    }
+
+    /// `input` uses the shared EstimateInput keys: estimating, unapplied,
+    /// invalid_maximum, maximum_bytes, estimate_bytes, estimate_exact, original_bytes.
+    static func estimate(_ input: [String: Any]) -> Estimate {
+        var object = input
+        object["operation"] = "estimate"
+        guard let value = request(object) else {
+            return Estimate(label: "—", muted: true, deltaLabel: nil, deltaSmaller: false)
+        }
+        let delta = value["delta"] as? [String: Any]
+        return Estimate(label: value["label"] as? String ?? "—",
+                        muted: value["muted"] as? Bool ?? true,
+                        deltaLabel: delta?["label"] as? String,
+                        deltaSmaller: delta?["smaller"] as? Bool ?? false)
+    }
+
+    /// Menus keyed `quality_modes`, `quality_presets`, `resolutions`,
+    /// `gif_frame_rates` and `gif_maximum_widths`.
+    static func menus(gif: Bool, baseWidth: UInt32, baseHeight: UInt32) -> [String: [Choice]] {
+        guard let value = request(["operation": "menus", "gif": gif, "base_width": baseWidth,
+                                   "base_height": baseHeight]) else { return [:] }
+        var menus: [String: [Choice]] = [:]
+        for (key, entries) in value {
+            guard let entries = entries as? [[String: Any]] else { continue }
+            menus[key] = entries.map {
+                Choice(value: $0["value"] as? String ?? "", label: $0["label"] as? String ?? "",
+                       description: $0["description"] as? String ?? "")
+            }
+        }
+        return menus
     }
 }

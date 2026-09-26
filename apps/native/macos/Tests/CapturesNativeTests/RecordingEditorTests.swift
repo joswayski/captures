@@ -39,7 +39,7 @@ final class RecordingEditorTests: XCTestCase {
 
         worker.deferReplace = true
         replace.performClick(nil); decision?(true)
-        let cancel = try button("Cancel operation", in: controller.root)
+        let cancel = try button("Cancel replacement", in: controller.root)
         cancel.performClick(nil)
         XCTAssertTrue(try XCTUnwrap(worker.observedReplaceCancel).isCancelled)
         let thumbnailCount = worker.thumbnailCalls
@@ -249,7 +249,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertFalse(compare.isEnabled)
         XCTAssertTrue(hide.isHidden)
         let cancelled = try XCTUnwrap(worker.observedComparisonCancel)
-        try button("Cancel operation", in: controller.root).performClick(nil)
+        try button("Cancel comparison", in: controller.root).performClick(nil)
         XCTAssertTrue(cancelled.isCancelled)
         worker.completeComparison(.success(try comparison(for: initial)))
         XCTAssertTrue(hide.isHidden, "cancelled completion cannot publish split pixels")
@@ -337,7 +337,10 @@ final class RecordingEditorTests: XCTestCase {
                 $0.contains("final capped save may differ") })
             XCTAssertFalse(try slider("Recording before and after split", in: controller.root).isHidden)
             XCTAssertTrue(labels(in: controller.root).contains { $0 == "Before" })
-            XCTAssertTrue(labels(in: controller.root).contains { $0 == "After" })
+            XCTAssertTrue(labels(in: controller.root).contains { $0 == "Encoded" })
+            XCTAssertEqual(try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSTextField }
+                .first { $0.accessibilityLabel() == "Recording preview mode" }).stringValue,
+                           "Encoded comparison")
             try render(controller.root, name: "recording-editor-comparison-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             try render(controller.root, name: "recording-editor-comparison-minimum-\(appearance)")
@@ -878,33 +881,37 @@ final class RecordingEditorTests: XCTestCase {
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
         let play = try button("Play", in: controller.root)
+        let compare = try button("Compare", in: controller.root)
+        let fit = try button("Fit", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
         let loop = try checkbox("Loop recording preview", in: controller.root)
         let sound = try checkbox("Preview accepted recording audio", in: controller.root)
-        let timestamp = try XCTUnwrap(descendants(in: controller.root)
-            .compactMap { $0 as? NSTextField }
-            .first { !$0.isEditable && $0.stringValue.contains(" / ") })
+        let viewport = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSScrollView }
+            .first { $0.accessibilityLabel() == "Recording preview viewport" })
+        let caption = try field("Recording source details", in: controller.root)
+        func frame(_ view: NSView) -> NSRect { view.convert(view.bounds, to: controller.root) }
 
         XCTAssertEqual(seek.doubleValue, 0, "layout coverage keeps the playhead at source start")
-        for size in [NSSize(width: 760, height: 540), NSSize(width: 960, height: 760)] {
+        XCTAssertTrue(play.circular && play.iconOnly, "Play is the shipping overlay circle")
+        for size in [NSSize(width: 760, height: 540), NSSize(width: 960, height: 600)] {
             controller.window.setContentSize(size)
-            XCTAssertFalse(play.isHidden); XCTAssertFalse(loop.isHidden); XCTAssertFalse(sound.isHidden)
-            XCTAssertFalse(seek.isHidden); XCTAssertFalse(timestamp.isHidden)
+            for view in [play, compare, fit, seek, loop, sound, caption] as [NSView] {
+                XCTAssertFalse(view.isHiddenOrHasHiddenAncestor)
+            }
             XCTAssertGreaterThan(seek.frame.width, 0)
-            XCTAssertTrue(controller.root.bounds.intersects(play.frame))
-            XCTAssertTrue(controller.root.bounds.intersects(loop.frame))
-            XCTAssertTrue(controller.root.bounds.intersects(sound.frame))
-            XCTAssertTrue(controller.root.bounds.intersects(seek.frame))
-            XCTAssertTrue(controller.root.bounds.intersects(timestamp.frame))
+            XCTAssertTrue(caption.stringValue.contains("0:00.000 / "))
             let gap = tokens.number("s-2")
-            XCTAssertLessThanOrEqual(play.frame.maxX + gap, loop.frame.minX,
-                                     "Play must not overlap Loop at width \(size.width)")
-            XCTAssertLessThanOrEqual(loop.frame.maxX + gap, sound.frame.minX,
-                                     "Loop must not overlap Sound at width \(size.width)")
-            XCTAssertLessThanOrEqual(sound.frame.maxX + gap, seek.frame.minX,
-                                     "Sound must not overlap the seek slider at width \(size.width)")
-            XCTAssertLessThanOrEqual(seek.frame.maxX + gap, timestamp.frame.minX,
-                                     "the seek slider must not overlap its timestamp at width \(size.width)")
+            // Shipping toolbar order: Sound, Compare, Loop preview, then Fit | 100%.
+            XCTAssertLessThanOrEqual(frame(sound).maxX + gap, frame(compare).minX,
+                                     "Sound must not overlap Compare at width \(size.width)")
+            XCTAssertLessThanOrEqual(frame(compare).maxX + gap, frame(loop).minX,
+                                     "Compare must not overlap Loop at width \(size.width)")
+            XCTAssertLessThanOrEqual(frame(loop).maxX + gap, frame(fit).minX,
+                                     "Loop must not overlap Fit at width \(size.width)")
+            XCTAssertTrue(frame(viewport).insetBy(dx: -1, dy: -1).contains(frame(play)),
+                          "Play overlays the preview media at width \(size.width)")
+            XCTAssertEqual(frame(play).midX, frame(viewport).midX, accuracy: 1)
         }
     }
 
@@ -932,7 +939,9 @@ final class RecordingEditorTests: XCTestCase {
 
         worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 4_567, exact: true))
         try button("Estimate size", in: controller.root).performClick(nil)
-        let estimateText = labels(in: controller.root).first { $0.contains("KB") }
+        let estimateLabel = try field("Recording size estimate", in: controller.root)
+        let estimateText = estimateLabel.stringValue
+        XCTAssertEqual(estimateText, "4.6 KB")
         let dirty = controller.dirty
         let requests = worker.requests.count
         let acceptedImage = image.image
@@ -943,7 +952,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(scroll.hasHorizontalScroller); XCTAssertTrue(scroll.hasVerticalScroller)
         XCTAssertTrue(image.image === acceptedImage)
         XCTAssertEqual(controller.dirty, dirty); XCTAssertEqual(worker.requests.count, requests)
-        XCTAssertEqual(labels(in: controller.root).first { $0.contains("KB") }, estimateText,
+        XCTAssertEqual(estimateLabel.stringValue, estimateText,
                        "display scale leaves the accepted estimate intact")
 
         let play = try button("Play", in: controller.root)
@@ -1219,22 +1228,28 @@ final class RecordingEditorTests: XCTestCase {
             XCTAssertEqual(maximumWidth.titleOfSelectedItem, "800 px")
             XCTAssertFalse(fps.isHiddenOrHasHiddenAncestor)
             XCTAssertFalse(maximumWidth.isHiddenOrHasHiddenAncestor)
+            XCTAssertEqual(try field("Recording editor title", in: controller.root).stringValue,
+                           "Edit recording", "a video source keeps its title while saving a GIF")
+            XCTAssertEqual(try popup("Recording export format", in: controller.root).titleOfSelectedItem,
+                           ".gif")
             try render(controller.root, name: "recording-editor-gif-24-fps-\(appearance)")
 
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            XCTAssertLessThanOrEqual(destination.frame.maxX + 8, maximumWidth.frame.minX - 72,
-                                     "minimum destination leaves room for both GIF labels")
-            XCTAssertLessThanOrEqual(maximumWidth.frame.maxX + 8, fps.frame.minX - 62)
-            XCTAssertLessThanOrEqual(fps.frame.maxX + 8, change.frame.minX)
-            XCTAssertTrue(controller.root.bounds.intersects(fps.frame))
-            XCTAssertTrue(controller.root.bounds.intersects(maximumWidth.frame))
-            let audioNote = try XCTUnwrap(descendants(in: controller.root)
+            // `.editor-output-card`: Frame rate beside Maximum width.
+            XCTAssertLessThanOrEqual(fps.frame.maxX + 8, maximumWidth.frame.minX)
+            XCTAssertTrue(fps.superview === maximumWidth.superview)
+            XCTAssertTrue(fps.superview!.bounds.contains(maximumWidth.frame))
+            XCTAssertLessThanOrEqual(destination.frame.maxX + 4, change.frame.minX,
+                                     "the save folder never runs under Change…")
+            // GIFs replace the audio rows with the shipping note.
+            let gifNote = try XCTUnwrap(descendants(in: controller.root)
                 .compactMap { $0 as? NSTextField }
-                .first { $0.stringValue == "GIF silent · MP4 kept" })
-            XCTAssertGreaterThanOrEqual(audioNote.frame.width, audioNote.intrinsicContentSize.width,
-                                        "minimum GIF audio status is not clipped")
-            XCTAssertLessThanOrEqual(audioNote.frame.maxX + 8,
-                                     try checkbox("Mono audio output", in: controller.root).frame.minX)
+                .first { $0.stringValue == "GIFs do not include recorded audio." })
+            XCTAssertFalse(gifNote.isHiddenOrHasHiddenAncestor)
+            XCTAssertTrue(gifNote.superview!.bounds.contains(gifNote.frame))
+            XCTAssertTrue(try checkbox("Mono audio output", in: controller.root).isHidden)
+            XCTAssertEqual(try field("Recording preview mode", in: controller.root).stringValue,
+                           "Silent playback")
             try render(controller.root,
                        name: "recording-editor-gif-24-fps-minimum-\(appearance)")
 
@@ -1261,7 +1276,8 @@ final class RecordingEditorTests: XCTestCase {
                              outputDirectory: "/Exports")
             let uncappedLabel = try field("Recording size estimate", in: uncapped.root)
             let estimate = try button("Estimate size", in: uncapped.root)
-            for (suffix, size) in [("normal", NSSize(width: 960, height: 760)),
+            XCTAssertEqual(uncappedLabel.stringValue, "—")
+            for (suffix, size) in [("normal", NSSize(width: 960, height: 600)),
                                    ("minimum", NSSize(width: 760, height: 540))] {
                 uncapped.window.setContentSize(size)
                 XCTAssertLessThanOrEqual(uncappedLabel.frame.maxX + 8, estimate.frame.minX,
@@ -1270,13 +1286,21 @@ final class RecordingEditorTests: XCTestCase {
                            name: "recording-editor-estimate-\(appearance)-\(suffix)")
             }
             try dispatchButtonClick(estimate, in: uncapped)
-            XCTAssertFalse(uncappedLabel.stringValue.contains("not estimated"),
+            XCTAssertEqual(uncappedLabel.stringValue, "1.5 MB",
                            "window dispatch reaches the unobscured Estimate size button")
+            let mode = try popup("Save quality", in: uncapped.root)
             let uncappedQuality = try popup("Recording export quality", in: uncapped.root)
-            uncappedQuality.selectItem(withTitle: "Tiny")
-            _ = uncappedQuality.sendAction(uncappedQuality.action, to: uncappedQuality.target)
-            try checkbox("Maximum recording file size", in: uncapped.root).performClick(nil)
-            XCTAssertEqual(uncappedQuality.titleOfSelectedItem, "Preserve")
+            XCTAssertEqual(mode.titleOfSelectedItem, "Preserve quality")
+            XCTAssertTrue(uncappedQuality.isHidden, "Preserve quality has no Compress preset")
+            choose(mode, "Compress")
+            XCTAssertFalse(uncappedQuality.isHidden)
+            XCTAssertEqual(uncappedQuality.titleOfSelectedItem, "Highest",
+                           "Compress starts from the shipping Highest preset")
+            choose(uncappedQuality, "Tiny")
+            choose(mode, "Maximum file size")
+            XCTAssertTrue(uncappedQuality.isHidden)
+            XCTAssertEqual(uncappedQuality.titleOfSelectedItem, "Tiny",
+                           "Maximum keeps the remembered Compress preset")
             try render(uncapped.root,
                        name: "recording-editor-maximum-from-tiny-minimum-\(appearance)")
 
@@ -1288,27 +1312,28 @@ final class RecordingEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                                outputDirectory: "/Exports")
-            let maximum = try checkbox("Maximum recording file size", in: controller.root)
+            let maximum = try popup("Save quality", in: controller.root)
             let value = try field("Maximum recording file size value", in: controller.root)
             let unit = try popup("Maximum recording file size unit", in: controller.root)
             let warning = try field("Maximum recording file size preview warning",
                                     in: controller.root)
-            XCTAssertEqual(maximum.state, .on)
+            XCTAssertEqual(maximum.titleOfSelectedItem, "Maximum file size")
             XCTAssertEqual(value.stringValue, "0.100019")
             XCTAssertEqual(unit.titleOfSelectedItem, "MB")
             XCTAssertFalse(warning.isHiddenOrHasHiddenAncestor)
+            XCTAssertTrue(try button("Estimate size", in: controller.root).isHidden,
+                          "a hard limit replaces the estimate action")
             try render(controller.root, name: "recording-editor-maximum-size-\(appearance)")
 
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            XCTAssertGreaterThanOrEqual(warning.frame.width, warning.intrinsicContentSize.width,
-                                        "minimum layout shows the complete budget-free warning")
-            XCTAssertLessThanOrEqual(warning.frame.maxX + 8,
-                                     try button("Cancel operation", in: controller.root).frame.minX)
-            XCTAssertLessThanOrEqual(unit.frame.maxX + 8,
-                                     try button("Save new copy", in: controller.root).frame.minX)
+            let card = try XCTUnwrap(warning.superview)
+            XCTAssertTrue(card.bounds.contains(warning.frame),
+                          "minimum layout keeps the complete budget-free warning in its card")
+            XCTAssertTrue(card.bounds.contains(unit.frame))
+            XCTAssertLessThanOrEqual(value.frame.maxX + 8, unit.frame.minX)
             let capLabel = try field("Recording size estimate", in: controller.root)
-            XCTAssertLessThanOrEqual(capLabel.frame.maxX + 8,
-                                     try button("Save new copy", in: controller.root).frame.minX)
+            XCTAssertEqual(capLabel.stringValue, "≤ 100 KB")
+            XCTAssertTrue(card.bounds.contains(capLabel.frame))
             try render(controller.root,
                        name: "recording-editor-maximum-size-minimum-\(appearance)")
 
@@ -1421,7 +1446,7 @@ final class RecordingEditorTests: XCTestCase {
                        "Loop cannot change while another operation owns the serialized worker")
         XCTAssertFalse(controller.windowShouldClose(controller.window),
                        "accepted thumbnail generation uses the existing busy close gate")
-        let cancel = try button("Cancel operation", in: controller.root)
+        let cancel = try button("Cancel thumbnails", in: controller.root)
         cancel.performClick(nil)
         XCTAssertTrue(try XCTUnwrap(worker.observedThumbnailCancel).isCancelled)
         XCTAssertEqual(timeline.thumbnailStateDescription, "Cancelling source thumbnails…")
@@ -1606,11 +1631,13 @@ final class RecordingEditorTests: XCTestCase {
         let motionImage = image.image
         play.performClick(nil); worker.completePlayback(.success(.cancelled))
         adjust.performClick(nil)
-        XCTAssertTrue(labels(in: controller.root).contains {
-            $0 == "Full source · 0:00.400"
-        }, "crop mode labels the accepted source time, not the paused motion time")
-        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("0:00.733 / 0:02.000") },
-                      "crop mode does not change the transient playback resume position")
+        XCTAssertTrue(try field("Recording source details", in: controller.root).stringValue
+            .hasPrefix("Uncropped source · 0:00.400 · 320 × 180"),
+            "crop mode labels the accepted source time, not the paused motion time")
+        XCTAssertEqual(try slider("Recording frame position", in: controller.root).doubleValue, 733,
+                       "crop mode does not change the transient playback resume position")
+        XCTAssertEqual(try field("Recording preview mode", in: controller.root).stringValue,
+                       "Source crop")
         try button("Done cropping", in: controller.root).performClick(nil)
         XCTAssertTrue(image.image === motionImage,
                       "Done restores the exact previously presented motion frame")
@@ -1655,7 +1682,7 @@ final class RecordingEditorTests: XCTestCase {
         try button("Adjust crop", in: controller.root).performClick(nil)
         XCTAssertFalse(controller.windowShouldClose(controller.window))
         XCTAssertFalse(controller.prepareForTermination())
-        let cancel = try button("Cancel operation", in: controller.root)
+        let cancel = try button("Cancel source preview", in: controller.root)
         cancel.performClick(nil)
         XCTAssertTrue(try XCTUnwrap(worker.observedSourceCancel).isCancelled)
         worker.completeSource(.success(RecordingSourceImage(positionMilliseconds: 400,
@@ -1957,14 +1984,22 @@ final class RecordingEditorTests: XCTestCase {
             .compactMap { $0 as? RecordingTrimHandle }.first { $0.edge == .end })
         let start = try field("Trim start milliseconds", in: controller.root)
         let end = try field("Trim end milliseconds", in: controller.root)
-        let explanation = try XCTUnwrap(descendants(in: controller.root)
+        let retry = try button("Retry", in: controller.root)
+        let failure = try XCTUnwrap(descendants(in: controller.root)
             .compactMap { $0 as? NSTextField }
-            .first { !$0.isEditable && $0.stringValue.hasPrefix("Apply before") })
+            .first { $0.stringValue == "Source thumbnails unavailable." })
+        let selected = try field("Recording selected duration", in: controller.root)
 
-        for size in [NSSize(width: 960, height: 760), NSSize(width: 760, height: 540)] {
+        for size in [NSSize(width: 960, height: 600), NSSize(width: 760, height: 540)] {
             controller.window.setContentSize(size)
-            XCTAssertLessThanOrEqual(explanation.intrinsicContentSize.width, explanation.frame.width,
-                                     "Retry must not clip the adjacent edit-gating explanation")
+            XCTAssertFalse(retry.isHiddenOrHasHiddenAncestor)
+            XCTAssertFalse(failure.isHiddenOrHasHiddenAncestor)
+            XCTAssertLessThanOrEqual(failure.frame.maxX, retry.frame.minX,
+                                     "the thumbnail failure note stays before Retry")
+            XCTAssertLessThanOrEqual(retry.frame.maxX, selected.frame.minX,
+                                     "Retry never covers the selected-duration summary")
+            XCTAssertLessThanOrEqual(retry.frame.maxY, timeline.frame.minY,
+                                     "Retry sits in the summary row, above the track")
             start.stringValue = "200"; end.stringValue = "1800"
             controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                          object: start))
@@ -2042,7 +2077,7 @@ final class RecordingEditorTests: XCTestCase {
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: start))
         let format = try popup("Recording export format", in: controller.root)
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertFalse(try slider("Recording frame position", in: controller.root).isEnabled)
         XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
         worker.requestResult = .failure(AppBridgeError.backend("preview unavailable"))
@@ -2058,7 +2093,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(export["max_size_bytes"] is NSNull,
                       "the host preserves the accepted uncapped Save export")
         XCTAssertEqual(start.stringValue, "250"); XCTAssertEqual(end.stringValue, "1250")
-        XCTAssertEqual(format.titleOfSelectedItem, "GIF")
+        XCTAssertEqual(format.titleOfSelectedItem, ".gif")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("preview unavailable") })
         XCTAssertFalse(controller.prepareForTermination(), "staged recording edits have no draft")
     }
@@ -2266,7 +2301,9 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(mode.titleOfSelectedItem, "Custom")
         XCTAssertEqual(outputWidth.stringValue, "81"); XCTAssertEqual(outputHeight.stringValue, "61")
 
-        mode.selectItem(withTitle: "Original"); _ = mode.sendAction(mode.action, to: mode.target)
+        XCTAssertEqual(mode.itemTitles.first, "Original — 1000 × 500",
+                       "Original names the staged crop base like shipping")
+        mode.selectItem(at: 0); _ = mode.sendAction(mode.action, to: mode.target)
         worker.requestResult = .success(try presentation(position: 500, revision: 4,
             sourceWidth: 4_001, sourceHeight: 2_003,
             crop: NativeRecordingCropRect(x: 20, y: 30, width: 1_001, height: 501)))
@@ -2292,9 +2329,11 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(system.stringValue, "80%")
         XCTAssertEqual(microphone.stringValue, "120%")
         system.stringValue = "25"; microphone.stringValue = "175"
-        let muteMicrophone = try checkbox("Mute microphone", in: controller.root)
+        let includeMicrophone = try checkbox("Microphone", in: controller.root)
         let monoOutput = try checkbox("Mono audio output", in: controller.root)
-        muteMicrophone.state = .on; monoOutput.state = .on
+        XCTAssertEqual(includeMicrophone.state, .on, "checked tracks are included, like shipping")
+        XCTAssertEqual(monoOutput.title, "Convert to mono")
+        includeMicrophone.state = .off; monoOutput.state = .on
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: system))
         XCTAssertFalse(try slider("Recording frame position", in: controller.root).isEnabled)
@@ -2388,10 +2427,11 @@ final class RecordingEditorTests: XCTestCase {
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: start))
         let format = try popup("Recording export format", in: controller.root)
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
-        let muteSystem = try checkbox("Mute system audio", in: controller.root)
-        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
-        muteSystem.state = .on; _ = muteSystem.sendAction(muteSystem.action, to: muteSystem.target)
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
+        let includeSystem = try checkbox("System audio", in: controller.root)
+        format.selectItem(withTitle: ".mp4"); _ = format.sendAction(format.action, to: format.target)
+        includeSystem.state = .off
+        _ = includeSystem.sendAction(includeSystem.action, to: includeSystem.target)
         worker.requestResult = .success(try presentation(start: 100, position: 500, revision: 4,
             hasSystemAudio: true, hasMicrophoneAudio: true,
             systemVolume: Double(Float(0.1234)), microphoneVolume: Double(Float(0.29)),
@@ -2430,13 +2470,15 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
 
         let format = try popup("Recording export format", in: controller.root)
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertFalse(system.isEnabled); XCTAssertFalse(microphone.isEnabled)
-        XCTAssertFalse(try checkbox("Mute system audio", in: controller.root).isEnabled)
+        XCTAssertFalse(try checkbox("System audio", in: controller.root).isEnabled)
         XCTAssertFalse(try checkbox("Mono audio output", in: controller.root).isEnabled)
         XCTAssertEqual(system.stringValue, "30"); XCTAssertEqual(microphone.stringValue, "160")
-        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("MP4 kept") })
-        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertFalse(try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == "GIFs do not include recorded audio." }).isHiddenOrHasHiddenAncestor,
+            "GIF output shows the shipping audio note while MP4 settings are kept")
+        format.selectItem(withTitle: ".mp4"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertTrue(system.isEnabled); XCTAssertTrue(microphone.isEnabled)
         XCTAssertEqual(system.stringValue, "30"); XCTAssertEqual(microphone.stringValue, "160")
 
@@ -2446,7 +2488,10 @@ final class RecordingEditorTests: XCTestCase {
         defer { silent.window.orderOut(nil) }
         silent.present(artifact: recordingArtifact(), historyRoot: "/History",
                        outputDirectory: "/Exports")
-        XCTAssertTrue(labels(in: silent.root).contains { $0 == "No audio tracks" })
+        XCTAssertEqual(try field("Recording preview mode", in: silent.root).stringValue,
+                       "Silent playback")
+        XCTAssertTrue(try checkbox("Mono audio output", in: silent.root).isHiddenOrHasHiddenAncestor,
+                      "a recording without audio shows no Audio card")
         XCTAssertTrue(try field("System audio volume percent", in: silent.root).isHiddenOrHasHiddenAncestor)
         XCTAssertTrue(try field("Microphone volume percent", in: silent.root).isHiddenOrHasHiddenAncestor)
 
@@ -2475,7 +2520,7 @@ final class RecordingEditorTests: XCTestCase {
         let save = try button("Save new copy", in: controller.root)
         XCTAssertTrue(fps.isHiddenOrHasHiddenAncestor)
 
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertFalse(fps.isHiddenOrHasHiddenAncestor)
         XCTAssertEqual(fps.itemTitles, ["8 FPS", "10 FPS", "12 FPS", "15 FPS",
                                         "20 FPS", "24 FPS", "30 FPS"])
@@ -2512,7 +2557,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("GIF preview unavailable") })
 
         fps.selectItem(withTitle: "8 FPS"); _ = fps.sendAction(fps.action, to: fps.target)
-        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".mp4"); _ = format.sendAction(format.action, to: format.target)
         worker.requestResult = .success(try presentation(revision: 2, exportFormat: "mp4"))
         try button("Apply edits", in: controller.root).performClick(nil)
         let mp4Export = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
@@ -2520,7 +2565,7 @@ final class RecordingEditorTests: XCTestCase {
                       "GIF cadence never changes MP4 export cadence")
         XCTAssertTrue(fps.isHiddenOrHasHiddenAncestor)
 
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertEqual(fps.titleOfSelectedItem, "8 FPS", "MP4 roundtrip remembers the GIF choice")
         worker.requestResult = .success(try presentation(revision: 3,
             output: NativeRecordingDimensions(width: 320, height: 180),
@@ -2547,7 +2592,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(worker.openCount, 2, "a clean item switch opens the new History item")
         XCTAssertTrue(fps.isHiddenOrHasHiddenAncestor)
         let requestCount = worker.requests.count
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertEqual(fps.titleOfSelectedItem, "15 FPS",
                        "a successful new-item open resets remembered GIF cadence")
         XCTAssertEqual(worker.requests.count, requestCount,
@@ -2572,7 +2617,7 @@ final class RecordingEditorTests: XCTestCase {
         let save = try button("Save new copy", in: controller.root)
         XCTAssertTrue(maximumWidth.isHiddenOrHasHiddenAncestor)
 
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertEqual(maximumWidth.itemTitles, ["320 px", "480 px", "640 px", "800 px", "1200 px"])
         XCTAssertEqual(maximumWidth.titleOfSelectedItem, "800 px")
         XCTAssertFalse(maximumWidth.isHiddenOrHasHiddenAncestor)
@@ -2620,7 +2665,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(outputHeight.stringValue, "901",
                        "seek retains both the GIF choice and its independent custom base")
 
-        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".mp4"); _ = format.sendAction(format.action, to: format.target)
         worker.requestResult = .success(try presentation(
             position: 733, revision: 4, sourceWidth: 2_001, sourceHeight: 3_001,
             output: NativeRecordingDimensions(width: 1601, height: 901)))
@@ -2631,7 +2676,7 @@ final class RecordingEditorTests: XCTestCase {
                        "MP4 restores the independent custom base dimensions")
         XCTAssertTrue(maximumWidth.isHiddenOrHasHiddenAncestor)
 
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertEqual(maximumWidth.titleOfSelectedItem, "1200 px")
         maximumWidth.selectItem(withTitle: "320 px")
         _ = maximumWidth.sendAction(maximumWidth.action, to: maximumWidth.target)
@@ -2664,7 +2709,7 @@ final class RecordingEditorTests: XCTestCase {
         controller.present(artifact: recordingArtifact(id: "next-recording"),
                            historyRoot: "/History", outputDirectory: "/Exports")
         XCTAssertEqual(worker.openCount, 2)
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertEqual(maximumWidth.titleOfSelectedItem, "800 px",
                        "a successful new-item open resets the item-local maximum width")
     }
@@ -2682,7 +2727,7 @@ final class RecordingEditorTests: XCTestCase {
         let format = try popup("Recording export format", in: controller.root)
         let maximumWidth = try popup("GIF maximum width", in: controller.root)
         let outputMode = try popup("Recording output size", in: controller.root)
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
         maximumWidth.selectItem(withTitle: "1200 px")
         _ = maximumWidth.sendAction(maximumWidth.action, to: maximumWidth.target)
         worker.requestResult = .success(try presentation(
@@ -2737,62 +2782,70 @@ final class RecordingEditorTests: XCTestCase {
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
         let label = try field("Recording size estimate", in: controller.root)
+        let delta = try field("Recording size estimate change", in: controller.root)
         let estimate = try button("Estimate size", in: controller.root)
         let start = try field("Trim start milliseconds", in: controller.root)
-        let maximum = try checkbox("Maximum recording file size", in: controller.root)
+        let mode = try popup("Save quality", in: controller.root)
+        XCTAssertEqual(label.stringValue, "—")
 
         worker.deferEstimate = true
         estimate.performClick(nil)
-        XCTAssertFalse(label.stringValue.contains("%"), "pending estimate has no delta")
+        XCTAssertEqual(label.stringValue, "Estimating…")
+        XCTAssertTrue(delta.isHidden, "pending estimate has no delta")
+        XCTAssertEqual(try button("Cancel estimate", in: controller.root).isHidden, false)
         worker.completeEstimate(.success(RecordingEditorEstimate(sizeBytes: 400_000, exact: true)))
-        XCTAssertTrue(label.stringValue.hasSuffix(" · −60%"))
-        XCTAssertEqual(label.toolTip,
-                       "Percentage change compares the estimated saved size with the original recording file size.")
+        XCTAssertEqual(label.stringValue, "400 KB")
+        XCTAssertFalse(delta.isHidden); XCTAssertEqual(delta.stringValue, "−60%")
+        XCTAssertEqual(label.toolTip, "Estimated saved file size for the current edits and settings")
         XCTAssertEqual(label.accessibilityHelp(), label.toolTip)
+        XCTAssertEqual(delta.toolTip, "Change versus the original recording file")
 
         let seek = try slider("Recording frame position", in: controller.root)
         worker.requestResult = .failure(AppBridgeError.backend("seek unavailable"))
         seek.doubleValue = 500; _ = seek.sendAction(seek.action, to: seek.target)
-        XCTAssertTrue(label.stringValue.hasSuffix(" · −60%"),
-                      "a failed Seek does not invalidate the accepted estimate")
+        XCTAssertEqual(delta.stringValue, "−60%",
+                       "a failed Seek does not invalidate the accepted estimate")
+        XCTAssertFalse(delta.isHidden)
         worker.requestResult = .success(try presentation(position: 733, revision: 1,
                                                           sourceSizeBytes: 1_000_000))
         seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
-        XCTAssertTrue(label.stringValue.hasSuffix(" · −60%"),
-                      "seek retains an estimate for unchanged accepted settings")
+        XCTAssertEqual(label.stringValue, "400 KB",
+                       "seek retains an estimate for unchanged accepted settings")
+        XCTAssertFalse(delta.isHidden)
 
         start.stringValue = "100"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: start))
-        XCTAssertEqual(label.stringValue, "Apply edits to estimate size")
-        XCTAssertFalse(label.stringValue.contains("%"), "staged edits invalidate the delta")
+        XCTAssertEqual(label.stringValue, "Apply edits to estimate")
+        XCTAssertTrue(delta.isHidden, "staged edits invalidate the delta")
         start.stringValue = "0"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: start))
-        XCTAssertEqual(label.stringValue, "Size not estimated")
+        XCTAssertEqual(label.stringValue, "—")
 
         worker.deferEstimate = false
         worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_250_000,
                                                                  exact: false))
         estimate.performClick(nil)
-        XCTAssertTrue(label.stringValue.hasPrefix("≈ "))
-        XCTAssertTrue(label.stringValue.hasSuffix(" · +25%"))
+        XCTAssertEqual(label.stringValue, "≈ 1.3 MB", "shipping toFixed rounds 1.25 up")
+        XCTAssertEqual(delta.stringValue, "+25%"); XCTAssertFalse(delta.isHidden)
 
-        maximum.performClick(nil)
-        XCTAssertFalse(label.stringValue.contains("%"), "Maximum shows only its cap")
-        maximum.performClick(nil)
+        choose(mode, "Maximum file size")
+        XCTAssertTrue(delta.isHidden, "Maximum shows only its cap")
+        choose(mode, "Preserve quality")
         worker.estimateResult = .failure(AppBridgeError.backend("estimate failed"))
         estimate.performClick(nil)
-        XCTAssertFalse(label.stringValue.contains("%"), "estimate errors publish no delta")
+        XCTAssertTrue(delta.isHidden, "estimate errors publish no delta")
 
         worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_004_000,
                                                                  exact: true))
         estimate.performClick(nil)
-        XCTAssertFalse(label.stringValue.contains("%"), "a delta rounded to zero stays hidden")
+        XCTAssertEqual(label.stringValue, "1.0 MB")
+        XCTAssertTrue(delta.isHidden, "a delta rounded to zero stays hidden")
         controller.present(artifact: recordingArtifact(id: "next-recording"),
                            historyRoot: "/History", outputDirectory: "/Exports")
         XCTAssertEqual(worker.openCount, 2)
-        XCTAssertEqual(label.stringValue, "Size not estimated")
+        XCTAssertEqual(label.stringValue, "—")
     }
 
     func testEstimateDeltaRenderedExactApproximateNormalAndMinimum() throws {
@@ -2807,17 +2860,23 @@ final class RecordingEditorTests: XCTestCase {
             controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                                outputDirectory: "/Exports")
             let label = try field("Recording size estimate", in: controller.root)
+            let delta = try field("Recording size estimate change", in: controller.root)
             let estimate = try button("Estimate size", in: controller.root)
 
             worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 400_000,
                                                                      exact: true))
             estimate.performClick(nil)
-            XCTAssertTrue(label.stringValue.hasSuffix(" · −60%"))
+            XCTAssertEqual(label.stringValue, "400 KB")
+            XCTAssertEqual(delta.stringValue, "−60%")
+            XCTAssertLessThanOrEqual(label.frame.maxX, delta.frame.minX)
+            XCTAssertLessThanOrEqual(delta.frame.maxX + 8, estimate.frame.minX,
+                                     "the delta pill sits between the size and Estimate size")
             try render(controller.root,
                        name: "recording-editor-estimate-delta-exact-\(appearance)")
 
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             XCTAssertGreaterThanOrEqual(label.frame.width, label.intrinsicContentSize.width)
+            XCTAssertGreaterThanOrEqual(delta.frame.width, delta.intrinsicContentSize.width)
             try render(controller.root,
                        name: "recording-editor-estimate-delta-exact-minimum-\(appearance)")
 
@@ -2825,8 +2884,9 @@ final class RecordingEditorTests: XCTestCase {
                                                                      exact: false))
             estimate.performClick(nil)
             XCTAssertTrue(label.stringValue.hasPrefix("≈ "))
-            XCTAssertTrue(label.stringValue.hasSuffix(" · +25%"))
+            XCTAssertEqual(delta.stringValue, "+25%")
             XCTAssertGreaterThanOrEqual(label.frame.width, label.intrinsicContentSize.width)
+            XCTAssertGreaterThanOrEqual(delta.frame.width, delta.intrinsicContentSize.width)
             try render(controller.root,
                        name: "recording-editor-estimate-delta-approximate-minimum-\(appearance)")
         }
@@ -2842,30 +2902,35 @@ final class RecordingEditorTests: XCTestCase {
                            outputDirectory: "/Exports")
         let format = try popup("Recording export format", in: controller.root)
         let quality = try popup("Recording export quality", in: controller.root)
-        let maximum = try checkbox("Maximum recording file size", in: controller.root)
+        let mode = try popup("Save quality", in: controller.root)
         let maximumValue = try field("Maximum recording file size value", in: controller.root)
         let apply = try button("Apply edits", in: controller.root)
         let save = try button("Save new copy", in: controller.root)
 
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
-        let palettes = [("Preserve", 256), ("Highest", 256), ("High", 256),
-                        ("Standard", 128), ("Small", 96), ("Tiny", 64)]
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertEqual(mode.titleOfSelectedItem, "Compress",
+                       "shipping moves a Preserve GIF to Compress")
+        XCTAssertEqual(quality.titleOfSelectedItem, "Highest")
+        XCTAssertEqual(mode.item(withTitle: "Preserve quality")?.isHidden, true,
+                       "Preserve quality is offered only for MP4")
+        let palettes = [("Highest", "highest", 256), ("High", "high", 256),
+                        ("Balanced", "standard", 128), ("Smaller", "small", 96), ("Tiny", "tiny", 64)]
         for (index, palette) in palettes.enumerated() {
-            quality.selectItem(withTitle: palette.0)
-            _ = quality.sendAction(quality.action, to: quality.target)
+            choose(quality, palette.0)
             worker.requestResult = .success(try presentation(
                 revision: UInt64(index + 1),
                 output: NativeRecordingDimensions(width: 320, height: 180),
                 exportFormat: "gif",
-                exportQuality: palette.0.lowercased(), framesPerSecond: 15,
-                gifMaxColors: palette.1))
+                exportQuality: palette.1, framesPerSecond: 15,
+                gifMaxColors: palette.2))
             apply.performClick(nil)
             let request = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
-            XCTAssertEqual((request["gif_max_colors"] as? NSNumber)?.intValue, palette.1,
+            XCTAssertEqual(request["quality"] as? String, palette.1, palette.0)
+            XCTAssertEqual((request["gif_max_colors"] as? NSNumber)?.intValue, palette.2,
                            palette.0)
         }
 
-        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".mp4"); _ = format.sendAction(format.action, to: format.target)
         worker.requestResult = .success(try presentation(revision: 7, exportQuality: "tiny"))
         apply.performClick(nil)
         let mp4 = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
@@ -2873,9 +2938,9 @@ final class RecordingEditorTests: XCTestCase {
                       "GIF palette never changes an MP4 request")
         XCTAssertEqual(quality.titleOfSelectedItem, "Tiny")
 
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
-        maximum.performClick(nil)
-        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
+        choose(mode, "Maximum file size")
+        XCTAssertTrue(quality.isHidden)
         worker.requestResult = .success(try presentation(
             revision: 8, output: NativeRecordingDimensions(width: 320, height: 180),
             exportFormat: "gif", exportQuality: "preserve",
@@ -2893,7 +2958,7 @@ final class RecordingEditorTests: XCTestCase {
                                                      object: maximumValue))
         worker.requestResult = .failure(AppBridgeError.backend("GIF palette preview unavailable"))
         apply.performClick(nil)
-        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
+        XCTAssertEqual(mode.titleOfSelectedItem, "Maximum file size")
         let failedRequest = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
         XCTAssertEqual((failedRequest["gif_max_colors"] as? NSNumber)?.intValue, 64)
         XCTAssertTrue(try XCTUnwrap(try XCTUnwrap(descendants(in: controller.root)
@@ -2939,7 +3004,7 @@ final class RecordingEditorTests: XCTestCase {
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
         let quality = try popup("Recording export quality", in: controller.root)
-        let maximum = try checkbox("Maximum recording file size", in: controller.root)
+        let maximum = try popup("Save quality", in: controller.root)
         let value = try field("Maximum recording file size value", in: controller.root)
         let unit = try popup("Maximum recording file size unit", in: controller.root)
         let apply = try button("Apply edits", in: controller.root)
@@ -2948,9 +3013,9 @@ final class RecordingEditorTests: XCTestCase {
         let play = try button("Play", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
 
-        quality.selectItem(withTitle: "Tiny"); _ = quality.sendAction(quality.action, to: quality.target)
-        maximum.performClick(nil)
-        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
+        choose(maximum, "Compress"); choose(quality, "Tiny")
+        choose(maximum, "Maximum file size")
+        XCTAssertTrue(quality.isHidden, "Maximum saves at Preserve quality")
         value.stringValue = ".1000199"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: value))
@@ -2960,12 +3025,13 @@ final class RecordingEditorTests: XCTestCase {
         worker.requestResult = .success(try presentation(revision: 1,
                                                          saveMaximumBytes: 100_019))
         apply.performClick(nil)
-        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
+        XCTAssertEqual(maximum.titleOfSelectedItem, "Maximum file size")
         let acceptedRequest = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
         XCTAssertEqual((acceptedRequest["max_size_bytes"] as? NSNumber)?.uint64Value, 100_019)
         XCTAssertEqual(acceptedRequest["quality"] as? String, "preserve")
         XCTAssertTrue(controller.dirty)
-        XCTAssertTrue(labels(in: controller.root).contains { $0 == "≤ 0.100019 MB" })
+        XCTAssertEqual(try field("Recording size estimate", in: controller.root).stringValue,
+                       "≤ 100 KB")
 
         unit.selectItem(withTitle: "KB"); _ = unit.sendAction(unit.action, to: unit.target)
         XCTAssertEqual(value.stringValue, "100.019")
@@ -2996,11 +3062,11 @@ final class RecordingEditorTests: XCTestCase {
                                                          saveMaximumBytes: 100_019))
         seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
         XCTAssertEqual(value.stringValue, "100.019")
-        XCTAssertEqual(quality.titleOfSelectedItem, "Preserve")
+        XCTAssertEqual(maximum.titleOfSelectedItem, "Maximum file size")
         XCTAssertFalse(controller.dirty)
 
         let format = try popup("Recording export format", in: controller.root)
-        format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
         worker.requestResult = .success(try presentation(position: 733, revision: 3,
             output: NativeRecordingDimensions(width: 320, height: 180),
             exportFormat: "gif", saveMaximumBytes: 100_019, framesPerSecond: 15))
@@ -3008,7 +3074,7 @@ final class RecordingEditorTests: XCTestCase {
         let gifRequest = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
         XCTAssertEqual(gifRequest["format"] as? String, "gif")
         XCTAssertEqual((gifRequest["max_size_bytes"] as? NSNumber)?.uint64Value, 100_019)
-        format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+        format.selectItem(withTitle: ".mp4"); _ = format.sendAction(format.action, to: format.target)
         worker.requestResult = .success(try presentation(position: 733, revision: 4,
                                                           saveMaximumBytes: 100_019))
         apply.performClick(nil)
@@ -3026,7 +3092,7 @@ final class RecordingEditorTests: XCTestCase {
         value.stringValue = "100.019"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: value))
-        maximum.performClick(nil)
+        choose(maximum, "Compress")
         XCTAssertTrue(quality.isEnabled)
         XCTAssertEqual(quality.titleOfSelectedItem, "Tiny",
                        "leaving maximum restores the prior quality preference")
@@ -3040,7 +3106,7 @@ final class RecordingEditorTests: XCTestCase {
         controller.present(artifact: recordingArtifact(id: "next-recording"),
                            historyRoot: "/History", outputDirectory: "/Exports")
         XCTAssertEqual(worker.openCount, 2)
-        XCTAssertEqual(maximum.state, .off)
+        XCTAssertEqual(maximum.titleOfSelectedItem, "Preserve quality")
         XCTAssertEqual(value.stringValue, "10")
         XCTAssertEqual(unit.titleOfSelectedItem, "MB")
         XCTAssertFalse(controller.dirty)
@@ -3077,8 +3143,25 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("≈") && $0.contains("MB") })
         worker.saveResult = .success(.savedWithoutHistory(path: "/Exports/edited.mp4",
                                                           warning: "History disk unavailable"))
+        let filename = try field("Saved filename", in: controller.root)
+        XCTAssertTrue(filename.stringValue.hasPrefix("Captures_") && filename.stringValue.hasSuffix("_edited"),
+                      "the default stem matches the wgpu host")
+        XCTAssertEqual(try field("Recording destination", in: controller.root).stringValue, "/Exports")
+        filename.stringValue = "bad/name"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: filename))
         try button("Save new copy", in: controller.root).performClick(nil)
-        XCTAssertEqual(worker.saves.first?.destination, "/Exports/recording-edit-recordin.mp4")
+        XCTAssertTrue(worker.saves.isEmpty, "invalid filenames never reach the worker")
+        XCTAssertTrue(labels(in: controller.root).contains {
+            $0 == "Enter a filename without folders or reserved characters." })
+        filename.stringValue = "edited"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: filename))
+        XCTAssertFalse(labels(in: controller.root).contains {
+            $0 == "Enter a filename without folders or reserved characters." },
+            "editing the filename clears its error")
+        try button("Save new copy", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.saves.first?.destination, "/Exports/edited.mp4")
         XCTAssertEqual(historyReloads, 0, "post-publication warning must not claim a History update")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("edited.mp4") })
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("History disk unavailable") })
@@ -3120,11 +3203,56 @@ final class RecordingEditorTests: XCTestCase {
                            historyRoot: "/History", outputDirectory: "/Elsewhere")
         XCTAssertEqual(worker.openCount, 1, "busy same/different-item requests cannot reopen the session")
         XCTAssertNotNil(worker.observedSaveCancel, "same-item focus retains the independent cancel token")
-        XCTAssertFalse(try button("Cancel operation", in: controller.root).isHiddenOrHasHiddenAncestor)
+        XCTAssertFalse(try button("Cancel export", in: controller.root).isHiddenOrHasHiddenAncestor)
         worker.completeSave(.success(.saved(path: "/Exports/recording-edit-recordin.mp4")))
         XCTAssertEqual(historyReloads, 1, "accepted save completion still publishes to History")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("recording-edit-recordin.mp4") })
         XCTAssertFalse(controller.dirty)
+    }
+
+    func testShowInFolderRevealsOnlyTheLastSuccessfulCopy() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        var revealed: [URL] = []
+        controller.revealFiles = { revealed.append(contentsOf: $0) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let show = try button("Show in Folder", in: controller.root)
+        XCTAssertTrue(show.isHidden, "shipping hides Show in Folder until a save succeeds")
+        let filename = try field("Saved filename", in: controller.root)
+        filename.stringValue = "clip"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: filename))
+        worker.deferSave = true
+        try button("Save new copy", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.saves.last?.destination, "/Exports/clip.mp4")
+        XCTAssertTrue(show.isHidden, "a running save hides the previous copy's action")
+        XCTAssertFalse(try button("Cancel export", in: controller.root).isHidden)
+        worker.completeSave(.success(.saved(path: "/Exports/clip.mp4")))
+        XCTAssertFalse(show.isHidden)
+        let format = try popup("Recording export format", in: controller.root)
+        let replace = try button("Replace original…", in: controller.root)
+        for size in [NSSize(width: 960, height: 600), NSSize(width: 760, height: 540)] {
+            controller.window.setContentSize(size)
+            XCTAssertLessThanOrEqual(show.frame.maxX, replace.frame.minX,
+                                     "Show in Folder sits left of the save actions at \(size.width)")
+            XCTAssertTrue(show.frame.minX >= format.frame.maxX || show.frame.minY >= format.frame.maxY,
+                          "footer actions never cover the filename field at \(size.width)")
+            XCTAssertTrue(show.superview!.bounds.contains(show.frame))
+        }
+        show.performClick(nil)
+        XCTAssertEqual(revealed, [URL(fileURLWithPath: "/Exports/clip.mp4")])
+
+        worker.saveResult = .failure(AppBridgeError.backend("disk full"))
+        worker.deferSave = false
+        filename.stringValue = "second"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
+                                                     object: filename))
+        try button("Save new copy", in: controller.root).performClick(nil)
+        XCTAssertTrue(show.isHidden, "a failed save never offers the stale copy")
     }
 
     func testExternalOpenCompletionWaitsForRecordingThumbnailsAndRefusesDirtySwitch() throws {
@@ -3210,9 +3338,9 @@ final class RecordingEditorTests: XCTestCase {
             try render(controller.root, name: "recording-editor-trim-staged-\(appearance)")
             timeline.nudge(edge: .start, direction: -1, page: true)
             let format = try popup("Recording export format", in: controller.root)
-            format.selectItem(withTitle: "GIF"); _ = format.sendAction(format.action, to: format.target)
+            format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
             try render(controller.root, name: "recording-editor-gif-audio-disabled-\(appearance)")
-            format.selectItem(withTitle: "MP4"); _ = format.sendAction(format.action, to: format.target)
+            format.selectItem(withTitle: ".mp4"); _ = format.sendAction(format.action, to: format.target)
             let cropEnabled = try checkbox("Crop recording", in: controller.root)
             cropEnabled.state = .on; _ = cropEnabled.sendAction(cropEnabled.action,
                                                                  to: cropEnabled.target)
@@ -3229,7 +3357,7 @@ final class RecordingEditorTests: XCTestCase {
             try render(controller.root, name: "recording-editor-crop-output-staged-\(appearance)")
             cropEnabled.state = .off; _ = cropEnabled.sendAction(cropEnabled.action,
                                                                   to: cropEnabled.target)
-            outputMode.selectItem(withTitle: "Original")
+            outputMode.selectItem(at: 0)
             _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             XCTAssertTrue(controller.root.subviews.allSatisfy {
@@ -3244,16 +3372,16 @@ final class RecordingEditorTests: XCTestCase {
             controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                          object: outputWidth))
             try render(controller.root, name: "recording-editor-custom-output-minimum-\(appearance)")
-            outputMode.selectItem(withTitle: "Original")
+            outputMode.selectItem(at: 0)
             _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
 
             worker.deferSave = true
             try button("Save new copy", in: controller.root).performClick(nil)
             XCTAssertFalse(systemVolume.isEnabled)
-            XCTAssertFalse(try checkbox("Mute system audio", in: controller.root).isEnabled)
+            XCTAssertFalse(try checkbox("System audio", in: controller.root).isEnabled)
             XCTAssertFalse(controller.windowShouldClose(controller.window))
             XCTAssertFalse(controller.prepareForTermination())
-            let cancel = try button("Cancel operation", in: controller.root)
+            let cancel = try button("Cancel export", in: controller.root)
             XCTAssertFalse(cancel.isHiddenOrHasHiddenAncestor); cancel.performClick(nil)
             worker.completeSave(.failure(AppBridgeError.backend("Export cancelled")))
             XCTAssertTrue(systemVolume.isEnabled)
@@ -4319,19 +4447,30 @@ final class RecordingEditorTests: XCTestCase {
     private func button(_ title: String, in view: NSView) throws -> CaptureButton {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }.first { $0.title == title })
     }
+    /// Picks a popup item by title and sends its action, as a user choice does.
+    private func choose(_ popup: NSPopUpButton, _ title: String,
+                        file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertNotNil(popup.item(withTitle: title), "\(title) is offered", file: file, line: line)
+        popup.selectItem(withTitle: title)
+        _ = popup.sendAction(popup.action, to: popup.target)
+    }
     private func windowHit(_ handle: RecordingTrimHandle,
                            in controller: RecordingEditorController) throws -> NSView {
+        // The editor page scrolls; bring the control into view like a user would.
+        _ = handle.scrollToVisible(handle.bounds)
         let point = handle.convert(NSPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil)
         return try XCTUnwrap(controller.window.contentView?.hitTest(point))
     }
     private func windowHit(_ handle: RecordingCropHandle,
                            in controller: RecordingEditorController) throws -> NSView {
+        _ = handle.scrollToVisible(handle.bounds)
         let point = handle.convert(NSPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil)
         return try XCTUnwrap(controller.window.contentView?.hitTest(point))
     }
     private func dispatchMouse(_ type: NSEvent.EventType, to handle: RecordingTrimHandle,
                                in controller: RecordingEditorController,
                                deltaX: CGFloat = 0) throws {
+        _ = handle.scrollToVisible(handle.bounds)
         var point = handle.convert(NSPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil)
         point.x += deltaX
         let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point,
@@ -4348,6 +4487,7 @@ final class RecordingEditorTests: XCTestCase {
     private func dispatchCropMouse(_ type: NSEvent.EventType, to handle: RecordingCropHandle,
                                    in controller: RecordingEditorController,
                                    deltaX: CGFloat = 0, deltaY: CGFloat = 0) throws {
+        _ = handle.scrollToVisible(handle.bounds)
         var point = handle.convert(NSPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil)
         point.x += deltaX; point.y += deltaY
         let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point,
@@ -4408,6 +4548,7 @@ final class RecordingEditorTests: XCTestCase {
     }
     private func dispatchButtonClick(_ button: CaptureButton,
                                      in controller: RecordingEditorController) throws {
+        _ = button.scrollToVisible(button.bounds)
         let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
         let content = try XCTUnwrap(controller.window.contentView)
         let contentSuperview = try XCTUnwrap(content.superview)

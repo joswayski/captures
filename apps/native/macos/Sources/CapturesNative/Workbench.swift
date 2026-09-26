@@ -97,6 +97,10 @@ final class CaptureButton: NSButton {
     private var hoverTracking: NSTrackingArea?
     private var hovered = false
     var icon: CaptureButtonIcon? { didSet { updateTrackingAreas(); needsDisplay = true } }
+    /// Draw only the icon; the title stays the accessible name.
+    var iconOnly = false { didSet { needsDisplay = true } }
+    /// A fully rounded (circular) shape, e.g. the recording preview's play control.
+    var circular = false { didSet { needsDisplay = true } }
     var actionBlock: (() -> Void)?
     var enterActionBlock: (() -> Void)?
     var escapeActionBlock: (() -> Void)?
@@ -155,7 +159,8 @@ final class CaptureButton: NSButton {
 
     override func draw(_ dirtyRect: NSRect) {
         let editorTool = icon?.isEditorTool == true
-        let radius = tokens.number(editorTool ? "r-lg" : hudControl ? "r-sm" : "r-md")
+        let radius = circular ? min(bounds.width, bounds.height) / 2 - 1
+            : tokens.number(editorTool ? "r-lg" : hudControl ? "r-sm" : "r-md")
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
             xRadius: radius, yRadius: radius)
         if hudControl {
@@ -211,14 +216,15 @@ final class CaptureButton: NSButton {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font, .foregroundColor: foreground,
         ]
-        let size = (title as NSString).size(withAttributes: attributes)
+        let label = iconOnly && icon != nil ? "" : title
+        let size = (label as NSString).size(withAttributes: attributes)
         let iconSide: CGFloat = icon?.isEditorTool == true ? tokens.number("s-6") + tokens.number("s-1")
             : icon?.isShipping == true ? 16 : 14
-        let iconWidth: CGFloat = icon == nil ? 0 : (title.isEmpty ? iconSide : iconSide + 6)
+        let iconWidth: CGFloat = icon == nil ? 0 : (label.isEmpty ? iconSide : iconSide + 6)
         let startX = (bounds.width - size.width - iconWidth) / 2
         if let icon { draw(icon, in: NSRect(x: startX, y: (bounds.height - iconSide) / 2,
             width: iconSide, height: iconSide), color: foreground) }
-        (title as NSString).draw(at: CGPoint(x: startX + iconWidth,
+        (label as NSString).draw(at: CGPoint(x: startX + iconWidth,
             y: (bounds.height - size.height) / 2), withAttributes: attributes)
         if window?.firstResponder === self {
             tokens.color("theme-accent").setStroke()
