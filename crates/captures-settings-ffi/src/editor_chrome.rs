@@ -57,6 +57,7 @@ fn rect([x, y, width, height]: [f64; 4]) -> Result<Rect, String> {
 }
 
 fn copy() -> Value {
+    use captures_app::editor_layers::geometry as g;
     use chrome::{colors as c, header as h, layers as l};
     json!({
         "metrics": {
@@ -102,6 +103,36 @@ fn copy() -> Value {
             "lock": l::LOCK, "unlock": l::UNLOCK, "menu": l::MENU, "drag": l::DRAG,
             "locked": l::LOCKED, "rename": l::RENAME,
         },
+        "layer_menu": layer_menu(),
+        "layer_geometry": {
+            "width": g::WIDTH, "height": g::HEIGHT, "width_label": g::WIDTH_LABEL,
+            "height_label": g::HEIGHT_LABEL, "x_label": g::X_LABEL, "y_label": g::Y_LABEL,
+            "max_size": g::MAX_SIZE, "proportional": g::PROPORTIONAL, "locked": g::LOCKED,
+            "keeps_aspect": g::KEEPS_ASPECT,
+        },
+        "blend_modes": captures_app::editor_layers::BLEND_MODES
+            .iter()
+            .map(|(value, label)| json!({"value": value, "label": label}))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn layer_menu() -> Value {
+    use captures_app::editor_layers::menu as m;
+    json!({
+        "appearance": m::APPEARANCE, "blend_mode": m::BLEND_MODE, "opacity": m::OPACITY,
+        "opacity_label": m::OPACITY_LABEL, "transform": m::TRANSFORM, "arrange": m::ARRANGE,
+        "combine": m::COMBINE, "rotate_left": m::ROTATE_LEFT, "rotate_right": m::ROTATE_RIGHT,
+        "flip_horizontal": m::FLIP_HORIZONTAL, "flip_vertical": m::FLIP_VERTICAL,
+        "rotate_left_tip": m::ROTATE_LEFT_TIP, "rotate_right_tip": m::ROTATE_RIGHT_TIP,
+        "flip_horizontal_tip": m::FLIP_HORIZONTAL_TIP, "flip_vertical_tip": m::FLIP_VERTICAL_TIP,
+        "bring_front": m::BRING_FRONT, "send_back": m::SEND_BACK,
+        "bring_front_tip": m::BRING_FRONT_TIP, "send_back_tip": m::SEND_BACK_TIP,
+        "merge_down": m::MERGE_DOWN, "merge_visible": m::MERGE_VISIBLE, "flatten": m::FLATTEN,
+        "merge_down_tip": m::MERGE_DOWN_TIP, "merge_visible_tip": m::MERGE_VISIBLE_TIP,
+        "flatten_tip": m::FLATTEN_TIP, "duplicate": m::DUPLICATE, "delete": m::DELETE,
+        "duplicate_tip": m::DUPLICATE_TIP, "delete_tip": m::DELETE_TIP,
+        "rename_label": m::RENAME_LABEL,
     })
 }
 
@@ -189,6 +220,10 @@ mod tests {
         assert_eq!(copy["ok"], true);
         let result = &copy["result"];
         assert_eq!(result["rail"][6]["label"], "Eraser");
+        assert_eq!(result["blend_modes"][0]["value"], "source-over");
+        assert_eq!(result["blend_modes"][5]["label"], "Lighten");
+        assert_eq!(result["layer_menu"]["bring_front"], "Bring to front");
+        assert_eq!(result["layer_geometry"]["x_label"], "Layer X");
         assert_eq!(result["rail"][6]["name"], "Eraser (B)");
         assert_eq!(result["rail"][3]["shortcut"], Value::Null);
         assert_eq!(result["shapes"][3]["name"], "Triangle");

@@ -12,6 +12,7 @@ pub mod editor_export;
 pub mod editor_fonts;
 pub mod editor_image_background;
 pub mod editor_image_decode;
+pub mod editor_layers;
 pub mod editor_output;
 pub mod editor_render;
 pub mod editor_session;

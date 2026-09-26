@@ -871,7 +871,8 @@ pub unsafe extern "C" fn captures_editor_open_v1(
     }))
     .unwrap_or_else(|_| Err("internal panic".into()));
     let (handle, value) = match result {
-        Ok(session) => {
+        Ok(mut session) => {
+            session.refresh_layer_thumbnails();
             let value = json!({"ok":true,"result":session.snapshot()});
             (Box::into_raw(Box::new(session)), value)
         }
@@ -935,6 +936,7 @@ pub unsafe extern "C" fn captures_editor_import_image_v1(
             selected_id: request.selected_id,
             point: request.point,
         })?;
+        session.refresh_layer_thumbnails();
         Ok::<_, String>(json!({"layer_id":layer_id,"snapshot":session.snapshot()}))
     }))
     .unwrap_or_else(|_| Err("internal panic".into()));
@@ -1067,6 +1069,7 @@ pub unsafe extern "C" fn captures_editor_request_v1(
             .map_err(|error| error.to_string())?;
         let session = unsafe { handle.as_mut() }.ok_or("editor handle is null")?;
         session.execute(request)?;
+        session.refresh_layer_thumbnails();
         Ok::<_, String>(json!(session.snapshot()))
     }))
     .unwrap_or_else(|_| Err("internal panic".into()));

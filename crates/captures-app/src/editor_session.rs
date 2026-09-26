@@ -244,6 +244,14 @@ pub enum Request {
     },
     Undo,
     Redo,
+    /// A live inspector edit (shipping NumberInput steps, typing, sliders).
+    /// Consecutive live edits with the same `key` fold into one undo step
+    /// until any other edit, undo or redo. Only `layer` and `edit_text`
+    /// requests may be live; hosts put the field and focus session in `key`.
+    Live {
+        key: String,
+        request: Box<Request>,
+    },
     SaveDraft {
         updated_at_ms: u64,
     },
@@ -311,6 +319,10 @@ pub struct Snapshot<'a> {
     pub canvas_expand: BTreeMap<&'a str, crate::editor_canvas::CanvasExpandPreview>,
     /// Shipping Layers-panel row copy per layer ID (`editor_chrome`).
     pub layer_rows: BTreeMap<&'a str, LayerRow>,
+    /// Live row previews (`data:image/png;base64,…`) per layer ID, current as
+    /// of the last [`EditorSession::refresh_layer_thumbnails`]. A missing
+    /// entry means hosts show the row's kind icon.
+    pub layer_thumbnails: BTreeMap<&'a str, &'a str>,
     /// Capabilities for committed document history. Transient text previews do
     /// not add or clear undo/redo entries.
     pub can_undo: bool,
@@ -348,6 +360,10 @@ pub struct EditorSession {
     layer_clipboard: Option<Element>,
     layer_paste_count: u32,
     text_input: Option<TransientTextInput>,
+    /// The key and resulting document of the last live inspector edit; the
+    /// next live edit with the same key amends that undo step.
+    live: Option<(String, Document)>,
+    thumbnails: crate::editor_layers::ThumbnailCache,
 }
 
 struct TransientTextInput {
@@ -459,7 +475,26 @@ impl EditorSession {
             layer_clipboard: None,
             layer_paste_count: 0,
             text_input: None,
+            live: None,
+            thumbnails: crate::editor_layers::ThumbnailCache::default(),
         })
+    }
+
+    /// Re-render row thumbnails for layers that changed since the last call.
+    /// Hosts call this before reading a snapshot or [`Self::layer_thumbnail`].
+    pub fn refresh_layer_thumbnails(&mut self) {
+        let document = self.visible_document().clone();
+        let assets = &self.assets;
+        let fonts = &mut self.fonts;
+        self.thumbnails.refresh(&document, |document| {
+            render_frame(document, assets, fonts.as_mut())
+        });
+    }
+
+    /// The cached row thumbnail for one layer.
+    #[must_use]
+    pub fn layer_thumbnail(&self, id: &str) -> Option<Arc<RgbaImage>> {
+        self.thumbnails.get(id).map(|entry| entry.image.clone())
     }
 
     fn visible_document(&self) -> &Document {
@@ -555,6 +590,12 @@ impl EditorSession {
                     .flatten()
                     .map(|preview| (element.base().id.as_str(), preview))
                 })
+                .collect(),
+            layer_thumbnails: self
+                .thumbnails
+                .iter()
+                .filter(|(_, entry)| !entry.data_url.is_empty())
+                .map(|(id, entry)| (id, entry.data_url.as_str()))
                 .collect(),
             layer_rows: self
                 .visible_document()
@@ -1262,6 +1303,15 @@ impl EditorSession {
             | Request::Flatten { .. }) => return self.combine_layers(request),
             edit => edit,
         };
+        let (request, live_key) = match request {
+            Request::Live { key, request } => {
+                if !matches!(*request, Request::Layer { .. } | Request::EditText { .. }) {
+                    return Err("Only layer and text edits can be live.".into());
+                }
+                (*request, Some(key))
+            }
+            request => (request, None),
+        };
         let is_paste = matches!(&request, Request::PasteLayer { .. });
         let mut next = self.history.clone();
         match request {
@@ -1272,11 +1322,14 @@ impl EditorSession {
             | Request::SaveDraft { .. }
             | Request::DiscardDraft
             | Request::RemoveImageBackground { .. }
-            | Request::PaintImageBackground { .. } => unreachable!(),
+            | Request::PaintImageBackground { .. }
+            | Request::Live { .. } => unreachable!(),
             Request::Undo => {
+                self.live = None;
                 next.undo();
             }
             Request::Redo => {
+                self.live = None;
                 next.redo();
             }
             Request::Commit { document } => {
@@ -1394,6 +1447,17 @@ impl EditorSession {
         if next.current() == self.history.current() {
             return Ok(());
         }
+        let amends = live_key.as_ref().is_some_and(|key| {
+            self.history.undo_len() > 0
+                && self.live.as_ref().is_some_and(|(live, document)| {
+                    live == key && document == self.history.current()
+                })
+        });
+        if amends {
+            let mut amended = self.history.clone();
+            amended.amend(next.current().clone());
+            next = amended;
+        }
         // Check even hidden/original image references: a later save or unhide
         // must not turn a successful edit into a missing-asset draft.
         for source in sources(next.current()) {
@@ -1406,6 +1470,7 @@ impl EditorSession {
         // unchanged. Hosts never receive a half-applied edit.
         self.history = next;
         self.pixels = Arc::new(pixels);
+        self.live = live_key.map(|key| (key, self.history.current().clone()));
         if is_paste {
             self.layer_paste_count += 1;
         }
