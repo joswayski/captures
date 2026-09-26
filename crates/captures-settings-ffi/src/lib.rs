@@ -505,6 +505,8 @@ mod tests {
         assert_eq!(result["copy"]["eyebrow"], "Welcome to Captures");
         assert_eq!(result["copy"]["lede"], captures_app::onboarding::LEDE);
         assert_eq!(result["copy"]["refresh"], "Refresh status");
+        assert_eq!(result["copy"]["poll_interval_ms"], 1_500);
+        assert_eq!(result["copy"]["settings_away_ms"], 2_500);
 
         let input = CString::new(
             json!({"operation":"onboarding_presentation","state":{
@@ -527,6 +529,7 @@ mod tests {
         assert_eq!(presentation["primary_label"], "Restart Captures");
         assert_eq!(presentation["screen_status"]["label"], "Restart required");
         assert_eq!(presentation["microphone_action"], "Allow microphone");
+        assert_eq!(presentation["waiting_for_permission"], true);
     }
 
     #[test]
