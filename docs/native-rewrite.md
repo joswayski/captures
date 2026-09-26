@@ -22,7 +22,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; History Restore to a floating preview; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause (silent by default), opt-in Loop and accepted-mix Sound preview, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
-| Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and hover fan, explicit optional feedback | Capture-time permission recovery, remaining Preferences parity, remaining preview effects, physical setup/login and installed Open With acceptance, crash reporting |
+| Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and hover fan, editor presence, hover blur, stale-pointer suppression and glass tooltips, explicit optional feedback | Capture-time permission recovery, remaining Preferences parity, remaining preview effects, physical setup/login and installed Open With acceptance, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, remaining viewport/output controls and Tauri design parity; remaining recording controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises; unsigned development package staging | Physical acceptance, accessibility/IME, Wayland live capture, release packaging/signing/updater, performance/energy and rollback gates |
 
@@ -1229,7 +1229,14 @@ Close plus Delete; unsaved Delete only dismisses. Right placements mirror the
 corner controls. The stack toolbar appears only for two or more expanded
 previews: an outer Clear all icon (tooltip "Clear all") and a Minimize icon that
 swaps to a "Show less" label and widens inward on hover or focus (no morph
-animation). Card icon tooltips use the shipping short names (Close, Delete, Edit).
+animation). Card icons (Close, Delete, Edit) and Clear all show the shipping
+instant glass tip, on hover or keyboard focus with no delay: centered, above
+the icon in bottom-anchored stacks and below it in top-anchored ones, fading
+and nudging 2 pt (`.icon-button::after`). AppKit and wgpu share this chip with
+the recording HUD's tooltip; the system/egui hover texts are gone, including
+the native-only "Click to expand; drag to move the preview pile", "Drag the
+original file to another app", overflow-cue, metadata and Copy/Save tips that
+shipping lacks. `captures_app::preview_chrome` owns the tip geometry.
 When an expanded stack overflows, centered chevron cues at the window edges
 ("Show older captures" / "Show newer captures", swapped for top placements)
 scroll one card slot; `captures_app::preview` owns the edge tolerance, slot
@@ -1247,10 +1254,40 @@ capture, and a one-second ✓ Saved confirmation. Ownership follows the shared
 `captures_app::clipboard` model: the macOS pasteboard change count, the Windows
 clipboard sequence number, or on Linux a host write counter plus a throttled
 pixel comparison that notices other apps replacing the clipboard. New cards play
-the shipping arrival (see the motion slice). Hover blur, the editor-presence pill,
-stale-pointer hover suppression, the animated Show less morph, the dismiss/delete
-exits and other stack transitions remain follow-up work; this does not close the visual parity gate. Share/sign-in
-UI is deliberately outside this slice.
+the shipping arrival (see the motion slice).
+
+Editor presence, hover media and stale-pointer suppression now follow the
+shipping `ThumbnailCard`, with rules in `captures_app::preview_chrome` (AppKit
+through the `captures_preview_editor_*`, `_hover_lock_v1`,
+`_icon_tooltip_frame_v1` and `_hover_media_v1` ABI):
+
+- **Editor presence.** While a screenshot editor window shows a card's capture
+  (visible or minimized), its Edit icon morphs into the "In editor" pill and
+  the card gains the 2 pt accent ring with its glow (`.thumbnail-editor-active`).
+  Hover or focus offers "Show in editor", which focuses the existing editor;
+  the click that opened it keeps the passive label until the pointer leaves.
+  Closing the editor plays the shipping 550 ms leave (the ring eases out, the
+  pill shrinks and ignores clicks), then the plain Edit icon lingers for 3 s
+  without hover. wgpu reads its open-editor map each frame; AppKit's screenshot
+  editor reports presence changes to the preview controller. The optimistic
+  morph while an editor opens is not separate: presence arrives in the same
+  frame (wgpu) or after the settings read (AppKit). Shipping's viewer-active
+  ring has no emitter in the shipping backend, so it has no native equivalent.
+  Ring and pill appear on expanded cards only.
+- **Hover media.** Hover or focus applies `blur(2px) brightness(.5)
+  scale(1.015)` over the shipping 180/220 ms transitions. AppKit uses a Core
+  Image Gaussian blur on the image layer, a 50% black layer and a clipped
+  scale. wgpu fades in a card-sized copy blurred off the UI thread (2x the
+  card, a 2 pt Gaussian) over the darkened, scaled sharp image; the blur
+  approximates CSS at the card's edges.
+- **Stale-pointer suppression.** After an expand or a new card, hover chrome
+  and the blur stay idle until the pointer moves 4 pt from its first sample or
+  leaves the stack (`data-thumbnail-suppress-card-hover`); a pointer already
+  outside releases it at once, and keyboard focus still reveals chrome.
+
+The animated Show less morph, the dismiss/delete exits and other stack
+transitions remain follow-up work; this does not close the visual parity gate.
+Share/sign-in UI is deliberately outside this slice.
 Show less/expand preserves capture order, overflow scrolls without a
 count cap, and Clear all dismisses only snapshotted IDs, not later captures.
 Reveal uses the current exported path, with file checks off the UI thread and

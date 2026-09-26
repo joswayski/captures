@@ -49,10 +49,12 @@ final class MiniPreviewTests: XCTestCase {
         let reveal = try XCTUnwrap(buttons.first { $0.title == "Show in Folder" })
         XCTAssertEqual(buttons.map(\.title), ["Close", "Delete", "Edit", "Copy", "Show in Folder"])
         XCTAssertEqual(reveal.accessibilityLabel(), "Show in Folder")
-        XCTAssertEqual(reveal.toolTip, "Show in Folder")
-        // Shipping icon buttons use short tooltips that match their names.
+        // Labelled actions carry no tooltip, and no control uses the system one.
+        XCTAssertNil(reveal.tooltipText)
+        XCTAssertTrue(buttons.allSatisfy { $0.toolTip == nil })
+        // Shipping icon buttons use short glass tips that match their names.
         for name in ["Close", "Delete", "Edit"] {
-            XCTAssertEqual(buttons.first { $0.title == name }?.toolTip, name)
+            XCTAssertEqual(buttons.first { $0.title == name }?.tooltipText, name)
         }
         try write(render(panel), name: "mini-preview-single-saved-reveal.png")
     }
@@ -856,9 +858,11 @@ final class MiniPreviewTests: XCTestCase {
             let clear = try XCTUnwrap(toolbar.first { $0.kind == .clear })
             let minimize = try XCTUnwrap(toolbar.first { $0.kind == .collapse })
             XCTAssertEqual(clear.accessibilityLabel(), "Clear all previews")
-            XCTAssertEqual(clear.toolTip, "Clear all")
+            XCTAssertNil(clear.toolTip)
+            XCTAssertEqual(clear.tooltipText, "Clear all")
             XCTAssertEqual(minimize.accessibilityLabel(), "Minimize previews")
             XCTAssertNil(minimize.toolTip)
+            XCTAssertNil(minimize.tooltipText, "Show less swaps in a label instead of a tip")
             let rest = minimize.frame
             XCTAssertEqual(rest.width, 28)
             XCTAssertFalse(minimize.showsHoverLabel)
@@ -929,6 +933,172 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertFalse(panel.isVisible)
         XCTAssertEqual(terminationRequests, 1)
         withExtendedLifetime(handler) {}
+    }
+
+    func testIconTooltipsAreInstantGlassChipsAndSystemTooltipsAreGone() throws {
+        _ = NSApplication.shared
+        for top in [false, true] {
+            let panel = fixturePanel(ids: ["older", "newer"],
+                images: ["older": solidImage(.systemBlue), "newer": solidImage(.systemRed)],
+                topAnchor: top, savedPaths: ["newer": "/Exports/newer.png"])
+            defer { panel.close() }
+            let view = panel.previewView
+            XCTAssertTrue(view.subviewsRecursive.allSatisfy { $0.toolTip == nil },
+                          "no delayed system tooltips")
+            let card = try XCTUnwrap(view.card(for: "newer"))
+            let hover = try hoverEvent(for: panel)
+            card.mouseEntered(with: hover)
+            let controls = card.subviews.compactMap { $0 as? MiniPreviewButton }
+            let delete = try XCTUnwrap(controls.first { $0.kind == .trash })
+            delete.mouseEntered(with: hover)
+            XCTAssertEqual(view.visibleTooltip, "Delete")
+            let tip = try XCTUnwrap(view.visibleTooltipFrame)
+            let anchor = delete.convert(delete.bounds, to: view)
+            XCTAssertEqual(tip.midX, anchor.midX, accuracy: 0.5)
+            if top {
+                XCTAssertEqual(tip.minY, anchor.maxY + 6, accuracy: 0.5, "top stacks open tips below")
+            } else {
+                XCTAssertEqual(tip.maxY, anchor.minY - 6, accuracy: 0.5, "bottom stacks open tips above")
+            }
+            try write(render(panel), name: "mini-preview-tooltip-\(top ? "top" : "bottom").png")
+            delete.mouseExited(with: hover)
+            XCTAssertNil(view.visibleTooltip)
+            let copyAction = try XCTUnwrap(controls.first { $0.kind == .copy })
+            copyAction.mouseEntered(with: hover)
+            XCTAssertNil(view.visibleTooltip, "labelled actions carry no tip")
+            copyAction.mouseExited(with: hover)
+            let clear = try XCTUnwrap(view.stackToolbarButtons.first { $0.kind == .clear })
+            clear.mouseEntered(with: hover)
+            XCTAssertEqual(view.visibleTooltip, "Clear all")
+            clear.mouseExited(with: hover)
+            XCTAssertNil(view.visibleTooltip)
+            // Hiding chrome under a hovered icon also hides its tip.
+            let close = try XCTUnwrap(controls.first { $0.kind == .close })
+            close.mouseEntered(with: hover)
+            XCTAssertEqual(view.visibleTooltip, "Close")
+            card.mouseExited(with: hover)
+            XCTAssertNil(view.visibleTooltip)
+        }
+        let pile = fixturePanel(ids: ["a", "b"],
+            images: ["a": solidImage(.systemBlue), "b": solidImage(.systemRed)], collapsed: true)
+        defer { pile.close() }
+        XCTAssertTrue(pile.previewView.subviewsRecursive.allSatisfy { $0.toolTip == nil },
+                      "the compact pile carries no expand/drag tooltip")
+    }
+
+    func testHoverBlursDarkensAndScalesMediaAndStalePointerLockHoldsItOff() throws {
+        _ = NSApplication.shared
+        let panel = fixturePanel(ids: ["card"], images: ["card": solidImage(.white)])
+        defer { panel.close() }
+        let view = panel.previewView
+        let card = try XCTUnwrap(view.card(for: "card"))
+        let hover = try hoverEvent(for: panel)
+        XCTAssertFalse(card.mediaHovered)
+        XCTAssertEqual(card.mediaBlurRadius, 0)
+        card.mouseEntered(with: hover)
+        try waitUntil { card.mediaHovered && abs(card.mediaDimOpacity - 0.5) < 0.01 }
+        XCTAssertEqual(card.mediaBlurRadius, 2, accuracy: 0.01)
+        try waitUntil { abs(card.mediaScale - 1.015) < 0.001 }
+        try write(render(panel), name: "mini-preview-hover-blur.png")
+        card.mouseExited(with: hover)
+        try waitUntil { !card.mediaHovered && card.mediaDimOpacity < 0.01 }
+        XCTAssertEqual(card.mediaBlurRadius, 0, accuracy: 0.01)
+        try waitUntil { abs(card.mediaScale - 1) < 0.001 }
+
+        // After an expand, the resting pointer does not count as hover.
+        view.lockCardHover(releaseIfPointerOutside: false)
+        card.mouseEntered(with: hover)
+        XCTAssertTrue(view.isCardHoverLocked)
+        XCTAssertFalse(card.mediaHovered)
+        XCTAssertEqual(view.visibleCardActionTitles, [])
+        view.samplePointer(NSPoint(x: 100, y: 100))
+        view.samplePointer(NSPoint(x: 102, y: 101))
+        XCTAssertTrue(view.isCardHoverLocked, "sub-slop jitter keeps hover idle")
+        XCTAssertFalse(card.mediaHovered)
+        view.samplePointer(NSPoint(x: 100, y: 105))
+        XCTAssertFalse(view.isCardHoverLocked)
+        XCTAssertTrue(card.mediaHovered)
+        XCTAssertEqual(Set(view.visibleCardActionTitles), ["Delete", "Edit", "Copy", "Save file"])
+        // Leaving the stack releases a lock too.
+        card.mouseExited(with: hover)
+        view.lockCardHover(releaseIfPointerOutside: false)
+        XCTAssertTrue(view.isCardHoverLocked)
+        view.samplePointer(nil)
+        XCTAssertFalse(view.isCardHoverLocked)
+    }
+
+    func testEditorPresencePinsInEditorPillAndRingThenLingers() throws {
+        _ = NSApplication.shared
+        let present = UInt32(CAPTURES_EDITOR_PHASE_PRESENT)
+        for right in [false, true] {
+            let panel = fixturePanel(ids: ["card"], images: ["card": solidImage(.systemBlue)],
+                                     rightAnchor: right)
+            defer { panel.close() }
+            let view = panel.previewView
+            let card = try XCTUnwrap(view.card(for: "card"))
+            let edit = try XCTUnwrap(view.editControl(for: "card"))
+            let rest = edit.frame
+            XCTAssertTrue(edit.isHidden)
+            XCTAssertEqual(edit.accessibilityLabel(), "Edit")
+            view.setEditorPhase(present, for: "card", animated: false)
+            XCTAssertFalse(edit.isHidden, "an open editor pins the control without hover")
+            XCTAssertTrue(edit.editorPresent)
+            XCTAssertEqual(edit.editorLabel, "In editor")
+            XCTAssertEqual(edit.accessibilityLabel(), "Show in editor")
+            XCTAssertNil(edit.tooltipText, "the pill carries no tip")
+            XCTAssertEqual(card.editorRingOpacity, 1)
+            XCTAssertGreaterThan(edit.frame.width, 60)
+            XCTAssertEqual(right ? edit.frame.minX : edit.frame.maxX, right ? rest.minX : rest.maxX,
+                           "the pill widens away from its corner")
+            XCTAssertEqual(view.visibleCardActionTitles, ["Edit"])
+            XCTAssertTrue(card.hasVisibleLabels, "idle metadata stays beside the pill")
+            try write(render(panel), name: "mini-preview-in-editor-\(right ? "right" : "left").png")
+            let hover = try hoverEvent(for: panel)
+            edit.mouseEntered(with: hover)
+            XCTAssertEqual(edit.editorLabel, "Show in editor")
+            edit.performClick(nil)
+            XCTAssertEqual(edit.editorLabel, "In editor", "the opening click keeps the passive label")
+            edit.mouseExited(with: hover)
+            edit.mouseEntered(with: hover)
+            XCTAssertEqual(edit.editorLabel, "Show in editor")
+            edit.mouseExited(with: hover)
+
+            view.setEditorPhase(UInt32(CAPTURES_EDITOR_PHASE_LEAVING), for: "card", animated: false)
+            XCTAssertFalse(edit.isHidden)
+            XCTAssertFalse(edit.isEnabled, "a leaving pill ignores clicks")
+            XCTAssertEqual(card.editorRingOpacity, 0)
+            XCTAssertEqual(edit.frame, rest)
+            view.setEditorPhase(UInt32(CAPTURES_EDITOR_PHASE_LINGERING), for: "card", animated: false)
+            XCTAssertFalse(edit.isHidden, "the Edit icon lingers without hover")
+            XCTAssertTrue(edit.isEnabled)
+            XCTAssertEqual(edit.tooltipText, "Edit")
+            XCTAssertEqual(edit.accessibilityLabel(), "Edit")
+            view.setEditorPhase(UInt32(CAPTURES_EDITOR_PHASE_IDLE), for: "card", animated: false)
+            XCTAssertTrue(edit.isHidden)
+        }
+    }
+
+    func testControllerFollowsOpenEditorsThenLeavesAndLingers() throws {
+        _ = NSApplication.shared
+        let captured = artifact(id: "edited", previewPath: "/edited-preview.png")
+        let controller = try presentedController(captured)
+        defer { controller.close() }
+        let idle = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
+        let lingering = UInt32(CAPTURES_EDITOR_PHASE_LINGERING)
+        XCTAssertEqual(controller.editorPhase(for: "edited"), idle)
+        controller.setEditorArtifacts(["edited"])
+        XCTAssertEqual(controller.editorPhase(for: "edited"), UInt32(CAPTURES_EDITOR_PHASE_PRESENT))
+        controller.setEditorArtifacts([])
+        XCTAssertTrue([UInt32(CAPTURES_EDITOR_PHASE_LEAVING), lingering]
+            .contains(controller.editorPhase(for: "edited")))
+        try waitUntil { controller.editorPhase(for: "edited") == lingering }
+        try waitUntil { controller.editorPhase(for: "edited") == idle }
+    }
+
+    private func hoverEvent(for panel: NSWindow) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: .zero,
+            modifierFlags: [], timestamp: 1, windowNumber: panel.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 0, pressure: 0))
     }
 
     private func artifact(id: String, previewPath: String,

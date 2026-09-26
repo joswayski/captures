@@ -57,7 +57,7 @@ previous frame's widgets, so after the harness clicked Copy (pointer resting on
 the button) a move to the image plus press in one frame found no drag widget
 and no XDND session started (`Timed out: receiver negotiates COPY`). The drag
 area is now registered every frame; only `Action::DragFile` and the grab
-cursor/tooltip are suppressed when the press starts on a control. Regression
+cursor are suppressed when the press starts on a control. Regression
 test: `image_drag_starts_right_after_pointer_rested_on_an_action`. Verified on
 private X11: `--drag-only`, `--drag-only --reduced-motion` and `--stack` pass;
 the unfixed build reproduces the CI timeout.
@@ -131,16 +131,17 @@ captures. Reference captures in this orb: `/tmp/tauri-preview-idle.png`,
 
 ## Continue visual parity after the blocking checks
 
-1. Add matching image hover blur and subtle card/button shadows. Current native
-   hover is immediate 50% dimming only. Prefer a cached small preview/filter
-   path; do not read back screenshot pixels every frame.
-2. Done: metadata byte sizes, live clipboard confirmation with Copy hidden and
-   ✓ Saved feedback. Remaining: the Edit → In editor / Show in editor presence
-   pill, bound to actual editor state.
-3. Done: short shipping tooltips, the Show less hover label (static swap) and
-   overflow cues. Remaining: stationary-pointer hover suppression after
-   arrival/expansion, control animations and the animated Show less morph. Keep focus-visible
-   actions usable and test nonactivating-panel keyboard/screen-reader behavior.
+1. Done: image hover blur/brightness/scale (AppKit Core Image; wgpu a cached
+   pre-blurred card copy, no per-frame readback). Remaining: subtle
+   card/button shadows.
+2. Done: metadata byte sizes, live clipboard confirmation with Copy hidden,
+   ✓ Saved feedback and the Edit → In editor / Show in editor presence pill with
+   the accent ring, bound to each host's open screenshot editor.
+3. Done: shipping instant glass tooltips, the Show less hover label (static
+   swap), overflow cues and stationary-pointer hover suppression after
+   arrival/expansion. Remaining: control animations and the animated Show less
+   morph. Keep focus-visible actions usable and test nonactivating-panel
+   keyboard/screen-reader behavior.
 4. Continue pile perspective/rotation/scale/blur, stagger, entry/exit dust and
    settle behavior, reduced motion, then cross-display/anchor changes. Follow
    `docs/native-rewrite.md`; stubs and unverified hosts do not close parity gates.

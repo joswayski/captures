@@ -107,35 +107,9 @@ enum RecordingHUDPolicy {
 
 /// Shipping `.recording-tooltip > [role="tooltip"]`: a fixed-glass pill with an
 /// xs medium label. It never takes the mouse.
-final class RecordingHUDTooltipView: NSView {
-    let label = NSTextField(labelWithString: "")
-    override var isFlipped: Bool { true }
-
-    init(tokens: Tokens) {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
-        layer?.borderColor = tokens.color(RecordingHUDColorToken.glassBorder.rawValue).cgColor
-        layer?.borderWidth = 1
-        layer?.cornerRadius = tokens.number("r-sm")
-        label.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
-        label.textColor = tokens.color(RecordingHUDColorToken.glassText.rawValue)
-        label.alignment = .center
-        label.lineBreakMode = .byTruncatingTail
-        addSubview(label)
-        isHidden = true
-        alphaValue = 0
-        setAccessibilityElement(false)
-        label.setAccessibilityElement(false)
-    }
+final class RecordingHUDTooltipView: GlassTooltipView {
+    init(tokens: Tokens) { super.init(tokens: tokens, style: .recordingHUD) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    override func layout() {
-        super.layout()
-        label.frame = bounds.insetBy(dx: 9, dy: 6)
-    }
 }
 
 final class RecordingHUDView: NSView {
