@@ -128,13 +128,17 @@ pub unsafe extern "C" fn captures_editor_save_v1(
         if session.snapshot().active_text_input.is_some() {
             return Err("Finish or cancel text input before saving.".to_owned());
         }
-        editor_export::publish(
+        let saved = editor_export::publish(
             &request.history_root,
             &session.pixels(),
             &request.plan,
             request.options,
             request.mode,
-        )
+        )?;
+        let notice = editor_export::saved_notice(&request.plan, &saved);
+        let mut value = serde_json::to_value(saved).map_err(|error| error.to_string())?;
+        value["notice"] = json!(notice);
+        Ok(value)
     }))
     .unwrap_or_else(|_| Err("internal panic".into()));
     response(match result {
@@ -299,6 +303,10 @@ mod tests {
             let saved = take_json(captures_editor_save_v1(&session, request.as_ptr()));
             assert_eq!(saved["result"]["status"], "saved", "{saved}");
             assert_eq!(saved["result"]["artifact"]["entry"]["mode"], "window");
+            assert_eq!(
+                saved["result"]["notice"],
+                format!("Saved {}", destination.display())
+            );
             let collision = take_json(captures_editor_save_v1(&session, request.as_ptr()));
             assert_eq!(
                 collision["error"],

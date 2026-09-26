@@ -452,7 +452,8 @@ char *captures_editor_export_bar_v1(const char *request_json);
  * revalidates that History entry's saved path and kind from disk before an
  * atomic replace; a new_file plan never replaces an existing file. Response
  * schema matches captures_editor_save_new_v1. Refuses while inline text is
- * active. Never mutates document/undo/redo/draft state. */
+ * active. Never mutates document/undo/redo/draft state. A successful result
+ * also carries notice: the shared status text for that save. */
 char *captures_editor_save_v1(const CapturesEditorSession *session, const char *request_json);
 
 /* ESTIMATE the saved size of a retained frame from captures_editor_frame_v1,
