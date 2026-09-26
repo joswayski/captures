@@ -92,13 +92,13 @@ final class RecordingTrimHandle: NSView {
     override func resignFirstResponder() -> Bool {
         timeline?.endDrag()
         let accepted = super.resignFirstResponder()
-        needsDisplay = true
+        needsDisplay = true; timeline?.needsDisplay = true
         return accepted
     }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
-        needsDisplay = true
+        needsDisplay = true; timeline?.needsDisplay = true
         return accepted
     }
 
@@ -287,7 +287,7 @@ final class RecordingTrimTimeline: NSView {
         stage(edge: edge, milliseconds: UInt64(milliseconds.rounded()))
     }
 
-    func endDrag() { drag = nil; dragEdge = nil }
+    func endDrag() { drag = nil; dragEdge = nil; needsDisplay = true }
 
     func nudge(edge: NativeRecordingTimelineEdge, direction: Int, page: Bool) {
         guard editingEnabled, direction == -1 || direction == 1 else { return }
@@ -420,6 +420,33 @@ final class RecordingTrimTimeline: NSView {
             NSRect(x: x - 1, y: 0, width: 2, height: bounds.height).fill()
             NSBezierPath(roundedRect: NSRect(x: x - 5, y: 0, width: 10, height: 8),
                          xRadius: 3, yRadius: 3).fill()
+        }
+        // Shipping's handle time label, shown while a grip is focused or dragged.
+        var active = dragEdge
+        if active == nil, let responder = window?.firstResponder {
+            if responder === startHandle { active = .start } else if responder === endHandle { active = .end }
+        }
+        if editingEnabled, let active {
+            let handle = active == .start ? startHandle : endHandle
+            let value = active == .start ? startMilliseconds : endMilliseconds
+            let label = RecordingEditorCopy.time(value, duration: durationMilliseconds) as NSString
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: tokens.number("text-2xs"),
+                                                         weight: .semibold),
+                .foregroundColor: tokens.color("theme-accent-ink"),
+            ]
+            let size = label.size(withAttributes: attributes)
+            let padding = tokens.number("s-3")
+            let width = size.width + padding * 2
+            let x = active == .start ? handle.frame.maxX : handle.frame.minX - width
+            let pill = NSRect(x: min(max(0, x), max(0, bounds.width - width)),
+                              y: frame.minY + tokens.number("s-2"), width: width,
+                              height: size.height + 6)
+            tokens.color("theme-accent").setFill()
+            NSBezierPath(roundedRect: pill, xRadius: tokens.number("r-xs"),
+                         yRadius: tokens.number("r-xs")).fill()
+            label.draw(at: NSPoint(x: pill.minX + padding, y: pill.minY + 3),
+                       withAttributes: attributes)
         }
     }
 }
