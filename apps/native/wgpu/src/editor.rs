@@ -4953,7 +4953,7 @@ fn show_layers(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
                 ),
             );
             if !shape.base.locked {
-                canvas::show_curve_controls(ui, view, tx, shape);
+                canvas::show_curve_controls(ui, tokens, view, tx, shape);
             }
         }
         Element::Path(path) => show_annotation(ui, view, tx, &path.style, false),

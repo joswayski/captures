@@ -277,7 +277,8 @@ final class EditorCurveControls: NSView {
     var resized: (CGFloat) -> Void = { _ in }
     private let tokens: Tokens
     private let heading = NSTextField(labelWithString: NativeEditorCanvas.curveLabel)
-    let bendSlider = NSSlider(value: 0, minValue: -100, maxValue: 100, target: nil, action: nil)
+    /// Shipping `RangeSlider` (#841 primitive) with Left/Straight/Right marks.
+    let bendSlider = TokenSlider(value: 0, minValue: -100, maxValue: 100, target: nil, action: nil)
     let bendValue = NSTextField(labelWithString: "0%")
     private var marks: [NSTextField] = []
     private(set) var straightenButton: CaptureButton!
@@ -299,6 +300,7 @@ final class EditorCurveControls: NSView {
         bendValue.frame = NSRect(x: 212, y: 2, width: 60, height: 20)
         addSubview(bendValue)
         bendSlider.frame = NSRect(x: 0, y: 26, width: 272, height: 24)
+        bendSlider.tokens = tokens
         bendSlider.isContinuous = false
         bendSlider.numberOfTickMarks = 3
         bendSlider.target = self; bendSlider.action = #selector(bendReleased)

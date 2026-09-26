@@ -1608,9 +1608,8 @@ fn stack_drop_light_focus(point: Point, target: Rect) -> Rect {
     let short_side = target.width.min(target.height).max(1.);
     let width = (short_side * 0.32)
         .min(target.width * 0.36)
-        .min(260.)
-        .max(72.);
-    let height = (width * 0.78).min(target.height * 0.36).min(200.).max(54.);
+        .clamp(72., 260.);
+    let height = (width * 0.78).min(target.height * 0.36).clamp(54., 200.);
     let min_x = target.x - width * 0.2;
     let max_x = target.x + target.width - width * 0.8;
     let min_y = target.y - height * 0.2;

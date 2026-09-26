@@ -1910,7 +1910,24 @@ chooser fixture, asymmetric rendered pixels, cancellation/retry, undo/redo,
 reopen and stale-close handling in both appearances. That fixture does not verify
 physical file dialogs, input, accessibility or IME. Windows and Wayland share the
 implementation but remain presentation-unverified; AppKit import is described below.
-Batch import and drag-and-drop remain separate slices. Shipping Tauri import is unchanged.
+Batch picker import remains a separate slice. Shipping Tauri import is unchanged.
+
+Both hosts now port the shipping canvas interactions from shared
+`captures_app::editor_canvas` geometry and copy. Image files dropped on the
+canvas (egui hovered/dropped files, AppKit `NSDraggingDestination`) show the
+shared `image_drop_guide` target, edge glow or stack light and toast, then
+import one file at a time through the existing external-image layer path at the
+drop sample; later files stack below the previous import and unsupported drops
+report an error. A selected layer past the canvas edge shows the overflow tint and
+an Expand canvas action whose hover shows the dashed ghost; `expand_canvas` is one
+undo step. Lines/arrows show endpoints, curve dots and starter dots with shipping
+hover hints; drags preview live and commit one `curve` edit on release, double-clicks
+add/remove points, and the Layers Curve slider (#841 `RangeSlider`/`TokenSlider`)
+or Straighten action commit once. Curves persist in saves and drafts. Private X11
+exercises a real XDND drop, Expand canvas, curve dots, undo/redo and draft reopen
+in both appearances; AppKit is covered by XCTest only. The Wand colour loupe,
+`DrawToolPreview` and the Apply crop pulse remain open. Windows/Wayland share the
+wgpu code but are presentation-unverified.
 
 Separately, both live development hosts open external PNG/JPEG/WebP/GIF/MP4/WebM
 paths through the shared History-backed `open_media` request using repeatable

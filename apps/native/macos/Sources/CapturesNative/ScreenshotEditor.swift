@@ -956,7 +956,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             if curvePreview != nil, handles.path.count >= 2 {
                 let path = NSBezierPath()
                 for (index, point) in handles.path.enumerated() {
-                    index == 0 ? path.move(to: map(point)) : path.line(to: map(point))
+                    if index == 0 { path.move(to: map(point)) } else { path.line(to: map(point)) }
                 }
                 strokeColor.withAlphaComponent(0.85).setStroke(); path.lineWidth = 1.5; path.stroke()
             }
@@ -4643,6 +4643,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             return true
         }
     }
+
+    private func selectCanvasLayer(_ id: String?) {
         guard !state.busy else { return }
         selectedLayerID = id
         if let id, let index = state.snapshot?.layers.firstIndex(where: { $0.id == id }) { selectedLayerIndex = index }

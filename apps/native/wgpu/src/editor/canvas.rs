@@ -625,6 +625,7 @@ pub(super) fn curve_drag_preview(
 /// changes commit once on release.
 pub(super) fn show_curve_controls(
     ui: &mut egui::Ui,
+    tokens: &Tokens,
     view: &mut View,
     tx: &Sender<Job>,
     shape: &ShapeElement,
@@ -641,22 +642,24 @@ pub(super) fn show_curve_controls(
             .map_or(handles.bend_percent, |(_, value)| *value);
         let mut value = staged;
         ui.label(canvas::CURVE_LABEL);
-        let response = ui.add(
-            egui::Slider::new(&mut value, -100. ..=100.)
-                .step_by(1.)
-                .suffix("%")
-                .show_value(true),
-        );
-        response.widget_info(|| egui::WidgetInfo::slider(true, value, canvas::CURVE_LABEL));
-        ui.horizontal(|ui| {
-            for (_, mark) in canvas::CURVE_MARKS {
-                ui.small(mark);
-            }
-        });
+        let marks =
+            canvas::CURVE_MARKS.map(|(value, label)| crate::primitives::RangeMark { value, label });
+        let response = crate::primitives::RangeSlider::new(
+            ("curve-bend", shape.base.id.as_str()),
+            canvas::CURVE_LABEL,
+            ui.available_width().min(272.),
+            -100. ..=100.,
+            format!("{}%", value.round()),
+        )
+        .marks(&marks)
+        .show(ui, tokens, &mut value);
         if response.changed() {
             view.curve_bend = Some((shape.base.id.clone(), value));
         }
-        let released = response.drag_stopped() || (response.changed() && !response.dragged());
+        // Pointer drags commit once on release; keyboard steps commit at once.
+        let released = response.drag_stopped()
+            || response.clicked()
+            || (response.changed() && !response.is_pointer_button_down_on());
         if released
             && let Some((id, value)) = view.curve_bend.take()
             && value != handles.bend_percent
