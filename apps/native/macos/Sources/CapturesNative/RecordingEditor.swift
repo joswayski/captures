@@ -1309,7 +1309,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             self?.compareAcceptedFrame()
         }
         comparisonButton.setAccessibilityLabel("Compare encoded recording before and after")
-        comparisonButton.toolTip = "Encode a sample at the accepted still frame, not the paused playback position. Before is spatially edited; Encoded includes compression, GIF palette and cadence. First attempt only: a Maximum-size save may differ. Apply staged edits and seek inside the accepted trim first."
+        comparisonButton.toolTip = "Encode a sample at the accepted still frame, not the paused playback position. Before is spatially edited; Encoded includes compression, GIF palette and cadence. First attempt only: a Maximum-size save may differ. Encoding may select a neighboring frame at the output cadence. Apply staged edits and seek inside the accepted trim first."
         comparisonHideButton = button("Hide", parent: previewPanel) { [weak self] in
             self?.invalidateComparison()
         }

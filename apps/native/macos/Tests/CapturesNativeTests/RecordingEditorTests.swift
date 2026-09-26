@@ -3371,6 +3371,11 @@ final class RecordingEditorTests: XCTestCase {
             format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
             try render(controller.root, name: "recording-editor-gif-audio-disabled-\(appearance)")
             format.selectItem(withTitle: ".mp4"); _ = format.sendAction(format.action, to: format.target)
+            // As in shipping, GIF moved Preserve to Compress and MP4 keeps that
+            // choice; restore Preserve so nothing remains staged before saving.
+            let qualityMode = try popup("Save quality", in: controller.root)
+            XCTAssertEqual(qualityMode.titleOfSelectedItem, "Compress")
+            choose(qualityMode, "Preserve quality")
             let cropEnabled = try checkbox("Crop recording", in: controller.root)
             cropEnabled.state = .on; _ = cropEnabled.sendAction(cropEnabled.action,
                                                                  to: cropEnabled.target)
