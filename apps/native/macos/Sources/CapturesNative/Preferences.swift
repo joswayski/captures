@@ -162,30 +162,34 @@ final class ShortcutRecorderButton: NSButton {
         let available = max(0, bounds.width - 20)
         // Shipping `kbd`: `--text-2xs` semibold chips with 5 pt padding.
         let baseSize = tokens.number("text-2xs")
-        var font = NSFont.systemFont(ofSize: baseSize, weight: .semibold)
-        var widths = values.map { ($0 as NSString).size(withAttributes: [.font: font]).width }
         let gap: CGFloat = 4
         let minimumPadding: CGFloat = 4
         let minimumFontSize: CGFloat = 9
-        let fixedWidth = CGFloat(values.count) * minimumPadding * 2
-            + CGFloat(max(0, values.count - 1)) * gap
-        let textWidth = widths.reduce(0, +)
-        if textWidth + fixedWidth > available, textWidth > 0 {
-            let scale = max(minimumFontSize / baseSize, (available - fixedWidth) / textWidth)
-            font = NSFont.systemFont(ofSize: min(baseSize, baseSize * scale), weight: .semibold)
-            widths = values.map { ($0 as NSString).size(withAttributes: [.font: font]).width }
+        func layout(_ size: CGFloat) -> (NSFont, [NSRect], CGFloat) {
+            let font = NSFont.systemFont(ofSize: size, weight: .semibold)
+            let widths = values.map { ceil(($0 as NSString).size(withAttributes: [.font: font]).width) }
+            let remaining = available - widths.reduce(0, +)
+                - CGFloat(max(0, values.count - 1)) * gap
+            let padding = values.isEmpty ? minimumPadding
+                : max(minimumPadding, min(5, remaining / CGFloat(values.count * 2)))
+            var x: CGFloat = 10
+            let height: CGFloat = 20
+            let frames = widths.map { width -> NSRect in
+                let chip = max(20, width + padding * 2)
+                defer { x += chip + gap }
+                return NSRect(x: x, y: (bounds.height - height) / 2, width: chip, height: height)
+            }
+            return (font, frames, (frames.last?.maxX ?? 10) - 10)
         }
-        let remaining = available - widths.reduce(0, +)
-            - CGFloat(max(0, values.count - 1)) * gap
-        let padding = values.isEmpty ? minimumPadding
-            : max(minimumPadding, min(5, remaining / CGFloat(values.count * 2)))
-        var x: CGFloat = 10
-        let height: CGFloat = 20
-        let frames = widths.map { width -> NSRect in
-            defer { x += max(20, width + padding * 2) + gap }
-            return NSRect(x: x, y: (bounds.height - height) / 2, width: max(20, width + padding * 2), height: height)
+        // Shrink in small steps against the measured layout (text width is not
+        // exactly linear in point size, and short chips keep a 20 pt minimum).
+        var size = baseSize
+        var result = layout(size)
+        while result.2 > available, size - 0.25 >= minimumFontSize {
+            size -= 0.25
+            result = layout(size)
         }
-        return (font, frames)
+        return (result.0, result.1)
     }
 
     func displayedChipFrames() -> [NSRect] { chipLayout(keys).1 }
