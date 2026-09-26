@@ -384,66 +384,66 @@ fn paint_surface(
             .map(|window| (coordinates.rect(window, view.display), window)),
         _ => None,
     };
-    let veil = tokens.color("glass-veil-heavy");
+    let direct = matches!(guidance, SurfaceGuidance::Direct { .. });
+    let display_target = matches!(guidance, SurfaceGuidance::None);
+    // Shipping `CaptureDim`: window mode uses the stronger window shade and
+    // the Full screen target the region shade.
+    let window_shade = tokens.color("capture-shade-window");
     if let Some((rect, window)) = selected.filter(|(rect, _)| rect.is_positive()) {
-        for outside in [
-            egui::Rect::from_min_max(surface.min, Pos2::new(surface.right(), rect.top())),
-            egui::Rect::from_min_max(Pos2::new(surface.left(), rect.bottom()), surface.max),
-            egui::Rect::from_min_max(
-                Pos2::new(surface.left(), rect.top()),
-                Pos2::new(rect.left(), rect.bottom()),
-            ),
-            egui::Rect::from_min_max(
-                Pos2::new(rect.right(), rect.top()),
-                Pos2::new(surface.right(), rect.bottom()),
-            ),
-        ] {
-            painter.rect_filled(outside, 0., veil);
-        }
-        let radius = window.corner_radius.unwrap_or(0.).clamp(0., 255.) as u8;
+        let radius = window
+            .corner_radius
+            .unwrap_or(0.)
+            .clamp(0., f64::from(rect.width().min(rect.height())) / 2.) as f32;
+        paint_shade_around(painter, surface, rect, radius, window_shade);
+        let corner = radius.round().clamp(0., 255.) as u8;
         painter.rect_filled(
             rect,
-            radius,
+            corner,
             tokens.color("theme-accent").gamma_multiply(0.14),
         );
         painter.rect_stroke(
             rect,
-            radius,
+            corner,
             Stroke::new(2., tokens.color("theme-accent")),
             StrokeKind::Outside,
         );
-        paint_label(
-            painter,
+        // `.window-target` clips its title chip to the rounded window bounds.
+        let space = tokens.number("s-2");
+        paint_chip(
+            &painter.with_clip_rect(rect.intersect(painter.clip_rect())),
             tokens,
-            rect.left_top() + egui::vec2(8., 8.),
+            rect.left_top() + egui::vec2(space, space),
             window_label(window),
+            rect.width() - 8.,
         );
-    } else {
-        painter.rect_filled(surface, 0., veil);
-        if hovered == Some(SelectionTarget::Display) {
-            painter.rect_stroke(
-                surface.shrink(2.),
-                0.,
-                Stroke::new(2., tokens.color("theme-accent")),
-                StrokeKind::Inside,
-            );
-            if view.auto_start {
-                let text = painter.layout_no_wrap(
-                    "Entire display".into(),
-                    FontId::proportional(tokens.number("text-sm")),
-                    tokens.color("glass-text"),
-                );
-                let center = surface.center_bottom() - egui::vec2(0., 54.);
-                let background =
-                    egui::Rect::from_center_size(center, text.size() + egui::vec2(18., 10.));
-                painter.rect_filled(
-                    background,
-                    tokens.number("r-md"),
-                    tokens.color("glass-strong"),
-                );
-                painter.galley(center - text.size() / 2., text, Color32::WHITE);
-            }
+    } else if hovered == Some(SelectionTarget::Display) {
+        if display_target {
+            painter.rect_filled(surface, 0., tokens.color("capture-shade"));
+        } else if !direct {
+            painter.rect_filled(surface, 0., window_shade);
         }
+        // `.capture-display-outline`: an inset 2 px accent ring at the display edge.
+        painter.rect_stroke(
+            surface,
+            0.,
+            Stroke::new(2., tokens.color("theme-accent")),
+            StrokeKind::Inside,
+        );
+        if direct {
+            // Shipping `.capture-display-fallback`; the direct overlay stays clear.
+            let inset = tokens.number("s-4");
+            paint_chip(
+                painter,
+                tokens,
+                surface.min + egui::vec2(inset, inset),
+                "Entire display",
+                360_f32.min(surface.width() - 8.),
+            );
+        }
+    } else if !direct {
+        // New Capture's window target dims while it waits for a choice; the
+        // direct screenshot overlay stays clear until something is hovered.
+        painter.rect_filled(surface, 0., window_shade);
     }
 
     let has_selection = match guidance {
@@ -510,20 +510,98 @@ fn paint_surface(
     );
 }
 
-fn paint_label(painter: &egui::Painter, tokens: &Tokens, origin: Pos2, title: &str) {
-    let galley = painter.layout(
-        title.into(),
-        FontId::proportional(tokens.number("text-sm")),
+/// Shipping glass title chip (`.window-target span`,
+/// `.capture-display-fallback span`): one ellipsized line of `--text-xs`.
+fn paint_chip(painter: &egui::Painter, tokens: &Tokens, origin: Pos2, title: &str, max_width: f32) {
+    let padding = egui::vec2(tokens.number("s-3"), tokens.number("s-2"));
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        title.to_owned(),
+        FontId::proportional(tokens.number("text-xs")),
         tokens.color("glass-text"),
-        320.,
     );
-    let background = egui::Rect::from_min_size(origin, galley.size() + egui::vec2(14., 8.));
+    job.wrap = egui::text::TextWrapping::truncate_at_width((max_width - 2. * padding.x).max(0.));
+    let galley = painter.layout_job(job);
+    let background = egui::Rect::from_min_size(origin, galley.size() + 2. * padding);
     painter.rect_filled(
         background,
         tokens.number("r-sm"),
         tokens.color("glass-strong"),
     );
-    painter.galley(origin + egui::vec2(7., 4.), galley, Color32::WHITE);
+    painter.galley(origin + padding, galley, Color32::WHITE);
+}
+
+/// The window shade with a hole that follows the window's rounded corners:
+/// four strips around the bounds plus a fan in each corner outside the arc.
+fn paint_shade_around(
+    painter: &egui::Painter,
+    surface: egui::Rect,
+    hole: egui::Rect,
+    radius: f32,
+    color: Color32,
+) {
+    for outside in [
+        egui::Rect::from_min_max(surface.min, Pos2::new(surface.right(), hole.top())),
+        egui::Rect::from_min_max(Pos2::new(surface.left(), hole.bottom()), surface.max),
+        egui::Rect::from_min_max(
+            Pos2::new(surface.left(), hole.top()),
+            Pos2::new(hole.left(), hole.bottom()),
+        ),
+        egui::Rect::from_min_max(
+            Pos2::new(hole.right(), hole.top()),
+            Pos2::new(surface.right(), hole.bottom()),
+        ),
+    ] {
+        if outside.is_positive() {
+            painter.rect_filled(outside, 0., color);
+        }
+    }
+    if radius <= 0. {
+        return;
+    }
+    painter.add(egui::Shape::mesh(rounded_corner_mesh(hole, radius, color)));
+}
+
+/// Triangles between each corner of `hole` and its quarter arc (y down).
+fn rounded_corner_mesh(hole: egui::Rect, radius: f32, color: Color32) -> egui::Mesh {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    const STEPS: u32 = 12;
+    let mut mesh = egui::Mesh::default();
+    for (corner, center, start) in [
+        (
+            hole.left_top(),
+            hole.left_top() + egui::vec2(radius, radius),
+            PI,
+        ),
+        (
+            hole.right_top(),
+            hole.right_top() + egui::vec2(-radius, radius),
+            PI + FRAC_PI_2,
+        ),
+        (
+            hole.right_bottom(),
+            hole.right_bottom() - egui::vec2(radius, radius),
+            0.,
+        ),
+        (
+            hole.left_bottom(),
+            hole.left_bottom() + egui::vec2(radius, -radius),
+            FRAC_PI_2,
+        ),
+    ] {
+        let base = mesh.vertices.len() as u32;
+        mesh.colored_vertex(corner, color);
+        for step in 0..=STEPS {
+            let angle = start + FRAC_PI_2 * step as f32 / STEPS as f32;
+            mesh.colored_vertex(
+                center + radius * egui::vec2(angle.cos(), angle.sin()),
+                color,
+            );
+        }
+        for step in 0..STEPS {
+            mesh.add_triangle(base, base + 1 + step, base + 2 + step);
+        }
+    }
+    mesh
 }
 
 fn window_label(window: &WindowDescriptor) -> &str {
@@ -661,6 +739,151 @@ mod tests {
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         action
+    }
+
+    fn painted(hovered: Option<SelectionTarget>, guidance: SurfaceGuidance) -> Vec<egui::Shape> {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 720.));
+        let display = display();
+        let (windows, _) = targets();
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        ctx.begin_pass(raw(screen, Vec::new()));
+        let ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::unique("window-selector-paint-test"),
+            egui::UiBuilder::new().max_rect(screen),
+        );
+        let view = View {
+            frozen: None,
+            display: &display,
+            windows: &windows,
+            auto_start: true,
+        };
+        paint_surface(
+            &ui,
+            &tokens,
+            &view,
+            CoordinateMap::new(screen, &display),
+            hovered,
+            guidance,
+        );
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        output
+            .shapes
+            .into_iter()
+            .map(|clipped| clipped.shape)
+            .collect()
+    }
+
+    fn fills(shapes: &[egui::Shape], color: Color32) -> Vec<egui::Rect> {
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Rect(rect) if rect.fill == color => Some(rect.rect),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn texts(shapes: &[egui::Shape]) -> Vec<String> {
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn direct_overlay_stays_clear_until_hover_and_labels_the_display() {
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let window_shade = tokens.color("capture-shade-window");
+        let region_shade = tokens.color("capture-shade");
+        let direct = SurfaceGuidance::Direct {
+            has_selection: false,
+        };
+
+        let idle = painted(None, direct);
+        assert!(
+            fills(&idle, window_shade).is_empty(),
+            "direct overlay dims before hover"
+        );
+        assert!(fills(&idle, region_shade).is_empty());
+
+        let display = painted(Some(SelectionTarget::Display), direct);
+        assert!(
+            fills(&display, window_shade).is_empty(),
+            "desktop hover must stay clear"
+        );
+        assert!(texts(&display).iter().any(|text| text == "Entire display"));
+        let chip = fills(&display, tokens.color("glass-strong"))
+            .into_iter()
+            .find(|rect| rect.top() < 20.)
+            .expect("Entire display chip");
+        let inset = tokens.number("s-4");
+        assert_eq!(
+            chip.min,
+            Pos2::new(inset, inset),
+            "chip sits at the --s-4 inset"
+        );
+
+        let window = painted(Some(SelectionTarget::Window(1)), direct);
+        let strips = fills(&window, window_shade);
+        assert_eq!(strips.len(), 4, "shade surrounds the hovered window");
+        assert!(texts(&window).iter().any(|text| text == "front"));
+        assert!(!texts(&window).iter().any(|text| text == "Entire display"));
+
+        // New Capture keeps shipping `dimWithoutHole`; Full screen uses the region shade.
+        let menu = SurfaceGuidance::Menu {
+            hidden: false,
+            display: false,
+        };
+        assert_eq!(fills(&painted(None, menu), window_shade).len(), 1);
+        let full = painted(Some(SelectionTarget::Display), SurfaceGuidance::None);
+        assert_eq!(fills(&full, region_shade).len(), 1);
+        assert!(!texts(&full).iter().any(|text| text == "Entire display"));
+    }
+
+    fn covered(mesh: &egui::Mesh, point: Pos2) -> bool {
+        mesh.indices.chunks(3).any(|triangle| {
+            let [a, b, c] = [0, 1, 2].map(|i| mesh.vertices[triangle[i] as usize].pos);
+            let side =
+                |p: Pos2, q: Pos2| (q.x - p.x) * (point.y - p.y) - (q.y - p.y) * (point.x - p.x);
+            let (ab, bc, ca) = (side(a, b), side(b, c), side(c, a));
+            (ab >= 0. && bc >= 0. && ca >= 0.) || (ab <= 0. && bc <= 0. && ca <= 0.)
+        })
+    }
+
+    #[test]
+    fn rounded_window_hole_dims_each_corner_outside_the_arc_only() {
+        let hole = egui::Rect::from_min_max(Pos2::new(100., 100.), Pos2::new(300., 200.));
+        let mesh = rounded_corner_mesh(hole, 20., Color32::BLACK);
+        for corner in [
+            Pos2::new(102., 102.),
+            Pos2::new(298., 102.),
+            Pos2::new(298., 198.),
+            Pos2::new(102., 198.),
+        ] {
+            assert!(covered(&mesh, corner), "corner {corner:?} left undimmed");
+        }
+        for inside in [
+            Pos2::new(112., 112.),
+            Pos2::new(288., 112.),
+            Pos2::new(288., 188.),
+            Pos2::new(112., 188.),
+            Pos2::new(200., 150.),
+            Pos2::new(130., 101.),
+        ] {
+            assert!(
+                !covered(&mesh, inside),
+                "{inside:?} inside the window was dimmed"
+            );
+        }
+        for outside in [Pos2::new(99., 99.), Pos2::new(301., 150.)] {
+            assert!(!covered(&mesh, outside), "{outside:?} is the strips' job");
+        }
     }
 
     #[test]

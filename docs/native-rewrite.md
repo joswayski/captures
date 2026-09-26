@@ -77,6 +77,21 @@ and a click without a region shows "Click and drag to select a region" for 1.8
 seconds. "Automatically start on selection" applies only to the New Capture
 controls, which keep aspect presets and Enter confirmation.
 
+Both hosts now draw these overlays like shipping `CaptureOverlay`/`CaptureDim`,
+using new `capture-shade`, `capture-shade-window` and selection hairline tokens.
+Region mode dims with the lighter shipping shade. Its square marquee has no corner
+handles: a 1.5 px accent line between a dark outer and a light inner hairline, with
+the accent size badge at its left edge. The window overlay has no toolbar and stays
+clear until the pointer is over something. A hovered window gets the window shade,
+with a hole that follows its rounded corners, plus a 14% accent fill, an outer ring
+and its glass title chip. Over the desktop the screen stays clear, with an inset
+outline and an "Entire display" chip at the top left. AppKit takes the outline's
+corner radius from the screen's outline, like shipping. wgpu has no display radius
+on Windows or Linux, and shipping uses 0 there too. New Capture uses the same shades
+and frame hairlines, and keeps its handles and centered badge. Guidance chip styling
+for the direct overlays, the shade fade-in and New Capture's desktop-hover dim still
+differ from shipping. Rendering was checked on X11. AppKit is covered by XCTest only.
+
 Shortcut, tray and New Capture flows now start on the display under the pointer,
 like the shipping `capture_display_at_point`: wgpu resolves it through the shared
 `XcapBackend::display_id_at_point` and AppKit through `NSEvent.mouseLocation`, and

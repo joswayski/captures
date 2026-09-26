@@ -462,7 +462,8 @@ fn paint_surface(
         );
     }
     let selected = selection.map(|rect| coordinates.rect(rect));
-    let veil = tokens.color("glass-veil-heavy");
+    // Shipping `CaptureDim` region shade, for both the direct overlay and New Capture.
+    let veil = tokens.color("capture-shade");
     if let Some(rect) = selected.filter(|rect| rect.is_positive()) {
         for outside in [
             egui::Rect::from_min_max(surface.min, Pos2::new(surface.right(), rect.top())),
@@ -478,50 +479,7 @@ fn paint_surface(
         ] {
             painter.rect_filled(outside, 0., veil);
         }
-        painter.rect_stroke(
-            rect,
-            2.,
-            Stroke::new(1.5, tokens.color("theme-accent")),
-            StrokeKind::Inside,
-        );
-        painter.rect_stroke(
-            rect.shrink(1.5),
-            1.,
-            Stroke::new(1., Color32::from_white_alpha(72)),
-            StrokeKind::Inside,
-        );
-        for position in [
-            rect.left_top(),
-            rect.right_top(),
-            rect.left_bottom(),
-            rect.right_bottom(),
-        ] {
-            painter.circle_filled(position, 5., tokens.color("theme-accent"));
-            painter.circle_stroke(
-                position,
-                5.,
-                Stroke::new(2., tokens.color("theme-accent-ink")),
-            );
-        }
-        let dimensions = selection
-            .map(|rect| format!("{} × {}", rect.width.round(), rect.height.round()))
-            .unwrap_or_default();
-        let label_center = if rect.top() < 30. {
-            rect.center_top() + egui::vec2(0., 17.)
-        } else {
-            rect.center_top() - egui::vec2(0., 14.)
-        };
-        let galley = painter.layout_no_wrap(
-            dimensions,
-            FontId::proportional(tokens.number("text-sm")),
-            tokens.color("glass-text"),
-        );
-        painter.rect_filled(
-            egui::Rect::from_center_size(label_center, galley.size() + egui::vec2(12., 6.)),
-            tokens.number("r-sm"),
-            tokens.color("glass-strong"),
-        );
-        painter.galley(label_center - galley.size() / 2., galley, Color32::WHITE);
+        paint_marquee(painter, tokens, surface, rect, selection, menu);
     } else if menu {
         painter.rect_filled(surface, 0., veil);
     } else if !dragging {
@@ -556,6 +514,77 @@ fn paint_surface(
             dragging,
         );
     }
+}
+
+/// Shipping marquee: a 1.5 px accent border between a 1 px dark outer
+/// hairline and a 1 px light inner hairline, plus the accent size badge. The
+/// direct `.selection-box` is square with a left-aligned badge and no handles;
+/// New Capture's `.recording-selection-frame` rounds by 2 px, centers the badge
+/// and adds the four resize handles.
+fn paint_marquee(
+    painter: &egui::Painter,
+    tokens: &Tokens,
+    surface: egui::Rect,
+    rect: egui::Rect,
+    selection: Option<Rect>,
+    menu: bool,
+) {
+    let accent = tokens.color("theme-accent");
+    let radius = if menu { 2. } else { 0. };
+    painter.rect_stroke(
+        rect,
+        radius,
+        Stroke::new(1., tokens.color("selection-hairline-outer")),
+        StrokeKind::Outside,
+    );
+    painter.rect_stroke(rect, radius, Stroke::new(1.5, accent), StrokeKind::Inside);
+    painter.rect_stroke(
+        rect.shrink(1.5),
+        (radius - 1.5_f32).max(0.),
+        Stroke::new(1., tokens.color("selection-hairline-inner")),
+        StrokeKind::Inside,
+    );
+    if menu {
+        for position in [
+            rect.left_top(),
+            rect.right_top(),
+            rect.left_bottom(),
+            rect.right_bottom(),
+        ] {
+            painter.circle_filled(position, 5., accent);
+            painter.circle_stroke(
+                position,
+                5.,
+                Stroke::new(2., tokens.color("theme-accent-ink")),
+            );
+        }
+    }
+    let dimensions = selection
+        .map(|rect| format!("{} × {}", rect.width.round(), rect.height.round()))
+        .unwrap_or_default();
+    let galley = painter.layout_no_wrap(
+        dimensions,
+        FontId::proportional(tokens.number("text-xs")),
+        tokens.color("theme-accent-ink"),
+    );
+    let size = galley.size() + 2. * egui::vec2(tokens.number("s-4"), tokens.number("s-2"));
+    // Offsets are from the padding box, inside the 1.5 px border: `top: -30px`,
+    // or `top: var(--s-3)` inside the box within 30 px of the screen top.
+    let top = rect.top()
+        + 1.5
+        + if rect.top() - surface.top() < 30. {
+            tokens.number("s-3")
+        } else {
+            -30.
+        };
+    let left = if menu {
+        rect.center().x - size.x / 2.
+    } else {
+        rect.left() + 1.5
+    };
+    let badge = egui::Rect::from_min_size(Pos2::new(left, top), size);
+    painter.rect_filled(badge, tokens.number("r-sm"), accent);
+    painter.galley(badge.center() - galley.size() / 2., galley, Color32::WHITE);
 }
 
 #[cfg(test)]
@@ -627,6 +656,122 @@ mod tests {
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         action
+    }
+
+    fn painted(selection: Option<Rect>, menu: bool) -> Vec<egui::Shape> {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        ctx.begin_pass(raw(screen, Vec::new()));
+        let ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::unique("selector-paint-test"),
+            egui::UiBuilder::new().max_rect(screen),
+        );
+        paint_surface(
+            &ui,
+            CoordinateMap {
+                surface: screen,
+                bounds: BOUNDS,
+            },
+            &tokens,
+            None,
+            selection,
+            SurfaceState {
+                dragging: false,
+                feedback: false,
+                menu,
+            },
+        );
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        output
+            .shapes
+            .into_iter()
+            .map(|clipped| clipped.shape)
+            .collect()
+    }
+
+    #[test]
+    fn direct_marquee_matches_shipping_selection_box_without_handles() {
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let rect = Rect {
+            x: 100.,
+            y: 80.,
+            width: 320.,
+            height: 180.,
+        };
+        let circles = |shapes: &[egui::Shape]| {
+            shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(shape, egui::Shape::Circle(circle) if circle.fill != Color32::TRANSPARENT)
+                })
+                .count()
+        };
+        let strokes = |shapes: &[egui::Shape]| -> Vec<Color32> {
+            shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Rect(rect) if rect.stroke.width > 0. => Some(rect.stroke.color),
+                    _ => None,
+                })
+                .collect()
+        };
+        let badge = |shapes: &[egui::Shape]| {
+            shapes
+                .iter()
+                .find_map(|shape| match shape {
+                    egui::Shape::Rect(badge) if badge.fill == tokens.color("theme-accent") => {
+                        Some(badge.rect)
+                    }
+                    _ => None,
+                })
+                .expect("accent size badge")
+        };
+
+        let direct = painted(Some(rect), false);
+        assert_eq!(
+            circles(&direct),
+            0,
+            "the direct overlay has no corner handles"
+        );
+        assert_eq!(
+            strokes(&direct),
+            [
+                tokens.color("selection-hairline-outer"),
+                tokens.color("theme-accent"),
+                tokens.color("selection-hairline-inner"),
+            ]
+        );
+        let shade = tokens.color("capture-shade");
+        let strips = direct
+            .iter()
+            .filter(|shape| matches!(shape, egui::Shape::Rect(rect) if rect.fill == shade))
+            .count();
+        assert_eq!(
+            strips, 4,
+            "the lighter region shade surrounds the selection"
+        );
+        let left = badge(&direct);
+        assert!((left.left() - 101.5).abs() < 0.01 && (left.top() - 51.5).abs() < 0.01);
+
+        let menu = painted(Some(rect), true);
+        assert_eq!(
+            circles(&menu),
+            4,
+            "New Capture keeps its four resize handles"
+        );
+        let centered = badge(&menu);
+        assert!(
+            (centered.center().x - 260.).abs() < 0.01,
+            "New Capture centers the badge"
+        );
+
+        // Within 30 px of the top edge the badge moves inside the box.
+        let top = painted(Some(Rect { y: 10., ..rect }), false);
+        let inside = badge(&top);
+        assert!((inside.top() - (11.5 + tokens.number("s-3"))).abs() < 0.01);
     }
 
     #[test]

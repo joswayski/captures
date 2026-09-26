@@ -182,26 +182,34 @@ final class RegionSelectionView: NSView {
         let text = "\(Int(selection.rect.width.rounded())) × \(Int(selection.rect.height.rounded()))"
         dimensions.stringValue = text
         dimensions.setAccessibilityLabel("Selected region \(text) logical pixels")
-        let labelWidth = dimensions.intrinsicContentSize.width + tokens.number("s-6")
-        let height = tokens.number("h-xs")
-        dimensions.frame = NSRect(x: min(max(0, selection.nsRect.midX - labelWidth / 2), bounds.width - labelWidth),
-            y: selection.rect.y >= height + tokens.number("s-3") ? selection.rect.y - height - tokens.number("s-3") : selection.rect.y + tokens.number("s-3"),
-            width: labelWidth, height: height)
+        let labelWidth = dimensions.intrinsicContentSize.width + tokens.number("s-4") * 2
+        // Shipping `.selection-dimensions`: left-aligned inside the 1.5 pt border,
+        // 30 pt above the box, or `--s-3` inside it near the top of the screen.
+        let border: CGFloat = 1.5
+        dimensions.frame = NSRect(x: min(max(0, selection.rect.x + border), bounds.width - labelWidth),
+            y: selection.rect.y + border + (selection.rect.y < 30 ? tokens.number("s-3") : -30),
+            width: labelWidth, height: tokens.number("h-xs"))
         captureButton.needsDisplay = true
     }
 
     fileprivate func drawSelection() {
         let path = NSBezierPath(rect: bounds)
         if selection.capturable { path.appendRect(selection.nsRect) }
-        path.windingRule = .evenOdd; tokens.color("glass-veil").setFill(); path.fill()
+        path.windingRule = .evenOdd; tokens.color("capture-shade").setFill(); path.fill()
         guard selection.capturable else { return }
-        tokens.color("theme-accent").setStroke()
-        let border = NSBezierPath(rect: selection.nsRect); border.lineWidth = tokens.number("s-1") * 0.75; border.stroke()
-        for corner in selection.corners {
-            let radius = tokens.number("s-3") - tokens.number("s-1") / 2
-            let handle = NSBezierPath(ovalIn: NSRect(x: corner.x - radius, y: corner.y - radius, width: radius * 2, height: radius * 2))
-            tokens.color("theme-accent").setFill(); handle.fill()
-            tokens.color("theme-accent-ink").setStroke(); handle.lineWidth = tokens.number("s-1"); handle.stroke()
+        RegionSelectionView.drawMarquee(selection.nsRect, tokens: tokens, radius: 0)
+    }
+
+    /// Shipping marquee: a 1.5 pt accent border between a 1 pt dark outer
+    /// hairline and a 1 pt light inner hairline. The direct `.selection-box`
+    /// is square and has no handles; New Capture rounds it by 2 pt.
+    static func drawMarquee(_ rect: NSRect, tokens: Tokens, radius: CGFloat) {
+        for (inset, width, color, extra) in [(-0.5, 1.0, "selection-hairline-outer", 0.5),
+                                             (0.75, 1.5, "theme-accent", -0.75),
+                                             (2.0, 1.0, "selection-hairline-inner", -2.0)] as [(CGFloat, CGFloat, String, CGFloat)] {
+            let corner = max(0, radius + extra)
+            let line = NSBezierPath(roundedRect: rect.insetBy(dx: inset, dy: inset), xRadius: corner, yRadius: corner)
+            line.lineWidth = width; tokens.color(color).setStroke(); line.stroke()
         }
     }
 }

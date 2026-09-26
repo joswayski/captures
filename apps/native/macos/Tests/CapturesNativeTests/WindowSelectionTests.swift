@@ -129,6 +129,80 @@ final class WindowSelectionTests: XCTestCase {
         try render(view, window: window, name: "window-dark-auto-start")
     }
 
+    func testDirectOverlayStaysClearUntilHoverThenShadesTheWindowOrLabelsTheDisplay() throws {
+        _ = NSApplication.shared
+        let frame = NSRect(x: 0, y: 0, width: 900, height: 560)
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; defer { window.close() }
+        let targets = [WindowSelectionTarget(id: "front", title: " Draft ", appName: "Editor",
+            rect: NSRect(x: 60, y: 60, width: 400, height: 300), cornerRadius: 20)]
+        let view = WindowSelectionView(frame: frame, image: nil, targets: targets,
+            tokens: Tokens.variants["dark-mustard"]!, autoStart: true, displayCornerRadius: 24,
+            hitTest: { $0.x < 460 && $0.y < 360 ? 0 : -1 }, confirm: { _ in }, cancel: {})
+        window.contentView = view
+        XCTAssertFalse(view.subviews.flatMap(\.subviews).contains {
+            $0 is CaptureButton && !$0.isHidden && !($0.superview?.isHidden ?? false)
+        }, "the direct window overlay has no toolbar")
+
+        XCTAssertFalse(view.hasHoverTarget)
+        XCTAssertNil(view.hoverChipText)
+        var bitmap = try snapshot(view, window: window)
+        XCTAssertEqual(try alpha(bitmap, view, 700, 100), 0, accuracy: 0.01, "no dim before hover")
+        XCTAssertEqual(try alpha(bitmap, view, 1, 280), 0, accuracy: 0.01, "no outline before hover")
+
+        view.hover(NSPoint(x: 200, y: 200))
+        XCTAssertEqual(view.hoverChipText, "Draft", "shipping chip uses the trimmed window title")
+        bitmap = try snapshot(view, window: window)
+        try render(view, window: window, name: "window-dark-direct-hover")
+        XCTAssertEqual(try alpha(bitmap, view, 700, 100), 0.42, accuracy: 0.03, "window shade outside")
+        XCTAssertEqual(try alpha(bitmap, view, 61, 61), 0.42, accuracy: 0.03,
+            "the shade follows the rounded corner, so the corner outside the arc is dimmed")
+        XCTAssertEqual(try alpha(bitmap, view, 300, 250), 0.14, accuracy: 0.03, "14% accent fill")
+        XCTAssertGreaterThan(try alpha(bitmap, view, 59, 200), 0.9, "outer 2 pt accent ring")
+
+        view.hover(NSPoint(x: 700, y: 450))
+        XCTAssertEqual(view.activeChoice, .display)
+        XCTAssertEqual(view.hoverChipText, "Entire display")
+        bitmap = try snapshot(view, window: window)
+        try render(view, window: window, name: "window-dark-direct-display")
+        XCTAssertEqual(try alpha(bitmap, view, 700, 100), 0, accuracy: 0.01, "desktop hover stays clear")
+        XCTAssertGreaterThan(try alpha(bitmap, view, 1, 280), 0.9, "inset outline at the display edge")
+        XCTAssertEqual(try alpha(bitmap, view, 1.5, 1.5), 0, accuracy: 0.05,
+            "the outline follows the display corner radius")
+        let chip = try alpha(bitmap, view, 20, 16)
+        XCTAssertGreaterThan(chip, 0.9, "glass Entire display chip at the --s-4 inset")
+        XCTAssertEqual(try alpha(bitmap, view, 6, 6), 0, accuracy: 0.05, "chip starts at the inset")
+    }
+
+    func testDisplayCornerRadiusComesFromOnPathOutlinePoints() {
+        let frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        let rounded = NSBezierPath(roundedRect: frame, xRadius: 12, yRadius: 12)
+        XCTAssertEqual(DisplayCornerRadius.radius(
+            outline: DisplayCornerRadius.outlinePoints(rounded), frame: frame), 12, accuracy: 0.01)
+        XCTAssertEqual(DisplayCornerRadius.radius(
+            outline: DisplayCornerRadius.outlinePoints(NSBezierPath(rect: frame)), frame: frame), 0)
+        XCTAssertEqual(DisplayCornerRadius.radius(outline: [], frame: frame), 0)
+        XCTAssertEqual(DisplayCornerRadius.halfPoints(36.997_622_963_456_48), 37)
+        XCTAssertEqual(DisplayCornerRadius.halfPoints(38.2), 38)
+        XCTAssertEqual(DisplayCornerRadius.halfPoints(38.6), 38.5)
+        XCTAssertEqual(DisplayCornerRadius.halfPoints(-1), 0)
+        XCTAssertEqual(DisplayCornerRadius.halfPoints(.nan), 0)
+    }
+
+    private func snapshot(_ view: NSView, window: NSWindow) throws -> NSBitmapImageRep {
+        window.display(); view.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return bitmap
+    }
+
+    /// Alpha at a point in view coordinates (top-left origin), at any backing scale.
+    private func alpha(_ bitmap: NSBitmapImageRep, _ view: NSView, _ x: CGFloat, _ y: CGFloat) throws -> CGFloat {
+        let scaleX = CGFloat(bitmap.pixelsWide) / view.bounds.width
+        let scaleY = CGFloat(bitmap.pixelsHigh) / view.bounds.height
+        return try XCTUnwrap(bitmap.colorAt(x: Int(x * scaleX), y: Int(y * scaleY))).alphaComponent
+    }
+
     private func keyEvent(window: NSWindow, keyCode: UInt16, characters: String) throws -> NSEvent {
         try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
             timestamp: 0, windowNumber: window.windowNumber, context: nil,

@@ -1379,19 +1379,25 @@ final class UnifiedCaptureSelectionView: NSView {
         if let selectedRect {
             veil.append(NSBezierPath(roundedRect: selectedRect, xRadius: radius, yRadius: radius))
         }
-        veil.windingRule = .evenOdd; tokens.color("glass-veil").setFill(); veil.fill()
+        // Shipping `CaptureDim`: the window target waits under the stronger shade.
+        veil.windingRule = .evenOdd
+        tokens.color(target == .window ? "capture-shade-window" : "capture-shade").setFill(); veil.fill()
         guard let selectedRect else { return }
-        tokens.color("theme-accent").setStroke()
-        let border = NSBezierPath(roundedRect: selectedRect, xRadius: radius, yRadius: radius)
-        border.lineWidth = 1.5; border.stroke()
         if target == .region {
+            // `.recording-selection-frame`: 2 pt corners, hairlines and four handles.
+            RegionSelectionView.drawMarquee(selectedRect, tokens: tokens, radius: 2)
             for corner in region.corners {
                 let handle = NSBezierPath(ovalIn: NSRect(x: corner.x - 5, y: corner.y - 5,
                     width: 10, height: 10))
                 tokens.color("theme-accent").setFill(); handle.fill()
+                handle.lineWidth = tokens.number("s-1")
                 tokens.color("theme-accent-ink").setStroke(); handle.stroke()
             }
+            return
         }
+        tokens.color("theme-accent").setStroke()
+        let border = NSBezierPath(roundedRect: selectedRect, xRadius: radius, yRadius: radius)
+        border.lineWidth = 1.5; border.stroke()
     }
 }
 

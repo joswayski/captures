@@ -122,6 +122,11 @@
   --glass-veil-soft: rgba(15, 15, 18, 0.18);
   --glass-veil-heavy: rgba(15, 15, 18, 0.72);
   --glass-countdown-scrim: rgba(6, 7, 10, 0.5);
+  /* Capture overlay dims and the region marquee's hairlines. */
+  --capture-shade: rgba(6, 6, 10, 0.2);
+  --capture-shade-window: rgba(6, 9, 16, 0.42);
+  --selection-hairline-outer: rgba(0, 0, 0, 0.45);
+  --selection-hairline-inner: rgba(255, 255, 255, 0.28);
   --countdown-label-min: 14px;
   --countdown-label-max: 20px;
   --countdown-number-min: 150px;

@@ -127,8 +127,8 @@ html.capture-selector-display {
 
 .capture-shade {
   position: absolute;
-  fill: rgba(6, 6, 10, 0.2);
-  background: rgba(6, 6, 10, 0.2);
+  fill: var(--capture-shade);
+  background: var(--capture-shade);
   pointer-events: none;
 }
 
@@ -136,7 +136,7 @@ html.capture-selector-display {
   position: absolute;
   z-index: 1;
   inset: 0;
-  background: rgba(6, 6, 10, 0.2);
+  background: var(--capture-shade);
   pointer-events: none;
 }
 
@@ -150,8 +150,8 @@ html.capture-selector-display {
 }
 
 .capture-window .capture-shade {
-  fill: rgba(6, 9, 16, 0.42);
-  background: rgba(6, 9, 16, 0.42);
+  fill: var(--capture-shade-window);
+  background: var(--capture-shade-window);
 }
 
 .capture-display-outline {
@@ -261,8 +261,8 @@ html.capture-selector-display {
   border: 1.5px solid var(--theme-accent);
   background: transparent;
   box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.45),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+    0 0 0 1px var(--selection-hairline-outer),
+    inset 0 0 0 1px var(--selection-hairline-inner);
   pointer-events: none;
 }
 
@@ -545,8 +545,8 @@ html.capture-selector-display {
   border-radius: 2px;
   background: transparent;
   box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.45),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+    0 0 0 1px var(--selection-hairline-outer),
+    inset 0 0 0 1px var(--selection-hairline-inner);
   pointer-events: none;
 }
 
