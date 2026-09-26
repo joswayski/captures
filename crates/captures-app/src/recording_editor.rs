@@ -86,6 +86,8 @@ pub struct RecordingEditorSnapshot<'a> {
     pub revision: u64,
     pub has_system_audio: bool,
     pub has_microphone_audio: bool,
+    /// Frames the source capture dropped, for shipping's header warning.
+    pub dropped_frames: u64,
 }
 
 /// The v1 snapshot plus the accepted Save-new-copy configuration. Flattening
@@ -407,6 +409,7 @@ impl RecordingEditorSession {
             revision: self.revision,
             has_system_audio: self.has_system_audio,
             has_microphone_audio: self.has_microphone_audio,
+            dropped_frames: self.source_entry.dropped_frames,
         }
     }
 

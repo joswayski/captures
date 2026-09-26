@@ -705,13 +705,13 @@ defaults to Fit. Crop gestures use the scrolled image rectangle and end on scrol
 scale or layout changes. Motion remains capped at 1280 × 720 regardless of display
 scale. Physical AppKit input/accessibility and Windows/Wayland/mixed-DPI acceptance
 are still open.
-Available system/microphone tracks have 0–200% volume, independent mute and mono
-output controls. Availability comes from the accepted session's trusted audio
+Available system/microphone tracks have 0–200% volume, an include (unmute) checkbox
+per track and a Convert to mono control. Availability comes from the accepted session's trusted audio
 identity, not caller-provided track flags. Audio stages with geometry/format and
 uses the same Apply/save/dirty guards; failed updates preserve staged controls
-and accepted output state. Accepted audio also feeds opt-in Sound preview. GIF disables audio
-controls while keeping settings for a later MP4 export. No-track recordings show
-an explicit explanation rather than editable controls. Private X11 smoke uses
+and accepted output state. Accepted audio also feeds opt-in Sound preview. GIF replaces
+the audio rows with the shipping note while keeping settings for a later MP4 export.
+No-track recordings show no Audio card. Private X11 smoke uses
 distinct stereo tones in a retained playback mix plus separate system/mic tracks,
 then measures decoded export frequencies/amplitudes, mono channel count, mute,
 GIF silence, restored MP4 settings and History audio identity.
@@ -732,8 +732,8 @@ Apply/save/seek/failure/dirty/new-item behavior stays on the existing boundary.
 Private X11 light/dark coverage saves 800/1200/320 px GIFs from a 1600×900 source,
 restores 1600×900 MP4, and checks source/History immutability. AppKit CI exercises
 the same sizing lifecycle and real GIF dimensions. Physical acceptance remains open.
-Both native hosts map their existing GIF quality choice to the shipping palette
-limits: Tiny 64, Small 96, Standard 128 and High/Highest/Preserve 256 colors. No separate
+Both native hosts map their GIF quality choice to the shipping palette
+limits: Tiny 64, Smaller 96, Balanced 128 and High/Highest/Preserve 256 colors. No separate
 palette control is added. Maximum uses the remembered quality for the palette while
 forcing Preserve export quality; MP4 omits the GIF field without losing the choice.
 Private X11 exports a high-color source at Tiny and High and checks decoded colors,
@@ -786,8 +786,34 @@ adjustment. Maximum displays the budget-free first attempt and warns that final
 capped-save pixels can differ. Requested/fallback seek positions are not decoded
 PTS; output cadence can select neighboring frames. Physical macOS, Windows and
 Wayland input, accessibility and mixed-DPI acceptance remain open.
-The preview/timeline/save hierarchy follows the shipping recording editor, but
-the UI is not a visual match; physical audio playback acceptance remains open.
+Both hosts now render the shipping editor's page: an **Edit recording** (or **Edit
+GIF**) header with the dropped-frames caution when the source lost frames, a Preview card whose toolbar holds Sound, Compare, **Loop preview** and a
+Fit | 100% segment above a sunken viewport with an accent overlay Play/Pause circle,
+then a timeline card (range summary, "… selected", filmstrip with dimmed exclusions,
+accent grips and a playhead; clicking the track seeks; Start/End fields, **Reset trim**
+and the position control), **GIF settings** (Frame rate, Maximum width), **Crop & size**
+(X/Y/Width/Height, Lock aspect ratio, Adjust crop, **Output resolution** with
+"Original — W × H", 1080p/720p maximum and Custom), **Save quality** (Quality mode:
+Preserve quality, Compress or Maximum file size; the Tiny/Smaller/Balanced/High/Highest
+preset; Est. size with a green/red delta pill) and **Audio** (System audio/Microphone
+checkboxes that include a track, 0–200% volume, Convert to mono; GIF output shows only
+"GIFs do not include recorded audio."). The fixed save footer has Filename, "Saving to
+<folder>" with **Change…** (a folder picker), the filename field with its attached
+.mp4/.gif format, the status line, a thin progress bar, a Cancel named for the running
+operation, **Show in Folder** after a successful copy, **Replace original…**, **Apply
+edits** and **Save new copy**. Shipping copy and formatting come from
+`captures_app::recording_editor_ui` (AppKit: `captures_recording_editor_ui_v1`): titles,
+`formatEditorTime`, trim summary, `formatFileSize`, the Est. size states and delta,
+the dropped-frames warning (from the snapshot's additive `dropped_frames`),
+stage labels, saved messages, filename validation and every menu's labels and
+descriptions. As in shipping, Preserve quality is offered only for MP4: choosing GIF
+moves Preserve to Compress at the remembered preset (Highest by default), while an
+accepted Preserve GIF keeps showing its mode. Deliberate native differences remain:
+edits are staged and accepted with **Apply edits**, Est. size is explicit (**Estimate
+size**), saves never overwrite (no "Save as new file" switch; replacement is the
+separate confirmed action), WebM output is not offered, and AppKit keeps a Position
+slider where wgpu has a Position (ms) field with Seek. Physical audio playback
+acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted
 frame, and unapplied values gate scrubbing/export. Failed edits keep
 the staged values available for correction. MP4/GIF Save new copy uses

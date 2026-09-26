@@ -290,6 +290,9 @@ with source-relative scrubbing, draggable trim handles, numeric trim/crop contro
 and MP4/GIF **Save new copy**. Crop dimensions start aspect-locked; unlock to change
 width and height independently. Apply edits accepts the format, quality and edits
 together before saving; failed updates leave the last accepted frame intact.
+Both native editors follow the shipping layout (**Edit GIF** for GIF sources). The save
+footer names the file, shows its folder with **Change…** and the .mp4/.gif format;
+after a successful copy, **Show in Folder** reveals it.
 The shared recording editor now also supports same-format replacement of an
 existing permanent MP4/GIF when History retains identical recovery media.
 Both native editors expose **Replace original…** with confirmation of the opened
@@ -302,6 +305,7 @@ result requires closing and reopening. This is not crash-atomic across the saved
 file and History. **Save new copy** remains non-destructive.
 Trim handles stage changes without decoding on each pointer move; Apply updates
 the preview. Focused trim handles also accept arrow keys and Page Up/Page Down.
+Clicking the trim track seeks the accepted preview; **Reset trim** restores the full range.
 **Adjust crop** shows an uncropped source frame with draggable edges/corners and
 interior move. Crop handles follow the aspect lock; arrows move one source pixel,
 or ten with Shift. **Done cropping** restores the prior preview without accepting
@@ -324,9 +328,11 @@ silent without opening a device. Device failures are visible; turn Sound off to
 retry silently. Loop reopens the decoders each lap and is not gapless. Physical
 audio routing and A/V synchronization acceptance remain open.
 The preview identifies its accepted format/quality, and saving uses those settings.
-Both native recording editors map GIF quality to palette limits: Tiny 64 colors,
-Small 96, Standard 128, and High/Highest/Preserve 256. Maximum mode retains that
-choice while displaying Preserve and fitting the size cap; MP4 does not use it.
+**Save quality** offers Preserve quality (MP4 only; choosing GIF switches to Compress),
+Compress with Tiny, Smaller, Balanced, High or Highest, or Maximum file size.
+GIF palettes follow the preset: Tiny 64 colors, Smaller 96, Balanced 128, and
+High/Highest/Preserve 256. Maximum mode keeps that palette while saving at Preserve
+quality to fit the size cap; MP4 does not use it.
 **Estimate size** checks those accepted settings without publishing an export.
 Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
 audio-only Preserve changes show approximate sizes. Estimation can be canceled.
@@ -342,9 +348,9 @@ decimal KB/MB/GB with a 100 KB minimum. Apply accepts the limit; the size label 
 shows the cap instead of an estimate. Save may reduce resolution, frame rate or
 audio quality to fit, so its first-attempt preview is not a promise of final output.
 An unattainable limit fails without publishing a copy.
-Available system and microphone tracks have independent volume/mute controls plus
-mono output. Accepted settings apply to MP4 exports and Sound preview.
-GIF disables audio controls without discarding the MP4 settings.
+Available system and microphone tracks each have an include checkbox and 0–200%
+volume, plus **Convert to mono**. Accepted settings apply to MP4 exports and Sound
+preview. GIF output shows that GIFs have no audio, without discarding the MP4 settings.
 Both native recording editors offer 8, 10, 12, 15 (default), 20, 24 or 30 FPS for
 GIF exports. Apply accepts the frame rate with the other edits; switching to MP4
 keeps the GIF choice without changing MP4 cadence.
