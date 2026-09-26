@@ -793,6 +793,7 @@ final class CaptureControlsView: NSView {
         let recording = mode == .record
         captureButton.title = menuState?.primaryLabel ?? (recording ? "Start recording" : "Capture")
         captureButton.icon = recording ? .record : .capture
+        captureButton.readyPing = recording
         captureButton.setAccessibilityLabel(menuState?.primaryAccessibilityLabel
             ?? (recording ? "Start recording" : "Take screenshot"))
         captureButton.isEnabled = captureEnabled

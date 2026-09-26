@@ -103,7 +103,9 @@ final class LiveCaptureController: NSObject {
     private var recoveryGeneration = 0
     private var recoveryLoading = false
     private var recoveryBusy = false
-    private var recoveryConfirmation = false
+    /// Shipping's inline confirmation: the session whose Discard was pressed
+    /// once and now reads "Discard permanently?" (a second press deletes).
+    private(set) var recoveryDiscardArmedID: String?
     private var recoveryCancel: NativeRecordingEditorCancel?
     private var recoveryStage = ""
     private var recoveryActionGeneration = 0
@@ -525,7 +527,7 @@ final class LiveCaptureController: NSObject {
     }
 
     private func refreshRecovery() {
-        guard !historyRoot.isEmpty, !capturing, !recoveryBusy, !recoveryConfirmation,
+        guard !historyRoot.isEmpty, !capturing, !recoveryBusy,
               !recordingRetiring else { return }
         recoveryGeneration += 1
         let current = recoveryGeneration, root = historyRoot
@@ -582,12 +584,21 @@ final class LiveCaptureController: NSObject {
             details.font = .systemFont(ofSize: tokens.number("text-sm")); details.textColor = tokens.color("text-muted")
             content.addSubview(details)
             if draft.status == "recoverable", draft.identity != nil {
-                let recover = CaptureButton("Recover", frame: NSRect(x: width - 244, y: y + 10, width: 112, height: 29),
+                let recover = CaptureButton("Recover", frame: NSRect(
+                    x: width - (recoveryDiscardArmedID == draft.sessionID ? 304 : 244), y: y + 10,
+                    width: 112, height: 29),
                                             tokens: tokens) { [weak self] in self?.recover(draft) }
-                let discard = CaptureButton("Discard…", frame: NSRect(x: width - 124, y: y + 10, width: 112, height: 29),
+                // Shipping `.recording-recovery-row button.danger`: the first
+                // press arms "Discard permanently?"; the second deletes.
+                let armed = recoveryDiscardArmedID == draft.sessionID
+                let discard = CaptureButton(armed ? "Discard permanently?" : "Discard",
+                                            frame: NSRect(x: width - (armed ? 184 : 124), y: y + 10,
+                                                          width: armed ? 172 : 112, height: 29),
                                             tokens: tokens) { [weak self] in self?.confirmDiscard(draft) }
+                discard.signal = armed
+                discard.escapeActionBlock = { [weak self] in self?.disarmRecoveryDiscard() }
                 recover.isEnabled = !capturing && !clearingHistory && !recoveryBusy
-                    && !recoveryLoading && !recoveryConfirmation && !recordingRetiring
+                    && !recoveryLoading && !recordingRetiring
                 discard.isEnabled = recover.isEnabled
                 content.addSubview(recover); content.addSubview(discard)
                 nextY += 52
@@ -635,8 +646,9 @@ final class LiveCaptureController: NSObject {
     }
 
     private func recover(_ draft: RecordingRecoveryDraft) {
-        guard !recoveryConfirmation, currentRecovery(draft),
+        guard currentRecovery(draft),
               let cancel = NativeRecordingEditorCancel() else { return }
+        recoveryDiscardArmedID = nil
         recoveryActionGeneration += 1
         let current = recoveryActionGeneration
         let selectedAtDispatch = userSelectionGeneration
@@ -680,37 +692,34 @@ final class LiveCaptureController: NSObject {
     }
 
     private func confirmDiscard(_ draft: RecordingRecoveryDraft) {
-        guard currentRecovery(draft), !recoveryConfirmation else { return }
-        recoveryConfirmation = true; updateActions()
-        let alert = NSAlert()
-        alert.messageText = "Discard interrupted recording permanently?"
-        alert.informativeText = "This deletes the recovery bundle \(draft.sessionID) and cannot be undone."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Discard permanently"); alert.addButton(withTitle: "Cancel")
-        alert.buttons[0].keyEquivalent = ""; alert.buttons[1].keyEquivalent = "\r"
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard let self else { return }
-            self.recoveryConfirmation = false
-            self.updateActions()
-            guard response == .alertFirstButtonReturn, self.currentRecovery(draft) else {
-                self.processNextOpenImage()
-                return
-            }
-            self.recoveryActionGeneration += 1
-            let current = self.recoveryActionGeneration
-            self.recoveryBusy = true; self.recoveryActionError = nil
-            self.recoveryStage = "Discarding…"
-            self.updateActions(); self.renderRecovery()
-            self.recoveryWorker.discard(historyRoot: self.historyRoot, draft: draft) { [weak self] result in
-                guard let self, self.recoveryActionGeneration == current else { return }
-                self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
-                self.processNextOpenImage()
-                if case .failure(let error) = result {
-                    self.recoveryActionError = "Couldn’t discard recording: \(error.localizedDescription)"
-                    self.renderRecovery()
-                }
+        guard currentRecovery(draft) else { return }
+        guard recoveryDiscardArmedID == draft.sessionID else {
+            recoveryDiscardArmedID = draft.sessionID
+            renderRecovery()
+            return
+        }
+        recoveryDiscardArmedID = nil
+        recoveryActionGeneration += 1
+        let current = recoveryActionGeneration
+        recoveryBusy = true; recoveryActionError = nil
+        recoveryStage = "Discarding…"
+        updateActions(); renderRecovery()
+        recoveryWorker.discard(historyRoot: historyRoot, draft: draft) { [weak self] result in
+            guard let self, self.recoveryActionGeneration == current else { return }
+            self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
+            self.processNextOpenImage()
+            if case .failure(let error) = result {
+                self.recoveryActionError = "Couldn’t discard recording: \(error.localizedDescription)"
+                self.renderRecovery()
             }
         }
+    }
+
+    /// Escape disarms an armed Discard.
+    func disarmRecoveryDiscard() {
+        guard recoveryDiscardArmedID != nil else { return }
+        recoveryDiscardArmedID = nil
+        renderRecovery()
     }
 
     private func reloadHistorySelection(_ previousID: String?) {
@@ -812,7 +821,7 @@ final class LiveCaptureController: NSObject {
     }
 
     private var historyBusy: Bool {
-        capturing || clearingHistory || recoveryBusy || recoveryConfirmation
+        capturing || clearingHistory || recoveryBusy
             || recordingRetiring || externalOpenPending || permissionsVisible
     }
 
@@ -923,13 +932,14 @@ final class LiveCaptureController: NSObject {
     }
 
     private func cancelHistoryConfirmations() {
+        disarmRecoveryDiscard()
         confirmDeleteID = nil; confirmDeleteTimer?.invalidate(); confirmDeleteTimer = nil
         confirmDeleteAll = false; confirmDeleteAllTimer?.invalidate(); confirmDeleteAllTimer = nil
         updateActions()
     }
 
     private func requestPermission() {
-        guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
+        guard !capturing, !recoveryBusy, !recordingRetiring,
               !clearingHistory, !externalOpenPending, !permissionsVisible else { return }
         showPermissions()
     }
@@ -955,7 +965,7 @@ final class LiveCaptureController: NSObject {
         recordingSavedNotice.dismiss()
         if !capturing { selectDisplayUnderPointer() }
         let index = displayMenu.indexOfSelectedItem
-        guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
+        guard !capturing, !recoveryBusy, !recordingRetiring,
               !externalOpenPending, !permissionsVisible,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
@@ -1001,7 +1011,7 @@ final class LiveCaptureController: NSObject {
         recordingSavedNotice.dismiss()
         if !capturing { selectDisplayUnderPointer() }
         let index = displayMenu.indexOfSelectedItem
-        guard !capturing, !recoveryBusy, !recoveryConfirmation, !recordingRetiring,
+        guard !capturing, !recoveryBusy, !recordingRetiring,
               !externalOpenPending, !permissionsVisible,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
@@ -2479,7 +2489,7 @@ final class LiveCaptureController: NSObject {
     }
     func openPreview(_ artifact: CaptureArtifact) {
         guard !externalOpenPending, !permissionsVisible, !capturing, !clearingHistory,
-              !recoveryBusy, !recoveryConfirmation, !recordingRetiring else { return }
+              !recoveryBusy, !recordingRetiring else { return }
         presentEditor(artifact, requiresCurrentSelection: false)
     }
     func refreshHistory() { loadHistory() }
@@ -2493,7 +2503,7 @@ final class LiveCaptureController: NSObject {
 
     private func processNextOpenImage() {
         guard !externalOpenPending, !historyRoot.isEmpty, !capturing,
-              !clearingHistory, !recoveryBusy, !recoveryConfirmation,
+              !clearingHistory, !recoveryBusy,
               !recordingRetiring, !permissionsVisible else { return }
         guard !pendingOpenImages.isEmpty else {
             if !externalOpenErrors.isEmpty {
@@ -2626,7 +2636,7 @@ final class LiveCaptureController: NSObject {
             status.stringValue = "Wait for external images to finish opening before quitting."
             return false
         }
-        if recoveryBusy || recoveryConfirmation || recordingRetiring {
+        if recoveryBusy || recordingRetiring {
             status.stringValue = recordingRetiring
                 ? "Wait for recording media to finish before quitting."
                 : "Wait for or cancel recording recovery before quitting."

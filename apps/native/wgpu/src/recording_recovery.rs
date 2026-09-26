@@ -542,7 +542,7 @@ mod tests {
         let ctx = egui::Context::default();
         let (tx, jobs) = mpsc::channel();
         let mut view = view();
-        let mut frame = |view: &mut View, events: Vec<egui::Event>| {
+        let frame = |view: &mut View, events: Vec<egui::Event>| {
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(

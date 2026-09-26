@@ -113,6 +113,12 @@ final class CaptureButton: NSButton {
     var iconOnly = false { didSet { needsDisplay = true } }
     /// A fully rounded (circular) shape, e.g. the recording preview's play control.
     var circular = false { didSet { needsDisplay = true } }
+    /// Shipping `.capture-record-dot` on Start recording: a signal dot ringed
+    /// in accent ink whose `::after` copy plays `recording-ready-ping` while
+    /// the button is enabled (resting invisible under reduced motion).
+    var readyPing = false { didSet { if !readyPing { stopReadyPing() }; needsDisplay = true } }
+    private var readyPingStarted: CFTimeInterval?
+    private var readyPingTimer: Timer?
     var actionBlock: (() -> Void)?
     /// Hover or keyboard focus changed; the recording HUD shows its styled tooltip.
     var highlightChanged: ((CaptureButton, Bool) -> Void)?
@@ -283,6 +289,33 @@ final class CaptureButton: NSButton {
     /// Keyboard focus in a key window, like shipping `:focus-visible`.
     var focusRingVisible: Bool { window?.firstResponder === self && isEnabled }
 
+    /// The ready ping's copy (scale and opacity), or nil while it is not
+    /// drawn. Keeps a display timer only while it animates.
+    func readyPingPose(at time: CFTimeInterval = CACurrentMediaTime(),
+                       reduced: Bool = NativeMotion.reduceMotion) -> (scale: CGFloat, opacity: CGFloat)? {
+        guard readyPing, isEnabled else { stopReadyPing(); return nil }
+        if readyPingStarted == nil && window != nil { readyPingStarted = time }
+        // Before it is drawn in a window, `time` is the elapsed time.
+        let started = readyPingStarted ?? 0
+        guard let pose = NativeMotion.poseRepeating("capture_record_ready_ping", at: time - started,
+                                                    tokens: tokens, reduced: reduced) else { return nil }
+        if !reduced && readyPingTimer == nil && window != nil {
+            let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+                guard let self, self.readyPing, self.isEnabled, self.window != nil else {
+                    self?.stopReadyPing(); return
+                }
+                self.needsDisplay = true
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            readyPingTimer = timer
+        }
+        return pose.opacity > 0 ? (CGFloat(pose.scale), CGFloat(pose.opacity)) : nil
+    }
+
+    private func stopReadyPing() {
+        readyPingTimer?.invalidate(); readyPingTimer = nil; readyPingStarted = nil
+    }
+
     /// Shipping `.screenshot-canvas-bg-chip`: a 14 px swatch, checkered when clear.
     private func drawSwatch(_ color: NSColor, in rect: NSRect) {
         let chip = NSBezierPath(roundedRect: rect, xRadius: tokens.number("r-xs"), yRadius: tokens.number("r-xs"))
@@ -345,6 +378,19 @@ final class CaptureButton: NSButton {
             default: break
             }
             path.stroke()
+        case .record where readyPing:
+            let dot = NSRect(x: rect.midX - 5, y: rect.midY - 5, width: 10, height: 10)
+            if let ping = readyPingPose() {
+                let side = 10 * ping.scale
+                tokens.color("theme-signal").withAlphaComponent(ping.opacity).setFill()
+                NSBezierPath(ovalIn: NSRect(x: rect.midX - side / 2, y: rect.midY - side / 2,
+                                            width: side, height: side)).fill()
+            }
+            // `box-shadow: 0 0 0 1.5px var(--theme-accent-ink)` outside the dot.
+            tokens.color("theme-accent-ink").setFill()
+            NSBezierPath(ovalIn: dot.insetBy(dx: -1.5, dy: -1.5)).fill()
+            tokens.color("theme-signal").setFill()
+            NSBezierPath(ovalIn: dot).fill()
         case .record:
             NSBezierPath(ovalIn: rect.insetBy(dx: 3, dy: 3)).fill()
         case .capture:

@@ -353,10 +353,14 @@ def main():
         click(editor, px, first + 44 * index)
 
     def quality_mode(index):
-        # The Save quality listbox may open below with little room, so choose
-        # its row with the keyboard the select supports.
+        # The Save quality listbox opens below with little room and scrolls,
+        # so its clipped last row is chosen with End (egui's focus navigation
+        # takes the arrow keys, but Home/End reach the open listbox).
+        if index == 1:
+            setting_menu(282, 1, 3)
+            return
         setting_click(282)
-        for key in ["Home", *(["Down"] * index), "Return"]:
+        for key in ("Home" if index == 0 else "End", "Return"):
             run("xdotool", "key", key, "sleep", ".2")
 
     def setting_field(x, value, row=0):

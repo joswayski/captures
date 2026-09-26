@@ -647,6 +647,39 @@ struct EditorOutputPresentation {
     let image: CGImage
 
     var length: Int { data.count }
+
+    /// Takes ownership of an encoded export handle and its `{length}`
+    /// response: copies the bytes, frees both and decodes the image.
+    static func decode(exported: OpaquePointer?,
+                       response: UnsafeMutablePointer<CChar>?) throws -> EditorOutputPresentation {
+        defer { captures_settings_free_v1(response) }
+        guard let response else {
+            captures_editor_export_free_v1(exported)
+            throw AppBridgeError.invalidResponse
+        }
+        let result: [String: Any]
+        do { result = try AppBridge.decode(Data(bytes: response, count: strlen(response))) }
+        catch {
+            captures_editor_export_free_v1(exported)
+            throw error
+        }
+        guard let exported, let expectedLength = (result["length"] as? NSNumber)?.intValue else {
+            captures_editor_export_free_v1(exported)
+            throw AppBridgeError.invalidResponse
+        }
+        defer { captures_editor_export_free_v1(exported) }
+        var bytes = CapturesEditorBytes()
+        guard captures_editor_export_bytes_v1(exported, &bytes),
+              let pointer = bytes.data, bytes.length == expectedLength else {
+            throw AppBridgeError.invalidResponse
+        }
+        let encoded = Data(bytes: pointer, count: bytes.length)
+        guard let source = CGImageSourceCreateWithData(encoded as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw AppBridgeError.invalidResponse
+        }
+        return EditorOutputPresentation(data: encoded, image: image)
+    }
 }
 
 struct EditorDecodedImage: Equatable {
@@ -695,6 +728,14 @@ struct NativeExportBar {
     let savingCopy: Bool
     let plan: [String: Any]?
     let error: String?
+    /// Save quality rows for the current format (label, description).
+    let qualityModes: [(label: String, description: String)]
+    /// Compress presets with their per-format descriptions.
+    let qualityPresets: [(label: String, description: String, value: UInt64)]
+    /// Hover help on Maximum file size.
+    let maximumHelp: String
+    /// Compress or Maximum: the automatic comparison applies.
+    let compresses: Bool
 
     var stem: String { target["stem"] as? String ?? "" }
     var directory: String { target["directory"] as? String ?? "" }
@@ -723,6 +764,19 @@ struct NativeExportBar {
         self.formatRequiresCopy = formatRequiresCopy; self.savingCopy = savingCopy
         plan = view["plan"] as? [String: Any]
         error = view["error"] as? String
+        func choices(_ key: String) -> [[String: Any]] { view[key] as? [[String: Any]] ?? [] }
+        qualityModes = choices("quality_modes").compactMap { choice -> (label: String, description: String)? in
+            guard let label = choice["label"] as? String else { return nil }
+            return (label, choice["description"] as? String ?? "")
+        }
+        qualityPresets = choices("quality_presets").compactMap {
+            choice -> (label: String, description: String, value: UInt64)? in
+            guard let label = choice["label"] as? String,
+                  let value = (choice["value"] as? NSNumber)?.uint64Value else { return nil }
+            return (label, choice["description"] as? String ?? "", value)
+        }
+        maximumHelp = view["maximum_help"] as? String ?? ""
+        compresses = view["compresses"] as? Bool ?? false
     }
 
     static func present(_ request: [String: Any]) throws -> NativeExportBar {
@@ -801,6 +855,17 @@ final class NativeEditorFrame {
         return EditorEstimate(bytes: bytes,
                               baselineBytes: (result["baseline_bytes"] as? NSNumber)?.uint64Value)
     }
+
+    /// The automatic before/after comparison's After side: this frame encoded
+    /// exactly as Save would, off the session queue. No I/O.
+    func compare(_ options: [String: Any]) throws -> EditorOutputPresentation {
+        let data = try JSONSerialization.data(withJSONObject: options, options: [.sortedKeys])
+        var response: UnsafeMutablePointer<CChar>?
+        let exported = String(decoding: data, as: UTF8.self).withCString {
+            captures_editor_frame_encode_v1(handle, $0, &response)
+        }
+        return try EditorOutputPresentation.decode(exported: exported, response: response)
+    }
 }
 
 private final class NativeEditorSession {
@@ -873,33 +938,7 @@ private final class NativeEditorSession {
         let exported = String(decoding: data, as: UTF8.self).withCString {
             captures_editor_encode_v1(handle, $0, &response)
         }
-        defer { captures_settings_free_v1(response) }
-        guard let response else {
-            captures_editor_export_free_v1(exported)
-            throw AppBridgeError.invalidResponse
-        }
-        let result: [String: Any]
-        do { result = try AppBridge.decode(Data(bytes: response, count: strlen(response))) }
-        catch {
-            captures_editor_export_free_v1(exported)
-            throw error
-        }
-        guard let exported, let expectedLength = (result["length"] as? NSNumber)?.intValue else {
-            captures_editor_export_free_v1(exported)
-            throw AppBridgeError.invalidResponse
-        }
-        defer { captures_editor_export_free_v1(exported) }
-        var bytes = CapturesEditorBytes()
-        guard captures_editor_export_bytes_v1(exported, &bytes),
-              let pointer = bytes.data, bytes.length == expectedLength else {
-            throw AppBridgeError.invalidResponse
-        }
-        let encoded = Data(bytes: pointer, count: bytes.length)
-        guard let source = CGImageSourceCreateWithData(encoded as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            throw AppBridgeError.invalidResponse
-        }
-        return EditorOutputPresentation(data: encoded, image: image)
+        return try EditorOutputPresentation.decode(exported: exported, response: response)
     }
 
     /// Retain the current immutable frame without copying pixels.
@@ -1024,6 +1063,10 @@ protocol EditorWorking: AnyObject {
               completion: @escaping (Result<EditorExportSaved, Error>) -> Void)
     func estimate(_ request: [String: Any],
                   completion: @escaping (Result<EditorEstimate, Error>) -> Void)
+    /// Encode the published frame for the automatic comparison, off the
+    /// session queue like `estimate`.
+    func compare(_ options: [String: Any],
+                 completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void)
     func importImage(_ image: EditorDecodedImage, selectedID: String?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void)
     func close()
@@ -1175,6 +1218,23 @@ final class EditorWorker: EditorWorking {
                         throw AppBridgeError.backend("The screenshot editor is closed.")
                     }
                     return try frame.estimate(request)
+                }
+                DispatchQueue.main.async { completion(result) }
+            }
+        }
+    }
+
+    func compare(_ options: [String: Any],
+                 completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let frame = storage.session?.frame()
+            Self.estimateQueue.async {
+                let result = Result { () throws -> EditorOutputPresentation in
+                    guard let frame else {
+                        throw AppBridgeError.backend("The screenshot editor is closed.")
+                    }
+                    return try frame.compare(options)
                 }
                 DispatchQueue.main.async { completion(result) }
             }

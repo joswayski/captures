@@ -60,32 +60,43 @@ final class RecordingEditorTests: XCTestCase {
         let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
             worker: worker, confirmReplaceOriginal: { _, _, completion in decision = completion })
         defer { controller.window.orderOut(nil) }
-        let replace = try button("Replace original…", in: controller.root)
+        let save = try button("Save", in: controller.root)
+        let saveAsNew = try saveAsNewSwitch(in: controller.root)
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
-        XCTAssertFalse(replace.isEnabled, "recovery-only is not offered as a saved original")
+        // Without a replaceable original, Save always writes a new copy and
+        // "Save as new file" stays checked and locked.
+        XCTAssertTrue(controller.savingCopy, "recovery-only is not offered as a saved original")
+        XCTAssertEqual(save.accessibilityLabel(), "Save new copy")
+        XCTAssertEqual(saveAsNew.state, .on); XCTAssertFalse(saveAsNew.isEnabled)
         worker.initial = try presentation(artifactID: "next",
                                           originalSavePath: "/Exports/old.gif")
         controller.present(artifact: recordingArtifact(id: "next", savedPath: "/Exports/old.gif"),
                            historyRoot: "/History", outputDirectory: "/Exports")
-        XCTAssertFalse(replace.isEnabled, "accepted path extension must match accepted MP4 format")
+        XCTAssertTrue(controller.savingCopy, "accepted path extension must match accepted MP4 format")
+        XCTAssertFalse(saveAsNew.isEnabled)
         worker.initial = try presentation(artifactID: "third",
                                           originalSavePath: "/Exports/old.mp4")
         controller.present(artifact: recordingArtifact(id: "third", savedPath: "/Exports/old.mp4"),
                            historyRoot: "/History", outputDirectory: "/Exports")
-        XCTAssertTrue(replace.isEnabled)
+        // Shipping's default for a same-format original: Save replaces it.
+        XCTAssertFalse(controller.savingCopy)
+        XCTAssertEqual(save.accessibilityLabel(), "Replace original…")
+        XCTAssertEqual(saveAsNew.state, .off); XCTAssertTrue(saveAsNew.isEnabled)
+        XCTAssertTrue(save.isEnabled)
         worker.replaceResult = .failure(RecordingReplaceError(message: "compensation failed",
                                                               requiresReopen: true))
-        replace.performClick(nil); decision?(true)
-        XCTAssertFalse(replace.isEnabled)
+        save.performClick(nil); decision?(true)
+        XCTAssertFalse(save.isEnabled)
         XCTAssertFalse(try button("Play", in: controller.root).isEnabled)
-        XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
+        XCTAssertTrue(controller.savingCopy, "an uncertain replacement never offers another")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Close and reopen") })
         XCTAssertTrue(controller.windowShouldClose(controller.window))
         worker.initial = try presentation(originalSavePath: "/Exports/old.mp4")
         controller.present(artifact: recordingArtifact(savedPath: "/Exports/old.mp4"),
                            historyRoot: "/History", outputDirectory: "/Exports")
-        XCTAssertTrue(replace.isEnabled)
+        XCTAssertTrue(save.isEnabled)
+        XCTAssertFalse(controller.savingCopy)
     }
 
     func testReplaceOriginalMinimumLightDarkWithMaximumWarning() throws {
@@ -132,6 +143,10 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(try popup("GIF frame rate", in: controller.root).titleOfSelectedItem,
                        "15 FPS")
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
+        // The rebased original is replaceable again; "Save as new file" makes a copy.
+        XCTAssertFalse(controller.savingCopy)
+        try saveAsNewSwitch(in: controller.root).performClick(nil)
+        XCTAssertTrue(controller.savingCopy)
         XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
         worker.requestResult = .success(rebased)
         let seek = try slider("Recording frame position", in: controller.root)
@@ -222,104 +237,108 @@ final class RecordingEditorTests: XCTestCase {
             cancel: try XCTUnwrap(NativeRecordingEditorCancel())).image().dataProvider?.data)
     }
 
-    func testEncodedComparisonAcceptedPositionLifecycleAndStaleDelivery() throws {
+    func testAutomaticComparisonFollowsTheAcceptedStillAndRejectsStaleDelivery() throws {
         _ = NSApplication.shared
-        let initial = try presentation(position: 400)
+        let initial = try presentation(position: 400, exportQuality: "tiny")
         let worker = FakeRecordingEditorWorker(presentation: initial)
+        worker.deferComparison = true
         let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
                                                    worker: worker, confirmDiscard: { false })
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
-        let compare = try button("Compare", in: controller.root)
-        let hide = try button("Hide", in: controller.root)
-        XCTAssertEqual(compare.accessibilityLabel(), "Compare encoded recording before and after")
-        XCTAssertTrue(compare.toolTip?.contains("neighboring frame") == true)
-        let split = try slider("Recording before and after split", in: controller.root)
-        XCTAssertTrue(split.accessibilityHelp()?.contains("neighboring frame") == true)
+        XCTAssertNil(descendants(in: controller.root).compactMap { $0 as? CaptureButton }
+            .first { $0.title == "Compare" }, "there is no manual Compare button")
+        let compare = controller.compareView
         let start = try field("Trim start milliseconds", in: controller.root)
-        let seek = try slider("Recording frame position", in: controller.root)
         let play = try button("Play", in: controller.root)
-        XCTAssertTrue(compare.isEnabled); XCTAssertTrue(hide.isHidden)
+        XCTAssertTrue(controller.comparisonApplies)
+        XCTAssertEqual(worker.comparisonCalls, 0, "the sample waits for the 350 ms refresh")
+        pump { worker.comparisonCalls == 1 }
+        XCTAssertFalse(compare.isHidden); XCTAssertTrue(compare.processing)
+        XCTAssertEqual(compare.badges.before, "Before · 1.0 KB")
+        XCTAssertEqual(compare.badges.after, "After · Processing…")
         XCTAssertFalse(controller.dirty)
 
-        worker.deferComparison = true
-        compare.performClick(nil)
-        XCTAssertEqual(worker.comparisonCalls, 1)
-        XCTAssertFalse(compare.isEnabled)
-        XCTAssertTrue(hide.isHidden)
         let cancelled = try XCTUnwrap(worker.observedComparisonCancel)
         try button("Cancel comparison", in: controller.root).performClick(nil)
         XCTAssertTrue(cancelled.isCancelled)
         worker.completeComparison(.success(try comparison(for: initial)))
-        XCTAssertTrue(hide.isHidden, "cancelled completion cannot publish split pixels")
-        XCTAssertTrue(compare.isEnabled)
+        XCTAssertNil(compare.afterImage, "cancelled completion cannot publish split pixels")
+        XCTAssertEqual(compare.failureMessage, "Comparison cancelled.")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(worker.comparisonCalls, 1, "a cancelled sample is not retried on its own")
 
-        compare.performClick(nil)
+        // Hide, then Show before / after encodes again.
+        func retry() throws {
+            let calls = worker.comparisonCalls
+            compare.onDismiss?()
+            XCTAssertTrue(controller.comparisonDismissed); XCTAssertTrue(compare.isHidden)
+            let show = try button("Show before / after", in: controller.root)
+            XCTAssertFalse(show.isHidden)
+            show.performClick(nil)
+            pump { worker.comparisonCalls == calls + 1 }
+        }
+        try retry()
         worker.completeComparison(.failure(AppBridgeError.backend("encode failed")))
-        XCTAssertTrue(hide.isHidden)
-        XCTAssertTrue(compare.isEnabled, "encoding errors permit explicit retry")
-        compare.performClick(nil)
+        XCTAssertEqual(compare.failureMessage, "encode failed")
+        XCTAssertFalse(labels(in: controller.root).contains { $0.contains("encode failed") },
+                       "failures stay in the comparison frame")
+        try retry()
         worker.completeComparison(.success(try comparison(for: initial, position: 401)))
-        XCTAssertTrue(hide.isHidden, "wrong source-relative position is rejected")
-        compare.performClick(nil)
+        XCTAssertNil(compare.afterImage, "wrong source-relative position is rejected")
+        try retry()
         let original = try comparison(for: initial)
         let wrongRevision = RecordingEditorComparison(revision: initial.snapshot.revision + 1,
             positionMilliseconds: original.positionMilliseconds,
             export: original.export, before: original.before, after: original.after)
         worker.completeComparison(.success(wrongRevision))
-        XCTAssertTrue(hide.isHidden, "wrong accepted revision is rejected")
-        compare.performClick(nil)
-        var changedExport = original.export; changedExport["quality"] = "tiny"
+        XCTAssertNil(compare.afterImage, "wrong accepted revision is rejected")
+        try retry()
+        var changedExport = original.export; changedExport["quality"] = "high"
         let wrongExport = RecordingEditorComparison(revision: original.revision,
             positionMilliseconds: original.positionMilliseconds,
             export: changedExport, before: original.before, after: original.after)
         worker.completeComparison(.success(wrongExport))
-        XCTAssertTrue(hide.isHidden, "wrong accepted preview export is rejected")
-        compare.performClick(nil)
-        worker.completeComparison(.success(try comparison(for: initial)))
-        XCTAssertFalse(hide.isHidden); XCTAssertFalse(split.isHidden)
+        XCTAssertNil(compare.afterImage, "wrong accepted preview export is rejected")
+        try retry()
+        worker.completeComparison(.success(original))
+        XCTAssertNotNil(compare.afterImage); XCTAssertNil(compare.failureMessage)
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("accepted 0:00.400") })
-        split.doubleValue = 73; _ = split.sendAction(split.action, to: split.target)
-        hide.performClick(nil)
-        XCTAssertTrue(split.isHidden); XCTAssertFalse(controller.dirty)
-        XCTAssertTrue(labels(in: controller.root).contains { $0 == "Accepted recording preview." })
+        compare.split = 0.5
+        compare.stepSplit(0.23)
+        XCTAssertEqual(compare.split, 0.73, accuracy: 0.001)
+        XCTAssertFalse(controller.dirty)
 
-        worker.deferPlayback = true
-        play.performClick(nil)
-        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 650,
-            image: try solidImage(red: 2, green: 3, blue: 4)))
-        play.performClick(nil); worker.completePlayback(.success(.cancelled))
-        compare.performClick(nil)
-        worker.completeComparison(.success(try comparison(for: initial)))
-        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("accepted 0:00.400") },
-                      "paused playback time 650 is not the accepted comparison position")
-        play.performClick(nil)
-        XCTAssertTrue(hide.isHidden, "playback hides comparison without changing edits")
-        play.performClick(nil); worker.completePlayback(.success(.cancelled))
-
-        compare.performClick(nil)
-        worker.completeComparison(.success(try comparison(for: initial)))
+        // Staged edits hide it; undoing them encodes the same identity again.
+        let calls = worker.comparisonCalls
         start.stringValue = "200"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: start))
-        XCTAssertTrue(hide.isHidden); XCTAssertFalse(compare.isEnabled)
+        XCTAssertTrue(compare.isHidden)
         start.stringValue = "0"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: start))
-        XCTAssertTrue(compare.isEnabled)
-        compare.performClick(nil)
-        worker.completeComparison(.success(try comparison(for: initial)))
-        seek.doubleValue = 800; _ = seek.sendAction(seek.action, to: seek.target)
-        XCTAssertTrue(hide.isHidden)
+        pump { worker.comparisonCalls == calls + 1 }
+        worker.completeComparison(.success(original))
+        XCTAssertFalse(compare.isHidden)
+
+        // Playback hides it, and a paused transient frame is not the accepted still.
+        worker.deferPlayback = true
+        play.performClick(nil)
+        XCTAssertTrue(compare.isHidden, "playback hides comparison without changing edits")
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 650,
+            image: try solidImage(red: 2, green: 3, blue: 4)))
+        play.performClick(nil); worker.completePlayback(.success(.cancelled))
+        XCTAssertTrue(compare.isHidden)
         XCTAssertFalse(controller.dirty)
         controller.present(artifact: recordingArtifact(id: "next-recording"),
                            historyRoot: "/History", outputDirectory: "/Exports")
         XCTAssertEqual(worker.openCount, 2)
-        XCTAssertTrue(hide.isHidden)
+        XCTAssertFalse(controller.comparisonDismissed)
     }
 
-    func testEncodedComparisonLightDarkNormalMinimumAndMaximumWarning() throws {
+    func testAutomaticComparisonLightDarkNormalMinimumAndMaximumBadges() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
             let initial = try presentation(saveMaximumBytes: 100_000)
@@ -331,50 +350,50 @@ final class RecordingEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                                outputDirectory: "/Exports")
-            try button("Compare", in: controller.root)
-                .performClick(nil)
-            XCTAssertTrue(labels(in: controller.root).contains {
-                $0.contains("final capped save may differ") })
-            XCTAssertFalse(try slider("Recording before and after split", in: controller.root).isHidden)
-            XCTAssertTrue(labels(in: controller.root).contains { $0 == "Before" })
-            XCTAssertTrue(labels(in: controller.root).contains { $0 == "Encoded" })
+            pump { controller.compareView.afterImage != nil }
+            let compare = controller.compareView
+            XCTAssertEqual(compare.badges.before, "Before · 1.0 KB")
+            XCTAssertEqual(compare.badges.after, "After · 100 KB", "Maximum shows its cap")
             XCTAssertEqual(try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSTextField }
                 .first { $0.accessibilityLabel() == "Recording preview mode" }).stringValue,
                            "Encoded comparison")
+            XCTAssertTrue(compare.visibleRect.contains(compare.dismissRect))
+            XCTAssertTrue(compare.visibleRect.contains(compare.handleRect))
             try render(controller.root, name: "recording-editor-comparison-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             try render(controller.root, name: "recording-editor-comparison-minimum-\(appearance)")
         }
     }
 
-    func testComparisonDrawsBothImagesUprightInFlippedView() throws {
+    func testComparisonDrawsTheEncodedSideUprightInFlippedView() throws {
         _ = NSApplication.shared
-        let before = try bandedImage(top: [220, 20, 30], bottom: [25, 210, 35])
         let after = try bandedImage(top: [30, 40, 220], bottom: [230, 210, 20])
-        let comparison = RecordingComparisonView(tokens: Tokens.variants["light-mustard"]!)
-        comparison.frame = NSRect(x: 0, y: 0, width: 160, height: 160)
-        comparison.comparison = RecordingEditorComparison(revision: 1,
-            positionMilliseconds: 0, export: [:], before: before, after: after)
-        let bitmap = try XCTUnwrap(comparison.bitmapImageRepForCachingDisplay(in: comparison.bounds))
-        comparison.cacheDisplay(in: comparison.bounds, to: bitmap)
+        let overlay = CompressionCompareView(tokens: Tokens.variants["light-mustard"]!)
+        overlay.frame = NSRect(x: 0, y: 0, width: 240, height: 240)
+        overlay.mediaRect = overlay.bounds
+        overlay.afterImage = after
+        let bitmap = try XCTUnwrap(overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds))
+        overlay.cacheDisplay(in: overlay.bounds, to: bitmap)
         func rgb(_ x: Int, _ y: Int) throws -> NSColor {
-            try XCTUnwrap(bitmap.colorAt(x: x * bitmap.pixelsWide / 160,
-                                         y: y * bitmap.pixelsHigh / 160)?.usingColorSpace(.deviceRGB))
+            try XCTUnwrap(bitmap.colorAt(x: x * bitmap.pixelsWide / 240,
+                                         y: y * bitmap.pixelsHigh / 240)?.usingColorSpace(.deviceRGB))
         }
-        for (x, y, expected) in [(40, 20, [220, 20, 30]), (120, 20, [30, 40, 220]),
-                                 (40, 140, [25, 210, 35]), (120, 140, [230, 210, 20])] {
+        // Right of the centred divider, clear of the handle, Hide and the bottom badges.
+        for (x, y, expected) in [(170, 90, [30, 40, 220]), (170, 160, [230, 210, 20])] {
             let color = try rgb(x, y)
             for (actual, channel) in zip([color.redComponent, color.greenComponent,
                                           color.blueComponent], expected) {
                 XCTAssertEqual(actual, CGFloat(channel) / 255, accuracy: 0.06)
             }
         }
-        try render(comparison, name: "recording-editor-comparison-upright-corners")
+        XCTAssertEqual(try rgb(60, 90).alphaComponent, 0, accuracy: 0.01, "Before is the editor's own media")
+        try render(overlay, name: "recording-editor-comparison-upright-corners")
     }
 
-    func testComparisonAfterSmallPausedFrameRestoresAccepted100PercentGeometry() throws {
+    func testComparisonWaitsForTheAcceptedStillAtActualSize() throws {
         _ = NSApplication.shared
-        let initial = try presentation(position: 400, previewWidth: 640, previewHeight: 360)
+        let initial = try presentation(position: 400, previewWidth: 640, previewHeight: 360,
+                                       exportQuality: "tiny")
         let worker = FakeRecordingEditorWorker(presentation: initial)
         worker.deferPlayback = true; worker.deferComparison = true
         let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
@@ -392,20 +411,10 @@ final class RecordingEditorTests: XCTestCase {
         try button("Pause", in: controller.root).performClick(nil)
         worker.completePlayback(.success(.cancelled))
         XCTAssertEqual(preview.frame.width, 320)
-        try button("Compare", in: controller.root).performClick(nil)
-        XCTAssertEqual(preview.image?.size.width, 640)
-        XCTAssertEqual(preview.frame.width, 640,
-                       "comparison 100% rect follows the accepted frame, not paused motion")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(worker.comparisonCalls, 0, "a paused transient frame is not compared")
+        XCTAssertTrue(controller.compareView.isHidden)
         XCTAssertEqual(try slider("Recording frame position", in: controller.root).doubleValue, 400)
-        worker.completeComparison(.success(RecordingEditorComparison(
-            revision: initial.snapshot.revision,
-            positionMilliseconds: 400, export: initial.snapshot.export,
-            before: try solidImage(width: 640, height: 360, red: 180, green: 20, blue: 20),
-            after: try solidImage(width: 640, height: 360, red: 20, green: 20, blue: 180))))
-        let overlay = try XCTUnwrap(descendants(in: controller.root)
-            .compactMap { $0 as? RecordingComparisonView }.first)
-        XCTAssertEqual(overlay.frame.width, 640)
-        XCTAssertFalse(overlay.isHidden)
     }
 
     func testRealEncodedComparisonIsReadOnlyAndFramesOutliveOwner() throws {
@@ -881,7 +890,6 @@ final class RecordingEditorTests: XCTestCase {
         controller.present(artifact: recordingArtifact(), historyRoot: "/History",
                            outputDirectory: "/Exports")
         let play = try button("Play", in: controller.root)
-        let compare = try button("Compare", in: controller.root)
         let fit = try button("Fit", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
         let loop = try checkbox("Loop recording preview", in: controller.root)
@@ -896,17 +904,18 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(play.circular && play.iconOnly, "Play is the shipping overlay circle")
         for size in [NSSize(width: 760, height: 540), NSSize(width: 960, height: 600)] {
             controller.window.setContentSize(size)
-            for view in [play, compare, fit, seek, loop, sound, caption] as [NSView] {
+            for view in [play, fit, seek, loop, sound, caption] as [NSView] {
                 XCTAssertFalse(view.isHiddenOrHasHiddenAncestor)
             }
             XCTAssertGreaterThan(seek.frame.width, 0)
             XCTAssertTrue(caption.stringValue.contains("0:00.000 / "))
             let gap = tokens.number("s-2")
-            // Shipping toolbar order: Sound, Compare, Loop preview, then Fit | 100%.
-            XCTAssertLessThanOrEqual(frame(sound).maxX + gap, frame(compare).minX,
-                                     "Sound must not overlap Compare at width \(size.width)")
-            XCTAssertLessThanOrEqual(frame(compare).maxX + gap, frame(loop).minX,
-                                     "Compare must not overlap Loop at width \(size.width)")
+            // Shipping toolbar order: Sound, Loop preview, then Fit | 100%. The
+            // comparison is automatic, so there is no Compare toggle.
+            XCTAssertNil(descendants(in: controller.root).compactMap { $0 as? CaptureButton }
+                .first { $0.title == "Compare" })
+            XCTAssertLessThanOrEqual(frame(sound).maxX + gap, frame(loop).minX,
+                                     "Sound must not overlap Loop at width \(size.width)")
             XCTAssertLessThanOrEqual(frame(loop).maxX + gap, frame(fit).minX,
                                      "Loop must not overlap Fit at width \(size.width)")
             XCTAssertTrue(frame(viewport).insetBy(dx: -1, dy: -1).contains(frame(play)),
@@ -3264,10 +3273,10 @@ final class RecordingEditorTests: XCTestCase {
         worker.completeSave(.success(.saved(path: "/Exports/clip.mp4")))
         XCTAssertFalse(show.isHidden)
         let format = try popup("Recording export format", in: controller.root)
-        let replace = try button("Replace original…", in: controller.root)
+        let saveAction = try button("Save new copy", in: controller.root)
         for size in [NSSize(width: 960, height: 600), NSSize(width: 760, height: 540)] {
             controller.window.setContentSize(size)
-            XCTAssertLessThanOrEqual(show.frame.maxX, replace.frame.minX,
+            XCTAssertLessThanOrEqual(show.frame.maxX, saveAction.frame.minX,
                                      "Show in Folder sits left of the save actions at \(size.width)")
             XCTAssertTrue(show.frame.minX >= format.frame.maxX || show.frame.minY >= format.frame.maxY,
                           "footer actions never cover the filename field at \(size.width)")
@@ -4097,8 +4106,8 @@ final class RecordingEditorTests: XCTestCase {
         let fit = try XCTUnwrap(KeyViewLoop.order(from: initial).first { ($0 as? NSButton)?.title == "Fit" })
         let order = KeyViewLoop.order(from: fit)
         var previous = 0
-        for name in ["100%", "Compare encoded recording before and after", "Hide recording comparison",
-                     "Play silent recording preview", "Recording crop canvas", "Recording before and after split",
+        for name in ["100%",
+                     "Play silent recording preview", "Recording crop canvas",
                      "Loop recording preview", "Preview accepted recording audio", "Recording trim start handle",
                      "Trim start milliseconds", "GIF frame rate", "Crop recording",
                      "Adjust recording crop graphically", "Recording crop X", "Recording crop height",
@@ -4108,7 +4117,7 @@ final class RecordingEditorTests: XCTestCase {
             let index = try XCTUnwrap(keyViewIndex(order, name, after: previous), "\(name) follows")
             previous = index
         }
-        XCTAssertEqual((order.last as? NSButton)?.title, "Save new copy", "The footer closes the loop")
+        XCTAssertEqual((order.last as? NSButton)?.title, "Save", "The footer closes the loop")
         XCTAssertTrue(order.last?.nextKeyView === fit)
     }
 
@@ -4506,8 +4515,24 @@ final class RecordingEditorTests: XCTestCase {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSButton }
             .first { $0.accessibilityLabel() == label })
     }
+    /// Runs the main loop until `predicate` holds (deadline loop).
+    private func pump(timeout: TimeInterval = 3, file: StaticString = #filePath, line: UInt = #line,
+                      until predicate: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !predicate() && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(predicate(), file: file, line: line)
+    }
+    /// A button by title, or by accessible name: Save is named for what it
+    /// does now ("Save new copy" or "Replace original…").
     private func button(_ title: String, in view: NSView) throws -> CaptureButton {
-        try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }.first { $0.title == title })
+        try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }
+            .first { $0.title == title || $0.accessibilityLabel() == title })
+    }
+    private func saveAsNewSwitch(in view: NSView) throws -> NSSwitch {
+        try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSSwitch }
+            .first { $0.accessibilityLabel() == "Save as new file" })
     }
     /// Picks a popup item by title and sends its action, as a user choice does.
     private func choose(_ popup: NSPopUpButton, _ title: String,

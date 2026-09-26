@@ -162,8 +162,8 @@ Both native hosts accept `--live --open-media "/path/to/file"`; repeat
 `--open-media` for PNG/JPEG/WebP/GIF/MP4/WebM paths. `--open-image` remains an alias
 in the same ordered queue. Stills import owned History pixels; GIF/video entries
 reference the external source and require FFmpeg/FFprobe as described below.
-Neither path changes source bytes. External recordings offer Save new copy, not
-Replace original. An already-open source keeps its edits; a closed screenshot
+Neither path changes source bytes. External recordings keep **Save as new file**
+locked on, so Save always writes a new copy. An already-open source keeps its edits; a closed screenshot
 source with a saved draft must be restored or explicitly discarded from History
 before source reload. AppKit also queues macOS file-open callbacks in live mode.
 Bare development binaries do not register Open With associations. Subsequent
@@ -328,8 +328,8 @@ font-bearing draft manifests also retain it. Run `apps/native/x11_editor_smoke.p
 exercise real Text controls; `--text-draft-only` retains the synthetic-font regression.
 Use `--text-defaults-only` for pre-placement style/size/color, centered boxes,
 unchanged drafts while configuring, undo/redo and default reset after reopening.
-Use `--output-presets-only` to exercise native compression presets, PNG palette
-selection, exact Highest pixels, unchanged drafts/originals and minimum-size controls.
+Use `--output-presets-only` to exercise native compression presets and their
+descriptions, the automatic before/after comparison with Hide/Show, exact Highest pixels, unchanged drafts/originals and minimum-size controls.
 Use `--output-size-only` to exercise percentage/custom dimensions, aspect locking,
 saved-file/History consistency, unchanged drafts and full-resolution clipboard copy.
 Use `--polygon-only` to exercise Triangle/Diamond/Star transient and committed pixels,

@@ -560,6 +560,14 @@ impl View {
         self.request_comparison(ctx, tx);
     }
 
+    /// Staged edits hide the sample; once they are undone the same accepted
+    /// identity may encode again (a failure or cancellation still does not loop).
+    fn drop_comparison_if_unapplied(&mut self) {
+        if self.unapplied() && self.comparison.take().is_some() {
+            self.comparison_attempt = None;
+        }
+    }
+
     /// Before is the original file, After the accepted estimate or the
     /// Maximum cap (shipping's recording badges).
     fn comparison_badges(&self) -> compare::Badges {
@@ -2553,9 +2561,7 @@ fn show(
                 },
             );
         });
-    if view.unapplied() {
-        view.comparison = None;
-    }
+    view.drop_comparison_if_unapplied();
     if probe_env() {
         let controls = PROBE.with_borrow(Clone::clone);
         if controls.is_some() && controls != view.probe_emitted {
@@ -2967,9 +2973,7 @@ fn show_save_actions(
 }
 
 fn show_page(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
-    if view.unapplied() {
-        view.comparison = None;
-    }
+    view.drop_comparison_if_unapplied();
     let gap = tokens.number("s-5");
     ui.spacing_mut().item_spacing.y = gap;
     let title = view
