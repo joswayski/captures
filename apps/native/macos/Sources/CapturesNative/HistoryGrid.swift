@@ -876,3 +876,9 @@ final class HistoryEmptyView: NSView {
         HistoryGlyph.drawHistory(in: tile.insetBy(dx: 13, dy: 13), color: tokens.color("text-subtle"), flipped: true)
     }
 }
+
+/// The grid moves its selection with the arrow keys, so Tab visits it once
+/// rather than every card control.
+extension HistoryGridView: KeyViewParticipant {
+    var keyViewLeaf: Bool { true }
+}

@@ -1803,6 +1803,33 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         root.addSubview(railTip)
         fields = [cropX, cropY, cropWidth, cropHeight, canvasWidth, canvasHeight]
         layoutEditor()
+        installKeyViewLoop()
+    }
+
+    /// Tab follows the shipping DOM order: header, tool rail, canvas and
+    /// inspector in build order, then the export footer like
+    /// `.screenshot-export-bar` (open settings, disclosure, save location,
+    /// filename, format, Show in Folder, Copy image, Save as new, Save). The
+    /// active section's canvas starts focused, as `focusActiveCanvas` does.
+    private func installKeyViewLoop() {
+        let exportControls: [NSView?] = [
+            exportSettingsPanel, exportDisclosure, changeOutputDirectoryButton, outputFilename,
+            outputFormat, showInFolderButton, copyImageButton, saveAsNewSwitch, exportSaveButton,
+        ]
+        let order = root.subviews.filter { $0 !== exportBar } + exportControls.compactMap { $0 }
+        let canvas: NSView
+        switch sectionControl.selectedSegment {
+        case Section.draw: canvas = drawOverlay
+        case Section.layers: canvas = selectionOverlay
+        default: canvas = cropOverlay
+        }
+        KeyViewLoop.install(order, window: window, initial: canvas)
+    }
+
+    /// The editor's key-view loop from its initial first responder, for tests.
+    var keyViewOrder: [NSView] {
+        guard let first = window.initialFirstResponder else { return [] }
+        return KeyViewLoop.order(from: first)
     }
 
     /// Shipping header chrome: restored-draft banner, Canvas toolbar, Undo/Redo,

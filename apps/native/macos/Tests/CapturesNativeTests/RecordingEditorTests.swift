@@ -4086,6 +4086,32 @@ final class RecordingEditorTests: XCTestCase {
                        "audio exports keep the original byte-identical")
     }
 
+    func testKeyViewLoopFollowsTheShippingEditorOrder() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 0, revision: 1))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.window.setContentSize(NSSize(width: 960, height: 560))
+        let initial = try XCTUnwrap(controller.window.initialFirstResponder)
+        XCTAssertEqual(initial.accessibilityLabel(), "Play silent recording preview", "Play starts focused")
+        let fit = try XCTUnwrap(KeyViewLoop.order(from: initial).first { ($0 as? NSButton)?.title == "Fit" })
+        let order = KeyViewLoop.order(from: fit)
+        var previous = 0
+        for name in ["100%", "Compare encoded recording before and after", "Hide recording comparison",
+                     "Play silent recording preview", "Recording crop canvas", "Recording before and after split",
+                     "Loop recording preview", "Preview accepted recording audio", "Recording trim start handle",
+                     "Trim start milliseconds", "GIF frame rate", "Crop recording",
+                     "Adjust recording crop graphically", "Recording crop X", "Recording crop height",
+                     "Lock recording crop aspect ratio", "Recording output size", "Save quality",
+                     "System audio", "System audio volume", "Microphone", "Mono audio output",
+                     "Change save location", "Saved filename", "Recording export format"] {
+            let index = try XCTUnwrap(keyViewIndex(order, name, after: previous), "\(name) follows")
+            previous = index
+        }
+        XCTAssertEqual((order.last as? NSButton)?.title, "Save new copy", "The footer closes the loop")
+        XCTAssertTrue(order.last?.nextKeyView === fit)
+    }
+
     private func presentation(artifactID: String = "recording-id",
                               start: UInt64 = 0, end: UInt64? = nil,
                               position: UInt64 = 0, revision: UInt64 = 0,

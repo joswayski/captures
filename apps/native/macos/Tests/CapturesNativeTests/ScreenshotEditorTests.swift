@@ -6389,6 +6389,25 @@ final class ScreenshotEditorTests: XCTestCase {
             .first { $0.accessibilityLabel() == label })
     }
 
+    func testExportFooterTabOrderFollowsTheShippingExportBar() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.window.setContentSize(NSSize(width: 1000, height: 600))
+        let order = controller.keyViewOrder
+        XCTAssertTrue(order.first === controller.cropOverlay, "The active section's canvas starts focused")
+        var previous = -1
+        for name in ["Output size", "Save quality", "Export settings", "Change save location", "Saved filename",
+                     "Format", "Show in Folder", "Copy image", "Save as new file"] {
+            let index = try XCTUnwrap(keyViewIndex(order, name, after: previous), "\(name) follows")
+            previous = index
+        }
+        let save = try XCTUnwrap(keyViewIndex(order, "Save", after: previous), "Save ends the footer")
+        XCTAssertTrue(order[(save + 1) % order.count] === KeyViewLoop.candidates(in: controller.root).first,
+                      "After the footer, Tab wraps to the header")
+    }
+
     private func snapshot(id: String, width: Double = 640, height: Double = 360,
                           unsaved: Bool = false, draft: Bool = false,
                           canRedo: Bool = false,

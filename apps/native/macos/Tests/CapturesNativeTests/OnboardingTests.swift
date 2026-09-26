@@ -357,6 +357,35 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(otherView.primaryButton.title, "Start capturing")
     }
 
+    func testSetupTabOrderFollowsShippingCardsThenActions() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let transport = OnboardingTransport()
+        let controller = OnboardingController(store: try SettingsStore(path: "/fixture.json",
+            transport: transport, debounceInterval: 0), now: { 0 }, schedule: ManualTimers().schedule)
+        let frame = NSRect(x: 0, y: 0, width: 700, height: 560)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let view = OnboardingView(frame: frame, tokens: tokens, controller: controller)
+        window.contentView = view
+        XCTAssertTrue(window.initialFirstResponder === view.primaryButton,
+                      "While checking, only the primary action exists")
+        controller.check()
+        try settle { !controller.busy }
+        XCTAssertTrue(window.initialFirstResponder === view.screenRow.button,
+                      "Allow access is the first control, like Tab from the top of the page")
+        XCTAssertTrue(KeyViewLoop.order(from: view.screenRow.button).elementsEqual(
+            [view.screenRow.button, view.microphoneRow.button, view.primaryButton] as [NSView], by: ===))
+
+        let recovery = OnboardingView(frame: frame, tokens: tokens, controller: OnboardingController(
+            store: try SettingsStore(path: "/fixture.json", transport: transport, debounceInterval: 0),
+            now: { 0 }, schedule: ManualTimers().schedule), done: {})
+        XCTAssertTrue(KeyViewLoop.order(from: recovery.screenRow.button).elementsEqual(
+            [recovery.screenRow.button, recovery.microphoneRow.button, recovery.refreshButton,
+             recovery.primaryButton] as [NSView], by: ===), "Recovery's Refresh precedes Done")
+    }
+
     /// Runs the main loop until `condition` holds, failing after a deadline.
     private func settle(_ condition: () -> Bool) throws {
         let deadline = Date().addingTimeInterval(3)

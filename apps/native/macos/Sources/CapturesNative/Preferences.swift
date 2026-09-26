@@ -840,6 +840,17 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         ) { [weak self] _ in self?.updateActiveSection() }
         layoutHeaderActions()
         updateActiveSection()
+        installKeyViewLoop()
+    }
+
+    /// Shipping DOM order: the section nav, the header's History button (and
+    /// the native Retry), the find bar, then each card's controls in order.
+    /// The first section starts keyboard focus.
+    private func installKeyViewLoop() {
+        var order: [NSView] = sections.compactMap { navButtons[$0.0] as NSView? }
+        order += ([historyButton, retryButton, findBar] as [NSView?]).compactMap { $0 }
+        order.append(scroll)
+        KeyViewLoop.install(order, window: root.window, initial: order.first)
     }
 
     /// Shipping `.preferences-header-actions`: History, then the save status
@@ -880,6 +891,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         scroll.contentView.scroll(to: NSPoint(x: 0, y: min(oldY, max(0, document.frame.height - scroll.contentSize.height))))
         updateFind()
         updateActiveSection()
+        installKeyViewLoop()
         if !rebuilding { revealHighlightIfNeeded() }
     }
 
@@ -1964,6 +1976,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         root.addSubview(bar); findBar = bar; findField = field
         setHeader(height: Self.headerHeight + Self.findHeight)
         updateFind()
+        installKeyViewLoop()
         windowFocusFind()
     }
 
@@ -2025,6 +2038,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         findPrevious = nil; findNext = nil; matches = []
         setHeader(height: Self.headerHeight)
         updateFind()
+        installKeyViewLoop()
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {

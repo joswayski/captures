@@ -591,6 +591,28 @@ final class OnboardingView: NSView {
         needsLayout = true
         update()
     }
+
+    /// Shipping DOM order: the screen action, the microphone action, then the
+    /// action row (recovery's Refresh before Done).
+    var keyViewOrder: [NSView] {
+        var views: [NSView] = [screenRow.button, microphoneRow.button]
+        if done != nil { views.append(refreshButton) }
+        views.append(primaryButton)
+        return views
+    }
+
+    /// The first control a keyboard user can act on, like Tab from the top
+    /// of the shipping page; the primary action while nothing else is.
+    var firstControl: NSView {
+        keyViewOrder.first { view in
+            !view.isHiddenOrHasHiddenAncestor && (view as? NSControl)?.isEnabled != false
+        } ?? primaryButton
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        KeyViewLoop.install(keyViewOrder, window: window, initial: firstControl)
+    }
     required init?(coder: NSCoder) { nil }
 
     private var busyAction: String? { controller.busy ? controller.pendingAction ?? "check" : nil }
@@ -627,6 +649,7 @@ final class OnboardingView: NSView {
             primaryButton.isEnabled = !busy && (view?.screenReady == true || view?.restartRequired == true)
         }
         primaryButton.setAccessibilityLabel(primaryButton.title)
+        KeyViewLoop.install(keyViewOrder, window: window, initial: firstControl)
         refreshButton.needsDisplay = true; primaryButton.needsDisplay = true
         needsLayout = true
         needsDisplay = true
