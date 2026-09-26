@@ -631,6 +631,82 @@ struct EditorImportPresentation {
     let presentation: EditorPresentation
 }
 
+/// One export-bar save: the published path, the History entry that the next
+/// Save may overwrite (nil when History could not be updated) and the shared
+/// status text for it.
+struct EditorExportSaved: Equatable {
+    let path: String
+    let artifactID: String?
+    let sizeBytes: UInt64?
+    let warning: String?
+    let notice: String
+}
+
+/// Exact encoded length Save would write, and the size its % change compares to.
+struct EditorEstimate: Equatable {
+    let bytes: UInt64
+    let baselineBytes: UInt64?
+}
+
+/// Shared export-bar model (captures_app::editor_export through the C ABI).
+/// The target is opaque Rust JSON that is sent back unchanged with each action.
+struct NativeExportBar {
+    let target: [String: Any]
+    let formatLabel: String
+    let suffix: String
+    let summary: String
+    let estimateLabel: String
+    let deltaLabel: String?
+    let deltaPercent: Int?
+    let hint: String
+    let hintWarning: Bool
+    let formatRequiresCopy: Bool
+    let savingCopy: Bool
+    let plan: [String: Any]?
+    let error: String?
+
+    var stem: String { target["stem"] as? String ?? "" }
+    var directory: String { target["directory"] as? String ?? "" }
+    var sourcePath: String? { (target["source"] as? [String: Any])?["path"] as? String }
+    var planOverwrites: Bool { plan?["kind"] as? String == "overwrite" }
+    var planArtifactID: String? { plan?["artifact_id"] as? String }
+
+    init?(_ value: [String: Any]) {
+        guard let target = value["target"] as? [String: Any],
+              let view = value["view"] as? [String: Any],
+              let formatLabel = view["format_label"] as? String,
+              let suffix = view["suffix"] as? String,
+              let summary = view["summary"] as? String,
+              let estimateLabel = view["estimate_label"] as? String,
+              let hint = view["hint"] as? String,
+              let hintWarning = view["hint_warning"] as? Bool,
+              let formatRequiresCopy = view["format_requires_copy"] as? Bool,
+              let savingCopy = view["saving_copy"] as? Bool else { return nil }
+        self.target = target
+        self.formatLabel = formatLabel; self.suffix = suffix; self.summary = summary
+        self.estimateLabel = estimateLabel
+        let delta = view["delta"] as? [String: Any]
+        deltaLabel = delta?["label"] as? String
+        deltaPercent = (delta?["percent"] as? NSNumber)?.intValue
+        self.hint = hint; self.hintWarning = hintWarning
+        self.formatRequiresCopy = formatRequiresCopy; self.savingCopy = savingCopy
+        plan = view["plan"] as? [String: Any]
+        error = view["error"] as? String
+    }
+
+    static func present(_ request: [String: Any]) throws -> NativeExportBar {
+        let data = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
+        let response = String(decoding: data, as: UTF8.self).withCString {
+            captures_editor_export_bar_v1($0)
+        }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let bar = NativeExportBar(result) else { throw AppBridgeError.invalidResponse }
+        return bar
+    }
+}
+
 enum EditorSavePresentation: Equatable {
     case saved(path: String)
     case savedWithoutHistory(path: String, warning: String)
@@ -677,6 +753,22 @@ final class NativeEditorFrame {
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
         else { throw AppBridgeError.invalidResponse }
         return image
+    }
+
+    /// Encode exactly as Save would, off the session queue. No I/O.
+    func estimate(_ request: [String: Any]) throws -> EditorEstimate {
+        let data = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
+        let response = String(decoding: data, as: UTF8.self).withCString {
+            captures_editor_estimate_v1(handle, $0)
+        }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let bytes = (result["bytes"] as? NSNumber)?.uint64Value else {
+            throw AppBridgeError.invalidResponse
+        }
+        return EditorEstimate(bytes: bytes,
+                              baselineBytes: (result["baseline_bytes"] as? NSNumber)?.uint64Value)
     }
 }
 
@@ -779,6 +871,43 @@ private final class NativeEditorSession {
         return EditorOutputPresentation(data: encoded, image: image)
     }
 
+    /// Retain the current immutable frame without copying pixels.
+    func frame() -> NativeEditorFrame? {
+        guard let frame = captures_editor_frame_v1(handle) else { return nil }
+        return NativeEditorFrame(handle: frame)
+    }
+
+    /// Publish exactly as an export-bar plan says (overwrite or new file).
+    func saveExport(_ request: [String: Any]) throws -> EditorExportSaved {
+        let data = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
+        let response = String(decoding: data, as: UTF8.self).withCString {
+            captures_editor_save_v1(handle, $0)
+        }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let status = result["status"] as? String,
+              let path = result["path"] as? String, !path.isEmpty,
+              let notice = result["notice"] as? String else { throw AppBridgeError.invalidResponse }
+        switch status {
+        case "saved":
+            guard let artifact = result["artifact"] as? [String: Any],
+                  let entry = artifact["entry"] as? [String: Any],
+                  let id = entry["id"] as? String else { throw AppBridgeError.invalidResponse }
+            return EditorExportSaved(path: path, artifactID: id,
+                                     sizeBytes: (entry["size_bytes"] as? NSNumber)?.uint64Value,
+                                     warning: nil, notice: notice)
+        case "saved_without_history":
+            guard let warning = result["warning"] as? String, !warning.isEmpty else {
+                throw AppBridgeError.invalidResponse
+            }
+            return EditorExportSaved(path: path, artifactID: nil, sizeBytes: nil,
+                                     warning: warning, notice: notice)
+        default:
+            throw AppBridgeError.invalidResponse
+        }
+    }
+
     func saveNew(_ request: [String: Any]) throws -> EditorSavePresentation {
         try save(request) { handle, json in captures_editor_save_new_v1(handle, json) }
     }
@@ -860,6 +989,10 @@ protocol EditorWorking: AnyObject {
                  completion: @escaping (Result<EditorSavePresentation, Error>) -> Void)
     func saveOriginal(_ request: [String: Any],
                       completion: @escaping (Result<EditorSavePresentation, Error>) -> Void)
+    func save(_ request: [String: Any],
+              completion: @escaping (Result<EditorExportSaved, Error>) -> Void)
+    func estimate(_ request: [String: Any],
+                  completion: @escaping (Result<EditorEstimate, Error>) -> Void)
     func importImage(_ image: EditorDecodedImage, selectedID: String?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void)
     func close()
@@ -871,6 +1004,9 @@ protocol EditorWorking: AnyObject {
 final class EditorWorker: EditorWorking {
     private static let queue = DispatchQueue(label: "es.captures.native.editor",
                                              qos: .userInitiated)
+    /// Size estimates encode retained frames here, never on the session queue.
+    private static let estimateQueue = DispatchQueue(label: "es.captures.native.editor-estimate",
+                                                     qos: .utility)
     private final class Storage {
         var session: NativeEditorSession?
         var snapshot: NativeEditorSnapshot?
@@ -975,6 +1111,42 @@ final class EditorWorker: EditorWorking {
                 return try session.saveOriginal(request)
             }
             DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func save(_ request: [String: Any],
+              completion: @escaping (Result<EditorExportSaved, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> EditorExportSaved in
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The screenshot editor is closed.")
+                }
+                guard storage.snapshot?.activeTextInput == nil else {
+                    throw AppBridgeError.backend("Finish or cancel inline text before saving.")
+                }
+                return try session.saveExport(request)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func estimate(_ request: [String: Any],
+                  completion: @escaping (Result<EditorEstimate, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            // Only retain the published frame here; encoding runs elsewhere so
+            // estimates never delay accepted edits.
+            let frame = storage.session?.frame()
+            Self.estimateQueue.async {
+                let result = Result { () throws -> EditorEstimate in
+                    guard let frame else {
+                        throw AppBridgeError.backend("The screenshot editor is closed.")
+                    }
+                    return try frame.estimate(request)
+                }
+                DispatchQueue.main.async { completion(result) }
+            }
         }
     }
 

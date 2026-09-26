@@ -167,6 +167,23 @@ bool captures_startup_notice_placement_v1(CapturesTrayNoticeRect monitor,
     bool menu_bar_at_top, uint32_t fallback_edge,
     CapturesTrayNoticePlacement *output);
 
+/* Shipping New Capture menu copy and policy (captures-app::capture_menu).
+ * Operations: "copy" (static labels, FPS/resolution options, toggles, guidance),
+ * "menu" {mode "screenshot"|"recording", auto_start, can_exclude_controls,
+ * controls_excluded, state {starting, switching_display, error}, options
+ * {show_cursor, highlight_clicks, system_audio}, available {cursor_control,
+ * click_highlights, system_audio}} -> visibility note (lead/emphasis/trail/hint,
+ * Preferences target or null), confirm note, primary button and toggle status;
+ * "toggle" {changed, show_cursor, highlight_clicks} -> coupled cursor/clicks;
+ * "microphones" {available, loading, selected, devices [{id, name}]};
+ * "display_identity" {name, width, height, recording_fps?}. Standard owned
+ * {ok,result}/{ok,error} envelope; free with captures_settings_free_v1. */
+char *captures_capture_menu_v1(const char *request_json);
+/* Guidance-chip pointer ducking (28 pt approach pad, 12 pt leave slack). Pointer
+ * and chip bounds share one top-left logical space. No allocation. */
+bool captures_capture_guidance_pointer_over_v1(double x, double y, double left,
+    double top, double right, double bottom, bool currently_over);
+
 /* Owned shared visibility state, not a native window. Serialize all calls on
  * one handle (normally the UI thread). Free exactly once after callers stop;
  * NULL is permitted by free and returns false from every other handle call.
@@ -489,6 +506,38 @@ char *captures_editor_save_new_v1(const CapturesEditorSession *session, const ch
  * NULL session/input returns an owned error response. */
 char *captures_editor_save_original_v1(const CapturesEditorSession *session,
     const char *request_json);
+
+/* EXPORT BAR model shared by every host. Pure JSON in/out; the only I/O is a
+ * file-exists check when a target is created from init. Request:
+ * {target:<target>|init:{source:{artifact_id,path}|null,default_directory,default_stem},
+ *  action?:{kind:"set_stem",stem}|{kind:"set_directory",directory}|
+ *          {kind:"set_save_as_new",enabled}|{kind:"adopt",source:{artifact_id,path}},
+ *  options:<encode options incl. size>, document_size:[w,h],
+ *  transparent_background?:bool, estimate?:{bytes,baseline_bytes,pending}}.
+ * Exactly one of target/init. Owned response {ok:true,result:{target,view}}
+ * where target is opaque JSON to send back unchanged and view carries
+ * format_label, suffix, dimensions, summary, estimate_label, delta{percent,label},
+ * hint, hint_warning, format_requires_copy, saving_copy, plan
+ * ({kind:"overwrite",artifact_id,path}|{kind:"new_file",path}) and error.
+ * Free with captures_settings_free_v1. NULL/invalid input returns an error. */
+char *captures_editor_export_bar_v1(const char *request_json);
+
+/* SAVE the edited frame on the serialized session worker exactly as an export
+ * bar plan says. Request {history_root,plan,options,mode}. An overwrite plan
+ * revalidates that History entry's saved path and kind from disk before an
+ * atomic replace; a new_file plan never replaces an existing file. Response
+ * schema matches captures_editor_save_new_v1. Refuses while inline text is
+ * active. Never mutates document/undo/redo/draft state. A successful result
+ * also carries notice: the shared status text for that save. */
+char *captures_editor_save_v1(const CapturesEditorSession *session, const char *request_json);
+
+/* ESTIMATE the saved size of a retained frame from captures_editor_frame_v1,
+ * without the session, so hosts may run it on any background thread. Request
+ * {options,original_bytes:unsigned|null}; owned response
+ * {ok:true,result:{bytes,baseline_bytes}}: the exact encoded length Save would
+ * write and the size the percentage compares against (the original file for
+ * Preserve, the lossless flattened PNG otherwise). No I/O. */
+char *captures_editor_estimate_v1(const CapturesEditorFrame *frame, const char *request_json);
 
 /* Allocation-free recording crop/output-size geometry. Crop resize preserves
  * the crop's current aspect ratio and fits at its existing origin; staged width

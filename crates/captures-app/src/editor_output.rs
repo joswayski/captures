@@ -223,7 +223,7 @@ const fn canonical_extension(format: ExportFormat) -> &'static str {
     }
 }
 
-fn extension_matches(format: ExportFormat, extension: &str) -> bool {
+pub(crate) fn extension_matches(format: ExportFormat, extension: &str) -> bool {
     match format {
         ExportFormat::Png => extension.eq_ignore_ascii_case("png"),
         ExportFormat::Jpeg => {

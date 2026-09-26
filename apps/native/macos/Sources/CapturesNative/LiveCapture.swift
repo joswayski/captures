@@ -80,6 +80,7 @@ final class LiveCaptureController: NSObject {
     private let historyRootOverride: String?
     private let settingsPath: String?
     private let showPreferences: () -> Void
+    private let showPreferenceSetting: (String) -> Void
     private let showPermissions: () -> Void
     private var permissionsVisible = false
     private let captureStateChanged: (Bool) -> Void
@@ -237,10 +238,12 @@ final class LiveCaptureController: NSObject {
          recordingControlsVisibilityChanged: @escaping (Bool) -> Void = { _ in },
          reportError: @escaping (String) -> Void = { _ in },
          showPermissions: @escaping () -> Void = {},
+         showPreferenceSetting: @escaping (String) -> Void = { _ in },
          showPreferences: @escaping () -> Void) {
         self.root = root; self.window = window; self.tokens = tokens
         historyRootOverride = historyRoot; self.transport = transport
         self.recoveryWorker = recoveryWorker; self.showPreferences = showPreferences
+        self.showPreferenceSetting = showPreferenceSetting
         self.showPermissions = showPermissions
         self.settingsPath = settingsPath; self.miniPreviews = miniPreviews
         self.miniPreviewActions = miniPreviewActions
@@ -984,6 +987,7 @@ final class LiveCaptureController: NSObject {
                 AppBridgeError.backend("The selected display is no longer available."))
             return
         }
+        let replacingDisplay = unifiedPanel != nil
         if let selector = unifiedPanel?.selector {
             unifiedControlsState = selector.controlsState
         }
@@ -1041,13 +1045,29 @@ final class LiveCaptureController: NSObject {
                             RecordingControlAvailability(cursor: $0.cursorControl,
                                 clicks: $0.clickHighlights, systemAudio: $0.systemAudio,
                                 microphone: $0.microphone)
-                        }, microphoneDevices: self.microphoneDevices)
+                        }, microphoneDevices: self.microphoneDevices,
+                        visibility: self.recordingCapabilities.map {
+                            CaptureControlsVisibility(canExclude: $0.canExcludeControls,
+                                excluded: $0.controlsExcluded)
+                        } ?? .excludedByDefault,
+                        displayIdentity: CaptureDisplayIdentity(name: display.name,
+                            width: display.width, height: display.height))
                     panel.selector.controls.recordingControlsChanged = { [weak self] state in
                         self?.recordingControlState = state
                     }
+                    panel.selector.openPreference = { [weak self] setting in
+                        // Shipping `openCapturePreference`: dismiss the menu,
+                        // then show Preferences at the linked setting.
+                        guard let self, self.flowGeneration == generation,
+                              self.unifiedPanel != nil else { return }
+                        self.finishCapture()
+                        self.status.stringValue = "Capture cancelled."
+                        self.showPreferenceSetting(setting)
+                    }
                     self.unifiedPanel = panel
                     self.preparingUnified = false
-                    panel.selector.restoreControls(self.unifiedControlsState)
+                    panel.selector.restoreControls(self.unifiedControlsState,
+                        armAutoStart: replacingDisplay)
                     guard self.unifiedPanel === panel else { return }
                     panel.makeKeyAndOrderFront(nil)
                     self.selectorShortcutGeneration = generation
