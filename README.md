@@ -182,8 +182,9 @@ Captures design. Development workbenches include Swift/AppKit on macOS and an
 experimental Rust/wgpu renderer candidate for Windows/Linux. They are not
 replacement downloads. An opt-in native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to
-shared Rust engines. Clear history requires confirmation, removes all capture
-types regardless of the selected filter, and keeps exported files and recovery drafts.
+shared Rust engines. Its History uses the shipping card grid, header, filters and
+empty states; Delete all asks for a second click, removes all capture types
+regardless of the selected filter, and keeps exported files and recovery drafts.
 It uses separate development data; Wayland capture is gated
 until the candidate can hide its window reliably. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
@@ -399,7 +400,7 @@ or letting it expire preserves History and exports; failed saves can be retried.
 Both native workbenches also render the Preview update notice (release notes,
 download progress, restart countdown and errors) from a simulated status source.
 Native builds cannot check for, download or install updates yet.
-The AppKit History view enables **Edit screenshot** for screenshots only. Its first
+A screenshot History card's **Edit** opens the AppKit screenshot editor. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
 Its Layers panel connects shared visibility, lock, opacity, movement, image rename,

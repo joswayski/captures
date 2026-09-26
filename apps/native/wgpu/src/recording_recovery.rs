@@ -195,14 +195,32 @@ impl View {
         let mut confirm = None;
         let mut discard = false;
         let mut recover = None;
-        ui.separator();
+        // Shipping `.recording-recovery-section`: a raised card in Capture History.
+        let copy = captures_app::history_view::copy();
+        let height = (ui.available_height() * 0.5).min(240.);
+        egui::Frame::new()
+            .fill(tokens.color("surface-raised"))
+            .stroke(egui::Stroke::new(1., tokens.color("caution-surface")))
+            .corner_radius(tokens.number("r-xl") as u8)
+            .inner_margin(tokens.number("s-6") as i8)
+            .show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = tokens.number("s-4");
         ui.horizontal_wrapped(|ui| {
-            ui.strong("Interrupted recordings");
+            ui.label(
+                egui::RichText::new(copy.recovery_title)
+                    .size(tokens.number("text-lg"))
+                    .strong(),
+            );
             refresh = ui
                 .add_enabled(enabled && idle, egui::Button::new("Refresh").small())
                 .clicked();
         });
-        let height = (ui.available_height() * 0.5).min(240.);
+        ui.label(
+            egui::RichText::new(copy.recovery_help)
+                .size(tokens.number("text-sm"))
+                .color(tokens.color("text-subtle")),
+        );
         egui::ScrollArea::vertical().id_salt("recording-recovery").max_height(height).show(ui, |ui| {
             if matches!(self.pending, Some(Pending::Listing)) {
                 ui.label("Checking recovery files…");
@@ -230,41 +248,53 @@ impl View {
             if let Some(message) = &self.message {
                 ui.label(message);
             }
-            for draft in &self.drafts {
+            // Shipping `.recording-recovery-row`: details left, actions right,
+            // separated by a subtle rule.
+            for (index, draft) in self.drafts.iter().enumerate() {
                 ui.push_id(&draft.session_id, |ui| {
-                    ui.group(|ui| {
-                        ui.strong(match draft.kind {
-                            Some(RecordingKind::Video) => "Video recording",
-                            Some(RecordingKind::Gif) => "GIF recording",
-                            None => "Unavailable recording",
+                    if index > 0 {
+                        ui.separator();
+                    }
+                    let target = Target::from_draft(draft);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = tokens.number("s-2");
+                            ui.label(egui::RichText::new(match draft.kind {
+                                Some(RecordingKind::Video) => "Video recording",
+                                Some(RecordingKind::Gif) => "GIF recording",
+                                None => "Unavailable recording",
+                            }).size(tokens.number("text-md")).color(tokens.color("text")));
+                            let date = draft.created_at_ms
+                                .and_then(|ms| i64::try_from(ms).ok())
+                                .and_then(chrono::DateTime::from_timestamp_millis)
+                                .map(|date| date.with_timezone(&chrono::Local).format("%b %d, %H:%M").to_string())
+                                .unwrap_or_else(|| "Unknown time".into());
+                            ui.label(egui::RichText::new(format!(
+                                "{date} · {} recovered so far",
+                                captures_app::recording_timeline::format_recording_time(draft.completed_duration_ms)
+                            )).size(tokens.number("text-sm")).color(tokens.color("text-muted")));
+                            if let Some(reason) = &draft.reason {
+                                ui.label(egui::RichText::new(reason)
+                                    .size(tokens.number("text-sm"))
+                                    .color(tokens.color("danger-text")));
+                            }
                         });
-                        let date = draft.created_at_ms
-                            .and_then(|ms| i64::try_from(ms).ok())
-                            .and_then(chrono::DateTime::from_timestamp_millis)
-                            .map(|date| date.with_timezone(&chrono::Local).format("%b %d, %H:%M").to_string())
-                            .unwrap_or_else(|| "Unknown time".into());
-                        ui.label(format!(
-                            "{date} · {} recovered so far",
-                            captures_app::recording_timeline::format_recording_time(draft.completed_duration_ms)
-                        ));
-                        if let Some(reason) = &draft.reason {
-                            ui.label(reason);
+                        if target.is_some() {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let available = enabled && idle && self.confirmation.is_none();
+                                if ui.add_enabled(available, egui::Button::new("Discard…")).clicked() {
+                                    confirm = target.clone();
+                                }
+                                if ui.add_enabled(available, egui::Button::new("Recover")).clicked() {
+                                    recover = target.clone();
+                                }
+                            });
                         }
-                        let target = Target::from_draft(draft);
-                        ui.horizontal(|ui| {
-                            let available = enabled && idle && self.confirmation.is_none() && target.is_some();
-                            if ui.add_enabled(available, egui::Button::new("Recover")).clicked() {
-                                recover = target.clone();
-                            }
-                            if ui.add_enabled(available, egui::Button::new("Discard…")).clicked() {
-                                confirm = target;
-                            }
-                        });
                     });
                 });
             }
         });
-        ui.separator();
+            });
         if let Some(target) = confirm {
             self.confirmation = Some(target);
         }
@@ -345,6 +375,11 @@ impl Recovery {
 
     pub fn blocking(&self) -> bool {
         self.view.pending.is_some() || self.view.confirmation.is_some()
+    }
+
+    /// Interrupted recordings are listed, so History is not empty.
+    pub fn has_drafts(&self) -> bool {
+        !self.view.drafts.is_empty()
     }
 
     pub fn refresh(&mut self) {

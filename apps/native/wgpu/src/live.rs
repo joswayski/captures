@@ -144,9 +144,10 @@ enum Job {
         target: WindowCaptureTarget,
         after_countdown: bool,
     },
-    DecodeHistory {
-        generation: u64,
-        path: PathBuf,
+    DecodeThumbnail {
+        root: PathBuf,
+        entry: Box<captures_history::HistoryEntry>,
+        key: ThumbnailKey,
     },
     DecodePreview {
         generation: u64,
@@ -216,9 +217,10 @@ enum Reply {
         preview: PreviewGuard,
         result: Result<(), String>,
     },
-    HistoryDecoded {
-        generation: u64,
-        path: PathBuf,
+    ThumbnailDecoded {
+        id: String,
+        key: ThumbnailKey,
+        missing: bool,
         result: Result<Decoded, String>,
     },
     PreviewDecoded {
@@ -231,6 +233,38 @@ enum Reply {
 struct Decoded {
     image: egui::ColorImage,
 }
+
+/// Identifies the History entry a thumbnail and missing check were read for.
+/// An editor replacing the original or a save changes it, forcing a reload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ThumbnailKey {
+    path: PathBuf,
+    width: u32,
+    height: u32,
+    size_bytes: u64,
+    saved_path: Option<String>,
+}
+
+impl ThumbnailKey {
+    fn of(artifact: &Artifact) -> Self {
+        Self {
+            path: artifact.preview_path.clone(),
+            width: artifact.entry.width,
+            height: artifact.entry.height,
+            size_bytes: artifact.entry.size_bytes,
+            saved_path: artifact.entry.saved_path.clone(),
+        }
+    }
+}
+
+struct HistoryThumbnail {
+    key: ThumbnailKey,
+    thumbnail: crate::history::Thumbnail,
+    missing: bool,
+}
+
+/// Bounded texture residency: offscreen thumbnails beyond this are released.
+const HISTORY_THUMBNAIL_CACHE: usize = 96;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PreviewGuard {
@@ -823,9 +857,12 @@ pub struct Live {
     recovery_selection: u64,
     history_filter: HistoryFilter,
     selection: Selection,
-    texture: Option<egui::TextureHandle>,
-    preview_loading: bool,
-    decoded_path: Option<PathBuf>,
+    /// Card presentation and thumbnails, keyed by artifact ID.
+    history_cards: HashMap<String, captures_app::history_view::Card>,
+    history_thumbnails: HashMap<String, HistoryThumbnail>,
+    history_loaded: bool,
+    history_scroll_to: Option<String>,
+    card_busy: Option<(String, captures_app::history_view::CardAction)>,
     status: String,
     error: Option<String>,
     pending: usize,
@@ -902,8 +939,10 @@ pub struct Live {
     recording_restore_available: bool,
     history_refresh_status: Option<String>,
     can_hide: Option<bool>,
-    confirm_delete: Option<String>,
-    confirm_clear_history: bool,
+    /// Shipping two-step deletion: the armed card and when it reverts.
+    confirm_delete: Option<(String, Instant)>,
+    confirm_clear_history: Option<Instant>,
+    clearing_history: bool,
     requested_capture: Option<CaptureRequest>,
     restore_root_visible: bool,
     permission_recovery_requested: bool,
@@ -1046,10 +1085,11 @@ impl Live {
                             .map(Box::new)
                             .map_err(|error| error.to_string()),
                     },
-                    Job::DecodeHistory { generation, path } => Reply::HistoryDecoded {
-                        generation,
-                        result: decode(&path),
-                        path,
+                    Job::DecodeThumbnail { root, entry, key } => Reply::ThumbnailDecoded {
+                        id: entry.id.clone(),
+                        missing: captures_app::history_view::media_missing(&root, &entry),
+                        result: decode(&key.path),
+                        key,
                     },
                     Job::DecodePreview {
                         generation,
@@ -1105,9 +1145,11 @@ impl Live {
             recording_editors: HashMap::new(),
             history_filter: HistoryFilter::All,
             selection: Selection::default(),
-            texture: None,
-            preview_loading: false,
-            decoded_path: None,
+            history_cards: HashMap::new(),
+            history_thumbnails: HashMap::new(),
+            history_loaded: false,
+            history_scroll_to: None,
+            card_busy: None,
             status: "Loading capture workspace…".into(),
             error: None,
             pending: 0,
@@ -1179,7 +1221,8 @@ impl Live {
             history_refresh_status: None,
             can_hide: None,
             confirm_delete: None,
-            confirm_clear_history: false,
+            confirm_clear_history: None,
+            clearing_history: false,
             requested_capture: None,
             restore_root_visible: true,
             permission_recovery_requested: false,
@@ -1713,53 +1756,52 @@ impl Live {
         }
     }
 
-    fn load_selected(&mut self) {
-        let Some(item) = self
-            .artifacts
-            .iter()
-            .find(|item| self.selection.id.as_deref() == Some(item.entry.id.as_str()))
-        else {
-            self.texture = None;
-            self.decoded_path = None;
-            self.preview_loading = false;
-            return;
-        };
-        let generation = self.selection.generation;
-        let _ = self.tx.send(Job::DecodeHistory {
-            generation,
-            path: item.image_path.clone(),
-        });
-    }
-
     fn select(&mut self, id: String) {
         if let Some(item) = self.artifacts.iter().find(|item| item.entry.id == id)
             && !self.history_filter.matches(item.entry.kind)
         {
             self.history_filter = HistoryFilter::All;
         }
+        self.history_scroll_to = Some(id.clone());
         self.selection.begin(id);
-        self.texture = None;
-        self.decoded_path = None;
-        self.preview_loading = true;
-        self.load_selected();
+        self.invalidate_history_cards();
     }
 
-    fn refresh_history_selection(&mut self) {
-        let visible = |item: &&Artifact| self.history_filter.matches(item.entry.kind);
-        let id = self
+    /// Drop cached card presentation and any thumbnail read for an older
+    /// version of an entry (or for an entry no longer in History).
+    fn invalidate_history_cards(&mut self) {
+        self.history_cards.clear();
+        let current: HashMap<&str, ThumbnailKey> = self
             .artifacts
             .iter()
-            .filter(visible)
-            .find(|item| self.selection.id.as_deref() == Some(item.entry.id.as_str()))
-            .or_else(|| self.artifacts.iter().find(visible))
-            .map(|item| item.entry.id.clone());
+            .map(|artifact| (artifact.entry.id.as_str(), ThumbnailKey::of(artifact)))
+            .collect();
+        self.history_thumbnails
+            .retain(|id, thumbnail| current.get(id.as_str()) == Some(&thumbnail.key));
+    }
+
+    fn artifact_index(&self, id: &str) -> Option<usize> {
+        self.artifacts.iter().position(|item| item.entry.id == id)
+    }
+
+    /// Keep an explicit selection that is still visible. Like shipping, loading
+    /// or filtering History never selects a card on the user's behalf.
+    fn refresh_history_selection(&mut self) {
+        let keep = self
+            .selection
+            .id
+            .as_deref()
+            .filter(|id| {
+                self.artifacts.iter().any(|item| {
+                    item.entry.id == *id && self.history_filter.matches(item.entry.kind)
+                })
+            })
+            .map(str::to_owned);
         self.selection.clear();
-        self.texture = None;
-        self.decoded_path = None;
-        self.preview_loading = false;
         self.confirm_delete = None;
-        if let Some(id) = id {
-            self.select(id);
+        self.invalidate_history_cards();
+        if let Some(id) = keep {
+            self.selection.begin(id);
         }
     }
 
@@ -3264,6 +3306,7 @@ impl Live {
                     self.pending = self.pending.saturating_sub(1);
                     let open_recording = open_recording
                         .filter(|(_, _, generation)| self.selection.accepts(*generation));
+                    self.history_loaded = true;
                     match result {
                         Ok(artifacts) => {
                             self.apply(Response::History { artifacts }, false);
@@ -3277,18 +3320,21 @@ impl Live {
                                 self.open_recording_editor(ctx, id, directory);
                             }
                         }
-                        Err(error) => self.error = Some(error),
+                        Err(error) => {
+                            self.error = Some(captures_app::history_view::load_error(&error));
+                        }
                     }
                 }
                 Reply::HistoryCleared(result) => {
                     self.pending = self.pending.saturating_sub(1);
+                    self.clearing_history = false;
                     match result {
                         Ok(response) => self.apply(*response, true),
                         Err(error) => {
                             // Some files may already have been deleted. Refresh the
                             // remaining history without concealing the operation error.
                             self.load_history();
-                            self.error = Some(format!("Could not clear history: {error}"));
+                            self.error = Some(captures_app::history_view::clear_error(&error));
                         }
                     }
                 }
@@ -3688,26 +3734,30 @@ impl Live {
                         Err(error) => self.error = Some(error),
                     }
                 }
-                Reply::HistoryDecoded {
-                    generation,
-                    path,
+                Reply::ThumbnailDecoded {
+                    id,
+                    key,
+                    missing,
                     result,
-                } if self.selection.accepts(generation) => match result {
-                    Ok(decoded) => {
-                        self.preview_loading = false;
-                        self.texture = Some(ctx.load_texture(
-                            format!("capture:{}", path.display()),
-                            decoded.image,
-                            egui::TextureOptions::LINEAR,
-                        ));
-                        self.decoded_path = Some(path);
+                } => {
+                    // Accept only the request for the entry version still listed.
+                    if let Some(entry) = self
+                        .history_thumbnails
+                        .get_mut(&id)
+                        .filter(|entry| entry.key == key)
+                    {
+                        entry.missing = missing;
+                        entry.thumbnail = match result {
+                            Ok(decoded) => crate::history::Thumbnail::Ready(ctx.load_texture(
+                                format!("history:{id}"),
+                                decoded.image,
+                                egui::TextureOptions::LINEAR,
+                            )),
+                            Err(_) => crate::history::Thumbnail::Failed,
+                        };
+                        self.history_cards.remove(&id);
                     }
-                    Err(error) => {
-                        self.preview_loading = false;
-                        self.error = Some(error);
-                    }
-                },
-                Reply::HistoryDecoded { .. } => {}
+                }
                 Reply::PreviewDecoded {
                     generation,
                     artifact_id,
@@ -3981,8 +4031,9 @@ impl Live {
                     .cloned()
                     .collect::<Vec<_>>();
                 self.previews.clear(&removed);
-                self.confirm_clear_history = false;
+                self.confirm_clear_history = None;
                 self.confirm_delete = None;
+                self.history_loaded = true;
                 for card in self.previews.cards.values_mut() {
                     if let Some(artifact) = artifacts
                         .iter()
@@ -4016,6 +4067,7 @@ impl Live {
                 if let Some(card) = self.previews.cards.get_mut(&artifact_id) {
                     card.saved_path = Some(path.clone());
                 }
+                self.invalidate_history_cards();
                 if announce {
                     self.status = format!("Saved {}", path.display());
                 }
@@ -5314,14 +5366,47 @@ impl Live {
         if self.flow.is_some() || self.capture_in_flight || self.permission_recovery_visible {
             ui.disable();
         }
-        egui::Panel::top("live-header").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("Captures");
-                ui.label(
-                    RichText::new("Native capture workspace").color(t.color("text-muted")),
-                );
-            });
-            ui.label("Capture screenshots or record video from a display, region or window. Open screenshots from History to crop, resize the canvas and keep edits as drafts.");
+        let now = Instant::now();
+        self.expire_history_confirmations(ui.ctx(), now);
+        // Escape backs out of an armed Delete / Delete all without deleting.
+        if (self.confirm_delete.is_some() || self.confirm_clear_history.is_some())
+            && !self.recovery.blocking()
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.confirm_delete = None;
+            self.confirm_clear_history = None;
+        }
+        if self.pending == 0 {
+            self.card_busy = None;
+        }
+        let copy = captures_app::history_view::copy();
+        let busy = self.pending > 0 || self.recovery.blocking();
+        let margin = |name: &str| t.number(name) as i8;
+        let mut header_event = None;
+        egui::Panel::top("live-header")
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(t.color("surface-canvas"))
+                    .inner_margin(egui::Margin {
+                        left: margin("s-8"),
+                        right: margin("s-8"),
+                        top: margin("s-8"),
+                        bottom: margin("s-5"),
+                    }),
+            )
+            .show(ui, |ui| {
+            header_event = crate::history::header(
+                ui,
+                t,
+                crate::history::DeleteAll {
+                    visible: self.history_loaded && !self.artifacts.is_empty(),
+                    confirming: self.confirm_clear_history.is_some(),
+                    busy: self.clearing_history,
+                    enabled: !busy,
+                },
+            );
+            ui.add_space(t.number("s-5"));
             ui.horizontal(|ui| {
                 egui::ComboBox::from_label("Display")
                     .selected_text(self.displays.iter().find(|d| Some(&d.id) == self.display_id.as_ref()).map_or("No display", |d| d.name.as_str()))
@@ -5353,79 +5438,91 @@ impl Live {
             if self.can_hide == Some(false) {
                 ui.colored_label(t.color("theme-signal"), "Display, region and window capture unavailable: this Wayland backend cannot hide and verify the root window.");
             }
-            if let Some(error) = &self.error { ui.colored_label(t.color("theme-signal"), error); }
-            else { ui.label(RichText::new(&self.status).small().color(t.color("text-muted"))); }
+            ui.label(RichText::new(&self.status).small().color(t.color("text-muted")));
         });
+        match header_event {
+            Some(crate::history::HeaderEvent::DeleteAll) => self.delete_all_history(now),
+            Some(crate::history::HeaderEvent::Cancel) => self.confirm_clear_history = None,
+            None => {}
+        }
 
-        egui::Panel::left("live-history")
-            .resizable(true)
-            .default_size(270.)
-            .min_size(220.)
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(t.color("surface-canvas"))
+                    .inner_margin(egui::Margin {
+                        left: margin("s-8"),
+                        right: margin("s-8"),
+                        top: 0,
+                        bottom: 0,
+                    }),
+            )
             .show(ui, |ui| {
-                ui.heading("History");
-                ui.label(
-                    RichText::new(self.root.display().to_string())
-                        .small()
-                        .color(t.color("text-muted")),
-                );
-                if self
-                    .history_filter
-                    .ui(ui, self.artifacts.iter().map(|item| item.entry.kind))
-                {
-                    self.confirm_clear_history = false;
-                    self.refresh_history_selection();
-                }
-                if ui
-                    .add_enabled(
-                        self.pending == 0 && !self.recovery.blocking() && !self.artifacts.is_empty(),
-                        egui::Button::new("Clear history…"),
-                    )
-                    .clicked()
-                {
-                    self.confirm_clear_history = true;
-                    self.confirm_delete = None;
-                }
-                if self.confirm_clear_history {
-                    ui.group(|ui| {
-                        ui.label(
-                            "Delete all screenshots, videos and GIFs from history, including captures outside this filter? Exported files and recovery drafts stay on disk.",
-                        );
-                        ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked()
-                                || ui.input_mut(|input| {
-                                    input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
-                                })
-                            {
-                                self.confirm_clear_history = false;
-                            }
-                            if ui
-                                .add_enabled(
-                                    self.pending == 0 && !self.recovery.blocking(),
-                                    egui::Button::new(
-                                        RichText::new("Delete all").color(t.color("theme-signal")),
-                                    ),
-                                )
-                                .clicked()
-                            {
-                                self.confirm_clear_history = false;
-                                self.send(Request::ClearHistory {
-                                    root: self.root.clone(),
-                                });
-                            }
-                        });
+                ui.spacing_mut().item_spacing.y = t.number("s-6");
+                if self.history_loaded && !self.artifacts.is_empty() {
+                    let mut counts = [0usize; 4];
+                    for item in &self.artifacts {
+                        for (index, filter) in HistoryFilter::ALL.iter().enumerate() {
+                            counts[index] += usize::from(filter.matches(item.entry.kind));
+                        }
+                    }
+                    let options: Vec<_> = HistoryFilter::ALL
+                        .iter()
+                        .zip(counts)
+                        .map(|(filter, count)| {
+                            (
+                                filter.label(),
+                                count,
+                                *filter == self.history_filter,
+                                !busy && (*filter == HistoryFilter::All || count > 0),
+                            )
+                        })
+                        .collect();
+                    let toolbar = ui.scope(|ui| {
+                        ui.spacing_mut().item_spacing.y = t.number("s-5");
+                        let clicked = crate::history::filters(ui, t, &options);
+                        ui.add_space(0.);
+                        clicked
                     });
+                    let line = toolbar.response.rect.bottom();
+                    ui.painter().hline(
+                        ui.max_rect().x_range(),
+                        line,
+                        egui::Stroke::new(1., t.color("border-subtle")),
+                    );
+                    if let Some(index) = toolbar.inner {
+                        self.history_filter = HistoryFilter::ALL[index];
+                        self.confirm_clear_history = None;
+                        self.refresh_history_selection();
+                    }
                 }
-                let recovery_enabled = self.pending == 0 && !self.is_capturing()
-                    && self.requested_capture.is_none() && !self.confirm_clear_history
+                if let Some(error) = &self.error {
+                    crate::history::error(ui, t, error);
+                }
+                let recovery_enabled = self.pending == 0
+                    && !self.is_capturing()
+                    && self.requested_capture.is_none()
+                    && self.confirm_clear_history.is_none()
                     && self.confirm_delete.is_none();
                 if let Some(target) = self.recovery.ui(ui, t, recovery_enabled) {
                     match settings() {
                         Ok(settings) => {
                             self.recovery_selection = self.selection.generation;
-                            self.recovery.recover(target, settings.output_directory.into());
+                            self.recovery
+                                .recover(target, settings.output_directory.into());
                         }
                         Err(error) => self.error = Some(error),
                     }
+                }
+                if !self.history_loaded {
+                    crate::history::empty(ui, t, copy.loading, None);
+                    return;
+                }
+                if self.artifacts.is_empty() {
+                    if !self.recovery.has_drafts() {
+                        crate::history::empty(ui, t, copy.empty_title, Some(copy.empty_body));
+                    }
+                    return;
                 }
                 let visible: Vec<usize> = self
                     .artifacts
@@ -5435,201 +5532,307 @@ impl Live {
                     .map(|(index, _)| index)
                     .collect();
                 if visible.is_empty() {
-                    ui.label(if self.artifacts.is_empty() {
-                        "No captures yet"
-                    } else {
-                        "No captures match this filter"
-                    });
+                    ui.label(RichText::new(copy.filtered_empty).color(t.color("text-subtle")));
+                    return;
                 }
-                egui::ScrollArea::vertical().show_rows(ui, 40., visible.len(), |ui, rows| {
-                    for row in rows {
-                        let item = &self.artifacts[visible[row]].entry;
-                        let id = item.id.clone();
-                        let date = chrono::DateTime::parse_from_rfc3339(&item.created_at)
-                            .map(|date| {
-                                date.with_timezone(&chrono::Local)
-                                    .format("%b %d, %H:%M")
-                                    .to_string()
-                            })
-                            .unwrap_or_else(|_| item.created_at.clone());
-                        if ui
-                            .add_sized(
-                                [ui.available_width(), 40.],
-                                egui::Button::new(format!(
-                                    "{} · {}×{}\n{}",
-                                    match item.kind {
-                                        captures_history::ArtifactKind::Screenshot => "Screenshot",
-                                        captures_history::ArtifactKind::Video => "Video",
-                                        captures_history::ArtifactKind::Gif => "GIF",
-                                    },
-                                    item.width,
-                                    item.height,
-                                    date
-                                ))
-                                .wrap_mode(egui::TextWrapMode::Extend)
-                                .selected(self.selection.id.as_deref() == Some(&id)),
-                            )
-                            .clicked()
-                        {
-                            self.select(id);
-                        }
+                for &index in &visible {
+                    let artifact = &self.artifacts[index];
+                    if !self.history_cards.contains_key(&artifact.entry.id) {
+                        let missing = self
+                            .history_thumbnails
+                            .get(&artifact.entry.id)
+                            .is_some_and(|thumbnail| thumbnail.missing);
+                        self.history_cards.insert(
+                            artifact.entry.id.clone(),
+                            captures_app::history_view::card(&artifact.entry, missing),
+                        );
                     }
+                }
+                let scroll_to = self.history_scroll_to.take().and_then(|id| {
+                    visible
+                        .iter()
+                        .position(|index| self.artifacts[*index].entry.id == id)
                 });
-            });
-
-        egui::CentralPanel::default().show(ui, |ui| {
-            let selected = self.selection.id.clone();
-            let selected_entry = selected.as_ref().and_then(|id| {
-                self.artifacts
+                let output = {
+                    let items: Vec<_> = visible
+                        .iter()
+                        .map(|&index| {
+                            let id = self.artifacts[index].entry.id.as_str();
+                            crate::history::Item {
+                                id,
+                                card: &self.history_cards[id],
+                                thumbnail: self
+                                    .history_thumbnails
+                                    .get(id)
+                                    .map(|entry| &entry.thumbnail),
+                                selected: self.selection.id.as_deref() == Some(id),
+                                confirming_delete: self
+                                    .confirm_delete
+                                    .as_ref()
+                                    .is_some_and(|(armed, _)| armed == id),
+                                busy: self
+                                    .card_busy
+                                    .as_ref()
+                                    .filter(|(busy, _)| busy == id)
+                                    .map(|(_, action)| *action),
+                            }
+                        })
+                        .collect();
+                    crate::history::grid(ui, t, &items, !busy, scroll_to)
+                };
+                let ids: Vec<String> = visible
                     .iter()
-                    .find(|artifact| &artifact.entry.id == id)
-                    .map(|artifact| artifact.entry.clone())
-            });
-            let selected_is_screenshot = selected_entry
-                .as_ref()
-                .is_some_and(|entry| entry.kind == captures_history::ArtifactKind::Screenshot);
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(
-                        selected_is_screenshot
-                            && self.decoded_path.is_some()
-                            && self.pending == 0 && !self.recovery.blocking(),
-                        egui::Button::new("Copy pixels"),
-                    )
-                    .clicked()
-                {
-                    self.copy();
-                }
-                if ui
-                    .add_enabled(
-                        selected.is_some() && self.pending == 0 && !self.recovery.blocking(),
-                        egui::Button::new(if selected.is_some() && !selected_is_screenshot { "Save file" } else { "Save image" }),
-                    )
-                    .clicked()
-                    && let Some(id) = selected.clone()
-                {
-                    match settings() {
-                        Ok(settings) => self.send(if selected_is_screenshot {
-                            Request::SaveScreenshot {
-                                root: self.root.clone(), id,
-                                directory: settings.output_directory.into(),
-                                format: settings.screenshot_format,
-                            }
-                        } else {
-                            Request::SaveRecording {
-                                root: self.root.clone(), id,
-                                directory: settings.output_directory.into(),
-                            }
-                        }),
-                        Err(error) => self.error = Some(error),
+                    .map(|&index| self.artifacts[index].entry.id.clone())
+                    .collect();
+                for event in output.events {
+                    match event {
+                        crate::history::Event::NeedsThumbnail(slot) => {
+                            self.request_thumbnail(&ids[slot])
+                        }
+                        crate::history::Event::Select(slot) => self.select_card(&ids[slot]),
+                        crate::history::Event::Open(slot) => {
+                            self.select_card(&ids[slot]);
+                            self.card_action(
+                                ui.ctx(),
+                                &ids[slot],
+                                captures_app::history_view::CardAction::Edit,
+                                settings(),
+                            );
+                        }
+                        crate::history::Event::Action(slot, action) => {
+                            self.card_action(ui.ctx(), &ids[slot], action, settings());
+                        }
+                        crate::history::Event::Delete(slot) => self.delete_card(&ids[slot], now),
                     }
                 }
-                if ui
-                    .add_enabled(
-                        selected.is_some() && self.pending == 0 && !self.recovery.blocking(),
-                        egui::Button::new("Delete from history…"),
-                    )
-                    .clicked()
-                {
-                    self.confirm_clear_history = false;
-                    self.confirm_delete = selected.clone();
+                if self.history_thumbnails.len() > HISTORY_THUMBNAIL_CACHE {
+                    let resident: std::collections::HashSet<&str> = ids[output.visible.clone()]
+                        .iter()
+                        .map(String::as_str)
+                        .collect();
+                    self.history_thumbnails
+                        .retain(|id, _| resident.contains(id.as_str()));
                 }
-                let saved = self
-                    .artifacts
-                    .iter()
-                    .find(|a| Some(&a.entry.id) == selected.as_ref())
-                    .and_then(|a| a.entry.saved_path.as_deref());
-                if ui
-                    .add_enabled(saved.is_some(), egui::Button::new("Show in Folder"))
-                    .clicked()
-                    && let Some(path) = saved
+                // Keyboard: arrows move the selection (also while actions are
+                // busy), Return opens it. Only when no control owns focus, so
+                // focused buttons keep their own navigation.
+                if ui.ctx().memory(|memory| memory.focused().is_none()) {
+                    let key = ui.input(|input| {
+                        [
+                            (egui::Key::ArrowRight, 1, 0),
+                            (egui::Key::ArrowLeft, -1, 0),
+                            (egui::Key::ArrowDown, 0, 1),
+                            (egui::Key::ArrowUp, 0, -1),
+                        ]
+                        .into_iter()
+                        .find(|(key, _, _)| input.key_pressed(*key))
+                    });
+                    let current = self
+                        .selection
+                        .id
+                        .as_deref()
+                        .and_then(|id| ids.iter().position(|visible| visible == id));
+                    if let Some((_, columns, rows)) = key {
+                        let layout = captures_app::history_view::grid(output.width);
+                        let next =
+                            current.map_or(0, |index| layout.step(index, ids.len(), columns, rows));
+                        self.select(ids[next].clone());
+                    } else if let Some(index) = current.filter(|_| !busy)
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                    {
+                        let id = ids[index].clone();
+                        self.card_action(
+                            ui.ctx(),
+                            &id,
+                            captures_app::history_view::CardAction::Edit,
+                            settings(),
+                        );
+                    }
+                }
+            });
+    }
+
+    /// Revert shipping two-step confirmations after four seconds.
+    fn expire_history_confirmations(&mut self, ctx: &egui::Context, now: Instant) {
+        let timeout = Duration::from_millis(captures_app::history_view::CONFIRM_TIMEOUT_MS);
+        for armed in [
+            self.confirm_delete.as_ref().map(|(_, at)| *at),
+            self.confirm_clear_history,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let remaining = timeout.saturating_sub(now.saturating_duration_since(armed));
+            if !remaining.is_zero() {
+                ctx.request_repaint_after(remaining);
+            }
+        }
+        if self
+            .confirm_delete
+            .as_ref()
+            .is_some_and(|(_, at)| now.saturating_duration_since(*at) >= timeout)
+        {
+            self.confirm_delete = None;
+        }
+        if self
+            .confirm_clear_history
+            .is_some_and(|at| now.saturating_duration_since(at) >= timeout)
+        {
+            self.confirm_clear_history = None;
+        }
+    }
+
+    /// First click arms "Delete all forever"; the second deletes every kind.
+    fn delete_all_history(&mut self, now: Instant) {
+        if self.pending > 0 || self.recovery.blocking() || self.artifacts.is_empty() {
+            return;
+        }
+        if self.confirm_clear_history.take().is_none() {
+            self.confirm_clear_history = Some(now);
+            self.confirm_delete = None;
+            return;
+        }
+        self.clearing_history = true;
+        self.send(Request::ClearHistory {
+            root: self.root.clone(),
+        });
+    }
+
+    /// Shipping card trash: arm, then delete on a second click within the
+    /// timeout. Missing recordings are removed immediately.
+    fn delete_card(&mut self, id: &str, now: Instant) {
+        if self.pending > 0 || self.recovery.blocking() {
+            return;
+        }
+        let confirm = self
+            .history_cards
+            .get(id)
+            .is_none_or(|card| card.delete_requires_confirmation);
+        let armed = self
+            .confirm_delete
+            .as_ref()
+            .is_some_and(|(armed, _)| armed == id);
+        if confirm && !armed {
+            self.confirm_delete = Some((id.to_owned(), now));
+            self.confirm_clear_history = None;
+            return;
+        }
+        self.send(Request::Delete {
+            root: self.root.clone(),
+            id: id.to_owned(),
+        });
+    }
+
+    fn select_card(&mut self, id: &str) {
+        if self.selection.id.as_deref() != Some(id) {
+            self.selection.begin(id.to_owned());
+        }
+    }
+
+    fn request_thumbnail(&mut self, id: &str) {
+        let Some(artifact) = self.artifacts.iter().find(|item| item.entry.id == id) else {
+            return;
+        };
+        let key = ThumbnailKey::of(artifact);
+        self.history_thumbnails.insert(
+            id.to_owned(),
+            HistoryThumbnail {
+                key: key.clone(),
+                thumbnail: crate::history::Thumbnail::Loading,
+                missing: false,
+            },
+        );
+        let _ = self.tx.send(Job::DecodeThumbnail {
+            root: self.root.clone(),
+            entry: Box::new(artifact.entry.clone()),
+            key,
+        });
+    }
+
+    fn card_action(
+        &mut self,
+        ctx: &egui::Context,
+        id: &str,
+        action: captures_app::history_view::CardAction,
+        settings: Result<AppSettings, String>,
+    ) {
+        use captures_app::history_view::CardAction;
+        if self.pending > 0 || self.recovery.blocking() {
+            return;
+        }
+        let Some(entry) = self
+            .artifact_index(id)
+            .map(|index| self.artifacts[index].entry.clone())
+        else {
+            return;
+        };
+        let recording = entry.kind.is_recording();
+        match action {
+            CardAction::Copy => self.copy(id),
+            CardAction::ShowInFolder => {
+                if let Some(path) = entry.saved_path.as_deref()
                     && let Err(error) = reveal(Path::new(path))
                 {
                     self.error = Some(format!("Could not reveal export: {error}"));
                 }
-                if ui.add_enabled(selected.is_some() && self.pending == 0 && !self.recovery.blocking(),
-                    egui::Button::new(if selected_is_screenshot { "Edit screenshot" } else { "Edit recording" })).clicked()
-                    && let Some(id) = selected.clone()
-                {
-                    match settings() {
-                        Ok(settings) if !selected_is_screenshot => {
-                            self.open_recording_editor(ui.ctx(), id, settings.output_directory.into());
-                        }
-                        Ok(settings) => {
-                            let mode = selected_entry.as_ref().and_then(|entry| entry.mode).unwrap_or(captures_capture::CaptureMode::Region);
-                            self.open_screenshot_editor(ui.ctx(), id, settings.output_directory.into(), mode);
-                        }
-                        Err(error) => self.error = Some(error),
-                    }
-                }
-            });
-            if let Some(entry) = selected_entry.filter(|entry| entry.kind.is_recording()) {
-                ui.label(
-                    RichText::new(format!(
-                        "{} · {}×{} · {}",
-                        if entry.kind == captures_history::ArtifactKind::Video {
-                            "H.264 MP4 recording"
-                        } else {
-                            "GIF recording"
-                        },
-                        entry.width,
-                        entry.height,
-                        captures_app::recording_timeline::format_recording_time(entry.duration_ms.unwrap_or_default())
-                    ))
-                    .color(t.color("text-muted")),
-                );
-                ui.label("History shows the saved poster frame. Open Edit recording for playback and editing.");
             }
-            if let Some(id) = self.confirm_delete.clone() {
-                ui.group(|ui| {
-                    ui.label("Delete this capture from history? Exported files are never deleted.");
-                    ui.horizontal(|ui| {
-                        if ui.button("Cancel").clicked() {
-                            self.confirm_delete = None;
+            CardAction::Edit => match settings {
+                Ok(settings) if recording => {
+                    self.open_recording_editor(
+                        ctx,
+                        id.to_owned(),
+                        settings.output_directory.into(),
+                    );
+                }
+                Ok(settings) => {
+                    let mode = entry.mode.unwrap_or(captures_capture::CaptureMode::Region);
+                    self.open_screenshot_editor(
+                        ctx,
+                        id.to_owned(),
+                        settings.output_directory.into(),
+                        mode,
+                    );
+                }
+                Err(error) => self.error = Some(error),
+            },
+            CardAction::SaveImage | CardAction::SaveFile => match settings {
+                Ok(settings) => {
+                    self.card_busy = Some((id.to_owned(), action));
+                    self.send(if recording {
+                        Request::SaveRecording {
+                            root: self.root.clone(),
+                            id: id.to_owned(),
+                            directory: settings.output_directory.into(),
                         }
-                        if ui.add_enabled(self.pending == 0 && !self.recovery.blocking(), egui::Button::new("Delete capture")).clicked() {
-                            self.send(Request::Delete {
-                                root: self.root.clone(),
-                                id,
-                            });
+                    } else {
+                        Request::SaveScreenshot {
+                            root: self.root.clone(),
+                            id: id.to_owned(),
+                            directory: settings.output_directory.into(),
+                            format: settings.screenshot_format,
                         }
                     });
-                });
-            }
-            ui.add_space(t.number("s-4"));
-            if let Some(texture) = &self.texture {
-                ui.add(
-                    egui::Image::new(texture)
-                        .fit_to_exact_size(ui.available_size())
-                        .maintain_aspect_ratio(true),
-                );
-            } else if self.preview_loading {
-                ui.spinner();
-            } else if selected.is_some() {
-                ui.label("Preview unavailable. Select another capture or retry this one.");
-            } else {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Capture a display or select a history item to preview it.");
-                });
-            }
-        });
+                }
+                Err(error) => self.error = Some(error),
+            },
+        }
     }
 
-    fn copy(&mut self) {
-        if let Some(path) = &self.decoded_path {
-            self.pending += 1;
-            self.error = None;
-            let owner = self
-                .artifacts
-                .iter()
-                .find(|artifact| &artifact.image_path == path)
-                .map(|artifact| artifact.entry.id.clone());
-            let _ = self.tx.send(Job::Copy {
-                path: path.clone(),
-                preview: None,
-                owner,
-            });
+    fn copy(&mut self, id: &str) {
+        let Some(index) = self.artifact_index(id) else {
+            return;
+        };
+        if self.artifacts[index].entry.kind.is_recording() {
+            return;
         }
+        self.pending += 1;
+        self.error = None;
+        self.card_busy = Some((id.to_owned(), captures_app::history_view::CardAction::Copy));
+        let _ = self.tx.send(Job::Copy {
+            path: self.artifacts[index].image_path.clone(),
+            preview: None,
+            owner: Some(id.to_owned()),
+        });
     }
 }
 
@@ -6199,10 +6402,7 @@ mod tests {
         );
         assert_eq!(live.selection.id.as_deref(), Some(id.as_str()));
         assert_eq!(live.editors.len(), 1);
-        assert!(matches!(
-            jobs.try_recv().unwrap(),
-            Job::DecodeHistory { .. }
-        ));
+        // History thumbnails are requested by visible cards, not selection.
         live.start_next_media();
         let Job::OpenMedia {
             path,
@@ -6233,10 +6433,7 @@ mod tests {
                 .contains("bad.png: corrupt image"),
             "later successes must retain earlier file errors"
         );
-        assert!(matches!(
-            jobs.try_recv().unwrap(),
-            Job::DecodeHistory { .. }
-        ));
+        // History thumbnails are requested by visible cards, not selection.
         live.editors.clear();
         live.start_next_media();
         let Job::OpenMedia {
@@ -6447,15 +6644,20 @@ mod tests {
             },
             false,
         );
-        let original_decode = live.selection.generation;
-        live.decoded_path = Some(original.image_path.clone());
-        live.confirm_delete = Some("v1".into());
+        assert!(live.history_loaded);
+        assert!(
+            live.selection.id.is_none(),
+            "loading History never selects a card"
+        );
+        live.select("v1".into());
+        let original_selection = live.selection.generation;
+        live.confirm_delete = Some(("v1".into(), Instant::now()));
         live.history_filter = HistoryFilter::Screenshots;
         live.refresh_history_selection();
-        assert_eq!(live.selection.id.as_deref(), Some("s1"));
-        assert!(!live.selection.accepts(original_decode));
-        assert!(live.decoded_path.is_none());
+        assert!(live.selection.id.is_none(), "a hidden selection is cleared");
+        assert!(!live.selection.accepts(original_selection));
         assert!(live.confirm_delete.is_none());
+        live.select("s1".into());
 
         live.select("s2".into());
         live.apply(
@@ -6467,11 +6669,13 @@ mod tests {
         assert_eq!(live.history_filter, HistoryFilter::Screenshots);
         assert_eq!(live.selection.id.as_deref(), Some("s2"));
         live.apply(Response::Deleted { id: "s2".into() }, false);
-        assert_eq!(live.selection.id.as_deref(), Some("s1"));
+        assert!(
+            live.selection.id.is_none(),
+            "deletion never selects another card"
+        );
         live.apply(Response::Deleted { id: "s1".into() }, false);
         assert_eq!(live.history_filter, HistoryFilter::Screenshots);
         assert!(live.selection.id.is_none());
-        assert!(!live.preview_loading);
         assert_eq!(
             live.artifacts.len(),
             3,
@@ -6480,6 +6684,7 @@ mod tests {
 
         live.history_filter = HistoryFilter::Gif;
         live.refresh_history_selection();
+        live.select("g1".into());
         assert_eq!(live.selection.id.as_deref(), Some("g1"));
         live.apply(
             Response::History {
@@ -7505,6 +7710,172 @@ mod tests {
         assert!(top_left.y < bottom_right.y);
     }
 
+    /// Drain the startup History/display loads and recovery listing so card
+    /// actions are not blocked by them.
+    fn settle_startup(live: &mut Live) {
+        let (done, barrier) = mpsc::channel();
+        live.tx.send(Job::Barrier(done)).unwrap();
+        barrier.recv_timeout(Duration::from_secs(5)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live.recovery.blocking() && Instant::now() < deadline {
+            let _ = live.recovery.receive();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!live.recovery.blocking());
+        live.rx.try_iter().for_each(drop);
+        live.pending = 0;
+    }
+
+    #[test]
+    fn card_delete_needs_a_second_click_except_missing_recordings() {
+        let root = tempfile::tempdir().unwrap();
+        let screenshot = preview_artifact(root.path(), [10, 20, 30, 255]);
+        let id = screenshot.entry.id.clone();
+        let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
+        live.apply(
+            Response::History {
+                artifacts: load_history(root.path()).unwrap(),
+            },
+            false,
+        );
+        settle_startup(&mut live);
+        live.history_cards.insert(
+            id.clone(),
+            captures_app::history_view::card(&screenshot.entry, false),
+        );
+        let now = Instant::now();
+        live.delete_card(&id, now);
+        assert_eq!(
+            live.confirm_delete
+                .as_ref()
+                .map(|(armed, _)| armed.as_str()),
+            Some(id.as_str())
+        );
+        assert_eq!(live.pending, 0, "the first click only arms deletion");
+        // The shipping revert after four seconds.
+        live.expire_history_confirmations(&egui::Context::default(), now + Duration::from_secs(5));
+        assert!(live.confirm_delete.is_none());
+        live.delete_card(&id, now);
+        live.delete_card(&id, now);
+        assert_eq!(live.pending, 1, "the second click deletes");
+        live.flush();
+        let deleted = live
+            .rx
+            .try_iter()
+            .find_map(|reply| match reply {
+                Reply::Executed { result, .. } => Some(result.unwrap()),
+                _ => None,
+            })
+            .expect("delete response");
+        live.apply(*deleted, true);
+        assert!(live.artifacts.is_empty());
+        assert!(live.confirm_delete.is_none());
+
+        let mut missing = screenshot.entry.clone();
+        missing.id = "missing".into();
+        missing.kind = captures_history::ArtifactKind::Video;
+        live.history_cards.insert(
+            missing.id.clone(),
+            captures_app::history_view::card(&missing, true),
+        );
+        live.delete_card("missing", now);
+        assert!(
+            live.confirm_delete.is_none(),
+            "missing entries are removed at once"
+        );
+        assert_eq!(live.pending, 1);
+    }
+
+    #[test]
+    fn delete_all_arms_then_clears_history() {
+        let root = tempfile::tempdir().unwrap();
+        preview_artifact(root.path(), [10, 20, 30, 255]);
+        let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
+        live.apply(
+            Response::History {
+                artifacts: load_history(root.path()).unwrap(),
+            },
+            false,
+        );
+        settle_startup(&mut live);
+        let now = Instant::now();
+        live.delete_all_history(now);
+        assert_eq!(live.confirm_clear_history, Some(now));
+        assert!(!live.clearing_history);
+        assert_eq!(live.pending, 0);
+        live.delete_all_history(now);
+        assert!(live.confirm_clear_history.is_none());
+        assert!(live.clearing_history);
+        assert_eq!(live.pending, 1);
+        live.flush();
+    }
+
+    #[test]
+    fn thumbnails_are_rejected_or_dropped_when_their_entry_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [10, 20, 30, 255]);
+        let id = artifact.entry.id.clone();
+        let ctx = egui::Context::default();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.apply(
+            Response::History {
+                artifacts: vec![Artifact {
+                    entry: artifact.entry.clone(),
+                    image_path: artifact.image_path.clone(),
+                    preview_path: artifact.preview_path.clone(),
+                }],
+            },
+            false,
+        );
+        assert!(live.history_loaded);
+        live.request_thumbnail(&id);
+        let stale = ThumbnailKey::of(&live.artifacts[0]);
+        // An editor replaced the original: same ID, new dimensions.
+        live.artifacts[0].entry.width += 1;
+        live.invalidate_history_cards();
+        assert!(
+            !live.history_thumbnails.contains_key(&id),
+            "outdated request is dropped"
+        );
+        live.request_thumbnail(&id);
+        live.flush();
+        for reply in live.rx.try_iter().collect::<Vec<_>>() {
+            if let Reply::ThumbnailDecoded {
+                id: reply_id,
+                key,
+                missing,
+                result,
+            } = reply
+            {
+                assert_eq!(reply_id, id);
+                assert!(!missing, "screenshots are never missing");
+                // Deliver both the stale-key and current-key replies.
+                let accepted = live
+                    .history_thumbnails
+                    .get(&reply_id)
+                    .is_some_and(|entry| entry.key == key);
+                assert_eq!(accepted, key != stale);
+                if accepted {
+                    let entry = live.history_thumbnails.get_mut(&reply_id).unwrap();
+                    entry.thumbnail = match result {
+                        Ok(decoded) => crate::history::Thumbnail::Ready(ctx.load_texture(
+                            "test",
+                            decoded.image,
+                            egui::TextureOptions::LINEAR,
+                        )),
+                        Err(_) => crate::history::Thumbnail::Failed,
+                    };
+                }
+            }
+        }
+        assert!(matches!(
+            live.history_thumbnails
+                .get(&id)
+                .map(|entry| &entry.thumbnail),
+            Some(crate::history::Thumbnail::Ready(_))
+        ));
+    }
+
     #[test]
     fn clear_history_drains_at_shutdown_and_invalidates_selected_preview() {
         let root = tempfile::tempdir().unwrap();
@@ -7535,10 +7906,10 @@ mod tests {
             true,
         );
         assert_eq!(live.artifacts.len(), 2);
+        live.select(artifact.entry.id.clone());
         let decoding = live.selection.generation;
-        live.decoded_path = Some(artifact.image_path);
-        live.confirm_delete = Some(artifact.entry.id);
-        live.confirm_clear_history = true;
+        live.confirm_delete = Some((artifact.entry.id, Instant::now()));
+        live.confirm_clear_history = Some(Instant::now());
         live.send(Request::ClearHistory {
             root: root.path().into(),
         });
@@ -7558,10 +7929,8 @@ mod tests {
         assert_eq!(live.history_filter, HistoryFilter::Screenshots);
         assert!(!live.selection.accepts(decoding));
         assert!(live.selection.id.is_none());
-        assert!(live.decoded_path.is_none());
-        assert!(!live.preview_loading);
         assert!(live.confirm_delete.is_none());
-        assert!(!live.confirm_clear_history);
+        assert!(live.confirm_clear_history.is_none());
     }
 
     #[test]

@@ -53,7 +53,7 @@ final class OpenImageTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         controller.openImages([source.path])
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
-            .first?.documentView as? NSTableView)
+            .first?.documentView as? HistoryGridView)
         try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
         try waitUntil { NSApp.windows.contains { $0.title.hasPrefix("Edit screenshot") && $0.isVisible } }
         let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
@@ -166,7 +166,7 @@ final class OpenImageTests: XCTestCase {
             historyRoot: history.path, settingsPath: settingsPath, showPreferences: {})
         defer { withExtendedLifetime(controller) {} }
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
-            .first?.documentView as? NSTableView)
+            .first?.documentView as? HistoryGridView)
         try waitUntil { table.numberOfRows == 2 }
         let loaded = [first, second].sorted { $0.createdAt > $1.createdAt }
         let selectedRow = try XCTUnwrap(loaded.firstIndex { $0.id == second.id })
@@ -283,7 +283,7 @@ final class OpenImageTests: XCTestCase {
             window.makeKeyAndOrderFront(nil)
             controller.openImages(container == "gif" ? ["/unsupported.tiff", source.path] : [source.path])
             let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
-                .first?.documentView as? NSTableView)
+                .first?.documentView as? HistoryGridView)
             try waitUntil { table.numberOfRows == 1 && !controller.externalOpenPending }
             if container == "gif" {
                 XCTAssertTrue(root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
@@ -376,7 +376,7 @@ final class OpenImageTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         controller.openImages([first.path, second.path])
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
-            .first?.documentView as? NSTableView)
+            .first?.documentView as? HistoryGridView)
         try waitUntil { table.numberOfRows == 2 && !controller.externalOpenPending }
         let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
         defer { editor.performClose(nil) }
@@ -436,9 +436,10 @@ final class OpenImageTests: XCTestCase {
         XCTAssertTrue(controller.externalOpenPending)
         XCTAssertFalse(controller.capture(.display), "a global capture shortcut must not race image open")
         XCTAssertFalse(controller.newCapture(), "the global New Capture shortcut shares the gate")
-        XCTAssertFalse(try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }
-            .first { $0.title == "Edit recording" }).isEnabled,
-            "the empty-History editor action stays disabled during the import")
+        let importing = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
+            .first?.documentView as? HistoryGridView)
+        XCTAssertEqual(importing.numberOfRows, 0)
+        XCTAssertFalse(importing.enabled, "History card actions stay disabled during the import")
         transport.releaseFirstOpen.signal()
         try waitUntil { transport.requests.count == 3 && !controller.externalOpenPending }
         XCTAssertTrue(controller.prepareEditorForTermination())
@@ -449,7 +450,7 @@ final class OpenImageTests: XCTestCase {
         XCTAssertEqual(requests[0]["open_artifact_ids"] as? [String], [])
         XCTAssertEqual(requests[1]["open_artifact_ids"] as? [String], [])
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
-            .first?.documentView as? NSTableView)
+            .first?.documentView as? HistoryGridView)
         XCTAssertEqual(table.numberOfRows, 1)
         XCTAssertEqual(table.selectedRow, 0)
         let artifacts = try XCTUnwrap(AppBridge().request([
@@ -487,7 +488,7 @@ final class OpenImageTests: XCTestCase {
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
-            .first?.documentView as? NSTableView)
+            .first?.documentView as? HistoryGridView)
         try waitUntil { table.numberOfRows == 2 }
         controller.openImages([png.path])
         try waitUntil { transport.firstOpenStarted.wait(timeout: .now()) == .success }
@@ -519,7 +520,7 @@ final class OpenImageTests: XCTestCase {
             showPreferences: {})
         defer { withExtendedLifetime(controller) {} }
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
-            .first?.documentView as? NSTableView)
+            .first?.documentView as? HistoryGridView)
         try waitUntil { transport.operations.contains("history") }
         // Wait for the first History callback, not just its worker response.
         try waitUntil { !controller.externalOpenPending && table.numberOfRows == 0 }

@@ -214,6 +214,34 @@ add `--target-shortcuts` to exercise target keys, window clearing/reselection,
 same-selector identity, keyboard auto-start suppression and countdown isolation.
 This is not hardware or physical multi-display acceptance.
 
+## Capture History
+
+The live workspace renders History like the shipping `CaptureHistory` window:
+an "On this device" / **Capture History** header with the 30-day lede, counted
+All/Screenshots/Video/GIF filter pills (hidden while History is empty), the
+**Interrupted recordings** card, and an auto-fill grid of cards (minimum 252 pt,
+16 pt gaps, 168 pt thumbnail). Each card shows the thumbnail (`contain` fit),
+date ("Sep 26, 2026, 3:04 PM" in local time), "W × H · size" plus duration for
+recordings, and dropped-frame warnings. Screenshots offer **Edit** and **Save
+image**, recordings **Edit** and **Save file**; after export the second action
+becomes **Show in Folder**. Clicking the thumbnail opens the editor. A recording
+whose media is gone shows **File missing**, no actions, and is removed with one
+click. Otherwise the trash control arms **Delete forever** for four seconds and
+deletes on the second click. Secondary click lists the card's commands, including
+**Copy image** for screenshots. Loading, empty ("No captures yet") and load/delete
+error states use the shipping copy.
+
+Copy, card details, actions, the missing-media rule and grid metrics come from
+`captures_app::history_view`; AppKit reads them through the `history_copy`,
+`history_cards` and `history_grid` settings operations. Both hosts virtualize
+cards by row and decode thumbnails off the UI thread with bounded residency.
+Unlike shipping, History never selects a card on load; an explicit selection
+(click, arrow keys, a new capture or import) shows the accent ring, arrow keys
+move it, Return opens it and Escape backs out of an armed deletion. Shipping's
+**Restore** (reopen a floating preview) is not connected: the native workspace
+keeps Save/Show in Folder instead. The workspace also keeps its native capture
+controls above the grid; the window is not resizable on macOS.
+
 ## Live display-capture slice
 
 Launch with `--live [--history-root PATH]` on either native host. This is an
@@ -231,11 +259,12 @@ overwriting an unrelated file. Repeat Save reuses the existing export; a missing
 export can be recreated from history. History always retains the lossless PNG.
 JPEG composites alpha onto white; WebP saves losslessly, using the same encoders
 as the shipping application. Deleting history preserves all exported formats.
-**Clear history…** requires confirmation and deletes the workspace's screenshot,
-video and GIF history copies, including entries outside the selected filter.
-It leaves exported files, recording recovery drafts and other history roots untouched.
-Cancel leaves history unchanged. Both hosts reload after a failure, including
-partial deletion, and keep the error visible. This also works with existing
+**Delete all** arms **Delete all forever** (with Cancel) for four seconds; the
+second click deletes the workspace's screenshot, video and GIF history copies,
+including entries outside the selected filter. It leaves exported files, recording
+recovery drafts and other history roots untouched. Cancel, Escape or the timeout
+leave history unchanged. Both hosts reload after a failure, including partial
+deletion, and keep the error visible. This also works with existing
 local history on Wayland; the live capture restriction is separate.
 Captures not deleted remain available on reopening the workspace.
 

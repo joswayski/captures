@@ -90,6 +90,7 @@ pub unsafe extern "C" fn captures_recording_info_v1(request_json: *const c_char)
                         let directory = captures_history::entry_directory(&root, &entry.id).ok()?;
                         let media_path = entry.recording_media_path(&root)?;
                         Some(json!({
+                            "missing": !media_path.is_file(),
                             "entry": entry,
                             "media_path": media_path,
                             "preview_path": directory.join(captures_history::HISTORY_PREVIEW_FILE),

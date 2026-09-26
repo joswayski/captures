@@ -58,6 +58,12 @@ def main():
                 "mousemove_relative", "--sync", "1", "0",
                 "sleep", ".15", "mousedown", "1", "sleep", ".15", "mouseup", "1")
 
+        def published(history):
+            # A History publish renames a hidden staging directory into place;
+            # count only published entries.
+            return [path for path in history.glob("*/metadata.json")
+                    if not path.parent.name.startswith(".")]
+
         try:
             server = spawn(["Xvfb", "-displayfd", "1", "-screen", "0", "1280x900x24", "-nolisten", "tcp"], True)
             env["DISPLAY"] = ":" + server.stdout.readline().decode().strip()
@@ -80,17 +86,17 @@ def main():
                 time.sleep(1)
                 run("import", "-window", window, str(output / f"onboarding-{appearance}.png"))
                 assert not settings.exists(), "checking first run completed/wrote settings"
-                assert not list(history.glob("*/metadata.json")), "cold media imported before setup"
+                assert not published(history), "cold media imported before setup"
                 secondary = subprocess.run(common + ["--", str(forwarded)], env=env, capture_output=True, timeout=15)
                 assert secondary.returncode == 0, secondary.stderr
                 run("xdotool", "key", "super+shift+s")
                 time.sleep(.4)
-                assert not list(history.glob("*/metadata.json")), "capture/forwarding bypassed setup"
+                assert not published(history), "capture/forwarding bypassed setup"
                 assert len(windows(app.pid, ".*")) == 1, "capture selector/editor opened before setup"
                 click(window, 732, 476)  # Start capturing, right-aligned under the cards.
                 wait(lambda: settings.exists() and json.loads(settings.read_text()).get("onboarding_completed"),
                      "setup completion persisted")
-                wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "queued cold and forwarded media imported")
+                wait(lambda: len(published(history)) == 2, "queued cold and forwarded media imported")
                 # Shipping launch notice: nonactivating, titled like the Tauri
                 # window, anchored top-right without an X11 tray rect, dismissible.
                 notice = wait(lambda: windows(app.pid, "^Captures is running$"), "launch notice after setup")[0]
@@ -116,7 +122,7 @@ def main():
                 accepted_settings = settings.read_bytes()
                 recovery_media = root / "during permission recovery.png"
                 recovery_media.write_bytes(png(19, 9))
-                click(window, 835, 126)  # Capture permissions, without an OS prompt.
+                click(window, 859, 171)  # Capture permissions in the History header, without an OS prompt.
                 time.sleep(.5)
                 secondary = subprocess.run(common + ["--", str(recovery_media)], env=env,
                                            capture_output=True, timeout=15)
@@ -124,14 +130,14 @@ def main():
                 click(window, 196, 18)  # Navigation behind the dialog stays disabled.
                 run("xdotool", "key", "super+shift+s")
                 time.sleep(.5)
-                assert len(list(history.glob("*/metadata.json"))) == 2, "recovery imported queued media"
+                assert len(published(history)) == 2, "recovery imported queued media"
                 assert len(windows(again.pid, ".*")) == 1, "recovery launched capture/editor"
                 run("import", "-window", window, str(output / f"permission-recovery-{appearance}.png"))
                 click(window, 546, 449)  # Refresh status (secondary) is prompt-free and does not complete setup.
                 time.sleep(.4)
                 assert settings.read_bytes() == accepted_settings, "recovery changed setup/settings"
                 click(window, 681, 449)  # Done (primary card action), including when no upfront permission is required.
-                wait(lambda: len(list(history.glob("*/metadata.json"))) == 3, "recovery releases queued media")
+                wait(lambda: len(published(history)) == 3, "recovery releases queued media")
                 assert recovery_media.read_bytes() == png(19, 9), "recovery changed the input"
                 time.sleep(1)
                 click(window, 196, 18)  # Real Preferences navigation, absent on setup.

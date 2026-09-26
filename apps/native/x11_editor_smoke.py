@@ -349,6 +349,40 @@ def main():
         type_text(stem, 30)
         run("xdotool", "key", "Return", "sleep", ".3")
 
+    # Toolbar row button centers at y=62, measured under the shipping token
+    # font stack (egui's default font packed the row about 10% narrower).
+    # Without an Output tab the row also fits the 760px minimum unwrapped.
+    toolbar_x = {"undo": 37, "redo": 102, "save-draft": 184, "discard": 298,
+                 "geometry": 425, "layers": 511, "import": 615, "draw": 715}
+
+    def toolbar_click(name):
+        click(editor, toolbar_x[name], 62)
+
+    # Draw tool grid centers (inspector x, window y) under the token fonts.
+    # The wider labels wrap the twelve tools onto five rows instead of four.
+    draw_tool_points = {
+        "text": (34, 132), "rectangle": (111, 132),
+        "ellipse": (41, 176), "line": (108, 176), "arrow": (172, 176),
+        "pen": (33, 220), "wand": (95, 220), "erase": (163, 220),
+        "restore": (45, 264), "triangle": (127, 264),
+        "diamond": (50, 308), "star": (125, 308),
+    }
+
+    def draw_tool(name):
+        inspector_click(*draw_tool_points[name])
+
+    def draw_row(y):
+        # Draw rows authored below the historical four-row tool grid.
+        return y + 44
+
+    # Right-aligned title-bar zoom controls, as offsets from the window's right
+    # edge under the token fonts. Slider ends are the track's first/last pixels.
+    topbar_offset = {"slider-min": 462, "slider-max": 336, "fit": 308, "zoom": 232,
+                     "minus": 159, "plus": 116, "recenter": 49}
+
+    def topbar_click(name):
+        click(editor, editor_width() - topbar_offset[name], 18)
+
     def inspector_move(x, y, *tail):
         run("xdotool", "mousemove", "--window", editor, str(inspector_x(x)), str(y), *tail)
 
@@ -501,7 +535,7 @@ def main():
             shot(root, "history")
         else:
             shot(root, "history")
-            click(root, 810, 191)
+            click(root, 105, 546)  # First History card: Edit.
             editor = wait(lambda: windows("Screenshot editor"), "screenshot editor")[0]
         run("xdotool", "windowmove", "--sync", editor, "100", "80")
         time.sleep(1)
@@ -532,7 +566,7 @@ def main():
             def attempt():
                 # Save is idempotent; an edit can still be queued while X11
                 # exposes the prior idle title. Never retry a non-idempotent edit.
-                click(editor, 170, 62)
+                toolbar_click("save-draft")
                 return predicate()
             wait(attempt, description)
             # The manifest is written before the worker's UI snapshot arrives.
@@ -550,9 +584,20 @@ def main():
             run("xdotool", "keydown", "Alt_L", "sleep", ".1", "key", "F4",
                 "sleep", ".1", "keyup", "Alt_L", "sleep", ".4")
 
-        def reopen():
+        def history_edit_point(edit_y=546):
+            # History cards are newest first in a three-column grid (1000 px root,
+            # 24 px padding, 16 px gaps). Edit is the left action of the card body.
+            entries = sorted((json.loads(path.read_text()) for path in history.glob("*/metadata.json")
+                              if not path.parent.name.startswith(".")),
+                             key=lambda entry: entry["created_at"], reverse=True)
+            index = [entry["id"] for entry in entries].index(artifact_id)
+            assert index < 3, "the edited capture must be in the first History row"
+            card_width = (952 - 2 * 16) / 3
+            return round(24 + index * (card_width + 16) + 12 + (card_width - 24 - 6) / 4), edit_y
+
+        def reopen(edit_y=546):
             export_bar["open"] = False  # Every editor window starts collapsed.
-            click(root, 810, 191)
+            click(root, *history_edit_point(edit_y))  # The original capture's History card: Edit.
             window = wait(lambda: windows("Screenshot editor"), "reopened editor")[0]
             run("xdotool", "windowmove", "--sync", window, "100", "80")
             time.sleep(.6)
@@ -586,8 +631,8 @@ def main():
             document_pixel("external-image-opened", 500, 250, (46, 158, 113))
             document_pixel("external-image-opened", 20, 20, (40, 110, 166))
             assert not draft.exists(), "opening/focusing must not create edit drafts"
-            click(editor, 666, 62)
-            inspector_click(105, 133)
+            toolbar_click("draw")
+            draw_tool("rectangle")
             drag((320, 250), (480, 370))
             save_layers(lambda values: len(values) == 2, "external image edit is a real draft")
             preserved_draft = draft.read_bytes()
@@ -632,10 +677,11 @@ def main():
             assert not windows("Screenshot editor"), "saved draft blocks source reload"
             assert draft.read_bytes() == preserved_draft
             shot(root, "external-draft-blocked")
-            editor = reopen()  # The existing History route still restores the saved edit.
+            # The open error banner above the grid moves the cards 60px lower.
+            editor = reopen(606)  # The existing History route still restores the saved edit.
             shot(editor, "external-draft-restored")
             assert len(layers()) == 2
-            click(editor, 270, 62)
+            toolbar_click("discard")
             click(editor, 55, 128)
             wait(lambda: not draft.exists(), "explicitly discard the saved draft")
             close(root)
@@ -685,7 +731,7 @@ def main():
             run("xdotool", "key", "r", "sleep", ".2")
             drag((300, 220), (380, 300))
             first = save_layers(lambda values: len(values) == 2, "first combine layer")[-1]
-            click(editor, 463, 62)
+            toolbar_click("layers")
             inspector_click(15, 300)
             save_layers(lambda values: len(values) == 2 and not values[-1]["visible"],
                         "hidden combine fixture")
@@ -700,7 +746,7 @@ def main():
 
             # A context action belongs to its clicked row, not to the previous
             # selection. Select the second row, then merge the top row downward.
-            click(editor, 463, 62)
+            toolbar_click("layers")
             inspector_click(100, 202)
             inspector_move(100, 158, "sleep", ".2", "mousedown", "3",
                            "sleep", ".15", "mouseup", "3", "sleep", ".3")
@@ -741,12 +787,12 @@ def main():
 
             # Set a real canvas background, then flatten from the same Combine
             # menu. Flatten bakes it, removes hidden slots and locks one image.
-            click(editor, 396, 62)
+            toolbar_click("geometry")
             field(633, "#214365", x=95)
             inspector_click(75, 670)
             save_until(lambda: json.loads(draft.read_text())["document"]["background"] == "#214365",
                        "combine fixture background")
-            click(editor, 463, 62)
+            toolbar_click("layers")
             inspector_click(115, 104)
             inspector_click(120, 214)  # Flatten image.
             flattened = save_layers(lambda values: len(values) == 1, "flatten image")
@@ -766,7 +812,7 @@ def main():
             reopened = layers()
             assert len(reopened) == 1 and reopened[0] == flattened[0]
             assert json.loads(draft.read_text())["document"]["background"] is None
-            click(editor, 463, 62)
+            toolbar_click("layers")
             shot(editor, "combine-flattened-reopened")
 
             resize_editor(760, 540, "sleep", ".3")
@@ -819,7 +865,7 @@ def main():
             click(editor, 28, 313)
             shot(editor, "tool-rail-minimum-arrow")
             resize_editor(1000, 901, "sleep", ".3")
-            click(editor, 270, 62)
+            toolbar_click("discard")
             click(editor, 55, 128)
             wait(lambda: not draft.exists(), "discard rail fixture")
             click(editor, 300, 20)
@@ -841,7 +887,7 @@ def main():
             run("xdotool", "key", "v", "sleep", ".3")
             assert draft.read_bytes() == before_crop, "tool selection/cancellation must not save edits"
             assert save_layers(lambda values: len(values) == 2, "crop cancellation")[-1] == moved
-            click(editor, 270, 62)
+            toolbar_click("discard")
             click(editor, 55, 128)
             wait(lambda: not draft.exists(), "discard tool-key fixture")
             click(editor, 300, 20)  # Leave control focus before selecting a canvas tool.
@@ -851,19 +897,19 @@ def main():
             assert shape["shape"] == "rectangle", shape
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             save_layers(lambda values: len(values) == 1, "keyboard undo")
-            click(editor, 396, 62)
+            toolbar_click("geometry")
             inspector_click(75, 428)
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
             save_layers(lambda values: len(values) == 1, "field focus does not redo document")
-            click(editor, 666, 62)
+            toolbar_click("draw")
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "keyboard redo")[-1] == shape
 
-            click(editor, 396, 62)  # Geometry.
+            toolbar_click("geometry")  # Geometry.
             inspector_click(75, 428)  # Focus canvas width, not a document action.
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "field focus keeps document")[-1] == shape
-            click(editor, 270, 62)  # Open discard confirmation.
+            toolbar_click("discard")  # Open discard confirmation.
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             click(editor, 190, 128)  # Toolbar confirmation: cancel discard.
             assert save_layers(lambda values: len(values) == 2, "confirmation owns shortcuts")[-1] == shape
@@ -871,7 +917,7 @@ def main():
             save_layers(lambda values: len(values) == 1, "document shortcut restored after dialog")
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "redo after dialog")[-1] == shape
-            click(editor, 463, 62)  # Layers; select the restored shape, not the original.
+            toolbar_click("layers")  # Layers; select the restored shape, not the original.
             inspector_click(100, 158)
             run("xdotool", "key", "ctrl+d", "sleep", ".3")
             copied = save_layers(lambda values: len(values) == 3, "keyboard duplicate")[-1]
@@ -892,13 +938,13 @@ def main():
                 run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 3, "undo nudges exactly")[-1] == copied
             inspector_click(100, 158)  # Restore the copy selection after Undo.
-            click(editor, 396, 62)
+            toolbar_click("geometry")
             inspector_click(75, 428)
             run("xdotool", "key", "ctrl+d", "Delete", "Left", "shift+Up", "sleep", ".3")
             run("xdotool", "key", "p", "c", "r", "sleep", ".3")
             shot(editor, "shortcut-field-keeps-tool-letters")
             assert save_layers(lambda values: len(values) == 3, "field protects layer shortcuts")[-1] == copied
-            click(editor, 463, 62)
+            toolbar_click("layers")
             run("xdotool", "key", "Delete", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "Delete removes selected copy")[-1] == shape
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
@@ -945,7 +991,7 @@ def main():
             editor = reopen()
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 3, "reopen has no layer clipboard")[-1] == pasted_twice
-            click(editor, 463, 62)
+            toolbar_click("layers")
             before_menu = draft.read_bytes()
             inspector_move(100, 202, "sleep", ".2", "mousedown", "3",
                            "sleep", ".15", "mouseup", "3", "sleep", ".3")
@@ -992,8 +1038,8 @@ def main():
 
         if args.overwrite_only:
             run("xdotool", "windowsize", "--sync", editor, "1000", "1100")
-            click(editor, 666, 62)
-            inspector_click(105, 133)
+            toolbar_click("draw")
+            draw_tool("rectangle")
             drag((320, 250), (480, 370))
             save_layers(lambda values: len(values) == 2, "edited original fixture")
             saved_draft = draft.read_bytes()
@@ -1021,10 +1067,10 @@ def main():
             assert len(list(history.glob("*/metadata.json"))) == 1
             assert draft.read_bytes() == saved_draft
             replaced = source_export.read_bytes()
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "undo preserved after output")
             assert source_export.read_bytes() == replaced
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save_layers(lambda values: len(values) == 2, "redo preserved after output")
 
             # "Save as new file" suggests an -edited name beside the source and never touches it.
@@ -1040,7 +1086,7 @@ def main():
             assert copy_entry["saved_path"] == str(copy_path)
             shot(editor, "overwrite-new-file-saved")
             # The saved copy becomes the file Save overwrites, as in the shipping app.
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "undo before saving the adopted copy")
             copied_before = copy_path.read_bytes()
             export_click("save")
@@ -1049,7 +1095,7 @@ def main():
             assert source_export.read_bytes() == replaced
             entries = {json.loads(path.read_text())["id"] for path in history.glob("*/metadata.json")}
             assert entries == {artifact_id, copy_entry["id"]}
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save_layers(lambda values: len(values) == 2, "redo after saving the adopted copy")
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             inspector_move(180, 400, "click", "--repeat", "25", "5")
@@ -1076,7 +1122,7 @@ def main():
 
         if args.rotation_snap_only:
             resize_editor(1000, 1001)
-            click(editor, 463, 62)
+            toolbar_click("layers")
             inspector_click(79, 300)  # Unlock the original image for canvas rotation.
             save_layers(lambda values: not values[0]["locked"], "unlocked original")
             shot(editor, "rotation-snap-controls")
@@ -1104,9 +1150,9 @@ def main():
             yellow_document = (320 - 170 * math.cos(angle) + 50 * math.sin(angle),
                                180 - 170 * math.sin(angle) - 50 * math.cos(angle))
             document_pixel("rotation-snap-committed", *yellow_document, (229, 179, 68))
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: values[0].get("rotation", 0) == 0, "custom rotation undo")
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save_layers(lambda values: math.isclose(values[0].get("rotation", 0), angle, abs_tol=1e-12),
                         "custom rotation redo")
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
@@ -1116,7 +1162,7 @@ def main():
             wait(lambda: not windows("Screenshot editor"), "custom rotation closes")
             editor = reopen()
             resize_editor(1000, 1001)
-            click(editor, 463, 62)
+            toolbar_click("layers")
             shot(editor, "rotation-snap-reopened-default")
             assert math.isclose(layers()[0]["rotation"], angle, abs_tol=1e-12)
             document_pixel("rotation-snap-reopened-default", *yellow_document, (229, 179, 68))
@@ -1137,13 +1183,13 @@ def main():
             resize_editor(942, 1001)
             save(640, 360, 0, 0)
             before = draft.read_bytes()
-            click(editor, 666, 62)
-            inspector_click(16, 308)  # Enable the initially disabled closed-shape stroke.
+            toolbar_click("draw")
+            inspector_click(16, draw_row(308))  # Enable the initially disabled closed-shape stroke.
             shot(editor, "drawing-default-controls")
-            field(382, "#123456", 145)
-            field(426, "13", 77)
-            field(470, "37", 87)
-            field(586, "#abcdef", 145)
+            field(draw_row(382), "#123456", 145)
+            field(draw_row(426), "13", 77)
+            field(draw_row(470), "37", 87)
+            field(draw_row(586), "#abcdef", 145)
             shot(editor, "drawing-custom-controls")
             assert draft.read_bytes() == before, "default controls alone wrote a draft"
 
@@ -1162,13 +1208,13 @@ def main():
             # Independently blend 37% #abcdef / #123456 over the #286ea6 source.
             document_pixel("drawing-styled-committed", 300, 95, (88, 145, 193), 1)
             document_pixel("drawing-styled-committed", 300, 40, (32, 89, 136), 1)
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "one undo removes the new shape")
 
             # A line must stroke despite the retained closed-shape toggle being off.
-            click(editor, 666, 62)
-            inspector_click(16, 308)
-            inspector_click(30, 177)
+            toolbar_click("draw")
+            inspector_click(16, draw_row(308))
+            draw_tool("line")
             shot(editor, "drawing-line-controls")
             start, end = document_point((250, 70)), document_point((370, 70))
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
@@ -1184,10 +1230,10 @@ def main():
             assert line["style"]["fill"] is None and line["style"]["strokeEnabled"] is False
             shot(editor, "drawing-line-committed")
             document_pixel("drawing-line-committed", 300, 70, (32, 89, 136), 1)
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "undo line")
-            click(editor, 666, 62)
-            field(426, "0", 87)  # Open-tool controls have no closed Stroke toggle.
+            toolbar_click("draw")
+            field(draw_row(426), "0", 87)  # Open-tool controls have no closed Stroke toggle.
             start, end = document_point((250, 70)), document_point((370, 70))
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
@@ -1197,18 +1243,18 @@ def main():
             shot(editor, "drawing-zero-opacity")
             document_pixel("drawing-zero-opacity", 300, 70, (40, 110, 166))
 
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "undo invisible line")
-            click(editor, 666, 62)
+            toolbar_click("draw")
             before = draft.read_bytes()
-            field(426, "100", 87)
-            inspector_click(16, 467)  # Line's pre-placement Drop shadow.
+            field(draw_row(426), "100", 87)
+            inspector_click(16, draw_row(467))  # Line's pre-placement Drop shadow.
             shot(editor, "drawing-shadow-controls")
-            field(538, "#f0c040", 145)
-            field(582, "100", 145)
-            field(626, "0", 70)
-            field(670, "-23", 100)
-            field(714, "31", 100)
+            field(draw_row(538), "#f0c040", 145)
+            field(draw_row(582), "100", 145)
+            field(draw_row(626), "0", 70)
+            field(draw_row(670), "-23", 100)
+            field(draw_row(714), "31", 100)
             shot(editor, "drawing-shadow-custom-controls")
             assert draft.read_bytes() == before, "shadow defaults alone wrote a draft"
             start, end = document_point((250, 70)), document_point((370, 70))
@@ -1234,10 +1280,10 @@ def main():
             shot(editor, "drawing-shadow-committed")
             document_pixel("drawing-shadow-committed", 300, 70, (18, 52, 86), 1)
             document_pixel("drawing-shadow-committed", 277, 101, (240, 192, 64), 1)
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "one undo removes drawing and shadow")
-            click(editor, 666, 62)
-            inspector_click(16, 467)
+            toolbar_click("draw")
+            inspector_click(16, draw_row(467))
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
                 *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
@@ -1246,8 +1292,8 @@ def main():
             assert unshadowed["style"]["dropShadowStyle"] == custom, unshadowed
             shot(editor, "drawing-shadow-disabled")
             document_pixel("drawing-shadow-disabled", 277, 101, (40, 110, 166), 1)
-            click(editor, 666, 62)
-            inspector_click(16, 467)
+            toolbar_click("draw")
+            inspector_click(16, draw_row(467))
             shot(editor, "drawing-shadow-retained")
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
@@ -1268,15 +1314,15 @@ def main():
         if args.polygon_only:
             resize_editor(942, 701)
             save(640, 360, 0, 0)
-            click(editor, 666, 62)
+            toolbar_click("draw")
             shot(editor, "polygon-tools")
             ids = []
-            for name, tool_x, start, end, center in [
-                ("triangle", 45, (418, 239), (278, 119), (348, 179)),
-                ("diamond", 125, (598, 289), (498, 129), (548, 209)),
-                ("star", 192, (818, 419), (658, 299), (738, 359)),
+            for name, start, end, center in [
+                ("triangle", (418, 239), (278, 119), (348, 179)),
+                ("diamond", (598, 289), (498, 129), (548, 209)),
+                ("star", (818, 419), (658, 299), (738, 359)),
             ]:
-                inspector_click(tool_x, 265)
+                draw_tool(name)
                 before = draft.read_bytes()
                 transient_start, transient_end = canvas_point(start), canvas_point(end)
                 run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, transient_start),
@@ -1296,9 +1342,9 @@ def main():
                     start[0] - 238, start[1] - 89, end[0] - 238, end[1] - 89)
                 shot(editor, f"polygon-{name}-committed")
                 pixel(f"polygon-{name}-committed", *canvas_point(center), (255, 59, 92))
-                click(editor, 35, 62)
+                toolbar_click("undo")
                 save_layers(lambda values: len(values) == len(ids) + 1, f"{name} undo")
-                click(editor, 98, 62)
+                toolbar_click("redo")
                 save_layers(lambda values: values[-1]["id"] == created["id"], f"{name} redo stable ID")
                 ids.append(created["id"])
             # A convex hull or fan triangulation would incorrectly fill this star notch.
@@ -1338,14 +1384,14 @@ def main():
             exports = output / "exports"
             exports.mkdir()
 
-            def size_export(name, expected, section_x=None):
+            def size_export(name, expected, section=None):
                 wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
                      "settings applied")
                 shot(editor, f"output-size-{name}-settings")
                 path = exports / f"{name}.png"
                 export_filename(name)
-                if section_x is not None:
-                    click(editor, section_x, 62)  # Save does not depend on the inspector section.
+                if section is not None:
+                    toolbar_click(section)  # Save does not depend on the inspector section.
                 export_click("save")
                 wait(path.exists, f"{name} saved")
                 assert run("identify", "-format", "%wx%h", str(path)).decode() == expected
@@ -1361,12 +1407,12 @@ def main():
             shot(editor, "output-size-menu")
             run("xdotool", "key", "Escape", "sleep", ".2")
             setting_menu(54, 1, 4)  # 75%.
-            size_export("75-percent", "480x270", section_x=398)
+            size_export("75-percent", "480x270", section="geometry")
             setting_menu(54, 2, 4)  # 50%.
-            size_export("50-percent", "320x180", section_x=477)
+            size_export("50-percent", "320x180", section="layers")
             setting_menu(54, 3, 4)  # Custom starts from 640x360, locked.
             setting_field(237, 96)
-            size_export("locked", "96x54", section_x=666)
+            size_export("locked", "96x54", section="draw")
             setting_click(372)  # Unlock aspect.
             setting_field(307, 31)
             size_export("unlocked", "96x31")
@@ -1385,7 +1431,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "output-size-minimum")
             export_settings(False)
-            click(editor, 666, 62)  # Draw fits the toolbar at minimum width; no scrolling.
+            toolbar_click("draw")  # Minimum width: no Output tab or scrolling.
             # xclip forks a selection owner; do not capture its inherited stdout pipe.
             subprocess.run(["xclip", "-selection", "clipboard", "/dev/null"], env=env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=10)
@@ -1475,8 +1521,8 @@ def main():
             save_layers(lambda values: len(values) == 1, "composition baseline")
 
             def begin_input(point):
-                click(editor, 666, 62)
-                inspector_click(34, 128)
+                toolbar_click("draw")
+                draw_tool("text")
                 click(editor, *document_point(point))
 
             before = draft.read_bytes()
@@ -1604,8 +1650,8 @@ def main():
         if args.text_defaults_only:
             resize_editor(1000, 1001)
             save_layers(lambda values: len(values) == 1, "baseline draft before Text defaults")
-            click(editor, 666, 62)
-            inspector_click(34, 128)
+            toolbar_click("draw")
+            draw_tool("text")
             shot(editor, "text-defaults-initial")
             fixture_click((488, 289))  # Default Rounded box centered at document (480,200).
             type_text("Rounded")
@@ -1619,26 +1665,26 @@ def main():
             fixture_click((28, 109))
             shot(editor, "text-defaults-rounded")
             document_pixel("text-defaults-rounded", 480, 196, (17, 19, 24))
-            click(editor, 666, 62)
+            toolbar_click("draw")
             resize_editor(760, 540)
             shot(editor, "text-defaults-rounded-minimum")
             inspector_move(120, 430, "click", "--repeat", "3", "5", "sleep", ".3")
             shot(editor, "text-defaults-rounded-minimum-controls")
             inspector_move(120, 430, "click", "--repeat", "10", "4", "sleep", ".3")
             resize_editor(1000, 1001)
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "default rounded creation single undo")
             before = draft.read_bytes()
-            click(editor, 666, 62)
-            inspector_click(34, 128)
-            inspector_click(95, 337)
+            toolbar_click("draw")
+            draw_tool("text")
+            inspector_click(95, draw_row(337))
             shot(editor, "text-defaults-menu")
-            inspector_move(60, 506,
+            inspector_move(60, draw_row(506),
                 "click", "--repeat", "5", "5", "sleep", ".2")
             shot(editor, "text-defaults-menu-scrolled")
-            inspector_click(60, 499)  # Mono box, before Rounded box.
-            field(381, 37.5, x=59)
-            field(452, "#2367ab", x=105)
+            inspector_click(60, draw_row(499))  # Mono box, before Rounded box.
+            field(draw_row(381), 37.5, x=59)
+            field(draw_row(452), "#2367ab", x=105)
             shot(editor, "text-defaults-staged")
             assert draft.read_bytes() == before, "defaults must not write a draft"
             fixture_click((208, 169))  # Document (200,80), at actual-size scale.
@@ -1654,20 +1700,20 @@ def main():
             fixture_click((28, 109))  # Deselect: the rotation stem crosses the plate sample.
             shot(editor, "text-defaults-created")
             document_pixel("text-defaults-created", 200, 76, (17, 19, 24))
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "styled creation single undo")
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save_layers(lambda values: len(values) == 2 and values[-1]["id"] == text["id"],
                         "styled creation redo")
-            click(editor, 666, 62)
+            toolbar_click("draw")
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "text-defaults-minimum")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "styled Text editor closes")
             editor = reopen()
             resize_editor(1000, 1001)
-            click(editor, 666, 62)
-            inspector_click(34, 128)
+            toolbar_click("draw")
+            draw_tool("text")
             shot(editor, "text-defaults-reopened")
             assert layers()[-1] == text
             fixture_click((408, 269))  # Fresh editor defaults, not saved Mono box/37.5.
@@ -1700,10 +1746,10 @@ def main():
                 inspector_click(x, y + 18)
 
             resize_editor(1000, 1501)
-            click(editor, 666, 62)  # Draw.
-            inspector_click(34, 128)  # Text is the first tool.
-            inspector_click(95, 337)
-            inspector_click(60, 419)  # Standard: test plain glyphs before adding a plate.
+            toolbar_click("draw")  # Draw.
+            draw_tool("text")
+            inspector_click(95, draw_row(337))
+            inspector_click(60, draw_row(419))  # Standard: test plain glyphs before adding a plate.
             fixture_click((200, 250))
             type_text("Text")
             shot(editor, "text-composing")
@@ -1788,25 +1834,25 @@ def main():
                         "saving accepted pixels preserves staged family")
             shot(editor, f"text-family-pending-{args.appearance}")
             text_click(74, 1276)  # Cancel changes; later close must not be blocked.
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: values[-1]["background"] is None
                         and values[-1].get("dropShadow") is True, "undo shadowed plate")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: not values[-1]["outlined"]
                         and values[-1].get("dropShadow") is True, "undo text outline")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: not values[-1].get("dropShadow", False), "undo glyph shadow")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: values[-1]["text"] == "Text" and values[-1]["fontFamily"] == "sans",
                         "text edit undo")
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save_layers(lambda values: values[-1]["text"] == "Readable native text",
                         "text edit redo")
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save_layers(lambda values: values[-1].get("dropShadow") is True, "redo glyph shadow")
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save_layers(lambda values: values[-1]["outlined"], "redo text outline")
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save_layers(lambda values: values[-1]["background"] is not None, "redo shadowed plate")
             before_preset = draft.read_bytes()
             text_click(90, 357)
@@ -1822,8 +1868,8 @@ def main():
             assert text_pixels("text-preset-cancelled", font_field) == text_pixels(
                 f"text-edited-{args.appearance}", font_field), "Cancel restores the font field"
             # Cancel restores this label, not the independently chosen future preset.
-            click(editor, 666, 62)
-            inspector_click(34, 128)
+            toolbar_click("draw")
+            draw_tool("text")
             shot(editor, "text-preset-carried-default")
             fixture_click((488, 389))  # Document (480,300), away from the existing label.
             type_text("Later")
@@ -1835,9 +1881,9 @@ def main():
             assert future["align"] == "center" and not future["roundedBackground"]
             assert future["id"] != created["id"]
             shot(editor, "text-preset-carried-created")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: len(values) == 2, "future label is one undo step")
-            click(editor, 464, 62)
+            toolbar_click("layers")
             text_click(100, 153)  # Restore the original label's selected-text inspector.
             text_click(90, 357)
             text_click(90, 622)
@@ -1847,19 +1893,19 @@ def main():
             for key in ["text", "fontSize", "bold", "italic", "align", "color", "background", "dropShadowStyle"]:
                 assert preset[key] == edited[key], f"preset must preserve {key}"
             shot(editor, f"text-preset-applied-{args.appearance}")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: values[-1]["fontFamily"] == "serif" and values[-1]["outlined"],
                         "named style undo")
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save_layers(lambda values: values[-1]["fontFamily"] == "mono" and not values[-1]["outlined"],
                         "named style redo")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: values[-1]["fontFamily"] == "serif" and values[-1]["outlined"],
                         "restore accepted style for reopen")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "text editor closes")
             editor = reopen()
-            click(editor, 464, 62)  # Layers, with the restored text selected explicitly.
+            toolbar_click("layers")  # Layers, with the restored text selected explicitly.
             text_click(100, 153)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, f"text-minimum-reopened-{args.appearance}")
@@ -1909,18 +1955,18 @@ def main():
             assert json.loads(draft.read_text())["fonts"] == {
                 "families": {"sans": "Captures Shaping Test"}, "assets": ["regular"]}
             resize_editor(942, 701)
-            click(editor, 470, 62)  # Layers.
+            toolbar_click("layers")  # Layers.
             fixture_click((370, 230))  # Select the text plate, including non-ink pixels.
             drag((600, 230), (625, 247))
             save_layers(lambda values: (values[1]["x"], values[1]["y"]) == (275, 57), "text moved")
             shot(editor, "text-moved")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: (values[1]["x"], values[1]["y"]) == (250, 40), "text move undone")
             drag((697, 229), (737, 229))
             save_layers(lambda values: math.isclose(values[1]["width"], 220.2, abs_tol=1e-4)
                         and values[1]["fontSize"] == 80, "text fixed-width side resize")
             shot(editor, "text-resized")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: values[1]["width"] == 180, "text resize undone")
             # The top rotation handle would be outside the canvas; use the lower one.
             drag((578, 375), (428, 229), shift=True)
@@ -1928,7 +1974,7 @@ def main():
                         "text quarter-turn")
             run("xdotool", "mousemove", "0", "0")
             shot(editor, "text-rotated")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: values[1].get("rotation", 0) == 0, "text rotation undone")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "font-backed editor closes")
@@ -1969,12 +2015,12 @@ def main():
             resize_editor(942, 701)
             save(640, 360, 0, 0)
             source = layers()[0]["src"]
-            click(editor, 666, 62)
-            inspector_click(170, 221)  # Restore before the first edit reports a recoverable error.
+            toolbar_click("draw")
+            draw_tool("restore")  # Restore before the first edit reports a recoverable error.
             fixture_click((108, 189))
             shot(editor, "brush-restore-error")
             save_layers(lambda values: values[0]["src"] == source, "restore without original is atomic")
-            inspector_click(101, 221)  # Erase; keep shipping diameter/softness defaults.
+            draw_tool("erase")  # Erase; keep shipping diameter/softness defaults.
             shot(editor, "brush-controls")
             before = draft.read_bytes()
             brush_start = fixture_point((108, 189))
@@ -2004,11 +2050,11 @@ def main():
             asset_pixel(erased, 2, 1, (40, 110, 166, 255))
             shot(editor, "brush-erased")
             assert brush_pixel("brush-active") == brush_pixel("brush-erased"), "live erase matches committed transparency"
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: values[0]["src"] == source, "one-step brush undo")
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save_layers(lambda values: values[0]["src"] == erased["src"], "brush redo")
-            inspector_click(170, 221)
+            draw_tool("restore")
             before = draft.read_bytes()
             start, end = fixture_point((108, 189)), fixture_point((208, 229))
             run("xdotool", "mousemove", "--window", editor, *map(str, start), "mousedown", "1",
@@ -2024,15 +2070,15 @@ def main():
             assert restored["originalSrc"] == source
             asset_pixel(restored, 150, 120, (229, 179, 68, 255))
             shot(editor, "brush-restored")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: values[0]["src"] == erased["src"], "undo restore")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "brush draft closes")
             editor = reopen()
             asset_pixel(layers()[0], 150, 120, (0, 0, 0, 0))
             resize_editor(942, 701)
-            click(editor, 666, 62)
-            inspector_click(101, 221)
+            toolbar_click("draw")
+            draw_tool("erase")
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "brush-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
@@ -2060,8 +2106,8 @@ def main():
             resize_editor(942, 701)
             save(640, 360, 0, 0)
             source = layers()[0]["src"]
-            click(editor, 666, 62)
-            inspector_click(36, 221)
+            toolbar_click("draw")
+            draw_tool("wand")
             shot(editor, "wand-controls")
             # Pick authored document point (100,100). Original capture stays locked.
             fixture_click((108, 189))
@@ -2075,13 +2121,13 @@ def main():
             fixture_click((108, 189))  # Transparent seed fails; must not create a new asset.
             shot(editor, "wand-no-match")
             save_layers(lambda values: values[0]["src"] == edited["src"], "no-match preserves pixels")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: values[0]["src"] == source, "wand undo")
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save_layers(lambda values: values[0]["src"] == edited["src"], "wand redo")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_layers(lambda values: values[0]["src"] == source, "undo before global removal")
-            inspector_click(128, 308)  # Disable Contiguous below the four tool rows.
+            inspector_click(150, draw_row(308))  # Disable Contiguous below the tool rows.
             fixture_click((108, 189))
             global_edit = save_layers(lambda values: values[0]["src"] != source, "global wand")[0]
             asset_pixel(global_edit, 100, 100, (0, 0, 0, 0))
@@ -2093,8 +2139,8 @@ def main():
             editor = reopen()
             asset_pixel(layers()[0], 310, 60, (0, 0, 0, 0))
             resize_editor(942, 701)
-            click(editor, 666, 62)
-            inspector_click(36, 221)
+            toolbar_click("draw")
+            draw_tool("wand")
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "wand-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
@@ -2130,9 +2176,9 @@ def main():
             inspector_click(52, 807)
             save(640, 360, 0, 0)
             shot(editor, "trim-applied")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save(720, 420, 0, 0)
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save(640, 360, 0, 0)
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "trim draft closes")
@@ -2189,9 +2235,9 @@ def main():
             inspector_click(75, 670 + 27)
             save_until(lambda: background_is(None), "transparent canvas background")
             shot(editor, "background-transparent")
-            click(editor, 35, 62)
+            toolbar_click("undo")
             save_until(lambda: background_is("#214365"), "undo canvas background")
-            click(editor, 98, 62)
+            toolbar_click("redo")
             save_until(lambda: background_is(None), "redo canvas background")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "background draft closes")
@@ -2254,17 +2300,17 @@ def main():
               zoom_probe[1] + 40, (46, 158, 113))
         assert not draft.exists(), "settled pan must not enqueue an edit"
         # Recenter keeps zoom; Fit restores the historical fixture geometry.
-        click(editor, 840, 25)
+        topbar_click("recenter")
         shot(editor, f"viewport-recenter-{args.appearance}")
-        click(editor, 590, 18)
+        topbar_click("fit")
         shot(editor, f"viewport-fit-{args.appearance}")
         document_pixel(f"viewport-fit-{args.appearance}", 102, 111, (229, 179, 68))
         document_pixel(f"viewport-fit-{args.appearance}", 72, 111, (40, 110, 166))
-        click(editor, 668, 18)
+        topbar_click("zoom")
         shot(editor, "viewport-presets-menu")
         click(editor, 660, 145)  # 100% preset, without a custom row.
         shot(editor, "viewport-actual-button")
-        click(editor, 778, 18)  # + (1.25x)
+        topbar_click("plus")  # 1.25x
         shot(editor, "viewport-125-button")
         run("xdotool", "key", "ctrl+0", "sleep", ".3")
         shot(editor, "viewport-actual-key")
@@ -2282,7 +2328,7 @@ def main():
         shot(editor, "viewport-field-key")
         assert viewport_pixels("viewport-field-key") == viewport_pixels("viewport-actual-button")
         run("xdotool", "key", "Escape")
-        click(editor, 668, 18)
+        topbar_click("zoom")
         click(editor, 660, 101)  # 50% preset.
         shot(editor, "viewport-preset-50")
         # 640×360 at 50% is 320×180, centered in the 584×603 viewport.
@@ -2293,18 +2339,18 @@ def main():
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
         pixel("viewport-preset-50", 516, 310,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
-        click(editor, 668, 18)
+        topbar_click("zoom")
         click(editor, 660, 189)  # 200% preset.
         shot(editor, "viewport-preset-200")
         run("xdotool", "key", "ctrl+0", "ctrl+equal", "ctrl+equal", "sleep", ".3")
         shot(editor, "viewport-preset-custom")
-        click(editor, 668, 18)
+        topbar_click("zoom")
         shot(editor, "viewport-presets-custom-menu")
         click(editor, 660, 233)  # 200% now follows the custom percentage row.
         shot(editor, "viewport-preset-200-from-custom")
         assert viewport_pixels("viewport-preset-200") == viewport_pixels("viewport-preset-200-from-custom")
         assert viewport_pixels("viewport-preset-50") != viewport_pixels("viewport-preset-200")
-        click(editor, 668, 18)
+        topbar_click("zoom")
         click(editor, 660, 57)  # Fit removes the custom row and resets pan.
         shot(editor, "viewport-preset-fit")
         assert viewport_pixels("viewport-preset-fit") == viewport_pixels(f"viewport-fit-{args.appearance}")
@@ -2313,12 +2359,12 @@ def main():
             "mouseup", "2", "sleep", ".3")
         shot(editor, "viewport-fit-panned")
         assert viewport_pixels("viewport-fit-panned") != viewport_pixels("viewport-preset-fit")
-        click(editor, 668, 18)
+        topbar_click("zoom")
         click(editor, 660, 57)  # Reselecting Fit must reset pan even when already selected.
         shot(editor, "viewport-preset-fit-reselected")
         assert viewport_pixels("viewport-preset-fit-reselected") == viewport_pixels("viewport-preset-fit")
         assert not draft.exists(), "toolbar zoom must remain outside draft state"
-        click(editor, 590, 18)  # Fit also cancels any viewport gesture and restores coordinates.
+        topbar_click("fit")  # Fit also cancels any viewport gesture and restores coordinates.
         if args.zoom_only:
             # With spare width AND height, Fit keeps the 640×360 source at 1×.
             # An uncapped fit would paint beyond both independently checked edges.
@@ -2337,11 +2383,11 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "540",
                 "key", "ctrl+0", "ctrl+equal", "ctrl+equal", "sleep", ".3")
             shot(editor, "viewport-preset-custom-minimum")
-            click(editor, 542, 18)
+            topbar_click("zoom")
             shot(editor, "viewport-presets-custom-menu-minimum")
             run("xdotool", "key", "Escape")
-            click(editor, 465, 18)  # Fit resets the viewport-center anchor.
-            click(editor, 311, 18)  # Left end of the logarithmic slider: 5%.
+            topbar_click("fit")  # Fit resets the viewport-center anchor.
+            topbar_click("slider-min")  # Left end of the logarithmic slider: 5%.
             shot(editor, "viewport-slider-minimum")
             # The toolbar and export bar leave x=64..522, y=89..452, center
             # (293,270.5). The 5% source is 32×18, starting at (277,261.5).
@@ -2349,7 +2395,7 @@ def main():
             pixel("viewport-slider-minimum", 276, 263, surface)
             pixel("viewport-slider-minimum", 309, 263, surface)
             pixel("viewport-slider-minimum", 278, 279, surface)
-            click(editor, 437, 18)  # Right end: 800%, preserving the same anchor.
+            topbar_click("slider-max")  # Right end: 800%, preserving the same anchor.
             shot(editor, "viewport-slider-maximum")
             pixel("viewport-slider-maximum", 66, 150, (40, 110, 166))
             pixel("viewport-slider-maximum", 520, 450, (40, 110, 166))
@@ -2372,8 +2418,8 @@ def main():
             return
         # Preserve a pixel-aligned 640px viewport beside the new 56px rail.
         resize_editor(942, 701)
-        click(editor, 666, 62)
-        inspector_click(154, 177)  # Pen follows Arrow on the second tool row.
+        toolbar_click("draw")
+        draw_tool("pen")
         fixture_move((88, 329), "mousedown", "1", "sleep", ".2")
         for point in [(378, 209), (438, 329), (518, 249)]:
             x, y = canvas_point(point)
@@ -2402,7 +2448,7 @@ def main():
         assert dot["kind"] == "path" and len(dot["points"]) == 1
         shot(editor, "freehand-dot")
         fixture_pixel("freehand-dot", 470, 420, (255, 59, 92))
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save_layers(lambda values: len(values) == 2, "freehand dot undo")
         before_cancel = draft.read_bytes()
         cancel_start = fixture_point((170, 400))
@@ -2411,7 +2457,7 @@ def main():
             "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, cancel_end),
             "sleep", ".2", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
         assert draft.read_bytes() == before_cancel
-        click(editor, 98, 62)
+        toolbar_click("redo")
         assert save_layers(lambda values: len(values) == 3, "cancel preserves freehand redo")[-1]["id"] == dot["id"]
         drag((320, 500), (420, 560))
         outside = save_layers(lambda values: len(values) == 4, "outside freehand stroke")[-1]
@@ -2431,14 +2477,14 @@ def main():
         fixture_pixel("freehand-reopened", 141, 254, (255, 59, 92))
         assert layers()[1]["id"] == curve["id"] and layers()[1]["points"] == curve["points"]
         assert (artifact / "capture.png").read_bytes() == original
-        click(editor, 275, 62)
+        toolbar_click("discard")
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "discard freehand edits")
 
         resize_editor(942, 701)
-        click(editor, 666, 62)
+        toolbar_click("draw")
         shot(editor, "open-shape-tools")
-        inspector_click(32, 177)  # Line starts the second tool row.
+        draw_tool("line")
         drag((320, 310), (500, 310))
         horizontal = save_layers(lambda values: len(values) == 2, "horizontal line")[-1]
         assert horizontal["shape"] == "line" and horizontal["style"]["fill"] is None
@@ -2452,7 +2498,7 @@ def main():
         fixture_click((470, 420))
         point_line = save_layers(lambda values: len(values) == 4, "zero-length line click")[-1]
         assert (point_line["x"], point_line["y"]) == (point_line["endX"], point_line["endY"])
-        inspector_click(94, 176)  # Arrow follows Line.
+        draw_tool("arrow")
         before_arrow = draft.read_bytes()
         arrow_start = fixture_point((520, 320))
         arrow_end = fixture_point((350, 190))
@@ -2474,9 +2520,9 @@ def main():
         fixture_pixel("open-shape-arrow", 310, 260, (255, 59, 92))
         drag((500, 400), (502, 400))  # Two screen/document pixels is below the 3px gesture threshold.
         save_layers(lambda values: len(values) == 5, "short arrow cancellation")
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save_layers(lambda values: len(values) == 4, "arrow single undo")
-        click(editor, 98, 62)
+        toolbar_click("redo")
         assert save_layers(lambda values: len(values) == 5, "arrow redo")[-1]["id"] == arrow["id"]
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "open-shape-minimum")
@@ -2488,7 +2534,7 @@ def main():
         fixture_pixel("open-shape-reopened", 435, 255, (255, 59, 92))
         assert layers()[-1]["id"] == arrow["id"]
         assert (artifact / "capture.png").read_bytes() == original
-        click(editor, 275, 62)
+        toolbar_click("discard")
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "discard open-shape edits")
 
@@ -2496,11 +2542,11 @@ def main():
         # preserves the bottom-scrolled form's coordinates; the narrow/minimum-size
         # scroll path is exercised below.
         resize_editor(942, 923)
-        click(editor, 666, 62)
-        inspector_click(105, 133)  # Rectangle follows Text.
+        toolbar_click("draw")
+        draw_tool("rectangle")
         drag((320, 250), (480, 370))
         annotation = save_layers(lambda values: len(values) == 2, "annotation fixture")[-1]
-        click(editor, 463, 62)
+        toolbar_click("layers")
         inspector_click(79, 300)
         save_layers(lambda values: values[-1]["locked"], "locked annotation remains style editable")
         inspector_move(180, 400, "click", "--repeat", "20", "5")
@@ -2520,9 +2566,9 @@ def main():
         save_layers(lambda values: values[-1]["style"]["fill"] == "#23b5a9", "annotation fill")
         shot(editor, "annotation-fill")
         fixture_pixel("annotation-fill", 170, 310, (35, 181, 169))
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "one-step style undo")
-        click(editor, 98, 62)
+        toolbar_click("redo")
         save_layers(lambda values: values[-1]["style"]["fill"] == "#23b5a9", "style redo")
         inspector_click(15, bottom(300))  # Enable stroke, then keep the final controls in view.
         inspector_move(180, 400, "click", "--repeat", "20", "5")
@@ -2577,7 +2623,7 @@ def main():
         fixture_pixel("annotation-reopened", 279, 310, (212, 131, 33), tolerance=1)
         assert layers()[-1]["style"] == styled["style"]
         assert (artifact / "capture.png").read_bytes() == original
-        click(editor, 275, 62)
+        toolbar_click("discard")
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "discard annotation edits")
         resize_editor(1000, 701)
@@ -2588,7 +2634,7 @@ def main():
             "-draw", "rectangle 10,9 39,29", "-fill", "#2d64bd",
             "-draw", "rectangle 88,51 119,79", "-strip", "PNG32:" + str(imported_path))
         imported_bytes = imported_path.read_bytes()
-        click(editor, 573, 62)
+        toolbar_click("import")
         wait(lambda: chooser.pending, "image file picker opened")
         title, options = chooser.calls[-1]
         assert title == "Import image" and not options.get("directory", False)
@@ -2603,14 +2649,14 @@ def main():
         invalid = output / "broken.png"
         invalid.write_text("not an image")
         chooser.selected = invalid
-        click(editor, 573, 62)
+        toolbar_click("import")
         wait(lambda: chooser.pending, "picker after cancellation")
         GLib.idle_add(chooser.respond, False)
         time.sleep(.8)
         shot(editor, "import-decode-error")
         assert draft.read_bytes() == before_import
         chooser.selected = imported_path
-        click(editor, 573, 62)
+        toolbar_click("import")
         wait(lambda: chooser.pending, "retry import")
         GLib.idle_add(chooser.respond, False)
         imported_layers = save_layers(lambda values: len(values) == 2, "imported owned layer")
@@ -2624,7 +2670,7 @@ def main():
         shot(editor, "imported-canvas")
         fixture_pixel("imported-canvas", 293, 468, (60, 179, 113))
         fixture_pixel("imported-canvas", 370, 514, (45, 100, 189))
-        click(editor, 463, 62)
+        toolbar_click("layers")
         inspector_move(180, 400, "click", "--repeat", "25", "4")
         shot(editor, "imported-selected-layer")
         inspector_click(78, 371)
@@ -2639,10 +2685,10 @@ def main():
         inspector_move(180, 400, "click", "--repeat", "12", "4")
         assert imported_path.read_bytes() == imported_bytes
         imported_path.unlink()  # A saved import must no longer depend on its source file.
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save(640, 360, 0, 0)
         assert len(layers()) == 1
-        click(editor, 98, 62)
+        toolbar_click("redo")
         save(640, 440, 0, 0)
         assert layers()[-1]["id"] == imported_id
 
@@ -2668,12 +2714,12 @@ def main():
         # Independently scale the fixture's green center (25,19) from its left edge.
         resized_green = (260 + 25 * resized_width / 120, 360 + 19)
         document_pixel("layer-resize-committed", *resized_green, (60, 179, 113))
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save_layers(lambda values: values[-1]["width"] == 120 and values[-1]["height"] == 80,
                     "undo imported image resize")
         shot(editor, "layer-resize-undone")
         fixture_pixel("layer-resize-undone", 293, 468, (60, 179, 113))
-        click(editor, 98, 62)
+        toolbar_click("redo")
         save_layers(lambda values: math.isclose(values[-1]["width"], resized_width, abs_tol=1e-5),
                     "redo imported image resize")
         close(editor)
@@ -2686,7 +2732,7 @@ def main():
         document_pixel("layer-resize-reopened", *resized_green, (60, 179, 113))
         # Undo history is session-local. Restore through a fresh east-grip resize
         # at 1:1 scale, where the desired edge lands on an exact pointer pixel.
-        click(editor, 463, 62)  # Reopened editors start in Geometry, not Layers.
+        toolbar_click("layers")  # Reopened editors start in Geometry, not Layers.
         inspector_click(100, 158)
         resize_editor(942, 701, "sleep", ".3")
         drag((round(238 + 260 + resized_width), 489), (618, 489))
@@ -2721,11 +2767,11 @@ def main():
         expected_document = (expected_x, expected_y)
         assert tuple(map(round, expected_document)) == (300, 364)
         document_pixel("layer-rotation-shift-result", *expected_document, (60, 179, 113))
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save_layers(lambda values: "rotation" not in values[-1], "undo imported image rotation")
         shot(editor, "layer-rotation-undone")
         fixture_pixel("layer-rotation-undone", 293, 468, (60, 179, 113))
-        click(editor, 98, 62)
+        toolbar_click("redo")
         save_layers(lambda values: math.isclose(values[-1].get("rotation", 0), math.pi / 6,
                                                 abs_tol=1e-12),
                     "redo imported image rotation")
@@ -2738,11 +2784,11 @@ def main():
         assert math.isclose(layers()[-1]["rotation"], math.pi / 6, abs_tol=1e-12)
         assert saved(640, 440, 0, 0)
         # Discard returns to the original capture, without deleting exports or source data.
-        click(editor, 275, 62)
+        toolbar_click("discard")
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "discard imported draft")
         chooser.selected = artifact / "capture.png"
-        click(editor, 573, 62)
+        toolbar_click("import")
         wait(lambda: chooser.pending, "picker before close")
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "picker does not prevent closing")
@@ -2755,7 +2801,7 @@ def main():
 
         # Keep Image transform above the pinned footer while exercising its menu.
         resize_inspector_fixture(1000, 781)
-        click(editor, 463, 62)  # Layers, preserving the Geometry panel's scroll position.
+        toolbar_click("layers")  # Layers, preserving the Geometry panel's scroll position.
         shot(editor, "layers-original-locked")
         inspector_click(88, 632)
         shot(editor, "layers-transform-menu")
@@ -2795,11 +2841,11 @@ def main():
         close(editor)
         editor = reopen()
         resize_inspector_fixture(1000, 781)
-        click(editor, 463, 62)
+        toolbar_click("layers")
         assert_transformed_pixels("layers-transform-reopened", False, True)
         transform(2, "transpose", 360, 640)
         assert_transformed_pixels("layers-flip-horizontal", True, True)
-        click(editor, 36, 62)
+        toolbar_click("undo")
         save_layers(lambda values: values[0].get("orientation") == "rotate-90", "undo flip")
         # Reopening starts a new undo history, so rotate left explicitly restores the photo.
         transform(0, None, 640, 360)
@@ -2807,18 +2853,18 @@ def main():
         assert_transformed_pixels("layers-rotate-left", True, False)
         transform(3, "transpose", 360, 640)
         assert_transformed_pixels("layers-flip-vertical", True, True)
-        click(editor, 36, 62)
+        toolbar_click("undo")
         save_layers(lambda values: values[0].get("orientation") == "rotate-270", "undo vertical flip")
-        click(editor, 36, 62)
+        toolbar_click("undo")
         save_layers(lambda values: values[0].get("orientation") is None, "undo left rotation")
         assert saved(640, 360, 0, 0)
         inspector_click(17, 299)  # A hidden, locked image remains transformable.
         save_layers(lambda values: not values[0]["visible"], "hide original before transform")
         transform(2, "flip-horizontal", 640, 360)
         assert not layers()[0]["visible"]
-        click(editor, 36, 62)
+        toolbar_click("undo")
         save_layers(lambda values: values[0].get("orientation") is None, "undo hidden transform")
-        click(editor, 36, 62)
+        toolbar_click("undo")
         save_layers(lambda values: values[0]["visible"], "restore original visibility")
         assert_transformed_pixels("layers-transform-restored", True, True)
         inspector_click(47, 591)  # Duplicate the locked original, not delete or move it.
@@ -2869,10 +2915,10 @@ def main():
         shot(editor, "layers-canvas-moved-selection")
         fixture_pixel("layers-canvas-moved-selection", 361, 277, (40, 110, 166))
         fixture_pixel("layers-canvas-moved-selection", 137, 307, (229, 179, 68))
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save_layers(lambda values: (values[-1]["x"], values[-1]["y"]) == (190, 70),
                     "undo snapped canvas move")
-        click(editor, 98, 62)
+        toolbar_click("redo")
         save_layers(
             lambda values: all(math.isclose(values[-1][axis], expected, abs_tol=1e-5)
                                for axis, expected in zip(("x", "y"), expected_position)),
@@ -2888,7 +2934,7 @@ def main():
         fixture_pixel("layers-snapped-move-reopened", 137, 307, (229, 179, 68))
         # Reopen starts in Geometry and undo history is intentionally not persisted.
         # Switch to Layers and restore explicitly so downstream fixtures stay stable.
-        click(editor, 463, 62)
+        toolbar_click("layers")
         inspector_click(100, 158)
         field(459, 190)
         field(503, 70)
@@ -2904,7 +2950,7 @@ def main():
         save_layers(lambda values: not values[-1]["visible"], "hidden duplicate")
         shot(editor, "layers-hidden")
         fixture_pixel("layers-hidden", 361, 277, (40, 110, 166))
-        click(editor, 35, 62)  # Undo must restore the rendered half-opacity layer.
+        toolbar_click("undo")  # Undo must restore the rendered half-opacity layer.
         save_layers(lambda values: values[-1]["visible"], "undo visibility")
         shot(editor, "layers-undo-visible")
         fixture_pixel("layers-undo-visible", 361, 277, (134, 144, 117), tolerance=1)
@@ -2925,14 +2971,14 @@ def main():
         save_layers(lambda values: [value["id"] for value in values] == ["capture-background", copy_id, third], "reordered up")
         inspector_click(124, 591)
         save_layers(lambda values: len(values) == 2 and values[-1]["id"] == copy_id, "deleted selected copy")
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save_layers(lambda values: len(values) == 3, "undo deletion")
-        click(editor, 98, 62)
+        toolbar_click("redo")
         save_layers(lambda values: len(values) == 2, "redo deletion")
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "saved layers close")
         editor = reopen()
-        click(editor, 463, 62)
+        toolbar_click("layers")
         shot(editor, "layers-reopened")
         fixture_pixel("layers-reopened", 361, 277, (134, 144, 117), tolerance=1)
         assert layers()[-1]["name"] == long_name
@@ -2949,17 +2995,17 @@ def main():
         inspector_click(124, 591)
         save_layers(lambda values: len(values) == 0, "empty saved document")
         shot(editor, "layers-empty")
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save_layers(lambda values: [value["id"] for value in values] == [copy_id], "undo empty document")
-        click(editor, 275, 62)
+        toolbar_click("discard")
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "discard layer edits")
-        click(editor, 398, 62)  # Geometry has an independent scroll position.
+        toolbar_click("geometry")  # Geometry has an independent scroll position.
 
         # Odd height keeps the centered 1:1 document origin pixel-aligned.
         resize_editor(942, 701)
 
-        click(editor, 666, 62)  # Draw keeps the chosen shape active after each release.
+        toolbar_click("draw")  # Draw keeps the chosen shape active after each release.
         drag((658, 289), (538, 169))
         rectangle = save_layers(lambda values: len(values) == 2, "reverse rectangle")[-1]
         assert rectangle["kind"] == "shape" and rectangle["shape"] == "rectangle"
@@ -2967,13 +3013,13 @@ def main():
         assert rectangle["style"]["fill"] == "#ff3b5c" and not rectangle["style"]["strokeEnabled"]
         shot(editor, "shape-rectangle")
         fixture_pixel("shape-rectangle", 370, 230, (255, 59, 92))
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save_layers(lambda values: len(values) == 1, "single-step shape undo")
         shot(editor, "shape-undone")
         fixture_pixel("shape-undone", 370, 230, (40, 110, 166))
-        click(editor, 98, 62)
+        toolbar_click("redo")
         save_layers(lambda values: len(values) == 2 and values[-1]["id"] == rectangle["id"], "shape redo keeps id")
-        inspector_click(185, 133)  # Ellipse.
+        draw_tool("ellipse")
         drag((608, 349), (778, 399))
         ellipse = save_layers(lambda values: len(values) == 3, "ellipse layer")[-1]
         assert ellipse["shape"] == "ellipse" and ellipse["id"] != rectangle["id"]
@@ -3002,7 +3048,7 @@ def main():
         fixture_pixel("shape-reopened", 370, 230, (255, 59, 92))
         fixture_pixel("shape-reopened", 463, 374, (255, 59, 92))
         assert layers()[-1]["id"] == ellipse["id"]
-        click(editor, 666, 62)
+        toolbar_click("draw")
         drag((298, 500), (358, 570))  # Fully outside the image grows the canvas.
         outside = save_layers(lambda values: len(values) == 4, "outside shape retained")[-1]
         assert outside["shape"] == "rectangle"
@@ -3014,10 +3060,10 @@ def main():
         assert saved(640, expected_height, 0, 0)
         shot(editor, "shape-outside-expanded")
         assert (artifact / "capture.png").read_bytes() == original
-        click(editor, 275, 62)
+        toolbar_click("discard")
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "discard shape edits")
-        click(editor, 398, 62)
+        toolbar_click("geometry")
 
         inspector_click(159, 335)
         drag((638, 359), (278, 119))  # Reverse drag: 40,30 with size 360x240.
@@ -3037,14 +3083,14 @@ def main():
         assert draft.read_bytes() == before_selection
         inspector_click(50, 335)
         save(160, 160, -40, -30)
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save(640, 360, 0, 0)
         inspector_click(159, 335)
         drag((638, 500), (278, 119))  # Starts below the image; clamps to y=360.
         shot(editor, "crop-outside-start")
         inspector_click(50, 335)
         save(360, 330, -40, -30)
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save(640, 360, 0, 0)
         inspector_click(159, 335)
         inspector_click(125, 379)
@@ -3056,7 +3102,7 @@ def main():
         shot(editor, "crop-preset-four-three")
         inspector_click(50, 335)
         save(160, 120, -40, -30)
-        click(editor, 35, 62)
+        toolbar_click("undo")
         save(640, 360, 0, 0)
         inspector_click(159, 335)
         inspector_click(125, 379)
@@ -3073,9 +3119,9 @@ def main():
         shot(editor, "editor-cropped")
         fixture_pixel("editor-cropped", 308, 299, (40, 110, 166))
         fixture_pixel("editor-cropped", 120, 200, (229, 179, 68))
-        click(editor, 35, 62)  # Undo
+        toolbar_click("undo")  # Undo
         save(640, 360, 0, 0)
-        click(editor, 98, 62)  # Redo
+        toolbar_click("redo")  # Redo
         save(360, 240, -40, -30)
         field(428, 480)
         field(472, 300)
@@ -3231,7 +3277,7 @@ def main():
         assert len(list((output / "exports").iterdir())) == 2
         shot(editor, "clipboard-copied")
         export_settings(False)
-        click(editor, 398, 62)  # Geometry restores its own scroll position.
+        toolbar_click("geometry")  # Geometry restores its own scroll position.
 
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "saved editor closes")
@@ -3247,7 +3293,7 @@ def main():
         wait(lambda: not windows("Screenshot editor"), "unsaved editor closes")
         assert saved(480, 300, -40, -30)
         editor = reopen()
-        click(editor, 275, 62)
+        toolbar_click("discard")
         shot(editor, "editor-discard-confirmation")
         click(editor, 55, 128)
         wait(lambda: not draft.exists(), "explicit discard removes the saved draft")
@@ -3259,7 +3305,7 @@ def main():
         drafts.write_text("blocks directory creation")
         field(428, 500)
         inspector_click(58, 516)
-        click(editor, 170, 62)
+        toolbar_click("save-draft")
         shot(editor, "editor-save-error")
         assert app.poll() is None and windows("Screenshot editor")
         close(root)  # With no tray host, normal root close must flush or cancel.

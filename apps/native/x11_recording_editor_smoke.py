@@ -160,7 +160,13 @@ def main():
         run("xdotool", "key", "Return", "sleep", ".3")
 
     def close(window):
-        run("xdotool", "windowactivate", "--sync", window, "key", "alt+F4", "sleep", ".5")
+        # Alt+F4 goes to whichever client Openbox has focused; while it briefly
+        # clears the active window during activation the key closes nothing.
+        run("xdotool", "windowactivate", "--sync", window)
+        # A modal child may legitimately own focus, so only wait for Openbox to
+        # finish the transfer rather than for this exact window.
+        wait(lambda: active_window() is not None, "close target owns focus")
+        run("xdotool", "key", "alt+F4", "sleep", ".5")
 
     # The editor reports named control rectangles (CAPTURES_NATIVE_LAYOUT_PROBE)
     # as `recording-editor-layout` events on stdout. Interactions target those
@@ -564,7 +570,7 @@ def main():
             return
         time.sleep(1)
         shot(root, "history")
-        click(root, 795, 191)
+        click(root, 105, 546)  # First History card: Edit.
         editor = wait(lambda: windows("Recording editor"), "recording editor opens")[0]
         run("xdotool", "windowmove", "--sync", editor, "80", "60")
         run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")

@@ -3,7 +3,36 @@ import XCTest
 @testable import CapturesNative
 
 final class HistoryClearTests: XCTestCase {
-    func testMixedHistoryFiltersRetainSelectionAndHandleEmptyRefresh() throws {
+    func testSharedHistoryPresentationMatchesShippingCopy() throws {
+        let copy = try HistoryCopy(transport: SettingsBridge())
+        XCTAssertEqual(copy.eyebrow, "On this device")
+        XCTAssertEqual(copy.title, "Capture History")
+        XCTAssertEqual(copy.emptyTitle, "No captures yet")
+        XCTAssertEqual(copy.deleteAllConfirm, "Delete all forever")
+        XCTAssertEqual(copy.label(.saveFile), "Save file")
+        XCTAssertEqual(copy.busyLabel(.edit), "Opening…")
+        XCTAssertEqual(copy.confirmTimeout, 4, accuracy: 0.001)
+        let entry: [String: Any] = ["id": "v", "kind": "video", "preview_url": "", "full_url": "",
+            "width": 640, "height": 480, "size_bytes": 2_048, "created_at": "2026-09-26T15:04:05Z",
+            "duration_ms": 65_000, "dropped_frames": 2]
+        let cards = try HistoryCard.cards(for: [["entry": entry, "missing": false],
+                                                ["entry": entry, "missing": true], ["entry": [String: Any]()]])
+        XCTAssertEqual(cards.count, 3)
+        XCTAssertEqual(cards[0]?.details, "640 × 480 · 2.0 KB · 1:05")
+        XCTAssertEqual(cards[0]?.warning, "2 frames dropped while recording")
+        XCTAssertEqual(cards[0]?.actions, [.edit, .saveFile])
+        XCTAssertEqual(cards[1]?.missing, true)
+        XCTAssertEqual(cards[1]?.actions, [])
+        XCTAssertEqual(cards[1]?.deleteRequiresConfirmation, false)
+        XCTAssertNil(cards[2], "a malformed entry has no card")
+        let layout = try XCTUnwrap(HistoryGridLayout.make(width: 944))
+        XCTAssertEqual(layout.columns, 3)
+        XCTAssertEqual(layout.visibleItems(5, in: NSRect(x: 0, y: 0, width: 944, height: 100)), 0..<3)
+        XCTAssertEqual(layout.step(1, count: 5, columns: 0, rows: 1), 4)
+        XCTAssertEqual(layout.step(4, count: 5, columns: 1, rows: 0), 4)
+    }
+
+    func testMixedHistoryCardsFiltersSelectionAndSave() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -18,7 +47,7 @@ final class HistoryClearTests: XCTestCase {
         settings["screenshot_format"] = "jpeg"
         _ = try settingsBridge.request(["operation": "save", "path": settingsPath, "settings": settings])
         for appearance in ["light", "dark"] {
-            let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
+            let frame = NSRect(x: 0, y: 0, width: 1000, height: 600)
             let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             defer { window.close() }
@@ -33,62 +62,130 @@ final class HistoryClearTests: XCTestCase {
                 recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
-            let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
-            func button(_ title: String) throws -> CaptureButton {
-                try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }.first { $0.title == title })
+            let grid = try historyGrid(root)
+            func button(_ title: String) throws -> NSButton {
+                try XCTUnwrap(root.subviews.compactMap { $0 as? NSButton }.first { $0.title == title })
             }
-            func detailContains(_ text: String) -> Bool {
-                root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }.contains { $0.contains(text) }
+            func labels() -> [String] {
+                root.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isHidden }.map(\.stringValue)
             }
-            try waitUntil { table.numberOfRows == 5 && detailContains("H.264 MP4") }
+            func actions(_ row: Int) -> [String] {
+                grid.card(at: row)?.actionButtons.filter { !$0.isHidden }.map(\.title) ?? []
+            }
+            try waitUntil { grid.numberOfRows == 5 && grid.visibleCards.count == 5 }
+            XCTAssertEqual(grid.selectedRow, -1, "loading History never selects a card")
+            XCTAssertTrue(labels().contains("ON THIS DEVICE"))
+            XCTAssertTrue(labels().contains("Capture History"))
+            XCTAssertTrue(labels().contains { $0.contains("appear here for 30 days") })
             XCTAssertEqual(try button("All 5").state, .on)
+            XCTAssertEqual(try button("Delete all").accessibilityLabel(), "Delete all captures")
+            let first = try XCTUnwrap(grid.card(at: 0))
+            XCTAssertFalse(first.dateLabel.stringValue.isEmpty)
+            XCTAssertTrue(first.detailsLabel.stringValue.hasPrefix("\(image.width) × \(image.height) · 2.0 KB"))
+            XCTAssertEqual(actions(0), ["Edit", "Save file"])
+            XCTAssertEqual(first.deleteButton.accessibilityLabel(), "Delete from History")
+            try waitUntil { grid.visibleCards.allSatisfy { $0.thumbnail.image != nil } }
+
             try button("Screenshots 2").performClick(nil)
-            try waitUntil { table.numberOfRows == 2 && detailContains("\(image.width + 1) × \(image.height) · PNG") }
-            table.selectRowIndexes([1], byExtendingSelection: false)
-            try waitUntil { detailContains("\(image.width + 3) × \(image.height) · PNG") }
+            try waitUntil { grid.numberOfRows == 2 }
+            XCTAssertEqual(actions(0), ["Edit", "Save image"])
+            grid.selectRowIndexes([1], byExtendingSelection: false)
+            XCTAssertEqual(grid.selectedRow, 1)
+            XCTAssertTrue(try XCTUnwrap(grid.card(at: 1)).selected)
             transport.promote(id: "item-3")
             try button("Refresh").performClick(nil)
-            try waitUntil { table.selectedRow == 0 && detailContains("\(image.width + 3) × \(image.height) · PNG") }
+            try waitUntil { grid.selectedRow == 0 && grid.card(at: 0)?.artifactID == "item-3" }
             XCTAssertEqual(try button("Screenshots 2").state, .on)
+            // Keyboard: arrows move the explicit selection within the filter.
+            window.makeFirstResponder(grid)
+            grid.keyDown(with: try key(124, window))
+            XCTAssertEqual(grid.selectedRow, 1)
+            grid.keyDown(with: try key(126, window))
+            XCTAssertEqual(grid.selectedRow, 0)
             try button("Video 2").performClick(nil)
-            try waitUntil { table.numberOfRows == 2 && detailContains("H.264 MP4") }
-            XCTAssertFalse(try button("Copy image").isEnabled)
-            XCTAssertTrue(try button("Edit recording").isEnabled)
+            try waitUntil { grid.numberOfRows == 2 }
+            XCTAssertEqual(grid.selectedRow, -1, "a hidden selection is cleared, not replaced")
+            XCTAssertEqual(actions(1), ["Edit", "Save file"])
             try button("GIF 1").performClick(nil)
-            try waitUntil { table.numberOfRows == 1 && detailContains("GIF · Editor available") }
+            try waitUntil { grid.numberOfRows == 1 }
             XCTAssertEqual(try button("GIF 1").state, .on)
-            XCTAssertTrue(try button("Edit recording").isEnabled)
-            XCTAssertTrue(try button("Save file").isEnabled)
-            XCTAssertFalse(try button("Show in Folder").isEnabled)
-            try button("Save file").performClick(nil)
-            try waitUntil { transport.saveCount == 1 && detailContains("Saved recording to") }
-            XCTAssertTrue(try button("Show in Folder").isEnabled)
-            XCTAssertFalse(try button("Copy image").isEnabled)
+            let gif = try XCTUnwrap(grid.card(at: 0))
+            XCTAssertEqual(actions(0), ["Edit", "Save file"])
+            gif.actionButtons[1].performClick(nil)
+            try waitUntil { transport.saveCount == 1 && labels().contains { $0.contains("Saved recording to") } }
+            try waitUntil { actions(0) == ["Edit", "Show in Folder"] }
             XCTAssertEqual(transport.savedDirectory, settings["output_directory"] as? String)
-            XCTAssertEqual(table.selectedRow, 0)
-            for title in ["All 5", "Screenshots 2", "Video 2", "GIF 1"] {
+            XCTAssertEqual(grid.selectedRow, 0, "a card action selects its card")
+            for title in ["All 5", "Screenshots 2", "Video 2", "GIF 1", "Delete all"] {
                 XCTAssertTrue(root.bounds.contains(try button(title).frame))
             }
             if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
-                window.display(); root.layoutSubtreeIfNeeded()
-                let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
-                root.cacheDisplay(in: root.bounds, to: bitmap)
-                let folder = URL(fileURLWithPath: output)
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-                    .write(to: folder.appendingPathComponent("history-filter-\(appearance)-gif.png"))
+                try button("All 5").performClick(nil)
+                try waitUntil { grid.visibleCards.count == 5 && grid.visibleCards.allSatisfy { $0.thumbnail.image != nil } }
+                try capture(root, to: URL(fileURLWithPath: output).appendingPathComponent("history-grid-\(appearance).png"))
+                try button("GIF 1").performClick(nil)
+                try waitUntil { grid.numberOfRows == 1 }
             }
             transport.remove(kind: "gif")
             try button("Refresh").performClick(nil)
-            try waitUntil { table.numberOfRows == 0 && detailContains("No captures match this filter") }
-            XCTAssertEqual(table.selectedRow, -1)
+            // The filtered-empty copy lives in the grid area: Refresh also reloads
+            // displays, and that status message lands after History's.
+            try waitUntil { grid.numberOfRows == 0 && labels().contains("No captures match this filter.") }
+            XCTAssertEqual(grid.selectedRow, -1)
             XCTAssertFalse(try button("GIF 0").isEnabled)
             XCTAssertEqual(try button("GIF 0").state, .on)
-            XCTAssertFalse(try button("Delete from history").isEnabled)
             try button("All 4").performClick(nil)
-            try waitUntil { table.numberOfRows == 4 }
+            try waitUntil { grid.numberOfRows == 4 }
+            XCTAssertFalse(labels().contains("No captures match this filter."))
             XCTAssertEqual(transport.clearCount, 0, "filtering never deletes files")
         }
+    }
+
+    func testCardDeleteNeedsSecondClickExceptMissingRecordings() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = PreviewView.fixtureImage(scale: 1)
+        let path = directory.appendingPathComponent("fixture.png")
+        try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])).write(to: path)
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 600)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame); window.contentView = root
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
+            failPartway: false, kinds: ["screenshot", "video", "screenshot"], missing: ["item-1"])
+        let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
+            historyRoot: directory.path, settingsPath: nil, transport: transport,
+            recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
+        defer { withExtendedLifetime(controller) {} }
+        window.makeKeyAndOrderFront(nil)
+        let grid = try historyGrid(root)
+        try waitUntil { grid.numberOfRows == 3 && grid.visibleCards.count == 3 }
+        let missing = try XCTUnwrap(grid.card(at: 1))
+        XCTAssertEqual(missing.artifactID, "item-1")
+        XCTAssertFalse(missing.missingLabel.isHidden)
+        XCTAssertEqual(missing.missingLabel.stringValue, "File missing")
+        XCTAssertTrue(missing.actionButtons.allSatisfy(\.isHidden), "a missing recording has no actions")
+        XCTAssertEqual(missing.deleteButton.accessibilityLabel(), "Remove missing entry")
+
+        let screenshot = try XCTUnwrap(grid.card(at: 0))
+        screenshot.deleteButton.performClick(nil)
+        XCTAssertEqual(transport.deletedIDs, [], "the first click only arms deletion")
+        XCTAssertEqual(try XCTUnwrap(grid.card(at: 0)).deleteButton.accessibilityLabel(), "Confirm permanent deletion")
+        XCTAssertEqual(try XCTUnwrap(grid.card(at: 0)).deleteButton.toolTip, "Delete forever")
+        window.makeFirstResponder(grid)
+        grid.keyDown(with: try key(53, window))
+        XCTAssertEqual(try XCTUnwrap(grid.card(at: 0)).deleteButton.accessibilityLabel(), "Delete from History",
+                       "Escape backs out without deleting")
+        try XCTUnwrap(grid.card(at: 0)).deleteButton.performClick(nil)
+        try XCTUnwrap(grid.card(at: 0)).deleteButton.performClick(nil)
+        try waitUntil { transport.deletedIDs == ["item-0"] && grid.numberOfRows == 2 }
+        try XCTUnwrap(grid.card(at: 0)).deleteButton.performClick(nil)
+        try waitUntil { transport.deletedIDs == ["item-0", "item-1"] && grid.numberOfRows == 1 }
+        XCTAssertEqual(grid.card(at: 0)?.artifactID, "item-2")
     }
 
     func testCancelConfirmationClearAndPartialFailureRefresh() throws {
@@ -103,7 +200,7 @@ final class HistoryClearTests: XCTestCase {
 
         for failPartway in [false, true] {
             let appearance = failPartway ? "dark" : "light"
-            let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
+            let frame = NSRect(x: 0, y: 0, width: 1000, height: 600)
             let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             defer { window.close() }
@@ -119,26 +216,34 @@ final class HistoryClearTests: XCTestCase {
                 recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
-            let clear = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }.first { $0.title == "Clear history…" })
-            let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
-            try waitUntil { table.numberOfRows == (failPartway ? 3 : 2) && clear.isEnabled }
-            XCTAssertEqual(clear.accessibilityLabel(), "Clear history…")
-            let gif = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }.first { $0.title == "GIF 1" })
+            let clear = try XCTUnwrap(root.subviews.compactMap { $0 as? HistoryButton }
+                .first { $0.accessibilityLabel() == "Delete all captures" })
+            let cancel = try XCTUnwrap(root.subviews.compactMap { $0 as? HistoryButton }
+                .first { $0.accessibilityLabel() == "Cancel delete all captures" })
+            let grid = try historyGrid(root)
+            let empty = try XCTUnwrap(root.subviews.compactMap { $0 as? HistoryEmptyView }.first)
+            try waitUntil { grid.numberOfRows == (failPartway ? 3 : 2) && clear.isEnabled && !clear.isHidden }
+            XCTAssertEqual(clear.title, "Delete all")
+            XCTAssertTrue(cancel.isHidden)
+            XCTAssertTrue(empty.isHidden)
+            let gif = try XCTUnwrap(root.subviews.compactMap { $0 as? NSButton }.first { $0.title == "GIF 1" })
             gif.performClick(nil)
-            try waitUntil { table.numberOfRows == 1 }
+            try waitUntil { grid.numberOfRows == 1 }
 
             clear.performClick(nil)
-            try waitUntil { window.attachedSheet != nil }
-            XCTAssertEqual(transport.clearCount, 0, "opening confirmation cannot delete anything")
-            window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertSecondButtonReturn)
-            try waitUntil { window.attachedSheet == nil }
+            XCTAssertEqual(clear.title, "Delete all forever")
+            XCTAssertEqual(clear.accessibilityLabel(), "Confirm delete all captures")
+            XCTAssertFalse(cancel.isHidden)
+            XCTAssertEqual(transport.clearCount, 0, "arming confirmation cannot delete anything")
+            cancel.performClick(nil)
+            XCTAssertEqual(clear.title, "Delete all")
+            XCTAssertTrue(cancel.isHidden)
             XCTAssertEqual(transport.clearCount, 0)
-            XCTAssertEqual(table.numberOfRows, 1)
+            XCTAssertEqual(grid.numberOfRows, 1)
 
             clear.performClick(nil)
-            try waitUntil { window.attachedSheet != nil }
             let blockedGate = failPartway ? nil : transport.blockNextHistoryAfterClear()
-            window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertFirstButtonReturn)
+            clear.performClick(nil)
             if !failPartway {
                 var historyStarted = false
                 try waitUntil {
@@ -149,22 +254,21 @@ final class HistoryClearTests: XCTestCase {
                 blockedGate?.signal()
             }
             try waitUntil {
-                transport.clearCount == 1 && table.numberOfRows == (failPartway ? 1 : 0)
-                    && clear.isEnabled == failPartway
+                transport.clearCount == 1 && grid.numberOfRows == (failPartway ? 1 : 0)
+                    && clear.isEnabled == failPartway && clear.isHidden == !failPartway
             }
             if !failPartway {
                 let refresh = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }
                     .first { $0.title == "Refresh" })
                 try waitUntil { refresh.isEnabled }
-            }
-            if failPartway {
-                XCTAssertTrue(root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
-                    .contains { $0.contains("Couldn’t clear history") && $0.contains("fixture deletion failed") })
+                XCTAssertFalse(empty.isHidden)
+                XCTAssertEqual(empty.titleLabel.stringValue, "No captures yet")
+                XCTAssertEqual(empty.bodyLabel.stringValue, "New screenshots, videos, and GIFs appear here automatically.")
+                XCTAssertTrue(root.subviews.compactMap { $0 as? HistoryFilterPill }.allSatisfy(\.isHidden),
+                              "filters are hidden while History is empty")
             } else {
-                XCTAssertEqual(table.selectedRow, -1)
-                XCTAssertTrue(root.subviews.compactMap { $0 as? CaptureButton }
-                    .filter { ["Edit screenshot", "Edit recording", "Copy image", "Save image", "Delete from history"].contains($0.title) }
-                    .allSatisfy { !$0.isEnabled })
+                XCTAssertTrue(root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
+                    .contains { $0.contains("Couldn’t delete capture history") && $0.contains("fixture deletion failed") })
             }
             if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
                 window.display(); root.layoutSubtreeIfNeeded()
@@ -179,11 +283,36 @@ final class HistoryClearTests: XCTestCase {
             }
             if failPartway {
                 clear.performClick(nil)
-                try waitUntil { window.attachedSheet != nil }
-                window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertFirstButtonReturn)
-                try waitUntil { transport.clearCount == 2 && table.numberOfRows == 0 && !clear.isEnabled }
+                clear.performClick(nil)
+                try waitUntil { transport.clearCount == 2 && grid.numberOfRows == 0 && clear.isHidden }
             }
         }
+    }
+
+    private func historyGrid(_ root: NSView) throws -> HistoryGridView {
+        try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? HistoryGridView)
+    }
+
+    private func key(_ code: UInt16, _ window: NSWindow) throws -> NSEvent {
+        let characters: String
+        switch code {
+        case 53: characters = "\u{1b}"
+        case 123: characters = "\u{F702}"
+        case 124: characters = "\u{F703}"
+        case 125: characters = "\u{F701}"
+        default: characters = "\u{F700}"
+        }
+        return try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+    }
+
+    private func capture(_ view: NSView, to url: URL) throws {
+        view.window?.display(); view.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
     }
 
     private func waitUntil(_ condition: () -> Bool) throws {
@@ -213,6 +342,7 @@ private final class HistoryTransport: AppTransport {
     private let lock = NSLock()
     private var artifacts: [[String: Any]]
     private var clears = 0
+    private var deletes: [String] = []
     private var blockedHistory: DispatchSemaphore?
     let blockedHistoryStarted = DispatchSemaphore(value: 0)
     private var failPartway: Bool
@@ -220,12 +350,13 @@ private final class HistoryTransport: AppTransport {
     private var exportDirectory: String?
 
     init(path: String, width: Int, height: Int, failPartway: Bool,
-         kinds: [String] = ["screenshot", "screenshot"]) {
+         kinds: [String] = ["screenshot", "screenshot"], missing: Set<String> = []) {
         self.failPartway = failPartway
         artifacts = kinds.enumerated().map { index, kind in
             ["entry": ["id": "item-\(index)", "kind": kind, "width": width + index, "height": height,
+                       "preview_url": "", "full_url": "", "size_bytes": 2_048,
                        "created_at": "2026-09-18T00:00:0\(kinds.count - index)Z"],
-             "image_path": path, "preview_path": path]
+             "image_path": path, "preview_path": path, "missing": missing.contains("item-\(index)")]
         }
     }
 
@@ -243,6 +374,7 @@ private final class HistoryTransport: AppTransport {
     }
 
     var clearCount: Int { lock.lock(); defer { lock.unlock() }; return clears }
+    var deletedIDs: [String] { lock.lock(); defer { lock.unlock() }; return deletes }
     var saveCount: Int { lock.lock(); defer { lock.unlock() }; return saves }
     var savedDirectory: String? { lock.lock(); defer { lock.unlock() }; return exportDirectory }
 
@@ -263,6 +395,11 @@ private final class HistoryTransport: AppTransport {
             }
             return ["kind": "history", "artifacts": artifacts]
         case "displays": return ["kind": "displays", "displays": []]
+        case "delete":
+            guard let id = object["id"] as? String else { throw AppBridgeError.invalidResponse }
+            deletes.append(id)
+            artifacts.removeAll { ($0["entry"] as? [String: Any])?["id"] as? String == id }
+            return ["kind": "deleted", "id": id]
         case "save_recording":
             guard let directory = object["directory"] as? String,
                   let index = artifacts.firstIndex(where: { ($0["entry"] as? [String: Any])?["id"] as? String == object["id"] as? String }),
