@@ -1,8 +1,11 @@
 //! Frame-based recording editor. Media work stays on one serialized worker;
 //! the UI never substitutes a poster or unaccepted edit for the decoded frame.
 use std::{
+    cell::RefCell,
+    collections::BTreeMap,
     path::PathBuf,
     sync::{
+        OnceLock,
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
@@ -15,7 +18,10 @@ use captures_app::recording_editor::{
     RecordingEditorSession, RecordingExportComparison, RecordingSaveRequest,
     RecordingTimelineThumbnails, ReplaceOriginalError, ReplacedRecording, SavedRecording,
 };
-use captures_app::recording_timeline::{TimelineTrimDrag, TimelineTrimEdge, timeline_ratio};
+use captures_app::recording_editor_ui::{self, QualityMode, ResolutionChoice};
+use captures_app::recording_timeline::{
+    TimelineTrimDrag, TimelineTrimEdge, timeline_ratio, timeline_time_at_client_x,
+};
 use captures_media::{
     AudioEdit, CancelToken, CropDragHandle, CropRect, CropResizeAxis, EditSpec, ExportEstimate,
     ExportFormat, ExportProgress, ExportSpec, MediaMetadata, MediaToolchain, QualityPreset,
@@ -245,20 +251,35 @@ struct View {
     max_resolution: MaxResolution,
     audio: AudioEdit,
     position_ms: u64,
-    destination: String,
+    /// Timeline scrub in progress over this track rectangle.
+    scrub: Option<egui::Rect>,
+    artifact_id: String,
+    directory: PathBuf,
+    stem: String,
     gif: bool,
     gif_frames_per_second: Option<u16>,
     gif_maximum_width: Option<u32>,
     quality: QualityPreset,
+    /// Last Compress preset, restored when leaving Preserve or Maximum.
+    compress_quality: Option<QualityPreset>,
     maximum_size: bool,
     maximum_value: String,
     maximum_unit: FileSizeUnit,
     progress: Option<ExportProgress>,
     status: Option<String>,
     error: Option<String>,
+    probe_emitted: Option<ProbeRects>,
 }
 
 impl View {
+    fn destination(&self) -> PathBuf {
+        self.directory.join(format!(
+            "{}.{}",
+            self.stem,
+            if self.gif { "gif" } else { "mp4" }
+        ))
+    }
+
     fn export_spec(&self) -> ExportSpec {
         ExportSpec {
             format: if self.gif {
@@ -432,53 +453,30 @@ impl View {
         self.send(tx, Job::Replace(cancel));
     }
 
+    fn estimate_presentation(&self) -> recording_editor_ui::EstimatePresentation {
+        let estimate = self.estimate.as_ref();
+        recording_editor_ui::estimate(&recording_editor_ui::EstimateInput {
+            estimating: self.estimating,
+            unapplied: self.unapplied(),
+            invalid_maximum: self.maximum_size && self.maximum_bytes().is_none(),
+            maximum_bytes: self.presented.as_ref().and_then(|p| p.export.max_size_bytes),
+            estimate_bytes: estimate.map(|estimate| estimate.size_bytes),
+            estimate_exact: estimate.is_some_and(|estimate| estimate.exact),
+            // A staged Maximum never advertises a reduction.
+            original_bytes: if self.maximum_size {
+                0
+            } else {
+                self.presented.as_ref().map_or(0, |p| p.source.size_bytes)
+            },
+        })
+    }
+
+    #[cfg(test)]
     fn estimate_label(&self) -> String {
-        if self.estimating {
-            "Estimating size…".into()
-        } else if self.unapplied() {
-            "Apply edits to estimate size".into()
-        } else if let Some(cap) = self
-            .presented
-            .as_ref()
-            .and_then(|p| p.export.max_size_bytes)
-        {
-            format!(
-                "≤ {} {}",
-                self.maximum_unit.value(cap),
-                self.maximum_unit.label()
-            )
-        } else if let Some(estimate) = &self.estimate {
-            let mut label = format!(
-                "{}{} bytes{}",
-                if estimate.exact { "" } else { "≈ " },
-                estimate.size_bytes,
-                if estimate.exact { " (exact)" } else { "" }
-            );
-            if !self.maximum_size
-                && let Some(original) = self
-                    .presented
-                    .as_ref()
-                    .map(|p| p.source.size_bytes)
-                    .filter(|size| *size > 0)
-            {
-                // Match shipping Math.round, including negative half ties toward +infinity.
-                let percent = (estimate.size_bytes as f64 / original as f64 - 1.) * 100.;
-                let percent = if percent.fract() == -0.5 {
-                    percent.ceil()
-                } else {
-                    percent.round()
-                };
-                if percent != 0. {
-                    label.push_str(&format!(
-                        " · {}{:.0}%",
-                        if percent < 0. { "−" } else { "+" },
-                        percent.abs()
-                    ));
-                }
-            }
-            label
-        } else {
-            "Size not estimated".into()
+        let shown = self.estimate_presentation();
+        match shown.delta {
+            Some(delta) => format!("{} · {}", shown.label, delta.label),
+            None => shown.label,
         }
     }
 
@@ -783,11 +781,15 @@ impl View {
                     Ok((path, presented)) => {
                         // Replacement changes the source, not just accepted edits.
                         // Drop every source-dependent cache and saved baseline.
-                        let destination = std::mem::take(&mut self.destination);
+                        let directory = std::mem::take(&mut self.directory);
+                        let stem = std::mem::take(&mut self.stem);
+                        let artifact_id = std::mem::take(&mut self.artifact_id);
                         let preview_loop = self.preview_loop.clone();
                         preview_loop.store(false, Ordering::Relaxed);
                         *self = Self {
-                            destination,
+                            directory,
+                            stem,
+                            artifact_id,
                             original_path: Some(path.clone()),
                             preview_actual_size: self.preview_actual_size,
                             preview_loop,
@@ -827,20 +829,30 @@ impl View {
                 self.progress = None;
                 match result {
                     Ok(saved) => {
-                        let (path, warning) = match saved {
-                            SavedRecording::Saved { path, .. } => {
+                        let gif = self
+                            .presented
+                            .as_ref()
+                            .is_some_and(|p| p.export.format == ExportFormat::Gif);
+                        let (status, warning) = match saved {
+                            SavedRecording::Saved { artifact, .. } => {
                                 self.history_changed = true;
-                                (path, None)
+                                (
+                                    recording_editor_ui::saved_message(
+                                        gif,
+                                        artifact.entry.size_bytes,
+                                    ),
+                                    None,
+                                )
                             }
                             SavedRecording::SavedWithoutHistory { path, warning } => {
-                                (path, Some(warning))
+                                (format!("Saved new copy: {}", path.display()), Some(warning))
                             }
                         };
                         if let Some(p) = &self.presented {
                             self.saved_edit = p.edit.clone();
                             self.saved_export = Some(p.export.clone());
                         }
-                        self.status = Some(format!("Saved new copy: {}", path.display()));
+                        self.status = Some(status);
                         self.error = warning;
                     }
                     Err(error) => self.error = Some(error),
@@ -1007,7 +1019,7 @@ impl View {
             Event::Destination(path) => {
                 self.picker = false;
                 if let Some(path) = path {
-                    self.destination = path.to_string_lossy().into_owned();
+                    self.directory = path;
                 }
             }
         }
@@ -1069,6 +1081,7 @@ impl Editor {
         directory: PathBuf,
     ) -> Self {
         let viewport = egui::ViewportId::from_hash_of(("recording-editor", &artifact_id));
+        let artifact_id_for_view = artifact_id.clone();
         let (tx, jobs) = mpsc::channel();
         let (events, rx) = mpsc::channel();
         let out = events.clone();
@@ -1242,13 +1255,12 @@ impl Editor {
             view: Arc::new(Mutex::new(View {
                 busy: true,
                 preview_loop,
-                destination: directory
-                    .join(format!(
-                        "Captures_{}_edited.mp4",
-                        chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
-                    ))
-                    .to_string_lossy()
-                    .into_owned(),
+                artifact_id: artifact_id_for_view,
+                stem: format!(
+                    "Captures_{}_edited",
+                    chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
+                ),
+                directory,
                 ..View::default()
             })),
             playback_frame,
@@ -1609,26 +1621,454 @@ fn show_crop_overlay(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, image:
     }
 }
 
+// ----------------------------------------------------------------- layout ---
+//
+// The window follows the shipping recording editor (`App.tsx` RecordingEditor,
+// `styles/editor-video.css`): a heading, a Preview card with its toolbar and
+// overlay play button, a Timeline card, option cards and a fixed save footer.
+
+const LAYOUT_PROBE_ENV: &str = "CAPTURES_NATIVE_LAYOUT_PROBE";
+
+type ProbeRects = BTreeMap<String, [i32; 8]>;
+
+thread_local! {
+    /// Named control geometry for smoke and unit tests: `[rect, clip]` in
+    /// window points. `None` unless a caller opts in; each pass starts afresh.
+    static PROBE: RefCell<Option<ProbeRects>> = const { RefCell::new(None) };
+}
+
+fn probe_env() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os(LAYOUT_PROBE_ENV).is_some())
+}
+
+fn probe(ui: &egui::Ui, name: &str, rect: egui::Rect) {
+    PROBE.with_borrow_mut(|controls| {
+        if let Some(controls) = controls {
+            let clip = ui.clip_rect();
+            controls.insert(
+                name.to_owned(),
+                [
+                    rect.min.x, rect.min.y, rect.max.x, rect.max.y, clip.min.x, clip.min.y,
+                    clip.max.x, clip.max.y,
+                ]
+                .map(|value| value.clamp(-1e6, 1e6).round() as i32),
+            );
+        }
+    });
+}
+
+fn text(tokens: &Tokens, value: impl Into<String>, size: &str, color: &str) -> egui::RichText {
+    egui::RichText::new(value)
+        .size(tokens.number(size))
+        .color(tokens.color(color))
+}
+
+/// `.editor-card`: raised surface, subtle border, large radius.
+fn card<R>(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    fill: &str,
+    border: &str,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    egui::Frame::new()
+        .fill(tokens.color(fill))
+        .stroke(egui::Stroke::new(1., tokens.color(border)))
+        .corner_radius(tokens.number("r-xl") as u8)
+        .inner_margin(tokens.number("s-6") as i8)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
+}
+
+fn card_title(ui: &mut egui::Ui, tokens: &Tokens, title: &str) {
+    ui.label(text(tokens, title, "text-lg", "text").strong());
+}
+
+/// `.editor-field > span`: a small subtle label above its control.
+fn field_label(ui: &mut egui::Ui, tokens: &Tokens, label: &str) {
+    ui.label(text(tokens, label, "text-xs", "text-subtle"));
+}
+
+/// A shipping `CustomSelect` rendered as an egui combo box. Items carry their
+/// shipping descriptions as hover text and are probed as `name/label`.
+fn select<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    name: &str,
+    width: f32,
+    value: &mut T,
+    options: &[(T, String, &str)],
+) -> bool {
+    let selected = options
+        .iter()
+        .find(|(option, _, _)| option == value)
+        .map_or_else(String::new, |(_, label, _)| label.clone());
+    let mut changed = false;
+    let response = egui::ComboBox::from_id_salt(("recording-select", name))
+        .selected_text(selected)
+        .width(width)
+        .height(480.)
+        .truncate()
+        .show_ui(ui, |ui| {
+            for (option, label, description) in options {
+                let mut response = ui.selectable_value(value, *option, label.as_str());
+                if !description.is_empty() {
+                    response = response.on_hover_text(*description);
+                }
+                probe(ui, &format!("{name}/{label}"), response.rect);
+                changed |= response.changed();
+            }
+        })
+        .response;
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, name));
+    probe(ui, name, response.rect);
+    changed
+}
+
+/// `.recording-preview-loop`-style quiet toggle for the preview toolbar.
+fn toolbar_toggle(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    label: &str,
+    on: bool,
+    enabled: bool,
+) -> egui::Response {
+    let button = egui::Button::new(text(
+        tokens,
+        label,
+        "text-sm",
+        if on { "text" } else { "text-subtle" },
+    ))
+    .fill(if on {
+        tokens.color("surface-active")
+    } else {
+        egui::Color32::TRANSPARENT
+    })
+    .stroke(if on {
+        egui::Stroke::new(1., tokens.color("border"))
+    } else {
+        egui::Stroke::NONE
+    })
+    .corner_radius(tokens.number("r-md"))
+    .min_size(egui::vec2(0., tokens.number("h-sm")))
+    .selected(on);
+    let response = ui.add_enabled(enabled, button);
+    probe(ui, label, response.rect);
+    response
+}
+
+/// `.recording-preview-loop`: the toggle with its circular-arrow icon, drawn
+/// because the bundled fonts have no loop glyph.
+fn loop_toggle(ui: &mut egui::Ui, tokens: &Tokens, on: bool, enabled: bool) -> egui::Response {
+    let label = "Loop preview";
+    let font = egui::FontId::proportional(tokens.number("text-sm"));
+    let color = tokens.color(if !enabled {
+        "text-faint"
+    } else if on {
+        "text"
+    } else {
+        "text-subtle"
+    });
+    let galley = ui.painter().layout_no_wrap(label.into(), font, color);
+    let icon = 12.;
+    let padding = tokens.number("s-4");
+    let gap = tokens.number("s-3");
+    let size = egui::vec2(
+        padding * 2. + icon + gap + galley.size().x,
+        tokens.number("h-sm"),
+    );
+    let (rect, response) = ui.allocate_exact_size(
+        size,
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, label)
+    });
+    let painter = ui.painter();
+    if on {
+        painter.rect_filled(rect, tokens.number("r-md"), tokens.color("surface-active"));
+        painter.rect_stroke(
+            rect,
+            tokens.number("r-md"),
+            egui::Stroke::new(1., tokens.color("border")),
+            egui::StrokeKind::Inside,
+        );
+    } else if enabled && response.hovered() {
+        painter.rect_filled(rect, tokens.number("r-md"), tokens.color("surface-hover"));
+    }
+    if response.has_focus() {
+        painter.rect_stroke(
+            rect,
+            tokens.number("r-md"),
+            egui::Stroke::new(1., tokens.color("theme-accent")),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let center = egui::pos2(rect.left() + padding + icon / 2., rect.center().y);
+    let radius = icon / 2. - 1.;
+    let stroke = egui::Stroke::new(1.4, color);
+    let points: Vec<_> = (0..=20)
+        .map(|step| {
+            let angle = -0.35 + step as f32 / 20. * 1.6 * std::f32::consts::PI;
+            center + radius * egui::vec2(angle.cos(), angle.sin())
+        })
+        .collect();
+    let tip = *points.last().unwrap();
+    painter.add(egui::Shape::line(points, stroke));
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            tip + egui::vec2(-3.2, 0.2),
+            tip + egui::vec2(1.6, -2.6),
+            tip + egui::vec2(1.2, 2.8),
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
+    painter.galley(
+        egui::pos2(rect.left() + padding + icon + gap, rect.center().y - galley.size().y / 2.),
+        galley,
+        color,
+    );
+    probe(ui, label, rect);
+    if enabled && response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+/// `.editor-segmented` Fit / 100%: sunken track with a raised active segment.
+fn preview_size_segmented(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
+    let height = tokens.number("h-sm") + 6.;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(132., height), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, tokens.number("r-lg"), tokens.color("surface-sunken"));
+    ui.painter().rect_stroke(
+        rect,
+        tokens.number("r-lg"),
+        egui::Stroke::new(1., tokens.color("border-subtle")),
+        egui::StrokeKind::Inside,
+    );
+    let inner = rect.shrink(3.);
+    let enabled = view.texture.is_some() || view.source_texture.is_some();
+    for (index, (label, actual)) in [("Fit", false), ("100%", true)].into_iter().enumerate() {
+        let segment = egui::Rect::from_min_size(
+            inner.min + egui::vec2(inner.width() / 2. * index as f32, 0.),
+            egui::vec2(inner.width() / 2., inner.height()),
+        );
+        let active = view.preview_actual_size == actual;
+        let response = ui
+            .interact(
+                segment,
+                ui.scope_id().with(("recording-preview-size", label)),
+                if enabled {
+                    egui::Sense::click()
+                } else {
+                    egui::Sense::hover()
+                },
+            )
+            .on_hover_text(if actual {
+                "One decoded image pixel per screen point. Scroll to see overflow; playback may use a reduced-size frame."
+            } else {
+                "Fit the decoded frame within the preview."
+            });
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, label)
+        });
+        if active {
+            ui.painter()
+                .rect_filled(segment, tokens.number("r-sm"), tokens.color("surface-raised"));
+            ui.painter().rect_stroke(
+                segment,
+                tokens.number("r-sm"),
+                egui::Stroke::new(1., tokens.color("border-subtle")),
+                egui::StrokeKind::Inside,
+            );
+        }
+        let color = if !enabled {
+            tokens.color("text-faint")
+        } else if active || response.hovered() {
+            tokens.color("text")
+        } else {
+            tokens.color("text-subtle")
+        };
+        ui.painter().text(
+            segment.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(tokens.number("text-sm")),
+            color,
+        );
+        if response.has_focus() {
+            ui.painter().rect_stroke(
+                segment,
+                tokens.number("r-sm"),
+                egui::Stroke::new(1., tokens.color("theme-accent")),
+                egui::StrokeKind::Outside,
+            );
+        }
+        probe(ui, label, segment);
+        if response.clicked() {
+            view.preview_actual_size = actual;
+        }
+    }
+}
+
+/// `.recording-preview-overlay-play`: accent circle over the media.
+fn show_overlay_play(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    tx: &Sender<Job>,
+    image: egui::Rect,
+    viewport: egui::Rect,
+) {
+    let size = tokens.number("s-12") - tokens.number("s-4");
+    let center = if view.comparison.is_some() {
+        // Keep play clear of the centered comparison divider, as shipping does.
+        egui::pos2(
+            image.center().x,
+            image.bottom() - tokens.number("s-5") - tokens.number("s-10") - size / 2.,
+        )
+    } else {
+        image.center()
+    };
+    let center = center.clamp(
+        viewport.min + egui::Vec2::splat(size / 2.),
+        viewport.max - egui::Vec2::splat(size / 2.),
+    );
+    let rect = egui::Rect::from_center_size(center, egui::Vec2::splat(size));
+    let pausing = view.playing && view.cancel.as_ref().is_some_and(CancelToken::is_cancelled);
+    let enabled = if view.playing {
+        !pausing
+    } else {
+        !view.busy
+            && !view.picker
+            && !view.confirm_close
+            && !view.adjusting_crop
+            && view.presented.is_some()
+            && !view.unapplied()
+    };
+    let label = if view.playing {
+        if pausing { "Pausing…" } else { "Pause preview" }
+    } else {
+        "Play preview"
+    };
+    let response = ui
+        .interact(
+            rect,
+            ui.scope_id().with("recording-overlay-play"),
+            if enabled {
+                egui::Sense::click()
+            } else {
+                egui::Sense::hover()
+            },
+        )
+        .on_hover_text(if view.playing {
+            "Pause the preview."
+        } else if view.unapplied() {
+            "Apply staged edits before playing."
+        } else {
+            "Play the accepted trim and mix; Sound is off by default. Motion preview fits within 1280 × 720."
+        });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    probe(ui, "Play preview", rect);
+    probe(ui, label, rect);
+    // Shipping hides the pause affordance while playing until the media is hovered.
+    let hovered = ui.rect_contains_pointer(viewport) || response.has_focus();
+    let opacity = if view.playing && !hovered {
+        0.
+    } else if enabled || view.playing {
+        1.
+    } else {
+        0.45
+    };
+    if opacity > 0. {
+        let painter = ui.painter();
+        let fill = if response.hovered() && enabled {
+            tokens.color("theme-accent-hover")
+        } else {
+            tokens.color("theme-accent")
+        };
+        painter.circle_filled(center, size / 2., fill.gamma_multiply(opacity));
+        painter.circle_stroke(
+            center,
+            size / 2.,
+            egui::Stroke::new(1., tokens.color("glass-border-strong").gamma_multiply(opacity)),
+        );
+        let ink = tokens.color("theme-accent-ink").gamma_multiply(opacity);
+        let glyph = tokens.number("s-4") + 1.;
+        if view.playing {
+            for offset in [-glyph / 2., glyph / 2.] {
+                painter.rect_filled(
+                    egui::Rect::from_center_size(
+                        center + egui::vec2(offset * 0.7, 0.),
+                        egui::vec2(glyph * 0.45, glyph * 1.8),
+                    ),
+                    1.,
+                    ink,
+                );
+            }
+        } else {
+            let tip = center + egui::vec2(glyph + 1., 0.);
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    center + egui::vec2(-glyph * 0.7 + 1., -glyph),
+                    tip,
+                    center + egui::vec2(-glyph * 0.7 + 1., glyph),
+                ],
+                ink,
+                egui::Stroke::NONE,
+            ));
+        }
+        if response.has_focus() {
+            painter.circle_stroke(
+                center,
+                size / 2. + 3.,
+                egui::Stroke::new(2., tokens.color("text")),
+            );
+        }
+    }
+    if response.clicked() {
+        if view.playing {
+            view.pause_playback();
+        } else {
+            view.request_playback(tx);
+        }
+        ui.ctx().request_repaint();
+    }
+}
+
+/// The shipping timeline track: filmstrip, dimmed exclusions, accent trim
+/// handles and a playhead. Returns a source position when a scrub completes.
+///
+/// `rect` is the whole row. Trim grips sit outside the selected interval so
+/// even a 1 ms selection leaves distinct start/end hit regions inside it.
 fn show_trim_timeline(
     ui: &mut egui::Ui,
     tokens: &Tokens,
     view: &mut View,
     duration: u64,
     rect: egui::Rect,
-) {
+) -> Option<u64> {
     let grip_width = tokens.number("s-6");
     let track = rect.shrink2(egui::vec2(grip_width, 0.));
     if track.width() <= 0. || duration == 0 {
         view.trim_gesture = None;
-        return;
+        view.scrub = None;
+        return None;
     }
     let handles = |start: u64, end: u64| {
         let start = track.left()
             + timeline_ratio(start as f64, duration as f64).unwrap_or(0.) as f32 * track.width();
         let end = track.left()
             + timeline_ratio(end as f64, duration as f64).unwrap_or(1.) as f32 * track.width();
-        // Grips sit outside the selected interval, so even a 1 ms selection
-        // leaves distinct start/end hit regions. Both remain inside the row.
         [
             egui::Rect::from_min_max(
                 egui::pos2(start - grip_width, rect.top()),
@@ -1648,13 +2088,16 @@ fn show_trim_timeline(
         && view.end_ms <= duration
         && ui.input(|input| input.focused)
         && !egui::Popup::is_any_open(ui.ctx());
+    // Clicking the track scrubs the accepted still, as the shipping track
+    // seeks its video. Staged edits must be applied first, as for Seek.
+    let scrub_enabled = enabled && !view.unapplied() && view.presented.is_some();
     let handle_rects = handles(view.start_ms, view.end_ms);
     let responses = ["Trim start", "Trim end"].map(|label| {
         let index = usize::from(label == "Trim end");
         ui.interact(handle_rects[index], ui.scope_id().with(label),
                     if enabled { egui::Sense::click_and_drag() } else { egui::Sense::hover() })
-            .on_hover_text(format!("{label}: {} ms. Drag or use arrow keys/Page Up/Page Down. Apply edits to update the preview.",
-                                   if index == 0 { view.start_ms } else { view.end_ms }))
+            .on_hover_text(format!("{label}: {}. Drag or use arrow keys/Page Up/Page Down. Apply edits to update the preview.",
+                recording_editor_ui::format_editor_time(if index == 0 { view.start_ms } else { view.end_ms }, duration)))
     });
     if !enabled
         || view
@@ -1665,6 +2108,19 @@ fn show_trim_timeline(
         // Match shipping pointer cancellation: keep the last staged values.
         view.trim_gesture = None;
     }
+    if !scrub_enabled || view.scrub.is_some_and(|scrub| scrub != track) {
+        view.scrub = None;
+    }
+    let time_at = |x: f32| {
+        timeline_time_at_client_x(
+            f64::from(x),
+            f64::from(track.left()),
+            f64::from(track.width()),
+            duration as f64,
+        )
+        .map(|time| (time.round() as u64).min(duration.saturating_sub(1)))
+    };
+    let mut seek = None;
     if enabled && ui.ctx().current_pass_index() == 0 {
         for event in ui.input(|input| input.events.clone()) {
             match event {
@@ -1675,6 +2131,7 @@ fn show_trim_timeline(
                     ..
                 } => {
                     view.trim_gesture = None;
+                    view.scrub = None;
                     if !ui.clip_rect().contains(pos) {
                         continue;
                     }
@@ -1697,6 +2154,12 @@ fn show_trim_timeline(
                             responses[index].request_focus();
                             view.trim_gesture = Some(TrimGesture { edge, drag, track });
                         }
+                    } else if scrub_enabled
+                        && track.contains(pos)
+                        && let Some(time) = time_at(pos.x)
+                    {
+                        view.position_ms = time;
+                        view.scrub = Some(track);
                     }
                 }
                 egui::Event::PointerMoved(pos) => {
@@ -1713,14 +2176,28 @@ fn show_trim_timeline(
                             TimelineTrimEdge::Start => view.start_ms = value,
                             TimelineTrimEdge::End => view.end_ms = value,
                         }
+                    } else if view.scrub.is_some()
+                        && let Some(time) = time_at(pos.x)
+                    {
+                        view.position_ms = time;
                     }
                 }
                 egui::Event::PointerButton {
                     button: egui::PointerButton::Primary,
                     pressed: false,
                     ..
+                } => {
+                    view.trim_gesture = None;
+                    if view.scrub.take().is_some() {
+                        seek = Some(view.position_ms);
+                    }
                 }
-                | egui::Event::PointerGone => view.trim_gesture = None,
+                egui::Event::PointerGone => {
+                    view.trim_gesture = None;
+                    if view.scrub.take().is_some() {
+                        seek = Some(view.position_ms);
+                    }
+                }
                 egui::Event::Key {
                     key: egui::Key::Escape,
                     pressed: true,
@@ -1762,48 +2239,51 @@ fn show_trim_timeline(
         }
     }
     let [start, end] = handles(view.start_ms, view.end_ms);
-    ui.painter()
-        .rect_filled(track, 0., tokens.color("surface-sunken"));
+    let overhang = (rect.height() - track.height()).max(0.) / 2. + 3.;
+    let frame = rect.shrink2(egui::vec2(0., overhang.min(rect.height() / 4.)));
+    let painter = ui.painter();
+    painter.rect_filled(frame, tokens.number("r-md"), tokens.color("surface-sunken"));
+    painter.rect_stroke(
+        frame,
+        tokens.number("r-md"),
+        egui::Stroke::new(1., tokens.color("border")),
+        egui::StrokeKind::Inside,
+    );
+    let strip = egui::Rect::from_x_y_ranges(
+        track.x_range(),
+        frame.shrink(tokens.number("s-2")).y_range(),
+    );
     if let Some(texture) = &view.thumbnails {
-        // Center-crop the strip vertically to the compact track, preserving
-        // thumbnail aspect and the full horizontal source-time mapping.
+        // Center-crop the strip vertically to the track, preserving thumbnail
+        // aspect and the full horizontal source-time mapping.
         let size = texture.size_vec2();
-        let uv_height = (track.height() * size.x / (track.width() * size.y)).min(1.);
-        ui.painter().image(
-            texture.id(),
-            track,
-            egui::Rect::from_min_max(
-                egui::pos2(0., (1. - uv_height) / 2.),
-                egui::pos2(1., (1. + uv_height) / 2.),
+        let uv_height = (strip.height() * size.x / (strip.width() * size.y)).min(1.);
+        painter.add(
+            egui::epaint::RectShape::filled(
+                strip,
+                tokens.number("r-xs"),
+                egui::Color32::WHITE,
+            )
+            .with_texture(
+                texture.id(),
+                egui::Rect::from_min_max(
+                    egui::pos2(0., (1. - uv_height) / 2.),
+                    egui::pos2(1., (1. + uv_height) / 2.),
+                ),
             ),
-            egui::Color32::WHITE,
         );
-        for excluded in [
-            egui::Rect::from_min_max(track.min, egui::pos2(start.right(), track.bottom())),
-            egui::Rect::from_min_max(egui::pos2(end.left(), track.top()), track.max),
-        ] {
-            ui.painter().rect_filled(
-                excluded,
-                0.,
-                tokens.color("surface-sunken").gamma_multiply(0.7),
-            );
-        }
+    } else {
+        painter.rect_filled(strip, tokens.number("r-xs"), tokens.color("n-5"));
     }
-    if start.right() <= end.left() {
-        let selected = egui::Rect::from_min_max(
-            egui::pos2(start.right(), track.top()),
-            egui::pos2(end.left(), track.bottom()),
-        );
-        if view.thumbnails.is_none() {
-            ui.painter()
-                .rect_filled(selected, 0., tokens.color("surface-selected"));
+    // `.timeline-excluded`: trimmed-away time dims toward the canvas.
+    let excluded = tokens.color("surface-canvas").gamma_multiply(0.72);
+    for dim in [
+        egui::Rect::from_min_max(frame.min, egui::pos2(start.right(), frame.bottom())),
+        egui::Rect::from_min_max(egui::pos2(end.left(), frame.top()), frame.max),
+    ] {
+        if dim.width() > 0. {
+            painter.rect_filled(dim, tokens.number("r-md"), excluded);
         }
-        ui.painter().rect_stroke(
-            selected,
-            0.,
-            egui::Stroke::new(1., tokens.color("theme-accent")),
-            egui::StrokeKind::Inside,
-        );
     }
     if view.loading_thumbnails {
         // This status remains readable while the enclosing editing controls
@@ -1819,7 +2299,22 @@ fn show_trim_timeline(
                 tokens.color("text-muted"),
             );
     }
-    for (index, handle) in [start, end].into_iter().enumerate() {
+    // `.timeline-playhead`: a 2px line with a cap, over the filmstrip.
+    let position = view.position_ms.min(duration);
+    let x = track.left()
+        + timeline_ratio(position as f64, duration as f64).unwrap_or(0.) as f32 * track.width();
+    let line = egui::Rect::from_min_max(
+        egui::pos2(x - 1., rect.top()),
+        egui::pos2(x + 1., rect.bottom()),
+    );
+    painter.rect_filled(line, 0., tokens.color("text"));
+    painter.rect_filled(
+        egui::Rect::from_min_size(egui::pos2(x - 5., rect.top() - 3.), egui::vec2(10., 8.)),
+        3.,
+        tokens.color("text"),
+    );
+    probe(ui, "Timeline track", track);
+    for (index, grip) in [start, end].into_iter().enumerate() {
         let response = &responses[index];
         if enabled && response.has_focus() {
             // Arrow keys adjust this slider instead of moving egui focus to a
@@ -1835,48 +2330,72 @@ fn show_trim_timeline(
                 )
             });
         }
+        let label = if index == 0 { "Trim start" } else { "Trim end" };
+        let value = if index == 0 { view.start_ms } else { view.end_ms };
+        let time = recording_editor_ui::format_editor_time(value, duration);
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::WidgetType::Slider,
-                enabled,
-                format!(
-                    "Trim {}: {} ms",
-                    if index == 0 { "start" } else { "end" },
-                    if index == 0 {
-                        view.start_ms
-                    } else {
-                        view.end_ms
-                    }
-                ),
-            )
+            egui::WidgetInfo::labeled(egui::WidgetType::Slider, enabled, format!("{label}: {time}"))
         });
-        ui.painter()
-            .rect_filled(handle, tokens.number("r-sm"), tokens.color("control"));
-        ui.painter().rect_stroke(
-            handle,
-            tokens.number("r-sm"),
-            egui::Stroke::new(
-                1.,
-                tokens.color(if enabled && (response.hovered() || response.has_focus()) {
-                    "theme-accent"
-                } else {
-                    "control-border"
-                }),
-            ),
-            egui::StrokeKind::Inside,
-        );
-        ui.painter().vline(
-            handle.center().x,
-            handle.y_range().shrink(tokens.number("s-2")),
-            egui::Stroke::new(
-                1.,
-                tokens.color(if enabled { "text" } else { "text-muted" }),
-            ),
-        );
+        probe(ui, label, grip);
+        // `.timeline-trim-handle`: an 8px accent bar beside the boundary.
+        let bar_width = tokens.number("s-4");
+        let bar = if index == 0 {
+            egui::Rect::from_min_max(egui::pos2(grip.right() - bar_width, rect.top()), grip.max)
+        } else {
+            egui::Rect::from_min_max(grip.min, egui::pos2(grip.left() + bar_width, rect.bottom()))
+        };
+        let accent = tokens.color(if enabled {
+            "theme-accent"
+        } else {
+            "text-faint"
+        });
+        painter.rect_filled(bar, tokens.number("r-xs"), accent);
+        let grips = tokens.color("theme-accent-ink").gamma_multiply(0.45);
+        for offset in [-tokens.number("s-1"), tokens.number("s-1")] {
+            painter.vline(
+                bar.center().x + offset,
+                egui::Rangef::new(bar.center().y - 7., bar.center().y + 7.),
+                egui::Stroke::new(1., grips),
+            );
+        }
+        let active = enabled
+            && (response.hovered()
+                || response.has_focus()
+                || view
+                    .trim_gesture
+                    .as_ref()
+                    .is_some_and(|gesture| (gesture.edge == TimelineTrimEdge::Start) == (index == 0)));
+        if response.has_focus() {
+            painter.rect_stroke(
+                bar.expand(2.),
+                tokens.number("r-xs"),
+                egui::Stroke::new(2., tokens.color("text")),
+                egui::StrokeKind::Outside,
+            );
+        }
+        if active {
+            // Time bubble above the handle, like the shipping hover label.
+            let font = egui::FontId::proportional(tokens.number("text-2xs"));
+            let galley = ui.painter().layout_no_wrap(time, font, tokens.color("theme-accent-ink"));
+            let size = galley.size() + egui::vec2(tokens.number("s-3") * 2., 6.);
+            let top = rect.top() - 5. - size.y;
+            let bubble = if index == 0 {
+                egui::Rect::from_min_size(egui::pos2(bar.left(), top), size)
+            } else {
+                egui::Rect::from_min_size(egui::pos2(bar.right() - size.x, top), size)
+            };
+            let layer = ui
+                .ctx()
+                .layer_painter(egui::LayerId::new(egui::Order::Foreground, ui.scope_id().with(label)))
+                .with_clip_rect(ui.clip_rect());
+            layer.rect_filled(bubble, tokens.number("r-xs"), tokens.color("theme-accent"));
+            layer.galley(bubble.min + egui::vec2(tokens.number("s-3"), 3.), galley, egui::Color32::PLACEHOLDER);
+        }
         if enabled && response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
     }
+    seek
 }
 
 fn show(
@@ -1887,627 +2406,1416 @@ fn show(
     events: &Sender<Event>,
     viewport: egui::ViewportId,
 ) {
-    egui::Panel::bottom("recording-save").show(ui, |ui| {
-        if let Some(error) = &view.error {
-            ui.colored_label(tokens.color("danger-text"), error);
-        }
-        if let Some(status) = &view.status {
-            ui.label(status);
-        }
-        if view.confirm_close {
-            ui.label("Discard unsaved recording edits? The original recording is unchanged.");
-            ui.horizontal(|ui| {
-                if ui.button("Keep editing").clicked() {
-                    view.confirm_close = false;
-                }
-                if ui.button("Discard edits and close").clicked() {
-                    view.closed = true;
-                }
-            });
-        }
-        if let Some(confirmation) = &view.confirm_replace {
-            let path = confirmation.path.display().to_string();
-            ui.group(|ui| {
-                ui.strong("Replace the original recording?");
-                ui.label(path);
-                ui.label("Replaces this file and its History recovery copy with the accepted edits. This cannot be undone.");
-                ui.label("A matching recovery copy is required. Cancellation stops preparation, not an update already being committed.");
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel replacement").clicked() {
-                        view.confirm_replace = None;
-                    }
-                    if ui.button("Replace original").clicked() {
-                        view.confirm_replacement(tx);
-                    }
+    if probe_env() || PROBE.with_borrow(Option::is_some) {
+        PROBE.with_borrow_mut(|controls| *controls = Some(BTreeMap::new()));
+    }
+    show_footer(ui, tokens, view, tx, events, viewport);
+    egui::CentralPanel::default()
+        .frame(egui::Frame::new().fill(tokens.color("surface-canvas")))
+        .show(ui, |ui| {
+            if view.confirm_replace.is_some() || view.requires_reopen {
+                ui.disable();
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("recording-editor-page")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    probe(ui, "Page", ui.clip_rect());
+                    let pad = tokens.number("s-8");
+                    let side = ((ui.available_width() - 1220.) / 2.).max(pad);
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin {
+                            left: side as i8,
+                            right: side as i8,
+                            top: pad as i8,
+                            bottom: pad as i8,
+                        })
+                        .show(ui, |ui| show_page(ui, tokens, view, tx));
                 });
-            });
-        }
-        if view.confirm_replace.is_some() || view.requires_reopen {
-            ui.disable();
-        }
-        if let Some(progress) = &view.progress {
-            ui.add(
-                egui::ProgressBar::new(f32::from(progress.completed_per_mille) / 1000.).text(
-                    progress
-                        .message
-                        .clone()
-                        .unwrap_or_else(|| format!("{:?}", progress.stage)),
-                ),
-            );
-        }
-        if let Some(cancel) = &view.cancel
-            && ui
-                .add_enabled(!cancel.is_cancelled(), egui::Button::new(if view.playing { "Pause playback" } else if view.loading_source { "Cancel source preview" } else if view.loading_thumbnails { "Cancel thumbnails" } else if view.estimating { "Cancel estimate" } else if view.comparing.is_some() { "Cancel comparison" } else { "Cancel export" }))
-                .clicked()
-        {
-            cancel.cancel();
-        }
-        if let Some(error) = view.thumbnail_error.clone() {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Source thumbnails unavailable.");
-                if ui.add_enabled(!view.busy && !view.picker && !view.confirm_close,
-                                  egui::Button::new("Retry thumbnails"))
-                    .on_hover_text(error).clicked()
-                {
-                    view.request_thumbnails(tx);
-                }
-            });
-        }
-        ui.add_enabled_ui(!view.busy && !view.picker && !view.confirm_close, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Destination");
-                ui.add(
-                    egui::TextEdit::singleline(&mut view.destination)
-                        .desired_width((ui.available_width() - 240.).max(100.)),
-                );
-                if ui.add_enabled(view.can_replace(), egui::Button::new("Replace original…"))
-                    .on_hover_text("Replace the saved original and matching History recovery copy after confirmation. Only same-format MP4/GIF; apply edits first. A saved path is only a hint: the backend checks both files before writing.")
-                    .clicked()
-                {
-                    view.begin_replace();
-                }
-                if ui.button("Change…").clicked() {
-                    view.picker = true;
-                    let events = events.clone();
-                    let ctx = ui.ctx().clone();
-                    let path = PathBuf::from(&view.destination);
-                    thread::spawn(move || {
-                        let mut dialog =
-                            rfd::FileDialog::new().set_title("Save recording as new file");
-                        if let Some(parent) = path.parent() {
-                            dialog = dialog.set_directory(parent);
-                        }
-                        if let Some(name) = path.file_name() {
-                            dialog = dialog.set_file_name(name.to_string_lossy());
-                        }
-                        let _ = events.send(Event::Destination(dialog.save_file()));
-                        wake(&ctx, viewport);
-                    });
-                }
-            });
-            ui.horizontal(|ui| {
-                let old = view.gif;
-                ui.selectable_value(&mut view.gif, false, "MP4");
-                ui.selectable_value(&mut view.gif, true, "GIF");
-                if old != view.gif {
-                    view.destination = PathBuf::from(&view.destination)
-                        .with_extension(if view.gif { "gif" } else { "mp4" })
-                        .to_string_lossy()
-                        .into_owned();
-                }
-                ui.label(view.estimate_label())
-                    .on_hover_text("Percentage change compares the accepted estimate with the original recording file. Maximum mode shows the accepted byte limit, not an estimated size. Other modes estimate the accepted export; longer recordings use approximate encoded samples. No History entry or saved file is created.");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add_enabled(
-                            view.presented.is_some() && !view.unapplied(),
-                            egui::Button::new("Save new copy"),
-                        )
-                        .on_hover_text("Creates a separate copy. The original and existing files are never replaced.")
-                        .clicked()
-                    {
-                        let cancel = CancelToken::default();
-                        view.cancel = Some(cancel.clone());
-                        view.send(
-                            tx,
-                            Job::Save(
-                                RecordingSaveRequest {
-                                    destination: view.destination.clone().into(),
-                                    export: view.presented.as_ref().unwrap().export.clone(),
-                                },
-                                cancel,
-                            ),
-                        );
-                    }
-                    if ui
-                        .add_enabled(view.unapplied() && (!view.maximum_size || view.maximum_bytes().is_some()), egui::Button::new("Apply edits"))
-                        .on_hover_text("Update the preview before scrubbing or saving")
-                        .clicked()
-                    {
-                        let edit = view.staged_edit(view.presented.as_ref().unwrap());
-                        let export = view.export_spec();
-                        view.send(
-                            tx,
-                            Job::Apply(RecordingEditorRequest::UpdatePreview { edit, export }),
-                        );
-                    }
-                    if ui.add_enabled(view.presented.is_some() && !view.unapplied() && !view.maximum_size, egui::Button::new("Estimate size")).clicked() {
-                        view.request_estimate(tx);
-                    }
-                });
-            });
         });
-    });
-    egui::CentralPanel::default().show(ui, |ui| {
-        if view.confirm_replace.is_some() || view.requires_reopen {
-            ui.disable();
-        }
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            if view.unapplied() { view.comparison = None; }
-            ui.heading("Edit recording");
-            let previous_actual_size = view.preview_actual_size;
-            ui.horizontal(|ui| {
-                ui.strong("Preview");
-                ui.weak(if view.adjusting_crop { "Source crop" } else if view.comparison.is_some() { "Encoded comparison" } else if view.playback_audio_enabled { "Audio playback" } else if view.preview_sound && !view.playing { "Sound selected" } else { "Silent playback" });
-                if view.playing {
-                    let pausing = view.cancel.as_ref().is_some_and(CancelToken::is_cancelled);
-                    if ui.add_enabled(!pausing, egui::Button::new(if pausing { "Pausing…" } else { "Pause" }).small()).clicked() {
-                        view.pause_playback();
-                        ui.ctx().request_repaint();
-                    }
-                } else if ui.add_enabled(!view.busy && !view.picker && !view.confirm_close
-                    && !view.adjusting_crop && view.presented.is_some() && !view.unapplied(), egui::Button::new("Play").small())
-                    .on_hover_text("Play the accepted trim and mix; Sound is off by default. Apply staged edits first. Motion preview fits within 1280 × 720.")
-                    .clicked()
-                {
-                    view.request_playback(tx);
-                    ui.ctx().request_repaint();
-                }
-                let looping = view.preview_loop.load(Ordering::Relaxed);
-                if ui.add_enabled(view.presented.is_some() && (!view.busy || view.playing)
-                    && !view.picker && !view.confirm_close
-                    && view.cancel.as_ref().is_none_or(|cancel| !cancel.is_cancelled()),
-                    egui::Button::new("Loop preview").selected(looping).small())
-                    .on_hover_text("Repeat the accepted trim until paused. This changes only playback, not the saved recording.")
-                    .clicked()
-                {
-                    view.preview_loop.store(!looping, Ordering::Relaxed);
-                }
-                if view.adjusting_crop && ui.add_enabled(!view.busy && !view.picker && !view.confirm_close,
-                    egui::Button::new("Done cropping").small()).clicked()
-                {
-                    view.adjusting_crop = false;
-                    view.crop_gesture = None;
-                }
-                if ui.add_enabled(view.presented.is_some() && !view.busy && !view.picker && !view.confirm_close,
-                    egui::Button::new("Sound").selected(view.preview_sound).small())
-                    .on_hover_text("Preview accepted MP4 audio on the default output device. Change only while stopped. If the device fails, turn Sound off and retry. This never changes the export.")
-                    .clicked()
-                {
-                    view.preview_sound = !view.preview_sound;
-                }
-                if ui.add_enabled(view.can_compare(), egui::Button::new(
-                    if view.comparison.is_some() { "Hide compare" } else { "Compare" }).small())
-                    .on_hover_text("Encode a sample at the accepted still frame, not the paused playback position. Before is spatially edited; Encoded includes compression, GIF palette and cadence. First attempt only: a Maximum-size save may differ. Apply staged edits and seek inside the accepted trim first.")
-                    .clicked()
-                {
-                    if view.comparison.is_some() { view.comparison = None; }
-                    else { view.request_comparison(ui.ctx(), tx); }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Button::new("100%").small().selected(view.preview_actual_size))
-                        .on_hover_text("One decoded image pixel per screen point. Scroll to see overflow; playback may use a reduced-size frame.")
-                        .clicked()
-                    {
-                        view.preview_actual_size = true;
-                    }
-                    if ui.add(egui::Button::new("Fit").small().selected(!view.preview_actual_size)).clicked() {
-                        view.preview_actual_size = false;
-                    }
-                });
-            });
-            let scale_changed = previous_actual_size != view.preview_actual_size;
-            if scale_changed { view.crop_gesture = None; }
-            let width = ui.available_width();
-            let height = (ui.available_height() - 210.).clamp(140., 380.);
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-            ui.painter()
-                .rect_filled(rect, tokens.number("r-md"), tokens.color("surface-sunken"));
-            let preview_texture = if view.adjusting_crop { view.source_texture.clone() }
-                else if let Some(comparison) = &view.comparison { Some(comparison.textures[0].clone()) }
-                else { view.texture.clone() };
-            if let Some(texture) = preview_texture {
-                let size = texture.size_vec2();
-                let actual_size = view.preview_actual_size;
-                let margin = if view.adjusting_crop { tokens.number("s-3") } else { 0. };
-                let source_mode = view.adjusting_crop;
-                let mut viewport = ui.new_child(egui::UiBuilder::new()
-                    .id_salt("recording-preview-viewport").max_rect(rect));
-                viewport.shrink_clip_rect(rect);
-                let mut paint = |ui: &mut egui::Ui, image_rect: egui::Rect| {
-                    ui.painter().image(texture.id(), image_rect,
-                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                        egui::Color32::WHITE);
-                    if let Some(comparison) = &view.comparison {
-                        let response = ui.interact(image_rect.intersect(ui.clip_rect()),
-                            ui.scope_id().with("encoded-comparison-divider"), egui::Sense::click_and_drag())
-                            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
-                        if (response.clicked() || response.dragged()) && let Some(pos) = response.interact_pointer_pos() {
-                            view.comparison_split = ((pos.x - image_rect.left()) / image_rect.width()).clamp(0., 1.);
-                        }
-                        let split = image_rect.left() + image_rect.width() * view.comparison_split;
-                        let encoded_rect = egui::Rect::from_min_max(egui::pos2(split, image_rect.top()), image_rect.max);
-                        ui.painter().with_clip_rect(ui.clip_rect().intersect(encoded_rect)).image(
-                            comparison.textures[1].id(), image_rect,
-                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)), egui::Color32::WHITE);
-                        ui.painter().line_segment([egui::pos2(split, image_rect.top()), egui::pos2(split, image_rect.bottom())],
-                            egui::Stroke::new(tokens.number("s-1"), tokens.color("text")));
-                    }
-                    if source_mode { show_crop_overlay(ui, tokens, view, image_rect); }
-                    else { view.crop_gesture = None; }
-                };
-                if actual_size {
-                    let mut scroll = egui::ScrollArea::both()
-                        .id_salt(("recording-preview-scroll", source_mode, texture.size()))
-                        .max_width(rect.width()).max_height(rect.height())
-                        .auto_shrink([false, false])
-                        .scroll_source(egui::scroll_area::ScrollSource {
-                            drag: egui::scroll_area::DragScroll::Never,
-                            ..Default::default()
-                        });
-                    if scale_changed { scroll = scroll.scroll_offset(egui::Vec2::ZERO); }
-                    scroll.show(&mut viewport, |ui| {
-                        let extent = (size + egui::Vec2::splat(margin * 2.)).max(ui.available_size());
-                        let (content, _) = ui.allocate_exact_size(extent, egui::Sense::hover());
-                        paint(ui, egui::Rect::from_center_size(content.center(), size));
-                    });
-                } else {
-                    let bounds = rect.shrink(margin);
-                    let scale = (bounds.width() / size.x).min(bounds.height() / size.y);
-                    paint(&mut viewport, egui::Rect::from_center_size(bounds.center(), size * scale));
-                }
-            } else {
-                ui.label(if view.busy {
-                    "Decoding recording…"
-                } else {
-                    "Preview unavailable"
-                });
-            }
-            let Some(p) = &view.presented else {
-                return;
-            };
-            let duration = p.source.duration_ms.unwrap_or(0);
-            let displayed_position = if view.adjusting_crop { p.position_ms } else {
-                view.playback_position_ms.unwrap_or(p.position_ms)
-            };
-            let source_size = (p.source.width, p.source.height);
-            let system_audio = p.edit.audio.source_has_system_audio;
-            let microphone_audio = p.edit.audio.source_has_microphone_audio;
-            if view.adjusting_crop {
-                ui.label(format!("Uncropped source: {:.3}s · {} × {} · Drag to stage crop; Apply edits to preview output.",
-                    displayed_position as f64 / 1000., source_size.0, source_size.1));
-            } else if let Some(comparison) = &view.comparison {
-                ui.horizontal(|ui| {
-                    ui.label("Before");
-                    let split = ui.add(egui::Slider::new(&mut view.comparison_split, 0.0..=1.0)
-                        .show_value(false).text("Encoded split"));
-                    if split.is_pointer_button_down_on() { split.request_focus(); }
-                    ui.label(format!("Encoded · accepted {:.3}s · {} × {}", comparison.result.position_ms as f64 / 1000.,
-                        comparison.result.frames[0].width(), comparison.result.frames[0].height()));
-                });
-                ui.weak(if p.export.max_size_bytes.is_some() {
-                    "Encoded first attempt; final Maximum-size save may differ."
-                } else { "Encoded sample; cadence may select neighboring frames." })
-                    .on_hover_text(format!("Selected source position: {} ms. Encoded sample seek: {} ms. Seek positions are timeline intent, not exact decoded frame timestamps.",
-                        comparison.result.position_ms, comparison.result.after_seek_position_ms));
-            } else {
-            ui.label(format!(
-                "Source frame: {:.3}s / {:.3}s · {} × {} · {:?} {:?} preview: {} × {}",
-                displayed_position as f64 / 1000.,
-                duration as f64 / 1000.,
-                p.source.width,
-                p.source.height,
-                p.export.format,
-                p.export.quality,
-                view.texture.as_ref().map_or(p.frame.width() as usize, |t| t.size()[0]),
-                view.texture.as_ref().map_or(p.frame.height() as usize, |t| t.size()[1])
-            ));
-            if p.export.max_size_bytes.is_some() {
-                ui.weak("First-attempt preview. Size-limited saves may reduce resolution, frame rate or audio quality.");
-            }
-            }
-            ui.add_enabled_ui(!view.busy && !view.picker && !view.confirm_close, |ui| {
-                ui.add_enabled_ui(!view.unapplied(), |ui| {
-                    ui.horizontal(|ui| {
-                        let response = ui.add(
-                            egui::Slider::new(
-                                &mut view.position_ms,
-                                0..=duration.saturating_sub(1),
-                            )
-                            .show_value(false),
-                        );
-                        // Numeric entry must not send its first digit to the
-                        // worker and steal focus before the rest can be typed.
-                        ui.add(
-                            egui::DragValue::new(&mut view.position_ms)
-                                .range(0..=duration.saturating_sub(1)),
-                        );
-                        ui.label("ms");
-                        let seek = ui.button("Seek").clicked()
-                            || response.drag_stopped()
-                            || (response.changed() && !response.dragged());
-                        if seek && view.position_ms != displayed_position {
-                            view.send(
-                                tx,
-                                Job::Apply(RecordingEditorRequest::Seek {
-                                    position_ms: view.position_ms,
-                                }),
-                            );
-                        }
-                    });
-                });
-                ui.group(|ui| {
-                    ui.set_min_width(ui.available_width());
-                    let heading = ui.strong("Trim");
-                    let timeline = egui::Rect::from_min_max(
-                        egui::pos2(heading.rect.right() + tokens.number("s-5"), heading.rect.top()),
-                        egui::pos2(ui.max_rect().right(), heading.rect.bottom()),
-                    ).expand2(egui::vec2(0., tokens.number("s-2")));
-                    show_trim_timeline(ui, tokens, view, duration, timeline);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("Start (ms)");
-                        ui.add(egui::DragValue::new(&mut view.start_ms).range(0..=duration));
-                        ui.label("End (ms)");
-                        ui.add(egui::DragValue::new(&mut view.end_ms).range(0..=duration));
-                        ui.label(format!(
-                            "{:.3}s selected",
-                            view.end_ms.saturating_sub(view.start_ms) as f64 / 1000.
-                        ));
-                        if ui.button("Reset trim").clicked() {
-                            view.start_ms = 0;
-                            view.end_ms = duration;
-                        }
-                    });
-                });
-                ui.group(|ui| {
-                    ui.strong("Crop & size");
-                    let mut crop_enabled = view.crop.is_some();
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.checkbox(&mut crop_enabled, "Crop recording").changed() {
-                            view.crop = crop_enabled.then_some(CropRect {
-                                x: 0,
-                                y: 0,
-                                width: source_size.0,
-                                height: source_size.1,
-                            });
-                            if !crop_enabled {
-                                view.adjusting_crop = false;
-                            }
-                        }
-                        ui.add_enabled_ui(crop_enabled, |ui| {
-                            let mut locked = !view.crop_aspect_unlocked;
-                            if ui.checkbox(&mut locked, "Lock aspect ratio").changed() {
-                                view.crop_aspect_unlocked = !locked;
-                            }
-                            if ui.button(if view.adjusting_crop { "Done cropping" } else { "Adjust crop" }).clicked() {
-                                if view.adjusting_crop {
-                                    view.adjusting_crop = false;
-                                } else {
-                                    view.request_crop_view(tx);
-                                }
-                            }
-                        });
-                    });
-                    if let Some(crop) = &mut view.crop {
-                        ui.horizontal_wrapped(|ui| {
-                            for (label, value, minimum, maximum) in [
-                                ("X", &mut crop.x, 0, source_size.0.saturating_sub(2)),
-                                ("Y", &mut crop.y, 0, source_size.1.saturating_sub(2)),
-                            ] {
-                                ui.label(label);
-                                ui.add(egui::DragValue::new(value).range(minimum..=maximum));
-                            }
-                            for (label, horizontal, maximum) in [
-                                ("Width", true, source_size.0),
-                                ("Height", false, source_size.1),
-                            ] {
-                                let mut value = if horizontal { crop.width } else { crop.height };
-                                ui.label(label);
-                                if ui.add(egui::DragValue::new(&mut value).range(2..=maximum).update_while_editing(false)).changed() {
-                                    if !view.crop_aspect_unlocked {
-                                        *crop = crop.resize_aspect_locked(
-                                            source_size.0,
-                                            source_size.1,
-                                            if horizontal {
-                                                CropResizeAxis::Width
-                                            } else {
-                                                CropResizeAxis::Height
-                                            },
-                                            value,
-                                        );
-                                    } else if horizontal {
-                                        crop.width = value;
-                                    } else {
-                                        crop.height = value;
-                                    }
-                                }
-                            }
-                        });
-                    }
-                    let mut resize = view.output_size.is_some();
-                    ui.horizontal(|ui| {
-                        if ui.checkbox(&mut resize, "Custom output size").changed() {
-                            view.output_size = resize.then(|| {
-                                view.output_dimensions(source_size).unwrap_or_else(|| {
-                                    view.crop
-                                        .map_or(source_size, |crop| (crop.width, crop.height))
-                                })
-                            });
-                        }
-                        ui.add_enabled_ui(!resize, |ui| {
-                            ui.label("Preset");
-                            egui::ComboBox::from_id_salt("recording-resolution")
-                                .selected_text(match view.max_resolution {
-                                    MaxResolution::Original => "Original",
-                                    MaxResolution::P1080 => "1080p maximum",
-                                    MaxResolution::P720 => "720p maximum",
-                                })
-                                .show_ui(ui, |ui| {
-                                    for (preset, label) in [
-                                        (MaxResolution::Original, "Original"),
-                                        (MaxResolution::P1080, "1080p maximum"),
-                                        (MaxResolution::P720, "720p maximum"),
-                                    ] {
-                                        ui.selectable_value(&mut view.max_resolution, preset, label);
-                                    }
-                                })
-                                .response
-                                .on_hover_text("Scale down by height, keeping the crop aspect ratio. Never upscale.");
-                        });
-                    });
-                    if let Some((width, height)) = &mut view.output_size {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("Width");
-                            ui.add(egui::DragValue::new(width).range(2..=u32::MAX));
-                            ui.label("Height");
-                            ui.add(egui::DragValue::new(height).range(2..=u32::MAX));
-                            ui.weak("Aspect ratio is not locked");
-                        });
-                    }
-                    ui.weak("Apply previews even-pixel sizes for the selected format and quality.");
-                });
-                ui.group(|ui| {
-                    ui.strong("Audio");
-                    if !system_audio && !microphone_audio {
-                        ui.weak("No audio tracks in this recording.");
-                        return;
-                    }
-                    ui.weak(if view.gif {
-                        "GIF has no audio. Settings are kept for MP4."
-                    } else {
-                        "Apply for export and Sound preview"
-                    });
-                    ui.add_enabled_ui(!view.gif, |ui| {
-                        for (available, label, volume, mute) in [
-                            (
-                                system_audio,
-                                "System",
-                                &mut view.audio.system_volume,
-                                &mut view.audio.mute_system_audio,
-                            ),
-                            (
-                                microphone_audio,
-                                "Microphone",
-                                &mut view.audio.microphone_volume,
-                                &mut view.audio.mute_microphone,
-                            ),
-                        ] {
-                            if available {
-                                ui.horizontal(|ui| {
-                                    ui.label(label);
-                                    ui.add_enabled(
-                                        !*mute,
-                                        egui::Slider::new(volume, 0.0..=2.0)
-                                            .step_by(0.01)
-                                            .custom_formatter(|value, _| {
-                                                format!("{:.0}%", value * 100.)
-                                            })
-                                            .custom_parser(|input| {
-                                                input
-                                                    .trim()
-                                                    .trim_end_matches('%')
-                                                    .trim()
-                                                    .parse::<f64>()
-                                                    .ok()
-                                                    .map(|value| value / 100.)
-                                            }),
-                                    );
-                                    ui.checkbox(mute, "Mute");
-                                });
-                            }
-                        }
-                        ui.checkbox(&mut view.audio.mono_output, "Mono output");
-                    });
-                });
-                if view.gif {
-                    ui.horizontal(|ui| {
-                        ui.strong("GIF frame rate");
-                        let mut fps = view.gif_frames_per_second.unwrap_or(15);
-                        egui::ComboBox::from_id_salt("recording-gif-frame-rate")
-                            .selected_text(format!("{fps} FPS"))
-                            .height(7.0 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.y))
-                            .show_ui(ui, |ui| {
-                                for value in [8, 10, 12, 15, 20, 24, 30] {
-                                    if ui.selectable_value(&mut fps, value, format!("{value} FPS")).changed() {
-                                        view.gif_frames_per_second = Some(fps);
-                                    }
-                                }
-                            });
-                        ui.strong("Maximum width");
-                        let mut maximum = view.gif_maximum_width.unwrap_or(800);
-                        egui::ComboBox::from_id_salt("recording-gif-maximum-width")
-                            .selected_text(format!("{maximum} px"))
-                            .show_ui(ui, |ui| {
-                                for value in [320, 480, 640, 800, 1200] {
-                                    if ui.selectable_value(&mut maximum, value, format!("{value} px")).changed() {
-                                        view.gif_maximum_width = Some(maximum);
-                                    }
-                                }
-                            });
-                    });
-                }
-                ui.add_enabled_ui(!view.maximum_size, |ui| { ui.horizontal(|ui| {
-                    ui.strong("Save quality");
-                    egui::ComboBox::from_id_salt("recording-quality")
-                        .selected_text(format!("{:?}", view.export_spec().quality))
-                        .show_ui(ui, |ui| {
-                            for quality in [
-                                QualityPreset::Preserve,
-                                QualityPreset::Highest,
-                                QualityPreset::High,
-                                QualityPreset::Standard,
-                                QualityPreset::Small,
-                                QualityPreset::Tiny,
-                            ] {
-                                ui.selectable_value(
-                                    &mut view.quality,
-                                    quality,
-                                    format!("{quality:?}"),
-                                );
-                            }
-                        });
-                }); });
-                ui.checkbox(&mut view.maximum_size, "Maximum file size");
-                if view.maximum_size {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut view.maximum_value)
-                            .desired_width(tokens.number("s-6") * 4.));
-                        let mut unit = view.maximum_unit;
-                        egui::ComboBox::from_id_salt("recording-size-unit")
-                            .selected_text(unit.label())
-                            .show_ui(ui, |ui| {
-                                for choice in [FileSizeUnit::Kb, FileSizeUnit::Mb, FileSizeUnit::Gb] {
-                                    ui.selectable_value(&mut unit, choice, choice.label());
-                                }
-                            });
-                        if unit != view.maximum_unit { view.set_maximum_unit(unit); }
-                    });
-                    if view.maximum_bytes().is_none() {
-                        ui.colored_label(tokens.color("danger-text"), "Enter at least 100 KB (decimal units).");
-                    }
-                    ui.weak("Preserve quality with a hard limit. Save fails if no retry fits; the original stays unchanged.");
-                }
-            });
-        });
-    });
     if view.unapplied() {
         view.comparison = None;
     }
+    if probe_env() {
+        let controls = PROBE.with_borrow(Clone::clone);
+        if controls.is_some() && controls != view.probe_emitted {
+            crate::emit(
+                "recording-editor-layout",
+                serde_json::json!({"artifact_id": view.artifact_id, "controls": controls}),
+            );
+            view.probe_emitted = controls;
+        }
+    }
+}
+
+fn show_footer(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    tx: &Sender<Job>,
+    events: &Sender<Event>,
+    viewport: egui::ViewportId,
+) {
+    let margin = egui::Margin::symmetric(tokens.number("s-7") as i8, tokens.number("s-4") as i8);
+    egui::Panel::bottom("recording-save")
+        .frame(
+            egui::Frame::new()
+                .fill(tokens.color("surface-raised"))
+                .inner_margin(margin),
+        )
+        .show(ui, |ui| {
+            let full = ui.max_rect() + margin;
+            if let Some(progress) = &view.progress {
+                // `.recording-export-progress`: a 3px accent bar on the top edge.
+                let bar = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), 3.));
+                ui.painter().rect_filled(bar, 0., tokens.color("surface-sunken"));
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_size(
+                        bar.min,
+                        egui::vec2(
+                            bar.width() * f32::from(progress.completed_per_mille.min(1000)) / 1000.,
+                            bar.height(),
+                        ),
+                    ),
+                    0.,
+                    tokens.color("theme-accent"),
+                );
+            }
+            ui.spacing_mut().item_spacing.y = tokens.number("s-4");
+            if view.confirm_close {
+                card(ui, tokens, "caution-surface", "border-subtle", |ui| {
+                    ui.label(
+                        text(
+                            tokens,
+                            "Discard unsaved recording edits? The original recording is unchanged.",
+                            "text-sm",
+                            "text",
+                        )
+                        .strong(),
+                    );
+                    ui.horizontal(|ui| {
+                        let keep = ui.button("Keep editing");
+                        probe(ui, "Keep editing", keep.rect);
+                        if keep.clicked() {
+                            view.confirm_close = false;
+                        }
+                        let discard = ui.button("Discard edits and close");
+                        probe(ui, "Discard edits and close", discard.rect);
+                        if discard.clicked() {
+                            view.closed = true;
+                        }
+                    });
+                });
+            }
+            if let Some(confirmation) = &view.confirm_replace {
+                let path = confirmation.path.display().to_string();
+                card(ui, tokens, "caution-surface", "border-subtle", |ui| {
+                    ui.spacing_mut().item_spacing.y = tokens.number("s-3");
+                    ui.label(text(tokens, "Replace the original recording?", "text-md", "text").strong());
+                    ui.label(text(tokens, path, "text-sm", "text-muted").monospace());
+                    ui.label(text(tokens, "Replaces this file and its History recovery copy with the accepted edits. This cannot be undone.", "text-sm", "text"));
+                    ui.label(text(tokens, "A matching recovery copy is required. Cancellation stops preparation, not an update already being committed.", "text-xs", "text-subtle"));
+                    ui.horizontal(|ui| {
+                        let cancel = ui.button("Cancel replacement");
+                        probe(ui, "Cancel replacement", cancel.rect);
+                        if cancel.clicked() {
+                            view.confirm_replace = None;
+                        }
+                        let confirm = ui.add(primary_button(tokens, "Replace original"));
+                        probe(ui, "Replace original", confirm.rect);
+                        if confirm.clicked() {
+                            view.confirm_replacement(tx);
+                        }
+                    });
+                });
+            }
+            if view.confirm_replace.is_some() || view.requires_reopen {
+                ui.disable();
+            }
+            let available = ui.available_width();
+            let wide = available >= 820.;
+            let editable = !view.busy && !view.picker && !view.confirm_close;
+            let filename_width = if wide {
+                (available - 500. - tokens.number("s-6")).clamp(280., 420.)
+            } else {
+                available
+            };
+            let filename = |ui: &mut egui::Ui, view: &mut View| {
+                ui.add_enabled_ui(editable, |ui| {
+                    show_filename(ui, tokens, view, events, viewport, filename_width)
+                });
+            };
+            let actions = |ui: &mut egui::Ui, view: &mut View| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                    show_save_actions(ui, tokens, view, tx, editable)
+                });
+            };
+            if wide {
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(filename_width);
+                        filename(ui, view);
+                    });
+                    ui.add_space(tokens.number("s-6"));
+                    actions(ui, view);
+                });
+            } else {
+                filename(ui, view);
+                actions(ui, view);
+            }
+        });
+}
+
+fn primary_button(tokens: &Tokens, label: &str) -> egui::Button<'static> {
+    egui::Button::new(text(tokens, label, "text-md", "theme-accent-ink").strong())
+        .fill(tokens.color("theme-accent"))
+        .stroke(egui::Stroke::NONE)
+        .corner_radius(tokens.number("r-md"))
+        .min_size(egui::vec2(0., tokens.number("h-md")))
+}
+
+/// `.recording-filename`: label, destination folder and the filename field
+/// with its attached format select.
+fn show_filename(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    events: &Sender<Event>,
+    viewport: egui::ViewportId,
+    width: f32,
+) {
+    ui.spacing_mut().item_spacing.y = tokens.number("s-2");
+    ui.set_width(width);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = tokens.number("s-2");
+        ui.label(text(tokens, "Filename", "text-xs", "text-subtle"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let change = ui
+                .add(egui::Button::new(text(tokens, "Change…", "text-2xs", "text")).small())
+                .on_hover_text("Choose the folder for the new copy.");
+            probe(ui, "Change…", change.rect);
+            if change.clicked() {
+                view.picker = true;
+                let events = events.clone();
+                let ctx = ui.ctx().clone();
+                let directory = view.directory.clone();
+                thread::spawn(move || {
+                    let folder = rfd::FileDialog::new()
+                        .set_title("Choose save location")
+                        .set_directory(&directory)
+                        .pick_folder();
+                    let _ = events.send(Event::Destination(folder));
+                    wake(&ctx, viewport);
+                });
+            }
+            let directory = view.directory.display().to_string();
+            let location = ui
+                .add(
+                    egui::Label::new(
+                        text(tokens, directory.clone(), "text-2xs", "text-subtle").monospace(),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(directory);
+            probe(ui, "Save location", location.rect);
+            ui.label(text(tokens, "Saving to", "text-2xs", "text-faint"));
+        });
+    });
+    let height = tokens.number("h-md");
+    let (field, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let format_width = 76.;
+    let stem_rect = egui::Rect::from_min_max(
+        field.min,
+        egui::pos2(field.right() - format_width, field.bottom()),
+    );
+    let format_rect =
+        egui::Rect::from_min_max(egui::pos2(stem_rect.right(), field.top()), field.max);
+    // `.recording-filename-input`: one field with the format select attached.
+    ui.painter()
+        .rect_filled(field, tokens.number("r-md"), tokens.color("surface-field"));
+    let mut stem_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(stem_rect.shrink2(egui::vec2(tokens.number("s-4"), 0.)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    let response = stem_ui.add(
+        egui::TextEdit::singleline(&mut view.stem)
+            .frame(egui::Frame::NONE)
+            .font(egui::FontId::proportional(tokens.number("text-sm")))
+            .desired_width(stem_rect.width() - tokens.number("s-4") * 2.)
+            .align(egui::Align2::LEFT_CENTER),
+    );
+    probe(ui, "Filename", response.rect);
+    if response.changed() {
+        view.error = None;
+    }
+    ui.painter().rect_stroke(
+        field,
+        tokens.number("r-md"),
+        egui::Stroke::new(
+            1.,
+            tokens.color(if response.has_focus() {
+                "theme-accent"
+            } else {
+                "control-border"
+            }),
+        ),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().vline(
+        format_rect.left(),
+        field.y_range().shrink(1.),
+        egui::Stroke::new(1., tokens.color("control-border")),
+    );
+    let mut format_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(format_rect.shrink(2.))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    {
+        let visuals = format_ui.visuals_mut();
+        for widget in [
+            &mut visuals.widgets.inactive,
+            &mut visuals.widgets.hovered,
+            &mut visuals.widgets.active,
+            &mut visuals.widgets.open,
+        ] {
+            widget.bg_stroke = egui::Stroke::NONE;
+        }
+        visuals.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+    }
+    let old = view.gif;
+    let mut gif = view.gif;
+    select(
+        &mut format_ui,
+        "Format",
+        format_rect.width() - 12.,
+        &mut gif,
+        &[
+            (false, ".mp4".into(), "MP4"),
+            (true, ".gif".into(), "GIF"),
+        ],
+    );
+    if gif != old {
+        view.gif = gif;
+        // Shipping offers Preserve quality only for MP4 and switches a GIF to
+        // Compress; Maximum keeps its remembered preset.
+        if gif && !view.maximum_size && view.quality == QualityPreset::Preserve {
+            view.quality = view
+                .compress_quality
+                .unwrap_or(recording_editor_ui::DEFAULT_COMPRESS_PRESET);
+        }
+    }
+}
+
+fn show_save_actions(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    tx: &Sender<Job>,
+    editable: bool,
+) {
+    ui.spacing_mut().item_spacing.y = tokens.number("s-2");
+    // `.recording-save-toast`: error, status, or the running stage.
+    let (message, color) = if let Some(error) = &view.error {
+        (error.clone(), "danger-text")
+    } else if let Some(status) = &view.status {
+        (status.clone(), "text-subtle")
+    } else if let Some(progress) = &view.progress {
+        (
+            progress.message.clone().unwrap_or_else(|| {
+                recording_editor_ui::export_stage_label(progress.stage).to_owned()
+            }),
+            "text-subtle",
+        )
+    } else {
+        (String::new(), "text-subtle")
+    };
+    let status = ui.add(egui::Label::new(text(tokens, message, "text-xs", color)).wrap());
+    probe(ui, "Status", status.rect);
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_enabled_ui(editable, |ui| {
+                let save = ui
+                    .add_enabled(
+                        view.presented.is_some() && !view.unapplied(),
+                        primary_button(tokens, "Save new copy"),
+                    )
+                    .on_hover_text(
+                        "Creates a separate copy. The original and existing files are never replaced.",
+                    );
+                probe(ui, "Save new copy", save.rect);
+                if save.clicked() {
+                    if let Some(error) = recording_editor_ui::filename_error(&view.stem) {
+                        view.error = Some(error.into());
+                    } else {
+                        let cancel = CancelToken::default();
+                        view.cancel = Some(cancel.clone());
+                        let request = RecordingSaveRequest {
+                            destination: view.destination(),
+                            export: view.presented.as_ref().unwrap().export.clone(),
+                        };
+                        view.send(tx, Job::Save(request, cancel));
+                    }
+                }
+                let apply = ui
+                    .add_enabled(
+                        view.unapplied() && (!view.maximum_size || view.maximum_bytes().is_some()),
+                        egui::Button::new("Apply edits").min_size(egui::vec2(0., tokens.number("h-md"))),
+                    )
+                    .on_hover_text("Update the preview before scrubbing or saving");
+                probe(ui, "Apply edits", apply.rect);
+                if apply.clicked() {
+                    let edit = view.staged_edit(view.presented.as_ref().unwrap());
+                    let export = view.export_spec();
+                    view.send(
+                        tx,
+                        Job::Apply(RecordingEditorRequest::UpdatePreview { edit, export }),
+                    );
+                }
+                if view.cancel.is_none() {
+                    let replace = ui
+                        .add_enabled(
+                            view.can_replace(),
+                            egui::Button::new("Replace original…").min_size(egui::vec2(0., tokens.number("h-md"))),
+                        )
+                        .on_hover_text("Replace the saved original and matching History recovery copy after confirmation. Only same-format MP4/GIF; apply edits first. A saved path is only a hint: the backend checks both files before writing.");
+                    probe(ui, "Replace original…", replace.rect);
+                    if replace.clicked() {
+                        view.begin_replace();
+                    }
+                }
+            });
+            if let Some(cancel) = &view.cancel {
+                let label = if view.playing {
+                    "Pause playback"
+                } else if view.loading_source {
+                    "Cancel source preview"
+                } else if view.loading_thumbnails {
+                    "Cancel thumbnails"
+                } else if view.estimating {
+                    "Cancel estimate"
+                } else if view.comparing.is_some() {
+                    "Cancel comparison"
+                } else {
+                    "Cancel export"
+                };
+                let response = ui.add_enabled(
+                    !cancel.is_cancelled(),
+                    egui::Button::new(label).min_size(egui::vec2(0., tokens.number("h-md"))),
+                );
+                probe(ui, "Cancel", response.rect);
+                probe(ui, label, response.rect);
+                if response.clicked() {
+                    cancel.cancel();
+                }
+            }
+        });
+    });
+}
+
+fn show_page(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
+    if view.unapplied() {
+        view.comparison = None;
+    }
+    let gap = tokens.number("s-5");
+    ui.spacing_mut().item_spacing.y = gap;
+    let title = view
+        .presented
+        .as_ref()
+        .map_or(recording_editor_ui::TITLE_RECORDING, |p| {
+            recording_editor_ui::title(&p.source.mime_type)
+        });
+    ui.label(text(tokens, title, "text-2xl", "text").strong());
+    let window_height = ui.ctx().content_rect().height();
+    card_frame(ui, tokens, |ui| show_preview_card(ui, tokens, view, tx, window_height));
+    let Some(p) = &view.presented else {
+        return;
+    };
+    let duration = p.source.duration_ms.unwrap_or(0);
+    let source_size = (p.source.width, p.source.height);
+    let system_audio = p.edit.audio.source_has_system_audio;
+    let microphone_audio = p.edit.audio.source_has_microphone_audio;
+    ui.add_enabled_ui(!view.busy && !view.picker && !view.confirm_close, |ui| {
+        show_timeline_card(ui, tokens, view, tx, duration);
+        let wide = ui.available_width() >= 700.;
+        if view.gif {
+            show_gif_card(ui, tokens, view);
+        }
+        if wide {
+            ui.columns(2, |columns| {
+                columns[0].spacing_mut().item_spacing.y = gap;
+                columns[1].spacing_mut().item_spacing.y = gap;
+                show_crop_card(&mut columns[0], tokens, view, tx, source_size);
+                show_quality_card(&mut columns[1], tokens, view, tx);
+            });
+        } else {
+            show_crop_card(ui, tokens, view, tx, source_size);
+            show_quality_card(ui, tokens, view, tx);
+        }
+        if system_audio || microphone_audio {
+            show_audio_card(ui, tokens, view, system_audio, microphone_audio);
+        }
+    });
+}
+
+/// `.recording-editor-preview`: raised card whose viewport is sunken.
+fn card_frame<R>(ui: &mut egui::Ui, tokens: &Tokens, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::new()
+        .fill(tokens.color("surface-raised"))
+        .stroke(egui::Stroke::new(1., tokens.color("border-subtle")))
+        .corner_radius(tokens.number("r-xl") as u8)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
+}
+
+fn show_preview_card(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    tx: &Sender<Job>,
+    window_height: f32,
+) {
+    ui.spacing_mut().item_spacing = egui::vec2(tokens.number("s-4"), 0.);
+    let previous_actual_size = view.preview_actual_size;
+    let width = ui.available_width();
+    let (toolbar, _) = ui.allocate_exact_size(egui::vec2(width, 46.), egui::Sense::hover());
+    let mut bar = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(toolbar.shrink2(egui::vec2(tokens.number("s-5"), 0.)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    bar.label(text(tokens, "Preview", "text-md", "text-muted"));
+    let mode = if view.adjusting_crop {
+        "Source crop"
+    } else if view.comparison.is_some() {
+        "Encoded comparison"
+    } else if view.playback_audio_enabled {
+        "Audio playback"
+    } else if view.preview_sound && !view.playing {
+        "Sound selected"
+    } else {
+        "Silent playback"
+    };
+    bar.label(text(tokens, mode, "text-sm", "text-subtle"));
+    bar.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        preview_size_segmented(ui, tokens, view);
+        let looping = view.preview_loop.load(Ordering::Relaxed);
+        if loop_toggle(
+            ui,
+            tokens,
+            looping,
+            view.presented.is_some()
+                && (!view.busy || view.playing)
+                && !view.picker
+                && !view.confirm_close
+                && view.cancel.as_ref().is_none_or(|cancel| !cancel.is_cancelled()),
+        )
+        .on_hover_text("Repeat the accepted trim until paused. This changes only playback, not the saved recording.")
+        .clicked()
+        {
+            view.preview_loop.store(!looping, Ordering::Relaxed);
+        }
+        let compare = toolbar_toggle(
+            ui,
+            tokens,
+            if view.comparison.is_some() { "Hide compare" } else { "Compare" },
+            view.comparison.is_some(),
+            view.can_compare(),
+        )
+        .on_hover_text("Encode a sample at the accepted still frame, not the paused playback position. Before is spatially edited; Encoded includes compression, GIF palette and cadence. First attempt only: a Maximum-size save may differ. Apply staged edits and seek inside the accepted trim first.");
+        if compare.clicked() {
+            if view.comparison.is_some() {
+                view.comparison = None;
+            } else {
+                view.request_comparison(ui.ctx(), tx);
+            }
+        }
+        if toolbar_toggle(
+            ui,
+            tokens,
+            "Sound",
+            view.preview_sound,
+            view.presented.is_some() && !view.busy && !view.picker && !view.confirm_close,
+        )
+        .on_hover_text("Preview accepted MP4 audio on the default output device. Change only while stopped. If the device fails, turn Sound off and retry. This never changes the export.")
+        .clicked()
+        {
+            view.preview_sound = !view.preview_sound;
+        }
+        if view.adjusting_crop {
+            let done = ui.add_enabled(
+                !view.busy && !view.picker && !view.confirm_close,
+                egui::Button::new(text(tokens, "Done cropping", "text-sm", "text")),
+            );
+            probe(ui, "Done cropping (preview)", done.rect);
+            if done.clicked() {
+                view.adjusting_crop = false;
+                view.crop_gesture = None;
+            }
+        }
+    });
+    ui.painter().hline(
+        toolbar.x_range(),
+        toolbar.bottom(),
+        egui::Stroke::new(1., tokens.color("border-subtle")),
+    );
+    let scale_changed = previous_actual_size != view.preview_actual_size;
+    if scale_changed {
+        view.crop_gesture = None;
+    }
+    let height = (window_height * 0.46).clamp(180., 480.);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let radius = tokens.number("r-xl") as u8;
+    ui.painter().rect_filled(
+        rect,
+        egui::CornerRadius {
+            nw: 0,
+            ne: 0,
+            sw: radius,
+            se: radius,
+        },
+        tokens.color("surface-sunken"),
+    );
+    probe(ui, "Preview viewport", rect);
+    let inner = rect.shrink(tokens.number("s-5"));
+    let preview_texture = if view.adjusting_crop {
+        view.source_texture.clone()
+    } else if let Some(comparison) = &view.comparison {
+        Some(comparison.textures[0].clone())
+    } else {
+        view.texture.clone()
+    };
+    if let Some(texture) = preview_texture {
+        let size = texture.size_vec2();
+        let actual_size = view.preview_actual_size;
+        let margin = if view.adjusting_crop { tokens.number("s-3") } else { 0. };
+        let source_mode = view.adjusting_crop;
+        let mut viewport = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("recording-preview-viewport")
+                .max_rect(inner),
+        );
+        viewport.shrink_clip_rect(inner);
+        let mut image_rect_out = None;
+        let mut paint = |ui: &mut egui::Ui, image_rect: egui::Rect| {
+            ui.painter().add(
+                egui::epaint::RectShape::filled(
+                    image_rect,
+                    tokens.number("r-md"),
+                    egui::Color32::WHITE,
+                )
+                .with_texture(
+                    texture.id(),
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                ),
+            );
+            ui.painter().rect_stroke(
+                image_rect,
+                tokens.number("r-md"),
+                egui::Stroke::new(1., tokens.color("border")),
+                egui::StrokeKind::Outside,
+            );
+            probe(ui, "Preview image", image_rect);
+            image_rect_out = Some(image_rect.intersect(ui.clip_rect()));
+            if let Some(comparison) = &view.comparison {
+                let response = ui
+                    .interact(
+                        image_rect.intersect(ui.clip_rect()),
+                        ui.scope_id().with("encoded-comparison-divider"),
+                        egui::Sense::click_and_drag(),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                if (response.clicked() || response.dragged())
+                    && let Some(pos) = response.interact_pointer_pos()
+                {
+                    view.comparison_split =
+                        ((pos.x - image_rect.left()) / image_rect.width()).clamp(0., 1.);
+                }
+                let split = image_rect.left() + image_rect.width() * view.comparison_split;
+                let encoded_rect =
+                    egui::Rect::from_min_max(egui::pos2(split, image_rect.top()), image_rect.max);
+                ui.painter()
+                    .with_clip_rect(ui.clip_rect().intersect(encoded_rect))
+                    .image(
+                        comparison.textures[1].id(),
+                        image_rect,
+                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                        egui::Color32::WHITE,
+                    );
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(split, image_rect.top()),
+                        egui::pos2(split, image_rect.bottom()),
+                    ],
+                    egui::Stroke::new(tokens.number("s-1"), tokens.color("text")),
+                );
+                // Before / Encoded badges on the media, like shipping's
+                // CompressionPreview labels.
+                for (label, align, anchor) in [
+                    ("Before", egui::Align2::LEFT_TOP, image_rect.left_top() + egui::vec2(8., 8.)),
+                    ("Encoded", egui::Align2::RIGHT_TOP, image_rect.right_top() + egui::vec2(-8., 8.)),
+                ] {
+                    let painter = ui.painter();
+                    let galley = painter.layout_no_wrap(
+                        label.to_owned(),
+                        egui::FontId::proportional(tokens.number("text-2xs")),
+                        tokens.color("glass-text"),
+                    );
+                    let badge = align.anchor_size(anchor, galley.size() + egui::vec2(12., 6.));
+                    painter.rect_filled(badge, tokens.number("r-xs"), tokens.color("glass-strong"));
+                    painter.galley(badge.min + egui::vec2(6., 3.), galley, egui::Color32::PLACEHOLDER);
+                }
+            }
+            if source_mode {
+                show_crop_overlay(ui, tokens, view, image_rect);
+            } else {
+                view.crop_gesture = None;
+            }
+        };
+        if actual_size {
+            let mut scroll = egui::ScrollArea::both()
+                .id_salt(("recording-preview-scroll", source_mode, texture.size()))
+                .max_width(inner.width())
+                .max_height(inner.height())
+                .auto_shrink([false, false])
+                .scroll_source(egui::scroll_area::ScrollSource {
+                    drag: egui::scroll_area::DragScroll::Never,
+                    ..Default::default()
+                });
+            if scale_changed {
+                scroll = scroll.scroll_offset(egui::Vec2::ZERO);
+            }
+            scroll.show(&mut viewport, |ui| {
+                let extent = (size + egui::Vec2::splat(margin * 2.)).max(ui.available_size());
+                let (content, _) = ui.allocate_exact_size(extent, egui::Sense::hover());
+                paint(ui, egui::Rect::from_center_size(content.center(), size));
+            });
+        } else {
+            let bounds = inner.shrink(margin);
+            let scale = (bounds.width() / size.x).min(bounds.height() / size.y);
+            paint(
+                &mut viewport,
+                egui::Rect::from_center_size(bounds.center(), size * scale),
+            );
+        }
+        if !view.adjusting_crop
+            && let Some(image) = image_rect_out
+        {
+            show_overlay_play(ui, tokens, view, tx, image, inner);
+        }
+    } else {
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            if view.busy {
+                "Decoding recording…"
+            } else {
+                "Preview unavailable"
+            },
+            egui::FontId::proportional(tokens.number("text-md")),
+            tokens.color("text-subtle"),
+        );
+    }
+    let Some(p) = &view.presented else {
+        return;
+    };
+    // Native caption: accepted position, dimensions and output identity.
+    let duration = p.source.duration_ms.unwrap_or(0);
+    let displayed_position = if view.adjusting_crop {
+        p.position_ms
+    } else {
+        view.playback_position_ms.unwrap_or(p.position_ms)
+    };
+    let time = |ms| recording_editor_ui::format_editor_time(ms, duration);
+    let mut caption = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_size(
+                egui::pos2(rect.left() + tokens.number("s-5"), rect.bottom()),
+                egui::vec2(width - tokens.number("s-5") * 2., 200.),
+            ))
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    caption.spacing_mut().item_spacing = egui::vec2(tokens.number("s-4"), tokens.number("s-2"));
+    caption.add_space(tokens.number("s-4"));
+    if view.adjusting_crop {
+        caption.label(text(
+            tokens,
+            format!(
+                "Uncropped source · {} · {} × {} · Drag to stage the crop, then Apply edits.",
+                time(displayed_position),
+                p.source.width,
+                p.source.height
+            ),
+            "text-xs",
+            "text-subtle",
+        ));
+    } else if let Some(comparison) = &view.comparison {
+        caption.horizontal(|ui| {
+            ui.label(text(tokens, "Before", "text-xs", "text-subtle"));
+            let split = ui.add(
+                egui::Slider::new(&mut view.comparison_split, 0.0..=1.0)
+                    .show_value(false)
+                    .text("Encoded split"),
+            );
+            probe(ui, "Encoded split", split.rect);
+            if split.is_pointer_button_down_on() {
+                split.request_focus();
+            }
+            ui.label(text(
+                tokens,
+                format!(
+                    "Encoded · accepted {} · {} × {}",
+                    time(comparison.result.position_ms),
+                    comparison.result.frames[0].width(),
+                    comparison.result.frames[0].height()
+                ),
+                "text-xs",
+                "text-subtle",
+            ));
+        });
+        caption
+            .label(text(
+                tokens,
+                if p.export.max_size_bytes.is_some() {
+                    "Encoded first attempt; the final Maximum-size save may differ."
+                } else {
+                    "Encoded sample; cadence may select neighboring frames."
+                },
+                "text-xs",
+                "text-faint",
+            ))
+            .on_hover_text(format!(
+                "Selected source position: {} ms. Encoded sample seek: {} ms. Seek positions are timeline intent, not exact decoded frame timestamps.",
+                comparison.result.position_ms, comparison.result.after_seek_position_ms
+            ));
+    } else {
+        let (preview_width, preview_height) = view.texture.as_ref().map_or(
+            (p.frame.width() as usize, p.frame.height() as usize),
+            |t| (t.size()[0], t.size()[1]),
+        );
+        caption.label(text(
+            tokens,
+            format!(
+                "{} / {} · Source {} × {} · {} {} preview {} × {}",
+                time(displayed_position),
+                time(duration),
+                p.source.width,
+                p.source.height,
+                if p.export.format == ExportFormat::Gif { "GIF" } else { "MP4" },
+                recording_editor_ui::quality_label(p.export.quality),
+                preview_width,
+                preview_height
+            ),
+            "text-xs",
+            "text-subtle",
+        ));
+        if p.export.max_size_bytes.is_some() {
+            caption.label(text(
+                tokens,
+                "First-attempt preview. Size-limited saves may reduce resolution, frame rate or audio quality.",
+                "text-xs",
+                "text-faint",
+            ));
+        }
+    }
+    let used = caption.min_rect().bottom() - rect.bottom() + tokens.number("s-4");
+    ui.allocate_exact_size(egui::vec2(width, used.max(0.)), egui::Sense::hover());
+}
+
+fn show_timeline_card(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    tx: &Sender<Job>,
+    duration: u64,
+) {
+    egui::Frame::new()
+        .fill(tokens.color("surface-raised"))
+        .stroke(egui::Stroke::new(1., tokens.color("border-subtle")))
+        .corner_radius(tokens.number("r-xl") as u8)
+        .inner_margin(egui::Margin {
+            left: tokens.number("s-6") as i8,
+            right: tokens.number("s-6") as i8,
+            top: tokens.number("s-5") as i8,
+            bottom: tokens.number("s-6") as i8,
+        })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = tokens.number("s-4");
+            let summary = recording_editor_ui::trim_summary(view.start_ms, view.end_ms, duration);
+            ui.horizontal(|ui| {
+                ui.label(text(tokens, summary.range, "text-sm", "text").strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(text(tokens, summary.selected, "text-sm", "text-subtle"));
+                    if let Some(error) = view.thumbnail_error.clone() {
+                        let retry = ui
+                            .add_enabled(
+                                !view.busy && !view.picker && !view.confirm_close,
+                                egui::Button::new(text(tokens, "Retry thumbnails", "text-xs", "text")).small(),
+                            )
+                            .on_hover_text(error);
+                        probe(ui, "Retry thumbnails", retry.rect);
+                        if retry.clicked() {
+                            view.request_thumbnails(tx);
+                        }
+                        ui.label(text(tokens, "Source thumbnails unavailable.", "text-xs", "text-subtle"));
+                    }
+                });
+            });
+            ui.add_space(tokens.number("s-2"));
+            let height = recording_editor_ui::TIMELINE_TRACK_HEIGHT + 6.;
+            let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+            if let Some(position) = show_trim_timeline(ui, tokens, view, duration, row)
+                && view.presented.as_ref().is_some_and(|p| p.position_ms != position)
+            {
+                view.send(tx, Job::Apply(RecordingEditorRequest::Seek { position_ms: position }));
+            }
+            ui.add_space(tokens.number("s-2"));
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = tokens.number("s-3");
+                ui.label(text(tokens, "Start (ms)", "text-xs", "text-subtle"));
+                let start = ui.add(egui::DragValue::new(&mut view.start_ms).range(0..=duration));
+                probe(ui, "Start (ms)", start.rect);
+                ui.label(text(tokens, "End (ms)", "text-xs", "text-subtle"));
+                let end = ui.add(egui::DragValue::new(&mut view.end_ms).range(0..=duration));
+                probe(ui, "End (ms)", end.rect);
+                let reset = ui.button(text(tokens, "Reset trim", "text-sm", "text"));
+                probe(ui, "Reset trim", reset.rect);
+                if reset.clicked() {
+                    view.start_ms = 0;
+                    view.end_ms = duration;
+                }
+                ui.add_space(tokens.number("s-5"));
+                let displayed = view
+                    .presented
+                    .as_ref()
+                    .map_or(0, |p| view.playback_position_ms.unwrap_or(p.position_ms));
+                ui.add_enabled_ui(!view.unapplied(), |ui| {
+                    ui.label(text(tokens, "Position (ms)", "text-xs", "text-subtle"));
+                    // Numeric entry must not send its first digit to the
+                    // worker and steal focus before the rest can be typed.
+                    let position = ui.add(
+                        egui::DragValue::new(&mut view.position_ms)
+                            .range(0..=duration.saturating_sub(1)),
+                    );
+                    probe(ui, "Position (ms)", position.rect);
+                    let seek = ui
+                        .button(text(tokens, "Seek", "text-sm", "text"))
+                        .on_hover_text("Decode the accepted preview at this source position. Clicking the timeline also seeks.");
+                    probe(ui, "Seek", seek.rect);
+                    if seek.clicked() && view.position_ms != displayed {
+                        view.send(
+                            tx,
+                            Job::Apply(RecordingEditorRequest::Seek {
+                                position_ms: view.position_ms,
+                            }),
+                        );
+                    }
+                });
+            });
+        });
+}
+
+fn show_gif_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
+    card(ui, tokens, "surface-raised", "border-subtle", |ui| {
+        card_title(ui, tokens, "GIF settings");
+        ui.columns(2, |columns| {
+            columns[0].spacing_mut().item_spacing.y = tokens.number("s-3");
+            columns[1].spacing_mut().item_spacing.y = tokens.number("s-3");
+            field_label(&mut columns[0], tokens, "Frame rate");
+            let mut fps = view.gif_frames_per_second.unwrap_or(15);
+            let width = columns[0].available_width();
+            if select(
+                &mut columns[0],
+                "Frame rate",
+                width,
+                &mut fps,
+                &recording_editor_ui::GIF_FRAME_RATES
+                    .map(|value| (value, format!("{value} FPS"), "")),
+            ) {
+                view.gif_frames_per_second = Some(fps);
+            }
+            field_label(&mut columns[1], tokens, "Maximum width");
+            let mut maximum = view.gif_maximum_width.unwrap_or(800);
+            let width = columns[1].available_width();
+            if select(
+                &mut columns[1],
+                "Maximum width",
+                width,
+                &mut maximum,
+                &recording_editor_ui::GIF_MAXIMUM_WIDTHS
+                    .map(|value| (value, format!("{value} px"), "")),
+            ) {
+                view.gif_maximum_width = Some(maximum);
+            }
+        });
+    });
+}
+
+fn show_crop_card(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    tx: &Sender<Job>,
+    source_size: (u32, u32),
+) {
+    card(ui, tokens, "surface-raised", "border-subtle", |ui| {
+        card_title(ui, tokens, "Crop & size");
+        let mut crop_enabled = view.crop.is_some();
+        let toggle = ui.checkbox(&mut crop_enabled, "Crop recording");
+        probe(ui, "Crop recording", toggle.rect);
+        if toggle.changed() {
+            view.crop = crop_enabled.then_some(CropRect {
+                x: 0,
+                y: 0,
+                width: source_size.0,
+                height: source_size.1,
+            });
+            if !crop_enabled {
+                view.adjusting_crop = false;
+            }
+        }
+        // `.editor-number-grid`: X, Y, Width, Height, disabled until cropping.
+        let mut preview = view.crop.unwrap_or(CropRect {
+            x: 0,
+            y: 0,
+            width: source_size.0,
+            height: source_size.1,
+        });
+        let enabled = view.crop.is_some();
+        let mut changed = None;
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.columns(4, |columns| {
+                for (index, column) in columns.iter_mut().enumerate() {
+                    column.spacing_mut().item_spacing.y = tokens.number("s-2");
+                    let (label, probe_name) = [
+                        ("X", "Crop X"),
+                        ("Y", "Crop Y"),
+                        ("Width", "Crop width"),
+                        ("Height", "Crop height"),
+                    ][index];
+                    field_label(column, tokens, label);
+                    let width = column.available_width();
+                    let response = match index {
+                        0 => column.add_sized(
+                            [width, tokens.number("h-md")],
+                            egui::DragValue::new(&mut preview.x)
+                                .range(0..=source_size.0.saturating_sub(2)),
+                        ),
+                        1 => column.add_sized(
+                            [width, tokens.number("h-md")],
+                            egui::DragValue::new(&mut preview.y)
+                                .range(0..=source_size.1.saturating_sub(2)),
+                        ),
+                        _ => {
+                            let horizontal = index == 2;
+                            let mut value = if horizontal { preview.width } else { preview.height };
+                            let response = column.add_sized(
+                                [width, tokens.number("h-md")],
+                                egui::DragValue::new(&mut value)
+                                    .range(2..=if horizontal { source_size.0 } else { source_size.1 })
+                                    .update_while_editing(false),
+                            );
+                            if response.changed() {
+                                changed = Some((horizontal, value));
+                            }
+                            response
+                        }
+                    };
+                    probe(column, probe_name, response.rect);
+                }
+            });
+        });
+        if let Some(crop) = &mut view.crop {
+            crop.x = preview.x;
+            crop.y = preview.y;
+            if let Some((horizontal, value)) = changed {
+                if !view.crop_aspect_unlocked {
+                    *crop = crop.resize_aspect_locked(
+                        source_size.0,
+                        source_size.1,
+                        if horizontal {
+                            CropResizeAxis::Width
+                        } else {
+                            CropResizeAxis::Height
+                        },
+                        value,
+                    );
+                } else if horizontal {
+                    crop.width = value;
+                } else {
+                    crop.height = value;
+                }
+            }
+        }
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(enabled, |ui| {
+                let mut locked = !view.crop_aspect_unlocked;
+                let lock = ui.checkbox(&mut locked, "Lock aspect ratio");
+                probe(ui, "Lock aspect ratio", lock.rect);
+                if lock.changed() {
+                    view.crop_aspect_unlocked = !locked;
+                }
+                let label = if view.adjusting_crop { "Done cropping" } else { "Adjust crop" };
+                let adjust = ui.button(label).on_hover_text(
+                    "Drag the crop on the full source frame. Arrow keys move a focused handle by 1 source pixel; Shift moves 10.",
+                );
+                probe(ui, "Adjust crop", adjust.rect);
+                probe(ui, label, adjust.rect);
+                if adjust.clicked() {
+                    if view.adjusting_crop {
+                        view.adjusting_crop = false;
+                    } else {
+                        view.request_crop_view(tx);
+                    }
+                }
+            });
+        });
+        ui.spacing_mut().item_spacing.y = tokens.number("s-3");
+        field_label(ui, tokens, "Output resolution");
+        let base = view.crop.map_or(source_size, |crop| (crop.width, crop.height));
+        let base = MaxResolution::Original.constrain(base.0, base.1);
+        let current = if view.output_size.is_some() {
+            ResolutionChoice::Custom
+        } else {
+            match view.max_resolution {
+                MaxResolution::Original => ResolutionChoice::Original,
+                MaxResolution::P1080 => ResolutionChoice::P1080,
+                MaxResolution::P720 => ResolutionChoice::P720,
+            }
+        };
+        let mut choice = current;
+        let width = ui.available_width().min(430.);
+        let options = ResolutionChoice::ALL.map(|choice| {
+            (choice, choice.label(base.0, base.1), choice.description())
+        });
+        if select(ui, "Output resolution", width, &mut choice, &options) && choice != current {
+            match choice {
+                ResolutionChoice::Custom => {
+                    view.output_size = Some(view.output_dimensions(source_size).unwrap_or_else(|| {
+                        view.crop.map_or(source_size, |crop| (crop.width, crop.height))
+                    }));
+                }
+                preset => {
+                    view.output_size = None;
+                    view.max_resolution = match preset {
+                        ResolutionChoice::P1080 => MaxResolution::P1080,
+                        ResolutionChoice::P720 => MaxResolution::P720,
+                        _ => MaxResolution::Original,
+                    };
+                }
+            }
+        }
+        if let Some((width, height)) = &mut view.output_size {
+            ui.columns(2, |columns| {
+                for (index, column) in columns.iter_mut().enumerate() {
+                    column.spacing_mut().item_spacing.y = tokens.number("s-2");
+                    let (label, value) = if index == 0 {
+                        ("Width", &mut *width)
+                    } else {
+                        ("Height", &mut *height)
+                    };
+                    field_label(column, tokens, label);
+                    let available = column.available_width();
+                    let response = column.add_sized(
+                        [available, tokens.number("h-md")],
+                        egui::DragValue::new(value).range(2..=u32::MAX),
+                    );
+                    probe(column, &format!("Output {}", label.to_lowercase()), response.rect);
+                }
+            });
+        }
+        ui.label(text(
+            tokens,
+            "Apply previews even-pixel sizes for the selected format and quality.",
+            "text-xs",
+            "text-subtle",
+        ));
+    });
+}
+
+fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
+    card(ui, tokens, "surface-raised", "border-subtle", |ui| {
+        card_title(ui, tokens, "Save quality");
+        ui.spacing_mut().item_spacing.y = tokens.number("s-3");
+        field_label(ui, tokens, "Quality mode");
+        let current = QualityMode::of(view.quality, view.maximum_size);
+        let mut mode = current;
+        let width = ui.available_width().min(430.);
+        let mut options: Vec<_> = QualityMode::available(view.gif)
+            .iter()
+            .map(|mode| (*mode, mode.label().to_owned(), mode.description()))
+            .collect();
+        if !options.iter().any(|(option, _, _)| *option == current) {
+            // An accepted Preserve GIF keeps showing its mode until changed.
+            options.insert(0, (current, current.label().to_owned(), current.description()));
+        }
+        if select(ui, "Quality mode", width, &mut mode, &options) && mode != current {
+            match mode {
+                QualityMode::Preserve => {
+                    view.maximum_size = false;
+                    view.quality = QualityPreset::Preserve;
+                }
+                QualityMode::Compress => {
+                    view.maximum_size = false;
+                    if view.quality == QualityPreset::Preserve {
+                        view.quality = view
+                            .compress_quality
+                            .unwrap_or(recording_editor_ui::DEFAULT_COMPRESS_PRESET);
+                    }
+                }
+                QualityMode::Maximum => view.maximum_size = true,
+            }
+        }
+        ui.label(text(tokens, mode.description(), "text-xs", "text-subtle"));
+        if mode == QualityMode::Compress {
+            ui.add_space(tokens.number("s-2"));
+            field_label(ui, tokens, "Quality");
+            let mut quality = view.quality;
+            let options = recording_editor_ui::COMPRESS_PRESETS.map(|preset| {
+                (
+                    preset,
+                    recording_editor_ui::quality_label(preset).to_owned(),
+                    recording_editor_ui::quality_description(preset),
+                )
+            });
+            if select(ui, "Quality", width, &mut quality, &options) {
+                view.quality = quality;
+                view.compress_quality = Some(quality);
+            }
+        }
+        if mode == QualityMode::Maximum {
+            ui.add_space(tokens.number("s-2"));
+            field_label(ui, tokens, "Maximum file size");
+            ui.horizontal(|ui| {
+                let value = ui.add(
+                    egui::TextEdit::singleline(&mut view.maximum_value)
+                        .desired_width(tokens.number("s-6") * 6.),
+                );
+                probe(ui, "Maximum file size value", value.rect);
+                let mut unit = view.maximum_unit;
+                select(
+                    ui,
+                    "File size unit",
+                    64.,
+                    &mut unit,
+                    &[FileSizeUnit::Kb, FileSizeUnit::Mb, FileSizeUnit::Gb]
+                        .map(|choice| (choice, choice.label().to_owned(), "")),
+                );
+                if unit != view.maximum_unit {
+                    view.set_maximum_unit(unit);
+                }
+            });
+            if view.maximum_bytes().is_none() {
+                ui.label(text(
+                    tokens,
+                    "Enter at least 100 KB (decimal units).",
+                    "text-xs",
+                    "danger-text",
+                ));
+            }
+            ui.label(text(
+                tokens,
+                "Preserve quality with a hard limit. Save fails if no retry fits; the original stays unchanged.",
+                "text-xs",
+                "text-subtle",
+            ));
+        }
+        ui.add_space(tokens.number("s-3"));
+        field_label(ui, tokens, "Est. size");
+        ui.horizontal(|ui| {
+            let shown = view.estimate_presentation();
+            let value = ui
+                .label(
+                    text(
+                        tokens,
+                        shown.label.clone(),
+                        "text-sm",
+                        if shown.muted { "text-subtle" } else { "text" },
+                    )
+                    .monospace(),
+                )
+                .on_hover_text(recording_editor_ui::ESTIMATE_HELP);
+            probe(ui, "Est. size", value.rect);
+            if let Some(delta) = &shown.delta {
+                let (fill, color) = if delta.smaller() {
+                    ("positive-surface", "positive-text")
+                } else {
+                    ("danger-surface", "danger-text")
+                };
+                let pill = egui::Frame::new()
+                    .fill(tokens.color(fill))
+                    .corner_radius(tokens.number("r-pill").min(127.) as u8)
+                    .inner_margin(egui::Margin::symmetric(tokens.number("s-3") as i8, 2))
+                    .show(ui, |ui| {
+                        ui.label(text(tokens, delta.label.clone(), "text-xs", color).strong())
+                    })
+                    .response
+                    .on_hover_text(recording_editor_ui::DELTA_HELP);
+                probe(ui, "Est. size delta", pill.rect);
+            }
+            if !view.maximum_size {
+                let estimate = ui
+                    .add_enabled(
+                        view.presented.is_some() && !view.unapplied(),
+                        egui::Button::new(text(tokens, "Estimate size", "text-sm", "text")),
+                    )
+                    .on_hover_text("Percentage change compares the accepted estimate with the original recording file. Longer recordings use approximate encoded samples. No History entry or saved file is created.");
+                probe(ui, "Estimate size", estimate.rect);
+                if estimate.clicked() {
+                    view.request_estimate(tx);
+                }
+            }
+        });
+    });
+}
+
+fn show_audio_card(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    system_audio: bool,
+    microphone_audio: bool,
+) {
+    if view.gif {
+        // `.editor-audio-warning`: settings stay retained for a later MP4.
+        card(ui, tokens, "caution-surface", "caution-surface", |ui| {
+            card_title(ui, tokens, "Audio");
+            ui.label(text(tokens, recording_editor_ui::GIF_AUDIO_NOTE, "text-sm", "caution-text"));
+        });
+        return;
+    }
+    card(ui, tokens, "surface-raised", "border-subtle", |ui| {
+        card_title(ui, tokens, "Audio");
+        ui.spacing_mut().item_spacing.y = tokens.number("s-4");
+        for (available, label, volume, mute) in [
+            (
+                system_audio,
+                "System audio",
+                &mut view.audio.system_volume,
+                &mut view.audio.mute_system_audio,
+            ),
+            (
+                microphone_audio,
+                "Microphone",
+                &mut view.audio.microphone_volume,
+                &mut view.audio.mute_microphone,
+            ),
+        ] {
+            if !available {
+                continue;
+            }
+            ui.horizontal(|ui| {
+                let mut enabled = !*mute;
+                let (toggle_rect, _) = ui.allocate_exact_size(egui::vec2(130., tokens.number("h-sm")), egui::Sense::hover());
+                let toggle = ui.put(toggle_rect, egui::Checkbox::new(&mut enabled, label));
+                probe(ui, label, toggle.rect);
+                if toggle.changed() {
+                    *mute = !enabled;
+                }
+                ui.spacing_mut().slider_width = (ui.available_width() - 70.).max(100.);
+                let slider = ui.add_enabled(
+                    !*mute,
+                    egui::Slider::new(volume, 0.0..=2.0)
+                        .step_by(0.01)
+                        .custom_formatter(|value, _| format!("{:.0}%", value * 100.))
+                        .custom_parser(|input| {
+                            input
+                                .trim()
+                                .trim_end_matches('%')
+                                .trim()
+                                .parse::<f64>()
+                                .ok()
+                                .map(|value| value / 100.)
+                        }),
+                );
+                probe(ui, &format!("{label} volume"), slider.rect);
+            });
+        }
+        let mono = ui.checkbox(&mut view.audio.mono_output, "Convert to mono");
+        probe(ui, "Convert to mono", mono.rect);
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A textured image, painted either as a mesh or as a rounded rectangle.
+    fn textured(
+        shape: &egui::epaint::ClippedShape,
+        id: egui::TextureId,
+    ) -> Option<(egui::Rect, egui::Rect)> {
+        match &shape.shape {
+            egui::Shape::Mesh(mesh) if mesh.texture_id == id => {
+                Some((mesh.calc_bounds(), shape.clip_rect))
+            }
+            egui::Shape::Rect(rect)
+                if rect
+                    .brush
+                    .as_ref()
+                    .is_some_and(|brush| brush.fill_texture_id == id) =>
+            {
+                Some((rect.rect, shape.clip_rect))
+            }
+            _ => None,
+        }
+    }
+
+    /// Renders `show` with the layout probe and returns the named controls.
+    fn probe_frame(
+        ctx: &egui::Context,
+        tokens: &Tokens,
+        view: &mut View,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+    ) -> (egui::FullOutput, ProbeRects) {
+        let (tx, _) = mpsc::channel();
+        let (sender, _) = mpsc::channel();
+        probe_frame_with(ctx, tokens, view, &tx, &sender, size, events)
+    }
+
+    fn probe_frame_with(
+        ctx: &egui::Context,
+        tokens: &Tokens,
+        view: &mut View,
+        tx: &Sender<Job>,
+        sender: &Sender<Event>,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+    ) -> (egui::FullOutput, ProbeRects) {
+        PROBE.with_borrow_mut(|controls| *controls = Some(BTreeMap::new()));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                ..Default::default()
+            },
+            |ui| show(ui, tokens, view, tx, sender, egui::ViewportId::ROOT),
+        );
+        output.textures_delta.clear();
+        let controls = PROBE.with_borrow(|controls| controls.clone().unwrap_or_default());
+        (output, controls)
+    }
+
+    /// The visible part of a named control, panicking when it is missing.
+    fn probed(controls: &ProbeRects, name: &str) -> egui::Rect {
+        let [x0, y0, x1, y1, cx0, cy0, cx1, cy1] = *controls
+            .get(name)
+            .unwrap_or_else(|| panic!("missing {name} in {:?}", controls.keys()));
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(x0 as f32, y0 as f32),
+            egui::pos2(x1 as f32, y1 as f32),
+        );
+        rect.intersect(egui::Rect::from_min_max(
+            egui::pos2(cx0 as f32, cy0 as f32),
+            egui::pos2(cx1 as f32, cy1 as f32),
+        ))
+    }
 
     fn opened() -> View {
         let mut view = View::default();
@@ -2739,10 +4047,10 @@ mod tests {
                     ]
                 } else {
                     vec![
-                        "Destination",
-                        "Replace original…",
+                        "Filename",
+                        "Saving to",
                         "Change…",
-                        "Estimate size",
+                        "Replace original…",
                         "Apply edits",
                         "Save new copy",
                     ]
@@ -2972,7 +4280,6 @@ mod tests {
             let output = render(&mut view, vec![]);
             let mut rects = Vec::new();
             for label in [
-                "Play",
                 "Loop preview",
                 "Sound",
                 "Hide compare",
@@ -2980,8 +4287,7 @@ mod tests {
                 "100%",
                 "Before",
                 "Encoded split",
-                "Encoded · accepted 0.700s · 4 × 2",
-                "Estimate size",
+                "Encoded · accepted 0:00.700 · 4 × 2",
                 "Save new copy",
             ] {
                 let rect = output
@@ -3009,12 +4315,7 @@ mod tests {
             let bounds = output
                 .shapes
                 .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Mesh(mesh) if mesh.texture_id == ids[0] => {
-                        Some(mesh.calc_bounds())
-                    }
-                    _ => None,
-                })
+                .find_map(|shape| textured(shape, ids[0]).map(|(bounds, _)| bounds))
                 .unwrap();
             let pointer = egui::pos2(bounds.left() + bounds.width() * 0.25, bounds.center().y);
             render(&mut view, vec![egui::Event::PointerMoved(pointer)]);
@@ -3025,14 +4326,11 @@ mod tests {
             let encoded_clip = output
                 .shapes
                 .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Mesh(mesh) if mesh.texture_id == ids[1] => Some(shape.clip_rect),
-                    _ => None,
-                })
+                .find_map(|shape| textured(shape, ids[1]).map(|(_, clip)| clip))
                 .unwrap();
             assert!((encoded_clip.left() - pointer.x).abs() < 0.1);
             assert!((encoded_clip.right() - bounds.right()).abs() < 0.1);
-            let slider = egui::pos2(rects[7].left() - 40., rects[7].center().y);
+            let slider = egui::pos2(rects[6].left() - 40., rects[6].center().y);
             render(&mut view, vec![egui::Event::PointerMoved(slider)]);
             render(&mut view, vec![trim_pointer(slider, true)]);
             render(&mut view, vec![trim_pointer(slider, false)]);
@@ -3113,7 +4411,7 @@ mod tests {
         });
         view.receive(&ctx, Event::Presented(Ok(accepted)));
         assert!(!view.unapplied() && view.dirty() && view.estimate.is_none());
-        assert_eq!(view.estimate_label(), "≤ 0.100019 MB");
+        assert_eq!(view.estimate_label(), "≤ 100 KB");
         view.request_estimate(&tx);
         assert!(
             jobs.try_recv().is_err(),
@@ -3227,12 +4525,7 @@ mod tests {
             output
                 .shapes
                 .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Mesh(mesh) if mesh.texture_id == id => {
-                        Some((mesh.calc_bounds(), shape.clip_rect))
-                    }
-                    _ => None,
-                })
+                .find_map(|shape| textured(shape, id))
                 .expect("preview image mesh")
         };
         render(&mut view, vec![]);
@@ -3831,7 +5124,7 @@ mod tests {
             &view.presented.as_ref().unwrap().frame
         ));
         assert!(!view.busy && !view.history_changed);
-        assert_eq!(view.estimate_label(), "Apply edits to estimate size");
+        assert_eq!(view.estimate_label(), "Apply edits to estimate");
     }
 
     #[test]
@@ -3978,7 +5271,7 @@ mod tests {
                 exact: true,
             })),
         );
-        assert_eq!(view.estimate_label(), "12345 bytes (exact) · −38%");
+        assert_eq!(view.estimate_label(), "12.3 KB · −38%");
         assert!(!view.dirty() && !view.history_changed);
         let p = view.presented.as_ref().unwrap();
         view.receive(
@@ -3995,26 +5288,26 @@ mod tests {
         );
         assert_eq!(
             view.estimate_label(),
-            "12345 bytes (exact) · −38%",
+            "12.3 KB · −38%",
             "seek cannot change file size"
         );
         view.receive(&ctx, Event::Presented(Err("seek failed".into())));
         assert_eq!(
             view.estimate_label(),
-            "12345 bytes (exact) · −38%",
+            "12.3 KB · −38%",
             "a failed seek leaves the accepted estimate valid"
         );
         let (tx, jobs) = mpsc::channel();
         view.gif = true;
-        assert_eq!(view.estimate_label(), "Apply edits to estimate size");
+        assert_eq!(view.estimate_label(), "Apply edits to estimate");
         view.request_estimate(&tx);
         assert!(jobs.try_recv().is_err() && !view.busy);
         view.receive(&ctx, Event::Presented(Err("bad format preview".into())));
-        assert_eq!(view.estimate_label(), "Apply edits to estimate size");
+        assert_eq!(view.estimate_label(), "Apply edits to estimate");
         view.gif = false;
         assert_eq!(
             view.estimate_label(),
-            "12345 bytes (exact) · −38%",
+            "12.3 KB · −38%",
             "reverting staged edits restores the matching result"
         );
         view.gif = true;
@@ -4051,7 +5344,7 @@ mod tests {
                 exact: false,
             })),
         );
-        assert_eq!(view.estimate_label(), "≈ 67890 bytes · +239%");
+        assert_eq!(view.estimate_label(), "≈ 67.9 KB · +239%");
         assert!(!view.busy && !view.estimating && view.cancel.is_none() && view.error.is_none());
         assert!(
             view.dirty() && !view.history_changed,
@@ -4083,16 +5376,16 @@ mod tests {
             );
             assert_eq!(
                 view.estimate_label(),
-                format!("{size_bytes} bytes (exact){suffix}")
+                format!("{size_bytes} B{suffix}")
             );
             assert!(!view.dirty() && !view.history_changed);
             view.estimate.as_mut().unwrap().exact = false;
             assert_eq!(
                 view.estimate_label(),
-                format!("≈ {size_bytes} bytes{suffix}")
+                format!("≈ {size_bytes} B{suffix}")
             );
             view.estimating = true;
-            assert_eq!(view.estimate_label(), "Estimating size…");
+            assert_eq!(view.estimate_label(), "Estimating…");
             view.estimating = false;
             view.maximum_size = true;
             view.maximum_value.clear();
@@ -4106,11 +5399,11 @@ mod tests {
                 "staged cap is not an estimate"
             );
             view.presented.as_mut().unwrap().export = view.export_spec();
-            assert_eq!(view.estimate_label(), "≤ 10 MB");
+            assert_eq!(view.estimate_label(), "≤ 10.0 MB");
             view.receive(&ctx, Event::Estimated(Err("cancelled".into())));
             assert!(view.estimate.is_none());
         }
-        assert_eq!(opened().estimate_label(), "Size not estimated");
+        assert_eq!(opened().estimate_label(), "—");
     }
 
     #[test]
@@ -4598,82 +5891,84 @@ mod tests {
             let accepted = &mut view.presented.as_mut().unwrap().edit;
             accepted.trim_start_ms = 1550;
             accepted.trim_end_ms = Some(1551);
-            let (tx, _) = mpsc::channel();
-            let (events, _) = mpsc::channel();
             for pass in 0..4 {
                 view.estimate.as_mut().unwrap().exact = pass < 2;
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(760., 580.),
-                        )),
-                        ..Default::default()
-                    },
-                    |ui| show(ui, &tokens, &mut view, &tx, &events, egui::ViewportId::ROOT),
-                );
-                output.textures_delta.clear();
+                // The toolbar and save footer fit the minimum window; the
+                // page scrolls to the option cards, checked at minimum width.
+                let (_, controls) =
+                    probe_frame(&ctx, &tokens, &mut view, egui::vec2(760., 580.), vec![]);
+                let (output, cards) =
+                    probe_frame(&ctx, &tokens, &mut view, egui::vec2(760., 1800.), vec![]);
                 if pass % 2 == 0 {
                     continue;
                 }
-                let mut rects = Vec::new();
-                for label in [
-                    "Play",
-                    "Loop preview",
-                    "Sound",
-                    "Fit",
-                    "100%",
-                    if pass < 2 {
-                        "123456789012 bytes (exact) · −38%"
-                    } else {
-                        "≈ 123456789012 bytes · −38%"
-                    },
-                    "Estimate size",
-                    "Apply edits",
-                    "Save new copy",
-                    "Retry thumbnails",
+                for (controls, labels, height) in [
+                    (
+                        &controls,
+                        &[
+                            "Play preview",
+                            "Sound",
+                            "Compare",
+                            "Loop preview",
+                            "Fit",
+                            "100%",
+                            "Replace original…",
+                            "Apply edits",
+                            "Save new copy",
+                        ][..],
+                        580.,
+                    ),
+                    (
+                        &cards,
+                        &[
+                            "Timeline track",
+                            "Retry thumbnails",
+                            "Est. size",
+                            "Est. size delta",
+                            "Estimate size",
+                        ][..],
+                        1800.,
+                    ),
                 ] {
-                    let rect = output
-                        .shapes
-                        .iter()
-                        .find_map(|shape| match &shape.shape {
-                            egui::Shape::Text(text) if text.galley.job.text == label => {
-                                Some(text.galley.rect.translate(text.pos.to_vec2()))
-                            }
-                            _ => None,
-                        })
-                        .unwrap_or_else(|| panic!("missing {label} in {name}"));
-                    assert!(
-                        rect.left() >= 0.
-                            && rect.right() <= 760.
-                            && rect.top() >= 0.
-                            && rect.bottom() <= 580.,
-                        "{name}: {label} outside window: {rect:?}"
-                    );
-                    if label == "Retry thumbnails" {
-                        let trim = output
-                            .shapes
-                            .iter()
-                            .find_map(|shape| match &shape.shape {
-                                egui::Shape::Text(text) if text.galley.job.text == "Trim" => {
-                                    Some(text.galley.rect.translate(text.pos.to_vec2()))
-                                }
-                                _ => None,
-                            })
-                            .unwrap();
+                    let mut rects = Vec::new();
+                    for label in labels {
+                        let rect = probed(controls, label);
                         assert!(
-                            rect.top() > trim.bottom() + tokens.number("h-md"),
-                            "retry must never overlay either grip, even for a 1 ms middle selection"
+                            rect.width() > 0.
+                                && rect.left() >= 0.
+                                && rect.right() <= 760.
+                                && rect.top() >= 0.
+                                && rect.bottom() <= height,
+                            "{name}: {label} outside window: {rect:?}"
                         );
+                        for other in &rects {
+                            assert!(
+                                !rect.shrink(0.5).intersects(*other),
+                                "{name}: overlapping {label} {rect:?} {other:?}"
+                            );
+                        }
+                        rects.push(rect);
                     }
-                    for other in &rects {
-                        assert!(
-                            !rect.intersects(*other),
-                            "{name}: overlapping estimate/save labels"
-                        );
-                    }
-                    rects.push(rect);
                 }
+                let track = probed(&cards, "Timeline track");
+                for grip in ["Trim start", "Trim end"] {
+                    assert!(
+                        !probed(&cards, "Retry thumbnails").intersects(probed(&cards, grip)),
+                        "retry must never overlay either grip, even for a 1 ms middle selection"
+                    );
+                    assert!(probed(&cards, grip).intersects(track.expand(tokens.number("s-6"))));
+                }
+                let label = if pass < 2 { "123 GB" } else { "≈ 123 GB" };
+                assert!(
+                    output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.job.text == label)),
+                    "{name}: missing {label}"
+                );
+                assert!(
+                    output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.job.text == "−38%")),
+                    "{name}: missing delta"
+                );
             }
         }
     }
@@ -5218,7 +6513,7 @@ mod tests {
             jobs.try_recv().is_err(),
             "staged FPS gates estimate and playback"
         );
-        assert_eq!(view.estimate_label(), "Apply edits to estimate size");
+        assert_eq!(view.estimate_label(), "Apply edits to estimate");
         let export = view.export_spec();
         assert_eq!(export.format, ExportFormat::Gif);
         assert_eq!(export.frames_per_second, Some(8));
