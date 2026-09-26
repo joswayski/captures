@@ -44,7 +44,9 @@ The wgpu host now renders UI text in the token font stack instead of egui's bund
 faces: Segoe UI Variable Text / Segoe UI on Windows, and on Linux the first
 fontconfig match for Inter, Roboto, Helvetica Neue, Arial, then `sans-serif` (as
 WebKitGTK resolves it). A named `semibold` family backs `--weight-semibold`; egui's
-faces remain glyph fallbacks.
+faces remain glyph fallbacks. Under these wider faces the screenshot editor title
+ellipsizes before its zoom controls at the 760px minimum, and the History capture
+actions wrap inside the 1000px root window instead of running past its edge.
 
 Preferences now offer the shipping Default microphone select (Off plus enumerated
 inputs; wgpu enumerates when the menu first opens, AppKit off the main thread),
