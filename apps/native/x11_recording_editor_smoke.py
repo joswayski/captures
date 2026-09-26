@@ -504,6 +504,7 @@ def main():
             # A closed canonical reference must reload the same ID. Its default
             # Preserve MP4 export must encode MP4, not rename/copy WebM bytes.
             webm_id = next(value["id"] for value in entries if value["saved_path"] == str(webm))
+            switch_layout_log("reopened")
             app = spawn("reopened", app_command + ["--open-media", str(webm)])
             root = wait(lambda: windows("Captures"), "reopened History")[0]
             editor = wait(lambda: windows("Recording editor"), "closed external WebM reopened")[0]
@@ -591,8 +592,8 @@ def main():
             fill(editor, "End (ms)", 2300)
             press(editor, "Crop recording")
             press(editor, "Lock aspect ratio")
-            for x, value in ((51, 10), (114, 6), (208, 160), (309, 90)):
-                field(editor, x, 727, value)
+            for name, value in (("Crop X", 10), ("Crop Y", 6), ("Crop width", 160), ("Crop height", 90)):
+                fill(editor, name, value)
             choose(editor, "Output resolution", "Custom")
             fill(editor, "Output width", 81)
             fill(editor, "Output height", 61)
@@ -1192,8 +1193,8 @@ def main():
             press(editor, "Seek")
             press(editor, "Crop recording")
             press(editor, "Lock aspect ratio")  # Independent dimensions.
-            for x, value in ((51, 80), (114, 40), (208, 160), (309, 80)):
-                field(editor, x, 727, value)
+            for name, value in (("Crop X", 80), ("Crop Y", 40), ("Crop width", 160), ("Crop height", 80)):
+                fill(editor, name, value)
             press(editor, "Apply edits")
             shot(editor, "crop-accepted-before-source")
             press(editor, "Adjust crop")
@@ -1479,37 +1480,41 @@ def main():
             print("PASS silent playback: real motion, pause/resume/EOF, failure/retry, close, accepted export and immutable source")
             return
         if args.timeline:
-            def read_time(x):
-                click(editor, x, 598)
+            def read_time(name):
+                click(editor, *center(editor, name))
                 run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
                 return int(run("xclip", "-selection", "clipboard", "-o").strip())
 
-            def drag(x, delta, cancel=False):
-                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), "563",
+            def drag(name, delta, cancel=False):
+                # Grab the probed grip itself, rather than the interval boundary.
+                x, y = center(editor, name)
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y),
                     "mousedown", "1", "sleep", ".15", "mousemove_relative", "--sync", "--",
                     str(delta), "0", "sleep", ".2")
                 if cancel:
                     run("xdotool", "key", "Escape", "mousemove_relative", "--sync", "--", "100", "0")
                 run("xdotool", "mouseup", "1", "sleep", ".2")
 
-            # Grab inside each grip, rather than at the interval boundary.
-            # Time is measured from that original pointer, not absolute x.
-            drag(55, 2)
-            assert read_time(98) == 0, "subthreshold drag cannot jump trim start"
-            drag(55, 300)
-            start = read_time(98)
+            # Time is measured from the original pointer, not absolute x; the
+            # ~850px track at 960px makes each pixel about 3.5 ms.
+            track = visible_rect(editor, "Timeline track")
+            assert 780 <= track[2] - track[0] <= 900, track
+            drag("Trim start", 2)
+            assert read_time("Start (ms)") == 0, "subthreshold drag cannot jump trim start"
+            drag("Trim start", 300)
+            start = read_time("Start (ms)")
             assert 1000 <= start <= 1100, ("start drag", start)
-            drag(938, -200)
-            end = read_time(211)
+            drag("Trim end", -200)
+            end = read_time("End (ms)")
             assert 2250 <= end <= 2400, ("end drag", end)
-            drag(355, 15, cancel=True)
-            cancelled_start = read_time(98)
+            drag("Trim start", 15, cancel=True)
+            cancelled_start = read_time("Start (ms)")
             assert 45 <= cancelled_start - start <= 60, (start, cancelled_start)
             # A click focuses a handle without changing its value. Keyboard
             # adjustment must happen once, even across egui layout passes.
             press(editor, "Trim start")
             run("xdotool", "key", "Right", "sleep", ".2")
-            start = read_time(98)
+            start = read_time("Start (ms)")
             assert start == cancelled_start + 1, ("focused keyboard step", start, cancelled_start)
             shot(editor, "timeline-staged")
             dominant(output / "timeline-staged.png", 0)
@@ -1769,11 +1774,13 @@ def main():
         press(editor, "Apply edits")
         shot(editor, "cropped")
         dominant(output / "cropped.png", 1)
-        # Frame is 80x60 after shared even rounding, fitted into the 380px-tall
-        # preview. Both samples lie inside the translated/scaled white box;
-        # omitting the crop or either origin makes at least one sample green.
-        for x, y in ((253, 110), (353, 180)):
-            pixel = run("convert", str(output / "cropped.png"), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-")
+        # Frame is 80x60 after shared even rounding, fitted into the preview.
+        # Both samples (output pixels 8,6 and 20,12) lie inside the translated
+        # white box; omitting the crop or either origin makes one sample green.
+        samples = [image_point(editor, .1, .1), image_point(editor, .25, .2)]
+        shot(editor, "cropped-samples")
+        for x, y in samples:
+            pixel = run("convert", str(output / "cropped-samples.png"), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-")
             assert len(pixel) == 3 and min(pixel) > 210, (x, y, pixel)
         run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
         run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "12", "--delay", "60", "5", "sleep", ".5")
@@ -1894,7 +1901,8 @@ def main():
             choose(editor, "Format", ".gif")
             press(editor, "Apply edits")
             shot(editor, "gif-audio-disabled")
-            press(editor, "System audio")  # Disabled mute must not change the MP4 settings.
+            # GIFs show only the shipping audio note; retained MP4 settings are untouched.
+            assert "System audio" not in controls(editor), "GIF must replace the audio rows"
             _, streams = audio_export("audio-free.gif")
             assert not streams
             choose(editor, "Format", ".mp4")

@@ -5,8 +5,7 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     sync::{
-        OnceLock,
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
     },
@@ -459,7 +458,10 @@ impl View {
             estimating: self.estimating,
             unapplied: self.unapplied(),
             invalid_maximum: self.maximum_size && self.maximum_bytes().is_none(),
-            maximum_bytes: self.presented.as_ref().and_then(|p| p.export.max_size_bytes),
+            maximum_bytes: self
+                .presented
+                .as_ref()
+                .and_then(|p| p.export.max_size_bytes),
             estimate_bytes: estimate.map(|estimate| estimate.size_bytes),
             estimate_exact: estimate.is_some_and(|estimate| estimate.exact),
             // A staged Maximum never advertises a reduction.
@@ -1788,9 +1790,8 @@ fn loop_toggle(ui: &mut egui::Ui, tokens: &Tokens, on: bool, enabled: bool) -> e
             egui::Sense::hover()
         },
     );
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, label)
-    });
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, label));
     let painter = ui.painter();
     if on {
         painter.rect_filled(rect, tokens.number("r-md"), tokens.color("surface-active"));
@@ -1832,7 +1833,10 @@ fn loop_toggle(ui: &mut egui::Ui, tokens: &Tokens, on: bool, enabled: bool) -> e
         egui::Stroke::NONE,
     ));
     painter.galley(
-        egui::pos2(rect.left() + padding + icon + gap, rect.center().y - galley.size().y / 2.),
+        egui::pos2(
+            rect.left() + padding + icon + gap,
+            rect.center().y - galley.size().y / 2.,
+        ),
         galley,
         color,
     );
@@ -1882,8 +1886,11 @@ fn preview_size_segmented(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, label)
         });
         if active {
-            ui.painter()
-                .rect_filled(segment, tokens.number("r-sm"), tokens.color("surface-raised"));
+            ui.painter().rect_filled(
+                segment,
+                tokens.number("r-sm"),
+                tokens.color("surface-raised"),
+            );
             ui.painter().rect_stroke(
                 segment,
                 tokens.number("r-sm"),
@@ -1956,7 +1963,11 @@ fn show_overlay_play(
             && !view.unapplied()
     };
     let label = if view.playing {
-        if pausing { "Pausing…" } else { "Pause preview" }
+        if pausing {
+            "Pausing…"
+        } else {
+            "Pause preview"
+        }
     } else {
         "Play preview"
     };
@@ -2000,7 +2011,10 @@ fn show_overlay_play(
         painter.circle_stroke(
             center,
             size / 2.,
-            egui::Stroke::new(1., tokens.color("glass-border-strong").gamma_multiply(opacity)),
+            egui::Stroke::new(
+                1.,
+                tokens.color("glass-border-strong").gamma_multiply(opacity),
+            ),
         );
         let ink = tokens.color("theme-accent-ink").gamma_multiply(opacity);
         let glyph = tokens.number("s-4") + 1.;
@@ -2259,18 +2273,14 @@ fn show_trim_timeline(
         let size = texture.size_vec2();
         let uv_height = (strip.height() * size.x / (strip.width() * size.y)).min(1.);
         painter.add(
-            egui::epaint::RectShape::filled(
-                strip,
-                tokens.number("r-xs"),
-                egui::Color32::WHITE,
-            )
-            .with_texture(
-                texture.id(),
-                egui::Rect::from_min_max(
-                    egui::pos2(0., (1. - uv_height) / 2.),
-                    egui::pos2(1., (1. + uv_height) / 2.),
+            egui::epaint::RectShape::filled(strip, tokens.number("r-xs"), egui::Color32::WHITE)
+                .with_texture(
+                    texture.id(),
+                    egui::Rect::from_min_max(
+                        egui::pos2(0., (1. - uv_height) / 2.),
+                        egui::pos2(1., (1. + uv_height) / 2.),
+                    ),
                 ),
-            ),
         );
     } else {
         painter.rect_filled(strip, tokens.number("r-xs"), tokens.color("n-5"));
@@ -2331,10 +2341,18 @@ fn show_trim_timeline(
             });
         }
         let label = if index == 0 { "Trim start" } else { "Trim end" };
-        let value = if index == 0 { view.start_ms } else { view.end_ms };
+        let value = if index == 0 {
+            view.start_ms
+        } else {
+            view.end_ms
+        };
         let time = recording_editor_ui::format_editor_time(value, duration);
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Slider, enabled, format!("{label}: {time}"))
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Slider,
+                enabled,
+                format!("{label}: {time}"),
+            )
         });
         probe(ui, label, grip);
         // `.timeline-trim-handle`: an 8px accent bar beside the boundary.
@@ -2361,10 +2379,9 @@ fn show_trim_timeline(
         let active = enabled
             && (response.hovered()
                 || response.has_focus()
-                || view
-                    .trim_gesture
-                    .as_ref()
-                    .is_some_and(|gesture| (gesture.edge == TimelineTrimEdge::Start) == (index == 0)));
+                || view.trim_gesture.as_ref().is_some_and(|gesture| {
+                    (gesture.edge == TimelineTrimEdge::Start) == (index == 0)
+                }));
         if response.has_focus() {
             painter.rect_stroke(
                 bar.expand(2.),
@@ -2376,7 +2393,9 @@ fn show_trim_timeline(
         if active {
             // Time bubble above the handle, like the shipping hover label.
             let font = egui::FontId::proportional(tokens.number("text-2xs"));
-            let galley = ui.painter().layout_no_wrap(time, font, tokens.color("theme-accent-ink"));
+            let galley = ui
+                .painter()
+                .layout_no_wrap(time, font, tokens.color("theme-accent-ink"));
             let size = galley.size() + egui::vec2(tokens.number("s-3") * 2., 6.);
             let top = rect.top() - 5. - size.y;
             let bubble = if index == 0 {
@@ -2386,10 +2405,17 @@ fn show_trim_timeline(
             };
             let layer = ui
                 .ctx()
-                .layer_painter(egui::LayerId::new(egui::Order::Foreground, ui.scope_id().with(label)))
+                .layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    ui.scope_id().with(label),
+                ))
                 .with_clip_rect(ui.clip_rect());
             layer.rect_filled(bubble, tokens.number("r-xs"), tokens.color("theme-accent"));
-            layer.galley(bubble.min + egui::vec2(tokens.number("s-3"), 3.), galley, egui::Color32::PLACEHOLDER);
+            layer.galley(
+                bubble.min + egui::vec2(tokens.number("s-3"), 3.),
+                galley,
+                egui::Color32::PLACEHOLDER,
+            );
         }
         if enabled && response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -2691,10 +2717,7 @@ fn show_filename(
         "Format",
         format_rect.width() - 12.,
         &mut gif,
-        &[
-            (false, ".mp4".into(), "MP4"),
-            (true, ".gif".into(), "GIF"),
-        ],
+        &[(false, ".mp4".into(), "MP4"), (true, ".gif".into(), "GIF")],
     );
     if gif != old {
         view.gif = gif;
@@ -2828,7 +2851,9 @@ fn show_page(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
         });
     ui.label(text(tokens, title, "text-2xl", "text").strong());
     let window_height = ui.ctx().content_rect().height();
-    card_frame(ui, tokens, |ui| show_preview_card(ui, tokens, view, tx, window_height));
+    card_frame(ui, tokens, |ui| {
+        show_preview_card(ui, tokens, view, tx, window_height)
+    });
     let Some(p) = &view.presented else {
         return;
     };
@@ -2992,7 +3017,11 @@ fn show_preview_card(
     if let Some(texture) = preview_texture {
         let size = texture.size_vec2();
         let actual_size = view.preview_actual_size;
-        let margin = if view.adjusting_crop { tokens.number("s-3") } else { 0. };
+        let margin = if view.adjusting_crop {
+            tokens.number("s-3")
+        } else {
+            0.
+        };
         let source_mode = view.adjusting_crop;
         let mut viewport = ui.new_child(
             egui::UiBuilder::new()
@@ -3056,8 +3085,16 @@ fn show_preview_card(
                 // Before / Encoded badges on the media, like shipping's
                 // CompressionPreview labels.
                 for (label, align, anchor) in [
-                    ("Before", egui::Align2::LEFT_TOP, image_rect.left_top() + egui::vec2(8., 8.)),
-                    ("Encoded", egui::Align2::RIGHT_TOP, image_rect.right_top() + egui::vec2(-8., 8.)),
+                    (
+                        "Before",
+                        egui::Align2::LEFT_TOP,
+                        image_rect.left_top() + egui::vec2(8., 8.),
+                    ),
+                    (
+                        "Encoded",
+                        egui::Align2::RIGHT_TOP,
+                        image_rect.right_top() + egui::vec2(-8., 8.),
+                    ),
                 ] {
                     let painter = ui.painter();
                     let galley = painter.layout_no_wrap(
@@ -3067,7 +3104,11 @@ fn show_preview_card(
                     );
                     let badge = align.anchor_size(anchor, galley.size() + egui::vec2(12., 6.));
                     painter.rect_filled(badge, tokens.number("r-xs"), tokens.color("glass-strong"));
-                    painter.galley(badge.min + egui::vec2(6., 3.), galley, egui::Color32::PLACEHOLDER);
+                    painter.galley(
+                        badge.min + egui::vec2(6., 3.),
+                        galley,
+                        egui::Color32::PLACEHOLDER,
+                    );
                 }
             }
             if source_mode {
@@ -3193,10 +3234,12 @@ fn show_preview_card(
                 comparison.result.position_ms, comparison.result.after_seek_position_ms
             ));
     } else {
-        let (preview_width, preview_height) = view.texture.as_ref().map_or(
-            (p.frame.width() as usize, p.frame.height() as usize),
-            |t| (t.size()[0], t.size()[1]),
-        );
+        let (preview_width, preview_height) = view
+            .texture
+            .as_ref()
+            .map_or((p.frame.width() as usize, p.frame.height() as usize), |t| {
+                (t.size()[0], t.size()[1])
+            });
         caption.label(text(
             tokens,
             format!(
@@ -3205,7 +3248,11 @@ fn show_preview_card(
                 time(duration),
                 p.source.width,
                 p.source.height,
-                if p.export.format == ExportFormat::Gif { "GIF" } else { "MP4" },
+                if p.export.format == ExportFormat::Gif {
+                    "GIF"
+                } else {
+                    "MP4"
+                },
                 recording_editor_ui::quality_label(p.export.quality),
                 preview_width,
                 preview_height
@@ -3413,11 +3460,21 @@ fn show_crop_card(
                         ),
                         _ => {
                             let horizontal = index == 2;
-                            let mut value = if horizontal { preview.width } else { preview.height };
+                            let mut value = if horizontal {
+                                preview.width
+                            } else {
+                                preview.height
+                            };
                             let response = column.add_sized(
                                 [width, tokens.number("h-md")],
                                 egui::DragValue::new(&mut value)
-                                    .range(2..=if horizontal { source_size.0 } else { source_size.1 })
+                                    .range(
+                                        2..=if horizontal {
+                                            source_size.0
+                                        } else {
+                                            source_size.1
+                                        },
+                                    )
                                     .update_while_editing(false),
                             );
                             if response.changed() {
@@ -3477,7 +3534,9 @@ fn show_crop_card(
         });
         ui.spacing_mut().item_spacing.y = tokens.number("s-3");
         field_label(ui, tokens, "Output resolution");
-        let base = view.crop.map_or(source_size, |crop| (crop.width, crop.height));
+        let base = view
+            .crop
+            .map_or(source_size, |crop| (crop.width, crop.height));
         let base = MaxResolution::Original.constrain(base.0, base.1);
         let current = if view.output_size.is_some() {
             ResolutionChoice::Custom
@@ -3490,15 +3549,16 @@ fn show_crop_card(
         };
         let mut choice = current;
         let width = ui.available_width().min(430.);
-        let options = ResolutionChoice::ALL.map(|choice| {
-            (choice, choice.label(base.0, base.1), choice.description())
-        });
+        let options = ResolutionChoice::ALL
+            .map(|choice| (choice, choice.label(base.0, base.1), choice.description()));
         if select(ui, "Output resolution", width, &mut choice, &options) && choice != current {
             match choice {
                 ResolutionChoice::Custom => {
-                    view.output_size = Some(view.output_dimensions(source_size).unwrap_or_else(|| {
-                        view.crop.map_or(source_size, |crop| (crop.width, crop.height))
-                    }));
+                    view.output_size =
+                        Some(view.output_dimensions(source_size).unwrap_or_else(|| {
+                            view.crop
+                                .map_or(source_size, |crop| (crop.width, crop.height))
+                        }));
                 }
                 preset => {
                     view.output_size = None;
@@ -3525,7 +3585,11 @@ fn show_crop_card(
                         [available, tokens.number("h-md")],
                         egui::DragValue::new(value).range(2..=u32::MAX),
                     );
-                    probe(column, &format!("Output {}", label.to_lowercase()), response.rect);
+                    probe(
+                        column,
+                        &format!("Output {}", label.to_lowercase()),
+                        response.rect,
+                    );
                 }
             });
         }
@@ -3552,7 +3616,10 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
             .collect();
         if !options.iter().any(|(option, _, _)| *option == current) {
             // An accepted Preserve GIF keeps showing its mode until changed.
-            options.insert(0, (current, current.label().to_owned(), current.description()));
+            options.insert(
+                0,
+                (current, current.label().to_owned(), current.description()),
+            );
         }
         if select(ui, "Quality mode", width, &mut mode, &options) && mode != current {
             match mode {
@@ -3685,7 +3752,12 @@ fn show_audio_card(
         // `.editor-audio-warning`: settings stay retained for a later MP4.
         card(ui, tokens, "caution-surface", "caution-surface", |ui| {
             card_title(ui, tokens, "Audio");
-            ui.label(text(tokens, recording_editor_ui::GIF_AUDIO_NOTE, "text-sm", "caution-text"));
+            ui.label(text(
+                tokens,
+                recording_editor_ui::GIF_AUDIO_NOTE,
+                "text-sm",
+                "caution-text",
+            ));
         });
         return;
     }
@@ -3711,7 +3783,10 @@ fn show_audio_card(
             }
             ui.horizontal(|ui| {
                 let mut enabled = !*mute;
-                let (toggle_rect, _) = ui.allocate_exact_size(egui::vec2(130., tokens.number("h-sm")), egui::Sense::hover());
+                let (toggle_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(130., tokens.number("h-sm")),
+                    egui::Sense::hover(),
+                );
                 let toggle = ui.put(toggle_rect, egui::Checkbox::new(&mut enabled, label));
                 probe(ui, label, toggle.rect);
                 if toggle.changed() {
@@ -5374,16 +5449,10 @@ mod tests {
                     exact: true,
                 })),
             );
-            assert_eq!(
-                view.estimate_label(),
-                format!("{size_bytes} B{suffix}")
-            );
+            assert_eq!(view.estimate_label(), format!("{size_bytes} B{suffix}"));
             assert!(!view.dirty() && !view.history_changed);
             view.estimate.as_mut().unwrap().exact = false;
-            assert_eq!(
-                view.estimate_label(),
-                format!("≈ {size_bytes} B{suffix}")
-            );
+            assert_eq!(view.estimate_label(), format!("≈ {size_bytes} B{suffix}"));
             view.estimating = true;
             assert_eq!(view.estimate_label(), "Estimating…");
             view.estimating = false;
