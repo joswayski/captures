@@ -3,6 +3,8 @@ import AppKit
 /// Card commands from `captures_app::history_view::CardAction`.
 enum HistoryCardAction: String, CaseIterable {
     case edit
+    /// Shipping History Restore: bring a screenshot back as a floating preview.
+    case restore
     case copy
     case saveImage = "save_image"
     case saveFile = "save_file"
@@ -18,8 +20,13 @@ struct HistoryCopy: Equatable {
     let recoveryTitle, recoveryHelp: String
     let actionLabels: [HistoryCardAction: String]
     let actionBusyLabels: [HistoryCardAction: String]
+    /// Shipping success labels ("Restored") and button tooltips.
+    let actionDoneLabels: [HistoryCardAction: String]
+    let actionTooltips: [HistoryCardAction: String]
     /// Two-step Delete / Delete all revert after this many seconds.
     let confirmTimeout: TimeInterval
+    /// "✓ Restored" shows for this many seconds.
+    let feedbackDuration: TimeInterval
 
     static let current: HistoryCopy = {
         do { return try HistoryCopy(transport: SettingsBridge()) }
@@ -30,7 +37,8 @@ struct HistoryCopy: Equatable {
         let response = try transport.request(["operation": "history_copy"])
         guard let copy = response["copy"] as? [String: Any],
               let actions = response["actions"] as? [String: Any],
-              let timeout = response["confirm_timeout_ms"] as? NSNumber
+              let timeout = response["confirm_timeout_ms"] as? NSNumber,
+              let feedback = response["feedback_ms"] as? NSNumber
         else { throw SettingsStoreError.invalidResponse }
         func text(_ key: String) throws -> String {
             guard let value = copy[key] as? String else { throw SettingsStoreError.invalidResponse }
@@ -48,19 +56,26 @@ struct HistoryCopy: Equatable {
         recoveryTitle = try text("recovery_title"); recoveryHelp = try text("recovery_help")
         var labels: [HistoryCardAction: String] = [:]
         var busy: [HistoryCardAction: String] = [:]
+        var done: [HistoryCardAction: String] = [:]
+        var tooltips: [HistoryCardAction: String] = [:]
         for action in HistoryCardAction.allCases {
             guard let value = actions[action.rawValue] as? [String: Any],
                   let label = value["label"] as? String,
                   let busyLabel = value["busy"] as? String
             else { throw SettingsStoreError.invalidResponse }
             labels[action] = label; busy[action] = busyLabel
+            done[action] = value["done"] as? String; tooltips[action] = value["tooltip"] as? String
         }
         actionLabels = labels; actionBusyLabels = busy
+        actionDoneLabels = done; actionTooltips = tooltips
         confirmTimeout = timeout.doubleValue / 1_000
+        feedbackDuration = feedback.doubleValue / 1_000
     }
 
     func label(_ action: HistoryCardAction) -> String { actionLabels[action] ?? action.rawValue }
     func busyLabel(_ action: HistoryCardAction) -> String { actionBusyLabels[action] ?? label(action) }
+    func doneLabel(_ action: HistoryCardAction) -> String? { actionDoneLabels[action] }
+    func tooltip(_ action: HistoryCardAction) -> String? { actionTooltips[action] }
 }
 
 /// One card's shared presentation (`history_view::Card`).
@@ -160,7 +175,7 @@ struct HistoryGridLayout: Equatable {
 /// accessibility behavior; only the drawing is custom.
 final class HistoryButton: NSButton {
     enum Style { case primary, secondary, danger, confirm, ghost, overlay, confirmOverlay }
-    enum Glyph { case edit, save, trash }
+    enum Glyph { case edit, save, trash, restore, check }
 
     var tokens: Tokens
     var style: Style { didSet { needsDisplay = true } }
@@ -249,7 +264,8 @@ final class HistoryButton: NSButton {
     }
 }
 
-/// Shipping 24-unit icon paths (`EditIcon`, `SaveIcon`, `TrashIcon`, `HistoryIcon`).
+/// Shipping 24-unit icon paths (`EditIcon`, `SaveIcon`, `TrashIcon`, `HistoryIcon`;
+/// `RestoreIcon` and `CheckIcon` from the shared set).
 enum HistoryGlyph {
     static func draw(_ glyph: HistoryButton.Glyph, in rect: NSRect, color: NSColor, flipped: Bool) {
         let path = NSBezierPath()
@@ -272,6 +288,10 @@ enum HistoryGlyph {
         case .save:
             line([(5, 4), (17, 4), (19, 6), (19, 20), (5, 20), (5, 4)])
             line([(8, 4), (8, 10), (16, 10), (16, 4)]); line([(8, 20), (8, 14), (16, 14), (16, 20)])
+        case .restore, .check:
+            for points in ShippingIcons.polylines(glyph == .restore ? "restore" : "check") where points.count > 1 {
+                line(points.map { ($0.x, $0.y) })
+            }
         }
         color.setStroke(); path.stroke()
     }
@@ -300,6 +320,8 @@ struct HistoryGridItem {
     let image: NSImage?
     let confirmingDelete: Bool
     let busy: HistoryCardAction?
+    /// An action showing its shipping success label ("✓ Restored").
+    var done: HistoryCardAction? = nil
 }
 
 /// The thumbnail: `object-fit: contain` inside the card's sunken image area,
@@ -459,11 +481,14 @@ final class HistoryCardView: NSView {
             button.isHidden = !actions.indices.contains(slot)
             guard actions.indices.contains(slot) else { continue }
             let action = actions[slot]
-            button.title = item.busy == action ? copy.busyLabel(action) : copy.label(action)
+            let done = item.done == action ? copy.doneLabel(action) : nil
+            button.title = done ?? (item.busy == action ? copy.busyLabel(action) : copy.label(action))
             button.setAccessibilityLabel(button.title)
+            button.toolTip = copy.tooltip(action)
             button.style = action == .edit ? .primary : .secondary
             switch action {
             case .edit: button.glyph = HistoryButton.Glyph.edit
+            case .restore: button.glyph = done == nil ? HistoryButton.Glyph.restore : HistoryButton.Glyph.check
             case .saveImage, .saveFile: button.glyph = HistoryButton.Glyph.save
             case .copy, .showInFolder: button.glyph = nil
             }

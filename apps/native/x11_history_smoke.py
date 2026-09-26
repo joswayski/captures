@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise native history confirmation on a private X11 desktop and disposable files.
+"""Exercise native history Restore and confirmation on a private X11 desktop and disposable files.
 
 No screen-capture permission or session bypass. Requires Xvfb, Openbox, xdotool
 and ImageMagick. This is software-rendered UI evidence, not hardware acceptance.
@@ -36,6 +36,11 @@ def main():
 
         def run(*command):
             return subprocess.check_output(command, env=env, stderr=log, timeout=10)
+
+        def previews():
+            result = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "^Captures Mini Preview$"],
+                                    env=env, stderr=log, stdout=subprocess.PIPE, text=True, timeout=5)
+            return result.stdout.split()
 
         def wait(condition):
             deadline = time.monotonic() + 10
@@ -82,6 +87,16 @@ def main():
                         run("import", "-window", window, str(output / f"{prefix}-{name}.png"))
 
                     screenshot("populated")
+                    assert not previews(), "a preview opened before Restore"
+                    click(249, 591)  # First card's Restore brings back a floating preview.
+                    preview = wait(previews)[0]
+                    time.sleep(.5)  # Arrival motion.
+                    screenshot("restored")
+                    run("import", "-window", preview, str(output / f"{prefix}-restored-preview.png"))
+                    click(249, 591)  # Already showing: no duplicate window, still confirms.
+                    time.sleep(.3)
+                    assert len(previews()) == 1, "Restore duplicated the preview window"
+                    assert len(list(history.glob("*/metadata.json"))) == 2, "Restore changed History"
                     click(928, 115)  # Delete all arms "Delete all forever" in place.
                     screenshot("confirmation")
                     assert len(list(history.glob("*/metadata.json"))) == 2, "arming confirmation deleted files"
@@ -107,14 +122,15 @@ def main():
                         click(928, 115)
                         click(928, 115)  # Retry after restoring write access.
                     wait(lambda: not list(history.glob("*/metadata.json")))
+                    wait(lambda: not previews())  # Clearing History drops restored previews.
                     time.sleep(.3)
                     screenshot("empty")
                     assert export.read_bytes() == original_export, "export changed during clear"
                     run("xdotool", "key", "alt+F4")
                     assert app.wait(timeout=10) == 0
                     assert not list(history.glob("*/metadata.json"))
-                    print(f"PASS {prefix}: confirmation, Escape/Cancel, clear, export preserved, clean exit", flush=True)
-            (output / "result.json").write_text(json.dumps({"passed": True, "appearances": 2, "partialFailureAndRetry": True,
+                    print(f"PASS {prefix}: Restore, confirmation, Escape/Cancel, clear, export preserved, clean exit", flush=True)
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearances": 2, "partialFailureAndRetry": True, "restore": True,
                 "scope": "Disposable native history on private X11/software GL; not hardware or other OS acceptance."}, indent=2))
         finally:
             for child in reversed(children):

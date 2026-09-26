@@ -182,8 +182,8 @@ Captures design. Development workbenches include Swift/AppKit on macOS and an
 experimental Rust/wgpu renderer candidate for Windows/Linux. They are not
 replacement downloads. An opt-in native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to
-shared Rust engines. Its History uses the shipping card grid, header, filters and
-empty states; Delete all asks for a second click, removes all capture types
+shared Rust engines. Its History uses the shipping card grid, header, filters,
+Restore to a floating preview and empty states; Delete all asks for a second click, removes all capture types
 regardless of the selected filter, and keeps exported files and recovery drafts.
 It uses separate development data; Wayland capture is gated
 until the candidate can hide its window reliably. Native Preferences saves

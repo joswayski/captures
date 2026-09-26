@@ -1270,6 +1270,16 @@ final class MiniPreviewPanel: NSPanel {
     }
 }
 
+/// How a History Restore ended (`MiniPreviewController.restore`).
+enum MiniPreviewRestoreOutcome {
+    case shown
+    /// The card was already in the stack; nothing moved.
+    case alreadyShowing
+    /// The card was dismissed, cleared or replaced before it decoded.
+    case cancelled
+    case failed(Error)
+}
+
 /// AppKit presentation for recent screenshots. Rust owns visibility,
 /// membership/order/collapse, card layout, and monitor-relative placement.
 final class MiniPreviewController {
@@ -1425,18 +1435,44 @@ final class MiniPreviewController {
             restoreCapture(generation: generation); return
         }
         visibilityPendingArtifactID = artifact.id
+        policy.suppressCaptureUI(false)
+        decode(artifact) { _ in }
+    }
+
+    /// Shipping History Restore (`restore_history_artifact`): bring a
+    /// screenshot back as the front card without a capture generation or
+    /// clipboard copy. A card already in the stack stays where it is, like
+    /// shipping, which never duplicates or reorders it. An empty stack opens
+    /// on `screenID`; otherwise the pile keeps its display and position.
+    /// `completion` runs on the main queue once the card decoded, failed,
+    /// or was dismissed first.
+    func restore(_ artifact: CaptureArtifact, on screenID: String?, settings: MiniPreviewSettings,
+                 completion: @escaping (MiniPreviewRestoreOutcome) -> Void) {
+        precondition(Thread.isMainThread)
+        guard !stack.ids.contains(artifact.id) else { completion(.alreadyShowing); return }
+        if stack.ids.isEmpty {
+            if !settings.enabled || self.settings.placement != settings.placement { stackOrigin = nil }
+            self.screenID = screenID
+        }
+        self.settings = settings
+        guard stack.insert(artifact.id) else { completion(.alreadyShowing); return }
+        decode(artifact, completion: completion)
+    }
+
+    /// Decode a card just inserted into `stack` and present it.
+    private func decode(_ artifact: CaptureArtifact,
+                        completion: @escaping (MiniPreviewRestoreOutcome) -> Void) {
         nextDecodeToken &+= 1
         let decodeToken = nextDecodeToken
         pendingDecodes[artifact.id] = decodeToken
         cardGenerations[artifact.id] = decodeToken
         preparedDrags[artifact.id] = nil
-        policy.suppressCaptureUI(false)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             let result = Result { try self.imageLoader(artifact.previewPath) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.pendingDecodes[artifact.id] == decodeToken,
-                      self.stack.ids.contains(artifact.id) else { return }
+                      self.stack.ids.contains(artifact.id) else { completion(.cancelled); return }
                 self.pendingDecodes[artifact.id] = nil
                 switch result {
                 case .success(let image):
@@ -1450,7 +1486,8 @@ final class MiniPreviewController {
                     // A card appearing under a resting pointer waits for it to move.
                     self.panel?.previewView.lockCardHover()
                     self.prepareFileDrag(for: artifact)
-                case .failure:
+                    completion(.shown)
+                case .failure(let error):
                     if self.visibilityPendingArtifactID == artifact.id,
                        self.policy.stopWaiting() {
                         self.visibilityPendingArtifactID = nil
@@ -1459,6 +1496,7 @@ final class MiniPreviewController {
                     self.resources[artifact.id] = nil
                     self.makePanel()
                     self.updateVisibility()
+                    completion(.failed(error))
                 }
             }
         }
