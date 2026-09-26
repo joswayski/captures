@@ -40,6 +40,12 @@ Explorer, physical Finder/Linux file-manager acceptance, accessibility, Wayland
 live capture, signing/notarization, redistributable dependency bundling and update
 installation remain open. No parity gate closes from this development package.
 
+Preferences now offer the shipping Default microphone select (Off plus enumerated
+inputs; wgpu enumerates when the menu first opens, AppKit off the main thread),
+the AppKit GIF export card (frames per second, maximum width, palette colors)
+and AppKit scroll-spy highlighting of the section in view. The wgpu shortcut
+recorder shows `<kbd>`-style key chips and the "Press shortcut…" prompt.
+
 Direct region and window overlays (shortcut, tray and screenshot-during-recording)
 now follow the shipping `CaptureOverlay`: no toolbar, a completed region drag
 commits on release, a window/desktop click commits that window or the display,
@@ -848,6 +854,34 @@ exercises provide implementation evidence only. Windows and Wayland presentation
 physical macOS input, accessibility, playback audio, physical audio output, draft
 restoration and physical original-replacement verification remain open. No
 recording-editor or cross-platform parity gate closes.
+
+### Update notice surface: stub status source, no updater
+
+Both native hosts now render the shipping update notice: a solid
+`--surface-raised` card in a transparent, always-on-top window with a CSS-style
+triangle caret toward the tray/menu-bar icon. Shared Rust owns everything both
+hosts show. `captures_app::update_notice` ports the Tauri status model, the release
+note parser, stacked notes with PR links, size formatting, per-state copy, card
+heights and Escape blocking. `captures_app::tray_notice` ports the tray placement,
+including caret edge/offset and fallbacks. AppKit reaches both through
+`captures_update_notice_request_v1`. The covered states are Update available
+(stacked or single notes, Hide / What’s new, Update now or View release,
+open-captures warning), Downloading with progress, the restart countdown
+("Updated" / "Reopening in N seconds…"), Update failed with Try again and the
+download-page link, Checking and Up to date. Escape and Later/Close dismiss unless
+the notice is busy. Hide / What’s new writes `show_update_changelog`.
+
+**There is no native updater.** The notice is reachable only from workbench
+fixtures (`--scene update --update-state …`), driven by a deterministic stub that
+simulates install progress and the restart countdown. The stub never downloads,
+verifies, installs or relaunches. Pull request, release and download links are
+reported as fixture events, not opened. The tray/menu bar has no Check for
+Updates item, and Preferences keeps its disabled placeholder. Signed updates,
+installers and rollback remain distribution work. Private X11 checks
+(`apps/native/x11_update_notice_smoke.py`) cover rendering, resizing and fixture
+input. AppKit has XCTest coverage and compiles in macOS CI only. macOS, Windows
+and Wayland presentation, placement at a real tray icon, focus and accessibility
+are unverified. The Notices/updates gate stays open.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow

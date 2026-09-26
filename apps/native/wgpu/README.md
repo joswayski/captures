@@ -256,6 +256,7 @@ apps/native/wgpu/target/release/captures-wgpu-workbench --scene editor
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene region --exercise
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene window --exercise
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene capture-controls --capture-controls-recording
+apps/native/wgpu/target/release/captures-wgpu-workbench --scene update --update-state available --update-tray top
 ```
 
 Appearance: `--appearance system|light|dark`; palettes: `--theme cobalt` (or any
@@ -284,6 +285,7 @@ quits so the process cannot be stranded. Opening the output folder also requires
 | Capture Controls | Unified Screenshot/Record and Region/Window/Full screen controls over one prepared session; recording options, frozen/live previews, aspect/display pickers, keyboard confirm/cancel and draggable toolbar | Fixture uses synthetic pixels; real recording editing/export is a separate History action |
 | Region | Deterministic blank/draw/move/corner-resize/aspect/Shift/cancel selector fixture using the live component | Fixture uses synthetic pixels and does not request screen permission |
 | Window | Deterministic blank/frontmost-overlap/window/shell/display/cancel fixture using the live component and shared hit testing | Fixture uses synthetic pixels and does not request screen permission |
+| Update notice | Shared `captures_app::update_notice` copy for available/stacked notes, Hide / What’s new, open-captures warning, downloading, restart countdown, error/Try again, checking and up to date; `--update-state` picks the starting status and `--update-tray top\|bottom\|none` the tray position used for shared placement. The notice opens in its own transparent window with a caret. Escape dismisses it unless busy. | Stub status source only: no updater, download, install or relaunch; links are reported, not opened. Real tray-icon placement is not connected |
 | Idle | Hidden native window; no scheduled application work except optional quit deadline | Process/GPU teardown after last window; production tray lifecycle |
 
 The current screens are token-styled fixtures, not pixel-parity reproductions.

@@ -388,6 +388,9 @@ hosts offer counted All, Screenshots, Video and GIF history filters; filtering
 does not delete captures or exports. After finalization, a temporary **Recording ready**
 notice offers Save file, then Show in Folder after saving a permanent copy. Dismissing
 or letting it expire preserves History and exports; failed saves can be retried.
+Both native workbenches also render the Preview update notice (release notes,
+download progress, restart countdown and errors) from a simulated status source.
+Native builds cannot check for, download or install updates yet.
 A screenshot History card's **Edit** opens the AppKit screenshot editor. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.

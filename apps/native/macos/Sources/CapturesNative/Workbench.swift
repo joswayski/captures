@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import CCapturesSettings
 
 enum Metrics {
     static func emit(_ event: String, milliseconds: Double, detail: String = "") {
@@ -27,11 +28,57 @@ enum CaptureButtonIcon {
     case display
     case microphone(muted: Bool)
     case editorSelect, editorCrop, editorText, editorShapes, editorArrow, editorPen, editorBackground
+    /// A named icon from the shared shipping set (`captures_icon_polylines_v1`).
+    case shipping(String)
+    /// The shipping HUD stop control: an 11-point rounded signal square.
+    case stopSquare
 
     var isEditorTool: Bool {
         switch self {
-        case .capture, .record, .window, .display, .microphone: return false
+        case .capture, .record, .window, .display, .microphone, .shipping, .stopSquare: return false
         default: return true
+        }
+    }
+
+    var isShipping: Bool {
+        switch self {
+        case .shipping, .stopSquare: return true
+        default: return false
+        }
+    }
+}
+
+/// Polylines for the shared shipping icon set, in 24-unit y-down space.
+enum ShippingIcons {
+    private static var cache: [String: [[NSPoint]]] = [:]
+
+    static func polylines(_ name: String) -> [[NSPoint]] {
+        if let cached = cache[name] { return cached }
+        guard let response = captures_icon_polylines_v1(name) else { return [] }
+        defer { captures_settings_free_v1(response) }
+        guard let object = try? JSONSerialization.jsonObject(with: Data(String(cString: response).utf8))
+                as? [String: Any],
+              object["ok"] as? Bool == true,
+              let lines = object["result"] as? [[[NSNumber]]] else { return [] }
+        let result = lines.map { line in
+            line.compactMap { $0.count == 2 ? NSPoint(x: $0[0].doubleValue, y: $0[1].doubleValue) : nil }
+        }
+        cache[name] = result
+        return result
+    }
+
+    /// Stroke a named icon into `rect` (flipped view coordinates), 1.8-unit round strokes.
+    static func stroke(_ name: String, in rect: NSRect) {
+        for line in polylines(name) where line.count > 1 {
+            let path = NSBezierPath()
+            path.lineWidth = 1.8 * rect.width / 24
+            path.lineCapStyle = .round; path.lineJoinStyle = .round
+            for (index, point) in line.enumerated() {
+                let mapped = NSPoint(x: rect.minX + point.x * rect.width / 24,
+                                     y: rect.minY + point.y * rect.height / 24)
+                if index == 0 { path.move(to: mapped) } else { path.line(to: mapped) }
+            }
+            path.stroke()
         }
     }
 }
@@ -165,7 +212,8 @@ final class CaptureButton: NSButton {
             .font: font, .foregroundColor: foreground,
         ]
         let size = (title as NSString).size(withAttributes: attributes)
-        let iconSide: CGFloat = icon?.isEditorTool == true ? tokens.number("s-6") + tokens.number("s-1") : 14
+        let iconSide: CGFloat = icon?.isEditorTool == true ? tokens.number("s-6") + tokens.number("s-1")
+            : icon?.isShipping == true ? 16 : 14
         let iconWidth: CGFloat = icon == nil ? 0 : (title.isEmpty ? iconSide : iconSide + 6)
         let startX = (bounds.width - size.width - iconWidth) / 2
         if let icon { draw(icon, in: NSRect(x: startX, y: (bounds.height - iconSide) / 2,
@@ -182,6 +230,12 @@ final class CaptureButton: NSButton {
     private func draw(_ icon: CaptureButtonIcon, in rect: NSRect, color: NSColor) {
         color.setStroke(); color.setFill()
         switch icon {
+        case .shipping(let name):
+            ShippingIcons.stroke(name, in: rect)
+        case .stopSquare:
+            tokens.color(isEnabled ? "theme-signal" : "glass-text-subtle").setFill()
+            NSBezierPath(roundedRect: NSRect(x: rect.midX - 5.5, y: rect.midY - 5.5, width: 11, height: 11),
+                         xRadius: 2, yRadius: 2).fill()
         case .editorSelect, .editorCrop, .editorText, .editorShapes, .editorArrow, .editorPen, .editorBackground:
             // The shipping EditorIcon silhouettes, in their 24-unit coordinate space.
             func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
@@ -516,6 +570,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var renderedLiveStyleRevision = -1
     private var regionSelector: RegionSelectionView?
     private var windowSelector: WindowSelectionView?
+    private var updateNotice: UpdateNoticeController?
+    private var updateNoticeSettings: SettingsStore?
     private var scene: String
     private var appearance: String
     private var theme: String
@@ -907,6 +963,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         table = nil
         regionSelector = nil
         windowSelector = nil
+        if scene != "update" {
+            updateNotice?.close(); updateNotice = nil; updateNoticeSettings = nil
+        }
         if !options.live {
             liveController?.finishCapture(restoreWindow: false)
             liveController = nil
@@ -1050,8 +1109,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             sidebar.addSubview(icon)
         }
         label("Captures", x: 58, y: 22, width: 125, size: "text-xl", parent: sidebar)
-        for (i, name) in ["preferences", "history", "hud", "preview", "region", "window"].enumerated() {
-            let button = CaptureButton(name == "hud" ? "Recording controls" : name.capitalized,
+        for (i, name) in ["preferences", "history", "hud", "preview", "region", "window", "update"].enumerated() {
+            let button = CaptureButton(Self.sceneTitle(name),
                 frame: NSRect(x: 12, y: 70 + i * 44, width: 172, height: 34), tokens: tokens) { [weak self] in
                     self?.scene = name
                     self?.render()
@@ -1061,7 +1120,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }
         label("Fixture mode", x: 24, y: 640, width: 155, size: "text-sm", muted: true, parent: sidebar)
         label("No capture access", x: 24, y: 663, width: 155, size: "text-sm", muted: true, parent: sidebar)
-        label(scene == "hud" ? "Recording controls" : scene.capitalized,
+        label(Self.sceneTitle(scene),
             x: 220, y: 20, width: 650, size: "text-xl")
         label("Native rendering workbench · synthetic data, not functional parity",
             x: 220, y: 47, width: 740, size: "text-sm", muted: true)
@@ -1069,9 +1128,54 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         case "history": history()
         case "hud": hud()
         case "preview": previews()
+        case "update": updateNoticeFixture()
         default: break
         }
         Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+    }
+
+    static func sceneTitle(_ name: String) -> String {
+        switch name {
+        case "hud": return "Recording controls"
+        case "update": return "Update notice"
+        default: return name.capitalized
+        }
+    }
+
+    /// Stub-driven update notice. Only an explicit --settings-file persists the
+    /// Hide / What's new choice; fixtures never touch the development profile.
+    private func updateNoticeFixture() {
+        label("Stub status source: no updater, download, install or relaunch is connected.",
+            x: 220, y: 90, width: 740, size: "text-sm", muted: true)
+        for (i, name) in UpdateNoticeModel.fixtures.enumerated() {
+            let button = CaptureButton(name, frame: NSRect(x: 220 + (i % 5) * 150, y: 130 + (i / 5) * 44,
+                width: 140, height: 34), tokens: tokens) { [weak self] in self?.showUpdateNotice(name) }
+            content.addSubview(button)
+        }
+        if updateNotice == nil { showUpdateNotice(options.updateState ?? "available") }
+    }
+
+    private func showUpdateNotice(_ fixture: String) {
+        if updateNotice == nil {
+            let controller = UpdateNoticeController(tokens: tokens, tray: options.updateTray ?? "top")
+            if let path = options.settingsFile, let store = try? SettingsStore(path: path) {
+                updateNoticeSettings = store
+                store.load { [weak controller] result in
+                    guard case .success(let settings) = result else { return }
+                    controller?.model.showChangelog = settings.bool("show_update_changelog", true)
+                    controller?.refresh()
+                }
+                controller.model.persistShowChangelog = { [weak store] show in
+                    store?.load { result in
+                        guard case .success(var settings) = result else { return }
+                        settings["show_update_changelog"] = show
+                        store?.save(settings) { _, _ in }
+                    }
+                }
+            }
+            updateNotice = controller
+        }
+        updateNotice?.present(fixture: fixture)
     }
 
     private func openPreview(_ artifact: CaptureArtifact) {

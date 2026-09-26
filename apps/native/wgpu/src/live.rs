@@ -3922,7 +3922,7 @@ impl Live {
         for editor in self.recording_editors.values() {
             editor.show(ctx, tokens);
         }
-        self.capture_viewports(ctx, tokens);
+        self.capture_viewports(ctx, tokens, reduced_motion);
         while let Ok(action) = self.notice_rx.try_recv() {
             use crate::recording_saved_notice::Action;
             match action {
@@ -4541,7 +4541,7 @@ impl Live {
         ctx.request_repaint_of(viewport);
     }
 
-    fn capture_viewports(&mut self, ctx: &egui::Context, t: &Tokens) {
+    fn capture_viewports(&mut self, ctx: &egui::Context, t: &Tokens, reduced_motion: bool) {
         // The guide belongs to the recording, not the HUD. Keep it during
         // countdown, pause, restart and Hide; dropping the snapshot closes it.
         if let (Some(snapshot), Some(target)) = (&self.recording_snapshot, self.countdown_target)
@@ -4657,6 +4657,7 @@ impl Live {
                             notice,
                             warning: warning.is_some(),
                             hide_available,
+                            reduced_motion,
                         },
                     ) {
                         let message = match action {
@@ -4689,7 +4690,10 @@ impl Live {
                         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                     }
                     if !paused {
-                        ui.ctx().request_repaint_after(Duration::from_millis(100));
+                        // 30 fps keeps the shipping status pulse smooth; the timer only needs 10.
+                        ui.ctx().request_repaint_after(Duration::from_millis(
+                            if reduced_motion { 100 } else { 33 },
+                        ));
                     }
                 },
             );

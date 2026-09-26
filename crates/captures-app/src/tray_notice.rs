@@ -6,6 +6,7 @@
 //! Ported from the Tauri host (`apps/desktop/src-tauri/src/lib.rs`) so every
 //! native host shares one policy and its tests.
 
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Card size of the launch pill, excluding the transparent shadow frame.
@@ -47,7 +48,7 @@ pub const STARTUP_NOTICE_TITLE: &str = "Captures is ready to use";
 pub const STARTUP_NOTICE_HINT: &str = "Open New Capture with";
 
 /// A rect in logical points, top-left origin, y growing downward.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LogicalRect {
     pub x: f64,
     pub y: f64,
@@ -73,7 +74,8 @@ impl LogicalRect {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Caret {
     None,
     Top,
@@ -118,7 +120,7 @@ pub const fn should_retry_tray_rect() -> bool {
 }
 
 /// Transparent notice window frame plus where its caret points.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Placement {
     pub x: f64,
     pub y: f64,

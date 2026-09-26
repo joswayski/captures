@@ -12,6 +12,32 @@ final class RecordingHUDTests: XCTestCase {
         }
     }
 
+    func testHUDUsesShippingIconsHidesMeterWithoutMicrophoneAndPulsesWhileRecording() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let hud = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102), tokens: tokens)
+        let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
+        XCTAssertTrue(buttons.allSatisfy { $0.title.isEmpty }, "HUD actions are icon-only")
+        XCTAssertTrue(buttons.allSatisfy { button in
+            guard let icon = button.icon else { return false }
+            if case .stopSquare = icon { return true }
+            return icon.isShipping
+        })
+        for name in ["pause", "resume", "restart", "capture", "microphone", "microphone-muted",
+                     "trash", "hide-controls"] {
+            XCTAssertFalse(ShippingIcons.polylines(name).isEmpty, name)
+        }
+        let meter = try XCTUnwrap(hud.subviews.first { $0.accessibilityLabel() == "Microphone level" })
+        hud.setMicrophone(muted: false, available: false)
+        XCTAssertTrue(meter.isHidden)
+        hud.setMicrophone(muted: false, available: true)
+        XCTAssertFalse(meter.isHidden)
+        hud.setPaused(false, elapsedMilliseconds: 0)
+        XCTAssertEqual(hud.dotPulsing, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        hud.setPaused(true, elapsedMilliseconds: 0)
+        XCTAssertFalse(hud.dotPulsing)
+    }
+
     func testCompactHUDRunningPausedAndUnavailableControlsFit() throws {
         _ = NSApplication.shared
         for appearance in ["dark", "light"] {
