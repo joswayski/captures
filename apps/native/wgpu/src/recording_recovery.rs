@@ -94,9 +94,10 @@ impl View {
     }
 
     fn recover(&mut self, tx: &Sender<Job>, target: Target, directory: PathBuf) {
-        if self.pending.is_some() || self.confirmation.is_some() || !self.current(&target) {
+        if self.pending.is_some() || !self.current(&target) {
             return;
         }
+        self.confirmation = None;
         self.error = None;
         self.message = None;
         self.stage = Some(RecoveryProgress::Scanning);
@@ -194,6 +195,7 @@ impl View {
         let mut refresh = false;
         let mut confirm = None;
         let mut discard = false;
+        let confirming = self.confirmation.clone();
         let mut recover = None;
         // Shipping `.recording-recovery-section`: a raised card in Capture History.
         let copy = captures_app::history_view::copy();
@@ -281,9 +283,28 @@ impl View {
                         });
                         if target.is_some() {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let available = enabled && idle && self.confirmation.is_none();
-                                if ui.add_enabled(available, egui::Button::new("Discard…")).clicked() {
-                                    confirm = target.clone();
+                                let available = enabled && idle;
+                                // Shipping's inline confirmation: the first press
+                                // arms this row's Discard, the second deletes.
+                                let armed = confirming.is_some() && confirming == target;
+                                let label = if armed { "Discard permanently?" } else { "Discard" };
+                                let mut button = egui::Button::new(if armed {
+                                    egui::RichText::new(label).color(tokens.color("danger-text"))
+                                } else {
+                                    egui::RichText::new(label)
+                                });
+                                if armed {
+                                    // `.recording-recovery-row button.danger`.
+                                    button = button
+                                        .fill(tokens.color("danger-surface"))
+                                        .stroke(egui::Stroke::NONE);
+                                }
+                                if ui.add_enabled(available, button).clicked() {
+                                    if armed {
+                                        discard = true;
+                                    } else {
+                                        confirm = target.clone();
+                                    }
                                 }
                                 if ui.add_enabled(available, egui::Button::new("Recover")).clicked() {
                                     recover = target.clone();
@@ -298,27 +319,10 @@ impl View {
         if let Some(target) = confirm {
             self.confirmation = Some(target);
         }
-        if let Some(target) = &self.confirmation {
-            let mut keep = false;
-            egui::Window::new("Discard interrupted recording?")
-                .id(egui::Id::unique("confirm-recording-discard"))
-                .collapsible(false).resizable(false).default_width(360.)
-                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-                .show(ui.ctx(), |ui| {
-                    ui.label("Permanently deletes this recording's recovery files. This cannot be undone.");
-                    ui.monospace(&target.session_id);
-                    ui.horizontal(|ui| {
-                        keep = ui.button("Keep recording").clicked();
-                        discard = ui.add_enabled(enabled && idle,
-                            egui::Button::new(egui::RichText::new("Discard permanently")
-                                .color(tokens.color("danger-text")))).clicked();
-                    });
-                });
-            if keep
-                || ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-            {
-                self.confirmation = None;
-            }
+        if self.confirmation.is_some()
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.confirmation = None;
         }
         if refresh {
             self.error = None;
@@ -374,7 +378,7 @@ impl Recovery {
     }
 
     pub fn blocking(&self) -> bool {
-        self.view.pending.is_some() || self.view.confirmation.is_some()
+        self.view.pending.is_some()
     }
 
     /// Interrupted recordings are listed, so History is not empty.
@@ -409,9 +413,6 @@ impl Recovery {
             return Err(
                 "Cancel or wait for interrupted-recording recovery before quitting.".into(),
             );
-        }
-        if self.view.confirmation.is_some() {
-            return Err("Dismiss the recording discard confirmation before quitting.".into());
         }
         Ok(())
     }
@@ -536,6 +537,79 @@ mod tests {
     }
 
     #[test]
+    fn discard_confirms_inline_on_a_second_press_and_escape_disarms_it() {
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let ctx = egui::Context::default();
+        let (tx, jobs) = mpsc::channel();
+        let mut view = view();
+        let mut frame = |view: &mut View, events: Vec<egui::Event>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(700., 500.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        view.ui(ui, &tokens, true, &tx);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let find = |output: &egui::FullOutput, label: &str| {
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.pos + text.galley.rect.center().to_vec2())
+                }
+                _ => None,
+            })
+        };
+        let press = |pos| {
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            [egui::Event::PointerMoved(pos), button(true), button(false)]
+        };
+        let output = frame(&mut view, vec![]);
+        let discard = find(&output, "Discard").expect("Discard");
+        assert!(find(&output, "Discard…").is_none(), "no modal hand-off");
+        for event in press(discard) {
+            frame(&mut view, vec![event]);
+        }
+        let output = frame(&mut view, vec![]);
+        let armed = find(&output, "Discard permanently?").expect("armed label");
+        assert!(view.confirmation.is_some() && jobs.try_recv().is_err());
+        assert!(find(&output, "Discard interrupted recording?").is_none());
+        frame(
+            &mut view,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(view.confirmation.is_none() && jobs.try_recv().is_err());
+        for event in press(discard) {
+            frame(&mut view, vec![event]);
+        }
+        for event in press(armed) {
+            frame(&mut view, vec![event]);
+        }
+        let target = Target::from_draft(&view.drafts[0]).unwrap();
+        assert!(matches!(jobs.try_recv().unwrap(), Job::Discard(sent) if sent == target));
+    }
+
+    #[test]
     fn recover_failure_refreshes_then_retries_with_new_identity() {
         let (tx, jobs) = mpsc::channel();
         let mut view = view();
@@ -590,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn quit_waits_for_mutation_or_confirmation_but_not_an_idle_list() {
+    fn quit_waits_for_a_mutation_but_not_an_idle_list_or_armed_discard() {
         let (tx, _jobs) = mpsc::channel();
         let (_out, rx) = mpsc::channel();
         let mut recovery = Recovery {
@@ -605,8 +679,9 @@ mod tests {
         recovery.view.pending = Some(Pending::Discarding);
         assert!(recovery.can_quit().is_err());
         recovery.view.pending = None;
+        // An armed inline Discard is only a pending press, never a modal.
         recovery.view.confirmation = Target::from_draft(&recovery.view.drafts[0]);
-        assert!(recovery.can_quit().is_err());
+        assert!(recovery.can_quit().is_ok() && !recovery.blocking());
         recovery.view.confirmation = None;
         let target = Target::from_draft(&recovery.view.drafts[0]).unwrap();
         recovery.recover(target, "output".into());

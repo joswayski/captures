@@ -33,8 +33,7 @@ pub(super) struct InlineText {
     close_after: bool,
     previous_selection: Option<String>,
     previous_document: Arc<Document>,
-    previous_output: Option<(egui::TextureHandle, usize)>,
-    previous_show_output: bool,
+    previous_output: Option<(egui::TextureHandle, u64)>,
 }
 
 impl View {
@@ -93,12 +92,10 @@ impl View {
             previous_selection: self.selected_layer.clone(),
             previous_document: presented.document.clone(),
             previous_output: self.output.clone(),
-            previous_show_output: self.show_output,
         });
         self.cancel_edit_gestures();
         self.cancel_crop();
         self.viewport_pan = None;
-        self.show_output = false;
         self.submit(
             tx,
             Request::BeginTextInput {
@@ -134,7 +131,6 @@ impl View {
         if input.finish == Some(false) && !input.started {
             let input = self.inline.take().unwrap();
             self.output = input.previous_output;
-            self.show_output = input.previous_show_output;
             self.select_layer_exact(input.previous_selection);
             self.error = None;
             return;
@@ -203,7 +199,6 @@ impl View {
             // output; a real document change goes through normal invalidation.
             if presented.document == input.previous_document {
                 self.output = input.previous_output;
-                self.show_output = input.previous_show_output;
                 self.select_layer_exact(input.previous_selection);
             }
             self.activate_tool(Section::Layers, None);
@@ -376,7 +371,6 @@ mod tests {
         let mut view = View::default();
         view.receive(&ctx, Ok(presented_text("label", "original")));
         view.output = Some((view.texture.as_ref().unwrap().clone(), 37));
-        view.show_output = true;
         let (tx, rx) = mpsc::channel();
         view.begin_inline(
             &tx,
@@ -444,7 +438,7 @@ mod tests {
         ));
         assert!(rx.try_recv().is_err());
         view.receive(&ctx, Ok(presented_text("label", "original")));
-        assert!(view.inline.is_none() && view.show_output);
+        assert!(view.inline.is_none() && view.output.is_some());
         assert_eq!(view.output.as_ref().unwrap().1, 37);
         assert_eq!(view.selected_layer.as_deref(), Some("label"));
     }
@@ -466,7 +460,7 @@ mod tests {
         view.receive(&ctx, Err("still unavailable".into()));
         view.finish_inline(false);
         view.drain_inline(&tx);
-        assert!(view.inline.is_none() && view.show_output && rx.try_recv().is_err());
+        assert!(view.inline.is_none() && view.output.is_some() && rx.try_recv().is_err());
 
         let (ctx, mut view, tx, rx) = setup();
         accept(&ctx, &mut view, "original");

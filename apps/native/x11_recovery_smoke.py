@@ -132,17 +132,17 @@ exec /usr/bin/ffmpeg "$@"
 
                     screenshot("populated")
                     # History content starts below the wrapped two-line capture action row.
-                    click(918, 424)  # First bundle's Discard… action.
+                    # Shipping's inline confirmation: the first press arms the
+                    # row's Discard as "Discard permanently?"; Escape disarms it.
+                    click(918, 424)  # First bundle's Discard.
                     screenshot("confirmation")
                     assert digest_tree(video) == video_before
                     run("xdotool", "key", "Escape")
                     time.sleep(.2)
                     assert digest_tree(video) == video_before
                     click(918, 424)
-                    click(395, 410)  # Keep recording (centered dialog).
                     assert digest_tree(video) == video_before
-                    click(918, 424)
-                    click(545, 410)  # Discard permanently.
+                    click(918, 424)  # Discard permanently? (grows left of the same edge).
                     wait(lambda: not video.exists())
                     assert digest_tree(gif) == gif_before
                     assert digest_tree(history) == original_history

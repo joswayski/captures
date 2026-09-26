@@ -486,16 +486,29 @@ impl CaptureControls {
                                 if !primary.hidden {
                                     ui.separator();
                                     let target = self.current_target();
-                                    if ui
-                                        .add_enabled(
-                                            target.is_some(),
-                                            egui::Button::new(
-                                                RichText::new(primary.label)
-                                                    .color(tokens.color("theme-accent-ink")),
-                                            )
-                                            .fill(tokens.color("theme-accent"))
-                                            .stroke(Stroke::NONE),
-                                        )
+                                    let label = RichText::new(primary.label)
+                                        .color(tokens.color("theme-accent-ink"));
+                                    let recording = self.action_mode == ActionMode::Recording;
+                                    // `.capture-record-dot` before Start recording.
+                                    let dot = egui::IdSalt::new("capture-record-dot");
+                                    let button = if recording {
+                                        egui::Button::new((
+                                            egui::Atom::custom(dot, egui::Vec2::splat(10.)),
+                                            label,
+                                        ))
+                                    } else {
+                                        egui::Button::new(label)
+                                    }
+                                    .fill(tokens.color("theme-accent"))
+                                    .stroke(Stroke::NONE);
+                                    let shown = ui
+                                        .add_enabled_ui(target.is_some(), |ui| button.atom_ui(ui))
+                                        .inner;
+                                    if let Some(rect) = shown.rect(dot) {
+                                        paint_record_dot(ui, tokens, rect, target.is_some());
+                                    }
+                                    if shown
+                                        .response
                                         .on_hover_text(format!(
                                             "{} (Enter)",
                                             primary.accessibility_label
@@ -1171,6 +1184,37 @@ fn truncate_label(label: &str, maximum_characters: usize) -> String {
     truncated
 }
 
+/// Shipping `.capture-record-dot`: a 10 px signal dot ringed in accent ink.
+/// While Start recording is enabled its `::after` copy plays
+/// `recording-ready-ping`, growing to twice its size as it fades; under
+/// reduced motion the copy rests invisible.
+fn paint_record_dot(ui: &egui::Ui, tokens: &Tokens, rect: egui::Rect, enabled: bool) {
+    let centre = rect.center();
+    let radius = rect.width().min(rect.height()) / 2.;
+    let signal = tokens.color("theme-signal");
+    if enabled {
+        let reduced = crate::motion::reduced(ui.ctx());
+        let now = ui.input(|input| input.time);
+        let pose = tokens
+            .motion(Motion::CaptureRecordReadyPing)
+            .pose_repeating(now * 1000., reduced);
+        if pose.opacity > 0. {
+            ui.painter().circle_filled(
+                centre,
+                radius * pose.scale as f32,
+                signal.gamma_multiply(pose.opacity as f32),
+            );
+        }
+        if !reduced {
+            ui.ctx().request_repaint();
+        }
+    }
+    // `box-shadow: 0 0 0 1.5px var(--theme-accent-ink)` outside the dot.
+    ui.painter()
+        .circle_filled(centre, radius + 1.5, tokens.color("theme-accent-ink"));
+    ui.painter().circle_filled(centre, radius, signal);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1654,6 +1698,59 @@ mod tests {
         assert_eq!(display_label(&named), "Built-in Retina Display");
         named.name = " ".into();
         assert_eq!(display_label(&named), "Display");
+    }
+
+    #[test]
+    fn record_dot_pings_while_ready_and_rests_under_reduced_motion() {
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let circles = |reduced: bool, enabled: bool| {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                crate::motion::set_reduced(ui.ctx(), reduced);
+                let rect =
+                    egui::Rect::from_center_size(egui::pos2(20., 20.), egui::Vec2::splat(10.));
+                paint_record_dot(ui, &tokens, rect, enabled);
+            });
+            output.textures_delta.clear();
+            let circles: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Circle(circle) => Some((circle.radius, circle.fill)),
+                    _ => None,
+                })
+                .collect();
+            let repaints = output
+                .viewport_output
+                .values()
+                .any(|viewport| viewport.repaint_delay.is_zero());
+            (circles, repaints)
+        };
+        let signal = tokens.color("theme-signal");
+        let (ping, repaint) = circles(false, true);
+        assert_eq!(ping.len(), 3, "ping copy, ink ring and dot");
+        // The copy grows from the dot to twice its size as it fades from 0.7.
+        assert!(ping[0].0 >= 5. && ping[0].0 <= 10., "{:?}", ping[0]);
+        assert!(
+            ping[0].1.a() <= signal.gamma_multiply(0.7).a(),
+            "{:?}",
+            ping[0]
+        );
+        assert_eq!(ping[2], (5., signal));
+        assert_eq!(ping[1].0, 6.5);
+        assert!(repaint, "the ping keeps animating");
+        let (still, _) = circles(true, true);
+        assert_eq!(
+            still.len(),
+            2,
+            "reduced motion rests on the invisible final frame"
+        );
+        let (disabled, _) = circles(false, false);
+        assert_eq!(
+            disabled.len(),
+            2,
+            "no ping while Start recording is disabled"
+        );
     }
 
     #[test]
