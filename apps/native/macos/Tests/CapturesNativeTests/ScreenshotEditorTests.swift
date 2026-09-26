@@ -57,7 +57,7 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
-            let labels = ["Select & move (V)", "Crop (C)", "Text (T)", "Shapes", "Arrow (A)", "Freehand (P)", "Background removal (B)"]
+            let labels = ["Select & move (V)", "Crop (C)", "Text (T)", "Shapes", "Arrow (A)", "Freehand (P)", "Eraser (B)"]
             let rail = try labels.map { label in
                 try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? CaptureButton }
                     .first { $0.accessibilityLabel() == label })
@@ -68,8 +68,21 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertFalse(button.isHidden)
                 XCTAssertTrue(button.isEnabled)
                 XCTAssertEqual(button.frame.size, NSSize(width: 38, height: 38))
-                XCTAssertEqual(button.toolTip, button.accessibilityLabel())
+                if button.accessibilityLabel() == "Shapes" {
+                    XCTAssertEqual(button.toolTip, "Shapes · Rectangle (R)", "shipping names the current shape")
+                } else {
+                    XCTAssertEqual(button.toolTip, button.accessibilityLabel())
+                }
             }
+            // Shipping's glass hover tip shows the label without the shortcut.
+            rail[6].highlightChanged?(rail[6], true)
+            let tip = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == "Eraser" && !$0.isHidden })
+            XCTAssertEqual(tip.frame.minX, rail[6].frame.maxX + 10)
+            rail[6].highlightChanged?(rail[6], false)
+            XCTAssertTrue(tip.isHidden)
+            XCTAssertEqual(rail[0].frame.minY, 52 + 8)
+            XCTAssertEqual(rail[1].frame.minY - rail[0].frame.minY, 40, "38pt buttons with 2pt gaps")
             let sections = try segmented("Editor section", in: controller.root)
             rail[2].performClick(nil)
             XCTAssertEqual(sections.selectedSegment, 2)
@@ -332,7 +345,8 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = controller.window.performKeyEquivalent(with: try event([.control, .shift]))
         XCTAssertTrue(worker.requests.isEmpty, "field editors must not dispatch document history")
 
-        controller.window.makeFirstResponder(undo)
+        // Document history also works from a focused header button.
+        controller.window.makeFirstResponder(try button("Add images", in: controller.root))
         worker.deferRequests = true
         XCTAssertTrue(controller.window.performKeyEquivalent(with: try event(.control)))
         XCTAssertEqual(worker.requests.map { $0["operation"] as? String }, ["undo"])
@@ -377,7 +391,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(worker.requests.isEmpty)
             XCTAssertEqual(worker.encodes.count, 1)
             try render(controller.root, name: "screenshot-editor-zoom-slider-maximum-\(appearance)")
-            try button("Fit", in: controller.root).performClick(nil)
+            try press("Fit canvas", in: controller.root)
             XCTAssertEqual(controller.viewport, NativeEditorViewport())
             XCTAssertEqual(slider.doubleValue, 0.5902718572045537, accuracy: 1e-12)
             try render(controller.root, name: "screenshot-editor-zoom-slider-fit-\(appearance)")
@@ -584,7 +598,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(controller.presentedImageRect.midX, input.bounds.midX, accuracy: 0.001)
             XCTAssertEqual(controller.presentedImageRect.midY, input.bounds.midY, accuracy: 0.001)
             try render(controller.root, name: "screenshot-editor-fit-small-\(appearance)")
-            try button("+", in: controller.root).performClick(nil)
+            try press("Zoom in", in: controller.root)
             XCTAssertEqual(controller.viewport.zoomPercent, 125, "step starts from capped Fit")
             XCTAssertEqual(controller.presentedImageRect.size, NSSize(width: 200, height: 112.5))
             try chooseZoomPreset("200%", in: controller.root)
@@ -605,22 +619,48 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        let labels = ["Fit screenshot in viewport",
-                      "Zoom out", "Zoom in", "Recenter screenshot"]
-        let controls = descendants(in: controller.root).compactMap { $0 as? CaptureButton }
-            .filter { labels.contains($0.accessibilityLabel() ?? "") }
-        XCTAssertEqual(controls.count, 4)
+        // Shipping zoom group: Fit, −, slider, + and presets, with shipping tooltips.
+        let group = try XCTUnwrap(descendants(in: controller.root).first {
+            $0.accessibilityLabel() == "Canvas zoom controls" })
+        let fit = try button("Fit canvas", in: controller.root)
+        let zoomOut = try button("Zoom out", in: controller.root)
+        let zoomIn = try button("Zoom in", in: controller.root)
+        for control in [fit, zoomOut, zoomIn] {
+            XCTAssertTrue(control.isDescendant(of: group))
+            XCTAssertTrue(control.title.isEmpty, "icon-only, like shipping")
+        }
+        XCTAssertEqual(fit.toolTip, "Fit canvas to window")
+        XCTAssertEqual(try popup("Canvas zoom preset", in: controller.root).toolTip, "Zoom presets")
+        XCTAssertTrue(fit.selected, "Fit is the active zoom mode")
         try chooseZoomPreset("100%", in: controller.root)
         XCTAssertEqual(controller.viewport.zoomPercent, 100)
-        controls.first { $0.accessibilityLabel() == "Zoom in" }?.performClick(nil)
+        XCTAssertFalse(fit.selected)
+        zoomIn.performClick(nil)
         XCTAssertEqual(controller.viewport.zoomPercent, 125)
-        controls.first { $0.accessibilityLabel() == "Recenter screenshot" }?.performClick(nil)
+        // Recenter appears only once pan leaves the canvas mostly off screen.
+        let recenter = try button("Recenter", in: controller.root)
+        XCTAssertTrue(recenter.isHidden)
+        let input = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorViewportGestureView }
+            .first { $0.accessibilityLabel() == "Screenshot viewport" })
+        input.onViewportPan?(NSPoint(x: 5000, y: 5000))
+        XCTAssertFalse(recenter.isHidden)
+        recenter.performClick(nil)
         XCTAssertEqual(controller.viewport.zoomPercent, 125)
-        controls.first { $0.accessibilityLabel() == "Fit screenshot in viewport" }?.performClick(nil)
+        XCTAssertEqual(controller.viewport.panX, 0); XCTAssertEqual(controller.viewport.panY, 0)
+        XCTAssertTrue(recenter.isHidden)
+        fit.performClick(nil)
         XCTAssertEqual(controller.viewport, NativeEditorViewport())
+        XCTAssertTrue(fit.selected)
+        try chooseZoomPreset("200%", in: controller.root)
+        for _ in 0..<12 { zoomIn.performClick(nil) }
+        XCTAssertEqual(controller.viewport.zoomPercent, 800)
+        XCTAssertFalse(zoomIn.isEnabled, "+ disables at 800%")
+        XCTAssertTrue(zoomOut.isEnabled)
         XCTAssertEqual(controller.state.snapshot, original)
         XCTAssertTrue(worker.requests.isEmpty)
-        XCTAssertTrue(controls.allSatisfy { controller.root.bounds.contains($0.convert($0.bounds, to: controller.root)) })
+        for control in [fit, zoomOut, zoomIn] {
+            XCTAssertTrue(controller.root.bounds.contains(control.convert(control.bounds, to: controller.root)))
+        }
     }
 
     func testWindowResizeKeepsInspectorAndZoomControlsVisibleAndFitCentered() throws {
@@ -636,9 +676,19 @@ final class ScreenshotEditorTests: XCTestCase {
             let input = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorViewportGestureView }
                 .first { $0.accessibilityLabel() == "Screenshot viewport" })
             let section = try segmented("Editor section", in: controller.root)
+            XCTAssertTrue(section.isHidden, "the rail chooses the inspector, as in shipping")
             let inspector = try XCTUnwrap(descendants(in: controller.root)
                 .first { $0.accessibilityLabel() == "Geometry controls" })
+            let header = try XCTUnwrap(descendants(in: controller.root)
+                .first { $0.accessibilityLabel() == "Screenshot editor toolbar" })
             let undo = try button("Undo", in: controller.root)
+            // A draft found at open shows shipping's restored-edits banner above the header.
+            XCTAssertTrue(controller.draftRestored)
+            XCTAssertEqual(header.frame.minY, 40)
+            try render(controller.root, name: "screenshot-editor-draft-restored-\(appearance)")
+            try press("Dismiss restored-edits notice", in: controller.root)
+            XCTAssertFalse(controller.draftRestored)
+            XCTAssertEqual(header.frame, NSRect(x: 0, y: 0, width: controller.root.bounds.width, height: 52))
             // The export bar adds 80pt below the historical 1000×700 layout,
             // but a display whose visible frame is shorter keeps the whole
             // window, export bar included, on screen.
@@ -646,31 +696,28 @@ final class ScreenshotEditorTests: XCTestCase {
             let defaultHeight = min(780, controller.window.contentRect(forFrameRect: visible).height)
             XCTAssertEqual(controller.root.bounds.width, 1000)
             XCTAssertEqual(controller.root.bounds.height, defaultHeight, accuracy: 1)
+            XCTAssertTrue(undo.isHidden, "shipping hides Undo/Redo at or below 1040pt")
             let bar = try XCTUnwrap(descendants(in: controller.root).first { $0.accessibilityLabel() == "Export bar" })
             XCTAssertEqual(bar.frame.maxY, controller.root.bounds.height)
             XCTAssertEqual(bar.frame.height, 80)
             // Exercise both axes without exceeding the CI display's height.
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            waitUntil { input.bounds.size == NSSize(width: 300, height: 238) }
+            waitUntil { input.bounds.size == NSSize(width: 320, height: 348) }
             controller.window.setContentSize(NSSize(width: 1200, height: 600))
             controller.root.layoutSubtreeIfNeeded()
-            // 740×334 is shorter than the 640×360 screenshot: Fit scales it
-            // by 334/360 and centres it horizontally.
-            waitUntil { input.bounds.size == NSSize(width: 740, height: 334)
-                && abs(controller.presentedImageRect.height - 334) < 1e-7 }
-            XCTAssertEqual(input.bounds.size, NSSize(width: 740, height: 334))
+            // 760×408 holds the 640×360 screenshot at its actual size, centred.
+            waitUntil { input.bounds.size == NSSize(width: 760, height: 408)
+                && abs(controller.presentedImageRect.height - 360) < 1e-7 }
             XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1200, height: 600))
-            XCTAssertEqual(section.frame.minX, 888)
-            XCTAssertEqual(inspector.frame, NSRect(x: 888, y: 66, width: 272, height: 230))
-            XCTAssertEqual(undo.frame.origin, NSPoint(x: 888, y: 310))
-            let fitWidth: CGFloat = 640 * 334 / 360
-            XCTAssertEqual(controller.presentedImageRect.minX, (740 - fitWidth) / 2, accuracy: 1e-7)
-            XCTAssertEqual(controller.presentedImageRect.minY, 0, accuracy: 1e-7)
-            XCTAssertEqual(controller.presentedImageRect.width, fitWidth, accuracy: 1e-7)
-            XCTAssertEqual(controller.presentedImageRect.height, 334, accuracy: 1e-7)
+            XCTAssertEqual(inspector.frame, NSRect(x: 888, y: 64, width: 272, height: 330))
+            XCTAssertFalse(undo.isHidden)
+            let zoomGroup = try XCTUnwrap(descendants(in: controller.root)
+                .first { $0.accessibilityLabel() == "Canvas zoom controls" })
+            XCTAssertLessThan(undo.frame.maxX, zoomGroup.frame.minX)
+            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 60, y: 24, width: 640, height: 360))
             XCTAssertEqual(bar.frame, NSRect(x: 0, y: 520, width: 1200, height: 80))
             for control in descendants(in: controller.root) where
-                ["Canvas zoom", "Canvas zoom preset", "Edited canvas dimensions", "Screenshot editor status"]
+                ["Canvas zoom", "Canvas zoom preset", "Canvas width", "Screenshot editor status"]
                     .contains(control.accessibilityLabel() ?? "") {
                 let frame = control.convert(control.bounds, to: controller.root)
                 XCTAssertTrue(controller.root.bounds.contains(frame))
@@ -679,15 +726,11 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-resized-fit-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             controller.root.layoutSubtreeIfNeeded()
-            waitUntil { controller.presentedImageRect.width == 300 }
-            XCTAssertEqual(input.bounds.size, NSSize(width: 300, height: 238))
-            XCTAssertEqual(section.frame.minX, 448)
-            XCTAssertEqual(inspector.frame, NSRect(x: 448, y: 66, width: 272, height: 170))
-            XCTAssertEqual(undo.frame.origin, NSPoint(x: 448, y: 250))
-            XCTAssertEqual(controller.presentedImageRect.minX, 0, accuracy: 1e-7)
-            XCTAssertEqual(controller.presentedImageRect.minY, 34.625, accuracy: 1e-7)
-            XCTAssertEqual(controller.presentedImageRect.width, 300, accuracy: 1e-7)
-            XCTAssertEqual(controller.presentedImageRect.height, 168.75, accuracy: 1e-7)
+            waitUntil { controller.presentedImageRect.width == 320 }
+            XCTAssertEqual(input.bounds.size, NSSize(width: 320, height: 348))
+            XCTAssertEqual(inspector.frame, NSRect(x: 448, y: 64, width: 272, height: 270))
+            XCTAssertTrue(undo.isHidden)
+            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 84, width: 320, height: 180))
             try render(controller.root, name: "screenshot-editor-resized-minimum-\(appearance)")
             XCTAssertEqual(controller.viewport, NativeEditorViewport())
             XCTAssertEqual(controller.state.snapshot, original)
@@ -830,13 +873,14 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.drawOverlay.begin(at: NSPoint(x: 120, y: 140))
         XCTAssertNotNil(controller.drawOverlay.startPoint)
         controller.window.setContentSize(NSSize(width: 1200, height: 600))
-        waitUntil { controller.drawOverlay.startPoint == nil && input.bounds.width == 740
-            && controller.presentedImageRect.midX == 370 + CGFloat(viewport.panX) }
+        waitUntil { controller.drawOverlay.startPoint == nil && input.bounds.width == 760
+            && controller.presentedImageRect.midX == 380 + CGFloat(viewport.panX) }
         controller.drawOverlay.end(at: NSPoint(x: 260, y: 220))
         XCTAssertEqual(controller.viewport, viewport)
-        XCTAssertEqual(controller.presentedImageRect.midX, 370 + CGFloat(viewport.panX), accuracy: 1e-7)
-        // 1200×600 leaves a 740×334 viewport above the 80pt export bar.
-        XCTAssertEqual(controller.presentedImageRect.midY, 167 + CGFloat(viewport.panY), accuracy: 1e-7)
+        XCTAssertEqual(controller.presentedImageRect.midX, 380 + CGFloat(viewport.panX), accuracy: 1e-7)
+        // 1200×600 leaves a 760×368 viewport between the restored-draft banner,
+        // the 52pt header and the 80pt export bar.
+        XCTAssertEqual(controller.presentedImageRect.midY, 184 + CGFloat(viewport.panY), accuracy: 1e-7)
         let point = NSPoint(x: 160, y: 180)
         let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
             location: controller.drawOverlay.convert(point, to: nil), modifierFlags: [.command],
@@ -860,34 +904,42 @@ final class ScreenshotEditorTests: XCTestCase {
             let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try press("Dismiss restored-edits notice", in: controller.root)
             let input = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorViewportGestureView }
                 .first { $0.accessibilityLabel() == "Screenshot viewport" })
-            let dimensions = try field("Edited canvas dimensions", in: controller.root)
             let zoom = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSSlider }
                 .first { $0.accessibilityLabel() == "Canvas zoom" })
+            let canvasToolbar = try XCTUnwrap(descendants(in: controller.root)
+                .first { !($0 is NSTextField) && $0.accessibilityLabel() == "Canvas" })
+            let zoomGroup = try XCTUnwrap(descendants(in: controller.root)
+                .first { $0.accessibilityLabel() == "Canvas zoom controls" })
+            let undo = try button("Undo", in: controller.root)
+            let trim = try button("Trim edges", in: controller.root)
             let sections = try segmented("Editor section", in: controller.root)
-            // Both sides of the wrapping threshold, and a return from compact
-            // to wide, catch stale autoresizing offsets and cumulative drift.
-            for width in [CGFloat(999), 1000, 760, 1000] {
+            // Both sides of shipping's 1040pt header rule, the minimum and a return
+            // to wide, catch stale offsets and cumulative drift.
+            for width in [CGFloat(1041), 1040, 760, 1000] {
                 controller.window.setContentSize(NSSize(width: width, height: 540))
                 controller.root.layoutSubtreeIfNeeded()
-                waitUntil { input.bounds.width == width - 460 }
-                XCTAssertEqual(zoom.frame.origin.y, width < 1000 ? 374 : 410)
-                XCTAssertEqual(dimensions.frame.origin, NSPoint(x: width < 1000 ? 24 : 440, y: 414))
-                XCTAssertEqual(input.bounds.height, width < 1000 ? 238 : 274)
-                XCTAssertFalse(zoom.frame.intersects(dimensions.frame))
-                XCTAssertLessThanOrEqual(zoom.frame.maxX, sections.frame.minX - 24)
+                waitUntil { input.bounds.width == width - 440 }
+                XCTAssertEqual(input.bounds.height, 348)
+                XCTAssertEqual(undo.isHidden, width <= 1040)
+                // 92pt/72pt slider cells minus their 8pt/6pt padding.
+                XCTAssertEqual(zoom.frame.width, width > 1040 ? 76 : 60)
+                XCTAssertLessThanOrEqual(canvasToolbar.frame.maxX, zoomGroup.frame.minX - 12)
+                XCTAssertFalse(trim.isHiddenOrHasHiddenAncestor)
+                XCTAssertTrue(controller.root.bounds.contains(trim.convert(trim.bounds, to: controller.root)))
             }
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            waitUntil { controller.presentedImageRect.width == 300 }
-            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 34.625, width: 300, height: 168.75))
-            XCTAssertEqual(zoom.frame.width, 92)
-            XCTAssertEqual(sections.frame, NSRect(x: 448, y: 24, width: 272, height: 28))
+            waitUntil { controller.presentedImageRect.width == 320 }
+            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 84, width: 320, height: 180))
+            XCTAssertTrue(trim.title.isEmpty, "the minimum header keeps Trim as an icon with its tooltip")
+            XCTAssertEqual(trim.toolTip, "Shrink the canvas to the edges of visible layers")
             for control in controller.root.subviews where !control.isHidden {
                 XCTAssertTrue(controller.root.bounds.contains(control.frame), "\(control) must fit at minimum size")
             }
             try render(controller.root, name: "screenshot-editor-compact-fit-\(appearance)")
-            let controls: [NSView] = [try button("Trim edges", in: controller.root),
+            let controls: [NSView] = [try button("Apply crop", in: controller.root),
                 try button("Add image…", in: controller.root),
                 try popup("Drawing tool", in: controller.root)]
             for control in [try button("Change…", in: controller.root), try button("Save", in: controller.root),
@@ -938,8 +990,8 @@ final class ScreenshotEditorTests: XCTestCase {
             try chooseZoomPreset("200%", in: controller.root)
             XCTAssertEqual(controller.presentedImageRect.size, NSSize(width: 1280, height: 720))
             try chooseZoomPreset("100%", in: controller.root)
-            try button("+", in: controller.root).performClick(nil)
-            try button("+", in: controller.root).performClick(nil)
+            try press("Zoom in", in: controller.root)
+            try press("Zoom in", in: controller.root)
             XCTAssertEqual(preset.titleOfSelectedItem, "156.3%")
             XCTAssertEqual(preset.itemTitles, ["Fit", "156.3%", "50%", "100%", "200%"])
             try render(controller.root, name: "screenshot-editor-zoom-preset-custom-minimum-\(appearance)")
@@ -1121,7 +1173,7 @@ final class ScreenshotEditorTests: XCTestCase {
         let discardController = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: discardWorker)
         defer { discardController.window.orderOut(nil) }
         discardController.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try button("Discard edits…", in: discardController.root).performClick(nil)
+        try performDraftAction("Discard edits…", in: discardController)
         let discardSheet = try XCTUnwrap(discardController.window.attachedSheet)
         discardController.window.endSheet(discardSheet, returnCode: .alertFirstButtonReturn)
         waitUntil { discardWorker.requests.contains { $0["operation"] as? String == "discard_draft" } }
@@ -1134,7 +1186,7 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try button("Save draft", in: controller.root).performClick(nil)
+        try performDraftAction("Save draft", in: controller)
         waitUntil { !controller.state.busy }
         XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
         XCTAssertTrue(controller.window.isVisible)
@@ -1198,7 +1250,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(controller.state.artifactID, "first")
         XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
         XCTAssertTrue(controller.window.title.contains("Unsaved"))
-        XCTAssertTrue(try button("Save draft", in: controller.root).isEnabled)
+        XCTAssertTrue(try draftAction("Save draft", in: controller).isEnabled)
     }
 
     func testCropOverlayMapsScaledImageCoordinatesAndLatchesSharedAspect() {
@@ -1299,7 +1351,7 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.cropOverlay.drag(to: NSPoint(x: image.minX + image.width * 0.5, y: image.minY + image.height * 0.6))
             XCTAssertEqual(controller.cropOverlay.selection, NSRect(x: 64, y: 72, width: 256, height: 192))
             try render(controller.root, name: "screenshot-editor-crop-drag-\(appearance)")
-            try button("+", in: controller.root).performClick(nil)
+            try press("Zoom in", in: controller.root)
             let candidate = controller.cropOverlay.selection
             controller.cropOverlay.end(at: NSPoint(x: 500, y: 400))
             XCTAssertEqual(controller.cropOverlay.selection, candidate, "zoom cancels only the active pointer gesture")
@@ -1512,22 +1564,17 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
             waitUntil { controller.state.snapshot != nil && !controller.state.busy }
             let initial = try XCTUnwrap(controller.state.snapshot)
-            (try field("Canvas width", in: controller.root)).stringValue = "10"
-            (try field("Canvas height", in: controller.root)).stringValue = "5"
-            try button("Resize canvas", in: controller.root).performClick(nil)
+            try commitCanvasSize("10", "5", in: controller.root)
             waitUntil { controller.state.snapshot?.width == 10 && !controller.state.busy }
             try showOutput(in: controller.root)
             try button("Preview output", in: controller.root).performClick(nil)
             waitUntil { !controller.state.busy }
             let output = try segmented("Output preview image", in: controller.root)
             XCTAssertTrue(output.isEnabled)
-            let section = try segmented("Editor section", in: controller.root)
-            section.selectedSegment = 0; _ = section.sendAction(section.action, to: section.target)
+            // Trim edges lives in the header Canvas toolbar, as in shipping.
             let trim = try button("Trim edges", in: controller.root)
-            let scroll = try XCTUnwrap(trim.enclosingScrollView)
-            trim.scrollToVisible(trim.bounds)
-            scroll.reflectScrolledClipView(scroll.contentView)
-            XCTAssertTrue(scroll.documentVisibleRect.contains(trim.frame))
+            XCTAssertNil(trim.enclosingScrollView)
+            XCTAssertFalse(trim.isHiddenOrHasHiddenAncestor)
             try render(controller.root, name: "screenshot-editor-trim-minimum-\(appearance)")
             trim.performClick(nil)
             XCTAssertFalse(trim.isEnabled, "one shared command owns busy state")
@@ -1537,11 +1584,11 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(controller.state.snapshot?.layers, initial.layers)
             XCTAssertFalse(output.isEnabled, "trim invalidates encoded output")
             try render(controller.root, name: "screenshot-editor-trim-applied-\(appearance)")
-            try button("Undo", in: controller.root).performClick(nil)
+            try press("Undo", in: controller.root)
             waitUntil { !controller.state.busy }
             XCTAssertEqual(controller.state.snapshot?.width, 10)
             XCTAssertEqual(controller.state.snapshot?.height, 5)
-            try button("Redo", in: controller.root).performClick(nil)
+            try press("Redo", in: controller.root)
             waitUntil { !controller.state.busy }
             XCTAssertEqual(controller.state.snapshot?.width, initial.width)
         }
@@ -1556,9 +1603,6 @@ final class ScreenshotEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             let trim = try button("Trim edges", in: controller.root)
-            let scroll = try XCTUnwrap(trim.enclosingScrollView)
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: 356))
-            scroll.reflectScrolledClipView(scroll.contentView)
             worker.failOperation = "trim_canvas"
             worker.failureMessage = "The trimmed canvas exceeds the image dimension limit. The accepted pixels and draft are unchanged."
             trim.performClick(nil)
@@ -1583,9 +1627,7 @@ final class ScreenshotEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
             controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
             waitUntil { controller.state.snapshot != nil && !controller.state.busy }
-            (try field("Canvas width", in: controller.root)).stringValue = "10"
-            (try field("Canvas height", in: controller.root)).stringValue = "5"
-            try button("Resize canvas", in: controller.root).performClick(nil)
+            try commitCanvasSize("10", "5", in: controller.root)
             waitUntil { controller.state.snapshot?.width == 10 && !controller.state.busy }
             let layers = controller.state.snapshot?.layers
             try showOutput(in: controller.root)
@@ -1593,14 +1635,11 @@ final class ScreenshotEditorTests: XCTestCase {
             waitUntil { !controller.state.busy }
             let output = try segmented("Output preview image", in: controller.root)
             XCTAssertTrue(output.isEnabled)
-            let section = try segmented("Editor section", in: controller.root)
-            section.selectedSegment = 0; _ = section.sendAction(section.action, to: section.target)
+            // Shipping's header Background color trigger opens the canvas background card.
+            try showBackgroundCard(in: controller.root)
             let mode = try popup("Canvas background mode", in: controller.root)
             let color = try field("Canvas background color", in: controller.root)
             let apply = try button("Apply background", in: controller.root)
-            let scroll = try XCTUnwrap(color.enclosingScrollView)
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: 226))
-            scroll.reflectScrolledClipView(scroll.contentView)
             color.stringValue = "#21436580"
             XCTAssertEqual(controller.state.snapshot?.background, "#f7f7f5", "fields are not edits")
             apply.performClick(nil)
@@ -1624,11 +1663,11 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertNil(controller.state.snapshot?.background)
             XCTAssertEqual(color.stringValue, "#21436580", "remember the last accepted solid color")
             try render(controller.root, name: "screenshot-editor-background-transparent-\(appearance)")
-            try button("Undo", in: controller.root).performClick(nil)
+            try press("Undo", in: controller.root)
             waitUntil { !controller.state.busy }
             XCTAssertEqual(mode.titleOfSelectedItem, "Solid")
             XCTAssertEqual(controller.state.snapshot?.background, "#21436580")
-            try button("Redo", in: controller.root).performClick(nil)
+            try press("Redo", in: controller.root)
             waitUntil { !controller.state.busy }
             XCTAssertEqual(mode.titleOfSelectedItem, "Transparent")
             try showOutput(in: controller.root)
@@ -1639,7 +1678,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 9, y: 4)).alphaComponent, 0)
             XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 2, y: 1)).alphaComponent, 1)
             XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.drafts.path))
-            try button("Save draft", in: controller.root).performClick(nil)
+            try performDraftAction("Save draft", in: controller)
             waitUntil { !controller.state.busy && controller.state.snapshot?.hasDraft == true }
             _ = controller.windowShouldClose(controller.window)
             controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
@@ -2177,10 +2216,10 @@ final class ScreenshotEditorTests: XCTestCase {
         let tool = try popup("Drawing tool", in: controller.root)
         tool.selectItem(at: 1); _ = tool.sendAction(tool.action, to: tool.target)
         let overlay = controller.drawOverlay
-        // A 540×334 viewport fits the 1280×640 canvas by width (scale 27/64),
-        // leaving 32pt of whitespace above and below it.
+        // A 560×408 viewport fits the 1280×640 canvas by width (scale 7/16),
+        // leaving 64pt of whitespace above and below it.
         XCTAssertEqual(overlay.presentedImageRect,
-                       NSRect(x: 0, y: 32, width: 540, height: 270))
+                       NSRect(x: 0, y: 64, width: 560, height: 280))
         overlay.begin(at: NSPoint(x: 500, y: 275))
         overlay.drag(to: NSPoint(x: 60, y: 5))
         XCTAssertTrue(worker.requests.isEmpty, "transient drawing never mutates the document")
@@ -2191,10 +2230,10 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(request["shape"] as? String, "ellipse")
         let start = try XCTUnwrap(request["start"] as? [String: CGFloat])
         let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
-        XCTAssertEqual(try XCTUnwrap(start["x"]), 1_185.185, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(start["y"]), 576, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(end["x"]), 142.222, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(end["y"]), -64, accuracy: 0.001,
+        XCTAssertEqual(try XCTUnwrap(start["x"]), 1_142.857, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(start["y"]), 482.286, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(end["x"]), 137.143, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(end["y"]), -134.857, accuracy: 0.001,
                        "preview whitespace maps to off-canvas document coordinates")
         XCTAssertEqual((request["style"] as? [String: Any])?["color"] as? String, "#FF3B5C")
         XCTAssertEqual(request["opacity"] as? Double, 100)
@@ -2264,7 +2303,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
             XCTAssertEqual(request["shape"] as? String, title.lowercased())
             let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
-            XCTAssertEqual(try XCTUnwrap(end["y"]), -64, accuracy: 0.001)
+            XCTAssertEqual(try XCTUnwrap(end["y"]), -134.857, accuracy: 0.001)
             overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 300, y: 350))
             overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 400, y: 200))
             overlay.begin(at: NSPoint(x: 200, y: 200)); overlay.drag(to: NSPoint(x: 260, y: 260))
@@ -2327,7 +2366,7 @@ final class ScreenshotEditorTests: XCTestCase {
             guard request["operation"] as? String == "undo" else { return nil }
             return self.snapshot(id: "shot", unsaved: true, layers: [back, middle, front])
         }
-        try button("Undo", in: controller.root).performClick(nil)
+        try press("Undo", in: controller.root)
         XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue, "Back",
                        "undo retains a still-existing stable layer selection")
     }
@@ -2359,9 +2398,7 @@ final class ScreenshotEditorTests: XCTestCase {
             let rect = try XCTUnwrap(worker.requests.last?["rect"] as? [String: Double])
             XCTAssertEqual(rect, ["x": 13, "y": 7, "width": 321, "height": 199])
 
-            (try field("Canvas width", in: controller.root)).stringValue = "800"
-            (try field("Canvas height", in: controller.root)).stringValue = "500"
-            try button("Resize canvas", in: controller.root).performClick(nil)
+            try commitCanvasSize("800", "500", in: controller.root)
             XCTAssertEqual(worker.requests.last?["operation"] as? String, "resize_canvas")
             XCTAssertEqual(worker.requests.last?["width"] as? Double, 800)
             XCTAssertEqual(worker.requests.last?["height"] as? Double, 500)
@@ -2381,10 +2418,10 @@ final class ScreenshotEditorTests: XCTestCase {
 
             worker.failOperation = "save_draft"
             worker.failureMessage = "The draft could not be saved because the isolated editor-drafts location is unavailable. Your unsaved screenshot edits remain open and recoverable."
-            try button("Save draft", in: controller.root).performClick(nil)
+            try performDraftAction("Save draft", in: controller)
             try render(controller.root, name: "screenshot-editor-save-error-\(appearance)")
 
-            try button("Discard edits…", in: controller.root).performClick(nil)
+            try performDraftAction("Discard edits…", in: controller)
             let discardSheet = try XCTUnwrap(controller.window.attachedSheet)
             settle(discardSheet)
             try render(try XCTUnwrap(discardSheet.contentView),
@@ -4142,14 +4179,14 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(rgba(moved.image, x: 110, y: 90), [247, 247, 245, 255])
             XCTAssertEqual(rgba(moved.image, x: 10, y: 10), [255, 59, 92, 255])
             try render(controller.root, name: "screenshot-editor-move-committed-\(appearance)")
-            try button("Undo", in: controller.root).performClick(nil)
+            try press("Undo", in: controller.root)
             waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == true }
             let undone = try request(["operation": "snapshot"], using: live)
             XCTAssertEqual(rgba(undone.image, x: 110, y: 90), [255, 59, 92, 255])
             XCTAssertEqual(rgba(undone.image, x: 10, y: 10), [247, 247, 245, 255])
-            try button("Redo", in: controller.root).performClick(nil)
+            try press("Redo", in: controller.root)
             waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == false }
-            try button("Save draft", in: controller.root).performClick(nil)
+            try performDraftAction("Save draft", in: controller)
             waitUntil { !controller.state.busy && controller.state.snapshot?.unsavedChanges == false }
             live.close(); EditorWorker.flush()
             let reopened = EditorWorker()
@@ -4214,14 +4251,14 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(rgba(rotated.image, x: 110, y: 110), [247, 247, 245, 255])
             XCTAssertEqual(rgba(rotated.image, x: 160, y: 60), [255, 59, 92, 255])
             try render(controller.root, name: "screenshot-editor-rotation-committed-\(appearance)")
-            try button("Undo", in: controller.root).performClick(nil)
+            try press("Undo", in: controller.root)
             waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == true }
             let undone = try request(["operation": "snapshot"], using: live)
             XCTAssertEqual(rgba(undone.image, x: 110, y: 110), [255, 59, 92, 255])
             XCTAssertEqual(rgba(undone.image, x: 160, y: 60), [247, 247, 245, 255])
-            try button("Redo", in: controller.root).performClick(nil)
+            try press("Redo", in: controller.root)
             waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == false }
-            try button("Save draft", in: controller.root).performClick(nil)
+            try performDraftAction("Save draft", in: controller)
             waitUntil { !controller.state.busy && controller.state.snapshot?.unsavedChanges == false }
             live.close(); EditorWorker.flush()
             let reopened = EditorWorker()
@@ -4316,13 +4353,13 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(resized.snapshot.layers.first?.id, id)
             XCTAssertEqual(rgba(resized.image, x: 260, y: 165), [255, 59, 92, 255])
             try render(controller.root, name: "screenshot-editor-resize-committed-\(appearance)")
-            try button("Undo", in: controller.root).performClick(nil)
+            try press("Undo", in: controller.root)
             waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == true }
             XCTAssertEqual(rgba(try request(["operation": "snapshot"], using: live).image,
                                 x: 260, y: 165), [247, 247, 245, 255])
-            try button("Redo", in: controller.root).performClick(nil)
+            try press("Redo", in: controller.root)
             waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == false }
-            try button("Save draft", in: controller.root).performClick(nil)
+            try performDraftAction("Save draft", in: controller)
             waitUntil { !controller.state.busy && controller.state.snapshot?.unsavedChanges == false }
             live.close(); EditorWorker.flush()
             let reopened = EditorWorker(), restored = expectation(description: "reopen resized draft")
@@ -5087,7 +5124,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
         editor.string = "applied"
         worker.failOperation = nil
-        try button("Save draft", in: controller.root).performClick(nil)
+        try performDraftAction("Save draft", in: controller)
         XCTAssertEqual(editor.string, "applied", "saving accepted pixels must not erase pending typing")
         worker.response = { request in
             guard request["operation"] as? String == "edit_text" else { return nil }
@@ -5274,7 +5311,7 @@ final class ScreenshotEditorTests: XCTestCase {
                            "fake accepted Outlined style must match the requested edit")
             XCTAssertTrue(controller.state.snapshot?.layers.first?.textStyle?.outlined == true)
             XCTAssertEqual(future.titleOfSelectedItem, "Outlined", "accepted edit must not reset future style")
-            try button("Undo", in: controller.root).performClick(nil)
+            try press("Undo", in: controller.root)
             XCTAssertEqual(future.titleOfSelectedItem, "Outlined", "undo must not restore prior creation defaults")
 
             let overlay = controller.drawOverlay
@@ -6419,9 +6456,50 @@ final class ScreenshotEditorTests: XCTestCase {
             "preview_path": "/native/History/\(id)/preview.png"])!
     }
 
+    /// A button by title, or by accessible name for icon-only header chrome.
     private func button(_ title: String, in view: NSView) throws -> CaptureButton {
-        let matches = descendants(in: view).compactMap { $0 as? CaptureButton }.filter { $0.title == title }
+        let matches = descendants(in: view).compactMap { $0 as? CaptureButton }
+            .filter { $0.title == title || $0.accessibilityLabel() == title }
         return try XCTUnwrap(matches.first { !$0.isHiddenOrHasHiddenAncestor } ?? matches.first)
+    }
+
+    /// Sends an enabled button's action. Shipping hides Undo/Redo at or below
+    /// 1040pt, so header actions are exercised independently of visibility.
+    private func press(_ title: String, in view: NSView) throws {
+        let control = try button(title, in: view)
+        guard control.isEnabled else { return }
+        _ = control.sendAction(control.action, to: control.target)
+    }
+
+    /// Native drafts are explicit: Save draft and Discard edits… live in the
+    /// header's draft menu.
+    private func draftAction(_ title: String, in controller: ScreenshotEditorController) throws -> NSMenuItem {
+        try XCTUnwrap(controller.draftMenu.items.first { $0.title == title })
+    }
+
+    private func performDraftAction(_ title: String, in controller: ScreenshotEditorController) throws {
+        let item = try draftAction(title, in: controller)
+        guard item.isEnabled else { return }
+        controller.draftMenu.performActionForItem(at: controller.draftMenu.index(of: item))
+    }
+
+    /// The header canvas fields commit one resize on Enter or leaving a field.
+    private func commitCanvasSize(_ width: String, _ height: String, in view: NSView) throws {
+        let widthField = try field("Canvas width", in: view)
+        widthField.stringValue = width
+        (try field("Canvas height", in: view)).stringValue = height
+        _ = widthField.sendAction(widthField.action, to: widthField.target)
+    }
+
+    /// Opens the header's canvas background card.
+    private func showBackgroundCard(in view: NSView) throws {
+        let card = try XCTUnwrap(descendants(in: view).first {
+            !($0 is CaptureButton) && $0.accessibilityLabel() == "Canvas background" })
+        guard card.isHidden else { return }
+        let trigger = try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }
+            .first { $0.accessibilityLabel()?.hasPrefix("Background color") == true })
+        trigger.performClick(nil)
+        XCTAssertFalse(card.isHidden)
     }
 
     private func field(_ label: String, in view: NSView) throws -> NSTextField {
