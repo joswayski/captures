@@ -207,7 +207,10 @@ def main():
         click(confirmation, 104, 115)
 
     def history():
-        return set((output / "history").glob("*/metadata.json"))
+        # pathlib's "*" matches dot-directories, including the hidden staging
+        # directory a publish renames into place; count only published entries.
+        return {path for path in (output / "history").glob("*/metadata.json")
+                if not path.parent.name.startswith(".")}
 
     def finished(expected_count):
         wait(lambda: len(history()) == expected_count, "History publication count")
@@ -744,7 +747,7 @@ pcm.!pulse {
                     and manifest()["session_id"] == before["session_id"])
 
             click(hud, 142, 54)
-            metadata = wait(lambda: list((output / "history").glob("*/metadata.json")),
+            metadata = wait(lambda: list(history()),
                             "hidden/restored recording publication")
             assert len(metadata) == 1
             media = metadata[0].parent / "media.mp4"
@@ -854,7 +857,7 @@ pcm.!pulse {
             # before Stop; a broken unmute must time out rather than pass on metadata.
             wait(lambda: microphone.stat().st_size > 192000, "unmuted microphone sample delivery")
         click(hud, 142, 54)
-        metadata = wait(lambda: list((output / "history").glob("*/metadata.json")), "History publication")
+        metadata = wait(lambda: list(history()), "History publication")
         assert len(metadata) == 1
         time.sleep(.5)
         assert not windows("Recording ready") and not windows("Recording editor"), (
