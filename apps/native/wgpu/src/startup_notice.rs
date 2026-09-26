@@ -16,6 +16,7 @@ pub struct Notice {
     pub placement: Placement,
     pub keys: Vec<String>,
     pub generation: u64,
+    shown_at: Instant,
     expires_at: Instant,
     retry_until: Instant,
 }
@@ -38,9 +39,15 @@ impl Notice {
             placement,
             keys,
             generation,
+            shown_at: now,
             expires_at: now + visible_for,
             retry_until: now + retry,
         }
+    }
+
+    /// Time since the notice appeared, for its entrance animation.
+    pub fn elapsed_ms(&self, now: Instant) -> f64 {
+        crate::motion::elapsed_ms(self.shown_at, now)
     }
 
     pub fn expired(&self, now: Instant) -> bool {

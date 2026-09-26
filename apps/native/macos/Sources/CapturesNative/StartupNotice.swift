@@ -334,6 +334,9 @@ final class StartupNoticeController {
         // Never activates Captures or takes key focus from the frontmost app.
         panel.orderFrontRegardless()
         panel.apply(layout, primaryHeight: primaryHeight)
+        // Shipping `startup-arrive`, rising from below when the caret points down.
+        NativeMotion.play(layout.caret == .bottom ? "startup_notice_in_from_below" : "startup_notice_in",
+                          on: panel.noticeView, tokens: tokens)
         let generation = self.generation
         timer = Timer.scheduledTimer(withTimeInterval: lifetime, repeats: false) { [weak self] _ in
             guard let self, self.generation == generation else { return }

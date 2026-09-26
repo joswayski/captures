@@ -923,7 +923,7 @@ void captures_recording_free_v1(CapturesRecordingSession *handle);
 
 /* Versioned JSON ABI. Operations are load, save, default_path, theme,
  * login_item, onboarding, onboarding_copy, onboarding_presentation,
- * history_copy, history_cards and history_grid.
+ * history_copy, history_cards, history_grid and motion.
  * Onboarding returns {"ok":true,"state":{...,"presentation":{...}}};
  * onboarding_copy returns the state-independent setup strings as
  * {"ok":true,"copy":{...}}; onboarding_presentation takes {"state":{...}}
@@ -937,6 +937,12 @@ void captures_recording_free_v1(CapturesRecordingSession *handle);
  * returns {"ok":true,"grid":{columns,card_width,card_height,gap}}.
  * Theme accepts {"operation":"theme","accent":"#rgb","signal":"#rrggbb",
  * "light":true} and returns {"ok":true,"colors":{...}}.
+ * Motion is I/O-free and returns the shipping animations as
+ * {"ok":true,"motion":{"keyframes":{name:{duration,delay_ms,easing,frames}},
+ * "transitions":{name:{duration,easing}}}}. duration is {"token":"dur-n"} or
+ * {"millis":n}; easing is {"token":"ease-x"} or {"bezier":[x1,y1,x2,y2]};
+ * frames are [{offset,opacity,translate_y,scale,blur}] (translate_y in points,
+ * positive downward; the easing applies to each segment).
  * `request_json` must be a non-null, NUL-terminated UTF-8
  * string no larger than 8 MiB. The returned string is always NUL-terminated,
  * owned by Rust, and must be released exactly once with captures_settings_free_v1.

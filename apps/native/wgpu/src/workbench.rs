@@ -511,6 +511,7 @@ impl Workbench {
         tokens: &Tokens,
         notice: Option<&crate::startup_notice::Notice>,
         sender: &Sender<u64>,
+        reduced_motion: bool,
     ) {
         let Some(notice) = notice.cloned() else {
             return;
@@ -541,7 +542,32 @@ impl Workbench {
         let viewport = egui::ViewportId::from_hash_of(("startup-notice", notice.generation));
         ctx.show_viewport_deferred(viewport, builder, move |ui, _| {
             let now = Instant::now();
-            let dismissed = crate::startup_notice::show(ui, &tokens, &notice);
+            // Shipping `startup-arrive` (from below when the caret points down).
+            let arrive = tokens.motion(
+                if notice.placement.caret == captures_app::tray_notice::Caret::Bottom {
+                    captures_app::motion::Motion::StartupNoticeInFromBelow
+                } else {
+                    captures_app::motion::Motion::StartupNoticeIn
+                },
+            );
+            let elapsed = notice.elapsed_ms(now);
+            if arrive.running(elapsed, reduced_motion) {
+                ui.ctx().request_repaint();
+            }
+            let card = egui::Rect::from_min_size(
+                egui::pos2(
+                    notice.placement.card_rect().x as f32,
+                    notice.placement.card_rect().y as f32,
+                ),
+                egui::vec2(
+                    notice.placement.card_rect().width as f32,
+                    notice.placement.card_rect().height as f32,
+                ),
+            );
+            let dismissed =
+                crate::motion::with_pose(ui, arrive.pose_at(elapsed, reduced_motion), card, |ui| {
+                    crate::startup_notice::show(ui, &tokens, &notice)
+                });
             if dismissed
                 || notice.expired(now)
                 || ui.input(|input| input.viewport().close_requested())
@@ -1558,6 +1584,8 @@ impl eframe::App for Workbench {
                 &t,
                 self.startup_notice.as_ref(),
                 &self.startup_notice_tx,
+                self.preferences_state
+                    .reduced_motion(self.options.reduced_motion),
             );
             if self.preferences_state.permission_recovery_open() {
                 ui.disable();
@@ -1825,8 +1853,12 @@ impl eframe::App for Workbench {
             }
         });
         if self.options.scene == Scene::Update {
-            self.update_notice
-                .show(&ctx, &t, &mut self.preferences_state);
+            self.update_notice.show(
+                &ctx,
+                &t,
+                &mut self.preferences_state,
+                self.options.reduced_motion,
+            );
         }
         // Take only this native viewport's framebuffer; never capture the desktop.
         if self.options.screenshot.is_some()

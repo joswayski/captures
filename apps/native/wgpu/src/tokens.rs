@@ -7,6 +7,18 @@ use serde::Deserialize;
 pub struct Tokens {
     colors: BTreeMap<String, [f32; 4]>,
     numbers: BTreeMap<String, f32>,
+    /// `--ease-*` control points; see `captures_app::motion`.
+    #[serde(default)]
+    easings: BTreeMap<String, [f64; 4]>,
+}
+
+impl captures_app::motion::MotionTokens for Tokens {
+    fn duration_ms(&self, token: &str) -> Option<f64> {
+        self.numbers.get(token).map(|&ms| f64::from(ms))
+    }
+    fn easing(&self, token: &str) -> Option<[f64; 4]> {
+        self.easings.get(token).copied()
+    }
 }
 
 pub fn load() -> BTreeMap<String, Tokens> {
@@ -27,6 +39,12 @@ impl Tokens {
     }
     pub fn number(&self, name: &str) -> f32 {
         self.numbers[name]
+    }
+
+    /// A shipping animation resolved against these tokens. Every motion's
+    /// tokens are generated at build time; the test below checks them all.
+    pub fn motion(&self, motion: captures_app::motion::Motion) -> captures_app::motion::Animation {
+        motion.resolve(self).expect("build-generated motion tokens")
     }
 
     pub fn glass_controls(&self, ui: &mut egui::Ui) {
@@ -119,6 +137,14 @@ mod tests {
             variants["dark-mustard"].color("theme-accent"),
             Color32::from_rgb(255, 202, 40)
         );
+        for tokens in variants.values() {
+            for motion in captures_app::motion::Motion::ALL {
+                assert!(motion.resolve(tokens).is_some(), "{}", motion.name());
+            }
+            for transition in captures_app::motion::Transition::ALL {
+                assert!(transition.resolve(tokens).is_some());
+            }
+        }
         for theme in crate::options::THEMES {
             assert_eq!(
                 variants[&format!("light-{theme}")].color("glass-strong"),

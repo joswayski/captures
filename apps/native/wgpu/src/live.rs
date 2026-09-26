@@ -549,6 +549,8 @@ struct PreviewCard {
     /// Start of the brief "Saved" confirmation after an explicit save.
     saved_at: Option<Instant>,
     rejected_at: Option<Instant>,
+    /// When the decoded image first painted: shipping `thumbnail-arrive`.
+    arrived_at: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -565,6 +567,7 @@ struct PreviewRenderCard {
     saved_at: Option<Instant>,
     clipboard_current: bool,
     rejected_at: Option<Instant>,
+    arrived_at: Option<Instant>,
     layout: captures_app::preview::PreviewCardLayout,
     hover_y: f64,
 }
@@ -681,6 +684,7 @@ impl MiniPreviews {
                 saved_path: artifact.entry.saved_path.as_deref().map(PathBuf::from),
                 saved_at: None,
                 rejected_at: None,
+                arrived_at: None,
             },
         );
         if target.is_some() {
@@ -810,6 +814,9 @@ enum SelectorKind {
 const CLIPBOARD_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// Shipping `THUMBNAIL_SAVED_FEEDBACK_MS`.
 const SAVED_FEEDBACK: Duration = Duration::from_millis(1_000);
+
+/// Shipping keeps the controls-hidden notice window for 6.2 s.
+const RECORDING_HIDDEN_NOTICE_MS: f64 = 6_200.;
 
 pub(crate) fn request_hidden_root_paint(ctx: &egui::Context) {
     ctx.send_viewport_cmd_to(
@@ -2245,12 +2252,16 @@ impl Live {
                 {
                     self.hud_action_started();
                     self.recording_controls_hidden = Some(generation);
-                    self.recording_hidden_notice_until =
-                        Some(Instant::now() + Duration::from_millis(6_200));
+                    self.recording_hidden_notice_until = Some(
+                        Instant::now()
+                            + Duration::from_secs_f64(RECORDING_HIDDEN_NOTICE_MS / 1000.),
+                    );
                     self.recording_restart_confirmation = false;
                     self.recording_delete_confirmation = false;
                     request_hidden_root_paint(ctx);
-                    ctx.request_repaint_after(Duration::from_millis(6_200));
+                    ctx.request_repaint_after(Duration::from_secs_f64(
+                        RECORDING_HIDDEN_NOTICE_MS / 1000.,
+                    ));
                 }
                 SelectorMessage::SwitchControlsDisplay {
                     generation,
@@ -3775,6 +3786,7 @@ impl Live {
                             decoded.image,
                             egui::TextureOptions::LINEAR,
                         ));
+                        card.arrived_at = Some(Instant::now());
                         request_hidden_root_paint(ctx);
                         ctx.request_repaint();
                     }
@@ -4180,7 +4192,7 @@ impl Live {
                 _ => {}
             }
         }
-        self.recording_notice_viewport(ctx, tokens);
+        self.recording_notice_viewport(ctx, tokens, reduced_motion);
         if self.flow.is_none()
             && let Ok(settings) = &settings
         {
@@ -4250,6 +4262,7 @@ impl Live {
                         .filter(|at| now.saturating_duration_since(*at) < SAVED_FEEDBACK),
                     clipboard_current: clipboard_owner.as_deref() == Some(artifact_id.as_str()),
                     rejected_at: card.rejected_at,
+                    arrived_at: card.arrived_at,
                     layout: self.previews.stack.card_layout(index, top_anchor)?,
                     hover_y: self
                         .previews
@@ -4346,7 +4359,25 @@ impl Live {
                 } else {
                     None
                 };
+                let arrive = tokens.motion(captures_app::motion::Motion::PreviewCardArrive);
                 let mut show_card = |ui: &mut egui::Ui, card: &PreviewRenderCard| {
+                    // Shipping `thumbnail-arrive`: the card rises and fades in.
+                    let arrival = card
+                        .arrived_at
+                        .map_or(captures_app::motion::Pose::REST, |at| {
+                            let elapsed = crate::motion::elapsed_ms(at, Instant::now());
+                            if arrive.running(elapsed, reduced_motion) {
+                                ui.ctx().request_repaint();
+                            }
+                            arrive.pose_at(elapsed, reduced_motion)
+                        });
+                    let card_rect = egui::Rect::from_min_size(
+                        ui.cursor().min,
+                        egui::vec2(
+                            ui.available_width(),
+                            captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
+                        ),
+                    );
                     let reject_offset = card.rejected_at.map_or(0., |start| {
                         let elapsed = start.elapsed().as_secs_f32();
                         if !reduced_motion && elapsed < 0.420 {
@@ -4361,30 +4392,32 @@ impl Live {
                             SAVED_FEEDBACK.saturating_sub(saved_at.elapsed()),
                         );
                     }
-                    let action = crate::mini_preview::show(
-                        ui,
-                        &tokens,
-                        crate::mini_preview::View {
-                            artifact_id: &card.artifact_id,
-                            texture: &card.texture,
-                            width: card.width,
-                            height: card.height,
-                            size_bytes: card.size_bytes,
-                            busy: card.busy,
-                            message: card.message.as_deref(),
-                            clipboard_current: card.clipboard_current,
-                            saved_feedback: card.saved_at.is_some(),
-                            can_save: save.is_some(),
-                            saved: card.saved_path.is_some(),
-                            interactive: card.layout.interactive,
-                            collapsed,
-                            stack_count: count,
-                            depth: card.layout.depth,
-                            desktop_pointer,
-                            reject_offset,
-                            right_anchor: placement.is_right(),
-                        },
-                    );
+                    let action = crate::motion::with_pose(ui, arrival, card_rect, |ui| {
+                        crate::mini_preview::show(
+                            ui,
+                            &tokens,
+                            crate::mini_preview::View {
+                                artifact_id: &card.artifact_id,
+                                texture: &card.texture,
+                                width: card.width,
+                                height: card.height,
+                                size_bytes: card.size_bytes,
+                                busy: card.busy,
+                                message: card.message.as_deref(),
+                                clipboard_current: card.clipboard_current,
+                                saved_feedback: card.saved_at.is_some(),
+                                can_save: save.is_some(),
+                                saved: card.saved_path.is_some(),
+                                interactive: card.layout.interactive,
+                                collapsed,
+                                stack_count: count,
+                                depth: card.layout.depth,
+                                desktop_pointer,
+                                reject_offset,
+                                right_anchor: placement.is_right(),
+                            },
+                        )
+                    });
                     let next_message = match action {
                         Some(crate::mini_preview::Action::DragFile) => {
                             let artifact_id = card.artifact_id.clone();
@@ -4666,7 +4699,12 @@ impl Live {
         );
     }
 
-    fn recording_notice_viewport(&self, ctx: &egui::Context, tokens: &Tokens) {
+    fn recording_notice_viewport(
+        &self,
+        ctx: &egui::Context,
+        tokens: &Tokens,
+        reduced_motion: bool,
+    ) {
         let (Some(notice), Some(target)) = (&self.recording_notice, self.recording_notice_target)
         else {
             return;
@@ -4714,10 +4752,31 @@ impl Live {
                 ));
                 request_hidden_root_paint(ui.ctx());
                 ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
-            } else if let Some(action) = crate::recording_saved_notice::show(ui, &tokens, &notice) {
-                let _ = sender.send(action);
-                request_hidden_root_paint(ui.ctx());
-                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            } else {
+                // Shipping `recording-saved-lifecycle`: frames only while it moves.
+                let lifecycle =
+                    tokens.motion(captures_app::motion::Motion::RecordingSavedLifecycle);
+                let (pose, moving) = notice.pose(&lifecycle, Instant::now(), reduced_motion);
+                let card = egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    crate::recording_saved_notice::SIZE,
+                );
+                let action = crate::motion::with_pose(ui, pose, card, |ui| {
+                    crate::recording_saved_notice::show(ui, &tokens, &notice)
+                });
+                if let Some(action) = action {
+                    let _ = sender.send(action);
+                    request_hidden_root_paint(ui.ctx());
+                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                }
+                if moving {
+                    ui.ctx().request_repaint();
+                } else if !reduced_motion
+                    && let Some(wake) = notice.exit_wake(&lifecycle, Instant::now())
+                    && !wake.is_zero()
+                {
+                    ui.ctx().request_repaint_after(wake);
+                }
             }
             if let Some(remaining) = notice.remaining(Instant::now()) {
                 ui.ctx().request_repaint_after(remaining);
@@ -4876,9 +4935,9 @@ impl Live {
                 },
             );
             if controls_hidden
-                && self
+                && let Some(deadline) = self
                     .recording_hidden_notice_until
-                    .is_some_and(|deadline| deadline > Instant::now())
+                    .filter(|deadline| *deadline > Instant::now())
             {
                 let notice_tokens = t.clone();
                 ctx.show_viewport_deferred(
@@ -4893,6 +4952,25 @@ impl Live {
                         .with_mouse_passthrough(true),
                     move |ui, _| {
                         notice_tokens.glass_controls(ui);
+                        // Shipping `recording-controls-hidden-lifecycle` (6 s) ends
+                        // 200 ms before the 6.2 s window closes.
+                        let lifecycle = notice_tokens.motion(
+                            captures_app::motion::Motion::RecordingControlsHiddenLifecycle,
+                        );
+                        let now = Instant::now();
+                        let until = deadline.saturating_duration_since(now).as_secs_f64() * 1000.;
+                        let since = RECORDING_HIDDEN_NOTICE_MS - until;
+                        let until = (until - 200.).max(0.);
+                        let pose = lifecycle.lifecycle_pose(since, Some(until), reduced_motion);
+                        if lifecycle.lifecycle_running(since, Some(until), reduced_motion) {
+                            ui.ctx().request_repaint();
+                        } else if !reduced_motion {
+                            ui.ctx().request_repaint_after(Duration::from_secs_f64(
+                                lifecycle.lifecycle_exit_in(until) / 1000.,
+                            ));
+                        }
+                        let rect = ui.max_rect();
+                        crate::motion::with_pose(ui, pose, rect, |ui| {
                         egui::Frame::new()
                             .fill(notice_tokens.color("glass-strong"))
                             .stroke(egui::Stroke::new(
@@ -4910,6 +4988,7 @@ impl Live {
                                     );
                                 });
                             });
+                        });
                     },
                 );
             }

@@ -787,6 +787,13 @@ final class MiniPreviewView: NSView {
 
     func rejectDrop(for artifactID: String) { cards[artifactID]?.rejectDrop() }
 
+    /// Shipping `thumbnail-arrive`: a newly decoded card rises and fades in
+    /// (the 3 px blur is omitted). Presentation-only; skipped under Reduce Motion.
+    @discardableResult func playArrival(for artifactID: String) -> Bool {
+        guard let card = cards[artifactID] else { return false }
+        return NativeMotion.play("preview_card_arrive", on: card, tokens: tokens) > 0
+    }
+
     func statusText(for artifactID: String) -> String? { cards[artifactID]?.statusText }
 
     func activatePileExpand() { pileExpandButton?.performClick(nil) }
@@ -983,6 +990,7 @@ final class MiniPreviewController {
                     self.resources[artifact.id] = MiniPreviewResource(artifact: artifact, image: image)
                     self.makePanel()
                     self.updateVisibility()
+                    self.panel?.previewView.playArrival(for: artifact.id)
                     self.prepareFileDrag(for: artifact)
                 case .failure:
                     if self.visibilityPendingArtifactID == artifact.id,

@@ -5,6 +5,7 @@
 use std::f32::consts::TAU;
 
 use captures_app::{
+    motion::Motion,
     tray_notice::{Caret, LogicalRect, Placement, TRAY_NOTICE_CARET_SIZE as CARET_SIZE},
     update_notice::CARET_SPAN,
     update_notice::{Action, Icon, IconTone, Presentation},
@@ -563,6 +564,14 @@ pub struct FixtureHost {
     next_tick: Option<std::time::Instant>,
     synced_setting: bool,
     last_report: Option<serde_json::Value>,
+    /// Start of the shipping `ui-pop-in` entrance for the visible notice.
+    shown_at: Option<std::time::Instant>,
+    /// Start of the restart state; shipping's `update-restart-exit` fade is
+    /// timed from it (3 s delay).
+    restart_at: Option<std::time::Instant>,
+    /// The Updated card kept on screen after the stub "restart" so its exit
+    /// fade can finish.
+    leaving: Option<(Presentation, Placement)>,
     tx: std::sync::mpsc::Sender<Action>,
     rx: std::sync::mpsc::Receiver<Action>,
 }
@@ -583,6 +592,9 @@ impl FixtureHost {
             next_tick: None,
             synced_setting: false,
             last_report: None,
+            shown_at: None,
+            restart_at: None,
+            leaving: None,
             tx,
             rx,
         };
@@ -598,6 +610,9 @@ impl FixtureHost {
         self.view.installing = false;
         self.simulating = false;
         self.next_tick = None;
+        self.shown_at = None;
+        self.restart_at = None;
+        self.leaving = None;
     }
 
     /// Root-window controls for switching fixture statuses.
@@ -635,6 +650,7 @@ impl FixtureHost {
             }
             Action::Dismiss => {
                 self.visible = false;
+                self.shown_at = None;
                 self.simulating = false;
                 self.next_tick = None;
                 crate::emit("update-notice-dismissed", serde_json::json!({}));
@@ -680,7 +696,7 @@ impl FixtureHost {
         }
     }
 
-    fn tick(&mut self, ctx: &egui::Context) {
+    fn tick(&mut self, ctx: &egui::Context, placement: Option<Placement>) {
         use captures_app::update_notice::{StubEvent, stub_next, stub_tick_interval_ms};
         if !self.simulating || !self.visible {
             return;
@@ -698,11 +714,14 @@ impl FixtureHost {
             ctx.request_repaint_after(due - now);
             return;
         }
+        let before = self.presentation();
         self.status = stub_next(status, StubEvent::Tick);
         self.next_tick = None;
         if self.status.is_none() {
             // The stub "restart" finished; nothing is relaunched.
             self.visible = false;
+            self.shown_at = None;
+            self.leaving = placement.map(|placement| (before, placement));
             crate::emit("update-notice-restart-simulated", serde_json::json!({}));
         }
         ctx.request_repaint();
@@ -713,6 +732,7 @@ impl FixtureHost {
         ctx: &egui::Context,
         tokens: &Tokens,
         preferences: &mut crate::preferences::Preferences,
+        reduced_motion: bool,
     ) {
         if !self.synced_setting && !preferences.is_loading() {
             self.synced_setting = true;
@@ -724,13 +744,57 @@ impl FixtureHost {
         while let Ok(action) = self.rx.try_recv() {
             self.apply(action, blocked, preferences);
         }
-        self.tick(ctx);
-        let viewport = egui::ViewportId::from_hash_of("update-notice");
+        let placement = self
+            .visible
+            .then(|| self.placement(ctx, &self.presentation()));
+        self.tick(ctx, placement);
+        let now = std::time::Instant::now();
+        let restart_exit = tokens.motion(Motion::UpdateNoticeRestartExit);
         if !self.visible {
             self.report(None);
+            // Shipping fades the Updated card out 3 s into the restart state.
+            let Some((presentation, placement)) = self.leaving.clone() else {
+                return;
+            };
+            let elapsed = self
+                .restart_at
+                .map_or(f64::INFINITY, |at| crate::motion::elapsed_ms(at, now));
+            if elapsed >= restart_exit.total_ms(reduced_motion) {
+                self.leaving = None;
+                self.restart_at = None;
+                return;
+            }
+            let pose = restart_exit.pose_at(elapsed, reduced_motion);
+            self.paint(ctx, tokens, presentation, placement, pose, false);
+            ctx.request_repaint();
             return;
         }
         let presentation = self.presentation();
+        let placement = self.placement(ctx, &presentation);
+        self.report(Some((&presentation, &placement)));
+        let shown_at = *self.shown_at.get_or_insert(now);
+        let pose = if presentation.restart.is_some() {
+            let started = *self.restart_at.get_or_insert(now);
+            let elapsed = crate::motion::elapsed_ms(started, now);
+            if restart_exit.running(elapsed, reduced_motion) {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+                    ((restart_exit.delay_ms - elapsed).max(0.) / 1000.).max(1. / 120.),
+                ));
+            }
+            restart_exit.pose_at(elapsed, reduced_motion)
+        } else {
+            self.restart_at = None;
+            let pop_in = tokens.motion(Motion::UpdateNoticeIn);
+            let elapsed = crate::motion::elapsed_ms(shown_at, now);
+            if pop_in.running(elapsed, reduced_motion) {
+                ctx.request_repaint();
+            }
+            pop_in.pose_at(elapsed, reduced_motion)
+        };
+        self.paint(ctx, tokens, presentation, placement, pose, true);
+    }
+
+    fn placement(&self, ctx: &egui::Context, presentation: &Presentation) -> Placement {
         let size = ctx
             .input(|input| input.viewport().monitor_size)
             .unwrap_or(egui::vec2(1440., 900.));
@@ -740,15 +804,28 @@ impl FixtureHost {
             width: f64::from(size.x),
             height: f64::from(size.y),
         };
-        let placement = captures_app::update_notice::placement(
+        captures_app::update_notice::placement(
             monitor,
             monitor,
             self.tray.rect(monitor),
             cfg!(target_os = "macos"),
             presentation.card_width,
             presentation.card_height,
-        );
-        self.report(Some((&presentation, &placement)));
+        )
+    }
+
+    /// Paint the transparent notice window. `interactive` is false for the
+    /// exit fade after the stub restart, which accepts no actions.
+    fn paint(
+        &self,
+        ctx: &egui::Context,
+        tokens: &Tokens,
+        presentation: Presentation,
+        placement: Placement,
+        pose: captures_app::motion::Pose,
+        interactive: bool,
+    ) {
+        let viewport = egui::ViewportId::from_hash_of("update-notice");
         let window = egui::vec2(placement.width as f32, placement.height as f32);
         let builder = egui::ViewportBuilder::default()
             .with_title(TITLE)
@@ -769,11 +846,15 @@ impl FixtureHost {
             let ctx = ui.ctx().clone();
             let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
             let close = ui.input(|input| input.viewport().close_requested());
-            if close && presentation.dismiss_blocked {
+            if close && (presentation.dismiss_blocked || !interactive) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             }
-            let action = show(ui, &tokens, &presentation, &placement)
-                .or_else(|| (escape || close).then_some(Action::Dismiss));
+            let card = rect(placement.card_rect());
+            let action = crate::motion::with_pose(ui, pose, card, |ui| {
+                show(ui, &tokens, &presentation, &placement)
+            })
+            .or_else(|| (escape || close).then_some(Action::Dismiss))
+            .filter(|_| interactive);
             if let Some(action) = action {
                 let _ = sender.send(action);
                 ctx.request_repaint_of(egui::ViewportId::ROOT);

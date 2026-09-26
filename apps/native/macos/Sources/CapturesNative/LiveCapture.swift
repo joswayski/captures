@@ -1654,6 +1654,19 @@ final class LiveCaptureController: NSObject {
         let notice = RecordingControlsHiddenNoticePanel(screen: screen, tokens: tokens)
         recordingHiddenNotice = notice
         notice.orderFrontRegardless()
+        // Shipping `recording-controls-hidden-lifecycle` (6 s) ends 200 ms before the close.
+        let motion = RecordingControlsHiddenNoticePanel.motion
+        if let content = notice.contentView {
+            NativeMotion.playEntrance(motion, on: content, tokens: tokens)
+            let exitAt = 6.0 - NativeMotion.exitDuration(motion, tokens: tokens)
+            if !NativeMotion.reduceMotion {
+                DispatchQueue.main.asyncAfter(deadline: .now() + exitAt) { [weak self, weak notice] in
+                    guard let self, let notice, self.recordingHiddenNotice === notice,
+                          let content = notice.contentView else { return }
+                    NativeMotion.playExit(motion, on: content, tokens: self.tokens)
+                }
+            }
+        }
         recordingHiddenNoticeTimer?.invalidate()
         recordingHiddenNoticeTimer = Timer.scheduledTimer(withTimeInterval: 6.2,
             repeats: false) { [weak self, weak notice] _ in

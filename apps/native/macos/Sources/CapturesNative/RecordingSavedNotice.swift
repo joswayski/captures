@@ -160,10 +160,14 @@ final class RecordingSavedNoticePanel: NSPanel {
 
 final class RecordingSavedNoticeController {
     static let lifetime: TimeInterval = 15.2
+    /// Shipping `recording-saved-lifecycle` (15 s) ends 200 ms before the window closes.
+    static let motion = "recording_saved_lifecycle"
+    static let closeAfterAnimation: TimeInterval = 0.2
     let model = RecordingSavedNoticeModel()
     private let tokens: Tokens
-    private var panel: RecordingSavedNoticePanel?
+    private(set) var panel: RecordingSavedNoticePanel?
     private var timer: Timer?
+    private var exitTimer: Timer?
     var save: (String, @escaping (Result<String, Error>) -> Void) -> Void = { _, _ in }
     var reveal: (String) -> Bool = {
         FileManager.default.fileExists(atPath: $0)
@@ -173,14 +177,16 @@ final class RecordingSavedNoticeController {
     init(tokens: Tokens) { self.tokens = tokens; model.changed = { [weak self] in self?.render() } }
 
     func present(artifactID: String, screen: NSScreen) {
-        timer?.invalidate(); panel?.close()
-        panel = RecordingSavedNoticePanel(screen: screen, tokens: tokens)
-        panel?.noticeView.primaryButton.actionBlock = { [weak self] in self?.performPrimaryAction() }
-        panel?.noticeView.dismissButton.actionBlock = { [weak self] in self?.dismiss() }
-        _ = model.present(artifactID: artifactID); panel?.orderFrontRegardless(); armExpiry()
+        timer?.invalidate(); exitTimer?.invalidate(); exitTimer = nil; panel?.close()
+        let panel = RecordingSavedNoticePanel(screen: screen, tokens: tokens)
+        self.panel = panel
+        panel.noticeView.primaryButton.actionBlock = { [weak self] in self?.performPrimaryAction() }
+        panel.noticeView.dismissButton.actionBlock = { [weak self] in self?.dismiss() }
+        _ = model.present(artifactID: artifactID); panel.orderFrontRegardless(); armExpiry()
+        NativeMotion.playEntrance(Self.motion, on: panel.noticeView, tokens: tokens)
     }
 
-    func dismiss() { timer?.invalidate(); timer = nil; model.dismiss() }
+    func dismiss() { timer?.invalidate(); timer = nil; exitTimer?.invalidate(); exitTimer = nil; model.dismiss() }
 
     func savedFromHistory(artifactID: String, path: String) {
         if model.markSaved(artifactID: artifactID, path: path) { armExpiry() }
@@ -206,17 +212,29 @@ final class RecordingSavedNoticeController {
 
     private func armExpiry() {
         timer?.invalidate()
+        exitTimer?.invalidate(); exitTimer = nil
+        // A save or error restarts the life: hold steady rather than replay the entrance.
+        if let view = panel?.noticeView, NativeMotion.isPlaying(on: view) { NativeMotion.cancel(on: view) }
         if model.state == .saving { return }
         let generation = model.generation
         timer = Timer.scheduledTimer(withTimeInterval: Self.lifetime, repeats: false) { [weak self] _ in
             self?.model.expire(generation: generation)
         }
+        let exitAt = Self.lifetime - Self.closeAfterAnimation - NativeMotion.exitDuration(Self.motion, tokens: tokens)
+        guard !NativeMotion.reduceMotion, exitAt > 0 else { return }
+        exitTimer = Timer.scheduledTimer(withTimeInterval: exitAt, repeats: false) { [weak self] _ in
+            guard let self, self.model.generation == generation, let view = self.panel?.noticeView else { return }
+            NativeMotion.playExit(Self.motion, on: view, tokens: self.tokens)
+        }
     }
 
     private func render() {
-        guard let state = model.state else { timer?.invalidate(); timer = nil; panel?.close(); panel = nil; return }
+        guard let state = model.state else {
+            timer?.invalidate(); timer = nil; exitTimer?.invalidate(); exitTimer = nil
+            panel?.close(); panel = nil; return
+        }
         panel?.noticeView.update(state)
     }
 
-    deinit { timer?.invalidate(); panel?.close(); model.dismiss() }
+    deinit { timer?.invalidate(); exitTimer?.invalidate(); panel?.close(); model.dismiss() }
 }
