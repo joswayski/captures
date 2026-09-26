@@ -406,6 +406,10 @@ struct View {
     brush_softness: f64,
     brush_points: Vec<Point>,
     shape_drag: Option<(Point, Point)>,
+    /// Canvas rect at press. A live drawing preview can grow the canvas and
+    /// re-center the viewport mid-gesture; pointer positions must keep mapping
+    /// into the committed document the gesture started on.
+    shape_drag_frame: egui::Rect,
     freehand_points: Vec<Point>,
     canvas: [f64; 2],
     background_solid: bool,
@@ -473,6 +477,7 @@ impl Default for View {
             brush_softness: 18.,
             brush_points: Vec::new(),
             shape_drag: None,
+            shape_drag_frame: egui::Rect::NOTHING,
             freehand_points: Vec::new(),
             canvas: [1., 1.],
             background_solid: true,
@@ -3266,16 +3271,22 @@ fn show_shape(
     {
         let start = image_point(origin, preview, bounds);
         view.shape_drag = Some((start, start));
+        view.shape_drag_frame = preview;
         if view.draw_shape == DrawShape::Freehand {
             view.freehand_points = vec![start];
         }
     }
+    let frame = if view.shape_drag.is_some() {
+        view.shape_drag_frame
+    } else {
+        preview
+    };
     if first_pass
         && !viewport_intercepted
         && view.draw_shape == DrawShape::Freehand
         && view.shape_drag.is_some()
     {
-        let minimum = 1.5 * bounds.width / f64::from(preview.width());
+        let minimum = 1.5 * bounds.width / f64::from(frame.width());
         // Keep every accepted movement in this frame, not just its final pointer
         // position. Ignore hover events preceding the press and moves after release.
         let mut held = !started;
@@ -3288,7 +3299,7 @@ fn show_shape(
                         ..
                     } => held = *pressed,
                     egui::Event::PointerMoved(position) if held => {
-                        let point = image_point(*position, preview, bounds);
+                        let point = image_point(*position, frame, bounds);
                         let last = view
                             .freehand_points
                             .last()
@@ -3309,7 +3320,7 @@ fn show_shape(
         && let Some(position) = response.interact_pointer_pos()
         && let Some((_, end)) = &mut view.shape_drag
     {
-        *end = image_point(position, preview, bounds);
+        *end = image_point(position, frame, bounds);
     }
     if response.hovered() || response.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -3335,7 +3346,7 @@ fn show_shape(
             view.draw_shape.request(
                 start,
                 end,
-                f64::from(preview.width()) / bounds.width,
+                f64::from(frame.width()) / bounds.width,
                 &style,
                 opacity,
             )
@@ -3481,7 +3492,7 @@ fn show_shape(
             view.draw_shape.request(
                 start,
                 end,
-                f64::from(preview.width()) / bounds.width,
+                f64::from(frame.width()) / bounds.width,
                 &style,
                 opacity,
             )
@@ -8052,6 +8063,75 @@ mod tests {
         assert!(view.shape_drag.is_none());
         frame(&mut view, vec![button(end, false)]);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn shape_drag_keeps_press_mapping_when_live_preview_grows_the_canvas() {
+        // A drawing preview that extends past the image grows the rendered
+        // canvas, so the viewport re-lays out taller and re-centered while the
+        // committed document keeps its size. The stationary pointer must keep
+        // mapping into the committed document, not the grown preview rect.
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(640, 360));
+        view.receive(&ctx, Ok(value));
+        let (tx, rx) = mpsc::channel();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 800.));
+        let committed = egui::Rect::from_min_size(egui::pos2(64., 211.), egui::vec2(640., 360.));
+        let grown = egui::Rect::from_min_size(egui::pos2(64., 148.), egui::vec2(640., 486.));
+        let frame = |view: &mut View, preview, events| {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            });
+            let mut ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique("shape-grow-test"),
+                egui::UiBuilder::new().max_rect(screen),
+            );
+            show_shape(&mut ui, view, &tx, screen, preview, false);
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+        };
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(&mut view, committed, vec![]);
+        for kind in [DrawShape::Rectangle, DrawShape::Freehand] {
+            view.draw_shape = kind;
+            let start = egui::pos2(124., 622.);
+            let end = egui::pos2(184., 692.);
+            frame(
+                &mut view,
+                committed,
+                vec![egui::Event::PointerMoved(start), button(start, true)],
+            );
+            frame(&mut view, committed, vec![egui::Event::PointerMoved(end)]);
+            let expected = view.shape_drag.unwrap();
+            let near = |point: Point, x: f64, y: f64| (point.x - x).hypot(point.y - y) < 1e-6;
+            assert!(near(expected.0, 60., 411.) && near(expected.1, 120., 481.));
+            // Pointer holds still while the grown preview re-centers the canvas.
+            frame(&mut view, grown, vec![]);
+            frame(&mut view, grown, vec![egui::Event::PointerMoved(end)]);
+            assert_eq!(view.shape_drag, Some(expected));
+            frame(&mut view, grown, vec![button(end, false)]);
+            match rx.try_recv().unwrap() {
+                Job::Apply(Request::CreateClosedShape { create }) => {
+                    assert_eq!((create.start, create.end), expected);
+                }
+                Job::Apply(Request::CreateFreehandPath { create }) => {
+                    assert_eq!(create.points, vec![expected.0, expected.1]);
+                }
+                _ => panic!("expected exactly one creation command"),
+            }
+            assert!(rx.try_recv().is_err() && view.shape_drag.is_none());
+            view.pending = false;
+        }
     }
 
     #[test]
