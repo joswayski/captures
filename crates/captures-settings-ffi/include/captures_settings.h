@@ -200,6 +200,17 @@ char *captures_capture_menu_v1(const char *request_json);
 bool captures_capture_guidance_pointer_over_v1(double x, double y, double left,
     double top, double right, double bottom, bool currently_over);
 
+/* Shipping Preferences copy and policy (captures-app::preferences). Operations:
+ * "copy" {platform? "macos"|"windows"|"linux"} -> sections, row titles and
+ * descriptions keyed by setting ("recording." prefixes nested keys), option
+ * labels, themes, mini-preview corners, shortcut rows/help, updates, feedback,
+ * login-item and find copy; "description" {key, show_mini_previews, include,
+ * can_exclude} -> state-dependent {lead, emphasis, trail}; "find" {query,
+ * texts, index} -> matching text indices and the "n of m" / "No results"
+ * label. Standard owned {ok,result}/{ok,error} envelope; free with
+ * captures_settings_free_v1. */
+char *captures_preferences_v1(const char *request_json);
+
 /* Owned shared visibility state, not a native window. Serialize all calls on
  * one handle (normally the UI thread). Free exactly once after callers stop;
  * NULL is permitted by free and returns false from every other handle call.
