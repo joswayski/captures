@@ -1583,64 +1583,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         view.cancel_layer_gesture();
     }
     egui::Panel::top("editor-actions").show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.heading("Screenshot editor");
-            ui.label(RichText::new(if view.pending { "Working…" } else if view.unsaved() { "Unsaved edits" }
-                else if view.presented.as_ref().is_some_and(|p| p.has_draft) { "Draft saved" } else { "Original screenshot" })
-                .color(tokens.color("text-muted")));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Recenter").on_hover_text("Center the current zoom without changing it").clicked() {
-                    view.cancel_edit_gestures();
-                    view.viewport.recenter();
-                    view.viewport_pan = None;
-                }
-                if ui.button("+").on_hover_text("Zoom in 1.25×").clicked() {
-                    change_viewport_zoom(view, 1.25, None);
-                }
-                if ui.button("−").on_hover_text("Zoom out 1.25×").clicked() {
-                    change_viewport_zoom(view, 1. / 1.25, None);
-                }
-                let current = view.viewport.zoom_percent;
-                let label = if current == 0. { "Fit".into() } else { format!("{current}%") };
-                let mut selected = current;
-                let mut chosen = false;
-                let response = egui::ComboBox::from_id_salt("viewport-zoom-preset")
-                    .width(tokens.number("s-12") + tokens.number("s-9"))
-                    .selected_text(&label)
-                    .show_ui(ui, |ui| {
-                        chosen |= ui.selectable_value(&mut selected, 0., "Fit").clicked();
-                        if current != 0. && ![50., 100., 200.].contains(&current) {
-                            chosen |= ui.selectable_value(&mut selected, current, format!("{current}%")).clicked();
-                        }
-                        for percent in [50., 100., 200.] {
-                            chosen |= ui.selectable_value(&mut selected, percent, format!("{percent}%")).clicked();
-                        }
-                    }).response.on_hover_text("Canvas zoom preset");
-                response.widget_info(|| egui::WidgetInfo::labeled(
-                    egui::WidgetType::ComboBox, ui.is_enabled(), format!("Canvas zoom preset: {label}")));
-                if chosen {
-                    if selected == 0. { view.reset_viewport(); }
-                    else { set_viewport_zoom(view, selected, None); }
-                }
-                if ui.button("Fit").on_hover_text("Fit the image in the editor").clicked() {
-                    view.reset_viewport();
-                }
-                if let Some(percent) = displayed_zoom(view) {
-                    let mut position = zoom_slider_position(percent).unwrap_or(0.);
-                    ui.scope(|ui| {
-                        ui.spacing_mut().slider_width = tokens.number("s-12") * 2.;
-                        let response = ui.add_enabled(!view.pending,
-                            egui::Slider::new(&mut position, 0.0..=1.0).show_value(false))
-                            .on_hover_text(format!("Canvas zoom: {percent:.1}%. Drag from 5% to 800%."));
-                        response.widget_info(|| egui::WidgetInfo::labeled(
-                            egui::WidgetType::Slider, response.enabled(), format!("Canvas zoom: {percent:.1}%")));
-                        if response.changed() && let Some(zoom) = zoom_from_slider(position) {
-                            set_viewport_zoom(view, zoom, None);
-                        }
-                    });
-                }
-            });
-        });
+        show_title_bar(ui, tokens, view);
         ui.add_enabled_ui(!view.pending && view.inline.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(view.presented.as_ref().is_some_and(|p| p.can_undo), egui::Button::new("Undo")).clicked() { view.submit(tx, Request::Undo); }
@@ -1978,6 +1921,156 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         }
     });
     view.drain_inline(tx);
+}
+
+/// Laid-out title-bar regions, for the no-overlap layout rule.
+#[derive(Clone, Copy, Debug)]
+struct TitleBar {
+    /// Union of the title and status labels.
+    title: egui::Rect,
+    /// Union of the right-aligned zoom controls.
+    controls: egui::Rect,
+}
+
+/// Title, status and the right-aligned zoom controls.
+///
+/// Shipping leaves the title to the window title bar and gives its header's
+/// left group `min-width: 0`, so zoom stays reachable on narrow windows. Here
+/// the controls are laid out first and the title and status get only the width
+/// left over, each ellipsized, so they never run under the slider at the 760px
+/// minimum. The status yields last: it is the part that changes.
+fn show_title_bar(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) -> TitleBar {
+    let mut bar = TitleBar {
+        title: egui::Rect::NOTHING,
+        controls: egui::Rect::NOTHING,
+    };
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .button("Recenter")
+                .on_hover_text("Center the current zoom without changing it")
+                .clicked()
+            {
+                view.cancel_edit_gestures();
+                view.viewport.recenter();
+                view.viewport_pan = None;
+            }
+            if ui.button("+").on_hover_text("Zoom in 1.25×").clicked() {
+                change_viewport_zoom(view, 1.25, None);
+            }
+            if ui.button("−").on_hover_text("Zoom out 1.25×").clicked() {
+                change_viewport_zoom(view, 1. / 1.25, None);
+            }
+            let current = view.viewport.zoom_percent;
+            let label = if current == 0. {
+                "Fit".into()
+            } else {
+                format!("{current}%")
+            };
+            let mut selected = current;
+            let mut chosen = false;
+            let response = egui::ComboBox::from_id_salt("viewport-zoom-preset")
+                .width(tokens.number("s-12") + tokens.number("s-9"))
+                .selected_text(&label)
+                .show_ui(ui, |ui| {
+                    chosen |= ui.selectable_value(&mut selected, 0., "Fit").clicked();
+                    if current != 0. && ![50., 100., 200.].contains(&current) {
+                        chosen |= ui
+                            .selectable_value(&mut selected, current, format!("{current}%"))
+                            .clicked();
+                    }
+                    for percent in [50., 100., 200.] {
+                        chosen |= ui
+                            .selectable_value(&mut selected, percent, format!("{percent}%"))
+                            .clicked();
+                    }
+                })
+                .response
+                .on_hover_text("Canvas zoom preset");
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::ComboBox,
+                    ui.is_enabled(),
+                    format!("Canvas zoom preset: {label}"),
+                )
+            });
+            if chosen {
+                if selected == 0. {
+                    view.reset_viewport();
+                } else {
+                    set_viewport_zoom(view, selected, None);
+                }
+            }
+            if ui
+                .button("Fit")
+                .on_hover_text("Fit the image in the editor")
+                .clicked()
+            {
+                view.reset_viewport();
+            }
+            if let Some(percent) = displayed_zoom(view) {
+                let mut position = zoom_slider_position(percent).unwrap_or(0.);
+                ui.scope(|ui| {
+                    ui.spacing_mut().slider_width = tokens.number("s-12") * 2.;
+                    let response = ui
+                        .add_enabled(
+                            !view.pending,
+                            egui::Slider::new(&mut position, 0.0..=1.0).show_value(false),
+                        )
+                        .on_hover_text(format!(
+                            "Canvas zoom: {percent:.1}%. Drag from 5% to 800%."
+                        ));
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Slider,
+                            response.enabled(),
+                            format!("Canvas zoom: {percent:.1}%"),
+                        )
+                    });
+                    if response.changed()
+                        && let Some(zoom) = zoom_from_slider(position)
+                    {
+                        set_viewport_zoom(view, zoom, None);
+                    }
+                });
+            }
+            bar.controls = ui.min_rect();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let status = RichText::new(if view.pending {
+                    "Working…"
+                } else if view.unsaved() {
+                    "Unsaved edits"
+                } else if view.presented.as_ref().is_some_and(|p| p.has_draft) {
+                    "Draft saved"
+                } else {
+                    "Original screenshot"
+                })
+                .color(tokens.color("text-muted"));
+                let status_width = egui::WidgetText::from(status.clone())
+                    .into_galley(
+                        ui,
+                        Some(egui::TextWrapMode::Extend),
+                        f32::INFINITY,
+                        egui::TextStyle::Body,
+                    )
+                    .size()
+                    .x;
+                let title_width =
+                    (ui.available_width() - status_width - ui.spacing().item_spacing.x).max(0.);
+                let title = ui
+                    .allocate_ui(egui::vec2(title_width, ui.available_height()), |ui| {
+                        ui.add(
+                            egui::Label::new(RichText::new("Screenshot editor").heading())
+                                .truncate(),
+                        )
+                    })
+                    .inner;
+                let status = ui.add(egui::Label::new(status).truncate());
+                bar.title = title.rect.union(status.rect);
+            });
+        });
+    });
+    bar
 }
 
 fn show_tool_rail(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
@@ -5578,6 +5671,64 @@ mod tests {
             Ok(Job::Apply(Request::PasteLayer { after_id: None, .. }))
         ));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn title_bar_ellipsizes_title_before_zoom_controls() {
+        // Token fonts (DejaVu Sans on Linux CI) are wider than egui's default.
+        let ctx = egui::Context::default();
+        crate::ui_fonts::install(&ctx);
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        tokens.apply(&ctx, true);
+        // Every status: original, draft saved, unsaved, working.
+        let layout = |width: f32, status: usize| {
+            let mut view = View::default();
+            view.receive(&ctx, Ok(presented(status == 2)));
+            view.presented.as_mut().unwrap().has_draft = status == 1;
+            view.pending = status == 3;
+            view.viewport.zoom_percent = 5.; // Show the slider without a canvas pass.
+            let mut bar = None;
+            for _ in 0..2 {
+                // The first pass loads the fonts.
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 540.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::Panel::top("title-bar").show(ui, |ui| {
+                            bar = Some(show_title_bar(ui, &tokens, &mut view));
+                        });
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            bar.unwrap()
+        };
+        for status in 0..4 {
+            let wide = layout(1180., status);
+            assert!(wide.title.right() < wide.controls.left());
+            // 760 is the editor's minimum width; 560 forces the status to yield too.
+            for width in [760., 560.] {
+                let bar = layout(width, status);
+                assert!(
+                    bar.title.right() <= bar.controls.left(),
+                    "{width}px, status {status}: title {:?} overlaps controls {:?}",
+                    bar.title,
+                    bar.controls
+                );
+                // The controls keep their offsets from the right edge.
+                assert_eq!(width - bar.controls.left(), 1180. - wide.controls.left());
+                assert!(bar.controls.right() <= width);
+            }
+        }
+        // Whether the title fits at 760px depends on the platform font (it does
+        // not under DejaVu Sans, it does under Segoe UI); at 400px the zoom
+        // controls leave too little room for any font, so the title must shrink.
+        assert!(layout(400., 0).title.width() < layout(1180., 0).title.width());
     }
 
     #[test]

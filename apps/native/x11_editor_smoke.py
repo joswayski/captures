@@ -535,7 +535,7 @@ def main():
             shot(root, "history")
         else:
             shot(root, "history")
-            click(root, 105, 546)  # First History card: Edit.
+            click(root, 105, 590)  # First History card: Edit, below the two-line action row.
             editor = wait(lambda: windows("Screenshot editor"), "screenshot editor")[0]
         run("xdotool", "windowmove", "--sync", editor, "100", "80")
         time.sleep(1)
@@ -584,7 +584,7 @@ def main():
             run("xdotool", "keydown", "Alt_L", "sleep", ".1", "key", "F4",
                 "sleep", ".1", "keyup", "Alt_L", "sleep", ".4")
 
-        def history_edit_point(edit_y=546):
+        def history_edit_point(edit_y=590):
             # History cards are newest first in a three-column grid (1000 px root,
             # 24 px padding, 16 px gaps). Edit is the left action of the card body.
             entries = sorted((json.loads(path.read_text()) for path in history.glob("*/metadata.json")
@@ -595,7 +595,7 @@ def main():
             card_width = (952 - 2 * 16) / 3
             return round(24 + index * (card_width + 16) + 12 + (card_width - 24 - 6) / 4), edit_y
 
-        def reopen(edit_y=546):
+        def reopen(edit_y=590):
             export_bar["open"] = False  # Every editor window starts collapsed.
             click(root, *history_edit_point(edit_y))  # The original capture's History card: Edit.
             window = wait(lambda: windows("Screenshot editor"), "reopened editor")[0]
@@ -678,7 +678,7 @@ def main():
             assert draft.read_bytes() == preserved_draft
             shot(root, "external-draft-blocked")
             # The open error banner above the grid moves the cards 60px lower.
-            editor = reopen(606)  # The existing History route still restores the saved edit.
+            editor = reopen(650)  # The existing History route still restores the saved edit.
             shot(editor, "external-draft-restored")
             assert len(layers()) == 2
             toolbar_click("discard")

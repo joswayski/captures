@@ -122,7 +122,7 @@ def main():
                 accepted_settings = settings.read_bytes()
                 recovery_media = root / "during permission recovery.png"
                 recovery_media.write_bytes(png(19, 9))
-                click(window, 859, 171)  # Capture permissions in the History header, without an OS prompt.
+                click(window, 109, 217)  # Capture permissions, wrapped to the History header's second action line, without an OS prompt.
                 time.sleep(.5)
                 secondary = subprocess.run(common + ["--", str(recovery_media)], env=env,
                                            capture_output=True, timeout=15)

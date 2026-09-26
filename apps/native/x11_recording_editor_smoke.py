@@ -570,7 +570,7 @@ def main():
             return
         time.sleep(1)
         shot(root, "history")
-        click(root, 105, 546)  # First History card: Edit.
+        click(root, 105, 590)  # First History card: Edit, below the two-line action row.
         editor = wait(lambda: windows("Recording editor"), "recording editor opens")[0]
         run("xdotool", "windowmove", "--sync", editor, "80", "60")
         run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
