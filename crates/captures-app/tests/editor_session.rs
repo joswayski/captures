@@ -3425,6 +3425,12 @@ fn transient_updates_preserve_anchor_metadata_and_last_accepted_preview() {
     };
     assert_eq!(label.base.x + label.width, 130.);
     assert_eq!(label.extra["future"], json!({"keep":23}));
+    // The Layers row follows the live preview, like shipping's first-line name.
+    let row = &editor.snapshot().layer_rows["label"];
+    assert_eq!(
+        (row.name.as_str(), row.kind, row.icon),
+        ("fi", "Text", "text")
+    );
     assert_eq!(
         editor.snapshot().selection_outlines["label"],
         accepted

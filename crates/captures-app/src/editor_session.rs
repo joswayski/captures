@@ -264,6 +264,14 @@ pub struct AnnotationControls<'a> {
     pub drop_shadow_style: DropShadowStyle,
 }
 
+/// One Layers-panel row: shipping name, muted kind line and preview icon.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct LayerRow {
+    pub name: String,
+    pub kind: &'static str,
+    pub icon: &'static str,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Snapshot<'a> {
     pub artifact_id: &'a str,
@@ -286,6 +294,8 @@ pub struct Snapshot<'a> {
     /// Resolved display defaults; reading them never authors custom shadow data.
     pub text_shadow_styles: BTreeMap<&'a str, DropShadowStyle>,
     pub selection_outlines: BTreeMap<&'a str, [Point; 4]>,
+    /// Shipping Layers-panel row copy per layer ID (`editor_chrome`).
+    pub layer_rows: BTreeMap<&'a str, LayerRow>,
     /// Capabilities for committed document history. Transient text previews do
     /// not add or clear undo/redo entries.
     pub can_undo: bool,
@@ -500,6 +510,21 @@ impl EditorSession {
                         .selection_outline()
                         .ok()
                         .map(|outline| (element.base().id.as_str(), outline))
+                })
+                .collect(),
+            layer_rows: self
+                .visible_document()
+                .elements
+                .iter()
+                .map(|element| {
+                    (
+                        element.base().id.as_str(),
+                        LayerRow {
+                            name: crate::editor_chrome::layer_name(element),
+                            kind: crate::editor_chrome::layer_kind(element),
+                            icon: crate::editor_chrome::layer_icon(element),
+                        },
+                    )
                 })
                 .collect(),
             annotation_controls: self
