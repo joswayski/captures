@@ -116,11 +116,13 @@ both appearances. Shared client tests cover HTTP success, cooldown and payload
 privacy against disposable loopback servers. Physical input/AT acceptance remains open.
 
 A screenshot History card's Edit opens a worker-owned crop/canvas/draft editor. Undo/redo,
-Save draft, confirmed Discard edits, and unsaved-close choices preserve the original
-capture and exports. Closing without saving preserves any older saved draft.
-Geometry → Draw crop selects on the preview, including reverse and outside-image
+Save draft and confirmed Discard edits (in the header's draft menu), and unsaved-close
+choices preserve the original capture and exports. Closing without saving preserves any
+older saved draft. The shipping header also holds the canvas W × H fields, Trim edges,
+the canvas background, the zoom group and Add images; the rail chooses the inspector.
+The Crop tool selects on the preview, including reverse and outside-image
 drags. Free, 1:1, 4:3, 3:2 and 16:9 presets use shared Rust geometry; hold Shift
-to lock the current ratio. Apply crop commits; Cancel, Escape or switching panels
+to lock the current ratio. Apply crop commits; Cancel, Escape or switching tools
 abandons the selection without editing or saving. Numeric crop fields remain usable.
 The Layers panel selects front-to-back layers and connects visibility, locking,
 image rename, opacity, X/Y movement, duplicate, delete and adjacent ordering.
@@ -128,7 +130,7 @@ Shared Rust preserves locked boundaries and makes every accepted edit undoable.
 Draw adds filled rectangles/ellipses, straight lines, tapered arrows and freehand Pen strokes with the
 shipping default annotation color and rounded rectangle corners. Drag previews are
 transient; release creates one selected layer and undo step. Escape, focus loss,
-close or switching panels cancels
+close or switching tools cancels
 the unfinished drag. Reverse and off-canvas drags use document coordinates; partial
 overhang stays clipped and fully outside shapes expand the canvas. Zero-width or
 zero-height closed shapes add nothing; lines retain horizontal, vertical and

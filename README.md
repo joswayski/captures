@@ -511,9 +511,9 @@ locking; physical input acceptance remains separate work.
 The Windows/Linux candidate opens screenshots from History in a native crop,
 canvas-size and draft editor with undo/redo. Both native hosts place their scrolling
 inspector to the right of the canvas and center the image in Fit mode without
-upscaling small captures. Their workbench layout still differs from the shipping
-Tauri editor. Both editor windows resize down to 760×540, with scrollable inspector
-controls and a wrapping viewport footer on macOS. A shipping-style export bar spans
+upscaling small captures. Both use the shipping header and tool rail, while their
+inspector still differs from the shipping Tauri editor. Both editor windows resize
+down to 760×540, with scrollable inspector controls. A shipping-style export bar spans
 the bottom of both editors in every section: an **Export settings** disclosure whose
 summary reads like `PNG · 1920 × 1080 · ≈ 240 KB`, the filename with a format suffix
 menu, **Saving to** with **Change…**, **Copy image** (briefly **Copied**), a
@@ -634,16 +634,21 @@ O Ellipse, L Line, D Diamond, S Star, A Arrow, P Pen, and B the last-used
 Wand/Erase/Restore mode (initially Wand). Switching tools cancels unfinished
 gestures without applying them; selecting the same tool again preserves them.
 Focused native controls retain typing and letter navigation.
-Both hosts also keep a left tool rail visible beside the canvas: Select, Crop,
-Text, Shapes, Arrow, Pen and background removal. Shapes opens a native menu for
-Rectangle, Ellipse, Line, Triangle, Diamond and Star, recalling the last choice.
-The rail and shortcuts share the existing tools; pending work disables the rail.
+Both hosts also keep a left tool rail visible beside the canvas, with the shipping
+labels and hover tips: Select & move, Crop, Text, Shapes, Arrow, Freehand and Eraser.
+Shapes opens Rectangle, Ellipse, Line, Triangle, Diamond and Star, recalling the last
+choice. The rail chooses the inspector (there are no section tabs); pending work
+disables it. Like shipping, the header holds the canvas W × H fields, Trim edges and
+the canvas background, then Undo/Redo (hidden at 1040 points and narrower), the zoom
+group and Add images; native drafts keep Save draft and Discard edits… in a header
+menu. Reopening a draft shows the shipping restored-edits notice, and Recenter
+appears only while the canvas is panned mostly off screen.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
 Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit
 scale and preserves the viewport-center image point when dragged.
 Fit retains each workbench's existing placement.
 Windows, Wayland and physical AppKit presentation remain unverified.
-The native editor still uses a workbench layout, not the shipping Tauri editor design.
+The native editor's inspector still differs from the shipping Tauri editor design.
 Native cloud sharing is not implemented. Its required flow starts from a mini-preview
 Share icon and opens a native upload/settings popup, including native sign-in and OS
 credential storage. The [sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--required-not-implemented)

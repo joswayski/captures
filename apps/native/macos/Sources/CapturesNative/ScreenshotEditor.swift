@@ -36,29 +36,55 @@ struct ScreenshotEditorState: Equatable {
     mutating func close() { generation += 1; artifactID = nil; snapshot = nil; busy = false }
 }
 
+/// Shipping `.screenshot-layer-list li` in the native 32pt row: kind icon,
+/// shipping layer name, muted kind label and eye/lock quick actions.
 private final class EditorLayerCell: NSTableCellView {
     let titleLabel: NSTextField
     let detailLabel: NSTextField
+    let iconName: String
+    let visibilityButton: CaptureButton
+    let lockButton: CaptureButton
+    private let tokens: Tokens
 
-    init(title: NSTextField, detail: NSTextField) {
-        titleLabel = title; detailLabel = detail
+    init(title: NSTextField, detail: NSTextField, iconName: String, tokens: Tokens,
+         visibility: CaptureButton, lock: CaptureButton) {
+        titleLabel = title; detailLabel = detail; self.iconName = iconName; self.tokens = tokens
+        visibilityButton = visibility; lockButton = lock
         super.init(frame: .zero)
-        addSubview(title); addSubview(detail); textField = title
+        addSubview(title); addSubview(detail); addSubview(visibility); addSubview(lock)
+        textField = title
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
 
     override func layout() {
         super.layout()
         let inset: CGFloat = 8
         let gap: CGFloat = 8
-        let trailingEdge = min(bounds.maxX, visibleRect.maxX) - inset
-        let detailWidth = min(detailLabel.intrinsicContentSize.width,
-                              max(0, trailingEdge - inset))
-        detailLabel.frame = NSRect(x: trailingEdge - detailWidth, y: 4,
-                                   width: detailWidth, height: 22)
-        titleLabel.frame = NSRect(x: inset, y: 4,
-                                  width: max(0, detailLabel.frame.minX - inset - gap), height: 22)
+        let trailingEdge = min(bounds.maxX, visibleRect.maxX) - 4
+        lockButton.frame = NSRect(x: trailingEdge - 22, y: (bounds.height - 26) / 2, width: 22, height: 26)
+        visibilityButton.frame = NSRect(x: lockButton.frame.minX - 22, y: lockButton.frame.minY,
+                                        width: 22, height: 26)
+        let actionsLeft = visibilityButton.frame.minX - 4
+        let titleLeft = inset + 16 + gap
+        let titleWidth = titleLabel.intrinsicContentSize.width
+        let detailWidth = detailLabel.intrinsicContentSize.width
+        // The name has priority; the kind shows when both fit.
+        let showDetail = titleLeft + titleWidth + gap + detailWidth <= actionsLeft
+        detailLabel.isHidden = !showDetail
+        detailLabel.frame = NSRect(x: actionsLeft - detailWidth, y: (bounds.height - 16) / 2,
+                                   width: showDetail ? detailWidth : 0, height: 16)
+        let titleRight = showDetail ? detailLabel.frame.minX - gap : actionsLeft - gap
+        titleLabel.frame = NSRect(x: titleLeft, y: (bounds.height - 18) / 2,
+                                  width: max(0, titleRight - titleLeft), height: 18)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        tokens.color("text-muted").withAlphaComponent(titleLabel.alphaValue).setStroke()
+        ShippingIcons.stroke(iconName, in: NSRect(x: 8, y: (bounds.height - 16) / 2, width: 16, height: 16))
     }
 }
 
@@ -840,7 +866,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private(set) var viewport = NativeEditorViewport()
     private var viewportCanvasSize = NSSize.zero
     private var viewportBounds = NSRect.zero
-    private var viewportButtons: [CaptureButton] = []
     private let zoomPreset = NSPopUpButton()
     private let zoomSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
     private let cropX = NSTextField()
@@ -855,11 +880,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var backgroundReset: CaptureButton!
     private var lastSolidBackground = "#f7f7f5"
     private let status = NSTextField(wrappingLabelWithString: "")
-    private let dimensions = NSTextField(labelWithString: "")
     private let geometryPanel = Surface()
     private let geometryContent = Surface()
     private let layersPanel = Surface()
     private let layerContent = Surface()
+    private let layerCount = NSTextField(labelWithString: "0")
+    private let layerHeadingRule = Surface()
+    private var addLayerButton: CaptureButton!
+    private var drawHeading: NSTextField?
     private var annotationControls: EditorAnnotationControls!
     private let rotationSnap = NSTextField()
     private var rotationSnapLabel: NSTextField!
@@ -905,6 +933,38 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var lastBackgroundTool: EditorDrawOverlay.Shape = .wand
     private var lastGroupedShape: EditorDrawOverlay.Shape = .rectangle
     private var toolRailButtons: [(key: String, button: CaptureButton)] = []
+    // Shipping header chrome (`captures_app::editor_chrome`).
+    private let headerBar = Surface()
+    private let headerRule = Surface()
+    private let canvasToolbar = Surface()
+    private let canvasSplit = Surface()
+    private var canvasToolbarLabels: [NSTextField] = []
+    private var backgroundButton: CaptureButton!
+    private let backgroundCard = Surface()
+    private let zoomGroup = Surface()
+    private var zoomDividers: [Surface] = []
+    private var fitButton: CaptureButton!
+    private var zoomOutButton: CaptureButton!
+    private var zoomInButton: CaptureButton!
+    private var addImagesButton: CaptureButton!
+    private var draftMenuButton: CaptureButton!
+    /// Native drafts are explicit (shipping autosaves), so Save draft and
+    /// Discard edits share one compact header menu.
+    let draftMenu = NSMenu(title: EditorChrome.text("header", "draft_menu"))
+    private let saveDraftItem = NSMenuItem(title: EditorChrome.text("header", "save_draft"),
+                                           action: nil, keyEquivalent: "")
+    private let discardItem = NSMenuItem(title: EditorChrome.text("header", "discard_edits"),
+                                         action: nil, keyEquivalent: "")
+    private var recenterButton: CaptureButton!
+    private let railPanel = Surface()
+    private let railRule = Surface()
+    private let railTip = EditorPassthroughLabel(labelWithString: "")
+    private let draftBanner = Surface()
+    private let draftBannerLabel = NSTextField(labelWithString: EditorChrome.text("header", "draft_restored"))
+    private var draftDiscardButton: CaptureButton!
+    private var draftDismissButton: CaptureButton!
+    /// Shipping's "Restored unsaved edits" notice for a draft found at open.
+    private(set) var draftRestored = false
     private let wandTolerance = NSTextField()
     private let wandContiguous = NSButton(checkboxWithTitle: "Contiguous only", target: nil, action: nil)
     private var wandToleranceLabel: NSTextField!
@@ -994,13 +1054,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var importImageButton: CaptureButton!
     private var undoButton: CaptureButton!
     private var redoButton: CaptureButton!
-    private var saveButton: CaptureButton!
-    private var discardButton: CaptureButton!
     private var applyCropButton: CaptureButton!
     private var drawCropButton: CaptureButton!
     private let cropAspect = NSPopUpButton()
     private var cropPrevious: [String]?
-    private var resizeButton: CaptureButton!
     private var trimButton: CaptureButton!
     private var exportDisclosure: CaptureButton!
     private var previewOutputButton: CaptureButton!
@@ -1162,6 +1219,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     completion?(false); return
                 }
                 accepted = true
+                self.draftRestored = presentation.snapshot.hasDraft
+                self.layoutEditor()
                 self.createTextSize.stringValue = self.format(presentation.snapshot.initialTextSize)
                 self.publishInitialDrawingDefaults(presentation.snapshot)
                 self.publish(presentation, resetCrop: true)
@@ -1291,30 +1350,35 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func layoutEditor() {
         guard let previewPanel = viewportInput.superview else { return }
         let bar = exportBarHeight
-        // Keep the inspector width stable. Below the initial window width,
-        // move dimensions to a second footer row instead of squeezing controls.
-        let compact = root.bounds.width < 1000
-        let footerY = root.bounds.height - bar - (compact ? 86 : 50)
-        previewPanel.frame = NSRect(x: 24 + tokens.number("s-12"), y: 90,
-                                    width: root.bounds.width - 360 - tokens.number("s-12"),
-                                    height: footerY - 100)
-        for control in viewportButtons { control.frame.origin.y = footerY }
-        zoomPreset.frame.origin.y = footerY
-        zoomSlider.frame = NSRect(x: 332, y: footerY,
-                                  width: min(100, previewPanel.frame.maxX - 332), height: 30)
-        dimensions.frame = compact
-            ? NSRect(x: 24, y: footerY + 40, width: previewPanel.frame.width, height: 20)
-            : NSRect(x: 440, y: footerY + 4, width: previewPanel.frame.maxX - 440, height: 20)
+        layoutHeader()
+        let top = chromeTop
+        let gap = tokens.number("s-5")
+        let railWidth = EditorChrome.metric("rail_width")
+        railPanel.frame = NSRect(x: 0, y: top, width: railWidth,
+                                 height: max(0, root.bounds.height - bar - top))
+        railRule.frame = NSRect(x: railWidth - 1, y: 0, width: 1, height: railPanel.frame.height)
+        let side = EditorChrome.metric("rail_button")
+        for (index, entry) in toolRailButtons.enumerated() {
+            entry.button.frame = NSRect(x: (railWidth - side) / 2,
+                y: top + tokens.number("s-4") + CGFloat(index) * (side + tokens.number("s-1")),
+                width: side, height: side)
+        }
+        // Keep the inspector width stable; the canvas takes the remaining width.
         let inspectorX = root.bounds.width - 312
+        let previewX = railWidth + gap
+        previewPanel.frame = NSRect(x: previewX, y: top + gap,
+                                    width: max(0, inspectorX - 24 - previewX),
+                                    height: max(0, root.bounds.height - bar - 2 * gap - top))
+        if let recenterButton {
+            recenterButton.frame.origin = NSPoint(
+                x: (previewPanel.bounds.width - recenterButton.frame.width) / 2, y: gap)
+        }
         let statusY = root.bounds.height - bar - 16 - 96
         sectionControl?.frame.origin.x = inspectorX
         status.frame = NSRect(x: inspectorX, y: statusY, width: 272, height: 96)
-        saveButton?.frame.origin = NSPoint(x: inspectorX, y: statusY - 44)
-        discardButton?.frame.origin = NSPoint(x: inspectorX + 136, y: statusY - 44)
-        undoButton?.frame.origin = NSPoint(x: inspectorX, y: statusY - 98)
-        redoButton?.frame.origin = NSPoint(x: inspectorX + 144, y: statusY - 98)
         for panel in [geometryPanel, layersPanel, drawPanel] {
-            panel.frame = NSRect(x: inspectorX, y: 66, width: 272, height: max(0, statusY - 98 - 14 - 66))
+            panel.frame = NSRect(x: inspectorX, y: top + gap, width: 272,
+                                 height: max(0, statusY - 14 - top - gap))
         }
         layoutExportBar()
         guard viewportBounds.size != viewportInput.bounds.size else { return }
@@ -1326,6 +1390,148 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         viewportBounds = viewportInput.bounds
         updateViewportGeometry()
     }
+
+    /// The bottom of the header, below the restored-draft banner when it shows.
+    private var chromeTop: CGFloat { headerBar.frame.maxY }
+
+    /// The 52pt shipping header: the Canvas toolbar on the left; Undo/Redo (only
+    /// above 1040pt), the zoom group, Add images and the draft menu on the right.
+    /// Controls are placed first; the Canvas toolbar takes what remains.
+    private func layoutHeader() {
+        guard let addImagesButton, let draftMenuButton, let fitButton else { return }
+        let width = root.bounds.width
+        let pad = tokens.number("s-5")
+        let small = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        func titleWidth(_ text: String) -> CGFloat {
+            ceil((text as NSString).size(withAttributes: [.font: small]).width)
+        }
+        // Shipping `.screenshot-editor-draft-banner`: padding 6pt 12pt, h-sm actions.
+        draftBanner.isHidden = !draftRestored
+        let bannerHeight = draftRestored ? tokens.number("h-sm") + 2 * tokens.number("s-3") : 0
+        draftBanner.frame = NSRect(x: 0, y: 0, width: width, height: bannerHeight)
+        let bannerButtonY = tokens.number("s-3")
+        let dismissWidth = titleWidth(draftDismissButton.title) + 2 * tokens.number("s-4")
+        draftDismissButton.frame = NSRect(x: width - pad - dismissWidth, y: bannerButtonY,
+                                          width: dismissWidth, height: tokens.number("h-sm"))
+        let discardWidth = titleWidth(draftDiscardButton.title) + 2 * tokens.number("s-4")
+        draftDiscardButton.frame = NSRect(x: draftDismissButton.frame.minX - tokens.number("s-3") - discardWidth,
+                                          y: bannerButtonY, width: discardWidth, height: tokens.number("h-sm"))
+        draftBannerLabel.frame = NSRect(x: pad, y: (bannerHeight - 17) / 2,
+                                        width: max(0, draftDiscardButton.frame.minX - 2 * pad), height: 17)
+
+        let height = EditorChrome.metric("header_height")
+        headerBar.frame = NSRect(x: 0, y: bannerHeight, width: width, height: height)
+        headerRule.frame = NSRect(x: 0, y: height - 1, width: width, height: 1)
+        let layout = EditorChrome.headerLayout(width: width)
+        let control = EditorChrome.metric("header_control")
+        let y = (height - control) / 2
+        let spacing = tokens.number("s-2")
+        draftMenuButton.frame = NSRect(x: width - pad - control, y: y, width: control, height: control)
+        let addWidth = 2 * pad + 16 + tokens.number("s-3") + titleWidth(addImagesButton.title)
+        addImagesButton.frame = NSRect(x: draftMenuButton.frame.minX - spacing - addWidth, y: y,
+                                       width: addWidth, height: control)
+        let zoomButton = EditorChrome.metric("zoom_button")
+        let zoomWidth = 3 * zoomButton + layout.sliderWidth + layout.presetWidth + 4 + 2
+        zoomGroup.frame = NSRect(x: addImagesButton.frame.minX - 2 * spacing - zoomWidth, y: y,
+                                 width: zoomWidth, height: control)
+        var x: CGFloat = 1
+        let inner = control - 2
+        let sliderPad = tokens.number(layout.showHistory ? "s-4" : "s-3")
+        let zoomViews: [(NSView, CGFloat)] = [
+            (fitButton as NSView, zoomButton), (zoomOutButton! as NSView, zoomButton),
+            (zoomSlider as NSView, layout.sliderWidth), (zoomInButton! as NSView, zoomButton),
+            (zoomPreset as NSView, layout.presetWidth),
+        ]
+        for (index, entry) in zoomViews.enumerated() {
+            let (view, viewWidth) = entry
+            if view === zoomSlider {
+                view.frame = NSRect(x: x + sliderPad, y: 1, width: viewWidth - 2 * sliderPad, height: inner)
+            } else if view === zoomPreset {
+                view.frame = NSRect(x: x, y: (control - 26) / 2, width: viewWidth, height: 26)
+            } else {
+                view.frame = NSRect(x: x, y: 1, width: viewWidth, height: inner)
+            }
+            x += viewWidth
+            if index < zoomDividers.count {
+                zoomDividers[index].frame = NSRect(x: x, y: 1, width: 1, height: inner)
+                x += 1
+            }
+        }
+        var right = zoomGroup.frame.minX - 2 * spacing
+        undoButton.isHidden = !layout.showHistory
+        redoButton.isHidden = !layout.showHistory
+        if layout.showHistory {
+            redoButton.frame = NSRect(x: right - control, y: y, width: control, height: control)
+            undoButton.frame = NSRect(x: redoButton.frame.minX - spacing - control, y: y,
+                                      width: control, height: control)
+            right = undoButton.frame.minX
+        }
+        layoutCanvasToolbar(available: max(0, right - 2 * pad), y: y)
+    }
+
+    /// Shipping `.screenshot-canvas-toolbar`. With too little room it drops the
+    /// "Canvas" label, then draws Trim and Background icon-only (their titles
+    /// stay the accessible names, with tooltips), then clips like `overflow: hidden`.
+    private func layoutCanvasToolbar(available: CGFloat, y: CGFloat) {
+        guard canvasToolbarLabels.count == 4, let trimButton, let backgroundButton else { return }
+        let labels = canvasToolbarLabels
+        func textWidth(_ field: NSTextField) -> CGFloat { ceil(field.attributedStringValue.size().width) + 2 }
+        let small = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        func titleWidth(_ text: String) -> CGFloat {
+            ceil((text as NSString).size(withAttributes: [.font: small]).width)
+        }
+        let gap = tokens.number("s-2"), toolPad = tokens.number("s-4"), iconGap = tokens.number("s-3")
+        let fieldWidth = EditorChrome.metric("canvas_field")
+        let labelWidth = toolPad + textWidth(labels[0]) + tokens.number("s-3")
+        let trimFull = 2 * toolPad + 13 + iconGap + titleWidth(EditorChrome.text("header", "trim"))
+        let backgroundFull = 2 * toolPad + 14 + iconGap + titleWidth(Self.backgroundTitle)
+        let compactTool: CGFloat = 28
+        let dimensions = textWidth(labels[1]) + gap + fieldWidth + 2 + textWidth(labels[2]) + 2
+            + textWidth(labels[3]) + gap + fieldWidth
+        let split = 2 + 1 + 2 * gap + 2
+        func total(_ showLabel: Bool, _ full: Bool) -> CGFloat {
+            3 + (showLabel ? labelWidth + 2 : 0) + dimensions + split
+                + (full ? trimFull + 2 + backgroundFull : 2 * compactTool + 2) + 3
+        }
+        let showLabel = total(true, true) <= available
+        let full = showLabel || total(false, true) <= available
+        let height = EditorChrome.metric("header_control")
+        canvasToolbar.frame = NSRect(x: tokens.number("s-5"), y: y,
+                                     width: max(0, min(total(showLabel, full), available)), height: height)
+        let labelY = (height - 16) / 2
+        var x: CGFloat = 3
+        labels[0].isHidden = !showLabel
+        if showLabel {
+            labels[0].frame = NSRect(x: x + toolPad, y: labelY, width: textWidth(labels[0]), height: 16)
+            x += labelWidth + 2
+        }
+        for (axis, field) in [canvasWidth, canvasHeight].enumerated() {
+            let letter = labels[axis == 0 ? 1 : 3]
+            letter.frame = NSRect(x: x, y: labelY, width: textWidth(letter), height: 16)
+            x += letter.frame.width + gap
+            field.frame = NSRect(x: x, y: (height - 22) / 2, width: fieldWidth, height: 22)
+            x += fieldWidth
+            if axis == 0 {
+                x += 2
+                labels[2].frame = NSRect(x: x, y: labelY, width: textWidth(labels[2]), height: 16)
+                x += labels[2].frame.width + 2
+            }
+        }
+        canvasSplit.frame = NSRect(x: x + 2 + gap, y: (height - 16) / 2, width: 1, height: 16)
+        x += split
+        trimButton.iconOnly = !full
+        trimButton.frame = NSRect(x: x, y: (height - 28) / 2, width: full ? trimFull : compactTool, height: 28)
+        x = trimButton.frame.maxX + 2
+        backgroundButton.iconOnly = !full
+        backgroundButton.frame = NSRect(x: x, y: (height - 28) / 2,
+                                        width: full ? backgroundFull : compactTool, height: 28)
+        backgroundCard.frame.origin = NSPoint(
+            x: min(canvasToolbar.frame.minX + backgroundButton.frame.minX,
+                   max(0, root.bounds.width - backgroundCard.frame.width - 8)),
+            y: chromeTop + tokens.number("s-3"))
+    }
+
+    static let backgroundTitle = "Background color"
 
     /// Disclosure and filename widths: fixed actions first, then the disclosure
     /// grows to fit its summary, then the filename field takes what remains.
@@ -1404,12 +1610,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func build() {
-        label("Screenshot editor", frame: NSRect(x: 24, y: 20, width: 400, height: 30),
-              size: 21, weight: .semibold)
-        label("Edits stay in a recoverable draft. Save exports the edited image.",
-              frame: NSRect(x: 24, y: 54, width: 640, height: 32), muted: true)
-            .autoresizingMask = [.width]
-
+        // The window title names the editor; like shipping, the chrome does not repeat it.
+        buildHeader()
         buildToolRail()
         let previewPanel = Surface(frame: NSRect(x: 24 + tokens.number("s-12"), y: 90,
                                                 width: 640 - tokens.number("s-12"), height: 550))
@@ -1518,34 +1720,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         selectionOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         cropOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
-        let fit = button("Fit", frame: NSRect(x: 24, y: 650, width: 40, height: 30), parent: root) {
-            [weak self] in self?.fitViewport()
+        // Shipping `.screenshot-canvas-recenter`: fixed glass, shown only while
+        // free pan leaves the canvas mostly off screen.
+        recenterButton = CaptureButton(EditorChrome.text("header", "recenter"),
+            frame: NSRect(x: 0, y: 0, width: 96, height: tokens.number("h-sm")), tokens: tokens, glass: true) {
+            [weak self] in self?.recenterViewport()
         }
-        fit.setAccessibilityLabel("Fit screenshot in viewport"); viewportButtons.append(fit)
-        zoomPreset.frame = NSRect(x: 72, y: 650, width: 80, height: 30)
-        zoomPreset.setAccessibilityLabel("Canvas zoom preset")
-        zoomPreset.target = self; zoomPreset.action = #selector(changeZoomPreset)
-        root.addSubview(zoomPreset)
-        publishZoomPreset()
-        let controls: [(String, String, () -> Void)] = [
-            ("−", "Zoom out", { [weak self] in self?.scaleViewport(by: 1 / 1.25) }),
-            ("+", "Zoom in", { [weak self] in self?.scaleViewport(by: 1.25) }),
-            ("Recenter", "Recenter screenshot", { [weak self] in self?.recenterViewport() }),
-        ]
-        var x: CGFloat = 160
-        for (title, accessibility, action) in controls {
-            let width: CGFloat = title == "Recenter" ? 84 : 32
-            let control = button(title, frame: NSRect(x: x, y: 650, width: width, height: 30),
-                                 parent: root, action: action)
-            control.setAccessibilityLabel(accessibility); viewportButtons.append(control); x += width + 8
-        }
-        zoomSlider.frame = NSRect(x: 332, y: 650, width: 100, height: 30)
-        zoomSlider.isContinuous = true
-        zoomSlider.setAccessibilityLabel("Canvas zoom")
-        zoomSlider.target = self; zoomSlider.action = #selector(changeZoomSlider)
-        root.addSubview(zoomSlider)
-        dimensions.frame = NSRect(x: 440, y: 654, width: 224, height: 20)
-        dimensions.setAccessibilityLabel("Edited canvas dimensions"); root.addSubview(dimensions)
+        recenterButton.textSize = tokens.number("text-sm")
+        recenterButton.cornerRadius = tokens.number("h-sm") / 2
+        recenterButton.isHidden = true
+        previewPanel.addSubview(recenterButton)
 
         sectionControl = NSSegmentedControl(labels: ["Geometry", "Layers", "Draw"], trackingMode: .selectOne,
                                             target: self, action: #selector(changeSection))
@@ -1553,6 +1737,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         sectionControl.autoresizingMask = [.minXMargin]
         sectionControl.selectedSegment = 0
         sectionControl.setAccessibilityLabel("Editor section")
+        // Shipping has no section tabs: the rail's tool chooses the inspector.
+        // The hidden control keeps the section state and its action.
+        sectionControl.isHidden = true
         root.addSubview(sectionControl)
 
         geometryPanel.frame = NSRect(x: 688, y: 66, width: 272, height: 346)
@@ -1568,7 +1755,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let geometryScroll = NSScrollView(frame: geometryPanel.bounds)
         geometryScroll.autoresizingMask = [.width, .height]
         geometryScroll.hasVerticalScroller = true; geometryScroll.drawsBackground = false
-        geometryContent.frame = NSRect(x: 0, y: 0, width: 252, height: 746)
+        geometryContent.frame = NSRect(x: 0, y: 0, width: 252, height: 240)
         geometryScroll.documentView = geometryContent
         geometryPanel.addSubview(geometryScroll)
 
@@ -1604,70 +1791,251 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             [weak self] in self?.applyCrop()
         }
 
-        panelLabel("Canvas", frame: NSRect(x: 0, y: 242, width: 252, height: 24),
-                   size: 16, weight: .semibold, parent: geometryContent)
-        panelLabel("Resize canvas without scaling the image.", frame: NSRect(x: 0, y: 270, width: 252, height: 22),
-                   muted: true, parent: geometryContent)
-        panelFieldLabel("Width", x: 0, y: 300, parent: geometryContent)
-        panelFieldLabel("Height", x: 134, y: 300, parent: geometryContent)
-        configure(canvasWidth, frame: NSRect(x: 0, y: 324, width: 118, height: 30), label: "Canvas width",
-                  parent: geometryContent)
-        configure(canvasHeight, frame: NSRect(x: 134, y: 324, width: 118, height: 30), label: "Canvas height",
-                  parent: geometryContent)
-        resizeButton = button("Resize canvas", frame: NSRect(x: 0, y: 356, width: 252, height: 34),
-                              parent: geometryContent) {
-            [weak self] in self?.resizeCanvas()
-        }
-
-        panelFieldLabel("Canvas background", x: 0, y: 414, parent: geometryContent)
-        backgroundMode = NSPopUpButton()
-        backgroundMode.addItems(withTitles: ["Solid", "Transparent"])
-        backgroundMode.frame = NSRect(x: 0, y: 440, width: 252, height: 30)
-        backgroundMode.setAccessibilityLabel("Canvas background mode")
-        backgroundMode.target = self; backgroundMode.action = #selector(changeBackgroundMode)
-        geometryContent.addSubview(backgroundMode)
-        configure(backgroundColor, frame: NSRect(x: 0, y: 482, width: 252, height: 30),
-                  label: "Canvas background color", parent: geometryContent)
-        backgroundColor.placeholderString = "#RRGGBB or #RRGGBBAA"
-        backgroundColor.formatter = nil
-        backgroundApply = button("Apply background", frame: NSRect(x: 0, y: 526, width: 146, height: 34),
-                                 parent: geometryContent) { [weak self] in self?.applyBackground() }
-        backgroundReset = button("Reset fields", frame: NSRect(x: 156, y: 526, width: 96, height: 34),
-                                 parent: geometryContent) { [weak self] in
-            self?.publishBackgroundFields(); self?.updateControls()
-        }
-        panelLabel("Changes canvas fill, not an image layer’s background.",
-                   frame: NSRect(x: 0, y: 574, width: 252, height: 42), muted: true,
-                   parent: geometryContent)
-        trimButton = button("Trim edges", frame: NSRect(x: 0, y: 632, width: 252, height: 34),
-                            parent: geometryContent) { [weak self] in
-            self?.command(["operation": "trim_canvas"], message: "Trimming canvas…", resetCrop: true)
-        }
-        panelLabel("Fits visible layer bounds, including off-canvas content. Does not trim transparent pixels within images.",
-                   frame: NSRect(x: 0, y: 680, width: 252, height: 66), muted: true,
-                   parent: geometryContent)
-
         buildLayersPanel()
         buildDrawPanel()
 
-        undoButton = button("Undo", frame: NSRect(x: 688, y: 426, width: 128, height: 34)) {
-            [weak self] in self?.command(["operation": "undo"], message: "Undoing…")
-        }
-        redoButton = button("Redo", frame: NSRect(x: 832, y: 426, width: 128, height: 34)) {
-            [weak self] in self?.command(["operation": "redo"], message: "Redoing…")
-        }
-        saveButton = button("Save draft", frame: NSRect(x: 688, y: 480, width: 128, height: 34)) {
-            [weak self] in self?.saveDraft()
-        }
-        discardButton = button("Discard edits…", frame: NSRect(x: 824, y: 480, width: 136, height: 34)) {
-            [weak self] in self?.confirmDiscard()
-        }
         status.frame = NSRect(x: 688, y: 524, width: 272, height: 96)
         status.maximumNumberOfLines = 5; status.setAccessibilityLabel("Screenshot editor status")
         root.addSubview(status)
         buildExportBar()
+        // Floating chrome stays above the canvas, inspector and export bar.
+        root.addSubview(backgroundCard)
+        root.addSubview(railTip)
         fields = [cropX, cropY, cropWidth, cropHeight, canvasWidth, canvasHeight]
         layoutEditor()
+    }
+
+    /// Shipping header chrome: restored-draft banner, Canvas toolbar, Undo/Redo,
+    /// zoom group, Add images and the native draft menu.
+    private func buildHeader() {
+        for view in [draftBanner, headerBar, headerRule, canvasToolbar, canvasSplit, zoomGroup,
+                     railPanel, railRule, backgroundCard] {
+            view.wantsLayer = true
+        }
+        draftBanner.setAccessibilityLabel(EditorChrome.text("header", "draft_restored"))
+        draftBannerLabel.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        draftBannerLabel.lineBreakMode = .byTruncatingTail
+        draftBanner.addSubview(draftBannerLabel)
+        draftDiscardButton = button(EditorChrome.text("header", "draft_discard"), frame: .zero,
+                                    parent: draftBanner) { [weak self] in self?.discardRestoredDraft() }
+        draftDiscardButton.textSize = tokens.number("text-sm")
+        draftDismissButton = button(EditorChrome.text("header", "draft_dismiss"), frame: .zero,
+                                    parent: draftBanner) { [weak self] in
+            self?.draftRestored = false; self?.layoutEditor()
+        }
+        draftDismissButton.quiet = true; draftDismissButton.textSize = tokens.number("text-sm")
+        draftDismissButton.setAccessibilityLabel(EditorChrome.text("header", "draft_dismiss_label"))
+        draftBanner.isHidden = true
+        root.addSubview(draftBanner)
+
+        headerBar.setAccessibilityLabel("Screenshot editor toolbar")
+        root.addSubview(headerBar)
+        headerBar.addSubview(headerRule)
+
+        canvasToolbar.layer?.cornerRadius = tokens.number("r-lg")
+        canvasToolbar.layer?.borderWidth = 1
+        canvasToolbar.layer?.masksToBounds = true
+        canvasToolbar.setAccessibilityLabel(EditorChrome.text("header", "canvas"))
+        headerBar.addSubview(canvasToolbar)
+        for text in [EditorChrome.text("header", "canvas"), "W", "×", "H"] {
+            let label = NSTextField(labelWithString: text)
+            label.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+            label.setAccessibilityElement(false)
+            canvasToolbarLabels.append(label); canvasToolbar.addSubview(label)
+        }
+        for (field, key) in [(canvasWidth, "canvas_width"), (canvasHeight, "canvas_height")] {
+            configure(field, frame: .zero, label: EditorChrome.text("header", key), parent: canvasToolbar)
+            field.alignment = .left; field.isBordered = false; field.drawsBackground = false
+            field.focusRingType = .exterior
+            field.font = .systemFont(ofSize: tokens.number("text-sm"))
+            field.toolTip = EditorChrome.text("header", key)
+            // Enter or leaving the field commits one canvas resize, as in shipping.
+            field.target = self; field.action = #selector(canvasSizeCommitted)
+            field.cell?.sendsActionOnEndEditing = true
+        }
+        canvasToolbar.addSubview(canvasSplit)
+        trimButton = button(EditorChrome.text("header", "trim"), frame: .zero, parent: canvasToolbar) {
+            [weak self] in
+            self?.command(["operation": "trim_canvas"], message: "Trimming canvas…", resetCrop: true)
+        }
+        backgroundButton = button(Self.backgroundTitle, frame: .zero, parent: canvasToolbar) {
+            [weak self] in self?.toggleBackgroundCard()
+        }
+        for (control, icon) in [(trimButton!, "trim"), (backgroundButton!, "")] {
+            control.quiet = true; control.textSize = tokens.number("text-sm")
+            control.cornerRadius = tokens.number("r-sm")
+            if !icon.isEmpty { control.icon = .shipping(icon); control.iconSide = 13 }
+        }
+        trimButton.toolTip = EditorChrome.text("header", "trim_tooltip")
+        backgroundButton.toolTip = "Canvas background color"
+        backgroundButton.swatch = tokens.color("surface-raised")
+
+        // Canvas background card (native keeps its explicit hex field and Apply).
+        backgroundCard.frame = NSRect(x: 0, y: 0, width: 264, height: 128)
+        backgroundCard.layer?.cornerRadius = tokens.number("r-xl")
+        backgroundCard.layer?.borderWidth = 1
+        backgroundCard.setAccessibilityLabel("Canvas background")
+        backgroundCard.isHidden = true
+        backgroundMode = NSPopUpButton()
+        backgroundMode.addItems(withTitles: ["Solid", "Transparent"])
+        backgroundMode.frame = NSRect(x: 12, y: 12, width: 240, height: 28)
+        backgroundMode.setAccessibilityLabel("Canvas background mode")
+        backgroundMode.target = self; backgroundMode.action = #selector(changeBackgroundMode)
+        backgroundCard.addSubview(backgroundMode)
+        configure(backgroundColor, frame: NSRect(x: 12, y: 48, width: 240, height: 26),
+                  label: "Canvas background color", parent: backgroundCard)
+        backgroundColor.placeholderString = "#RRGGBB or #RRGGBBAA"
+        backgroundColor.formatter = nil; backgroundColor.alignment = .left
+        backgroundApply = button("Apply background", frame: NSRect(x: 12, y: 86, width: 144, height: 30),
+                                 parent: backgroundCard) { [weak self] in self?.applyBackground() }
+        backgroundReset = button("Reset fields", frame: NSRect(x: 164, y: 86, width: 88, height: 30),
+                                 parent: backgroundCard) { [weak self] in
+            self?.publishBackgroundFields(); self?.updateControls()
+        }
+
+        undoButton = headerIcon("undo", label: EditorChrome.text("header", "undo")) {
+            [weak self] in self?.undoDocument()
+        }
+        redoButton = headerIcon("redo", label: EditorChrome.text("header", "redo")) {
+            [weak self] in self?.redoDocument()
+        }
+
+        zoomGroup.layer?.cornerRadius = tokens.number("r-lg")
+        zoomGroup.layer?.borderWidth = 1
+        zoomGroup.layer?.masksToBounds = true
+        zoomGroup.setAccessibilityLabel(EditorChrome.text("header", "zoom_group"))
+        headerBar.addSubview(zoomGroup)
+        fitButton = headerIcon("fit", label: EditorChrome.text("header", "fit"), parent: zoomGroup) {
+            [weak self] in self?.fitViewport()
+        }
+        fitButton.toolTip = EditorChrome.text("header", "fit_tooltip")
+        zoomOutButton = headerIcon("minus", label: EditorChrome.text("header", "zoom_out"), parent: zoomGroup) {
+            [weak self] in self?.scaleViewport(by: 1 / 1.25)
+        }
+        zoomOutButton.toolTip = EditorChrome.text("header", "zoom_out")
+        zoomSlider.isContinuous = true
+        zoomSlider.controlSize = .small
+        zoomSlider.setAccessibilityLabel(EditorChrome.text("header", "zoom_slider"))
+        zoomSlider.target = self; zoomSlider.action = #selector(changeZoomSlider)
+        zoomGroup.addSubview(zoomSlider)
+        zoomInButton = headerIcon("plus", label: EditorChrome.text("header", "zoom_in"), parent: zoomGroup) {
+            [weak self] in self?.scaleViewport(by: 1.25)
+        }
+        zoomInButton.toolTip = EditorChrome.text("header", "zoom_in")
+        for control in [fitButton!, zoomOutButton!, zoomInButton!] {
+            control.cornerRadius = 0; control.iconSide = 14
+        }
+        zoomPreset.isBordered = false
+        zoomPreset.font = .monospacedSystemFont(ofSize: tokens.number("text-xs"), weight: .regular)
+        zoomPreset.setAccessibilityLabel(EditorChrome.text("header", "zoom_preset"))
+        zoomPreset.toolTip = EditorChrome.text("header", "zoom_preset_tooltip")
+        zoomPreset.target = self; zoomPreset.action = #selector(changeZoomPreset)
+        zoomGroup.addSubview(zoomPreset)
+        for _ in 0..<4 {
+            let divider = Surface(); divider.wantsLayer = true
+            zoomDividers.append(divider); zoomGroup.addSubview(divider)
+        }
+        publishZoomPreset()
+
+        addImagesButton = button(EditorChrome.text("header", "add_images"), frame: .zero, parent: headerBar) {
+            [weak self] in self?.chooseImage()
+        }
+        addImagesButton.icon = .shipping("image")
+        addImagesButton.textSize = tokens.number("text-sm")
+
+        draftMenuButton = headerIcon("more", label: EditorChrome.text("header", "draft_menu")) { [weak self] in
+            guard let self, let control = self.draftMenuButton else { return }
+            self.draftMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: control.bounds.maxY + 4), in: control)
+        }
+        draftMenuButton.toolTip = EditorChrome.text("header", "draft_menu")
+        draftMenu.autoenablesItems = false
+        saveDraftItem.target = self; saveDraftItem.action = #selector(saveDraftFromMenu)
+        discardItem.target = self; discardItem.action = #selector(discardFromMenu)
+        draftMenu.addItem(saveDraftItem); draftMenu.addItem(discardItem)
+
+        railPanel.setAccessibilityLabel("Screenshot tools")
+        root.addSubview(railPanel)
+        railPanel.addSubview(railRule)
+        railTip.wantsLayer = true
+        railTip.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+        railTip.alignment = .center
+        railTip.layer?.cornerRadius = tokens.number("r-sm")
+        railTip.layer?.borderWidth = 1
+        railTip.isHidden = true
+    }
+
+    /// A 34pt quiet header icon button with its accessible name.
+    private func headerIcon(_ name: String, label: String, parent: NSView? = nil,
+                            action: @escaping () -> Void) -> CaptureButton {
+        let control = button("", frame: NSRect(x: 0, y: 0, width: 34, height: 34),
+                             parent: parent ?? headerBar, action: action)
+        control.quiet = true; control.icon = .shipping(name)
+        control.setAccessibilityLabel(label)
+        return control
+    }
+
+    @objc private func canvasSizeCommitted() {
+        guard let snapshot = state.snapshot, let width = positive(canvasWidth),
+              let height = positive(canvasHeight) else {
+            if let snapshot = state.snapshot {
+                canvasWidth.stringValue = format(snapshot.width)
+                canvasHeight.stringValue = format(snapshot.height)
+            }
+            return
+        }
+        // Leaving an unchanged field is not an edit.
+        guard width != snapshot.width || height != snapshot.height else { return }
+        resizeCanvas()
+    }
+
+    private func toggleBackgroundCard() {
+        backgroundCard.isHidden.toggle()
+        backgroundButton.selected = !backgroundCard.isHidden
+        if !backgroundCard.isHidden { publishBackgroundFields(); updateControls() }
+        backgroundButton.needsDisplay = true
+    }
+
+    private func undoDocument() {
+        guard state.snapshot?.canUndo == true, !state.busy, inlineTextInput == nil else { return }
+        command(["operation": "undo"], message: "Undoing…")
+    }
+
+    private func redoDocument() {
+        guard state.snapshot?.canRedo == true, !state.busy, inlineTextInput == nil else { return }
+        command(["operation": "redo"], message: "Redoing…")
+    }
+
+    @objc private func saveDraftFromMenu() {
+        guard saveDraftItem.isEnabled else { return }
+        saveDraft()
+    }
+
+    @objc private func discardFromMenu() {
+        guard discardItem.isEnabled else { return }
+        confirmDiscard()
+    }
+
+    /// Shipping's banner Discard resets immediately, without confirmation.
+    private func discardRestoredDraft() {
+        guard state.snapshot != nil, !state.busy, inlineTextInput == nil else { return }
+        draftRestored = false
+        layoutEditor()
+        discardEdits()
+    }
+
+    /// Shipping rail tip: fixed glass beside the button, shown at once on hover
+    /// or focus with the tool label (the tooltip keeps the shortcut).
+    private func showRailTip(_ control: CaptureButton, _ visible: Bool) {
+        guard visible, let entry = toolRailButtons.first(where: { $0.button === control }),
+              let tool = EditorChrome.rail.first(where: { $0.key == entry.key }) else {
+            railTip.isHidden = true; return
+        }
+        railTip.stringValue = tool.label
+        let size = railTip.attributedStringValue.size()
+        let height = ceil(size.height) + 10
+        railTip.frame = NSRect(x: control.frame.maxX + 10, y: control.frame.midY - height / 2,
+                               width: ceil(size.width) + 2 * tokens.number("s-4"), height: height)
+        railTip.isHidden = false
     }
 
     private func buildDrawPanel() {
@@ -1676,7 +2044,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
         let content = Surface(frame: NSRect(x: 0, y: 0, width: 252, height: 390))
         scroll.documentView = content; drawPanel.addSubview(scroll)
-        panelLabel("Draw", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
+        drawHeading = panelLabel("Draw", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
                    size: 16, weight: .semibold, parent: content)
         panelLabel("Draw annotations, or click with Wand to remove pixels from an image.",
                    frame: NSRect(x: 0, y: 28, width: 252, height: 42), muted: true,
@@ -2076,7 +2444,34 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func buildLayersPanel() {
-        let panelScroll = NSScrollView(frame: layersPanel.bounds)
+        // Shipping `.screenshot-layers-heading`: title, count pill and Add image layer.
+        let headingHeight: CGFloat = 30
+        let title = NSTextField(labelWithString: EditorChrome.text("layers", "title"))
+        title.font = .systemFont(ofSize: tokens.number("text-md"), weight: .semibold)
+        title.frame = NSRect(x: 0, y: 6, width: 56, height: 18)
+        title.textColor = tokens.color("text")
+        title.sizeToFit(); title.frame.origin.y = (headingHeight - title.frame.height) / 2
+        layersPanel.addSubview(title)
+        layerCount.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
+        layerCount.alignment = .center
+        layerCount.wantsLayer = true
+        layerCount.layer?.cornerRadius = 9.5
+        layerCount.frame = NSRect(x: title.frame.maxX + tokens.number("s-3"), y: (headingHeight - 19) / 2,
+                                  width: 19, height: 19)
+        layerCount.setAccessibilityLabel("Layer count")
+        layersPanel.addSubview(layerCount)
+        addLayerButton = button("", frame: NSRect(x: 272 - 30, y: 0, width: 30, height: 30),
+                                parent: layersPanel) { [weak self] in self?.chooseImage() }
+        addLayerButton.quiet = true; addLayerButton.icon = .shipping("plus")
+        addLayerButton.autoresizingMask = [.minXMargin]
+        addLayerButton.setAccessibilityLabel(EditorChrome.text("layers", "add"))
+        addLayerButton.toolTip = EditorChrome.text("layers", "add")
+        layerHeadingRule.wantsLayer = true
+        layerHeadingRule.frame = NSRect(x: 0, y: headingHeight - 1, width: 272, height: 1)
+        layerHeadingRule.autoresizingMask = [.width]
+        layersPanel.addSubview(layerHeadingRule)
+        let panelScroll = NSScrollView(frame: NSRect(x: 0, y: headingHeight, width: layersPanel.bounds.width,
+                                                     height: max(0, layersPanel.bounds.height - headingHeight)))
         panelScroll.autoresizingMask = [.width, .height]
         panelScroll.hasVerticalScroller = true; panelScroll.scrollerStyle = .overlay
         panelScroll.drawsBackground = false
@@ -2209,32 +2604,47 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         [.rectangle, .ellipse, .line, .triangle, .diamond, .star].contains(shape)
     }
 
+    /// Shipping `.screenshot-tool-rail`, in `captures_app::editor_chrome` order.
+    /// layoutEditor() places the buttons in the rail column.
     private func buildToolRail() {
-        let side = tokens.number("h-lg") + tokens.number("s-1")
-        for (index, item) in [
-            ("v", "Select & move (V)", CaptureButtonIcon.editorSelect),
-            ("c", "Crop (C)", .editorCrop), ("t", "Text (T)", .editorText),
-            ("shapes", "Shapes", .editorShapes), ("a", "Arrow (A)", .editorArrow),
-            ("p", "Freehand (P)", .editorPen), ("b", "Background removal (B)", .editorBackground),
-        ].enumerated() {
-            let control = CaptureButton("", frame: NSRect(x: 24, y: 90 + CGFloat(index) * (side + tokens.number("s-2")),
-                width: side, height: side), tokens: tokens) { [weak self] in self?.chooseRailTool(item.0) }
-            control.icon = item.2
-            control.toolTip = item.1
-            control.setAccessibilityLabel(item.1)
-            if item.0 == "shapes" {
-                let menu = NSMenu(title: "Shapes")
+        let icons: [String: CaptureButtonIcon] = [
+            "v": .editorSelect, "c": .editorCrop, "t": .editorText, "shapes": .editorShapes,
+            "a": .editorArrow, "p": .editorPen, "b": .editorBackground,
+        ]
+        let side = EditorChrome.metric("rail_button")
+        for tool in EditorChrome.rail {
+            let key = tool.key
+            let control = CaptureButton("", frame: NSRect(x: 0, y: 0, width: side, height: side),
+                                        tokens: tokens) { [weak self] in self?.chooseRailTool(key) }
+            control.icon = icons[key]
+            control.toolTip = tool.name
+            control.setAccessibilityLabel(tool.name)
+            control.highlightChanged = { [weak self] button, visible in self?.showRailTip(button, visible) }
+            if key == "shapes" {
+                let menu = NSMenu(title: tool.label)
                 menu.autoenablesItems = false
-                for (title, shape) in [("Rectangle (R)", EditorDrawOverlay.Shape.rectangle), ("Ellipse (O)", .ellipse),
-                                       ("Line (L)", .line), ("Triangle", .triangle), ("Diamond (D)", .diamond), ("Star (S)", .star)] {
-                    let option = NSMenuItem(title: title, action: #selector(chooseRailShape(_:)), keyEquivalent: "")
+                let shapes: [String: EditorDrawOverlay.Shape] = [
+                    "rectangle": .rectangle, "ellipse": .ellipse, "line": .line,
+                    "triangle": .triangle, "diamond": .diamond, "star": .star,
+                ]
+                for item in EditorChrome.shapes {
+                    guard let shape = shapes[item.key] else { continue }
+                    let option = NSMenuItem(title: item.name, action: #selector(chooseRailShape(_:)), keyEquivalent: "")
                     option.target = self
                     option.tag = EditorDrawOverlay.Shape.allCases.firstIndex(of: shape)!
+                    let icon = item.icon
+                    let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { rect in
+                        NSColor.black.setStroke()
+                        ShippingIcons.stroke(icon, in: rect)
+                        return true
+                    }
+                    image.isTemplate = true
+                    option.image = image
                     menu.addItem(option)
                 }
                 control.menu = menu
             }
-            toolRailButtons.append((item.0, control))
+            toolRailButtons.append((key, control))
             root.addSubview(control)
         }
     }
@@ -2284,6 +2694,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             button.selected = selected; button.primary = selected
             button.setAccessibilityValue(selected ? 1 : 0)
             button.menu?.items.forEach { $0.state = $0.tag == drawTool?.indexOfSelectedItem ? .on : .off }
+            if key == "shapes" {
+                let names: [EditorDrawOverlay.Shape: String] = [
+                    .rectangle: "rectangle", .ellipse: "ellipse", .line: "line",
+                    .triangle: "triangle", .diamond: "diamond", .star: "star",
+                ]
+                let current = isGroupedShape(drawOverlay.shape) ? drawOverlay.shape : lastGroupedShape
+                let tooltip = EditorChrome.shapesTooltip(names[current] ?? "rectangle")
+                if button.toolTip != tooltip { button.toolTip = tooltip }
+            }
             button.needsDisplay = true
         }
     }
@@ -2291,6 +2710,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func publishDrawToolControls() {
         guard let drawTool, drawTool.indexOfSelectedItem >= 0 else { return }
         let shape = EditorDrawOverlay.Shape.allCases[drawTool.indexOfSelectedItem]
+        // Shipping's properties heading names the active tool.
+        drawHeading?.stringValue = EditorChrome.toolLabel(
+            shape == .text ? "t" : shape == .arrow ? "a" : shape.rawValue)
         let wand = shape == .wand
         let brush = shape.isBackgroundBrush
         let creatingText = shape == .text
@@ -3555,7 +3977,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 && activateToolShortcut(key.lowercased()) { return true }
             let button: CaptureButton?
             if command && key.lowercased() == "z" {
-                button = event.modifierFlags.contains(.shift) ? redoButton : undoButton
+                // Undo/Redo buttons hide at or below 1040pt, like shipping; the keys still work.
+                cancelDrawing(); cancelViewportPan()
+                if event.modifierFlags.contains(.shift) { redoDocument() } else { undoDocument() }
+                return true
             } else if command && key.lowercased() == "d" {
                 button = duplicateButton
             } else if command && key.lowercased() == "c" {
@@ -3662,6 +4087,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             }
         }
         zoomPreset.selectItem(at: values.firstIndex(of: current) ?? 0)
+        fitButton?.selected = current == 0; fitButton?.needsDisplay = true
+        publishZoomLimits(ready: state.snapshot != nil && !state.busy && inlineTextInput == nil)
+    }
+
+    /// Shipping disables − and + at the 5% and 800% bounds.
+    private func publishZoomLimits(ready: Bool) {
+        let displayed = viewport.zoomPercent == 0
+            ? fittedImageRect.width / max(1, viewportCanvasSize.width) * 100 : viewport.zoomPercent
+        zoomOutButton?.isEnabled = ready && displayed > 5 + 0.05
+        zoomInButton?.isEnabled = ready && displayed < 800 - 0.05
     }
 
     private func fitViewport() { cancelViewportPan(); changeViewport(to: NativeEditorViewport()) }
@@ -3698,6 +4133,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
     private func updateViewportGeometry() {
         preview.frame = presentedImageRect
+        recenterButton?.isHidden = editedImage == nil
+            || !EditorChrome.canvasOffscreen(viewport: viewportInput.bounds, canvas: presentedImageRect)
         updateInlineTextFrame()
         publishZoomPreset()
         drawOverlay.needsDisplay = true; selectionOverlay.needsDisplay = true
@@ -4209,6 +4646,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if let color = snapshot.background { lastSolidBackground = color }
         backgroundMode.selectItem(at: snapshot.background == nil ? 1 : 0)
         backgroundColor.stringValue = lastSolidBackground
+        backgroundButton?.swatch = snapshot.background.flatMap { NSColor(hex: $0) } ?? .clear
+        backgroundButton?.setAccessibilityLabel("Background color: \(snapshot.background ?? "transparent")")
     }
 
     private func applyBackground() {
@@ -4301,10 +4740,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.canvasSize = drawOverlay.canvasSize
         cropOverlay.canvasSize = viewportCanvasSize // Match wgpu's rendered-pixel crop bounds.
         updateViewportGeometry()
-        dimensions.stringValue = "\(format(snapshot.width)) × \(format(snapshot.height)) pixels"
         publishOutputDimensions()
         canvasWidth.stringValue = format(snapshot.width); canvasHeight.stringValue = format(snapshot.height)
         publishBackgroundFields()
+        if !snapshot.hasDraft && draftRestored { draftRestored = false; layoutEditor() }
         if resetCrop || cropWidth.stringValue.isEmpty {
             cropPrevious = nil
             cropX.stringValue = "0"; cropY.stringValue = "0"
@@ -4313,6 +4752,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publishCropSelection()
         publishCreateTextDefaults()
         reconcileLayerSelection(snapshot.layers)
+        publishLayerCount(snapshot.layers.count)
         window.title = snapshot.unsavedChanges ? "Edit screenshot — Unsaved" : "Edit screenshot"
         // New pixels or dimensions: refresh the summary and re-estimate the export.
         refreshExportBar()
@@ -4336,15 +4776,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func updateControls() {
         let ready = state.snapshot != nil && !state.busy && inlineTextInput == nil
         fields.forEach { $0.isEnabled = ready }
-        applyCropButton?.isEnabled = ready; resizeButton?.isEnabled = ready
-        trimButton?.isEnabled = ready
+        applyCropButton?.isEnabled = ready
+        trimButton?.isEnabled = ready; backgroundButton?.isEnabled = ready
         backgroundMode?.isEnabled = ready
         backgroundColor.isEnabled = ready && backgroundMode?.indexOfSelectedItem == 0
         backgroundApply?.isEnabled = ready; backgroundReset?.isEnabled = ready
         undoButton?.isEnabled = ready && state.snapshot?.canUndo == true
         redoButton?.isEnabled = ready && state.snapshot?.canRedo == true
-        saveButton?.isEnabled = ready && state.snapshot?.unsavedChanges == true
-        discardButton?.isEnabled = ready && (state.snapshot?.hasDraft == true || state.snapshot?.unsavedChanges == true)
+        saveDraftItem.isEnabled = ready && state.snapshot?.unsavedChanges == true
+        discardItem.isEnabled = ready && (state.snapshot?.hasDraft == true || state.snapshot?.unsavedChanges == true)
+        draftMenuButton?.isEnabled = ready
+        draftDiscardButton?.isEnabled = ready
+        addImagesButton?.isEnabled = ready && !importLoading
+        addLayerButton?.isEnabled = ready && !importLoading
         sectionControl?.isEnabled = ready
         outputFormat?.isEnabled = ready; outputQuality?.isEnabled = ready
         exportDisclosure?.isEnabled = state.snapshot != nil
@@ -4359,7 +4803,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportSaveButton?.title = saveInFlight ? "Saving…" : "Save"
         previewOutputButton?.isEnabled = ready
         outputPreviewMode?.isEnabled = ready && encodedOutput != nil
-        viewportButtons.forEach { $0.isEnabled = ready }
+        fitButton?.isEnabled = ready
+        publishZoomLimits(ready: ready)
         zoomPreset.isEnabled = ready
         zoomSlider.isEnabled = ready
         updateOutputOptionControls()
@@ -4461,14 +4906,50 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let layers = state.snapshot?.layers, layers.indices.contains(row) else { return nil }
         let layer = layers[row]
-        let title = NSTextField(labelWithString: layer.name)
-        title.lineBreakMode = .byTruncatingTail; title.toolTip = layer.name
+        let title = NSTextField(labelWithString: layer.rowName)
+        title.lineBreakMode = .byTruncatingTail; title.toolTip = layer.rowName
+        title.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
         title.textColor = tokens.color("text")
-        let detail = NSTextField(labelWithString:
-            "\(layer.kind.rawValue.capitalized)\(layer.visible ? "" : " · Hidden")\(layer.locked ? " · Locked" : "")")
-        detail.alignment = .right; detail.font = .systemFont(ofSize: 10)
-        detail.textColor = tokens.color("text-muted"); detail.toolTip = detail.stringValue
-        return EditorLayerCell(title: title, detail: detail)
+        let detail = NSTextField(labelWithString: layer.rowKind)
+        detail.alignment = .right; detail.font = .systemFont(ofSize: tokens.number("text-xs"))
+        detail.textColor = tokens.color("text-subtle"); detail.toolTip = layer.rowKind
+        // Shipping fades hidden layers' name and preview.
+        if !layer.visible { title.alphaValue = 0.42; detail.alphaValue = 0.42 }
+        let id = layer.id
+        let visibility = CaptureButton("", frame: .zero, tokens: tokens) { [weak self] in
+            self?.toggleVisibility(id: id)
+        }
+        visibility.icon = .shipping(layer.visible ? "eye" : "eye-off")
+        visibility.setAccessibilityLabel("\(layer.visible ? "Hide" : "Show") \(layer.rowName)")
+        visibility.toolTip = EditorChrome.text("layers", layer.visible ? "hide" : "show")
+        let lock = CaptureButton("", frame: .zero, tokens: tokens) { [weak self] in
+            self?.toggleLock(id: id)
+        }
+        lock.icon = .shipping(layer.locked ? "lock" : "unlock")
+        lock.setAccessibilityLabel("\(layer.locked ? "Unlock" : "Lock") \(layer.rowName)")
+        lock.toolTip = EditorChrome.text("layers", layer.locked ? "unlock" : "lock")
+        for (control, on) in [(visibility, !layer.visible), (lock, layer.locked)] {
+            control.quiet = true; control.iconSide = 14
+            control.cornerRadius = tokens.number("r-sm"); control.selected = on
+            control.isEnabled = state.snapshot != nil && !state.busy && inlineTextInput == nil
+        }
+        return EditorLayerCell(title: title, detail: detail, iconName: layer.rowIcon, tokens: tokens,
+                               visibility: visibility, lock: lock)
+    }
+
+    /// Row quick actions target their own layer; lock also selects it, like shipping.
+    private func toggleVisibility(id: String) {
+        guard let layer = state.snapshot?.layers.first(where: { $0.id == id }) else { return }
+        layerCommand(layer, edit: ["action": "visibility", "visible": !layer.visible],
+                     message: layer.visible ? "Hiding layer…" : "Showing layer…",
+                     preferredSelection: selectedLayerID)
+    }
+
+    private func toggleLock(id: String) {
+        guard let layer = state.snapshot?.layers.first(where: { $0.id == id }) else { return }
+        layerCommand(layer, edit: ["action": "lock", "locked": !layer.locked],
+                     message: layer.locked ? "Unlocking layer…" : "Locking layer…",
+                     preferredSelection: id)
     }
 
     private func restyle(_ tokens: Tokens) {
@@ -4480,7 +4961,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             label.textColor = tokens.color(label.identifier?.rawValue == "editor-muted"
                 ? "text-muted" : "text")
         }
-        status.textColor = tokens.color("text-muted"); dimensions.textColor = tokens.color("text-muted")
+        status.textColor = tokens.color("text-muted")
+        restyleChrome()
         exportBar.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         exportBarRule.layer?.backgroundColor = tokens.color("border-subtle").cgColor
         exportSettingsPanel.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
@@ -4510,6 +4992,43 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.needsDisplay = true
         preview.superview?.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         preview.superview?.layer?.borderColor = tokens.color("border").cgColor
+    }
+
+    private func publishLayerCount(_ count: Int) {
+        layerCount.stringValue = "\(count)"
+        layerCount.frame.size.width = max(19, ceil(layerCount.attributedStringValue.size().width) + 8)
+    }
+
+    private func restyleChrome() {
+        let raised = tokens.color("surface-raised").cgColor
+        let border = tokens.color("border-subtle").cgColor
+        headerBar.layer?.backgroundColor = raised
+        railPanel.layer?.backgroundColor = raised
+        headerRule.layer?.backgroundColor = border
+        railRule.layer?.backgroundColor = border
+        for group in [canvasToolbar, zoomGroup] {
+            group.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+            group.layer?.borderColor = border
+        }
+        zoomDividers.forEach { $0.layer?.backgroundColor = border }
+        canvasSplit.layer?.backgroundColor = tokens.color("border").cgColor
+        canvasToolbarLabels.forEach { $0.textColor = tokens.color("text-subtle") }
+        for field in [canvasWidth, canvasHeight] { field.textColor = tokens.color("text") }
+        backgroundCard.layer?.backgroundColor = tokens.color("surface-overlay").cgColor
+        backgroundCard.layer?.borderColor = tokens.color("border").cgColor
+        draftBanner.layer?.backgroundColor = tokens.color("caution-surface").cgColor
+        draftBannerLabel.textColor = tokens.color("caution-text")
+        railTip.backgroundColor = .clear
+        railTip.layer?.backgroundColor = tokens.color("glass-strong").cgColor
+        railTip.layer?.borderColor = tokens.color("glass-border").cgColor
+        railTip.textColor = tokens.color("glass-text")
+        layerCount.textColor = tokens.color("text-subtle")
+        layerCount.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        layerHeadingRule.layer?.backgroundColor = border
+        let controls: [CaptureButton?] = [trimButton, backgroundButton, undoButton, redoButton, fitButton,
+                                          zoomOutButton, zoomInButton, addImagesButton, draftMenuButton,
+                                          recenterButton, draftDiscardButton, draftDismissButton, addLayerButton]
+        for control in controls.compactMap({ $0 }) { control.tokens = tokens; control.needsDisplay = true }
     }
 
     private func configure(_ field: NSTextField, frame: NSRect, label: String,

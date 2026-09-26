@@ -44,9 +44,9 @@ The wgpu host now renders UI text in the token font stack instead of egui's bund
 faces: Segoe UI Variable Text / Segoe UI on Windows, and on Linux the first
 fontconfig match for Inter, Roboto, Helvetica Neue, Arial, then `sans-serif` (as
 WebKitGTK resolves it). A named `semibold` family backs `--weight-semibold`; egui's
-faces remain glyph fallbacks. Under these wider faces the screenshot editor title
-ellipsizes before its zoom controls at the 760px minimum, and the History capture
-actions wrap inside the 1000px root window instead of running past its edge.
+faces remain glyph fallbacks. Under these wider faces the screenshot editor's header
+Canvas toolbar compacts before its zoom controls at the 760px minimum, and the History
+capture actions wrap inside the 1000px root window instead of running past its edge.
 
 Preferences now offer the shipping Default microphone select (Off plus enumerated
 inputs; wgpu enumerates when the menu first opens, AppKit off the main thread),
@@ -356,6 +356,30 @@ but retains shared Fit/zoom/pan and pointer mapping; minimum windows remain
 visual parity. Automated host fixtures and private X11 cover selection/menu,
 minimum layout and busy gates; physical focus, accessibility and Windows/Wayland
 presentation acceptance remain open.
+The editor chrome slice then gives both hosts the shipping header and rail, from
+`captures_app::editor_chrome` (AppKit through `captures_editor_chrome_v1`) and the
+shared `EditorIcon` set. The workbench title, lede and two-row toolbar are gone: one
+52-point header holds the Canvas toolbar (W × H fields that commit one resize on
+Enter or leaving a field, Trim edges and a Background color trigger opening the
+canvas background card) and, on the right, Undo/Redo, the Fit/−/log slider/+/preset
+zoom group and Add images. As in shipping, Undo/Redo hide at 1040 points and below
+(Cmd/Ctrl Z still work) and the slider and preset narrow from 92/76 to 72/72; the
+Canvas toolbar drops its label, then shows Trim and Background icon-only, before
+clipping. Native drafts remain explicit, so Save draft and Discard edits… share one
+header draft menu. A draft found at open shows the shipping "Restored unsaved edits
+from last time." banner; its Discard resets without confirmation and Dismiss hides
+it. Recenter becomes the fixed-glass pill shown only while pan leaves the canvas
+mostly off screen. The Geometry/Layers/Draw tabs are gone: the rail's tool chooses
+the inspector. The rail uses the shipping labels (Eraser (B)), 38-point buttons with
+2-point gaps, hover and accent states and immediate glass hover tips; wgpu shows the
+Shapes corner cue and a three-column icon flyout, AppKit a menu with the shape icons.
+Inspector sections open with the tool name (Crop, Freehand, Eraser…) or shipping's
+Layers heading with a count and Add image layer; layer rows show the shipping names
+and kinds with eye and lock quick actions (lock also selects its row). wgpu editor
+errors use the export status line, as in shipping. The inspector keeps its native
+controls, the Draw tool grid and 30/32-point rows without thumbnails; the layer ⋯
+settings popover, the section styling and the canvas background swatches remain open.
+X11 smokes cover both appearances; AppKit is covered by XCTest only.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete
 custom rows are removed. Selecting a preset uses the existing shared viewport
@@ -953,7 +977,7 @@ All **19 end-to-end acceptance gates remain open**. The large remaining workstre
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow
 integration, physical cross-platform acceptance, and renderer/distribution/cutover.
 This is not a near-release checklist or a percentage-complete claim: implemented
-features still need acceptance, and the native editor still has a workbench layout.
+features still need acceptance, and the native editor inspector still differs from shipping.
 Shared commands and encoding remain prerequisites, not native editor/output acceptance.
 Native live capture on Wayland remains explicitly
 gated; no stub or X11 result closes that platform gate. Merging development slices
@@ -1954,8 +1978,8 @@ actions retain the serialized worker and accepted-work lifecycle. Native fixture
 exercise section/resize visibility, pending-work gates, overwrite/new-file/adoption
 and estimate states; X11 export tests save from every section. Windows/Wayland
 presentation and physical AppKit acceptance remain open, rather than being inferred
-from shared code or rendered CI fixtures. The tool rail and toolbar organization
-still differ from Tauri, and the CompressionPreview split slider is not connected.
+from shared code or rendered CI fixtures. The inspector layout still differs from
+Tauri (see the editor chrome slice), and the CompressionPreview split slider is not connected.
 Remaining viewport controls and other drawing tools are not connected.
 Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.

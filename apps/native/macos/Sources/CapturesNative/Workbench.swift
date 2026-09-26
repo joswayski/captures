@@ -97,6 +97,15 @@ final class CaptureButton: NSButton {
     /// (shipping `.capture-segmented-indicator`), so it draws no idle chrome.
     var slidingSegment = false { didSet { needsDisplay = true } }
     var hudControl = false { didSet { updateTrackingAreas(); needsDisplay = true } }
+    /// Shipping quiet editor chrome (header icon buttons, `.screenshot-canvas-tool`):
+    /// no fill until hover, muted ink that lifts to text, `.selected` for an active state.
+    var quiet = false { didSet { updateTrackingAreas(); needsDisplay = true } }
+    /// Overrides for quiet chrome: icon side, text size and corner radius.
+    var iconSide: CGFloat? { didSet { needsDisplay = true } }
+    var textSize: CGFloat? { didSet { needsDisplay = true } }
+    var cornerRadius: CGFloat? { didSet { needsDisplay = true } }
+    /// Canvas background chip drawn in place of an icon; `.clear` is transparent.
+    var swatch: NSColor? { didSet { needsDisplay = true } }
     private var hoverTracking: NSTrackingArea?
     private var hovered = false
     var icon: CaptureButtonIcon? { didSet { updateTrackingAreas(); needsDisplay = true } }
@@ -129,7 +138,7 @@ final class CaptureButton: NSButton {
         super.updateTrackingAreas()
         if let hoverTracking { removeTrackingArea(hoverTracking) }
         hoverTracking = nil
-        if hudControl || icon?.isEditorTool == true {
+        if hudControl || quiet || icon?.isEditorTool == true {
             let tracking = NSTrackingArea(rect: .zero,
                 options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                 owner: self, userInfo: nil)
@@ -173,7 +182,7 @@ final class CaptureButton: NSButton {
     override func draw(_ dirtyRect: NSRect) {
         let editorTool = icon?.isEditorTool == true
         let radius = circular ? min(bounds.width, bounds.height) / 2 - 1
-            : tokens.number(editorTool ? "r-lg" : hudControl ? "r-sm" : "r-md")
+            : cornerRadius ?? tokens.number(editorTool ? "r-lg" : hudControl ? "r-sm" : "r-md")
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
             xRadius: radius, yRadius: radius)
         if hudControl {
@@ -186,6 +195,12 @@ final class CaptureButton: NSButton {
                 tokens.color(signal ? "theme-signal" : "theme-accent")
                     .withAlphaComponent(signal ? 0.4 : 0.3).setStroke()
                 path.lineWidth = 1; path.stroke()
+            }
+        } else if quiet {
+            let pressed = cell?.isHighlighted == true
+            if selected || (isEnabled && (hovered || pressed)) {
+                tokens.color(selected ? "surface-selected" : "surface-hover").setFill()
+                path.fill()
             }
         } else if editorTool {
             if isEnabled && (selected || hovered || cell?.isHighlighted == true) {
@@ -216,7 +231,8 @@ final class CaptureButton: NSButton {
             path.lineWidth = 1
             path.stroke()
         }
-        let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: solid ? .semibold : .medium)
+        let font = NSFont.systemFont(ofSize: textSize ?? tokens.number("text-md"),
+                                     weight: solid ? .semibold : .medium)
         var foreground = solid
             ? tokens.color("solid-ink").withAlphaComponent(isEnabled ? 1 : 0.4)
             : tokens.color(isEnabled
@@ -230,18 +246,31 @@ final class CaptureButton: NSButton {
                 : hovered || cell?.isHighlighted == true ? "glass-text" : "glass-text-muted")
         } else if editorTool && isEnabled && !selected {
             foreground = tokens.color(hovered ? "text" : "text-muted")
+        } else if quiet {
+            let dark = tokens.color("text").brightnessComponent > 0.5
+            foreground = selected
+                ? tokens.color(dark ? "theme-accent-text" : "theme-accent-readable")
+                : tokens.color(isEnabled && (hovered || cell?.isHighlighted == true) ? "text" : "text-muted")
+                    .withAlphaComponent(isEnabled ? 1 : 0.32)
         }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font, .foregroundColor: foreground,
         ]
-        let label = iconOnly && icon != nil ? "" : title
+        let label = iconOnly && (icon != nil || swatch != nil) ? "" : title
         let size = (label as NSString).size(withAttributes: attributes)
-        let iconSide: CGFloat = icon?.isEditorTool == true ? tokens.number("s-6") + tokens.number("s-1")
-            : icon?.isShipping == true ? 16 : 14
-        let iconWidth: CGFloat = icon == nil ? 0 : (label.isEmpty ? iconSide : iconSide + 6)
+        let glyphSide: CGFloat = iconSide ?? (swatch != nil ? 14
+            : icon?.isEditorTool == true ? tokens.number("s-6") + tokens.number("s-1")
+            : icon?.isShipping == true ? 16 : 14)
+        let hasGlyph = icon != nil || swatch != nil
+        let iconWidth: CGFloat = !hasGlyph ? 0 : (label.isEmpty ? glyphSide : glyphSide + 6)
         let startX = (bounds.width - size.width - iconWidth) / 2
-        if let icon { draw(icon, in: NSRect(x: startX, y: (bounds.height - iconSide) / 2,
-            width: iconSide, height: iconSide), color: foreground) }
+        let glyphRect = NSRect(x: startX, y: (bounds.height - glyphSide) / 2,
+                               width: glyphSide, height: glyphSide)
+        if let swatch {
+            drawSwatch(swatch, in: glyphRect)
+        } else if let icon {
+            draw(icon, in: glyphRect, color: foreground)
+        }
         (label as NSString).draw(at: CGPoint(x: startX + iconWidth,
             y: (bounds.height - size.height) / 2), withAttributes: attributes)
         if window?.firstResponder === self {
@@ -249,6 +278,26 @@ final class CaptureButton: NSButton {
             path.lineWidth = 2
             path.stroke()
         }
+    }
+
+    /// Shipping `.screenshot-canvas-bg-chip`: a 14 px swatch, checkered when clear.
+    private func drawSwatch(_ color: NSColor, in rect: NSRect) {
+        let chip = NSBezierPath(roundedRect: rect, xRadius: tokens.number("r-xs"), yRadius: tokens.number("r-xs"))
+        NSGraphicsContext.saveGraphicsState()
+        chip.addClip()
+        if color.alphaComponent == 0 {
+            tokens.color("surface-raised").setFill(); rect.fill()
+            tokens.color("n-5").setFill()
+            let cell = rect.width / 4
+            for row in 0..<4 { for column in 0..<4 where (row + column) % 2 == 0 {
+                NSRect(x: rect.minX + CGFloat(column) * cell, y: rect.minY + CGFloat(row) * cell,
+                       width: cell, height: cell).fill()
+            } }
+        } else {
+            color.setFill(); rect.fill()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        tokens.color("border-strong").setStroke(); chip.lineWidth = 1; chip.stroke()
     }
 
     private func draw(_ icon: CaptureButtonIcon, in rect: NSRect, color: NSColor) {

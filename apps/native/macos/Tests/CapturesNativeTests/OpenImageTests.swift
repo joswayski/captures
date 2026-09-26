@@ -189,10 +189,8 @@ final class OpenImageTests: XCTestCase {
         XCTAssertFalse(window.isVisible, "preview Edit must leave the root window hidden")
         XCTAssertEqual(table.selectedRow, selectedRow,
                        "preview Edit must preserve the selected History row")
-        let dimensions = try XCTUnwrap(descendants(controls).compactMap { $0 as? NSTextField }
-            .first { $0.accessibilityLabel() == "Edited canvas dimensions" })
-        XCTAssertTrue(dimensions.stringValue.contains("\(first.width) × \(first.height)"),
-                      "the editor must show the exact preview artifact")
+        XCTAssertEqual(try canvasSize(in: controls), "\(first.width)×\(first.height)",
+                       "the editor must show the exact preview artifact")
 
         for (label, value) in [("Crop X", "7"), ("Crop Y", "11"),
                                ("Crop width", "120"), ("Crop height", "80")] {
@@ -380,11 +378,9 @@ final class OpenImageTests: XCTestCase {
         try waitUntil { table.numberOfRows == 2 && !controller.externalOpenPending }
         let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
         defer { editor.performClose(nil) }
-        let dimensions = try XCTUnwrap(descendants(try XCTUnwrap(editor.contentView))
-            .compactMap { $0 as? NSTextField }
-            .first { $0.accessibilityLabel() == "Edited canvas dimensions" })
-        XCTAssertTrue(dimensions.stringValue.contains("\(secondImage.width) × \(secondImage.height)"),
-                      "the second distinct source must open after the first editor settles")
+        XCTAssertEqual(try canvasSize(in: try XCTUnwrap(editor.contentView)),
+                       "\(secondImage.width)×\(secondImage.height)",
+                       "the second distinct source must open after the first editor settles")
         let artifacts = try XCTUnwrap(AppBridge().request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
         XCTAssertEqual(artifacts.count, 2)
@@ -544,6 +540,16 @@ final class OpenImageTests: XCTestCase {
         }
         XCTFail("external open did not settle")
         throw AppBridgeError.invalidResponse
+    }
+
+    /// The editor header's shipping Canvas W × H fields, as "W×H" digits.
+    private func canvasSize(in view: NSView) throws -> String {
+        func value(_ label: String) throws -> String {
+            let field = try XCTUnwrap(descendants(view).compactMap { $0 as? NSTextField }
+                .first { $0.accessibilityLabel() == label }, label)
+            return field.stringValue.filter(\.isNumber)
+        }
+        return "\(try value("Canvas width"))×\(try value("Canvas height"))"
     }
 
     private func descendants(_ view: NSView) -> [NSView] {

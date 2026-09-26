@@ -47,6 +47,7 @@ use std::{fs::File, io::Cursor};
 
 use crate::tokens::Tokens;
 
+mod chrome;
 mod drawing_preview;
 mod text_input;
 
@@ -415,6 +416,10 @@ struct View {
     shape_drag_frame: egui::Rect,
     freehand_points: Vec<Point>,
     canvas: [f64; 2],
+    /// Header Canvas W/H text while focused; otherwise the published size.
+    canvas_text: [String; 2],
+    /// Shipping's "Restored unsaved edits" banner for a draft found at open.
+    draft_restored: bool,
     background_solid: bool,
     background_color: String,
     last_solid_background: String,
@@ -499,6 +504,8 @@ impl Default for View {
             shape_drag_frame: egui::Rect::NOTHING,
             freehand_points: Vec::new(),
             canvas: [1., 1.],
+            canvas_text: [String::new(), String::new()],
+            draft_restored: false,
             background_solid: true,
             background_color: "#f7f7f5".into(),
             last_solid_background: "#f7f7f5".into(),
@@ -664,6 +671,8 @@ impl View {
         match result {
             Ok(mut presented) => {
                 if self.presented.is_none() {
+                    // A draft present at open was restored, as in shipping.
+                    self.draft_restored = presented.has_draft;
                     self.new_text_size = presented.initial_text_size;
                     self.new_text_preset = presented
                         .text_style_presets
@@ -751,6 +760,9 @@ impl View {
                         .take()
                         .or(self.selected_layer.clone())
                 });
+                if !presented.has_draft {
+                    self.draft_restored = false;
+                }
                 self.presented = Some(presented);
                 self.ensure_export_target();
                 if !copied_layer {
@@ -802,6 +814,17 @@ impl View {
 
     fn submit(&mut self, tx: &Sender<Job>, request: Request) {
         self.submit_job(tx, Job::Apply(request));
+    }
+
+    fn save_draft(&mut self, tx: &Sender<Job>) {
+        if self.presented.is_some() {
+            self.submit(
+                tx,
+                Request::SaveDraft {
+                    updated_at_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
+                },
+            );
+        }
     }
 
     fn reset_background_fields(&mut self) {
@@ -1582,50 +1605,15 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         view.cancel_drawing();
         view.cancel_layer_gesture();
     }
-    egui::Panel::top("editor-actions").show(ui, |ui| {
-        show_title_bar(ui, tokens, view);
-        ui.add_enabled_ui(!view.pending && view.inline.is_none(), |ui| {
-            ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(view.presented.as_ref().is_some_and(|p| p.can_undo), egui::Button::new("Undo")).clicked() { view.submit(tx, Request::Undo); }
-                if ui.add_enabled(view.presented.as_ref().is_some_and(|p| p.can_redo), egui::Button::new("Redo")).clicked() { view.submit(tx, Request::Redo); }
-                if ui.add_enabled(view.presented.is_some(), egui::Button::new("Save draft")).clicked() {
-                    view.submit(tx, Request::SaveDraft { updated_at_ms: chrono::Utc::now().timestamp_millis().max(0) as u64 });
-                }
-                if ui.add_enabled(view.presented.is_some(), egui::Button::new("Discard edits…")).clicked() { view.confirm_discard = true; }
-                ui.separator();
-                ui.selectable_value(&mut view.section, Section::Geometry, "Geometry");
-                ui.selectable_value(&mut view.section, Section::Layers, "Layers");
-                if ui.add_enabled(view.import_picker.is_none() && !view.close_requested && !view.confirm_discard, egui::Button::new("Import image…")).clicked() {
-                    view.choose_image(ui.ctx());
-                }
-                ui.selectable_value(&mut view.section, Section::Draw, "Draw");
-            });
+    egui::Panel::top("editor-actions")
+        .resizable(false)
+        .show_separator_line(false)
+        .frame(egui::Frame::NONE.fill(tokens.color("surface-raised")))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+            chrome::show_banners(ui, tokens, view, tx);
+            chrome::show_header(ui, tokens, view, tx);
         });
-        if let Some(error) = &view.error { ui.colored_label(tokens.color("theme-signal"), error); }
-        if view.close_requested && !view.pending {
-            ui.group(|ui| {
-                ui.label("Save unsaved edits before closing?");
-                ui.horizontal(|ui| {
-                    if ui.button("Save and close").clicked() {
-                        view.close_after_save = true;
-                        view.submit(tx, Request::SaveDraft { updated_at_ms: chrono::Utc::now().timestamp_millis().max(0) as u64 });
-                    }
-                    if ui.button("Close without saving").clicked() { view.closed = true; }
-                    if ui.button("Cancel close").clicked() { view.close_requested = false; }
-                });
-                ui.small("Closing without saving keeps the last saved draft and original capture.");
-            });
-        }
-        if view.confirm_discard {
-            ui.group(|ui| {
-                ui.label("Discard all edits and the saved draft? The original capture and exports stay unchanged.");
-                ui.add_enabled_ui(!view.pending, |ui| ui.horizontal(|ui| {
-                    if ui.button("Discard edits").clicked() { view.confirm_discard = false; view.submit(tx, Request::DiscardDraft); }
-                    if ui.button("Cancel discard").clicked() { view.confirm_discard = false; }
-                }));
-            });
-        }
-    });
     if view.section != previous_section {
         view.viewport_pan = None;
     }
@@ -1653,11 +1641,11 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
         ui.add_enabled_ui(!view.pending && view.inline.is_none() && view.presented.is_some(), |ui| {
             if view.section == Section::Layers {
-                show_layers(ui, view, tx);
+                show_layers(ui, tokens, view, tx);
                 return;
             }
             if view.section == Section::Draw {
-                ui.heading("Draw shapes");
+                chrome::section_heading(ui, tokens, view);
                 let previous_tool = view.draw_shape;
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Text, "Text");
@@ -1788,7 +1776,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 }
                 return;
             }
-            ui.heading("Crop");
+            chrome::section_heading(ui, tokens, view);
             ui.label("Coordinates in image pixels");
             egui::Grid::new("crop-fields").show(ui, |ui| {
                 for (label, value) in ["X", "Y", "Width", "Height"].into_iter().zip(&mut view.crop) {
@@ -1824,41 +1812,10 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 });
                 ui.small("Drag on the canvas. Hold Shift to lock the ratio. Escape cancels; Apply crop commits.");
             }
-            ui.add_space(tokens.number("s-6"));
-            ui.heading("Canvas");
-            egui::Grid::new("canvas-fields").show(ui, |ui| {
-                for (label, value) in ["Width", "Height"].into_iter().zip(&mut view.canvas) {
-                    ui.label(label);
-                    ui.add(egui::DragValue::new(value).range(1. ..=16384.).speed(1.)); ui.end_row();
-                }
-            });
-            if ui.button("Resize canvas").clicked() {
-                view.submit(tx, Request::ResizeCanvas { width: view.canvas[0], height: view.canvas[1] });
-            }
-            ui.add_space(tokens.number("s-4"));
-            ui.label("Canvas background");
-            ui.checkbox(&mut view.background_solid, "Solid background");
-            ui.add_enabled(view.background_solid,
-                egui::TextEdit::singleline(&mut view.background_color)
-                    .desired_width(ui.available_width()).hint_text("#RRGGBB or #RRGGBBAA"));
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("Apply background").clicked() {
-                    view.submit(tx, Request::SetBackground {
-                        color: view.background_solid.then(|| view.background_color.clone()),
-                    });
-                }
-                if ui.button("Reset fields").clicked() { view.reset_background_fields(); }
-            });
-            ui.small("Changes the canvas fill, not an image layer's background.");
-            ui.add_space(tokens.number("s-4"));
-            if ui.button("Trim edges").clicked() {
-                view.submit(tx, Request::TrimCanvas);
-            }
-            ui.small("Fits visible layer bounds, including off-canvas content. Does not trim transparent pixels within images.");
         });
         });
     });
-    show_tool_rail(ui, tokens, view);
+    chrome::show_tool_rail(ui, tokens, view);
     egui::CentralPanel::default().show(ui, |ui| {
         let texture = if view.show_output && view.export_settings_open {
             view.output.as_ref().map(|(texture, _)| texture)
@@ -1910,372 +1867,18 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 show_layer_canvas(ui, tokens, view, tx, available, preview, intercepted);
             }
             text_input::show(ui, tokens, view, available, preview);
+            chrome::recenter(ui, tokens, view, available, preview);
         } else if view.pending {
             ui.centered_and_justified(|ui| {
                 ui.spinner();
             });
         } else {
             ui.centered_and_justified(|ui| {
-                ui.label("Could not open this screenshot. See the error above.");
+                ui.label("Could not open this screenshot. See the error below.");
             });
         }
     });
     view.drain_inline(tx);
-}
-
-/// Laid-out title-bar regions, for the no-overlap layout rule.
-#[derive(Clone, Copy, Debug)]
-struct TitleBar {
-    /// Union of the title and status labels.
-    title: egui::Rect,
-    /// Union of the right-aligned zoom controls.
-    controls: egui::Rect,
-}
-
-/// Title, status and the right-aligned zoom controls.
-///
-/// Shipping leaves the title to the window title bar and gives its header's
-/// left group `min-width: 0`, so zoom stays reachable on narrow windows. Here
-/// the controls are laid out first and the title and status get only the width
-/// left over, each ellipsized, so they never run under the slider at the 760px
-/// minimum. The status yields last: it is the part that changes.
-fn show_title_bar(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) -> TitleBar {
-    let mut bar = TitleBar {
-        title: egui::Rect::NOTHING,
-        controls: egui::Rect::NOTHING,
-    };
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .button("Recenter")
-                .on_hover_text("Center the current zoom without changing it")
-                .clicked()
-            {
-                view.cancel_edit_gestures();
-                view.viewport.recenter();
-                view.viewport_pan = None;
-            }
-            if ui.button("+").on_hover_text("Zoom in 1.25×").clicked() {
-                change_viewport_zoom(view, 1.25, None);
-            }
-            if ui.button("−").on_hover_text("Zoom out 1.25×").clicked() {
-                change_viewport_zoom(view, 1. / 1.25, None);
-            }
-            let current = view.viewport.zoom_percent;
-            let label = if current == 0. {
-                "Fit".into()
-            } else {
-                format!("{current}%")
-            };
-            let mut selected = current;
-            let mut chosen = false;
-            let response = egui::ComboBox::from_id_salt("viewport-zoom-preset")
-                .width(tokens.number("s-12") + tokens.number("s-9"))
-                .selected_text(&label)
-                .show_ui(ui, |ui| {
-                    chosen |= ui.selectable_value(&mut selected, 0., "Fit").clicked();
-                    if current != 0. && ![50., 100., 200.].contains(&current) {
-                        chosen |= ui
-                            .selectable_value(&mut selected, current, format!("{current}%"))
-                            .clicked();
-                    }
-                    for percent in [50., 100., 200.] {
-                        chosen |= ui
-                            .selectable_value(&mut selected, percent, format!("{percent}%"))
-                            .clicked();
-                    }
-                })
-                .response
-                .on_hover_text("Canvas zoom preset");
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::ComboBox,
-                    ui.is_enabled(),
-                    format!("Canvas zoom preset: {label}"),
-                )
-            });
-            if chosen {
-                if selected == 0. {
-                    view.reset_viewport();
-                } else {
-                    set_viewport_zoom(view, selected, None);
-                }
-            }
-            if ui
-                .button("Fit")
-                .on_hover_text("Fit the image in the editor")
-                .clicked()
-            {
-                view.reset_viewport();
-            }
-            if let Some(percent) = displayed_zoom(view) {
-                let mut position = zoom_slider_position(percent).unwrap_or(0.);
-                ui.scope(|ui| {
-                    ui.spacing_mut().slider_width = tokens.number("s-12") * 2.;
-                    let response = ui
-                        .add_enabled(
-                            !view.pending,
-                            egui::Slider::new(&mut position, 0.0..=1.0).show_value(false),
-                        )
-                        .on_hover_text(format!(
-                            "Canvas zoom: {percent:.1}%. Drag from 5% to 800%."
-                        ));
-                    response.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Slider,
-                            response.enabled(),
-                            format!("Canvas zoom: {percent:.1}%"),
-                        )
-                    });
-                    if response.changed()
-                        && let Some(zoom) = zoom_from_slider(position)
-                    {
-                        set_viewport_zoom(view, zoom, None);
-                    }
-                });
-            }
-            bar.controls = ui.min_rect();
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let status = RichText::new(if view.pending {
-                    "Working…"
-                } else if view.unsaved() {
-                    "Unsaved edits"
-                } else if view.presented.as_ref().is_some_and(|p| p.has_draft) {
-                    "Draft saved"
-                } else {
-                    "Original screenshot"
-                })
-                .color(tokens.color("text-muted"));
-                let status_width = egui::WidgetText::from(status.clone())
-                    .into_galley(
-                        ui,
-                        Some(egui::TextWrapMode::Extend),
-                        f32::INFINITY,
-                        egui::TextStyle::Body,
-                    )
-                    .size()
-                    .x;
-                let title_width =
-                    (ui.available_width() - status_width - ui.spacing().item_spacing.x).max(0.);
-                let title = ui
-                    .allocate_ui(egui::vec2(title_width, ui.available_height()), |ui| {
-                        ui.add(
-                            egui::Label::new(RichText::new("Screenshot editor").heading())
-                                .truncate(),
-                        )
-                    })
-                    .inner;
-                let status = ui.add(egui::Label::new(status).truncate());
-                bar.title = title.rect.union(status.rect);
-            });
-        });
-    });
-    bar
-}
-
-fn show_tool_rail(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
-    let width = tokens.number("s-11") + tokens.number("s-4");
-    let side = tokens.number("h-lg") + tokens.number("s-1");
-    egui::Panel::left("editor-tool-rail")
-        .resizable(false)
-        .exact_size(width)
-        .show_separator_line(false)
-        .frame(
-            egui::Frame::side_top_panel(ui.style())
-                .fill(tokens.color("surface-raised"))
-                .stroke(egui::Stroke::new(1., tokens.color("border-subtle"))),
-        )
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = tokens.number("s-2");
-            ui.visuals_mut().widgets.inactive.weak_bg_fill = tokens.color("surface-raised");
-            let enabled = view.presented.is_some()
-                && !view.pending
-                && view.inline.is_none()
-                && !view.closed
-                && !view.close_requested
-                && !view.confirm_discard
-                && view.import_picker.is_none()
-                && view.folder_picker.is_none();
-            ui.add_enabled_ui(enabled, |ui| {
-                for (icon, label, section, shape) in [
-                    ("v", "Select & move (V)", Section::Layers, None),
-                    ("c", "Crop (C)", Section::Geometry, None),
-                    ("t", "Text (T)", Section::Draw, Some(DrawShape::Text)),
-                    (
-                        "shapes",
-                        "Shapes",
-                        Section::Draw,
-                        Some(view.last_grouped_shape),
-                    ),
-                    ("a", "Arrow (A)", Section::Draw, Some(DrawShape::Arrow)),
-                    (
-                        "p",
-                        "Freehand (P)",
-                        Section::Draw,
-                        Some(DrawShape::Freehand),
-                    ),
-                    (
-                        "b",
-                        "Background removal (B)",
-                        Section::Draw,
-                        Some(view.last_background_tool),
-                    ),
-                ] {
-                    let active = view.section == section
-                        && match icon {
-                            "c" => view.crop_previous.is_some(),
-                            "shapes" => view.draw_shape.is_grouped(),
-                            "b" => matches!(
-                                view.draw_shape,
-                                DrawShape::Wand | DrawShape::Erase | DrawShape::Restore
-                            ),
-                            _ => shape.is_none_or(|shape| view.draw_shape == shape),
-                        };
-                    let button = egui::Button::new("")
-                        .selected(active)
-                        .corner_radius(tokens.number("r-lg"))
-                        .stroke(egui::Stroke::NONE);
-                    let button = if active {
-                        button.fill(tokens.color("theme-accent"))
-                    } else {
-                        button
-                    };
-                    let response = ui
-                        .add_sized(egui::vec2(side, side), button)
-                        .on_hover_text(label);
-                    response.widget_info(|| {
-                        egui::WidgetInfo::selected(
-                            egui::WidgetType::Button,
-                            response.enabled(),
-                            active,
-                            label,
-                        )
-                    });
-                    let color = tokens.color(if !response.enabled() {
-                        "text-faint"
-                    } else if active {
-                        "theme-accent-ink"
-                    } else if response.hovered() {
-                        "text"
-                    } else {
-                        "text-muted"
-                    });
-                    paint_tool_icon(
-                        ui.painter(),
-                        response.rect,
-                        icon,
-                        color,
-                        tokens.number("s-6") + tokens.number("s-1"),
-                    );
-                    if response.clicked() {
-                        view.activate_tool(section, shape);
-                    }
-                    if icon == "shapes" {
-                        egui::Popup::menu(&response)
-                            .align(egui::RectAlign::RIGHT_START)
-                            .show(|ui| {
-                                for (label, shape) in [
-                                    ("Rectangle (R)", DrawShape::Rectangle),
-                                    ("Ellipse (O)", DrawShape::Ellipse),
-                                    ("Line (L)", DrawShape::Line),
-                                    ("Triangle", DrawShape::Triangle),
-                                    ("Diamond (D)", DrawShape::Diamond),
-                                    ("Star (S)", DrawShape::Star),
-                                ] {
-                                    if ui
-                                        .selectable_label(view.draw_shape == shape, label)
-                                        .clicked()
-                                    {
-                                        view.activate_tool(Section::Draw, Some(shape));
-                                        ui.close();
-                                    }
-                                }
-                            });
-                    }
-                }
-            });
-        });
-}
-
-// The shipping EditorIcon silhouettes, expressed in native vector primitives.
-fn paint_tool_icon(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    icon: &str,
-    color: egui::Color32,
-    size: f32,
-) {
-    let origin = rect.center() - egui::vec2(size, size) / 2.;
-    let point = |x, y| origin + egui::vec2(x, y) * (size / 24.);
-    let stroke = egui::Stroke::new(1.75 * size / 24., color);
-    let line = |points: &[(f32, f32)]| {
-        painter.add(egui::Shape::line(
-            points.iter().map(|&(x, y)| point(x, y)).collect(),
-            stroke,
-        ));
-    };
-    match icon {
-        "v" => line(&[(5., 3.), (18., 12.), (11., 14.), (8., 21.), (5., 3.)]),
-        "c" => {
-            line(&[(7., 3.), (7., 17.), (9., 19.), (21., 19.)]);
-            line(&[(3., 7.), (17., 7.), (19., 9.), (19., 21.)]);
-        }
-        "t" => {
-            line(&[(5., 5.), (19., 5.)]);
-            line(&[(12., 5.), (12., 19.)]);
-            line(&[(8., 19.), (16., 19.)]);
-        }
-        "shapes" => {
-            painter.rect_stroke(
-                egui::Rect::from_min_max(point(3.5, 8.5), point(14.5, 19.5)),
-                1.,
-                stroke,
-                egui::StrokeKind::Middle,
-            );
-            painter.circle_stroke(point(15.25, 9.75), 5.25 * size / 24., stroke);
-        }
-        "a" => {
-            line(&[(4., 20.), (20., 4.)]);
-            line(&[(12., 4.), (20., 4.), (20., 12.)]);
-        }
-        "p" => {
-            for points in [
-                [
-                    point(4., 16.),
-                    point(8., 9.),
-                    point(10., 8.),
-                    point(12., 13.),
-                ],
-                [
-                    point(12., 13.),
-                    point(14., 18.),
-                    point(16., 17.),
-                    point(20., 9.),
-                ],
-            ] {
-                painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
-                    points,
-                    false,
-                    egui::Color32::TRANSPARENT,
-                    stroke,
-                ));
-            }
-            line(&[(4., 20.), (20., 20.)]);
-        }
-        "b" => {
-            line(&[
-                (14.8, 20.5),
-                (6., 11.4),
-                (14.9, 2.3),
-                (21.7, 9.1),
-                (11., 19.8),
-                (8.2, 17.),
-            ]);
-            line(&[(8.6, 11.8), (12.2, 15.4)]);
-            line(&[(4., 21.), (12., 21.)]);
-        }
-        _ => unreachable!("editor rail icon"),
-    }
 }
 
 fn fitted_image_rect(available: egui::Rect, image: egui::Vec2) -> egui::Rect {
@@ -4057,7 +3660,11 @@ fn show_export_heading(
                 {
                     view.reveal_saved();
                 }
+                // Like shipping, editor errors share the export status line
+                // instead of pushing the canvas down.
                 let (text, color) = if let Some(error) = &view.export_error {
+                    (error.clone(), tokens.color("danger-text"))
+                } else if let Some(error) = &view.error {
                     (error.clone(), tokens.color("danger-text"))
                 } else if let Some(error) = bar.and_then(|bar| bar.error.clone()) {
                     (error, tokens.color("danger-text"))
@@ -4073,6 +3680,7 @@ fn show_export_heading(
                 } else {
                     (String::new(), tokens.color("text-subtle"))
                 };
+                // An elided label already supplies the full message as its tooltip.
                 ui.add(egui::Label::new(RichText::new(text).size(small).color(color)).truncate());
             });
         },
@@ -4925,15 +4533,14 @@ fn layer_context_menu(
     }
 }
 
-fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
+fn show_layers(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let Some(presented) = &view.presented else {
         return;
     };
     let document = presented.document.clone();
     let elements = &document.elements;
-    ui.horizontal(|ui| {
-        ui.heading("Layers");
-        ui.menu_button("Combine layers", |ui| {
+    if let Some(combine) = chrome::section_heading(ui, tokens, view) {
+        egui::Popup::menu(&combine).show(|ui| {
             for (label, action) in [
                 ("Merge down", LayerAction::MergeDown),
                 ("Merge visible", LayerAction::MergeVisible),
@@ -4952,7 +4559,7 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
                 }
             }
         });
-    });
+    }
     ui.small("Front to back");
     egui::ScrollArea::vertical()
         .id_salt("layer-list")
@@ -4962,24 +4569,35 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
         .show(ui, |ui| {
             for element in elements.iter().rev() {
                 let base = element.base();
-                let label = format!(
-                    "{}{}{}",
-                    layer_label(element),
-                    if base.locked { " · locked" } else { "" },
-                    if base.visible { "" } else { " · hidden" }
-                );
                 let selected = view.selected_layer.as_deref() == Some(&base.id);
                 ui.push_id(&base.id, |ui| {
-                    let response = ui
-                        .add_sized(
-                            [ui.available_width(), 30.],
-                            egui::Button::selectable(selected, &label).truncate(),
-                        )
-                        .on_hover_text(&label);
-                    if response.clicked() {
+                    let row = chrome::layer_row(ui, tokens, element, selected, ui.is_enabled());
+                    if row.visibility {
+                        view.submit(
+                            tx,
+                            Request::Layer {
+                                id: base.id.clone(),
+                                edit: LayerEdit::Visibility {
+                                    visible: !base.visible,
+                                },
+                            },
+                        );
+                    } else if row.lock {
+                        // Shipping selects the row it locks or unlocks.
+                        view.select_layer(Some(base.id.clone()));
+                        view.submit(
+                            tx,
+                            Request::Layer {
+                                id: base.id.clone(),
+                                edit: LayerEdit::Lock {
+                                    locked: !base.locked,
+                                },
+                            },
+                        );
+                    } else if row.body.clicked() {
                         view.select_layer(Some(base.id.clone()));
                     }
-                    response.context_menu(|ui| {
+                    row.body.context_menu(|ui| {
                         layer_context_menu(ui, view, tx, Some(base.id.clone()));
                     });
                 });
@@ -5505,6 +5123,7 @@ mod tests {
     #[test]
     fn context_menu_targets_row_not_selection_and_keeps_output_until_acceptance() {
         let ctx = egui::Context::default();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
         let mut view = View::default();
         let mut initial = presented(false);
         let target = initial.document.elements[0].base().id.clone();
@@ -5533,7 +5152,7 @@ mod tests {
                 },
                 |ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
-                        show_layers(ui, view, &tx);
+                        show_layers(ui, &tokens, view, &tx);
                     });
                     if ctx.current_pass_index() == 0 {
                         ctx.request_discard("layer menu multipass");
@@ -5571,7 +5190,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing text: {label}"))
         };
         let output = frame(&mut view, vec![]);
-        let row = position(&output, "Original screenshot · locked");
+        let row = position(&output, "Original screenshot");
         click(&mut view, row, egui::PointerButton::Secondary);
         assert!(egui::Popup::is_any_open(&ctx));
         assert_eq!(view.selected_layer.as_deref(), Some("other"));
@@ -5674,20 +5293,18 @@ mod tests {
     }
 
     #[test]
-    fn title_bar_ellipsizes_title_before_zoom_controls() {
-        // Token fonts (DejaVu Sans on Linux CI) are wider than egui's default.
+    fn header_keeps_canvas_toolbar_clear_of_controls_and_hides_history_at_1040() {
+        // Assertions compare layouts with each other, never platform font widths.
         let ctx = egui::Context::default();
         crate::ui_fonts::install(&ctx);
         let tokens = crate::tokens::load().remove("light-mustard").unwrap();
         tokens.apply(&ctx, true);
-        // Every status: original, draft saved, unsaved, working.
-        let layout = |width: f32, status: usize| {
+        let (tx, _rx) = mpsc::channel::<Job>();
+        let layout = |width: f32| {
             let mut view = View::default();
-            view.receive(&ctx, Ok(presented(status == 2)));
-            view.presented.as_mut().unwrap().has_draft = status == 1;
-            view.pending = status == 3;
+            view.receive(&ctx, Ok(presented(true)));
             view.viewport.zoom_percent = 5.; // Show the slider without a canvas pass.
-            let mut bar = None;
+            let mut header = None;
             for _ in 0..2 {
                 // The first pass loads the fonts.
                 let mut output = ctx.run_ui(
@@ -5699,36 +5316,172 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        egui::Panel::top("title-bar").show(ui, |ui| {
-                            bar = Some(show_title_bar(ui, &tokens, &mut view));
+                        egui::Panel::top("header").show(ui, |ui| {
+                            header = Some(chrome::show_header(ui, &tokens, &mut view, &tx));
                         });
                     },
                 );
                 output.textures_delta.clear();
             }
-            bar.unwrap()
+            header.unwrap()
         };
-        for status in 0..4 {
-            let wide = layout(1180., status);
-            assert!(wide.title.right() < wide.controls.left());
-            // 760 is the editor's minimum width; 560 forces the status to yield too.
-            for width in [760., 560.] {
-                let bar = layout(width, status);
-                assert!(
-                    bar.title.right() <= bar.controls.left(),
-                    "{width}px, status {status}: title {:?} overlaps controls {:?}",
-                    bar.title,
-                    bar.controls
-                );
-                // The controls keep their offsets from the right edge.
-                assert_eq!(width - bar.controls.left(), 1180. - wide.controls.left());
-                assert!(bar.controls.right() <= width);
-            }
+        let wide = layout(1180.);
+        assert!(wide.history_visible, "undo/redo show above 1040px");
+        assert!(wide.canvas.right() < wide.controls.left());
+        for width in [1040., 760., 560.] {
+            let header = layout(width);
+            assert!(!header.history_visible, "{width}px hides undo/redo");
+            assert!(
+                header.canvas.right() <= header.controls.left(),
+                "{width}px: canvas toolbar {:?} overlaps controls {:?}",
+                header.canvas,
+                header.controls
+            );
+            // The controls stay right-aligned and inside the window.
+            assert_eq!(
+                width - header.controls.right(),
+                1180. - wide.controls.right()
+            );
+            assert!(header.controls.left() >= 0.);
         }
-        // Whether the title fits at 760px depends on the platform font (it does
-        // not under DejaVu Sans, it does under Segoe UI); at 400px the zoom
-        // controls leave too little room for any font, so the title must shrink.
-        assert!(layout(400., 0).title.width() < layout(1180., 0).title.width());
+        // Hiding undo/redo (two 34px buttons and their 4px gap) and narrowing
+        // the zoom slider and preset shrinks the controls by a fixed amount.
+        let narrow = layout(1040.);
+        assert_eq!(
+            wide.controls.width() - narrow.controls.width(),
+            2. * 34. + 4. + (92. - 72.) + (76. - 72.)
+        );
+        // At 560px the toolbar has to yield: it compacts, then clips.
+        assert!(layout(560.).canvas.width() < wide.canvas.width());
+    }
+
+    #[test]
+    fn restored_draft_banner_draft_menu_and_layer_quick_actions_follow_shipping() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut view = View::default();
+        // A draft present at open is restored: shipping shows its banner.
+        view.receive(&ctx, Ok(presented(false)));
+        assert!(view.draft_restored);
+        view.section = Section::Layers;
+        let size = egui::vec2(1100., 700.);
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ui| show(ui, &tokens, view, &tx),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        // Accessible names locate controls without assuming platform font widths.
+        let find = |output: &egui::FullOutput, label: &str| {
+            let update = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .expect("accesskit tree");
+            update
+                .nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some(label))
+                .and_then(|(_, node)| node.bounds())
+                .map(|rect| {
+                    egui::pos2(
+                        ((rect.x0 + rect.x1) / 2.) as f32,
+                        ((rect.y0 + rect.y1) / 2.) as f32,
+                    )
+                })
+                .unwrap_or_else(|| panic!("missing control: {label}"))
+        };
+        let click = |view: &mut View, pos| {
+            frame(view, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    view,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+        };
+        frame(&mut view, vec![]);
+        let output = frame(&mut view, vec![]);
+        for label in [
+            "Undo",
+            "Redo",
+            "Fit canvas",
+            "Zoom out",
+            "Zoom in",
+            "Add images",
+            "Draft actions",
+            "Canvas width",
+            "Canvas height",
+            "Trim edges",
+            "Add image layer",
+            "Combine layers",
+        ] {
+            find(&output, label);
+        }
+        let dismiss = find(&output, "Dismiss restored-edits notice");
+        click(&mut view, dismiss);
+        assert!(
+            !view.draft_restored && rx.try_recv().is_err(),
+            "Dismiss only hides the notice"
+        );
+
+        // Row quick actions target their own layer; the eye does not select it.
+        let output = frame(&mut view, vec![]);
+        let hide = find(&output, "Hide Original screenshot");
+        view.selected_layer = None;
+        click(&mut view, hide);
+        match rx.try_recv() {
+            Ok(Job::Apply(Request::Layer {
+                id,
+                edit: LayerEdit::Visibility { visible: false },
+            })) => {
+                assert_eq!(id, "capture-background");
+            }
+            _ => panic!("the eye hides its row"),
+        }
+        assert!(view.selected_layer.is_none());
+        view.pending = false;
+        let output = frame(&mut view, vec![]);
+        let unlock = find(&output, "Unlock Original screenshot");
+        click(&mut view, unlock);
+        match rx.try_recv() {
+            Ok(Job::Apply(Request::Layer {
+                id,
+                edit: LayerEdit::Lock { locked: false },
+            })) => {
+                assert_eq!(id, "capture-background");
+            }
+            _ => panic!("the lock unlocks its row"),
+        }
+        assert_eq!(
+            view.selected_layer.as_deref(),
+            Some("capture-background"),
+            "lock selects its row"
+        );
+        view.pending = false;
+
+        // Native drafts stay explicit behind the header's draft menu.
+        let output = frame(&mut view, vec![]);
+        click(&mut view, find(&output, "Draft actions"));
+        let output = frame(&mut view, vec![]);
+        click(&mut view, find(&output, "Save draft"));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Job::Apply(Request::SaveDraft { .. }))
+        ));
     }
 
     #[test]
@@ -5749,7 +5502,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    show_tool_rail(ui, &tokens, view);
+                    chrome::show_tool_rail(ui, &tokens, view);
                     egui::CentralPanel::default().show(ui, |ui| {
                         assert_eq!(ui.available_rect_before_wrap().left(), 64.);
                     });
@@ -5777,7 +5530,8 @@ mod tests {
             }
         };
         frame(&mut view, vec![]);
-        let rail = |row: usize| egui::pos2(28., 22. + row as f32 * 42.);
+        // 8px top padding, 38px buttons and 2px gaps, as in shipping.
+        let rail = |row: usize| egui::pos2(28., 27. + row as f32 * 40.);
         click(&mut view, rail(2));
         assert_eq!(
             (view.section, view.draw_shape),
@@ -5793,17 +5547,13 @@ mod tests {
         assert!(view.crop_previous.is_none());
         click(&mut view, rail(3));
         assert!(egui::Popup::is_any_open(&ctx));
-        let output = frame(&mut view, vec![]);
-        let star = output
-            .shapes
-            .iter()
-            .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.job.text == "Star (S)" => {
-                    Some(text.pos + text.galley.rect.center().to_vec2())
-                }
-                _ => None,
-            })
-            .expect("open shape menu includes Star");
+        frame(&mut view, vec![]);
+        // The flyout opens 10px right of Shapes, centred on it: a 3×2 grid of
+        // 44px buttons with 4px gaps and 6px padding. Star is last.
+        let star = egui::pos2(
+            47. + 10. + 1. + 6. + 2. * 48. + 22.,
+            147. - 53. + 7. + 48. + 22.,
+        );
         click(&mut view, star);
         assert_eq!(view.draw_shape, DrawShape::Star);
         assert!(!egui::Popup::is_any_open(&ctx));

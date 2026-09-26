@@ -273,10 +273,21 @@ double captures_preview_dim_opacity_v1(size_t depth);
 
 /* Shipping vector icon ("pause", "resume", "restart", "capture", "microphone",
  * "microphone-muted", "trash", "hide-controls", "close", "check", "copy",
- * "save", "folder", "edit") as owned JSON {ok,result:[[[x,y],...],...]} in its
+ * "save", "folder", "edit", and the screenshot-editor chrome set such as
+ * "select", "undo", "fit", "eye", "lock", "more") as owned JSON {ok,result:[[[x,y],...],...]} in its
  * 24-unit viewBox with y down. Stroke each polyline with round caps/joins at
  * 1.8 units. Free with captures_settings_free_v1. */
 char *captures_icon_polylines_v1(const char *name);
+
+/* Shipping screenshot-editor chrome from captures-app::editor_chrome (shared
+ * with the wgpu host). request_json operations: "copy" -> {metrics, rail,
+ * shapes, header, layers} labels, tooltips and icon names; "header_layout"
+ * {width} -> {show_history, zoom_slider_width, zoom_preset_width} (the
+ * shipping 1040px rule); "shapes_tooltip" {current}; "tool_label" {key};
+ * "zoom_label" {percent}; "canvas_offscreen" {viewport:[x,y,w,h],
+ * canvas:[x,y,w,h]} -> whether Recenter should show. Standard owned
+ * {ok,result}/{ok,error} envelope; free with captures_settings_free_v1. */
+char *captures_editor_chrome_v1(const char *request_json);
 
 /* Idle mini-preview metadata, e.g. "1440 × 900 · 246 KB", matching the
  * shipping card. Returns owned UTF-8; free with captures_settings_free_v1. */
