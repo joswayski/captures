@@ -1299,7 +1299,7 @@ def main():
             run("xfce4-panel", "--quit")
             panel.wait(timeout=10)
             root = wait(lambda: windows("Captures"), "tray loss restores hidden root")[0]
-            wait(lambda: run("xdotool", "getactivewindow").decode().strip() == root,
+            wait(lambda: active_window() == root,
                  "tray loss focuses recovered root")
             time.sleep(.3)
             shot(root, "lifecycle-tray-loss-recovery")
