@@ -419,7 +419,7 @@ Layers heading with a count and Add image layer; layer rows show the shipping na
 and kinds with eye and lock quick actions (lock also selects its row). wgpu editor
 errors use the export status line, as in shipping. The inspector keeps its native
 controls, the Draw tool grid and 30/32-point rows without thumbnails; the layer ⋯
-settings popover, the section styling and the canvas background swatches remain open.
+settings popover and the section styling remain open.
 X11 smokes cover both appearances; AppKit is covered by XCTest only.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete
@@ -435,14 +435,21 @@ the viewport center and cancel transient editing without document/output work;
 presets, wheel and shortcuts update the thumb. AppKit exposes the displayed percent
 as its accessibility value description. This does not reproduce Tauri's full layout.
 Physical trackpad/mouse behavior still requires platform acceptance.
-Both hosts connect canvas fill/transparency in Geometry. Apply background submits
-one `set_background` worker transaction; the shared renderer validates hex colors
-and composites beneath existing layers. Invalid colors preserve pixels, document
-and undo/redo; hosts restore fields from the accepted state. Reset fields is not an
-edit. A transparent canvas remembers the session's last accepted solid color for
-switching back. Color changes participate in undo/redo and draft reopen; copy/export
-use the newly rendered pixels. These are canvas fills, not image-background removal,
-text backgrounds or the shipping color-picker layout. AppKit Geometry scrolls to keep
+Both hosts connect canvas fill/transparency through the shipping
+`CanvasBackgroundPicker` card: a Solid background toggle and the compact
+`ColorField` row (eight swatches from `captures_app::editor_chrome::colors` plus a
+custom tile; wgpu opens an inline picker, AppKit the system color panel). Each toggle,
+swatch or custom change submits one `set_background` worker transaction at once, as
+shipping commits each change; an unchanged color adds no undo step. Changes made
+while the worker is busy coalesce to the latest one. Turning Solid back on restores
+the last solid color (initially `#f7f7f5`). The shared renderer composites beneath
+existing layers. Color changes participate in undo/redo and draft reopen; copy/export
+use the newly rendered pixels. These are canvas fills, not image-background removal
+or text backgrounds. Stroke, fill and shadow colors in Layers → Annotation style use
+the same swatch row (staged until Apply style). Text style menus show the shipping
+preview chips, preset labels use shipping title case (Mono Box, Rounded Box) and
+the font menu lists Sans serif, Serif, Monospace and Rounded rather than pinned
+asset names. AppKit Geometry scrolls to keep
 the existing crop/canvas controls and new background controls reachable.
 The shared image-background prerequisite now maps document clicks through image
 rotation/orientation and supports contiguous/global magic-wand removal. It picks
@@ -626,8 +633,8 @@ family picker reads the session's actual pinned map, not host defaults. Older
 Sans-only drafts remain Sans-only; explicit font migration is still unimplemented.
 Both selected-text inspectors offer a Style menu staged with Apply/Cancel.
 Rust supplies the shipping seven-style catalog filtered by the session's pinned
-font families: the bundle offers all seven styles, including Rounded and Rounded box;
-Sans-only drafts offer Standard, Outlined and Box. Rounded/Rounded box require an
+font families: the bundle offers all seven styles, including Rounded and Rounded Box;
+Sans-only drafts offer Standard, Outlined and Box. Rounded/Rounded Box require an
 actual pinned `rounded` face and are not substituted with Sans. Presets change only
 family, plate/outline flags and (when no plate existed) the default plate color.
 They preserve content, size, alignment, traits, text color, custom plate colors,
@@ -652,7 +659,7 @@ per slice, not inferred from shared tests. Additional font import and OS acquisi
 inline input and physical input/IME/accessibility remain open.
 Both hosts now offer new-text style, size (8–512) and color before placement.
 Choices are per-editor UI state, not document/draft/undo; accepted responses and
-failed creation retain them. Both hosts' new editors start at Rounded box when the
+failed creation retain them. Both hosts' new editors start at Rounded Box when the
 snapshot offers it, otherwise Standard, then Plain. Both start at annotation red. Shared Rust
 supplies Tauri's initial size: 5.5% of the original capture's shorter side,
 rounded and clamped to 24–72. It uses History dimensions,
@@ -663,7 +670,7 @@ Rust validates the chosen preset and creates boxed text centered at the click us
 the eight-em composing width, retaining the anchor when content later refits.
 Placement is one render-before-publish transaction with fresh selection and normal
 output invalidation; invalid/unavailable styles preserve pixels, redo and drafts.
-The initial style now matches shipping Rounded box where the saved font set permits
+The initial style now matches shipping Rounded Box where the saved font set permits
 it, but typography and inline composition do not reproduce the Tauri layout.
 In both hosts, an explicit selected-text named Style choice also sets that offered
 preset for future new text in the same editor, even if Apply fails or the selected

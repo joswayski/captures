@@ -15,7 +15,8 @@ final class EditorAnnotationControls: NSView {
     private enum Group { case always, closed, stroke, fill, shadow }
     private var rows: [(view: NSView, group: Group)] = []
     private var fields: [String: NSTextField] = [:]
-    private var wells: [String: ClosureColorWell] = [:]
+    /// Shipping `ColorField` rows keyed by their label.
+    private var swatchRows: [String: ColorSwatchRow] = [:]
     private var toggles: [String: CaptureButton] = [:]
     private var actions: [CaptureButton] = []
     private let numbers: [(String, WritableKeyPath<NativeAnnotationStyle, Double>)] = [
@@ -33,12 +34,12 @@ final class EditorAnnotationControls: NSView {
         heading.frame = NSRect(x: 0, y: 0, width: 272, height: 26)
         addSubview(heading); rows.append((heading, .always))
         toggle("Stroke", group: .closed)
-        color("Stroke color", group: .stroke)
+        color(EditorColors.text("stroke_color"), group: .stroke) { $0.color = $1 }
         number(numbers[0].0, group: .stroke)
         toggle("Fill", group: .closed)
-        color("Fill color", group: .fill)
+        color(EditorColors.text("fill_color"), group: .fill) { $0.fill = $1 }
         toggle("Shadow", group: .always)
-        color("Shadow color", group: .shadow)
+        color(EditorColors.text("shadow_color"), group: .shadow) { $0.shadowColor = $1 }
         for (name, _) in numbers.dropFirst() { number(name, group: .shadow) }
         let buttons = row(.always)
         let apply = CaptureButton("Apply style", frame: NSRect(x: 0, y: 0, width: 128, height: 30),
@@ -57,16 +58,13 @@ final class EditorAnnotationControls: NSView {
         if fields.values.contains(where: { $0.currentEditor() != nil && $0.currentEditor() === window?.firstResponder }) {
             window?.makeFirstResponder(nil)
         }
-        wells.values.forEach { $0.deactivate() }
+        swatchRows.values.forEach { $0.deactivate() }
         original = style; draft = style
         if let style {
-            fields["Stroke color"]?.stringValue = style.color
-            fields["Fill color"]?.stringValue = style.fill ?? style.color
-            fields["Shadow color"]?.stringValue = style.shadowColor
+            swatchRows[EditorColors.text("stroke_color")]?.selectedHex = style.color
+            swatchRows[EditorColors.text("fill_color")]?.selectedHex = style.fill ?? style.color
+            swatchRows[EditorColors.text("shadow_color")]?.selectedHex = style.shadowColor
             for (name, key) in numbers { fields[name]?.stringValue = format(style[keyPath: key]) }
-            for (name, well) in wells {
-                well.color = NSColor(hex: fields[name]!.stringValue) ?? tokens.color("text")
-            }
         }
         refresh()
     }
@@ -94,10 +92,12 @@ final class EditorAnnotationControls: NSView {
             button.title = enabled ? "On" : "Off"; button.selected = enabled
             button.setAccessibilityValue(enabled)
         }
-        let controls: [NSControl] = Array(fields.values) + Array(wells.values)
-            + Array(toggles.values) + actions
+        let controls: [NSControl] = Array(fields.values) + Array(toggles.values) + actions
         for control in controls { control.isEnabled = ready && draft != nil }
-        for well in wells.values where !ready || well.isHiddenOrHasHiddenAncestor { well.deactivate() }
+        for swatches in swatchRows.values {
+            swatches.isEnabled = ready && draft != nil
+            if !ready || swatches.isHiddenOrHasHiddenAncestor { swatches.deactivate() }
+        }
         frame.size.height = y
         resized(y)
     }
@@ -115,21 +115,8 @@ final class EditorAnnotationControls: NSView {
                 edited[keyPath: key] = value
             }
         }
-        for name in ["Stroke color", "Fill color", "Shadow color"]
-            where fields[name]?.superview?.isHidden == false {
-            let previous = name == "Stroke color" ? original.color
-                : name == "Fill color" ? original.fill : original.shadowColor
-            let text = fields[name]!.stringValue
-            guard text != previous else { continue }
-            guard let value = PreferencesController.normalizeHex(text) else {
-                reportError("Enter \(name.lowercased()) as #RGB or #RRGGBB."); return
-            }
-            switch name {
-            case "Stroke color": edited.color = value
-            case "Fill color": edited.fill = value
-            default: edited.shadowColor = value
-            }
-        }
+        // Swatch and custom colors are staged on the draft; an untouched legacy
+        // value is never revalidated.
         let patch = edited.patch(from: original)
         if !patch.isEmpty { apply(patch) }
     }
@@ -156,17 +143,26 @@ final class EditorAnnotationControls: NSView {
         field.setAccessibilityLabel(name); fields[name] = field; parent.addSubview(field)
     }
 
-    private func color(_ name: String, group: Group) {
-        let parent = row(group, title: name)
-        let field = NSTextField(frame: NSRect(x: 130, y: 8, width: 100, height: 30))
-        field.setAccessibilityLabel(name); fields[name] = field; parent.addSubview(field)
-        let well = ClosureColorWell(frame: NSRect(x: 238, y: 8, width: 34, height: 30))
-        well.setAccessibilityLabel("Choose \(name.lowercased())")
-        well.change = { [weak field] color in
-            if let value = color.rgbHex { field?.stringValue = value }
+    /// A shipping `ColorField`: legend, eight swatches and a custom tile. A
+    /// choice stages the draft; Apply still commits the style as one step.
+    private func color(_ name: String, group: Group,
+                       stage: @escaping (inout NativeAnnotationStyle, String) -> Void) {
+        let parent = row(group)
+        let legend = NSTextField(labelWithString: name)
+        legend.frame = NSRect(x: 0, y: 8, width: 272, height: 20)
+        legend.font = .systemFont(ofSize: 12); legend.textColor = tokens.color("text-muted")
+        legend.setAccessibilityElement(false)
+        parent.addSubview(legend)
+        let swatches = ColorSwatchRow(tokens: tokens, label: name, compact: false)
+        let height = ColorSwatchRow.height(width: 272, compact: false, tokens: tokens)
+        swatches.frame = NSRect(x: 0, y: legend.frame.maxY + tokens.number("s-2"), width: 272, height: height)
+        swatches.changed = { [weak self] value in
+            guard let self, self.ready, var draft = self.draft else { return }
+            stage(&draft, value); self.draft = draft
         }
-        well.target = well; well.action = #selector(ClosureColorWell.selectedColor)
-        wells[name] = well; parent.addSubview(well)
+        parent.addSubview(swatches)
+        parent.frame.size.height = swatches.frame.maxY
+        swatchRows[name] = swatches
     }
 
     private func toggle(_ name: String, group: Group) {
@@ -176,7 +172,9 @@ final class EditorAnnotationControls: NSView {
             guard let self, var draft = self.draft, self.ready else { return }
             switch name {
             case "Stroke": draft.strokeEnabled.toggle()
-            case "Fill": draft.fill = draft.fill == nil ? self.fields["Fill color"]?.stringValue : nil
+            case "Fill":
+                let seed = self.swatchRows[EditorColors.text("fill_color")]?.selectedHex
+                draft.fill = draft.fill == nil ? (seed?.isEmpty == false ? seed : draft.color) : nil
             default: draft.dropShadow.toggle()
             }
             self.draft = draft; self.refresh()

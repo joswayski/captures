@@ -471,6 +471,12 @@ struct NativeActiveTextInput: Equatable {
     }
 }
 
+/// One font menu row: a pinned draft font key and its shipping label.
+struct NativeFontFamilyOption: Equatable {
+    let key: String
+    let label: String
+}
+
 struct NativeEditorSnapshot: Equatable {
     let artifactID: String
     let originalExportPath: String?
@@ -489,6 +495,8 @@ struct NativeEditorSnapshot: Equatable {
     let hasDraft: Bool
     let activeTextInput: NativeActiveTextInput?
     let fontFamilies: [String: String]
+    /// Shipping font menu order and labels ("Sans serif", …) for `fontFamilies`.
+    let fontFamilyOptions: [NativeFontFamilyOption]
     let textStylePresets: [NativeTextPreset]
     /// Shared documents store back-to-front. Native layer panels display front-to-back.
     let layers: [NativeEditorLayer]
@@ -584,6 +592,16 @@ struct NativeEditorSnapshot: Equatable {
         self.activeTextInput = activeTextInput
         let fontFamilies = value["font_families"] as? [String: String] ?? [:]
         self.fontFamilies = fontFamilies
+        var options: [NativeFontFamilyOption] = []
+        for row in value["font_family_options"] as? [[String: Any]] ?? [] {
+            guard let key = row["key"] as? String, let label = row["label"] as? String,
+                  fontFamilies[key] != nil else { continue }
+            options.append(NativeFontFamilyOption(key: key, label: label))
+        }
+        // Older payloads without menu rows fall back to pinned keys and names.
+        fontFamilyOptions = options.isEmpty
+            ? fontFamilies.keys.sorted().map { NativeFontFamilyOption(key: $0, label: fontFamilies[$0]!) }
+            : options
         let presets = value["text_style_presets"] as? [[String: Any]] ?? []
         let parsedPresets = presets.compactMap(NativeTextPreset.init)
         guard presets.count == parsedPresets.count else { return nil }

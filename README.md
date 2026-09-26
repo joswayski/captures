@@ -472,7 +472,7 @@ content, type, alignment, color and plates transactionally. Both native hosts no
 connect a basic **Draw → Text** tool with staged Apply/Cancel controls, including
 outlines and shadow color, opacity, blur and offsets. Before placement, choose a
 named style, size and color; boxed styles center on the click. These defaults last
-only for that editor. Both hosts start at Rounded box when its pinned font is
+only for that editor. Both hosts start at Rounded Box when its pinned font is
 offered, otherwise Standard, then Plain. New text starts in the annotation red,
 with an initial size scaled to the original capture (24–72). The bundle includes
 Nunito and Liberation Sans, Serif and Mono (OFL 1.1); exact font
@@ -481,7 +481,7 @@ fonts; adding new fonts to an existing draft is not implemented.
 Nunito covers fewer characters than Sans; for characters such as Greek λ, choose a
 Sans-based style (Standard or Box) before typing. Missing glyphs produce an error
 rather than a substitute font.
-Selected-text named styles use those pinned fonts; Rounded and Rounded box are
+Selected-text named styles use those pinned fonts; Rounded and Rounded Box are
 available in new sessions, but remain unavailable in older drafts without a
 saved rounded face.
 In both native editors, explicitly choosing a named style for selected text also makes that
@@ -527,9 +527,9 @@ annotation color, one undoable layer per gesture. Escape cancels unfinished work
 short arrow gestures are discarded and drafts retain completed shapes and strokes.
 Both hosts use shared polygon geometry for transient previews and committed layers.
 Pen smooths sampled points and retains click-only dots.
-**Layers → Annotation style** edits fill, stroke and shadow color, width, opacity,
-blur and offsets. Apply style creates one undo step; Reset fields cancels unapplied
-changes. Hidden and locked annotations remain editable.
+**Layers → Annotation style** edits fill, stroke and shadow color (the shipping
+eight swatches plus a custom color), width, opacity, blur and offsets. Apply style
+creates one undo step; Reset fields cancels unapplied changes. Hidden and locked annotations remain editable.
 Image layers also expose lossless left/right rotations and horizontal/vertical
 flips, including when hidden or locked; each action supports undo and draft restore.
 **Import image** adds one PNG, JPEG, WebP or TIFF below the selected visible image,
@@ -660,8 +660,9 @@ sign-in and native credential-vault sessions. It does not add a native sign-in
 screen, enable the account service, or make sharing available.
 Both hosts can copy the full-resolution edited image without saving a file or draft;
 copy ignores export format and quality settings.
-Canvas background controls support a hex color or transparency, with undo/redo and
-draft restore. They change the canvas fill, not backgrounds within image layers.
+The **Background color** card offers a Solid background toggle, the shipping eight
+swatches and a custom color; each change applies immediately as one undo step and
+survives draft restore. It changes the canvas fill, not backgrounds within image layers.
 **Trim edges** fits the canvas to visible layer geometry, preserving off-canvas
 content and moving hidden layers with the document. It does not scan image alpha
 to remove transparent borders. Trimming supports undo/redo and draft restore.
@@ -676,7 +677,8 @@ ring shows size while shared-renderer pixels preview the stroke during dragging.
 Release commits one undo step; Escape, focus loss or changing tools cancels the
 preview without editing. The shipping brush cursor design and physical-platform
 input acceptance remain parity work.
-Text controls support multiline content, pinned font families, size, bold/italic,
+Text controls support multiline content, pinned font families (listed as Sans serif,
+Serif, Monospace and Rounded), size, bold/italic,
 alignment, color, square/rounded background plates, outlines and a Drop shadow toggle.
 Apply changes the document in one undo step; Cancel restores accepted values.
 Custom shadows and pinned-font named styles are connected, including style/size/color
