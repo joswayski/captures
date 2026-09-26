@@ -26,6 +26,7 @@ mod shortcut_input;
 mod startup_notice;
 mod tokens;
 mod tray;
+mod ui_fonts;
 mod update_notice;
 mod window_selector;
 #[cfg(target_os = "windows")]

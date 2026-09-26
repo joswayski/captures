@@ -4929,7 +4929,27 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
     if matches!(element, Element::Image(_)) {
         ui.label("Name");
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut view.layer_name).desired_width(132.));
+            // Fit the field beside the token-font button so the row never
+            // overflows the fixed-width inspector and shifts the canvas.
+            let button_width = ui
+                .painter()
+                .layout_no_wrap(
+                    "Rename".into(),
+                    egui::TextStyle::Button.resolve(ui.style()),
+                    egui::Color32::PLACEHOLDER,
+                )
+                .size()
+                .x
+                + 2. * ui.spacing().button_padding.x;
+            let text_edit_margin = 8.; // TextEdit's default 4px horizontal margins.
+            let field_width = ui.available_width()
+                - button_width
+                - ui.spacing().item_spacing.x
+                - text_edit_margin;
+            ui.add(
+                egui::TextEdit::singleline(&mut view.layer_name)
+                    .desired_width(field_width.clamp(40., 132.)),
+            );
             if ui.button("Rename").clicked() {
                 view.submit_layer(
                     tx,

@@ -40,6 +40,12 @@ Explorer, physical Finder/Linux file-manager acceptance, accessibility, Wayland
 live capture, signing/notarization, redistributable dependency bundling and update
 installation remain open. No parity gate closes from this development package.
 
+The wgpu host now renders UI text in the token font stack instead of egui's bundled
+faces: Segoe UI Variable Text / Segoe UI on Windows, and on Linux the first
+fontconfig match for Inter, Roboto, Helvetica Neue, Arial, then `sans-serif` (as
+WebKitGTK resolves it). A named `semibold` family backs `--weight-semibold`; egui's
+faces remain glyph fallbacks.
+
 Preferences now offer the shipping Default microphone select (Off plus enumerated
 inputs; wgpu enumerates when the menu first opens, AppKit off the main thread),
 the AppKit GIF export card (frames per second, maximum width, palette colors)
