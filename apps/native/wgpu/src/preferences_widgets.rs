@@ -1,6 +1,7 @@
 //! Shipping Preferences controls drawn from design tokens: the sidebar,
-//! switches, segmented control, selects, buttons, accent chips and the mini
-//! preview corner picker (`styles/windows.css`, `styles/primitives.css`).
+//! switches, segmented control, buttons, accent chips and the mini preview
+//! corner picker (`styles/windows.css`, `styles/primitives.css`). Selects, the
+//! focus ring and scroll bars live in `primitives`.
 
 use eframe::egui::{
     self, Color32, FontId, Rect, Response, Sense, Stroke, StrokeKind, Vec2, pos2, vec2,

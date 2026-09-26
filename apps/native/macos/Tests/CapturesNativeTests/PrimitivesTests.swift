@@ -105,4 +105,52 @@ final class PrimitivesTests: XCTestCase {
         XCTAssertEqual(select.titleOfSelectedItem, "Compress")
         window.display()
     }
+
+    func testNumberFieldStepsWithinBoundsAndNamesItsSteppers() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let frame = NSRect(x: 0, y: 0, width: 300, height: 120)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame)
+        window.contentView = root
+        let field = TokenNumberField(frame: NSRect(x: 20, y: 20, width: 120, height: 32))
+        field.tokens = tokens
+        field.minimum = { 0 }; field.maximum = { 10 }
+        field.setAccessibilityLabel("Recording crop X")
+        var steps: [String] = []
+        field.stepped = { steps.append($0.stringValue) }
+        field.stringValue = "9"
+        root.addSubview(field)
+        XCTAssertEqual(field.increaseHalf.accessibilityLabel(), "Increase Recording crop X")
+        XCTAssertEqual(field.decreaseHalf.accessibilityLabel(), "Decrease Recording crop X")
+        XCTAssertFalse(KeyViewLoop.isCandidate(field.increaseHalf), "steppers stay out of the Tab order")
+        XCTAssertTrue(field.increaseHalf.accessibilityPerformPress())
+        XCTAssertEqual(field.stringValue, "10")
+        XCTAssertFalse(field.increaseHalf.available, "Increase is disabled at the maximum")
+        XCTAssertFalse(field.increaseHalf.accessibilityPerformPress())
+        field.step(up: false)
+        XCTAssertEqual(steps, ["10", "9"])
+        XCTAssertEqual(field.focusRingType, .none)
+        field.isEnabled = false
+        XCTAssertTrue(field.increaseHalf.isHidden, "disabled fields hide their steppers")
+        field.isEnabled = true
+        XCTAssertFalse(field.decreaseHalf.isHidden)
+        window.display()
+    }
+
+    func testTokenSliderDrawsTheShippingThumb() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let slider = TokenSlider(value: 100, minValue: 0, maxValue: 200, target: nil, action: nil)
+        slider.frame = NSRect(x: 0, y: 0, width: 200, height: 20)
+        slider.tokens = tokens
+        let cell = try XCTUnwrap(slider.cell as? TokenSliderCell)
+        XCTAssertNotNil(cell.tokens)
+        XCTAssertEqual(slider.focusRingType, .none)
+        let knob = cell.knobRect(flipped: slider.isFlipped)
+        XCTAssertEqual(knob.width, 14); XCTAssertEqual(knob.height, 14)
+        XCTAssertEqual(slider.doubleValue, 100)
+    }
 }

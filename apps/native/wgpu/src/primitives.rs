@@ -774,6 +774,492 @@ impl<'a> Select<'a> {
     }
 }
 
+/// Format `value` for a number field: integers plainly, decimals at the
+/// step's precision.
+fn number_text<N: egui::emath::Numeric>(value: N, step: f64) -> String {
+    if N::INTEGRAL {
+        format!("{}", value.to_f64().round() as i64)
+    } else {
+        captures_app::controls::number::format_stepped(value.to_f64(), step)
+    }
+}
+
+/// Shipping `NumberInput`: a mono field with custom Increase/Decrease
+/// steppers (hidden while disabled) and ArrowUp/ArrowDown stepping through
+/// `captures_app::controls::number`. Typing updates the value as it parses,
+/// clamped to the bounds, unless `commit_on_enter` defers it to Enter or
+/// focus loss.
+pub struct NumberInput<'a> {
+    id_salt: egui::IdSalt,
+    label: &'a str,
+    width: f32,
+    min: Option<f64>,
+    max: Option<f64>,
+    step: f64,
+    commit_on_enter: bool,
+}
+
+impl<'a> NumberInput<'a> {
+    /// `label` names the field and its steppers ("Increase {label}").
+    pub fn new(
+        id_salt: impl std::hash::Hash + std::fmt::Debug,
+        label: &'a str,
+        width: f32,
+    ) -> Self {
+        Self {
+            id_salt: egui::IdSalt::new(id_salt),
+            label,
+            width,
+            min: None,
+            max: None,
+            step: 1.,
+            commit_on_enter: false,
+        }
+    }
+    pub fn range(mut self, range: std::ops::RangeInclusive<f64>) -> Self {
+        self.min = Some(*range.start());
+        self.max = Some(*range.end());
+        self
+    }
+    pub fn commit_on_enter(mut self) -> Self {
+        self.commit_on_enter = true;
+        self
+    }
+
+    fn clamp(&self, value: f64) -> f64 {
+        let value = self.min.map_or(value, |min| value.max(min));
+        self.max.map_or(value, |max| value.min(max))
+    }
+
+    /// Returns the whole field's response, marked changed when `value` changed.
+    pub fn show<N: egui::emath::Numeric>(
+        self,
+        ui: &mut egui::Ui,
+        t: &Tokens,
+        value: &mut N,
+    ) -> egui::Response {
+        use captures_app::controls::number;
+        let id = ui.make_persistent_id(self.id_salt);
+        let text_id = id.with("text");
+        let buffer_id = id.with("buffer");
+        let enabled = ui.is_enabled();
+        let (rect, mut response) = ui.allocate_exact_size(
+            egui::vec2(self.width, t.number("h-md")),
+            egui::Sense::hover(),
+        );
+        let focused_before = ui.memory(|memory| memory.has_focus(text_id));
+        let mut buffer = if focused_before {
+            ui.data(|data| data.get_temp::<String>(buffer_id))
+                .unwrap_or_else(|| number_text(*value, self.step))
+        } else {
+            number_text(*value, self.step)
+        };
+        let mut changed = false;
+        let mut set = |value: &mut N, next: f64| {
+            let next = N::from_f64(next);
+            if next != *value {
+                *value = next;
+                changed = true;
+            }
+        };
+        // ArrowUp/ArrowDown step before the text edit sees them.
+        if enabled && focused_before {
+            for (key, up) in [(egui::Key::ArrowUp, true), (egui::Key::ArrowDown, false)] {
+                while ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key)) {
+                    let next = number::step_from(&buffer, self.step, up, self.min, self.max);
+                    set(value, next);
+                    buffer = number_text(N::from_f64(next), self.step);
+                }
+            }
+        }
+        let hovered = enabled && ui.rect_contains_pointer(rect);
+        let radius = t.number("r-md");
+        ui.painter().rect(
+            rect,
+            radius,
+            t.color("surface-field"),
+            Stroke::new(
+                1.,
+                t.color(if enabled && focused_before {
+                    "theme-accent"
+                } else if hovered {
+                    "border-strong"
+                } else {
+                    "control-border"
+                }),
+            ),
+            StrokeKind::Inside,
+        );
+        let steppers = enabled;
+        let stepper_width = 26.;
+        let text_rect = Rect::from_min_max(
+            rect.min,
+            egui::pos2(
+                rect.right() - if steppers { stepper_width } else { 0. },
+                rect.bottom(),
+            ),
+        );
+        let pad_x = t.number("s-4");
+        let mut text_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(text_rect.shrink2(egui::vec2(pad_x, 1.)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        let text = text_ui.add(
+            egui::TextEdit::singleline(&mut buffer)
+                .id(text_id)
+                .frame(egui::Frame::NONE)
+                .font(egui::FontId::monospace(t.number("text-sm")))
+                .desired_width(text_rect.width() - pad_x - t.number("s-2")),
+        );
+        text.widget_info(|| {
+            let mut info =
+                egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, enabled, self.label);
+            info.current_text_value = Some(buffer.clone());
+            info
+        });
+        let parsed = buffer.trim().parse::<f64>().ok().filter(|v| v.is_finite());
+        if text.changed()
+            && !self.commit_on_enter
+            && let Some(parsed) = parsed
+        {
+            set(value, self.clamp(parsed));
+        }
+        if text.lost_focus()
+            && !ui.input(|input| input.key_pressed(egui::Key::Escape))
+            && let Some(parsed) = parsed
+        {
+            set(value, self.clamp(parsed));
+        }
+        if text.has_focus() {
+            ui.data_mut(|data| data.insert_temp(buffer_id, buffer.clone()));
+            // Keep vertical arrows for stepping instead of moving focus.
+            ui.memory_mut(|memory| {
+                memory.set_focus_lock_filter(
+                    text_id,
+                    egui::EventFilter {
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        ..Default::default()
+                    },
+                );
+            });
+            focus_ring(ui, t, rect, radius);
+        } else {
+            ui.data_mut(|data| data.remove::<String>(buffer_id));
+        }
+
+        if steppers {
+            let (at_min, at_max) = number::at_bounds(&buffer, self.min, self.max);
+            let column = Rect::from_min_max(egui::pos2(text_rect.right(), rect.top()), rect.max);
+            let painter = ui.painter();
+            painter.rect_filled(
+                column.shrink(1.),
+                egui::CornerRadius {
+                    nw: 0,
+                    sw: 0,
+                    ne: (radius - 1.).max(0.) as u8,
+                    se: (radius - 1.).max(0.) as u8,
+                },
+                t.color("surface-hover"),
+            );
+            let divider = Stroke::new(1., t.color("border-subtle"));
+            painter.vline(column.left(), column.y_range().shrink(1.), divider);
+            painter.hline(column.x_range().shrink(1.), column.center().y, divider);
+            for (index, (name, up, disabled)) in
+                [("Increase", true, at_max), ("Decrease", false, at_min)]
+                    .into_iter()
+                    .enumerate()
+            {
+                let half = column.height() / 2.;
+                let step_rect = Rect::from_min_size(
+                    egui::pos2(column.left(), column.top() + half * index as f32),
+                    egui::vec2(column.width(), half),
+                );
+                // `tabIndex={-1}`: steppers are clickable but not focusable.
+                let step = ui.interact(step_rect, id.with(name), egui::Sense::CLICK);
+                let accessible = format!("{name} {}", self.label);
+                step.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, !disabled, &accessible)
+                });
+                let hot = !disabled && step.hovered();
+                if hot {
+                    ui.painter()
+                        .rect_filled(step_rect.shrink(1.), 0., t.color("surface-active"));
+                }
+                let color = t
+                    .color(if hot { "text" } else { "text-subtle" })
+                    .gamma_multiply(if disabled { 0.3 } else { 1. });
+                // Shipping 12-unit chevrons `M3 7.5 6 4.5 9 7.5` / `M3 4.5 6 7.5 9 4.5`.
+                let glyph = Rect::from_center_size(step_rect.center(), egui::Vec2::splat(11.));
+                let s = glyph.width() / 12.;
+                let p = |x: f32, y: f32| glyph.min + egui::vec2(x * s, y * s);
+                let points = if up {
+                    vec![p(3., 7.5), p(6., 4.5), p(9., 7.5)]
+                } else {
+                    vec![p(3., 4.5), p(6., 7.5), p(9., 4.5)]
+                };
+                ui.painter()
+                    .add(egui::Shape::line(points, Stroke::new(2. * s, color)));
+                if step.clicked() && !disabled {
+                    let next = number::step_from(&buffer, self.step, up, self.min, self.max);
+                    set(value, next);
+                    if text.has_focus() {
+                        ui.data_mut(|data| {
+                            data.insert_temp(buffer_id, number_text(N::from_f64(next), self.step));
+                        });
+                    }
+                }
+            }
+        }
+        if changed {
+            response.mark_changed();
+        }
+        response
+    }
+}
+
+/// One labelled position on a [`RangeSlider`] track.
+pub struct RangeMark<'a> {
+    pub value: f64,
+    pub label: &'a str,
+}
+
+/// Shipping `RangeSlider`: a value readout above a 4 pt accent track with a
+/// 14 pt thumb, optional ticks and labels under it, and an optional
+/// description (`NotchedSlider`). Arrow keys step, Page keys take ten steps,
+/// Home/End jump to the bounds.
+pub struct RangeSlider<'a> {
+    id_salt: egui::IdSalt,
+    label: &'a str,
+    width: f32,
+    min: f64,
+    max: f64,
+    step: f64,
+    value_text: String,
+    marks: &'a [RangeMark<'a>],
+    description: &'a str,
+}
+
+impl<'a> RangeSlider<'a> {
+    /// `label` is the accessible name; `value_text` the readout and value text.
+    pub fn new(
+        id_salt: impl std::hash::Hash + std::fmt::Debug,
+        label: &'a str,
+        width: f32,
+        range: std::ops::RangeInclusive<f64>,
+        value_text: String,
+    ) -> Self {
+        Self {
+            id_salt: egui::IdSalt::new(id_salt),
+            label,
+            width,
+            min: *range.start(),
+            max: *range.end(),
+            step: 1.,
+            value_text,
+            marks: &[],
+            description: "",
+        }
+    }
+    /// Ticks and labels under the track (shipping `marks`).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "shipping RangeSlider API; no native surface passes marks yet"
+        )
+    )]
+    pub fn marks(mut self, marks: &'a [RangeMark<'a>]) -> Self {
+        self.marks = marks;
+        self
+    }
+    /// Copy under the slider (shipping `NotchedSlider` description).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "shipping RangeSlider API; no native surface passes one yet"
+        )
+    )]
+    pub fn description(mut self, description: &'a str) -> Self {
+        self.description = description;
+        self
+    }
+
+    /// Returns the track's response (probe it for the thumb's travel),
+    /// marked changed when `value` changed.
+    pub fn show(self, ui: &mut egui::Ui, t: &Tokens, value: &mut f64) -> egui::Response {
+        use captures_app::controls::range;
+        let id = ui.make_persistent_id(self.id_salt);
+        let enabled = ui.is_enabled();
+        let alpha = if enabled { 1. } else { 0.45 };
+        let has_marks = !self.marks.is_empty();
+        let readout_height = 14.;
+        let track_height = 20.;
+        let gap = 2.;
+        let labels_height = if has_marks { gap + 14. } else { 0. };
+        let (bounds, _) = ui.allocate_exact_size(
+            egui::vec2(
+                self.width,
+                readout_height + gap + track_height + labels_height,
+            ),
+            egui::Sense::hover(),
+        );
+        let track = Rect::from_min_size(
+            egui::pos2(bounds.left(), bounds.top() + readout_height + gap),
+            egui::vec2(bounds.width(), track_height),
+        );
+        let mut response = ui.interact(track, id, egui::Sense::click_and_drag());
+        let travel = track.x_range().shrink(7.);
+        let mut next = *value;
+        if enabled {
+            if response.is_pointer_button_down_on()
+                && let Some(pointer) = response.interact_pointer_pos()
+            {
+                let fraction = f64::from((pointer.x - travel.min) / travel.span().max(1.));
+                next = range::value_at(fraction, self.min, self.max, self.step);
+                // A native range input takes focus when pressed.
+                response.request_focus();
+            }
+            if response.has_focus() {
+                ui.memory_mut(|memory| {
+                    memory.set_focus_lock_filter(
+                        id,
+                        egui::EventFilter {
+                            horizontal_arrows: true,
+                            vertical_arrows: true,
+                            ..Default::default()
+                        },
+                    );
+                });
+                let big = self.step * 10.;
+                for (key, delta) in [
+                    (egui::Key::ArrowRight, Some(self.step)),
+                    (egui::Key::ArrowUp, Some(self.step)),
+                    (egui::Key::ArrowLeft, Some(-self.step)),
+                    (egui::Key::ArrowDown, Some(-self.step)),
+                    (egui::Key::PageUp, Some(big)),
+                    (egui::Key::PageDown, Some(-big)),
+                    (egui::Key::Home, None),
+                    (egui::Key::End, None),
+                ] {
+                    // Every press counts, even several in one frame.
+                    while ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key)) {
+                        next = match (key, delta) {
+                            (egui::Key::Home, _) => self.min,
+                            (egui::Key::End, _) => self.max,
+                            (_, Some(delta)) => (next + delta).clamp(self.min, self.max),
+                            _ => next,
+                        };
+                    }
+                }
+            }
+        }
+        if next != *value {
+            *value = next;
+            response.mark_changed();
+        }
+        let value_now = *value;
+        response.widget_info(|| {
+            let mut info = egui::WidgetInfo::slider(enabled, value_now, self.label);
+            info.current_text_value = Some(self.value_text.clone());
+            info
+        });
+
+        let painter = ui.painter();
+        // `.range-slider-value output`.
+        let readout = painter.layout_no_wrap(
+            self.value_text.clone(),
+            egui::FontId::proportional(t.number("text-xs")),
+            t.color("text-subtle"),
+        );
+        painter.galley(
+            egui::pos2(
+                bounds.right() - readout.size().x,
+                bounds.top() + (readout_height - readout.size().y) / 2.,
+            ),
+            readout,
+            t.color("text-subtle").gamma_multiply(alpha),
+        );
+        let fraction = range::fraction(value_now, self.min, self.max) as f32;
+        let bar = Rect::from_min_max(
+            egui::pos2(track.left(), track.center().y - 2.),
+            egui::pos2(track.right(), track.center().y + 2.),
+        );
+        let x = travel.min + travel.span() * fraction;
+        painter.rect_filled(bar, 2., t.color("n-6").gamma_multiply(alpha));
+        painter.rect_filled(
+            Rect::from_min_max(bar.min, egui::pos2(x, bar.bottom())),
+            2.,
+            t.color("theme-accent").gamma_multiply(alpha),
+        );
+        for mark in self.marks {
+            let mark_x =
+                travel.min + travel.span() * range::fraction(mark.value, self.min, self.max) as f32;
+            painter.circle_filled(
+                egui::pos2(mark_x, track.center().y),
+                1.,
+                t.color("border-strong").gamma_multiply(alpha),
+            );
+        }
+        let hovered = enabled && (response.hovered() || response.dragged());
+        let thumb_radius = if hovered { 7. * 1.08 } else { 7. };
+        let thumb = Rect::from_center_size(
+            egui::pos2(x, track.center().y),
+            egui::Vec2::splat(thumb_radius * 2.),
+        );
+        painter.add(
+            crate::preferences_widgets::shadow_sm(ui.visuals().dark_mode)
+                .as_shape(thumb, thumb_radius),
+        );
+        painter.circle(
+            thumb.center(),
+            thumb_radius - 0.5,
+            t.color("surface-raised"),
+            Stroke::new(1., t.color("border-strong").gamma_multiply(alpha)),
+        );
+        if response.has_focus() {
+            focus_ring(ui, t, thumb, thumb_radius);
+        }
+        if has_marks {
+            let top = track.bottom() + gap + 1.;
+            let last = self.marks.len() - 1;
+            for (index, mark) in self.marks.iter().enumerate() {
+                let label = ui.painter().layout_no_wrap(
+                    mark.label.to_owned(),
+                    egui::FontId::proportional(t.number("text-2xs")),
+                    t.color("text-faint"),
+                );
+                let mark_x = travel.min
+                    + travel.span() * range::fraction(mark.value, self.min, self.max) as f32;
+                let left = match index {
+                    0 => mark_x,
+                    index if index == last => mark_x - label.size().x,
+                    _ => mark_x - label.size().x / 2.,
+                };
+                ui.painter().galley(
+                    egui::pos2(left, top),
+                    label,
+                    t.color("text-faint").gamma_multiply(alpha),
+                );
+            }
+        }
+        if !self.description.is_empty() {
+            ui.add_space(t.number("s-2") - ui.spacing().item_spacing.y);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(self.description)
+                        .size(t.number("text-xs"))
+                        .color(t.color("text-subtle")),
+                )
+                .wrap(),
+            );
+        }
+        response
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -998,5 +1484,91 @@ mod tests {
         let (_, rows) = run(vec![], &mut value);
         assert!(rows.is_empty(), "a press outside closes the listbox");
         assert_eq!(value, 'b');
+    }
+
+    #[test]
+    fn number_input_steps_with_arrows_and_steppers_within_bounds() {
+        let (ctx, t) = setup();
+        let mut value: u32 = 9;
+        let run = |events: Vec<egui::Event>, value: &mut u32| {
+            let mut field = Rect::NOTHING;
+            frame(&ctx, events, |ui| {
+                field = NumberInput::new("test-number", "Crop X", 120.)
+                    .range(0. ..=10.)
+                    .show(ui, &t, value)
+                    .rect;
+            });
+            field
+        };
+        let field = run(vec![], &mut value);
+        // The Increase stepper is the top half of the 26 pt column.
+        let increase = egui::pos2(field.right() - 13., field.top() + field.height() / 4.);
+        run(
+            vec![egui::Event::PointerMoved(increase), press(increase, true)],
+            &mut value,
+        );
+        run(vec![press(increase, false)], &mut value);
+        assert_eq!(value, 10);
+        run(
+            vec![egui::Event::PointerMoved(increase), press(increase, true)],
+            &mut value,
+        );
+        run(vec![press(increase, false)], &mut value);
+        assert_eq!(value, 10, "Increase is disabled at the maximum");
+        let text = egui::pos2(field.left() + 20., field.center().y);
+        run(
+            vec![egui::Event::PointerMoved(text), press(text, true)],
+            &mut value,
+        );
+        run(vec![press(text, false)], &mut value);
+        run(vec![key(egui::Key::ArrowDown)], &mut value);
+        run(vec![key(egui::Key::ArrowDown)], &mut value);
+        assert_eq!(value, 8, "ArrowDown steps the focused field");
+    }
+
+    #[test]
+    fn range_slider_follows_pointer_and_keys_and_lays_out_marks() {
+        let (ctx, t) = setup();
+        let marks = [
+            RangeMark {
+                value: 0.,
+                label: "Low",
+            },
+            RangeMark {
+                value: 100.,
+                label: "High",
+            },
+        ];
+        let mut value = 100.;
+        let run = |events: Vec<egui::Event>, value: &mut f64| {
+            let mut track = Rect::NOTHING;
+            frame(&ctx, events, |ui| {
+                let text = format!("{value}%");
+                track = RangeSlider::new("test-range", "Volume", 214., 0. ..=200., text)
+                    .marks(&marks)
+                    .description("Louder than the source above 100%.")
+                    .show(ui, &t, value)
+                    .rect;
+            });
+            track
+        };
+        let track = run(vec![], &mut value);
+        assert_eq!(track.height(), 20.);
+        // The thumb travels 7 pt inside each end: 200 pt for 0–200.
+        let quarter = egui::pos2(track.left() + 7. + 50., track.center().y);
+        run(
+            vec![egui::Event::PointerMoved(quarter), press(quarter, true)],
+            &mut value,
+        );
+        run(vec![press(quarter, false)], &mut value);
+        assert_eq!(value, 50.);
+        run(vec![key(egui::Key::ArrowRight)], &mut value);
+        assert_eq!(value, 51.);
+        run(vec![key(egui::Key::PageUp)], &mut value);
+        assert_eq!(value, 61.);
+        run(vec![key(egui::Key::End)], &mut value);
+        assert_eq!(value, 200.);
+        run(vec![key(egui::Key::Home)], &mut value);
+        assert_eq!(value, 0.);
     }
 }

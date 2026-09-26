@@ -213,6 +213,14 @@ bool captures_capture_guidance_pointer_over_v1(double x, double y, double left,
  * captures_settings_free_v1. */
 char *captures_preferences_v1(const char *request_json);
 
+/* Shipping control behaviour (captures-app::controls), shared with wgpu.
+ * Operations: "number_step" {text, step? (default 1), up, min?, max?} ->
+ * {value, text} one NumberInput step from the field text, clamped and
+ * formatted to the step's precision; "number_bounds" {text, min?, max?} ->
+ * {at_min, at_max} for disabling the Decrease/Increase steppers. Standard owned
+ * {ok,result}/{ok,error} envelope; free with captures_settings_free_v1. */
+char *captures_controls_v1(const char *request_json);
+
 /* Owned shared visibility state, not a native window. Serialize all calls on
  * one handle (normally the UI thread). Free exactly once after callers stop;
  * NULL is permitted by free and returns false from every other handle call.

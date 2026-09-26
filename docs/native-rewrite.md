@@ -114,6 +114,16 @@ the History display picker. AppKit's token `ClosurePopUpButton` trigger replaces
 capture menu's glass popups and the recording editor's stock popups; its native
 menu keeps AppKit keyboard handling (no Home/End) and shows descriptions as a second
 line. Screenshot editor selects remain stock on both hosts.
+Recording editor number fields (crop, output size, trim; wgpu also Position) follow
+`NumberInput`: wgpu `primitives::NumberInput` and AppKit `TokenNumberField` draw the
+token field with Increase/Decrease steppers ("Increase {label}", hidden while
+disabled, outside the Tab order) and step on ArrowUp/ArrowDown through shared
+`captures_app::controls::number` (AppKit via `captures_controls_v1`). Sliders follow
+`RangeSlider`: wgpu `primitives::RangeSlider` (value readout, 4 pt accent track,
+14 pt thumb, optional ticks, labels and description; arrow, Page, Home and End keys)
+replaces egui sliders for the encoded split and track volumes; AppKit `TokenSlider`
+draws the same track and thumb on its NSSliders and keeps the editable volume
+percent fields. The maximum file size field stays a plain text field on both hosts.
 Physical focus-visibility and scroller checks on macOS and Windows remain open.
 
 Direct region and window overlays (shortcut, tray and screenshot-during-recording)

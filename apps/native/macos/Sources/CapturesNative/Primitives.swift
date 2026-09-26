@@ -1,4 +1,5 @@
 import AppKit
+import CCapturesSettings
 
 // Shared shipping UI primitives drawn from design tokens (`styles/base.css`,
 // `styles/primitives.css`), used by every AppKit surface.
@@ -230,5 +231,318 @@ final class ClosurePopUpButton: NSPopUpButton {
         chevron.move(to: point(4, 6)); chevron.line(to: point(8, 10)); chevron.line(to: point(12, 6))
         chevron.lineWidth = 1.7 * scale; chevron.lineCapStyle = .round; chevron.lineJoinStyle = .round
         glyph.withAlphaComponent(alpha).setStroke(); chevron.stroke()
+    }
+}
+
+/// Shipping `NumberInput` behaviour from `captures_app::controls::number`.
+enum ControlsBridge {
+    static func request(_ object: [String: Any]) throws -> [String: Any] {
+        let data = try JSONSerialization.data(withJSONObject: object)
+        let response = String(decoding: data, as: UTF8.self).withCString {
+            captures_controls_v1($0)
+        }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        return try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+    }
+
+    private static func bounded(_ object: [String: Any], min: Double?, max: Double?) -> [String: Any] {
+        var object = object
+        if let min { object["min"] = min }
+        if let max { object["max"] = max }
+        return object
+    }
+
+    /// The field text one step up or down, clamped to the bounds.
+    static func step(_ text: String, up: Bool, min: Double?, max: Double?) -> String? {
+        let result = try? request(bounded(["operation": "number_step", "text": text, "up": up],
+                                          min: min, max: max))
+        return result?["text"] as? String
+    }
+
+    /// Whether Decrease and Increase are disabled at the bounds.
+    static func bounds(_ text: String, min: Double?, max: Double?) -> (atMin: Bool, atMax: Bool) {
+        let result = try? request(bounded(["operation": "number_bounds", "text": text],
+                                          min: min, max: max))
+        return (result?["at_min"] as? Bool ?? false, result?["at_max"] as? Bool ?? false)
+    }
+}
+
+/// Text inset for `TokenNumberField`: shipping padding, vertically centred,
+/// with room for the 26 pt stepper column.
+final class TokenNumberFieldCell: NSTextFieldCell {
+    var trailingInset: CGFloat = 0
+    var leadingInset: CGFloat = 12
+
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        let base = super.drawingRect(forBounds: rect)
+        let height = cellSize(forBounds: rect).height
+        let inset = NSRect(x: rect.minX + leadingInset, y: rect.minY, width: max(0,
+            rect.width - leadingInset - trailingInset), height: rect.height)
+        let y = inset.minY + max(0, (inset.height - height) / 2)
+        return NSRect(x: inset.minX, y: y, width: inset.width, height: min(base.height, height))
+    }
+
+    override func edit(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText,
+                       delegate: Any?, event: NSEvent?) {
+        super.edit(withFrame: drawingRect(forBounds: rect), in: controlView, editor: textObj,
+                   delegate: delegate, event: event)
+    }
+
+    override func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText,
+                         delegate: Any?, start selStart: Int, length selLength: Int) {
+        super.select(withFrame: drawingRect(forBounds: rect), in: controlView, editor: textObj,
+                     delegate: delegate, start: selStart, length: selLength)
+    }
+}
+
+/// One half of a `TokenNumberField` stepper column. It is a plain view, not a
+/// control, so it stays out of the key-view loop like shipping `tabIndex={-1}`,
+/// while VoiceOver still presses it as a named button.
+final class TokenStepperHalf: NSView {
+    let up: Bool
+    var tokens: Tokens? { didSet { needsDisplay = true } }
+    var available = true { didSet { needsDisplay = true } }
+    var press: (() -> Void)?
+    private var pointerInside = false
+    private var pointerTracking: NSTrackingArea?
+
+    init(up: Bool) {
+        self.up = up
+        super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func isAccessibilityEnabled() -> Bool { available }
+    override func accessibilityPerformPress() -> Bool {
+        guard available else { return false }
+        press?(); return true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let pointerTracking { removeTrackingArea(pointerTracking) }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(tracking); pointerTracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { pointerInside = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { pointerInside = false; needsDisplay = true }
+    override func mouseDown(with event: NSEvent) { if available { press?() } }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let tokens else { return }
+        let hot = available && pointerInside
+        if hot { tokens.color("surface-active").setFill(); bounds.fill() }
+        let color = tokens.color(hot ? "text" : "text-subtle").withAlphaComponent(available ? 1 : 0.3)
+        // Shipping 12-unit chevrons `M3 7.5 6 4.5 9 7.5` and `M3 4.5 6 7.5 9 4.5`.
+        let glyph = NSRect(x: bounds.midX - 5.5, y: bounds.midY - 5.5, width: 11, height: 11)
+        let scale = glyph.width / 12
+        func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
+            NSPoint(x: glyph.minX + x * scale, y: glyph.minY + y * scale)
+        }
+        let chevron = NSBezierPath()
+        if up {
+            chevron.move(to: point(3, 7.5)); chevron.line(to: point(6, 4.5)); chevron.line(to: point(9, 7.5))
+        } else {
+            chevron.move(to: point(3, 4.5)); chevron.line(to: point(6, 7.5)); chevron.line(to: point(9, 4.5))
+        }
+        chevron.lineWidth = 2 * scale; chevron.lineCapStyle = .round; chevron.lineJoinStyle = .round
+        color.setStroke(); chevron.stroke()
+    }
+}
+
+/// Shipping `NumberInput` on AppKit: a token field with mono digits, the
+/// focus ring while editing, and Increase/Decrease steppers (hidden while
+/// disabled). `stepped` runs after a stepper or ArrowUp/ArrowDown changes the
+/// text, so the owner can treat it like typing.
+final class TokenNumberField: NSTextField {
+    var tokens: Tokens? {
+        didSet {
+            increaseHalf.tokens = tokens; decreaseHalf.tokens = tokens
+            updateTextColor(); needsDisplay = true
+        }
+    }
+    var minimum: (() -> Double?) = { nil }
+    var maximum: (() -> Double?) = { nil }
+    var stepped: ((TokenNumberField) -> Void)?
+    let increaseHalf = TokenStepperHalf(up: true)
+    let decreaseHalf = TokenStepperHalf(up: false)
+    static let stepperWidth: CGFloat = 26
+
+    override class var cellClass: AnyClass? {
+        get { TokenNumberFieldCell.self }
+        set { super.cellClass = newValue }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setUpNumberField()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func setUpNumberField() {
+        isBezeled = false; isBordered = false; drawsBackground = false
+        focusRingType = .none
+        increaseHalf.press = { [weak self] in self?.step(up: true) }
+        decreaseHalf.press = { [weak self] in self?.step(up: false) }
+        addSubview(increaseHalf); addSubview(decreaseHalf)
+        updateSteppers()
+    }
+
+    override var isEnabled: Bool { didSet { updateTextColor(); updateSteppers(); needsDisplay = true } }
+
+    private func updateTextColor() {
+        guard let tokens else { return }
+        textColor = tokens.color("text").withAlphaComponent(isEnabled ? 1 : 0.5)
+    }
+    override var stringValue: String { didSet { updateSteppers() } }
+    override func setAccessibilityLabel(_ accessibilityLabel: String?) {
+        super.setAccessibilityLabel(accessibilityLabel)
+        let name = accessibilityLabel ?? ""
+        increaseHalf.setAccessibilityLabel(name.isEmpty ? "Increase" : "Increase \(name)")
+        decreaseHalf.setAccessibilityLabel(name.isEmpty ? "Decrease" : "Decrease \(name)")
+    }
+
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        updateSteppers()
+    }
+
+    /// Lay out and enable the steppers for the current text and bounds.
+    func updateSteppers() {
+        let visible = isEnabled && isEditable
+        (cell as? TokenNumberFieldCell)?.trailingInset = visible ? Self.stepperWidth + 4 : 12
+        let column = NSRect(x: bounds.maxX - Self.stepperWidth - 1, y: 1,
+                            width: Self.stepperWidth, height: max(0, bounds.height - 2))
+        let half = floor(column.height / 2)
+        increaseHalf.frame = NSRect(x: column.minX, y: column.minY, width: column.width, height: half)
+        decreaseHalf.frame = NSRect(x: column.minX, y: column.minY + half, width: column.width,
+                                    height: column.height - half)
+        // Subviews of a text field follow its (unflipped) coordinates.
+        if !isFlipped {
+            increaseHalf.frame.origin.y = column.maxY - half
+            decreaseHalf.frame.origin.y = column.minY
+        }
+        increaseHalf.isHidden = !visible; decreaseHalf.isHidden = !visible
+        let text = currentEditor()?.string ?? stringValue
+        let limits = ControlsBridge.bounds(text, min: minimum(), max: maximum())
+        increaseHalf.available = !limits.atMax
+        decreaseHalf.available = !limits.atMin
+        needsDisplay = true
+    }
+
+    /// One shipping step from the current text, as if typed.
+    func step(up: Bool) {
+        let text = currentEditor()?.string ?? stringValue
+        guard isEnabled, let next = ControlsBridge.step(text, up: up, min: minimum(), max: maximum())
+        else { return }
+        stringValue = next
+        currentEditor()?.string = next
+        stepped?(self)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder(); needsDisplay = true; return accepted
+    }
+    override func textDidEndEditing(_ notification: Notification) {
+        super.textDidEndEditing(notification); needsDisplay = true; updateSteppers()
+    }
+    override func textDidChange(_ notification: Notification) {
+        super.textDidChange(notification); updateSteppers()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if let tokens {
+            let radius = tokens.number("r-md")
+            let alpha: CGFloat = isEnabled ? 1 : 0.5
+            let editing = currentEditor() != nil
+            let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                                       xRadius: radius, yRadius: radius)
+            tokens.color("surface-field").withAlphaComponent(alpha).setFill(); outline.fill()
+            if !increaseHalf.isHidden {
+                NSGraphicsContext.saveGraphicsState()
+                outline.addClip()
+                let column = NSRect(x: bounds.maxX - Self.stepperWidth - 1, y: 0,
+                                    width: Self.stepperWidth + 1, height: bounds.height)
+                tokens.color("surface-hover").setFill(); column.fill()
+                tokens.color("border-subtle").setFill()
+                NSRect(x: column.minX, y: 0, width: 1, height: bounds.height).fill()
+                NSRect(x: column.minX, y: floor(bounds.midY), width: column.width, height: 1).fill()
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            tokens.color(editing ? "theme-accent" : "control-border").withAlphaComponent(alpha).setStroke()
+            outline.lineWidth = 1; outline.stroke()
+            if editing { drawFocusRing(tokens, in: bounds, radius: radius) }
+        }
+        super.draw(dirtyRect)
+    }
+}
+
+/// Shipping `RangeSlider` track and thumb: a 4 pt pill in `--n-6` filled with
+/// the accent up to a 14 pt raised thumb, with the token focus ring.
+final class TokenSliderCell: NSSliderCell {
+    var tokens: Tokens?
+    private static let thumb: CGFloat = 14
+
+    override func knobRect(flipped: Bool) -> NSRect {
+        let base = super.knobRect(flipped: flipped)
+        return NSRect(x: base.midX - Self.thumb / 2, y: base.midY - Self.thumb / 2,
+                      width: Self.thumb, height: Self.thumb)
+    }
+
+    override func drawBar(inside rect: NSRect, flipped: Bool) {
+        guard let tokens else { return super.drawBar(inside: rect, flipped: flipped) }
+        let alpha: CGFloat = isEnabled ? 1 : 0.45
+        let track = NSRect(x: rect.minX, y: rect.midY - 2, width: rect.width, height: 4)
+        tokens.color("n-6").withAlphaComponent(alpha).setFill()
+        NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
+        let knob = knobRect(flipped: flipped)
+        let filled = NSRect(x: track.minX, y: track.minY, width: max(0, knob.midX - track.minX),
+                            height: track.height)
+        tokens.color("theme-accent").withAlphaComponent(alpha).setFill()
+        NSBezierPath(roundedRect: filled, xRadius: 2, yRadius: 2).fill()
+    }
+
+    override func drawKnob(_ knobRect: NSRect) {
+        guard let tokens else { return super.drawKnob(knobRect) }
+        let alpha: CGFloat = isEnabled ? 1 : 0.45
+        let circle = NSBezierPath(ovalIn: knobRect.insetBy(dx: 0.5, dy: 0.5))
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.12)
+        shadow.shadowBlurRadius = 3; shadow.shadowOffset = NSSize(width: 0, height: -1)
+        shadow.set()
+        tokens.color("surface-raised").setFill(); circle.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        tokens.color("border-strong").withAlphaComponent(alpha).setStroke()
+        circle.lineWidth = 1; circle.stroke()
+        if let view = controlView, view.window?.firstResponder === view {
+            drawFocusRing(tokens, in: knobRect.insetBy(dx: -3, dy: -3), radius: Self.thumb / 2 + 2)
+        }
+    }
+}
+
+/// An `NSSlider` drawn as shipping `RangeSlider`; value, target/action,
+/// keyboard stepping and accessibility stay AppKit's.
+final class TokenSlider: NSSlider {
+    override class var cellClass: AnyClass? {
+        get { TokenSliderCell.self }
+        set { super.cellClass = newValue }
+    }
+
+    var tokens: Tokens? {
+        get { (cell as? TokenSliderCell)?.tokens }
+        set { (cell as? TokenSliderCell)?.tokens = newValue; focusRingType = .none; needsDisplay = true }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder(); needsDisplay = true; return accepted
+    }
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder(); needsDisplay = true; return accepted
     }
 }

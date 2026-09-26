@@ -1,6 +1,8 @@
 //! Behaviour of the shipping UI primitives (`CustomSelect.tsx`,
-//! `lib/customSelectMenu.ts`) for native hosts: select keyboard
-//! navigation and menu placement. Hosts only draw.
+//! `NumberInput.tsx`, `RangeSlider.tsx`, `lib/customSelectMenu.ts`) for the
+//! native hosts: select keyboard navigation and menu placement (wgpu; AppKit
+//! menus keep native keys), number stepping (both hosts; AppKit through
+//! `captures_controls_v1`), and slider track positions. Hosts only draw.
 
 use serde::Serialize;
 
@@ -196,6 +198,85 @@ pub mod select {
     }
 }
 
+/// Shipping `NumberInput` stepper behaviour.
+pub mod number {
+    /// Decimal places of `step` as written (0.1 → 1, 1 → 0).
+    pub fn decimal_places(step: f64) -> usize {
+        let text = step.to_string();
+        text.find('.').map_or(0, |dot| text.len() - dot - 1)
+    }
+
+    fn round_to(value: f64, places: usize) -> f64 {
+        if places == 0 {
+            value.round()
+        } else {
+            format!("{value:.places$}").parse().unwrap_or(value)
+        }
+    }
+
+    /// Round to the step's precision and drop trailing zeros (1.50 → "1.5").
+    pub fn format_stepped(value: f64, step: f64) -> String {
+        let rounded = round_to(value, decimal_places(step));
+        if rounded == 0. {
+            return "0".into();
+        }
+        rounded.to_string()
+    }
+
+    fn clamp(value: f64, min: Option<f64>, max: Option<f64>) -> f64 {
+        let value = min
+            .filter(|m| m.is_finite())
+            .map_or(value, |m| value.max(m));
+        max.filter(|m| m.is_finite())
+            .map_or(value, |m| value.min(m))
+    }
+
+    /// The value one step up (`up`) or down from `text`. An unparseable field
+    /// steps from `min`, else zero; the result stays within the bounds.
+    pub fn step_from(text: &str, step: f64, up: bool, min: Option<f64>, max: Option<f64>) -> f64 {
+        let base = text
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .unwrap_or_else(|| min.filter(|m| m.is_finite()).unwrap_or(0.));
+        let raw = base + if up { step } else { -step };
+        clamp(round_to(raw, decimal_places(step)), min, max)
+    }
+
+    /// Whether the Decrease and Increase steppers are disabled at the bounds.
+    pub fn at_bounds(text: &str, min: Option<f64>, max: Option<f64>) -> (bool, bool) {
+        match text.trim().parse::<f64>().ok().filter(|v| v.is_finite()) {
+            Some(value) => (
+                min.is_some_and(|min| value <= min),
+                max.is_some_and(|max| value >= max),
+            ),
+            None => (false, false),
+        }
+    }
+}
+
+/// Shipping `RangeSlider` track geometry.
+pub mod range {
+    /// Where `value` sits along the track, 0–1 (`--range-progress`, tick and
+    /// label positions).
+    pub fn fraction(value: f64, min: f64, max: f64) -> f64 {
+        let span = (max - min).max(1.);
+        ((value - min) / span).clamp(0., 1.)
+    }
+
+    /// The nearest `step` from `min` for a track fraction, within bounds.
+    pub fn value_at(fraction: f64, min: f64, max: f64, step: f64) -> f64 {
+        let raw = min + fraction.clamp(0., 1.) * (max - min);
+        let stepped = if step > 0. {
+            min + ((raw - min) / step).round() * step
+        } else {
+            raw
+        };
+        stepped.clamp(min.min(max), max.max(min))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::select::{Key, State};
@@ -300,5 +381,33 @@ mod tests {
         // Unmeasured menus estimate 31 pt rows.
         let estimate = select::layout(trigger, 0., 0., 800., 600., 20);
         assert_eq!(estimate.max_height, 240.);
+    }
+
+    #[test]
+    fn number_steps_like_shipping_number_input() {
+        assert_eq!(number::decimal_places(1.), 0);
+        assert_eq!(number::decimal_places(0.1), 1);
+        assert_eq!(number::decimal_places(0.25), 2);
+        assert_eq!(number::step_from("5", 1., true, Some(0.), Some(10.)), 6.);
+        assert_eq!(number::step_from("10", 1., true, Some(0.), Some(10.)), 10.);
+        assert_eq!(number::step_from("0.2", 0.1, true, None, None), 0.3);
+        assert_eq!(number::step_from("", 1., true, Some(2.), None), 3.);
+        assert_eq!(number::step_from("abc", 1., false, None, None), -1.);
+        assert_eq!(number::format_stepped(1.50, 0.1), "1.5");
+        assert_eq!(number::format_stepped(2.0, 0.1), "2");
+        assert_eq!(number::format_stepped(7.6, 1.), "8");
+        assert_eq!(number::at_bounds("0", Some(0.), Some(10.)), (true, false));
+        assert_eq!(number::at_bounds("10", Some(0.), Some(10.)), (false, true));
+        assert_eq!(number::at_bounds("x", Some(0.), Some(10.)), (false, false));
+    }
+
+    #[test]
+    fn range_positions_match_shipping_range_slider() {
+        assert_eq!(range::fraction(100., 0., 200.), 0.5);
+        assert_eq!(range::fraction(-5., 0., 200.), 0.);
+        assert_eq!(range::fraction(3., 0., 0.), 1., "a zero span still paints");
+        assert_eq!(range::value_at(0.5, 0., 200., 1.), 100.);
+        assert_eq!(range::value_at(0.333, 0., 3., 1.), 1.);
+        assert_eq!(range::value_at(2., 0., 3., 1.), 3.);
     }
 }

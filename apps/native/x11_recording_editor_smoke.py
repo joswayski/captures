@@ -270,12 +270,14 @@ def main():
         fill(window, "Filename", path.stem)
 
     def volume(window, track, value):
-        # The slider's numeric value box sits at its right edge.
+        # Shipping RangeSlider (0-200%, whole percents): a press focuses the
+        # track, then Home and one Right per percent set the exact value.
         x0, y0, x1, y1 = visible_rect(window, f"{track} volume")
-        click(window, x1 - 16, (y0 + y1) // 2)
-        run("xdotool", "key", "ctrl+a")
-        run("xdotool", "type", "--clearmodifiers", "--delay", "35", "--", str(value))
-        run("xdotool", "key", "Return", "sleep", ".3")
+        click(window, (x0 + x1) // 2, (y0 + y1) // 2)
+        run("xdotool", "key", "Home")
+        if value:
+            run("xdotool", "key", "--delay", "8", "--repeat", str(value), "Right")
+        run("xdotool", "sleep", ".3")
 
     def raw_press(window, name):
         """Click without waiting for idle, e.g. to cancel running work."""
