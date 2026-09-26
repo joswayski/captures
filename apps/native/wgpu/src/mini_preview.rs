@@ -1,3 +1,4 @@
+use captures_app::preview_chrome::{self, EditorPhase};
 use eframe::egui::{self, Color32, Stroke};
 
 use crate::tokens::Tokens;
@@ -55,6 +56,17 @@ pub struct View<'a> {
     pub desktop_pointer: Option<egui::Pos2>,
     pub reject_offset: f32,
     pub right_anchor: bool,
+    pub top_anchor: bool,
+    /// Card-sized pre-blurred copy of the media for the hover treatment.
+    pub blurred: Option<&'a egui::TextureHandle>,
+    /// Shared editor presence phase for this capture.
+    pub editor: EditorPhase,
+    /// Milliseconds since `editor` began (ring and pill transitions).
+    pub editor_elapsed_ms: f64,
+    /// Shipping stale-pointer lock: hover chrome stays idle until the
+    /// pointer moves after an expand or a new capture.
+    pub hover_locked: bool,
+    pub reduced_motion: bool,
 }
 
 pub fn reject_offset(elapsed_seconds: f32, reduced_motion: bool) -> f32 {
@@ -78,30 +90,26 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
     let (card, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let card = card.translate(egui::vec2(view.reject_offset, 0.));
     let radius = tokens.number("thumbnail-card-radius");
-    ui.painter()
-        .rect_filled(card, radius, tokens.color("glass-raised"));
-    egui::Image::new(view.texture)
-        .uv(cover_uv(view.texture.size_vec2(), card.size()))
-        .fit_to_exact_size(card.size())
-        .corner_radius(radius as u8)
-        .paint_at(ui, card);
-    if view.collapsed && view.depth > 0 {
-        ui.painter().rect_filled(
-            card,
-            radius,
-            tokens
-                .color("glass-strong-solid")
-                .gamma_multiply(captures_app::preview::collapsed_dim_opacity(view.depth) as f32),
-        );
-    }
-    ui.painter().rect_stroke(
-        card,
-        radius,
-        Stroke::new(1., tokens.color("glass-border")),
-        egui::StrokeKind::Inside,
-    );
 
     if view.collapsed {
+        ui.painter()
+            .rect_filled(card, radius, tokens.color("glass-raised"));
+        paint_media(ui, card, radius, view.texture, None, 0., 0.);
+        if view.depth > 0 {
+            ui.painter().rect_filled(
+                card,
+                radius,
+                tokens
+                    .color("glass-strong-solid")
+                    .gamma_multiply(captures_app::preview::collapsed_dim_opacity(view.depth) as f32),
+            );
+        }
+        ui.painter().rect_stroke(
+            card,
+            radius,
+            Stroke::new(1., tokens.color("glass-border")),
+            egui::StrokeKind::Inside,
+        );
         if view.interactive {
             let response = ui.interact(
                 card,
@@ -147,16 +155,8 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             if !ui.input(|input| input.pointer.primary_down()) {
                 ui.data_mut(|data| data.remove::<(egui::Pos2, Option<egui::Pos2>)>(drag_id));
             }
-            // Wrap to the card so the tooltip fits beside the pile. A wider
-            // single line no longer fits the small window and lands on top
-            // of the rear cards that this hover fans out.
-            let tooltip_width = card.width() - ui.spacing().menu_margin.sum().x;
-            response
-                .on_hover_cursor(egui::CursorIcon::Grab)
-                .on_hover_ui(|ui| {
-                    ui.set_max_width(tooltip_width);
-                    ui.label("Click to expand; drag to move the preview pile");
-                });
+            // Shipping's collapsed hit target has no tooltip.
+            response.on_hover_cursor(egui::CursorIcon::Grab);
         }
         return action;
     }
@@ -164,15 +164,11 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
     let inset = 8.;
     let icon_size = egui::vec2(28., 28.);
     let gap = tokens.number("s-3");
+    let tooltip_above = preview_chrome::icon_tooltip_above(view.top_anchor);
     let outer_x = if view.right_anchor {
         card.right() - inset - icon_size.x
     } else {
         card.left() + inset
-    };
-    let inner_x = if view.right_anchor {
-        card.left() + inset
-    } else {
-        card.right() - inset - icon_size.x
     };
     let top_y = card.top() + inset;
     let copy_rect = egui::Rect::from_center_size(
@@ -189,7 +185,8 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             },
         egui::vec2(140., 32.),
     );
-    let edit_rect = egui::Rect::from_min_size(egui::pos2(inner_x, top_y), icon_size);
+    let editor_id = ui.scope_id().with(("edit", view.artifact_id));
+    let edit_rect = editor_control_rect(ui, tokens, card, inset, &view, editor_id);
     let destructive_count: usize = if view.saved { 2 } else { 1 };
     let destructive_width =
         icon_size.x * destructive_count as f32 + gap * (destructive_count.saturating_sub(1)) as f32;
@@ -221,6 +218,60 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                 || (!view.clipboard_current && copy_rect.contains(pointer))
                 || (view.saved && close_rect.contains(pointer))
         });
+
+    let card_hovered = ui
+        .input(|input| input.pointer.hover_pos())
+        .is_some_and(|pointer| card.contains(pointer));
+    let any_focused = ui.memory(|memory| {
+        ["close", "delete", "edit", "copy", "save-reveal"]
+            .iter()
+            .any(|name| memory.has_focus(ui.scope_id().with((name, view.artifact_id))))
+    });
+    // Shipping hover chrome: pointer hover (unless the stale-pointer lock
+    // holds it off after an expand or a new capture) or keyboard focus.
+    let reveal = view.interactive && ((card_hovered && !view.hover_locked) || any_focused);
+
+    let ring = editor_ring_opacity(ui, tokens, &view);
+    if ring > 0. {
+        // `0 0 14px rgba(accent, .28)`: a glow outside the card, under it.
+        ui.painter().add(
+            egui::Shadow {
+                offset: [0, 0],
+                blur: 14,
+                spread: 0,
+                color: tokens.color("theme-accent").gamma_multiply(0.28 * ring),
+            }
+            .as_shape(card, radius),
+        );
+    }
+    ui.painter()
+        .rect_filled(card, radius, tokens.color("glass-raised"));
+    let media = media_hover_progress(ui, tokens, &view, reveal);
+    paint_media(
+        ui,
+        card,
+        radius,
+        view.texture,
+        view.blurred,
+        media.0,
+        media.1,
+    );
+    ui.painter().rect_stroke(
+        card,
+        radius,
+        Stroke::new(1., tokens.color("glass-border")),
+        egui::StrokeKind::Inside,
+    );
+    if ring > 0. {
+        // `0 0 0 2px rgba(accent, .9)`: the solid ring just outside the edge.
+        ui.painter().rect_stroke(
+            card,
+            radius,
+            Stroke::new(2., tokens.color("theme-accent").gamma_multiply(0.9 * ring)),
+            egui::StrokeKind::Outside,
+        );
+    }
+
     if view.interactive && view.busy.is_none() {
         // Register the drag area every frame. egui hit-tests a press against
         // the previous frame's widgets, so skipping it while the pointer was
@@ -237,9 +288,8 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             action = Some(Action::DragFile);
         }
         if !pointer_over_control {
-            response
-                .on_hover_cursor(egui::CursorIcon::Grab)
-                .on_hover_text("Drag the original file to another app");
+            // Shipping shows the grab cursor on the image, with no tooltip.
+            response.on_hover_cursor(egui::CursorIcon::Grab);
         }
     }
     let enabled = view.interactive && view.busy.is_none();
@@ -266,30 +316,6 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         Icon::Trash,
         enabled,
     ));
-    controls.push((
-        edit_rect,
-        "edit",
-        "Edit",
-        Action::Edit,
-        Icon::Edit,
-        enabled && view.can_save,
-    ));
-
-    let card_hovered = ui
-        .input(|input| input.pointer.hover_pos())
-        .is_some_and(|pointer| card.contains(pointer));
-    let any_focused = ui.memory(|memory| {
-        ["close", "delete", "edit", "copy", "save-reveal"]
-            .iter()
-            .any(|name| memory.has_focus(ui.scope_id().with((name, view.artifact_id))))
-    });
-    let reveal = view.interactive && (card_hovered || any_focused);
-    if reveal {
-        // wgpu has no inexpensive blur for an individual egui image. A dark
-        // scrim provides shipping-equivalent contrast without CPU readback.
-        ui.painter()
-            .rect_filled(card, radius, Color32::from_black_alpha(128));
-    }
 
     for (rect, id, label, result, icon, control_enabled) in controls {
         if control(
@@ -302,9 +328,22 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             reveal,
             control_enabled,
             false,
+            Some((tooltip_above, view.reduced_motion)),
         ) {
             action = Some(result);
         }
+    }
+    if editor_control(
+        ui,
+        tokens,
+        edit_rect,
+        editor_id,
+        &view,
+        reveal,
+        enabled && view.can_save,
+        tooltip_above,
+    ) {
+        action = Some(Action::Edit);
     }
     if !view.clipboard_current
         && control(
@@ -317,6 +356,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             reveal,
             enabled,
             false,
+            None,
         )
     {
         action = Some(Action::Copy);
@@ -338,6 +378,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         reveal,
         enabled && (view.saved || view.can_save),
         true,
+        None,
     ) {
         action = Some(if view.saved {
             Action::Reveal
@@ -354,7 +395,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
     });
     let label_position = card.left_bottom() + egui::vec2(inset, -inset);
     let mut label_job = egui::text::LayoutJob::simple(
-        label.clone(),
+        label,
         egui::FontId::proportional(tokens.number("text-2xs")),
         tokens.color("glass-text"),
         card.width() - tokens.number("s-3") * 4.,
@@ -377,14 +418,311 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             tokens.color("glass-text"),
         );
     }
-    ui.interact(
-        label_rect,
-        ui.scope_id().with("preview-status"),
-        egui::Sense::hover(),
-    )
-    .on_hover_text(label);
 
     action
+}
+
+/// Eased 0…1 progress of the hover filter (blur and brightness) and scale,
+/// each on its shipping transition. egui animates only while they change.
+fn media_hover_progress(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    view: &View<'_>,
+    reveal: bool,
+) -> (f32, f32) {
+    use captures_app::motion::Transition;
+    let progress = |transition: Transition, name: &str| {
+        let tween = tokens.transition(transition);
+        let seconds = if view.reduced_motion {
+            0.
+        } else {
+            tween.duration_ms as f32 / 1000.
+        };
+        let linear = ui.ctx().animate_bool_with_time(
+            ui.scope_id().with((name, view.artifact_id)),
+            reveal,
+            seconds,
+        );
+        tween.easing.ease(f64::from(linear)) as f32
+    };
+    (
+        progress(Transition::PreviewMediaFilter, "media-filter"),
+        progress(Transition::PreviewMediaScale, "media-scale"),
+    )
+}
+
+/// Shipping `.thumbnail-media img`: cover-cropped media, clipped to the card.
+/// On hover it takes `blur(2px) brightness(.5) scale(1.015)`. egui has no
+/// per-image blur, so a pre-blurred card-sized copy fades in over the sharp
+/// image while both darken and scale.
+fn paint_media(
+    ui: &egui::Ui,
+    card: egui::Rect,
+    radius: f32,
+    texture: &egui::TextureHandle,
+    blurred: Option<&egui::TextureHandle>,
+    filter: f32,
+    scale: f32,
+) {
+    use captures_app::preview_chrome::{HOVER_MEDIA_BRIGHTNESS, HOVER_MEDIA_SCALE};
+    let scale = egui::lerp(1.0..=HOVER_MEDIA_SCALE as f32, scale);
+    let rect = egui::Rect::from_center_size(card.center(), card.size() * scale);
+    let brightness = egui::lerp(1.0..=HOVER_MEDIA_BRIGHTNESS as f32, filter);
+    let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(card));
+    let tint = |alpha: f32| {
+        let value = (brightness * alpha * 255.).round() as u8;
+        Color32::from_rgba_premultiplied(value, value, value, (alpha * 255.).round() as u8)
+    };
+    let corners = radius * scale;
+    painter.add(
+        egui::epaint::RectShape::filled(rect, corners, tint(1.))
+            .with_texture(texture.id(), cover_uv(texture.size_vec2(), card.size())),
+    );
+    if let Some(blurred) = blurred.filter(|_| filter > 0.) {
+        painter.add(
+            egui::epaint::RectShape::filled(rect, corners, tint(filter)).with_texture(
+                blurred.id(),
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+            ),
+        );
+    }
+}
+
+/// Opacity of the editor ring: it arrives over `0.22s ease` and eases out
+/// over the 550 ms leave.
+fn editor_ring_opacity(ui: &egui::Ui, tokens: &Tokens, view: &View<'_>) -> f32 {
+    use captures_app::motion::Transition;
+    let (transition, from, to) = match view.editor {
+        EditorPhase::Present => (Transition::PreviewEditorRing, 0., 1.),
+        EditorPhase::Leaving => (Transition::PreviewEditorRingLeave, 1., 0.),
+        EditorPhase::Idle | EditorPhase::Lingering => return 0.,
+    };
+    let tween = tokens.transition(transition);
+    if tween.running(view.editor_elapsed_ms, view.reduced_motion) {
+        ui.ctx().request_repaint();
+    }
+    tween.value(from, to, view.editor_elapsed_ms, view.reduced_motion) as f32
+}
+
+/// Width of the present pill for these tokens: both labels share one cell.
+fn editor_pill_width(ui: &egui::Ui, tokens: &Tokens) -> f32 {
+    let measure = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(
+                text.to_owned(),
+                egui::FontId::proportional(tokens.number("text-2xs")),
+                Color32::WHITE,
+            )
+            .size()
+            .x
+    };
+    preview_chrome::editor_pill_width(
+        f64::from(measure(preview_chrome::EDITOR_PRESENT_LABEL)),
+        f64::from(measure(preview_chrome::EDITOR_SHOW_LABEL)),
+    ) as f32
+}
+
+/// The editor control's rect: a 28 pt icon in the inner top corner that
+/// widens away from that corner into the present pill over the shipping morph.
+fn editor_control_rect(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    card: egui::Rect,
+    inset: f32,
+    view: &View<'_>,
+    id: egui::Id,
+) -> egui::Rect {
+    let size = preview_chrome::EDITOR_CONTROL_SIZE as f32;
+    let target = if view.editor.present() {
+        editor_pill_width(ui, tokens)
+    } else {
+        size
+    };
+    let morph = tokens.transition(captures_app::motion::Transition::PreviewEditorMorph);
+    let seconds = if view.reduced_motion {
+        0.
+    } else {
+        morph.duration_ms as f32 / 1000.
+    };
+    let width = ui
+        .ctx()
+        .animate_value_with_time(id.with("width"), target, seconds);
+    let top = card.top() + inset;
+    if view.right_anchor {
+        egui::Rect::from_min_size(
+            egui::pos2(card.left() + inset, top),
+            egui::vec2(width, size),
+        )
+    } else {
+        egui::Rect::from_min_max(
+            egui::pos2(card.right() - inset - width, top),
+            egui::pos2(card.right() - inset, top + size),
+        )
+    }
+}
+
+/// Shipping `.thumbnail-editor-control`: the compact Edit icon, or while an
+/// editor shows this capture the "In editor" pill that offers "Show in
+/// editor" on hover or focus. Returns whether it was activated.
+#[allow(clippy::too_many_arguments)]
+fn editor_control(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    rect: egui::Rect,
+    id: egui::Id,
+    view: &View<'_>,
+    reveal: bool,
+    enabled: bool,
+    tooltip_above: bool,
+) -> bool {
+    let phase = view.editor;
+    let response = ui.interact(rect, id, egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, phase.accessible_label())
+    });
+    // `data-editor-just-opened`: the click that opened the editor keeps the
+    // pill passive until the pointer leaves the control.
+    let latch = id.with("just-opened");
+    let hovered = response.hovered();
+    let mut just_opened = ui.data(|data| data.get_temp::<bool>(latch)) == Some(true);
+    if just_opened && !hovered {
+        ui.data_mut(|data| data.remove::<bool>(latch));
+        just_opened = false;
+    }
+    let focused = response.has_focus();
+    let visible = reveal || focused || phase.pinned();
+    if visible {
+        let action_hover = (hovered || focused) && enabled && phase.interactive();
+        if phase.present() {
+            let offers_action = action_hover && !just_opened;
+            let accent = tokens.color("theme-accent");
+            ui.painter().add(
+                egui::Shadow {
+                    offset: [0, 0],
+                    blur: 14,
+                    spread: 0,
+                    color: accent.gamma_multiply(0.2),
+                }
+                .as_shape(rect, rect.height() / 2.),
+            );
+            let (fill, border, color) = if offers_action {
+                (
+                    accent,
+                    Color32::TRANSPARENT,
+                    tokens.color("theme-accent-ink"),
+                )
+            } else {
+                (
+                    tokens.color("glass-strong"),
+                    accent.gamma_multiply(0.72),
+                    tokens.color("theme-accent-text"),
+                )
+            };
+            ui.painter().rect(
+                rect,
+                rect.height() / 2.,
+                fill,
+                Stroke::new(1., border),
+                egui::StrokeKind::Inside,
+            );
+            let icon_side = preview_chrome::EDITOR_PILL_ICON as f32;
+            let icon = egui::Rect::from_min_size(
+                egui::pos2(
+                    rect.left() + 1. + preview_chrome::EDITOR_PILL_PADDING_LEFT as f32,
+                    rect.center().y - icon_side / 2.,
+                ),
+                egui::vec2(icon_side, icon_side),
+            );
+            // `stroke-width: 2.2` in the 24-unit viewBox at 11 pt.
+            paint_icon_with(ui.painter(), Icon::Edit, icon, color, 2.2 * icon_side / 24.);
+            let label = ui.painter().layout_no_wrap(
+                preview_chrome::editor_pill_label(hovered || focused, just_opened).to_owned(),
+                egui::FontId::proportional(tokens.number("text-2xs")),
+                color,
+            );
+            let text = egui::pos2(
+                icon.right() + preview_chrome::EDITOR_PILL_GAP as f32,
+                rect.center().y - label.size().y / 2.,
+            );
+            // Clip the label while the pill is still widening.
+            ui.painter()
+                .with_clip_rect(rect.shrink(1.))
+                .galley(text, label, color);
+        } else {
+            ui.painter().rect(
+                rect,
+                tokens.number("r-md"),
+                tokens.color(if action_hover {
+                    "glass-raised"
+                } else {
+                    "glass-strong"
+                }),
+                Stroke::new(1., tokens.color("glass-border")),
+                egui::StrokeKind::Inside,
+            );
+            let icon = egui::Rect::from_center_size(rect.center(), egui::vec2(16., 16.));
+            paint_icon(
+                ui.painter(),
+                Icon::Edit,
+                icon,
+                tokens.color(if enabled {
+                    "glass-text"
+                } else {
+                    "glass-text-muted"
+                }),
+            );
+        }
+        if focused {
+            ui.painter().rect_stroke(
+                rect.expand(2.),
+                if phase.present() {
+                    rect.height() / 2. + 2.
+                } else {
+                    tokens.number("r-md")
+                },
+                Stroke::new(2., tokens.color("theme-accent")),
+                egui::StrokeKind::Outside,
+            );
+        }
+    }
+    let tip = tooltip_progress(
+        ui,
+        tokens,
+        id,
+        visible && phase.tooltip().is_some() && (hovered || focused),
+        captures_app::motion::Transition::PreviewIconTooltip,
+        view.reduced_motion,
+    );
+    if let Some(text) = phase.tooltip() {
+        crate::glass_tooltip::preview_icon(ui, tokens, rect, text, tooltip_above, tip);
+    }
+    let activated = visible && enabled && phase.interactive() && response.clicked();
+    if activated {
+        ui.data_mut(|data| data.insert_temp(latch, true));
+    }
+    activated
+}
+
+/// 0…1 progress of an instant tooltip: no delay, fading and nudging over
+/// its shipping transition.
+fn tooltip_progress(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    id: egui::Id,
+    showing: bool,
+    transition: captures_app::motion::Transition,
+    reduced_motion: bool,
+) -> f32 {
+    let tween = tokens.transition(transition);
+    let seconds = if reduced_motion {
+        0.
+    } else {
+        tween.duration_ms as f32 / 1000.
+    };
+    let linear = ui
+        .ctx()
+        .animate_bool_with_time(id.with("tooltip"), showing, seconds);
+    tween.easing.ease(f64::from(linear)) as f32
 }
 
 /// Shipping `.clipboard-confirmation`: a green-edged pill at the bottom right.
@@ -434,6 +772,8 @@ pub fn show_stack_controls(
     ui: &mut egui::Ui,
     tokens: &Tokens,
     right_anchor: bool,
+    top_anchor: bool,
+    reduced_motion: bool,
 ) -> Option<StackAction> {
     use captures_app::preview::{
         STACK_CLEAR_ALL_LABEL, STACK_CLEAR_ALL_TOOLTIP, STACK_MINIMIZE_HOVER_LABEL,
@@ -464,10 +804,25 @@ pub fn show_stack_controls(
         egui::Rect::from_center_size(clear.center(), egui::vec2(14., 14.)),
         tokens.color("glass-text"),
     );
-    if clear_response
-        .on_hover_text(STACK_CLEAR_ALL_TOOLTIP)
-        .clicked()
-    {
+    // Shipping `.thumbnail-stack-control[data-tooltip]`: an instant glass tip,
+    // above the bottom toolbar and below the top one.
+    let tip = tooltip_progress(
+        ui,
+        tokens,
+        clear_response.id,
+        clear_response.hovered() || clear_response.has_focus(),
+        captures_app::motion::Transition::PreviewStackTooltip,
+        reduced_motion,
+    );
+    crate::glass_tooltip::preview_icon(
+        ui,
+        tokens,
+        clear,
+        STACK_CLEAR_ALL_TOOLTIP,
+        preview_chrome::icon_tooltip_above(top_anchor),
+        tip,
+    );
+    if clear_response.clicked() {
         action = Some(StackAction::ClearAll);
     }
 
@@ -650,7 +1005,8 @@ pub fn show_overflow_cues(
                 egui::StrokeKind::Outside,
             );
         }
-        if response.on_hover_text(label).clicked() {
+        // Shipping cues are named for accessibility but carry no tooltip.
+        if response.clicked() {
             slots = Some(if above { -1 } else { 1 });
         }
     }
@@ -680,6 +1036,7 @@ fn control(
     reveal: bool,
     enabled: bool,
     primary: bool,
+    tooltip: Option<(bool, bool)>,
 ) -> bool {
     let id = ui.scope_id().with(id_source);
     let response = ui.interact(rect, id, egui::Sense::click());
@@ -747,17 +1104,35 @@ fn control(
             );
         }
     }
-    response.on_hover_text(label).clicked() && enabled
+    // Shipping icon buttons carry an instant glass tip; the labelled centre
+    // actions carry none. `tooltip` is (opens above, reduced motion).
+    if let Some((above, reduced_motion)) = tooltip {
+        let progress = tooltip_progress(
+            ui,
+            tokens,
+            id,
+            visible && (response.hovered() || response.has_focus()),
+            captures_app::motion::Transition::PreviewIconTooltip,
+            reduced_motion,
+        );
+        crate::glass_tooltip::preview_icon(ui, tokens, rect, label, above, progress);
+    }
+    visible && enabled && response.clicked()
 }
 
 fn paint_icon(p: &egui::Painter, icon: Icon, rect: egui::Rect, color: Color32) {
+    paint_icon_with(p, icon, rect, color, 1.8);
+}
+
+/// Shipping 24-unit icons at `rect` with a `width` point stroke.
+fn paint_icon_with(p: &egui::Painter, icon: Icon, rect: egui::Rect, color: Color32, width: f32) {
     let q = |x: f32, y: f32| {
         egui::pos2(
             rect.left() + x / 24. * rect.width(),
             rect.top() + y / 24. * rect.height(),
         )
     };
-    let stroke = Stroke::new(1.8, color);
+    let stroke = Stroke::new(width, color);
     let line = |points: &[(f32, f32)]| {
         p.add(egui::Shape::line(
             points.iter().map(|&(x, y)| q(x, y)).collect(),
@@ -844,6 +1219,49 @@ fn paint_icon(p: &egui::Painter, icon: Icon, rect: egui::Rect, color: Color32) {
             line(&[(4., 17.), (12., 22.), (20., 17.)]);
         }
     }
+}
+
+/// Pixel density of [`hover_blur_image`]: 2× the card, so HiDPI displays
+/// sample it without upscaling.
+const HOVER_BLUR_DENSITY: f64 = 2.;
+
+/// The card's cover-cropped media, resized to 2× the card and blurred with the
+/// shipping `blur(2px)` standard deviation. Built off the UI thread once per
+/// card; the hover treatment fades it in over the sharp image.
+pub fn hover_blur_image(image: &egui::ColorImage) -> Option<egui::ColorImage> {
+    use captures_app::preview::{THUMBNAIL_CARD_HEIGHT, THUMBNAIL_PADDING, THUMBNAIL_WIDTH};
+    let [width, height] = image.size;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let card = egui::vec2(
+        (THUMBNAIL_WIDTH - THUMBNAIL_PADDING * 2.) as f32,
+        THUMBNAIL_CARD_HEIGHT as f32,
+    );
+    let uv = cover_uv(egui::vec2(width as f32, height as f32), card);
+    let crop_x = (uv.min.x * width as f32).round() as u32;
+    let crop_y = (uv.min.y * height as f32).round() as u32;
+    let crop_width = ((uv.width() * width as f32).round() as u32).clamp(1, width as u32 - crop_x);
+    let crop_height =
+        ((uv.height() * height as f32).round() as u32).clamp(1, height as u32 - crop_y);
+    let pixels = image::RgbaImage::from_raw(width as u32, height as u32, image.as_raw().to_vec())?;
+    let cropped = image::imageops::crop_imm(&pixels, crop_x, crop_y, crop_width, crop_height);
+    let target = [
+        (f64::from(card.x) * HOVER_BLUR_DENSITY) as u32,
+        (f64::from(card.y) * HOVER_BLUR_DENSITY) as u32,
+    ];
+    let resized = image::imageops::resize(
+        &*cropped,
+        target[0],
+        target[1],
+        image::imageops::FilterType::Triangle,
+    );
+    let sigma = captures_app::preview_chrome::HOVER_MEDIA_BLUR * HOVER_BLUR_DENSITY;
+    let blurred = image::imageops::fast_blur(&resized, sigma as f32);
+    Some(egui::ColorImage::from_rgba_premultiplied(
+        [target[0] as usize, target[1] as usize],
+        blurred.as_raw(),
+    ))
 }
 
 fn cover_uv(image: egui::Vec2, target: egui::Vec2) -> egui::Rect {
@@ -993,6 +1411,12 @@ mod tests {
                 desktop_pointer,
                 reject_offset: 0.,
                 right_anchor: false,
+                top_anchor: false,
+                blurred: None,
+                editor: EditorPhase::Idle,
+                editor_elapsed_ms: 0.,
+                hover_locked: false,
+                reduced_motion: false,
             },
         );
         let mut output = ctx.end_pass();
@@ -1040,6 +1464,12 @@ mod tests {
                     desktop_pointer: None,
                     reject_offset: 0.,
                     right_anchor,
+                    top_anchor: false,
+                    blurred: None,
+                    editor: EditorPhase::Idle,
+                    editor_elapsed_ms: 0.,
+                    hover_locked: false,
+                    reduced_motion: false,
                 },
             );
             let mut output = ctx.end_pass();
@@ -1123,6 +1553,12 @@ mod tests {
                     desktop_pointer: None,
                     reject_offset: 0.,
                     right_anchor: true,
+                    top_anchor: false,
+                    blurred: None,
+                    editor: EditorPhase::Idle,
+                    editor_elapsed_ms: 0.,
+                    hover_locked: false,
+                    reduced_motion: false,
                 },
             );
             let mut output = ctx.end_pass();
@@ -1191,6 +1627,12 @@ mod tests {
                         desktop_pointer: None,
                         reject_offset: 0.,
                         right_anchor: true,
+                        top_anchor: false,
+                        blurred: None,
+                        editor: EditorPhase::Idle,
+                        editor_elapsed_ms: 0.,
+                        hover_locked: false,
+                        reduced_motion: false,
                     },
                 );
             });
@@ -1257,6 +1699,12 @@ mod tests {
                     desktop_pointer: None,
                     reject_offset: 0.,
                     right_anchor: false,
+                    top_anchor: false,
+                    blurred: None,
+                    editor: EditorPhase::Idle,
+                    editor_elapsed_ms: 0.,
+                    hover_locked: false,
+                    reduced_motion: false,
                 },
             );
             let mut output = ctx.end_pass();
@@ -1415,7 +1863,7 @@ mod tests {
             egui::Id::unique("preview-controls-input-test"),
             egui::UiBuilder::new().max_rect(screen),
         );
-        let action = show_stack_controls(&mut ui, &tokens, false);
+        let action = show_stack_controls(&mut ui, &tokens, false, false, false);
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         action
@@ -1448,7 +1896,7 @@ mod tests {
                     egui::Id::unique("show-less-test"),
                     egui::UiBuilder::new().max_rect(screen),
                 );
-                show_stack_controls(&mut ui, &tokens, right_anchor);
+                show_stack_controls(&mut ui, &tokens, right_anchor, false, false);
                 let mut output = ctx.end_pass();
                 let texts = painted_texts(&output);
                 assert_eq!(
@@ -1573,6 +2021,12 @@ mod tests {
                     desktop_pointer: None,
                     reject_offset: 0.,
                     right_anchor: false,
+                    top_anchor: false,
+                    blurred: None,
+                    editor: EditorPhase::Idle,
+                    editor_elapsed_ms: 0.,
+                    hover_locked: false,
+                    reduced_motion: false,
                 },
             );
             let mut output = ctx.end_pass();
@@ -1586,6 +2040,249 @@ mod tests {
             );
             output.textures_delta.clear();
         }
+    }
+
+    struct ChromeCase {
+        pointer: egui::Pos2,
+        editor: EditorPhase,
+        hover_locked: bool,
+        top_anchor: bool,
+        blurred: bool,
+    }
+
+    /// One card frame at 284×160 with reduced motion so transitions land at
+    /// once. Returns painted texts, the output and the blurred texture id.
+    fn chrome_frame(
+        ctx: &egui::Context,
+        case: &ChromeCase,
+    ) -> (Vec<String>, egui::FullOutput, egui::TextureId) {
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let texture = ctx.load_texture(
+            "chrome-sharp",
+            egui::ColorImage::filled([4, 4], Color32::WHITE),
+            Default::default(),
+        );
+        let blurred = ctx.load_texture(
+            "chrome-blurred",
+            egui::ColorImage::filled([4, 4], Color32::GRAY),
+            Default::default(),
+        );
+        // Room above and below the card for tooltips.
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 240.));
+        ctx.begin_pass(raw(screen, moved(case.pointer)));
+        let mut ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::unique("chrome-frame"),
+            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                egui::pos2(0., 40.),
+                egui::vec2(284., 160.),
+            )),
+        );
+        show(
+            &mut ui,
+            &tokens,
+            View {
+                artifact_id: "fixture",
+                texture: &texture,
+                width: 391,
+                height: 207,
+                size_bytes: 245_760,
+                clipboard_current: false,
+                saved_feedback: false,
+                busy: None,
+                message: None,
+                can_save: true,
+                saved: true,
+                interactive: true,
+                collapsed: false,
+                stack_count: 1,
+                depth: 0,
+                desktop_pointer: None,
+                reject_offset: 0.,
+                right_anchor: false,
+                top_anchor: case.top_anchor,
+                blurred: case.blurred.then_some(&blurred),
+                editor: case.editor,
+                editor_elapsed_ms: 1_000.,
+                hover_locked: case.hover_locked,
+                reduced_motion: true,
+            },
+        );
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        (painted_texts(&output), output, blurred.id())
+    }
+
+    fn case(pointer: egui::Pos2) -> ChromeCase {
+        ChromeCase {
+            pointer,
+            editor: EditorPhase::Idle,
+            hover_locked: false,
+            top_anchor: false,
+            blurred: true,
+        }
+    }
+
+    fn text_rect(output: &egui::FullOutput, label: &str) -> Option<egui::Rect> {
+        output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == label => {
+                Some(text.galley.rect.translate(text.pos.to_vec2()))
+            }
+            _ => None,
+        })
+    }
+
+    fn uses_texture(output: &egui::FullOutput, id: egui::TextureId) -> bool {
+        output.shapes.iter().any(
+            |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill_texture_id() == id),
+        )
+    }
+
+    #[test]
+    fn hover_blurs_and_darkens_media_but_the_stale_pointer_lock_holds_it_off() {
+        let center = egui::pos2(142., 120.);
+        for locked in [false, true] {
+            let ctx = egui::Context::default();
+            let mut hover = case(center);
+            hover.hover_locked = locked;
+            chrome_frame(&ctx, &hover);
+            let (texts, mut output, blurred) = chrome_frame(&ctx, &hover);
+            assert_eq!(
+                texts.iter().any(|text| text == "Copy"),
+                !locked,
+                "{texts:?}"
+            );
+            assert_eq!(
+                texts.iter().any(|text| text == "391 × 207 · 246 KB"),
+                locked
+            );
+            assert_eq!(uses_texture(&output, blurred), !locked);
+            // The sharp media scales 1.015 and darkens to brightness .5.
+            let sharp = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect)
+                    if rect.fill_texture_id() != blurred
+                        && rect.fill_texture_id() != egui::TextureId::default() =>
+                {
+                    Some(rect.clone())
+                }
+                _ => None,
+            });
+            let sharp = sharp.expect("sharp media");
+            if locked {
+                assert_eq!(sharp.rect.width(), 284.);
+                assert_eq!(sharp.fill, Color32::WHITE);
+            } else {
+                assert!((sharp.rect.width() - 284. * 1.015).abs() < 0.01);
+                assert_eq!(
+                    sharp.fill,
+                    Color32::from_rgba_premultiplied(128, 128, 128, 255)
+                );
+            }
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn icon_tooltips_are_instant_glass_chips_on_icons_only() {
+        // Delete sits at (42..70, 48..76) on this saved, left-anchored card.
+        for top_anchor in [false, true] {
+            let ctx = egui::Context::default();
+            let mut over_delete = case(egui::pos2(56., 62.));
+            over_delete.top_anchor = top_anchor;
+            chrome_frame(&ctx, &over_delete);
+            let (_, mut output, _) = chrome_frame(&ctx, &over_delete);
+            let tip = text_rect(&output, "Delete").expect("Delete tooltip");
+            assert!((tip.center().x - 56.).abs() < 1., "{tip:?}");
+            if top_anchor {
+                assert!(tip.min.y > 76., "top stacks open tips below: {tip:?}");
+            } else {
+                assert!(tip.max.y < 48., "bottom stacks open tips above: {tip:?}");
+            }
+            output.textures_delta.clear();
+        }
+        let ctx = egui::Context::default();
+        let over_copy = case(egui::pos2(142., 100.));
+        chrome_frame(&ctx, &over_copy);
+        let (texts, mut output, _) = chrome_frame(&ctx, &over_copy);
+        assert_eq!(texts.iter().filter(|text| *text == "Copy").count(), 1);
+        assert!(!texts.iter().any(|text| text.contains("Drag the original")));
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn editor_presence_pins_the_pill_and_ring_and_offers_show_in_editor_on_hover() {
+        let accent = crate::tokens::load()["dark-mustard"].color("theme-accent");
+        let ring = |output: &egui::FullOutput| {
+            output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(rect)
+                    if rect.stroke.width == 2. && rect.stroke.color == accent.gamma_multiply(0.9))
+            })
+        };
+        let ctx = egui::Context::default();
+        let mut away = case(egui::pos2(500., 500.));
+        away.editor = EditorPhase::Present;
+        chrome_frame(&ctx, &away);
+        let (texts, mut output, _) = chrome_frame(&ctx, &away);
+        assert!(texts.iter().any(|text| text == "In editor"), "{texts:?}");
+        assert!(
+            !texts.iter().any(|text| text == "Copy"),
+            "chrome stays idle"
+        );
+        assert!(ring(&output));
+        let pill = text_rect(&output, "In editor").unwrap();
+        assert!(pill.max.x <= 276. && pill.min.x > 150., "{pill:?}");
+        output.textures_delta.clear();
+
+        let mut hover = case(egui::pos2(pill.center().x, pill.center().y));
+        hover.editor = EditorPhase::Present;
+        hover.hover_locked = true;
+        chrome_frame(&ctx, &hover);
+        let (texts, mut output, _) = chrome_frame(&ctx, &hover);
+        assert!(
+            texts.iter().any(|text| text == "Show in editor"),
+            "{texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|text| text == "Edit"),
+            "the pill carries no tooltip"
+        );
+        output.textures_delta.clear();
+
+        for phase in [EditorPhase::Idle, EditorPhase::Lingering] {
+            let ctx = egui::Context::default();
+            let mut rest = case(egui::pos2(500., 500.));
+            rest.editor = phase;
+            chrome_frame(&ctx, &rest);
+            let (_, mut output, _) = chrome_frame(&ctx, &rest);
+            assert!(!ring(&output));
+            let tokens = crate::tokens::load()["dark-mustard"].clone();
+            let compact = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(rect)
+                    if rect.rect.width() == 28. && rect.rect.min.x == 248.
+                        && rect.fill == tokens.color("glass-strong"))
+            });
+            assert_eq!(compact, phase == EditorPhase::Lingering, "{phase:?}");
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn hover_blur_copy_is_card_sized_cover_cropped_and_softened() {
+        let mut image = egui::ColorImage::filled([800, 200], Color32::BLACK);
+        for y in 0..200 {
+            for x in 400..800 {
+                image.pixels[y * 800 + x] = Color32::WHITE;
+            }
+        }
+        let blurred = hover_blur_image(&image).unwrap();
+        assert_eq!(blurred.size, [568, 320]);
+        // The hard black/white edge at the centre is spread across pixels.
+        let row = 160 * 568;
+        let edge = blurred.pixels[row + 284];
+        assert!(edge.r() > 20 && edge.r() < 235, "{edge:?}");
+        assert_eq!(blurred.pixels[row].r(), 0);
+        assert_eq!(blurred.pixels[row + 567].r(), 255);
+        assert!(hover_blur_image(&egui::ColorImage::filled([0, 0], Color32::BLACK)).is_none());
     }
 
     #[test]

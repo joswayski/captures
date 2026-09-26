@@ -298,13 +298,42 @@ pub enum Transition {
     /// `.recording-tooltip > [role="tooltip"]`: opacity and a 3 pt slide over
     /// `var(--dur-1)`, `var(--ease-standard)`.
     Tooltip,
+    /// `.thumbnail-card img`: the hover `filter` (blur and brightness) over
+    /// `0.18s ease`.
+    PreviewMediaFilter,
+    /// `.thumbnail-card img`: the hover `transform: scale()` over `0.22s ease`.
+    PreviewMediaScale,
+    /// `.icon-button::after`: card icon tooltips fade and nudge over `0.12s ease`.
+    PreviewIconTooltip,
+    /// `.thumbnail-stack-control[data-tooltip]::after`: the stack toolbar tip
+    /// over `var(--dur-1) var(--ease-out)`.
+    PreviewStackTooltip,
+    /// `.thumbnail-card`: the editor ring's `box-shadow` arrives over
+    /// `0.22s ease`.
+    PreviewEditorRing,
+    /// `.thumbnail-editor-leaving`: the ring eases out over
+    /// `0.55s var(--ease-standard)`.
+    PreviewEditorRingLeave,
+    /// `.thumbnail-editor-control`: Edit ↔ "In editor" width, padding and
+    /// colour morph over `0.28s cubic-bezier(0.2, 0.8, 0.2, 1)`.
+    PreviewEditorMorph,
 }
 
+/// CSS `ease` keyword.
+const CSS_EASE: Easing = Easing::Bezier([0.25, 0.1, 0.25, 1.]);
+
 impl Transition {
-    pub const ALL: [Self; 3] = [
+    pub const ALL: [Self; 10] = [
         Self::SegmentedIndicator,
         Self::HistoryCardHover,
         Self::Tooltip,
+        Self::PreviewMediaFilter,
+        Self::PreviewMediaScale,
+        Self::PreviewIconTooltip,
+        Self::PreviewStackTooltip,
+        Self::PreviewEditorRing,
+        Self::PreviewEditorRingLeave,
+        Self::PreviewEditorMorph,
     ];
 
     pub fn name(self) -> &'static str {
@@ -312,19 +341,30 @@ impl Transition {
             Self::SegmentedIndicator => "segmented_indicator",
             Self::HistoryCardHover => "history_card_hover",
             Self::Tooltip => "tooltip",
+            Self::PreviewMediaFilter => "preview_media_filter",
+            Self::PreviewMediaScale => "preview_media_scale",
+            Self::PreviewIconTooltip => "preview_icon_tooltip",
+            Self::PreviewStackTooltip => "preview_stack_tooltip",
+            Self::PreviewEditorRing => "preview_editor_ring",
+            Self::PreviewEditorRingLeave => "preview_editor_ring_leave",
+            Self::PreviewEditorMorph => "preview_editor_morph",
         }
     }
 
     pub fn spec(self) -> TransitionSpec {
+        let token = |duration, easing| (Timing::Token(duration), Easing::Token(easing));
         let (duration, easing) = match self {
-            Self::SegmentedIndicator => ("dur-4", "ease-standard"),
-            Self::HistoryCardHover => ("dur-3", "ease-standard"),
-            Self::Tooltip => ("dur-1", "ease-standard"),
+            Self::SegmentedIndicator => token("dur-4", "ease-standard"),
+            Self::HistoryCardHover => token("dur-3", "ease-standard"),
+            Self::Tooltip => token("dur-1", "ease-standard"),
+            Self::PreviewMediaFilter => (Timing::Millis(180.), CSS_EASE),
+            Self::PreviewMediaScale | Self::PreviewEditorRing => (Timing::Millis(220.), CSS_EASE),
+            Self::PreviewIconTooltip => (Timing::Millis(120.), CSS_EASE),
+            Self::PreviewStackTooltip => token("dur-1", "ease-out"),
+            Self::PreviewEditorRingLeave => (Timing::Millis(550.), Easing::Token("ease-standard")),
+            Self::PreviewEditorMorph => (Timing::Millis(280.), Easing::Bezier([0.2, 0.8, 0.2, 1.])),
         };
-        TransitionSpec {
-            duration: Timing::Token(duration),
-            easing: Easing::Token(easing),
-        }
+        TransitionSpec { duration, easing }
     }
 
     pub fn resolve(self, tokens: &impl MotionTokens) -> Option<Tween> {
@@ -686,6 +726,22 @@ mod tests {
         assert_eq!(
             catalog["transitions"]["segmented_indicator"]["easing"]["token"],
             "ease-standard"
+        );
+        assert_eq!(
+            catalog["transitions"]["preview_media_filter"]["duration"]["millis"],
+            180.
+        );
+        assert_eq!(
+            catalog["transitions"]["preview_media_filter"]["easing"]["bezier"][1],
+            0.1
+        );
+        // The ring leave matches the shipping presence leave timer.
+        assert_eq!(
+            Transition::PreviewEditorRingLeave
+                .resolve(&Shipping)
+                .unwrap()
+                .duration_ms,
+            crate::preview_chrome::EDITOR_PRESENCE_LEAVE_MS
         );
     }
 

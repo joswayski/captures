@@ -6,6 +6,7 @@ mod countdown;
 mod diagnostics;
 mod editor;
 mod feedback;
+mod glass_tooltip;
 mod history;
 mod live;
 mod mini_preview;

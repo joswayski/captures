@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import ImageIO
 import QuartzCore
 import CCapturesSettings
@@ -44,6 +45,23 @@ final class MiniPreviewButton: NSButton {
     var growsFromTrailingEdge = false
     private var restFrame: NSRect?
     var showsHoverLabel: Bool { hoverLabel != nil && (hovered || focused) }
+    /// Shipping instant glass tip (`data-tooltip`). Labelled actions have none;
+    /// the system tooltip is never used.
+    var tooltipText: String?
+    /// Reports hover/focus changes so the preview can show the glass tip.
+    var tooltipChanged: ((MiniPreviewButton, Bool) -> Void)?
+    var showsTooltip: Bool { tooltipText != nil && !isHidden && (hovered || focused) }
+    /// Shared editor presence (`CAPTURES_EDITOR_PHASE_*`) of an Edit control.
+    private(set) var editorPhase = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
+    /// `data-editor-just-opened`: the click that opened the editor keeps the
+    /// pill passive ("In editor") until the pointer leaves it.
+    private(set) var editorJustOpened = false
+    private var editorRestFrame: NSRect?
+    var editorPresent: Bool { editorPhase == UInt32(CAPTURES_EDITOR_PHASE_PRESENT) }
+    /// The pill's current label, for tests and accessibility checks.
+    var editorLabel: String {
+        String(cString: captures_preview_editor_label_v1(editorPhase, hovered || focused, editorJustOpened))
+    }
 
     init(_ title: String, kind: MiniPreviewButtonKind, frame: NSRect, tokens: Tokens,
          primary: Bool = false, action: @escaping () -> Void) {
@@ -51,26 +69,89 @@ final class MiniPreviewButton: NSButton {
         super.init(frame: frame)
         self.title = title; isBordered = false; setButtonType(.momentaryPushIn)
         target = self; self.action = #selector(activate)
-        setAccessibilityLabel(title); toolTip = title
+        setAccessibilityLabel(title); toolTip = nil
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    @objc private func activate() { actionBlock() }
+    @objc private func activate() {
+        if kind == .edit { editorJustOpened = true; needsDisplay = true }
+        actionBlock()
+    }
+    override var isHidden: Bool {
+        didSet {
+            guard isHidden, !oldValue else { return }
+            // Hidden chrome cannot stay hovered or keep its tip on screen.
+            hovered = false; editorJustOpened = false
+            tooltipChanged?(self, false)
+        }
+    }
+
+    /// Shipping `.thumbnail-editor-control`: the compact Edit icon, or while an
+    /// editor shows this capture the "In editor" pill, widening away from its
+    /// corner over the shipping morph. Leaving ignores clicks.
+    func setEditorPhase(_ phase: UInt32, animated: Bool) {
+        guard kind == .edit else { return }
+        editorPhase = phase
+        let rest = editorRestFrame ?? frame
+        editorRestFrame = rest
+        let width = editorPresent ? pillWidth() : rest.width
+        let next = NSRect(x: growsFromTrailingEdge ? rest.maxX - width : rest.minX,
+                          y: rest.minY, width: width, height: rest.height)
+        let idle = phase == UInt32(CAPTURES_EDITOR_PHASE_IDLE)
+        let lingering = phase == UInt32(CAPTURES_EDITOR_PHASE_LINGERING)
+        tooltipText = idle || lingering ? "Edit" : nil
+        isEnabled = phase != UInt32(CAPTURES_EDITOR_PHASE_LEAVING)
+        setAccessibilityLabel(String(cString: captures_preview_editor_label_v1(phase, true, false)))
+        // `0 0 14px rgba(accent, .2)` glow around the present pill.
+        wantsLayer = true
+        layer?.shadowColor = tokens.color("theme-accent").cgColor
+        layer?.shadowRadius = 7
+        layer?.shadowOffset = .zero
+        layer?.shadowOpacity = editorPresent ? 0.2 : 0
+        let morph = NativeMotion.transition("preview_editor_morph", tokens: tokens)
+        if animated, window?.isVisible == true, morph.duration > 0, frame != next {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = morph.duration
+                context.timingFunction = morph.timing
+                animator().frame = next
+            }
+        } else if frame != next {
+            frame = next
+        }
+        if showsTooltip { tooltipChanged?(self, true) } else { tooltipChanged?(self, false) }
+        needsDisplay = true
+    }
+
+    private var pillFont: NSFont { .systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold) }
+
+    private func pillWidth() -> CGFloat {
+        func measure(_ text: String) -> Double {
+            Double(NSAttributedString(string: text, attributes: [.font: pillFont]).size().width)
+        }
+        return CGFloat(captures_preview_editor_pill_width_v1(measure("In editor"),
+                                                            measure("Show in editor")))
+    }
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
         tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                                   owner: self, userInfo: nil)
         addTrackingArea(tracking!); super.updateTrackingAreas()
     }
-    override func mouseEntered(with event: NSEvent) { hovered = true; applyHoverShape(); needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { hovered = false; applyHoverShape(); needsDisplay = true }
+    override func mouseEntered(with event: NSEvent) {
+        hovered = true; applyHoverShape(); needsDisplay = true
+        tooltipChanged?(self, showsTooltip)
+    }
+    override func mouseExited(with event: NSEvent) {
+        hovered = false; editorJustOpened = false; applyHoverShape(); needsDisplay = true
+        tooltipChanged?(self, showsTooltip)
+    }
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
-        if result { focused = true; applyHoverShape(); (superview as? MiniPreviewCardView)?.focusWithinChanged() }
+        if result { focused = true; applyHoverShape(); (superview as? MiniPreviewCardView)?.focusWithinChanged(); tooltipChanged?(self, showsTooltip) }
         needsDisplay = true; return result
     }
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
-        if result { focused = false; applyHoverShape(); (superview as? MiniPreviewCardView)?.focusWithinChanged() }
+        if result { focused = false; applyHoverShape(); (superview as? MiniPreviewCardView)?.focusWithinChanged(); tooltipChanged?(self, showsTooltip) }
         needsDisplay = true; return result
     }
     private func applyHoverShape() {
@@ -84,6 +165,7 @@ final class MiniPreviewButton: NSButton {
         needsDisplay = true
     }
     override func draw(_ dirtyRect: NSRect) {
+        if kind == .edit && editorPresent { drawEditorPill(); return }
         let active = cell?.isHighlighted == true
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
                                 xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
@@ -120,8 +202,39 @@ final class MiniPreviewButton: NSButton {
             tokens.color("theme-accent").setStroke(); let focus = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5); focus.lineWidth = 2; focus.stroke()
         }
     }
-    private func drawIcon(in r: NSRect) {
-        let p = NSBezierPath(); p.lineWidth = 1.8; p.lineCapStyle = .round; p.lineJoinStyle = .round
+    /// `.thumbnail-editor-control.is-present`: an accent-outlined glass pill
+    /// that fills with the accent and offers "Show in editor" on hover/focus.
+    private func drawEditorPill() {
+        let offersAction = (hovered || focused) && !editorJustOpened
+        let radius = bounds.height / 2
+        let pill = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                                xRadius: radius - 0.5, yRadius: radius - 0.5)
+        let accent = tokens.color("theme-accent")
+        (offersAction ? accent : tokens.color("glass-strong")).setFill(); pill.fill()
+        if !offersAction {
+            accent.withAlphaComponent(0.72).setStroke(); pill.lineWidth = 1; pill.stroke()
+        }
+        let color = tokens.color(offersAction ? "theme-accent-ink" : "theme-accent-text")
+        color.setStroke(); color.setFill()
+        // Padding `3px 9px 3px 7px` inside a 1 px border; an 11 pt icon at 2.2 units.
+        let icon = NSRect(x: 8, y: (bounds.height - 11) / 2, width: 11, height: 11)
+        drawIcon(in: icon, lineWidth: 2.2 * 11 / 24)
+        let text = NSAttributedString(string: editorLabel, attributes: [
+            .font: pillFont, .foregroundColor: color])
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: bounds.insetBy(dx: 1, dy: 1)).addClip()
+        text.draw(at: NSPoint(x: icon.maxX + 5, y: (bounds.height - text.size().height) / 2))
+        NSGraphicsContext.restoreGraphicsState()
+        if window?.firstResponder === self {
+            tokens.color("theme-accent").setStroke()
+            let focus = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
+                                     xRadius: radius - 1, yRadius: radius - 1)
+            focus.lineWidth = 2; focus.stroke()
+        }
+    }
+
+    private func drawIcon(in r: NSRect, lineWidth: CGFloat = 1.8) {
+        let p = NSBezierPath(); p.lineWidth = lineWidth; p.lineCapStyle = .round; p.lineJoinStyle = .round
         func line(_ a: NSPoint, _ b: NSPoint) { p.move(to: a); p.line(to: b) }
         switch kind {
         case .close, .clear: line(NSPoint(x:r.minX+3,y:r.minY+3), NSPoint(x:r.maxX-3,y:r.maxY-3)); line(NSPoint(x:r.maxX-3,y:r.minY+3), NSPoint(x:r.minX+3,y:r.maxY-3))
@@ -201,6 +314,12 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private let tokens: Tokens
     private let mirrored: Bool
     private let imageView: MiniPreviewImageView
+    /// `.thumbnail-media`: clips the hover blur and scale to the rounded card.
+    private let mediaClip = NSView()
+    /// `brightness(.5)` over opaque media, as a black layer at 50%.
+    private let mediaDim = NSView()
+    /// `.thumbnail-editor-active` ring outside the card edge.
+    private let editorRing = CALayer()
     private let depthShade = NSView()
     private let dimensions: NSTextField
     private let status = NSTextField(labelWithString: "")
@@ -208,6 +327,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private var saveButton: MiniPreviewButton?
     private var copyButton: MiniPreviewButton?
     private var closeButton: MiniPreviewButton?
+    private var editButton: MiniPreviewButton?
     private let clipboardChip: MiniPreviewClipboardChip
     /// The clipboard still holds this capture: Copy hides and the chip shows.
     private(set) var clipboardCurrent = false
@@ -217,6 +337,21 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private var tracking: NSTrackingArea?
     private var compact = false
     private var chromeVisible = false
+    private var pointerInside = false
+    /// Shared editor presence phase (`CAPTURES_EDITOR_PHASE_*`).
+    private(set) var editorPhase = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
+    private var editorPinned: Bool { editorPhase != UInt32(CAPTURES_EDITOR_PHASE_IDLE) }
+    /// The stack's stale-pointer lock: hover waits for real pointer movement.
+    var isHoverLocked: () -> Bool = { false }
+    /// Shipping hover media treatment is applied (blur, brightness, scale).
+    private(set) var mediaHovered = false
+    /// Target Gaussian radius of the media's Core Image blur filter.
+    private(set) var mediaBlurRadius: Double = 0
+    var mediaDimOpacity: CGFloat { mediaDim.alphaValue }
+    var mediaScale: CGFloat { mediaClip.bounds.width > 0 ? imageView.frame.width / mediaClip.bounds.width : 1 }
+    var editorRingOpacity: Float { editorRing.opacity }
+    var iconButtons: [MiniPreviewButton] { actionButtons.filter { $0.tooltipText != nil || $0.kind == .edit } }
+    var editControl: MiniPreviewButton? { editButton }
     private var press: NSPoint?
     private var fileDragStarted = false
     var preparedDragPath: String?
@@ -244,11 +379,24 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         layer?.cornerRadius = tokens.number("thumbnail-card-radius")
         layer?.borderWidth = 1; layer?.borderColor = tokens.color("glass-border").cgColor
 
-        imageView.frame = bounds
-        imageView.wantsLayer = true; imageView.layer?.cornerRadius = tokens.number("thumbnail-card-radius")
-        imageView.layer?.masksToBounds = true
+        mediaClip.frame = bounds; mediaClip.wantsLayer = true
+        mediaClip.layer?.cornerRadius = tokens.number("thumbnail-card-radius")
+        mediaClip.layer?.masksToBounds = true
+        mediaClip.setAccessibilityElement(false)
+        addSubview(mediaClip)
+        imageView.frame = mediaClip.bounds
+        imageView.wantsLayer = true
+        imageView.layerUsesCoreImageFilters = true
+        if let blur = CIFilter(name: "CIGaussianBlur") {
+            blur.setDefaults(); blur.setValue(0, forKey: kCIInputRadiusKey); blur.name = "blur"
+            imageView.layer?.filters = [blur]
+        }
         imageView.setAccessibilityLabel("Screenshot thumbnail")
-        addSubview(imageView)
+        mediaClip.addSubview(imageView)
+        mediaDim.frame = mediaClip.bounds; mediaDim.wantsLayer = true
+        mediaDim.layer?.backgroundColor = NSColor.black.cgColor
+        mediaDim.alphaValue = 0; mediaDim.setAccessibilityElement(false)
+        mediaClip.addSubview(mediaDim)
 
         depthShade.frame = bounds; depthShade.wantsLayer = true
         depthShade.layer?.cornerRadius = tokens.number("thumbnail-card-radius")
@@ -276,11 +424,17 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         let outerX = mirrored ? bounds.width - inset - 28 : inset
         let groupStart = mirrored && saved ? outerX - 28 - gap : outerX
         let close = addButton("Close", .close, x: groupStart, y: inset, action: dismiss)
+        close.tooltipText = "Close"
         closeButton = close
-        addButton("Delete", .trash, x: groupStart + (saved ? 28 + gap : 0), y: inset) { [weak self] in
+        let delete = addButton("Delete", .trash, x: groupStart + (saved ? 28 + gap : 0), y: inset) { [weak self] in
             self?.saved == true ? trash() : dismiss()
         }
-        _ = addButton("Edit", .edit, x: mirrored ? inset : bounds.width - 36, y: inset, action: open)
+        delete.tooltipText = "Delete"
+        let edit = addButton("Edit", .edit, x: mirrored ? inset : bounds.width - 36, y: inset, action: open)
+        edit.tooltipText = "Edit"
+        // The present pill widens away from the inner corner.
+        edit.growsFromTrailingEdge = !mirrored
+        editButton = edit
         let centerX = (bounds.width - 140) / 2
         let centerTop = (bounds.height - 64 - gap) / 2
         copyButton = addButton("Copy", .copy, x: centerX, y: centerTop, width: 140, action: copy)
@@ -288,7 +442,95 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
                                     x: centerX, y: centerTop + 32 + gap, width: 140, primary: true, action: save)
         saveButton = saveControl
         setChromeVisible(false)
+        // `0 0 0 2px rgba(accent, .9), 0 0 14px rgba(accent, .28)`, drawn under
+        // the media so the glow shows only outside the card.
+        let radius = tokens.number("thumbnail-card-radius")
+        let accent = tokens.color("theme-accent")
+        editorRing.frame = bounds.insetBy(dx: -2, dy: -2)
+        editorRing.cornerRadius = radius + 2
+        editorRing.borderWidth = 2
+        editorRing.borderColor = accent.withAlphaComponent(0.9).cgColor
+        editorRing.shadowColor = accent.cgColor
+        editorRing.shadowOpacity = 0.28
+        editorRing.shadowRadius = 7
+        editorRing.shadowOffset = .zero
+        editorRing.opacity = 0
+        layer?.insertSublayer(editorRing, at: 0)
         setAccessibilityRole(.group); setAccessibilityLabel("Screenshot mini preview")
+    }
+
+    /// Apply the shared editor presence: the Edit control morphs into the
+    /// "In editor" pill, stays pinned while leaving and lingering, and the card
+    /// ring arrives over `0.22s ease` and eases out over the 550 ms leave.
+    func setEditorPhase(_ phase: UInt32, animated: Bool) {
+        editorPhase = phase
+        editButton?.setEditorPhase(phase, animated: animated)
+        let present = phase == UInt32(CAPTURES_EDITOR_PHASE_PRESENT)
+        let target: Float = present && !compact ? 1 : 0
+        let spec = NativeMotion.transition(present ? "preview_editor_ring" : "preview_editor_ring_leave",
+                                           tokens: tokens)
+        if animated, window?.isVisible == true, spec.duration > 0, editorRing.opacity != target {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = (editorRing.presentation() ?? editorRing).opacity
+            fade.toValue = target
+            fade.duration = spec.duration
+            fade.timingFunction = spec.timing
+            editorRing.add(fade, forKey: "preview-editor-ring")
+        }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        editorRing.opacity = target
+        CATransaction.commit()
+        if compact { editButton?.isHidden = true } else { setChromeVisible(chromeVisible) }
+    }
+
+    /// `html:not(.thumbnail-native-tracking) .thumbnail-card:hover img`: blur,
+    /// darken and scale the media over its shipping transitions.
+    private func setMediaHovered(_ hovered: Bool, animated: Bool = true) {
+        guard hovered != mediaHovered else { return }
+        mediaHovered = hovered
+        let media = captures_preview_hover_media_v1()
+        let live = animated && window?.isVisible == true
+        let filter = NativeMotion.transition("preview_media_filter", tokens: tokens)
+        let scaling = NativeMotion.transition("preview_media_scale", tokens: tokens)
+        let radius = hovered ? media.blur : 0
+        let from = mediaBlurRadius
+        mediaBlurRadius = radius
+        if let layer = imageView.layer {
+            layer.setValue(radius, forKeyPath: "filters.blur.inputRadius")
+            if live, filter.duration > 0 {
+                let blur = CABasicAnimation(keyPath: "filters.blur.inputRadius")
+                blur.fromValue = from; blur.toValue = radius
+                blur.duration = filter.duration; blur.timingFunction = filter.timing
+                layer.add(blur, forKey: "preview-media-blur")
+            }
+        }
+        let dim = hovered ? CGFloat(1 - media.brightness) : 0
+        let scale = hovered ? CGFloat(media.scale) : 1
+        let size = NSSize(width: mediaClip.bounds.width * scale, height: mediaClip.bounds.height * scale)
+        let scaled = NSRect(x: (mediaClip.bounds.width - size.width) / 2,
+                            y: (mediaClip.bounds.height - size.height) / 2,
+                            width: size.width, height: size.height)
+        guard live else {
+            mediaDim.alphaValue = dim; imageView.frame = scaled
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = filter.duration; context.timingFunction = filter.timing
+            mediaDim.animator().alphaValue = dim
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = scaling.duration; context.timingFunction = scaling.timing
+            imageView.animator().frame = scaled
+        }
+    }
+
+    /// Re-evaluate pointer hover after the stack's stale-pointer lock changes.
+    func hoverLockChanged() { refreshPointerChrome() }
+
+    private func refreshPointerChrome() {
+        let focusedControl = window?.firstResponder === self
+            || actionButtons.contains { $0.window?.firstResponder === $0 }
+        setChromeVisible((pointerInside && !isHoverLocked()) || focusedControl)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -338,7 +580,6 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         saveButton?.title = title
         saveButton?.kind = savedFeedbackActive ? .check : saved ? .folder : .save
         saveButton?.setAccessibilityLabel(title)
-        saveButton?.toolTip = title
         self.saved = saved
         let step = 28 + tokens.number("s-3")
         let start = mirrored ? bounds.width - 36 - (saved ? step : 0) : 8
@@ -358,11 +599,15 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
             .withAlphaComponent(CGFloat(captures_preview_dim_opacity_v1(depth))).cgColor
         dimensions.isHidden = compact || chromeVisible
         status.isHidden = compact || status.stringValue.isEmpty
-        actionButtons.forEach { $0.isHidden = compact || !chromeVisible }
+        actionButtons.forEach { if $0 !== editButton { $0.isHidden = compact || !chromeVisible } }
         if clipboardCurrent { copyButton?.isHidden = true }
         clipboardChip.isHidden = compact || !clipboardCurrent
         closeButton?.isHidden = compact || !chromeVisible || !saved
-        imageView.layer?.opacity = !compact && chromeVisible ? 0.5 : 1
+        editButton?.isHidden = compact || !(chromeVisible || editorPinned)
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        editorRing.opacity = !compact && editorPhase == UInt32(CAPTURES_EDITOR_PHASE_PRESENT) ? 1 : 0
+        CATransaction.commit()
+        setMediaHovered(!compact && chromeVisible, animated: false)
     }
 
     @discardableResult private func addButton(_ title: String, _ kind: MiniPreviewButtonKind, x: CGFloat,
@@ -374,11 +619,13 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private func setChromeVisible(_ visible: Bool) {
         guard !compact else { return }
         chromeVisible = visible
-        actionButtons.forEach { $0.isHidden = !visible }
+        actionButtons.forEach { if $0 !== editButton { $0.isHidden = !visible } }
         if clipboardCurrent { copyButton?.isHidden = true }
         closeButton?.isHidden = !visible || !saved
+        // An open, leaving or lingering editor keeps the control pinned.
+        editButton?.isHidden = !visible && !editorPinned
         dimensions.isHidden = visible
-        imageView.layer?.opacity = visible ? 0.5 : 1
+        setMediaHovered(visible)
     }
     override var acceptsFirstResponder: Bool { !compact }
     override func becomeFirstResponder() -> Bool { let result = super.becomeFirstResponder(); if result { setChromeVisible(true) }; return result }
@@ -396,8 +643,8 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
             if let responder = window.firstResponder as? NSView, responder.isDescendant(of: self) {
                 self.setChromeVisible(true); return
             }
-            let pointer = self.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
-            if !self.bounds.contains(pointer) { self.setChromeVisible(false) }
+            // Same rule as pointer chrome: hover counts only once unlocked.
+            self.setChromeVisible(self.pointerInside && !self.isHoverLocked())
         }
     }
     override func updateTrackingAreas() {
@@ -405,8 +652,12 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(tracking!); super.updateTrackingAreas()
     }
-    override func mouseEntered(with event: NSEvent) { setChromeVisible(true) }
+    override func mouseEntered(with event: NSEvent) {
+        pointerInside = true
+        refreshPointerChrome()
+    }
     override func mouseExited(with event: NSEvent) {
+        pointerInside = false
         if !actionButtons.contains(where: { $0.window?.firstResponder === $0 }) { setChromeVisible(false) }
     }
 
@@ -435,7 +686,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
               imageView.image.size.width > 0, imageView.image.size.height > 0 else { return }
         fileDragStarted = true
         let item = NSDraggingItem(pasteboardWriter: NSURL(fileURLWithPath: path))
-        item.setDraggingFrame(imageView.frame, contents: imageView.image)
+        item.setDraggingFrame(mediaClip.frame, contents: imageView.image)
         beginDraggingSession(with: [item], event: event, source: self)
     }
 
@@ -496,8 +747,8 @@ private final class MiniPreviewExpandButton: NSButton {
         super.init(frame: frame)
         title = ""; isBordered = false; setButtonType(.momentaryPushIn)
         target = self; self.action = #selector(activate)
+        // Shipping's collapsed hit target is named but carries no tooltip.
         setAccessibilityLabel(count == 1 ? "Expand preview" : "Expand \(count) previews")
-        toolTip = "Click to expand; drag to move the preview pile"
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func activate() { actionBlock() }
@@ -549,7 +800,8 @@ final class MiniPreviewOverflowCue: NSButton {
         super.init(frame: frame)
         title = ""; isBordered = false; setButtonType(.momentaryPushIn)
         target = self; self.action = #selector(activate)
-        setAccessibilityLabel(label); toolTip = label
+        // Named for accessibility; shipping cues carry no tooltip.
+        setAccessibilityLabel(label)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func activate() { actionBlock() }
@@ -614,6 +866,18 @@ final class MiniPreviewView: NSView {
     private var collapseButton: MiniPreviewButton?
     private var clearButton: MiniPreviewButton?
     private var overflowCues: [MiniPreviewOverflowCue] = []
+    /// Top-anchored stacks open icon tips below (not `topAnchor`, an NSView member).
+    private let anchoredAtTop: Bool
+    /// One shared glass tip for card icons and the stack toolbar.
+    private let tooltipView: GlassTooltipView
+    private weak var tooltipOwner: MiniPreviewButton?
+    /// The styled tooltip currently shown, for tests and accessibility checks.
+    var visibleTooltip: String? { tooltipView.isHidden ? nil : tooltipView.label.stringValue }
+    var visibleTooltipFrame: NSRect? { tooltipView.isHidden ? nil : tooltipView.frame }
+    /// Shipping stale-pointer suppression (`data-thumbnail-suppress-card-hover`).
+    private var hoverLock = CapturesCardHoverLock()
+    private var pointerTracking: NSTrackingArea?
+    var isCardHoverLocked: Bool { hoverLock.locked }
     var visibleOverflowCueLabels: [String] {
         overflowCues.filter { !$0.isHidden }.compactMap { $0.accessibilityLabel() }
     }
@@ -646,7 +910,8 @@ final class MiniPreviewView: NSView {
          setCollapsed: @escaping (Bool) -> Void,
          clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
         self.geometry = geometry; self.tokens = tokens; self.restLayouts = layouts
-        self.hoverLayouts = hoverLayouts
+        self.hoverLayouts = hoverLayouts; anchoredAtTop = topAnchor
+        tooltipView = GlassTooltipView(tokens: tokens, style: .previewIcon)
         artifactIDs = ids
         super.init(frame: NSRect(x: 0, y: 0, width: geometry.width, height: geometry.height))
         wantsLayer = true
@@ -677,6 +942,12 @@ final class MiniPreviewView: NSView {
             card.isHidden = false
             card.setCompact(collapsed, depth: layout.depth)
             card.setAccessibilityElement(layout.interactive)
+            card.isHoverLocked = { [weak self] in self?.hoverLock.locked == true }
+            for button in card.iconButtons {
+                button.tooltipChanged = { [weak self] owner, visible in
+                    self?.setTooltip(for: owner, visible: visible)
+                }
+            }
             document.addSubview(card); cards[id] = card
         }
 
@@ -717,12 +988,15 @@ final class MiniPreviewView: NSView {
             let clear = MiniPreviewButton("Clear all previews", kind: .clear,
                 frame: NSRect(x: outerX, y: controlY, width: 28, height: 28), tokens: tokens,
                 action: clearAll)
-            clear.toolTip = "Clear all"
+            clear.tooltipText = "Clear all"
+            clear.tooltipChanged = { [weak self] owner, visible in
+                self?.setTooltip(for: owner, visible: visible)
+            }
+            // Show less swaps its icon for a label instead of carrying a tip.
             let collapse = MiniPreviewButton("Minimize previews", kind: .collapse,
                 frame: NSRect(x: adjacentX, y: controlY, width: 28, height: 28), tokens: tokens) {
                 setCollapsed(true)
             }
-            collapse.toolTip = nil
             collapse.growsFromTrailingEdge = rightAnchor
             collapse.hoverLabel = "Show less"
             addSubview(collapse); addSubview(clear)
@@ -736,6 +1010,7 @@ final class MiniPreviewView: NSView {
             scroll.reflectScrolledClipView(scroll.contentView)
             updateOverflowCues()
         }
+        addSubview(tooltipView)
         setAccessibilityRole(.group)
         setAccessibilityLabel(ids.count == 1 ? "Screenshot mini preview" : "\(ids.count) screenshot mini previews")
     }
@@ -755,6 +1030,108 @@ final class MiniPreviewView: NSView {
         order.append(scroll)
         let card = KeyViewLoop.candidates(in: scroll).first { $0 is MiniPreviewCardView }
         KeyViewLoop.install(order, window: window, initial: card)
+    }
+
+    func setEditorPhase(_ phase: UInt32, for artifactID: String, animated: Bool) {
+        cards[artifactID]?.setEditorPhase(phase, animated: animated)
+    }
+
+    func editControl(for artifactID: String) -> MiniPreviewButton? { cards[artifactID]?.editControl }
+
+    func card(for artifactID: String) -> MiniPreviewCardView? { cards[artifactID] }
+
+    /// Shipping instant glass tip under (or, in bottom-anchored stacks, over)
+    /// a hovered or focused icon. It fades and nudges 2 pt over the shipping
+    /// tooltip transition and never takes the mouse.
+    func setTooltip(for button: MiniPreviewButton, visible: Bool) {
+        let spec = NativeMotion.transition(button.kind == .clear ? "preview_stack_tooltip"
+                                           : "preview_icon_tooltip", tokens: tokens)
+        let duration = window?.isVisible == true ? spec.duration : 0
+        guard visible, let text = button.tooltipText, !button.isHidden else {
+            guard tooltipOwner === button else { return }
+            tooltipOwner = nil
+            guard duration > 0 else {
+                tooltipView.alphaValue = 0; tooltipView.isHidden = true
+                return
+            }
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = duration; context.timingFunction = spec.timing
+                tooltipView.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                guard let self, self.tooltipOwner == nil else { return }
+                self.tooltipView.isHidden = true
+            })
+            return
+        }
+        tooltipOwner = button
+        tooltipView.label.stringValue = text
+        let size = tooltipView.label.intrinsicContentSize
+        let anchor = button.convert(button.bounds, to: self)
+        // Shared rule: bottom-anchored stacks open tips above their icons.
+        let above = !anchoredAtTop
+        func tipFrame(_ progress: Double) -> NSRect {
+            let value = captures_preview_icon_tooltip_frame_v1(
+                CapturesTrayNoticeRect(x: Double(anchor.minX), y: Double(anchor.minY),
+                                       width: Double(anchor.width), height: Double(anchor.height)),
+                Double(size.width), Double(size.height), above, progress)
+            return NSRect(x: value.x, y: value.y, width: value.width, height: value.height)
+        }
+        let wasHidden = tooltipView.isHidden || tooltipView.alphaValue == 0
+        tooltipView.isHidden = false
+        tooltipView.needsLayout = true
+        guard duration > 0 else {
+            tooltipView.frame = tipFrame(1); tooltipView.alphaValue = 1
+            return
+        }
+        if wasHidden { tooltipView.frame = tipFrame(0); tooltipView.alphaValue = 0 }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration; context.timingFunction = spec.timing
+            tooltipView.animator().frame = tipFrame(1)
+            tooltipView.animator().alphaValue = 1
+        }
+    }
+
+    override func updateTrackingAreas() {
+        if let pointerTracking { removeTrackingArea(pointerTracking) }
+        let next = NSTrackingArea(rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(next); pointerTracking = next
+        super.updateTrackingAreas()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        samplePointer(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        // Only this view's own area means the pointer left the stack; other
+        // views forward their exits up the responder chain.
+        guard event.type == .mouseExited, event.trackingArea === pointerTracking else { return }
+        samplePointer(nil)
+    }
+
+    /// Hold card hover off after an expand or a new capture until the pointer
+    /// really moves. A pointer already outside the stack releases it at once.
+    func lockCardHover(releaseIfPointerOutside: Bool = true) {
+        _ = captures_preview_hover_lock_v1(&hoverLock, UInt32(CAPTURES_HOVER_LOCK_LOCK), 0, 0)
+        cards.values.forEach { $0.hoverLockChanged() }
+        if releaseIfPointerOutside, let window {
+            let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            samplePointer(bounds.contains(point) ? point : nil)
+        }
+    }
+
+    /// Feed a pointer sample in this view's coordinates (nil when outside).
+    func samplePointer(_ point: NSPoint?) {
+        let wasLocked = hoverLock.locked
+        if let point {
+            _ = captures_preview_hover_lock_v1(&hoverLock, UInt32(CAPTURES_HOVER_LOCK_POINTER),
+                                               Double(point.x), Double(point.y))
+        } else {
+            _ = captures_preview_hover_lock_v1(&hoverLock, UInt32(CAPTURES_HOVER_LOCK_POINTER_OUTSIDE), 0, 0)
+        }
+        if wasLocked != hoverLock.locked { cards.values.forEach { $0.hoverLockChanged() } }
     }
 
     @objc private func scrollBoundsChanged(_ notification: Notification) { updateOverflowCues() }
@@ -916,6 +1293,10 @@ final class MiniPreviewController {
     /// The capture this app last copied, valid until the pasteboard changes.
     private var clipboardOwner: (pasteboard: NSPasteboard, changeCount: Int, artifactID: String)?
     private var clipboardTimer: Timer?
+    /// Captures an open screenshot editor window shows (visible or minimized).
+    private var editorArtifactIDs: Set<String> = []
+    private var editorPresence: [String: CapturesEditorPresence] = [:]
+    private var editorPresenceWake: DispatchWorkItem?
     var copyArtifact: ArtifactAction = { _ in }
     var saveArtifact: ArtifactAction = { _ in }
     var openArtifact: ArtifactAction = { _ in }
@@ -947,6 +1328,44 @@ final class MiniPreviewController {
 
     func showSavedFeedback(for artifactID: String) {
         panel?.previewView.showSavedFeedback(for: artifactID)
+    }
+
+    /// The host's open screenshot editors changed: cards whose capture is in
+    /// one show the "In editor" pill and ring; a closed editor plays the
+    /// shared leave and Edit linger.
+    func setEditorArtifacts(_ ids: Set<String>) {
+        precondition(Thread.isMainThread)
+        editorArtifactIDs = ids
+        updateEditorPresence(animated: true)
+    }
+
+    func editorPhase(for artifactID: String) -> UInt32 {
+        editorPresence[artifactID]?.phase ?? UInt32(CAPTURES_EDITOR_PHASE_IDLE)
+    }
+
+    private static var presenceClockMs: Double { ProcessInfo.processInfo.systemUptime * 1000 }
+
+    private func updateEditorPresence(animated: Bool) {
+        editorPresenceWake?.cancel(); editorPresenceWake = nil
+        let now = Self.presenceClockMs
+        let reduced = NativeMotion.reduceMotion
+        var wake: Double?
+        var next: [String: CapturesEditorPresence] = [:]
+        for id in stack.ids {
+            var presence = editorPresence[id]
+                ?? CapturesEditorPresence(active: false, phase: UInt32(CAPTURES_EDITOR_PHASE_IDLE), since_ms: now)
+            if captures_preview_editor_presence_update_v1(&presence, editorArtifactIDs.contains(id), now, reduced) {
+                panel?.previewView.setEditorPhase(presence.phase, for: id, animated: animated)
+            }
+            next[id] = presence
+            let wait = captures_preview_editor_presence_next_v1(presence, now, reduced)
+            if wait >= 0 { wake = min(wake ?? wait, wait) }
+        }
+        editorPresence = next
+        guard let wake else { return }
+        let work = DispatchWorkItem { [weak self] in self?.updateEditorPresence(animated: true) }
+        editorPresenceWake = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + wake / 1000 + 0.001, execute: work)
     }
 
     /// Forget ownership once another write changes the pasteboard, then show
@@ -1027,6 +1446,8 @@ final class MiniPreviewController {
                     self.makePanel()
                     self.updateVisibility()
                     self.panel?.previewView.playArrival(for: artifact.id)
+                    // A card appearing under a resting pointer waits for it to move.
+                    self.panel?.previewView.lockCardHover()
                     self.prepareFileDrag(for: artifact)
                 case .failure:
                     if self.visibilityPendingArtifactID == artifact.id,
@@ -1163,6 +1584,8 @@ final class MiniPreviewController {
         guard stack.isCollapsed != collapsed else { return }
         stack.setCollapsed(collapsed)
         makePanel(); updateVisibility()
+        // Expanding leaves the pointer over a card it never hovered.
+        if !collapsed { panel?.previewView.lockCardHover() }
     }
 
     func close() {
@@ -1228,6 +1651,8 @@ final class MiniPreviewController {
         }
         panel = next
         refreshClipboardOwner()
+        updateEditorPresence(animated: false)
+        for id in ids { next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false) }
     }
 
     private func perform(_ action: KeyPath<MiniPreviewController, ArtifactAction>,

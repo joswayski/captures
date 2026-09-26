@@ -2331,6 +2331,10 @@ final class LiveCaptureController: NSObject {
                             self?.miniPreviews?.dismiss(artifactID)
                             self?.loadHistory(select: artifactID)
                         })
+                    // Mini previews show "In editor" while this window shows their capture.
+                    self.screenshotEditor?.presenceChanged = { [weak self] artifactID in
+                        self?.miniPreviews?.setEditorArtifacts(Set(artifactID.map { [$0] } ?? []))
+                    }
                 }
                 self.screenshotEditor?.present(artifact: artifact, historyRoot: self.historyRoot,
                     outputDirectory: outputDirectory, completion: completion.map { finished in

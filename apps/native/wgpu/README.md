@@ -43,6 +43,10 @@ Save, history selection and nondestructive Dismiss actions. Expanded overflow sc
 without dropping cards; the stack can collapse or be cleared without deleting captures.
 It is excluded from captures by default and retained when the include-in-captures
 preference is enabled.
+Cards follow the shipping hover chrome: an "In editor" pill and accent ring while
+their screenshot editor is open, a pre-blurred darkened hover image, hover held
+off after an expand or a new card until the pointer moves, and instant glass
+icon tooltips.
 Record creates H.264 MP4 recordings with the stored FPS, maximum resolution,
 countdown, cursor, click-highlight, desktop-audio and microphone defaults where
 the current platform reports support. Pause/resume, confirmed Restart using the
@@ -100,19 +104,23 @@ Windows/X11 use the shipping
 synthetic cursor arrow, not the actual system cursor image. Other capture defaults remain unconnected;
 other scenes remain fixtures. The selector fixture handles window-focused Escape
 only, while live capture uses the shared process-wide Escape cancellation handler.
-Preferences → About → Send feedback uses the shared Rust client on a separate
-worker. Only explicit Send in `--live` can contact captur.es; fixture mode keeps
-submission disabled. The form previews the included app/system context, retains
-drafts on errors and navigation, and prevents duplicate sends while pending.
+Preferences → About → Send feedback and tray Send Feedback… open the shipping
+feedback window (its own 640×700 viewport, not a Preferences pane) with copy,
+category cards, placeholders and limits from `captures_app::feedback`. It uses the
+shared Rust client on a separate worker. Only explicit Send in `--live` can
+contact captur.es; fixture mode keeps submission disabled. The form previews the
+included app/system context, retains drafts on errors and when the window is
+closed and reopened, and prevents duplicate sends while pending.
 Captures, files, and diagnostics are never attached. Login and updating remain
 visibly unavailable.
 
 Feedback input/retry verification uses a rejecting loopback proxy, never the
 production service: `python apps/native/x11_feedback_smoke.py --binary
 apps/native/wgpu/target/release/captures-wgpu-workbench --output feedback-smoke`.
-It runs on private X11/software GL and checks empty/pending submission gates,
-retained text through navigation and failure, offline retry, and clean exit in
-both appearances. Shared client tests cover HTTP success, cooldown and payload
+It runs on private X11/software GL, follows the form's
+`CAPTURES_NATIVE_LAYOUT_PROBE` control rectangles in the feedback window, and
+checks empty/pending submission gates, retained text through window close/reopen
+and failure, offline retry, and clean exit in both appearances. Shared client tests cover HTTP success, cooldown and payload
 privacy against disposable loopback servers. Physical input/AT acceptance remains open.
 
 A screenshot History card's Edit opens a worker-owned crop/canvas/draft editor. Undo/redo,

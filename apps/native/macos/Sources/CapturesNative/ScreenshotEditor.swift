@@ -1187,7 +1187,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             return
         }
         if state.artifactID == artifact.id, state.snapshot != nil {
+            // "Show in editor" also brings back a minimized editor.
+            if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            publishPresence()
             completion?(true)
             return
         }
@@ -1207,6 +1210,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         status.stringValue = "Opening screenshot…"; updateControls()
         fitWindowToScreen()
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        publishPresence()
         let draftsRoot = URL(fileURLWithPath: historyRoot).deletingLastPathComponent()
             .appendingPathComponent("editor-drafts", isDirectory: true).path
         worker.open(historyRoot: historyRoot, draftsRoot: draftsRoot, artifactID: artifact.id) {
@@ -1243,6 +1247,22 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     var activeArtifactID: String? { window.isVisible ? state.artifactID : nil }
 
+    /// Capture this editor window shows while open (visible or minimized), for
+    /// the mini-preview "In editor" presence.
+    var presentArtifactID: String? {
+        window.isVisible || window.isMiniaturized ? state.artifactID : nil
+    }
+    /// Called on the main thread whenever `presentArtifactID` changes.
+    var presenceChanged: (String?) -> Void = { _ in }
+    private var reportedPresence: String?
+
+    private func publishPresence() {
+        let current = presentArtifactID
+        guard current != reportedPresence else { return }
+        reportedPresence = current
+        presenceChanged(current)
+    }
+
     func prepareForTermination() -> Bool {
         guard inlineTextInput != nil || !hasStagedText else {
             showError("Apply or cancel pending text before quitting.")
@@ -1262,7 +1282,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             inlineTextInput = nil; hideInlineTextEditor()
             state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
             estimateWork?.cancel(); estimateWork = nil; estimateGeneration += 1
-            window.orderOut(nil); return true
+            window.orderOut(nil); publishPresence(); return true
         case .failure(let error):
             if let failure = error as? EditorTerminationFailure,
                let presentation = failure.acceptedPresentation,
@@ -4798,6 +4818,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelViewportPan()
         viewport = NativeEditorViewport(); viewportCanvasSize = .zero
         worker.close(); window.orderOut(nil); updateControls()
+        publishPresence()
     }
 
     private func updateControls() {
