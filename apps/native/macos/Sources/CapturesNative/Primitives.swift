@@ -28,11 +28,18 @@ final class TokenScroller: NSScroller {
     override class func scrollerWidth(for controlSize: NSControl.ControlSize,
                                       scrollerStyle: NSScroller.Style) -> CGFloat { 10 }
 
-    /// The painted thumb inside the knob part.
+    /// The painted thumb inside the knob part: shipping's 4 pt pill centred
+    /// across the 10 pt bar, whatever cross size AppKit gives the knob part.
     var thumbRect: NSRect {
         let knob = rect(for: .knob)
         guard knob.width > 6, knob.height > 6 else { return .zero }
-        return knob.insetBy(dx: 3, dy: 3)
+        let thickness: CGFloat = 4
+        if bounds.height > bounds.width {
+            return NSRect(x: bounds.midX - thickness / 2, y: knob.minY + 3,
+                          width: thickness, height: knob.height - 6)
+        }
+        return NSRect(x: knob.minX + 3, y: bounds.midY - thickness / 2,
+                      width: knob.width - 6, height: thickness)
     }
 
     override func draw(_ dirtyRect: NSRect) { drawKnob() }
