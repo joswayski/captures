@@ -4355,9 +4355,9 @@ final class ScreenshotEditorTests: XCTestCase {
             let image = overlay.presentedImageRect, scale = image.width / 640
             XCTAssertEqual(overlay.resizeHandlePoints.count, 8)
             let southeast = overlay.resizeHandlePoints[4]
-            let press = CGPoint(x: image.minX + southeast.x * scale, y: image.minY + southeast.y * scale)
-            let release = CGPoint(x: press.x + 60 * scale, y: press.y + 40 * scale)
-            overlay.begin(at: press); overlay.drag(to: release)
+            let pressPoint = CGPoint(x: image.minX + southeast.x * scale, y: image.minY + southeast.y * scale)
+            let release = CGPoint(x: pressPoint.x + 60 * scale, y: pressPoint.y + 40 * scale)
+            overlay.begin(at: pressPoint); overlay.drag(to: release)
             XCTAssertNotNil(overlay.resizePreview); XCTAssertFalse(controller.state.snapshot!.unsavedChanges)
             try render(controller.root, name: "screenshot-editor-resize-active-\(appearance)")
             overlay.end(at: release)
