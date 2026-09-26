@@ -215,15 +215,26 @@ def main():
             return values.get(name)
         return wait(found, f"control {name}")
 
-    def visible_rect(window, name, prefix=False):
+    def visible_rect(window, name, prefix=False, whole_control=False):
         """Scroll the page until the named control is visible, then return it."""
-        for _ in range(60):
+        for attempt in range(60):
             x0, y0, x1, y1, cx0, cy0, cx1, cy1 = control(window, name, prefix)
             left, top, right, bottom = max(x0, cx0), max(y0, cy0), min(x1, cx1), min(y1, cy1)
-            if right - left >= 2 and bottom - top >= 2 and top >= y0 - 1 and bottom <= y1 + 1:
-                return left, top, right, bottom
+            # A control that fits its clip must be wholly visible: callers map
+            # fractions of the returned rect onto the control, so a clipped
+            # rect would misplace them. Taller controls (or a wheel step that
+            # keeps overshooting) settle for the visible part.
+            # Nested clips shrink as the page scrolls, so measure against the
+            # page viewport for controls inside it (not the fixed footer).
             page = control(window, "Page")
-            wheel = "5" if (y0 + y1) / 2 > cy1 else "4"
+            vy0, vy1 = cy0, cy1
+            if cy0 >= page[5] - 1 and cy1 <= page[7] + 1:
+                vy0, vy1 = page[5], page[7]
+            fits = whole_control and y1 - y0 <= vy1 - vy0 + 1 and attempt < 30
+            whole = y0 >= vy0 - 1 and y1 <= vy1 + 1
+            if right - left >= 2 and bottom - top >= 2 and (whole or not fits):
+                return left, top, right, bottom
+            wheel = "5" if (y1 > vy1 if fits else (y0 + y1) / 2 > cy1) else "4"
             run("xdotool", "mousemove", "--sync", "--window", window, str(page[0] + 6),
                 str((page[1] + page[3]) // 2), "click", wheel, "sleep", ".35")
         raise AssertionError(f"{name} never scrolled into view")
@@ -273,7 +284,9 @@ def main():
         click(window, page[0] + 6, page[1] + 40)
 
     def image_point(window, fx, fy):
-        x0, y0, x1, y1 = visible_rect(window, "Preview image")
+        # Fractions of a clipped rect would misplace the point, so scroll the
+        # whole image into view first.
+        x0, y0, x1, y1 = visible_rect(window, "Preview image", whole_control=True)
         return round(x0 + (x1 - x0) * fx), round(y0 + (y1 - y0) * fy)
 
     def region(window, name, inset=0):
@@ -286,6 +299,8 @@ def main():
         if at is None:
             # Away from the centered play button and the fixture's white box.
             x, y = image_point(window or editor, .75, .75)
+            # Measuring may scroll the page; retake the shot at that position.
+            run("import", "-window", window or editor, str(path))
             pixel = run("convert", str(path), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-")
         else:
             pixel = run("ffmpeg", "-v", "error", "-ss", str(at), "-i", str(path),
@@ -462,7 +477,7 @@ def main():
             run("xdotool", "windowmove", "--sync", mp4_editor, "80", "60",
                 "windowsize", "--sync", mp4_editor, "960", "900", "sleep", ".5")
             shot(mp4_editor, "external-mp4-decoded")
-            dominant(output / "external-mp4-decoded.png", 0)
+            dominant(output / "external-mp4-decoded.png", 0, window=mp4_editor)
             press(mp4_editor, "Replace original…")
             shot(mp4_editor, "external-mp4-replace-disabled")
             webm_allowed.touch()
@@ -853,8 +868,8 @@ def main():
             wait(playing, "GIF with Sound selected stays playable without a device")
             def gif_motion():
                 path = output / "sound-gif-silent.png"
+                x, y = image_point(editor, .75, .75)  # May scroll; measure before the shot.
                 run("import", "-window", editor, str(path))
-                x, y = image_point(editor, .75, .75)
                 pixel = run("convert", str(path), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-")
                 return len(pixel) == 3 and pixel[1] > max(pixel[0], pixel[2]) + 40
             wait(gif_motion, "silent GIF actually advances from red to green without a device")
@@ -1200,10 +1215,13 @@ def main():
                 # Scroll the image into view and remember where it was shot:
                 # its top quarter, clear of the play control, which dims while
                 # a staged crop awaits Apply.
-                visible_rect(editor, "Preview image")
+                visible_rect(editor, "Preview image", whole_control=True)
                 shot(editor, name)
                 # Measure after the shot settles so the probe matches its frame.
-                x0, y0, x1, y1 = visible_rect(editor, "Preview image")
+                x0, y0, x1, y1 = visible_rect(editor, "Preview image", whole_control=True)
+                # Inset past the rounded, antialiased edges, which vary with
+                # the page's scroll offset.
+                x0, y0, x1 = x0 + 8, y0 + 8, x1 - 8
                 preview_regions[name] = f"{x1 - x0}x{(y1 - y0) // 4}+{x0}+{y0}"
 
             def preview_pixels(name):
@@ -1230,9 +1248,8 @@ def main():
             press(editor, "Adjust crop")
             # Bring the whole full-source image into view before sampling it;
             # the crop card's button can leave the preview scrolled away.
-            visible_rect(editor, "Preview image")
-            shot(editor, "crop-source-ready")
             x, y = image_point(editor, .9, .9)
+            shot(editor, "crop-source-ready")
             pixel = run("convert", str(output / "crop-source-ready.png"), "-crop", f"1x1+{x}+{y}",
                         "-depth", "8", "rgb:-")
             assert pixel[1] > max(pixel[0], pixel[2]) + 10, ("full-source preview must be visible", pixel)
@@ -1309,9 +1326,9 @@ def main():
             fill(editor, "Position (ms)", 500)
             press(editor, "Seek")
             press(editor, "Adjust crop")
-            shot(editor, "crop-source-after-seek")
             # Sample inside the staged crop; the default point is in the dimmed exclusion.
             x, y = image_point(editor, .4, .4)
+            shot(editor, "crop-source-after-seek")
             pixel = run("convert", str(output / "crop-source-after-seek.png"), "-crop", f"1x1+{x}+{y}",
                         "-depth", "8", "rgb:-")
             assert pixel[0] > 90 and pixel[0] > max(pixel[1], pixel[2]) + 40, pixel
@@ -1376,8 +1393,8 @@ def main():
                 # Decoder startup is not presentation time. Observe an actual
                 # temporal transition instead of assuming fixed startup latency.
                 path = output / f"{name}.png"
+                x, y = image_point(editor, .75, .75)  # May scroll; measure before the shot.
                 run("import", "-window", editor, str(path))
-                x, y = image_point(editor, .75, .75)
                 pixel = run("convert", str(path), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-")
                 return len(pixel) == 3 and pixel[channel] > 90 and all(
                     pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel)
