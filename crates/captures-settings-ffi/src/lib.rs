@@ -1,5 +1,6 @@
 mod capture_menu;
 mod editor;
+mod editor_export;
 mod feedback;
 mod icons;
 mod instance;

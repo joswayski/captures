@@ -384,18 +384,19 @@ borrows exact pixels. Save-new uses the same once-resized frame for export, Hist
 dimensions, History PNG and thumbnail. Document/draft/undo and full-resolution copy
 remain unchanged; option changes invalidate encoded previews. Windows/Wayland
 presentation, physical macOS input and output acceptance remain open.
-Both hosts now expose confirmed **Replace original…** for the opened screenshot's
-existing saved path and matching output format. The session pins that path; shared
+Both hosts' export bars now overwrite the opened screenshot's existing saved path
+by default when the output format matches (see the export-bar paragraph below). The session pins that path; shared
 Rust rechecks current History identity/path/type and file availability before encoding.
 Sibling-temp publication replaces only that destination. Once-resized export, private
 History PNG, thumbnail and dimensions update the same artifact ID/date, rather than
 adding a copy. A post-publication History failure reports the saved path and warning.
 Hosts dismiss that artifact's stale mini preview and reload History with fresh decode
-generations after file publication, including partial success. Cancel/Escape and stale
-confirmations submit no write; accepted writes drain on quit. Document, pixels, draft,
+generations after file publication, including partial success. Accepted writes drain
+on quit. Document, pixels, draft,
 undo/redo and encoded preview are retained. Undo does not revert the saved file;
-discard reloads the current History image. Unlike Tauri's full post-save flow, a new
-copy is not adopted as this editor's source and drafts are not flattened/deleted.
+discard reloads the current History image. As in Tauri, a new file saved with a
+History entry becomes the editor's next overwrite target; drafts are not
+flattened/deleted.
 Validation at write start is not a cross-process compare-and-swap or a two-store
 transaction: an external change during encoding is not locked out. The file and
 History publication are separate, and a History failure cannot roll back a saved file.
@@ -1631,7 +1632,7 @@ AppKit waits for its current editor open to settle before advancing the batch;
 pending text or unsaved edits block switching without losing the new History item.
 With a draft, the user must restore or discard it from History first so an interrupted
 reload cannot hide the only copy. Screenshot source bytes stay untouched and the
-source path remains available for explicit Replace original. Private X11 exercises bad-file
+source path remains the export bar's default overwrite target. Private X11 exercises bad-file
 continuation, three editors, canonical aliases, decoded pixels, untouched sources,
 saved-draft refusal/History restoration and same-ID source reload after explicit
 discard in both appearances. Windows and Wayland use the same host code but this
@@ -1656,21 +1657,19 @@ misleading suffix, same-ID closed WebM reopen, H.264 MP4 export with decoded out
 pixels, source-byte identity and normal/minimum recording and error states.
 These checks do not close Windows, Wayland or physical-host acceptance gates.
 
-The wgpu Output panel now previews shared PNG/JPEG/WebP encoding with the shipping
+The wgpu export settings now preview shared PNG/JPEG/WebP encoding with the shipping
 quality modes, palette controls and hard byte budget. Encoding and decoding run
 on the editor worker; the UI reports actual encoded bytes and switches between
 the edited canvas and decoded output. Edits and option changes invalidate the
 previous comparison; encoding failures retain recoverable edits and allow retry.
 Preview never writes files or saves a draft. The same Windows/X11/Wayland host
 code is implemented; private-X11 and unit checks do not establish physical-host
-acceptance. Its **Save new copy** action runs shared publication on the same worker,
-starts in the configured output directory and accepts an editable full path.
-It never replaces existing files; successful exports add a distinct History entry
-without modifying the original or draft. A post-publication History failure shows
-the saved path and warning. Accepted writes drain before application quit.
-The wgpu host also connects an output-folder picker and edited-image clipboard
-output. AppKit export and clipboard controls are described below;
-post-save source adoption and physical-platform acceptance remain open.
+acceptance. Save runs shared publication on the same worker; new files never
+replace existing files and add a distinct History entry without modifying the
+original or draft. A post-publication History failure shows the saved path and
+warning. Accepted writes drain before application quit. The wgpu host also connects
+an output-folder picker and edited-image clipboard output. AppKit export and
+clipboard controls are described below; physical-platform acceptance remains open.
 
 The AppKit editor host now enables **Edit screenshot** only for screenshot History
 entries. Its dedicated serialized worker owns the shared Rust session and publishes
@@ -1680,13 +1679,13 @@ remains the only geometry/render authority. Geometry and Layers views retain the
 preview; the front-to-back layer panel exposes visibility, lock, opacity, absolute
 X/Y movement through shared deltas, image rename, duplicate, delete and adjacent
 ordering. Stable IDs preserve selection across replies, and shared Rust remains the
-authority for locked barriers and duplicate behavior. An Output view runs shared
-PNG/JPEG/WebP encoding on that worker, reports exact bytes and switches the fit preview
+authority for locked barriers and duplicate behavior. The export settings run shared
+PNG/JPEG/WebP encoding on that worker, report exact bytes and switch the fit preview
 between the edited canvas and decoded output. Option or document changes invalidate
-stale output; previewing has no draft, undo, clipboard or file side effects. **Save new
-copy** chooses a directory independently of the worker, then serializes publication on
-that worker. It never replaces a file or mutates the draft; successful publication adds
-a distinct History entry, and partial History failure preserves the saved path.
+stale output; previewing has no draft, undo, clipboard or file side effects. **Change…**
+chooses a directory independently of the worker; Save then serializes publication on
+that worker without mutating the draft. New files never replace an existing file and
+add a distinct History entry, and partial History failure preserves the saved path.
 **Copy image** encodes the full-resolution edited frame as lossless PNG on that same
 worker, then publishes retained bytes to the AppKit pasteboard only if the session's
 generation and artifact still match. Export options (including invalid byte budgets)
@@ -1797,18 +1796,35 @@ Below 1000 points wide, AppKit moves canvas dimensions to a second footer row;
 the inspector retains its width and scrolling access to every section's controls.
 Windows/X11/Wayland keep their existing responsive layout; physical resize/input
 acceptance remains open on all hosts.
-Copy image and Save new copy are pinned below the scrolling inspector on both
-hosts, including at 760×540. They remain available in Geometry, Layers and Draw;
-Output retains format/quality/size, destination, encoding preview and confirmed
-original replacement. Copy still uses full-resolution edited PNG pixels, while
-Save uses the selected export options without saving the draft or replacing a file.
-Both actions retain the serialized worker and accepted-work lifecycle. AppKit
-keeps its full status area above the actions; wgpu shows a compact status with the
-complete message on hover. Native fixtures exercise section/resize visibility,
-pending-work gates and unchanged canvas geometry; X11 export tests save from all
-four sections. Windows/Wayland presentation and physical AppKit acceptance remain
-open, rather than being inferred from shared code or rendered CI fixtures.
-The tool rail and toolbar/export-bar organization still differ from Tauri.
+Both hosts replace the pinned Copy/Save footer and Output section with the
+shipping-style bottom export bar, available in Geometry, Layers and Draw at every
+size down to 760×540 (the default AppKit window grows to 1000×780 to keep the
+canvas area, shrinking to fit shorter displays' visible frames). The collapsed bar shows an **Export settings** disclosure with a
+`PNG · 1920 × 1080 · ≈ 240 KB` summary, **Saving to** with **Change…**, the filename
+with a format-suffix menu, **Copy image** (four-second **Copied** confirmation),
+a **Save as new file** switch, primary **Save**, **Show in Folder** after a save and a
+hint/status line. Expanding it reveals size, quality, palette, maximum file size,
+**Est. size** with the % change from the original, and edited/encoded canvas
+selection. The estimate re-encodes 220 ms after the last edit or option change,
+off the session worker, replacing the explicit preview requirement.
+
+`captures_app::editor_export` owns the save model for both hosts (AppKit reaches it
+through `captures_editor_export_bar_v1`, `captures_editor_save_v1` and
+`captures_editor_estimate_v1`): Save overwrites the saved source by default; turning
+on the switch suggests an `-edited` filename, and renaming, choosing another folder or
+changing format saves a new file (a format change always does). Overwrite needs no
+confirmation because shared Rust re-checks the History entry, saved path and format
+at write time and publishes through a sibling temp file; the previous confirmation
+dialog is removed. New files that collide with an existing file are refused with a
+filename error. A saved file with a History entry is adopted as the next overwrite
+target. Unlike Tauri, the folder is not revealed automatically; **Show in Folder**
+reveals it on request. Copy still uses full-resolution edited PNG pixels. Both
+actions retain the serialized worker and accepted-work lifecycle. Native fixtures
+exercise section/resize visibility, pending-work gates, overwrite/new-file/adoption
+and estimate states; X11 export tests save from every section. Windows/Wayland
+presentation and physical AppKit acceptance remain open, rather than being inferred
+from shared code or rendered CI fixtures. The tool rail and toolbar organization
+still differ from Tauri, and the CompressionPreview split slider is not connected.
 Remaining viewport controls and other drawing tools are not connected.
 Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.
