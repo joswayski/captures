@@ -1794,6 +1794,33 @@ preparation or countdown. Recording, physical
 platform input/display acceptance and full capture-menu visual/accessibility
 parity remain open.
 
+The capture-menu parity slice moves shipping `RecordingSelector` copy and small
+policies into `captures-app::capture_menu`, exposed to AppKit through
+`captures_capture_menu_v1` (JSON, freed with `captures_settings_free_v1`) and an
+allocation-free guidance hit test. Both hosts now compute the controls-visibility
+note from recording capabilities ("These controls **won’t**/**will** show in
+screenshots|recordings"; Linux adds the Hide controls hint and never links). Where
+controls can be excluded the note, and "Auto-capture is on…", link to Preferences:
+the menu closes and Preferences scrolls to that row and highlights it for the
+shipping 2.4 s. Full screen shows the display identity (OS name, W × H, and
+"· N FPS" in Record) instead of guidance. The recording row uses labelled
+FPS (60/30/15) / Max resolution selects, Show cursor / Show clicks / Desktop audio
+switches with On/Off/Unavailable text and unavailable-reason tooltips, coupled
+cursor/clicks, and the microphone select's "Selected microphone" and (wgpu, which
+enumerates after opening) "Loading microphones…" states. The primary button uses
+the shipping labels and hides under auto-start unless a start failed; AppKit Record
+now honors auto-start like shipping and wgpu, while tray/shortcut Record Full Screen
+never auto-starts. Guidance uses the shipping copy and chip placement, stays until a
+window is selected, hides while dragging a region and fades within 28 points of the
+pointer (12-point leave slack). The wgpu region drag also settles at the release
+point when a slow frame batches the release with later motion. Neither host keeps
+the menu open while starting or switching displays, so "Capturing…", "Starting…" and
+"Switching…" are shared but not reachable; AppKit enumerates microphones before
+opening and never shows the loading row. Segmented-control animation/icons, the
+panel entrance animation, the Full screen display icon and Wayland remain open.
+Verified with Rust/XCTest source tests and private-X11 capture/recording smokes;
+AppKit compiles and runs only in macOS CI, and Windows presentation is unverified.
+
 Region preparation starts with `captures-app::selection`: shared create/move/
 corner-resize and settled-aspect geometry, including Shift precedence, fractional
 coordinates and the shipping minimum/clamping rules. A checked, allocation-free
