@@ -2270,15 +2270,34 @@ fn shortcut_recorder(
         );
         return response;
     }
+    // Shipping `kbd` chips; long chords tighten spacing, then shrink the
+    // text (to 80%) rather than dropping keys.
+    let base = t.number("text-2xs");
+    let measure = |size: f32| -> Vec<f32> {
+        keys.iter()
+            .map(|key| {
+                painter
+                    .layout_no_wrap(
+                        key.clone(),
+                        egui::FontId::proportional(size),
+                        t.color("text-muted"),
+                    )
+                    .size()
+                    .x
+            })
+            .collect()
+    };
+    let available = rect.width() - 2. * t.number("s-4");
+    let (scale, padding, gap) = fit_chips(&measure(base), available);
     for key in keys {
         let text = painter.layout_no_wrap(
             key.clone(),
-            egui::FontId::proportional(t.number("text-2xs")),
+            egui::FontId::proportional(base * scale),
             t.color("text-muted"),
         );
-        let size = egui::vec2((text.size().x + 10.).max(20.), text.size().y + 6.);
+        let size = egui::vec2((text.size().x + 2. * padding).max(20.), text.size().y + 6.);
         let chip = egui::Rect::from_min_size(egui::pos2(x, rect.center().y - size.y / 2.), size);
-        if chip.right() > rect.right() - t.number("s-4") {
+        if chip.right() > rect.right() - t.number("s-4") + 0.5 {
             break;
         }
         let chip_radius = t.number("r-xs");
@@ -2302,9 +2321,32 @@ fn shortcut_recorder(
             text,
             t.color("text-muted"),
         );
-        x = chip.right() + t.number("s-3");
+        x = chip.right() + gap;
     }
     response
+}
+
+/// Chip text scale, horizontal padding and gap so every key fits `available`:
+/// shipping 5 pt padding and 6 pt gaps, then 4/4, then text down to 80%.
+fn fit_chips(text_widths: &[f32], available: f32) -> (f32, f32, f32) {
+    let total = |scale: f32, padding: f32, gap: f32| {
+        text_widths
+            .iter()
+            .map(|width| (width * scale + 2. * padding).max(20.))
+            .sum::<f32>()
+            + gap * text_widths.len().saturating_sub(1) as f32
+    };
+    if total(1., 5., 6.) <= available {
+        return (1., 5., 6.);
+    }
+    if total(1., 4., 4.) <= available {
+        return (1., 4., 4.);
+    }
+    let mut scale = 1.;
+    while scale > 0.8 && total(scale, 4., 4.) > available {
+        scale -= 0.02;
+    }
+    (scale.max(0.8), 4., 4.)
 }
 
 /// Shipping `.setting-copy small`: `--text-sm` in `--text-subtle`, at most
@@ -2530,6 +2572,20 @@ mod tests {
             "Control+Shift+KeyD"
         );
         assert!(prefs.shortcut_recorder.is_none());
+    }
+
+    #[test]
+    fn long_chords_tighten_then_shrink_chips_instead_of_dropping_keys() {
+        assert_eq!(fit_chips(&[20., 22.], 200.), (1., 5., 6.));
+        let widths = [18., 24., 16., 30., 110.];
+        let (scale, padding, gap) = fit_chips(&widths, 228.);
+        assert!((0.8..1.).contains(&scale));
+        let total: f32 = widths
+            .iter()
+            .map(|w| (w * scale + 2. * padding).max(20.))
+            .sum::<f32>()
+            + gap * 4.;
+        assert!(total <= 228.);
     }
 
     #[test]
