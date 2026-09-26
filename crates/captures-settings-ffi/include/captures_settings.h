@@ -566,6 +566,20 @@ bool captures_recording_timeline_trim_update_v1(CapturesRecordingTimelineTrimDra
     double client_x, double track_left, double track_width,
     CapturesRecordingTimelineTrimUpdate *output);
 
+/* UI-thread-safe pure recording editor copy shared with the wgpu host, ported
+ * from the shipping Tauri editor. JSON operations: title {mime_type} ->
+ * {title}; trim_summary {start_ms, end_ms, duration_ms} -> {range, selected};
+ * time {ms, duration_ms} -> {label}; file_size {bytes} -> {label}; estimate
+ * {estimating?, unapplied?, invalid_maximum?, maximum_bytes?, estimate_bytes?,
+ * estimate_exact?, original_bytes?} -> {label, muted, delta: null|{percent,
+ * label, smaller}}; stage {stage: "preparing"|"encoding"|"verifying"|
+ * "complete"|"cancelled"|"failed"} -> {label}; saved {gif, size_bytes} ->
+ * {message}; filename_error {stem} -> {error: null|string}; menus {gif,
+ * base_width, base_height} -> {quality_modes, quality_presets, resolutions,
+ * gif_frame_rates, gif_maximum_widths}, each [{value, label, description}].
+ * Envelopes follow captures_app_request_v1; free with captures_settings_free_v1. */
+char *captures_recording_editor_ui_v1(const char *request_json);
+
 /* Shared recording editor prerequisite. Open on one serialized worker with
  * {history_root,artifact_id,ffmpeg,ffprobe}; the artifact must be a real History
  * recording. Success output is owned {ok:true,result:snapshot}; error output is
