@@ -53,7 +53,7 @@ pub fn install_focus_ring(ctx: &egui::Context) {
             if ctx.data(|data| data.get_temp::<u64>(key)) == Some(pass) {
                 return;
             }
-            let Some(response) = ctx.read_response(id) else {
+            let Some(response) = read_response_keeping_focus(&ctx, id) else {
                 return;
             };
             if !response.rect.is_positive() || !response.interact_rect.is_positive() {
@@ -72,6 +72,24 @@ pub fn install_focus_ring(ctx: &egui::Context) {
             );
         }),
     );
+}
+
+/// `Context::read_response` is not a pure read: it replays this pass's
+/// pointer presses against the widget and surrenders its focus when the
+/// press landed elsewhere. At end of pass that would drop focus a widget
+/// requested during the very pass that was clicked (e.g. the canvas text
+/// composer opened by a click on the canvas), so keystrokes and Escape
+/// would never reach it. Suspend focus surrender for this lookup only.
+fn read_response_keeping_focus(ctx: &egui::Context, id: egui::Id) -> Option<egui::Response> {
+    let surrender = ctx.options_mut(|options| {
+        std::mem::replace(
+            &mut options.input_options.surrender_focus_on,
+            egui::SurrenderFocusOn::Never,
+        )
+    });
+    let response = ctx.read_response(id);
+    ctx.options_mut(|options| options.input_options.surrender_focus_on = surrender);
+    response
 }
 
 /// Shipping scroll bars: a thin pill thumb over a transparent track. The
@@ -1365,6 +1383,45 @@ mod tests {
         let output = frame(&ctx, vec![], draw);
         let rings = strokes(&output).into_iter().filter(|s| *s == ring).count();
         assert_eq!(rings, 1, "a custom indicator suppresses the global ring");
+    }
+
+    #[test]
+    fn focus_ring_keeps_focus_requested_during_a_click_elsewhere() {
+        // The canvas text composer requests focus in the pass that handles
+        // the canvas click; the ring's end-of-pass lookup must not replay
+        // that click against the new field and take its focus away.
+        let (ctx, _) = setup();
+        install_focus_ring(&ctx);
+        let field = egui::Id::unique("composer-field");
+        let mut text = String::new();
+        let mut draw = |ui: &mut egui::Ui, focus: bool| {
+            let response = ui.add(egui::TextEdit::singleline(&mut text).id(field));
+            if focus {
+                response.request_focus();
+            }
+        };
+        frame(&ctx, vec![], |ui| draw(ui, false));
+        let pos = egui::pos2(500., 350.);
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(
+            &ctx,
+            vec![egui::Event::PointerMoved(pos), press(true), press(false)],
+            |ui| draw(ui, true),
+        );
+        assert!(ctx.memory(|memory| memory.has_focus(field)));
+        assert_eq!(
+            ctx.options(|options| options.input_options.surrender_focus_on),
+            egui::SurrenderFocusOn::default()
+        );
+        frame(&ctx, vec![egui::Event::Text("Text".into())], |ui| {
+            draw(ui, false)
+        });
+        assert_eq!(text, "Text");
     }
 
     #[test]
