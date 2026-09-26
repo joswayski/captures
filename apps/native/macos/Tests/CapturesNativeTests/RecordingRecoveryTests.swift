@@ -98,12 +98,13 @@ final class RecordingRecoveryTests: XCTestCase {
             window.makeKeyAndOrderFront(nil)
             let panel = try recoveryPanel(root)
             try waitUntil { worker.listCount > 0 && !panel.isHidden }
-            XCTAssertEqual(panel.frame, NSRect(x: 28, y: 194, width: 320, height: 152))
+            // The shipping card spans the History column; its origin follows the header.
+            XCTAssertEqual(panel.frame, NSRect(x: 28, y: 192, width: 944, height: 176))
             XCTAssertTrue(root.bounds.contains(panel.frame))
             let row = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView)
             let reason = try XCTUnwrap(row.subviews.compactMap { $0 as? NSTextField }
                 .first { $0.stringValue.contains("The recording manifest is corrupt") })
-            XCTAssertGreaterThan(reason.frame.height, 49)
+            XCTAssertGreaterThan(reason.frame.height, 32, "long text wraps past two lines")
             XCTAssertEqual(reason.toolTip, reason.stringValue)
             XCTAssertEqual(reason.accessibilityHelp(), reason.stringValue)
             XCTAssertTrue(panel.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
@@ -134,7 +135,7 @@ final class RecordingRecoveryTests: XCTestCase {
             let errorContent = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView)
             let errorField = try XCTUnwrap(errorContent.subviews.compactMap { $0 as? NSTextField }
                 .first { $0.stringValue.contains("Recovery root is temporarily unavailable.") })
-            XCTAssertGreaterThan(errorField.frame.height, 49)
+            XCTAssertGreaterThan(errorField.frame.height, 32, "long text wraps past two lines")
             XCTAssertEqual(errorField.toolTip, "Couldn’t list interrupted recordings: \(longError)")
             if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
                 window.display(); root.layoutSubtreeIfNeeded()
@@ -248,8 +249,9 @@ final class RecordingRecoveryTests: XCTestCase {
         // The initial History response may arrive after Recover was clicked.
         // Its programmatic selection must not count as user selection intent.
         initialHistoryGate.signal()
-        let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
-        try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
+        let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? HistoryGridView)
+        try waitUntil { table.numberOfRows == 1 }
+        XCTAssertEqual(table.selectedRow, -1, "loading History never selects a card")
         XCTAssertEqual(worker.recoverCount, 1)
         worker.completeRecover(.success(RecordingRecoveryResult(artifactID: id, warning: nil)))
         try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
@@ -289,8 +291,8 @@ final class RecordingRecoveryTests: XCTestCase {
             recoveryWorker: worker, showPreferences: {})
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
-        let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
-        try waitUntil { table.numberOfRows == 2 && table.selectedRow == 0 }
+        let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? HistoryGridView)
+        try waitUntil { table.numberOfRows == 2 }
         let panel = try recoveryPanel(root)
         let scroll = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first)
         buttons(try XCTUnwrap(scroll.documentView), title: "Recover")[0].performClick(nil)
