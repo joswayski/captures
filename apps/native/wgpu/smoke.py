@@ -90,6 +90,8 @@ def main():
         "hud-muted": ["--scene", "hud", "--hud-state", "muted"],
         "hud-busy": ["--scene", "hud", "--hud-state", "busy"],
         "hud-no-microphone": ["--scene", "hud", "--hud-state", "no-microphone"],
+        "hud-saving": ["--scene", "hud", "--hud-state", "saving"],
+        "hud-failed": ["--scene", "hud", "--hud-state", "failed"],
         "preview-before": ["--scene", "preview"],
         "preview-after": ["--scene", "preview", "--exercise", "--screenshot-after", "3"],
         "preview-reduced": ["--scene", "preview", "--exercise", "--reduced-motion", "--screenshot-after", "3"],

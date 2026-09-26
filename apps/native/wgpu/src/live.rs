@@ -276,6 +276,9 @@ enum CapturePhase {
     RecordingRestarting,
     RecordingFinalizing,
     RecordingDiscarding,
+    /// The engine could not start the take. Shipping keeps the HUD open with the
+    /// error, Retry recording and Delete.
+    RecordingFailed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -874,6 +877,8 @@ pub struct Live {
     include_recording_controls: bool,
     recording_snapshot: Option<RecordingSessionSnapshot>,
     recording_microphone_peak: f32,
+    /// Shipping `.recording-hud-error` line: action failures and engine warnings.
+    recording_hud_error: captures_app::recording_hud::ErrorLine,
     recording_segment_started: Option<Instant>,
     recording_snapshot_poll_pending: bool,
     recording_last_snapshot_poll: Instant,
@@ -1146,6 +1151,7 @@ impl Live {
             include_recording_controls: false,
             recording_snapshot: None,
             recording_microphone_peak: 0.,
+            recording_hud_error: Default::default(),
             recording_segment_started: None,
             recording_snapshot_poll_pending: false,
             recording_last_snapshot_poll: Instant::now(),
@@ -1997,6 +2003,7 @@ impl Live {
                     if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
                         && self.capture_phase == Some(CapturePhase::Recording) =>
                 {
+                    self.hud_action_started();
                     self.capture_phase = Some(CapturePhase::RecordingPausing);
                     self.status = "Pausing recording…".into();
                     self.recording_worker
@@ -2006,7 +2013,9 @@ impl Live {
                     if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
                         && self.capture_phase == Some(CapturePhase::RecordingPaused) =>
                 {
+                    self.hud_action_started();
                     self.capture_phase = Some(CapturePhase::RecordingStarting);
+                    self.status = "Resuming recording…".into();
                     self.recording_worker.send(recording::Command::Resume {
                         generation,
                         exclude_captures_app: recording_controls_are_excluded(
@@ -2022,6 +2031,7 @@ impl Live {
                         ) =>
                 {
                     let paused = self.capture_phase == Some(CapturePhase::RecordingPaused);
+                    self.hud_action_started();
                     self.capture_phase = Some(CapturePhase::RecordingMuting { paused });
                     self.status = if muted {
                         "Muting microphone…".into()
@@ -2040,6 +2050,14 @@ impl Live {
                 }
                 SelectorMessage::RestartRecording { generation }
                     if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
+                        && self.capture_phase == Some(CapturePhase::RecordingFailed) =>
+                {
+                    // Shipping "Retry recording" restarts a failed take without asking.
+                    self.recording_delete_confirmation = false;
+                    self.restart_recording(ctx, generation);
+                }
+                SelectorMessage::RestartRecording { generation }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
                         && matches!(
                             self.capture_phase,
                             Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
@@ -2055,6 +2073,7 @@ impl Live {
                             Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
                         ) =>
                 {
+                    self.hud_action_started();
                     self.start_recording_screenshot(ctx);
                 }
                 SelectorMessage::CancelRestartRecording { generation }
@@ -2072,29 +2091,7 @@ impl Live {
                         ) =>
                 {
                     self.recording_restart_confirmation = false;
-                    let seconds = self
-                        .recording_snapshot
-                        .as_ref()
-                        .map(|snapshot| snapshot.options.countdown_seconds)
-                        .unwrap_or(0);
-                    let Some(flow) = &mut self.flow else {
-                        continue;
-                    };
-                    match flow.restart_countdown(seconds) {
-                        Ok(()) => {
-                            self.recording_controls_hidden = None;
-                            self.recording_hidden_notice_until = None;
-                            self.capture_phase = Some(CapturePhase::RecordingRestarting);
-                            self.status = "Restarting recording…".into();
-                            self.recording_worker
-                                .send(recording::Command::Restart { generation });
-                            request_hidden_root_paint(ctx);
-                        }
-                        Err(error) => {
-                            self.error =
-                                Some(format!("Could not arm restarted recording Escape: {error}"));
-                        }
-                    }
+                    self.restart_recording(ctx, generation);
                 }
                 SelectorMessage::StopRecording { generation }
                     if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
@@ -2103,8 +2100,19 @@ impl Live {
                             Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
                         ) =>
                 {
+                    self.hud_action_started();
+                    // Shipping keeps the HUD up as "Saving…" with a frozen timer.
+                    if let Some(snapshot) = &mut self.recording_snapshot {
+                        snapshot.elapsed_ms = interpolated_recording_elapsed(
+                            snapshot.elapsed_ms,
+                            self.recording_segment_started
+                                .map(|started| started.elapsed()),
+                        );
+                    }
+                    self.recording_segment_started = None;
                     self.capture_phase = Some(CapturePhase::RecordingFinalizing);
                     self.status = "Finalizing recording…".into();
+                    request_hidden_root_paint(ctx);
                     self.recording_worker.send(recording::Command::Finish {
                         generation,
                         history_root: self.root.clone(),
@@ -2114,9 +2122,14 @@ impl Live {
                     if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
                         && matches!(
                             self.capture_phase,
-                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                            Some(
+                                CapturePhase::Recording
+                                    | CapturePhase::RecordingPaused
+                                    | CapturePhase::RecordingFailed
+                            )
                         ) =>
                 {
+                    self.hud_action_started();
                     self.recording_delete_confirmation = false;
                     self.capture_phase = Some(CapturePhase::RecordingDiscarding);
                     self.status = "Discarding recording…".into();
@@ -2127,7 +2140,11 @@ impl Live {
                     if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
                         && matches!(
                             self.capture_phase,
-                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                            Some(
+                                CapturePhase::Recording
+                                    | CapturePhase::RecordingPaused
+                                    | CapturePhase::RecordingFailed
+                            )
                         ) =>
                 {
                     self.recording_restart_confirmation = false;
@@ -2148,6 +2165,7 @@ impl Live {
                             Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
                         ) =>
                 {
+                    self.hud_action_started();
                     self.recording_controls_hidden = Some(generation);
                     self.recording_hidden_notice_until =
                         Some(Instant::now() + Duration::from_millis(6_200));
@@ -2443,9 +2461,13 @@ impl Live {
                     self.recording_snapshot_poll_pending = false;
                     let hud_changed = match result {
                         Ok(snapshot) => {
+                            let warning_changed = self.recording_hud_error.apply(
+                                captures_app::recording_hud::ErrorEvent::Warning {
+                                    warning: snapshot.warning.clone(),
+                                },
+                            );
                             let changed = self.recording_microphone_peak != microphone_peak
-                                || self.recording_snapshot.as_ref().map(|old| &old.warning)
-                                    != Some(&snapshot.warning);
+                                || warning_changed;
                             self.recording_microphone_peak = microphone_peak;
                             self.recording_segment_started =
                                 snapshot_interpolation_origin(snapshot.state, Instant::now());
@@ -2460,10 +2482,8 @@ impl Live {
                         }
                     };
                     if hud_changed
-                        && matches!(
-                            self.capture_phase,
-                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
-                        )
+                        && recording_hud_state(self.capture_phase, self.recording_has_started)
+                            .is_some()
                         && self.recording_controls_hidden != Some(generation)
                         && self.recording_screenshot_flow.is_none()
                     {
@@ -2487,6 +2507,8 @@ impl Live {
                     match result {
                         Ok(snapshot) => {
                             let seconds = snapshot.options.countdown_seconds;
+                            self.recording_hud_error
+                                .apply(captures_app::recording_hud::ErrorEvent::SessionChanged);
                             self.recording_snapshot = Some(snapshot);
                             let Some(flow) = &mut self.flow else { continue };
                             match flow.start_countdown(seconds) {
@@ -2542,6 +2564,11 @@ impl Live {
                                 continue;
                             }
                             self.recording_has_started = true;
+                            self.recording_hud_error.apply(
+                                captures_app::recording_hud::ErrorEvent::Warning {
+                                    warning: snapshot.warning.clone(),
+                                },
+                            );
                             self.recording_snapshot = Some(snapshot);
                             self.recording_microphone_peak = 0.;
                             self.recording_segment_started = Some(Instant::now());
@@ -2553,9 +2580,35 @@ impl Live {
                             request_hidden_root_paint(ctx);
                         }
                         Err(failure) => {
+                            let current = self.flow.as_ref().is_some_and(CaptureFlow::is_current);
+                            let snapshot = failure.snapshot.map(|snapshot| *snapshot);
+                            match snapshot {
+                                Some(snapshot)
+                                    if snapshot.state == RecordingState::Failed
+                                        && !self.recording_has_started
+                                        && current =>
+                                {
+                                    self.enter_failed_recording(ctx, snapshot, failure.error);
+                                    continue;
+                                }
+                                Some(snapshot)
+                                    if snapshot.state == RecordingState::Paused
+                                        && self.recording_has_started
+                                        && current =>
+                                {
+                                    // Shipping leaves a take paused when resume cannot
+                                    // reopen the engine; the error shows on the HUD.
+                                    self.recording_snapshot = Some(snapshot);
+                                    self.recording_segment_started = None;
+                                    self.capture_phase = Some(CapturePhase::RecordingPaused);
+                                    self.status = "Recording paused; resume failed.".into();
+                                    self.hud_action_failed(ctx, failure.error);
+                                    continue;
+                                }
+                                _ => {}
+                            }
                             self.error = Some(failure.error);
-                            if failure
-                                .snapshot
+                            if snapshot
                                 .is_some_and(|snapshot| snapshot.state == RecordingState::Failed)
                             {
                                 // Failed sessions retain their completed media for
@@ -2626,6 +2679,24 @@ impl Live {
                             self.recording_snapshot = Some(snapshot);
                             self.recording_microphone_peak = 0.;
                             request_hidden_root_paint(ctx);
+                        }
+                        Err(failure)
+                            if self.recording_has_started
+                                && self.flow.as_ref().is_some_and(CaptureFlow::is_current)
+                                && failure.snapshot.as_ref().is_some_and(|snapshot| {
+                                    snapshot.state == RecordingState::Paused
+                                }) =>
+                        {
+                            // Shipping keeps the take paused when the replacement
+                            // segment cannot open (for example, the microphone is
+                            // gone) and shows the error on the HUD.
+                            let snapshot = *failure.snapshot.expect("guarded snapshot");
+                            self.recording_snapshot = Some(snapshot);
+                            self.recording_microphone_peak = 0.;
+                            self.recording_segment_started = None;
+                            self.capture_phase = Some(CapturePhase::RecordingPaused);
+                            self.status = "Recording paused; the microphone change failed.".into();
+                            self.hud_action_failed(ctx, failure.error);
                         }
                         Err(failure) => {
                             self.error = Some(format!(
@@ -3630,22 +3701,100 @@ impl Live {
         self.start_next_media();
     }
 
+    /// Shipping clears the HUD error line whenever a HUD action starts.
+    fn hud_action_started(&mut self) {
+        self.recording_hud_error
+            .apply(captures_app::recording_hud::ErrorEvent::ActionStarted);
+    }
+
+    /// Show a HUD action or engine failure on the HUD's inline error line.
+    fn hud_action_failed(&mut self, ctx: &egui::Context, message: String) {
+        self.recording_hud_error
+            .apply(captures_app::recording_hud::ErrorEvent::ActionFailed { message });
+        request_hidden_root_paint(ctx);
+        ctx.request_repaint_of(egui::ViewportId::from_hash_of("recording-controls"));
+    }
+
+    /// Replace the take with a fresh countdown (confirmed Restart, or Retry
+    /// recording on a failed take). The same flow rearms Escape first.
+    fn restart_recording(&mut self, ctx: &egui::Context, generation: u64) {
+        let seconds = self
+            .recording_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.options.countdown_seconds)
+            .unwrap_or(0);
+        let Some(flow) = &mut self.flow else {
+            return;
+        };
+        match flow.restart_countdown(seconds) {
+            Ok(()) => {
+                self.hud_action_started();
+                self.recording_controls_hidden = None;
+                self.recording_hidden_notice_until = None;
+                self.capture_phase = Some(CapturePhase::RecordingRestarting);
+                self.status = "Restarting recording…".into();
+                self.recording_worker
+                    .send(recording::Command::Restart { generation });
+                request_hidden_root_paint(ctx);
+            }
+            Err(error) => {
+                self.hud_action_failed(
+                    ctx,
+                    format!("Could not arm restarted recording Escape: {error}"),
+                );
+            }
+        }
+    }
+
+    /// The initial engine start failed. Keep the take and HUD like shipping:
+    /// the error inline, Retry recording and Delete. Escape is released because
+    /// nothing is counting down; Retry rearms it for the new countdown.
+    fn enter_failed_recording(
+        &mut self,
+        ctx: &egui::Context,
+        snapshot: RecordingSessionSnapshot,
+        error: String,
+    ) {
+        if let Some(flow) = &mut self.flow
+            && let Err(disarm) = flow.disarm_escape()
+        {
+            self.status = format!("Recording failed; Escape could not be released: {disarm}");
+        } else {
+            self.status =
+                "Recording failed. Retry or delete it from the recording controls.".into();
+        }
+        self.recording_snapshot = Some(snapshot);
+        self.recording_microphone_peak = 0.;
+        self.recording_segment_started = None;
+        self.recording_snapshot_poll_pending = false;
+        self.recording_controls_hidden = None;
+        self.recording_hidden_notice_until = None;
+        self.capture_phase = Some(CapturePhase::RecordingFailed);
+        self.hud_action_failed(ctx, error);
+    }
+
     fn start_recording_screenshot(&mut self, ctx: &egui::Context) {
         let Some(parent) = self.flow.as_ref() else {
             return;
         };
         let Some(settings) = self.recording_screenshot_settings.as_ref().cloned() else {
-            self.error = Some("Screenshot preferences are unavailable for this recording.".into());
+            self.hud_action_failed(
+                ctx,
+                "Screenshot preferences are unavailable for this recording.".into(),
+            );
             return;
         };
         let Some(target) = self.countdown_target else {
-            self.error = Some("The recording display is no longer available.".into());
+            self.hud_action_failed(ctx, "The recording display is no longer available.".into());
             return;
         };
         let flow = match parent.begin_recording_screenshot(0) {
             Ok(flow) => flow,
             Err(error) => {
-                self.error = Some(format!("Could not start recording screenshot: {error}"));
+                self.hud_action_failed(
+                    ctx,
+                    format!("Could not start recording screenshot: {error}"),
+                );
                 return;
             }
         };
@@ -3654,7 +3803,7 @@ impl Live {
                 .begin_capture(&settings, Some(target), ctx.cumulative_frame_nr())
         {
             flow.cancel();
-            self.error = Some(error);
+            self.hud_action_failed(ctx, error);
             return;
         }
         self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
@@ -3710,6 +3859,7 @@ impl Live {
         self.capture_in_flight = false;
         self.recording_snapshot = None;
         self.recording_microphone_peak = 0.;
+        self.recording_hud_error = Default::default();
         self.recording_segment_started = None;
         self.recording_snapshot_poll_pending = false;
         self.recording_has_started = false;
@@ -4495,6 +4645,8 @@ impl Live {
         if let (Some(snapshot), Some(target)) = (&self.recording_snapshot, self.countdown_target)
             && let RecordingTarget::Region { rect, .. } = snapshot.options.target
             && self.flow.as_ref().is_some_and(CaptureFlow::is_current)
+            // Shipping removes the region indicator when a take fails.
+            && self.capture_phase != Some(CapturePhase::RecordingFailed)
         {
             let tokens = t.clone();
             let visible = self.recording_screenshot_flow.is_none();
@@ -4519,35 +4671,25 @@ impl Live {
                 },
             );
         }
-        if matches!(
-            self.capture_phase,
-            Some(
-                CapturePhase::Recording
-                    | CapturePhase::RecordingPaused
-                    | CapturePhase::RecordingMuting { .. }
+        if let Some((hud_state, phase_busy)) =
+            recording_hud_state(self.capture_phase, self.recording_has_started)
+            && let (Some(flow), Some(snapshot), Some(target)) = (
+                &self.flow,
+                self.recording_snapshot.clone(),
+                self.countdown_target,
             )
-        ) && let (Some(flow), Some(snapshot), Some(target)) = (
-            &self.flow,
-            self.recording_snapshot.clone(),
-            self.countdown_target,
-        ) {
+        {
             let generation = flow.generation();
-            let paused = match self.capture_phase {
-                Some(CapturePhase::RecordingPaused) => true,
-                Some(CapturePhase::RecordingMuting { paused }) => paused,
-                _ => false,
-            };
+            let running = matches!(
+                hud_state,
+                RecordingState::Recording | RecordingState::Finalizing
+            );
             let restart_confirmation = self.recording_restart_confirmation;
             let delete_confirmation = self.recording_delete_confirmation;
             let controls_hidden = self.recording_controls_hidden == Some(generation)
                 || self.recording_screenshot_flow.is_some();
             let hide_available = self.recording_restore_available;
-            let busy = restart_confirmation
-                || delete_confirmation
-                || matches!(
-                    self.capture_phase,
-                    Some(CapturePhase::RecordingMuting { .. })
-                );
+            let busy = restart_confirmation || delete_confirmation || phase_busy;
             let elapsed_ms = interpolated_recording_elapsed(
                 snapshot.elapsed_ms,
                 self.recording_segment_started
@@ -4557,7 +4699,7 @@ impl Live {
             let confirmation_sender = self.selector_tx.clone();
             let tokens = t.clone();
             let include_controls = self.include_recording_controls;
-            let warning = snapshot.warning.clone();
+            let error_line = self.recording_hud_error.line(snapshot.error.as_deref());
             let microphone_peak = self.recording_microphone_peak;
             let position = target.position
                 + egui::vec2(
@@ -4585,25 +4727,23 @@ impl Live {
                         .send_viewport_cmd(egui::ViewportCommand::ContentProtected(
                             recording_controls_are_excluded(include_controls),
                         ));
-                    let notice = warning.as_deref().unwrap_or({
-                        if cfg!(target_os = "linux") || include_controls {
-                            "These controls will show in recordings · Use Hide controls to keep them out"
-                        } else {
-                            "These controls won’t show in recordings"
-                        }
-                    });
+                    let notice = if cfg!(target_os = "linux") || include_controls {
+                        "These controls will show in recordings · Use Hide controls to keep them out"
+                    } else {
+                        "These controls won’t show in recordings"
+                    };
                     if let Some(action) = recording_hud::show(
                         ui,
                         &tokens,
                         recording_hud::View {
-                            paused,
+                            state: hud_state,
                             busy,
                             has_microphone: snapshot.options.audio.microphone_device_id.is_some(),
                             microphone_muted: snapshot.options.audio.microphone_muted,
                             microphone_peak,
                             elapsed_ms,
                             notice,
-                            warning: warning.is_some(),
+                            error: error_line.as_deref(),
                             hide_available,
                             reduced_motion,
                         },
@@ -4637,7 +4777,7 @@ impl Live {
                         let _ = sender.send(message);
                         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                     }
-                    if !paused {
+                    if running {
                         // 30 fps keeps the shipping status pulse smooth; the timer only needs 10.
                         ui.ctx().request_repaint_after(Duration::from_millis(
                             if reduced_motion { 100 } else { 33 },
@@ -5724,6 +5864,27 @@ fn recording_recovery_root(history_root: &Path) -> PathBuf {
     history_root.with_file_name("recording-recovery")
 }
 
+/// The HUD state for a capture phase, and whether an action is in flight.
+/// Shipping keeps the HUD up (controls disabled) while pausing, resuming,
+/// changing the microphone and saving, and shows failed takes; it is hidden
+/// only during countdown and restart.
+fn recording_hud_state(
+    phase: Option<CapturePhase>,
+    has_started: bool,
+) -> Option<(RecordingState, bool)> {
+    Some(match phase? {
+        CapturePhase::Recording => (RecordingState::Recording, false),
+        CapturePhase::RecordingPaused => (RecordingState::Paused, false),
+        CapturePhase::RecordingPausing => (RecordingState::Recording, true),
+        CapturePhase::RecordingMuting { paused: true } => (RecordingState::Paused, true),
+        CapturePhase::RecordingMuting { paused: false } => (RecordingState::Recording, true),
+        CapturePhase::RecordingStarting if has_started => (RecordingState::Paused, true),
+        CapturePhase::RecordingFinalizing if has_started => (RecordingState::Finalizing, true),
+        CapturePhase::RecordingFailed => (RecordingState::Failed, false),
+        _ => return None,
+    })
+}
+
 fn is_recording_phase(phase: Option<CapturePhase>) -> bool {
     matches!(
         phase,
@@ -5738,6 +5899,7 @@ fn is_recording_phase(phase: Option<CapturePhase>) -> bool {
                 | CapturePhase::RecordingRestarting
                 | CapturePhase::RecordingFinalizing
                 | CapturePhase::RecordingDiscarding
+                | CapturePhase::RecordingFailed
         )
     )
 }
@@ -6106,6 +6268,84 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn recording_hud_stays_up_while_busy_saving_and_failed() {
+        use CapturePhase as Phase;
+        use RecordingState as State;
+        for (phase, started, expected) in [
+            (Phase::Recording, true, Some((State::Recording, false))),
+            (Phase::RecordingPaused, true, Some((State::Paused, false))),
+            (
+                Phase::RecordingPausing,
+                true,
+                Some((State::Recording, true)),
+            ),
+            (Phase::RecordingStarting, true, Some((State::Paused, true))),
+            (Phase::RecordingStarting, false, None),
+            (
+                Phase::RecordingMuting { paused: true },
+                true,
+                Some((State::Paused, true)),
+            ),
+            (
+                Phase::RecordingFinalizing,
+                true,
+                Some((State::Finalizing, true)),
+            ),
+            (Phase::RecordingFailed, false, Some((State::Failed, false))),
+            (Phase::RecordingCountdown, false, None),
+            (Phase::RecordingRestarting, true, None),
+            (Phase::RecordingDiscarding, true, None),
+        ] {
+            assert_eq!(
+                recording_hud_state(Some(phase), started),
+                expected,
+                "{phase:?}"
+            );
+        }
+        assert!(is_recording_phase(Some(Phase::RecordingFailed)));
+    }
+
+    #[test]
+    fn failed_start_keeps_the_take_with_an_inline_error_until_the_next_action() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.capture_phase = Some(CapturePhase::RecordingStarting);
+        let snapshot: RecordingSessionSnapshot = serde_json::from_value(serde_json::json!({
+            "id": "take", "state": "failed", "elapsed_ms": 0,
+            "countdown_remaining_seconds": null, "warning": null,
+            "error": "no microphone device is available",
+            "options": {
+                "kind": "video", "target": {"type": "display", "display_id": "fixture"},
+                "frames_per_second": 15, "max_resolution": "original",
+                "countdown_seconds": 3, "show_cursor": false
+            }
+        }))
+        .unwrap();
+        live.enter_failed_recording(
+            &ctx,
+            snapshot,
+            "Error: no microphone device is available".into(),
+        );
+        assert_eq!(live.capture_phase, Some(CapturePhase::RecordingFailed));
+        assert!(live.status.starts_with("Recording failed"));
+        let error = live.recording_snapshot.as_ref().unwrap().error.clone();
+        assert_eq!(
+            live.recording_hud_error.line(error.as_deref()).as_deref(),
+            Some("no microphone device is available")
+        );
+        live.hud_action_started();
+        // The session's own failure remains until Retry replaces the take.
+        assert_eq!(
+            live.recording_hud_error.line(error.as_deref()).as_deref(),
+            Some("no microphone device is available")
+        );
+        assert_eq!(live.recording_hud_error.line(None), None);
+        live.capture_phase = None;
+        live.flush();
     }
 
     #[test]
