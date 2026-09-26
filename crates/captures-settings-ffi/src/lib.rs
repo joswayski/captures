@@ -6,6 +6,7 @@ mod preview;
 mod recording;
 mod recording_editor;
 mod recording_geometry;
+mod recording_hud;
 mod recording_recovery;
 mod recording_timeline;
 mod region;
