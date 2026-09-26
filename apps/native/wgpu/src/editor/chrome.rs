@@ -1151,8 +1151,11 @@ fn canvas_field(
                 .interactive(enabled),
         )
         .on_hover_text(label);
-    response
-        .widget_info(|| egui::WidgetInfo::text_edit(enabled, "", &view.canvas_text[axis], label));
+    response.widget_info(|| {
+        let mut info = egui::WidgetInfo::text_edit(enabled, "", &view.canvas_text[axis], "");
+        info.label = Some(label.into());
+        info
+    });
     if !response.lost_focus() {
         return;
     }
@@ -1472,4 +1475,343 @@ fn rail_tip(ui: &egui::Ui, tokens: &Tokens, anchor: egui::Rect, label: &str) {
         text,
         tokens.color("glass-text"),
     );
+}
+
+/// Shipping draw-tool key for [`model::tool_label`].
+fn draw_key(shape: DrawShape) -> &'static str {
+    match shape {
+        DrawShape::Text => "t",
+        DrawShape::Arrow => "a",
+        DrawShape::Freehand => "pen",
+        DrawShape::Wand => "wand",
+        DrawShape::Erase => "erase",
+        DrawShape::Restore => "restore",
+        shape => shape_key(shape),
+    }
+}
+
+/// The inspector section heading: shipping's Layers heading (title, count pill
+/// and add-image button) for Select, and the tool name like
+/// `.screenshot-properties-heading` for Crop and drawing tools. It keeps the
+/// height of the former section headings so controls below stay in place.
+/// For Layers it returns the native Combine menu button, beside Add image.
+pub(super) fn section_heading(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+) -> Option<egui::Response> {
+    let height = 30.;
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    ui.painter().hline(
+        rect.expand2(vec2(8., 0.)).x_range(),
+        rect.bottom() - 0.5,
+        Stroke::new(1., tokens.color("border-subtle")),
+    );
+    let title = match view.section {
+        Section::Layers => model::layers::TITLE,
+        Section::Geometry => model::tool_label("c"),
+        Section::Draw => model::tool_label(draw_key(view.draw_shape)),
+    };
+    let text = galley(
+        ui,
+        title,
+        font(tokens, "text-md", true),
+        tokens.color("text"),
+    );
+    let text_right = rect.left() + text.size().x;
+    ui.painter().galley(
+        pos2(rect.left(), rect.center().y - text.size().y / 2.),
+        text,
+        tokens.color("text"),
+    );
+    if view.section != Section::Layers {
+        return None;
+    }
+    let count = view
+        .presented
+        .as_ref()
+        .map_or(0, |presented| presented.document.elements.len());
+    let digits = galley(
+        ui,
+        &count.to_string(),
+        FontId::monospace(tokens.number("text-2xs")),
+        tokens.color("text-subtle"),
+    );
+    let pill = egui::Rect::from_min_size(
+        pos2(text_right + tokens.number("s-3"), rect.center().y - 9.5),
+        vec2((digits.size().x + 2. * tokens.number("s-2")).max(19.), 19.),
+    );
+    ui.painter().rect_filled(
+        pill,
+        tokens.number("r-pill"),
+        tokens.color("surface-sunken"),
+    );
+    ui.painter().galley(
+        pill.center() - digits.size() / 2.,
+        digits,
+        tokens.color("text-subtle"),
+    );
+    let add = egui::Rect::from_center_size(
+        pos2(rect.right() - 15., rect.center().y - 1.),
+        Vec2::splat(28.),
+    );
+    let enabled = edit_enabled(view) && view.import_picker.is_none();
+    let response = ui
+        .interact(
+            add,
+            ui.scope_id().with("add-image-layer"),
+            if enabled {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
+        )
+        .on_hover_text(model::layers::ADD);
+    let hovered = enabled && response.hovered();
+    if hovered {
+        ui.painter()
+            .rect_filled(add, tokens.number("r-md"), tokens.color("surface-hover"));
+    }
+    let ink = tokens.color(if hovered { "text" } else { "text-muted" });
+    icon(
+        ui.painter(),
+        "plus",
+        add.center(),
+        16.,
+        1.8,
+        dim(ink, enabled),
+    );
+    accessible(
+        &response,
+        egui::WidgetType::Button,
+        false,
+        model::layers::ADD,
+    );
+    if response.clicked() {
+        view.choose_image(ui.ctx());
+    }
+    // Native document-wide Combine actions: a quiet menu button beside Add.
+    let combine = add.translate(vec2(-30., 0.));
+    let response = ui
+        .interact(
+            combine,
+            ui.scope_id().with("combine-layers"),
+            Sense::click(),
+        )
+        .on_hover_text("Combine layers");
+    if response.hovered()
+        || egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&response))
+    {
+        ui.painter().rect_filled(
+            combine,
+            tokens.number("r-md"),
+            tokens.color("surface-hover"),
+        );
+    }
+    let ink = tokens.color(if response.hovered() {
+        "text"
+    } else {
+        "text-muted"
+    });
+    icon(
+        ui.painter(),
+        "merge-visible",
+        combine.center(),
+        16.,
+        1.8,
+        ink,
+    );
+    accessible(&response, egui::WidgetType::Button, false, "Combine layers");
+    Some(response)
+}
+
+/// What a layer row asked for this frame.
+pub(super) struct LayerRow {
+    /// The row body: click selects, secondary click opens the context menu.
+    pub body: egui::Response,
+    pub visibility: bool,
+    pub lock: bool,
+}
+
+/// Shipping `.screenshot-layer-list li`: a kind icon, the shipping layer name,
+/// the muted kind label and eye/lock quick actions. Hidden layers fade; the
+/// active row takes the selected surface and an accent rule.
+pub(super) fn layer_row(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    element: &Element,
+    selected: bool,
+    enabled: bool,
+) -> LayerRow {
+    let (rect, body) = ui.allocate_exact_size(vec2(ui.available_width(), 30.), Sense::click());
+    let base = element.base();
+    let name = model::layer_name(element);
+    let kind = model::layer_kind(element);
+    let radius = tokens.number("r-lg");
+    if selected {
+        ui.painter().rect(
+            rect,
+            radius,
+            tokens.color("surface-selected"),
+            Stroke::new(1., tokens.color("theme-accent").gamma_multiply(0.4)),
+            StrokeKind::Inside,
+        );
+    } else if body.hovered() {
+        ui.painter()
+            .rect_filled(rect, radius, tokens.color("surface-hover"));
+    }
+    let faded = |color: Color32| {
+        if base.visible {
+            color
+        } else {
+            color.gamma_multiply(0.42)
+        }
+    };
+    let icon_center = pos2(rect.left() + 14., rect.center().y);
+    icon(
+        ui.painter(),
+        model::layer_icon(element),
+        icon_center,
+        16.,
+        1.7,
+        faded(tokens.color("text-muted")),
+    );
+    let action = 22.;
+    let actions_left = rect.right() - 2. * action - 4.;
+    let kind_text = galley(
+        ui,
+        kind,
+        FontId::proportional(tokens.number("text-xs")),
+        Color32::PLACEHOLDER,
+    );
+    let name_font = FontId::proportional(tokens.number("text-sm"));
+    let name_left = icon_center.x + 14.;
+    let name_width = galley(ui, &name, name_font.clone(), Color32::PLACEHOLDER)
+        .size()
+        .x;
+    // The name has priority in the 30 px row; the kind shows when both fit.
+    let kind_left = actions_left - tokens.number("s-3") - kind_text.size().x;
+    if name_left + name_width + tokens.number("s-3") <= kind_left {
+        ui.painter().galley(
+            pos2(kind_left, rect.center().y - kind_text.size().y / 2.),
+            kind_text,
+            faded(tokens.color("text-subtle")),
+        );
+    }
+    let name_rect = egui::Rect::from_min_max(
+        pos2(name_left, rect.top()),
+        pos2(actions_left - tokens.number("s-3"), rect.bottom()),
+    );
+    let mut job = egui::text::LayoutJob::single_section(
+        name.clone(),
+        egui::TextFormat::simple(name_font, faded(tokens.color("text"))),
+    );
+    job.wrap = egui::text::TextWrapping {
+        max_width: name_rect.width().max(0.),
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    let name_galley = ui.painter().layout_job(job);
+    ui.painter().galley(
+        pos2(
+            name_rect.left(),
+            rect.center().y - name_galley.size().y / 2.,
+        ),
+        name_galley,
+        faded(tokens.color("text")),
+    );
+    body.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            enabled,
+            selected,
+            format!("{name}, {kind}"),
+        )
+    });
+    let body = body.on_hover_text(&name);
+    let quick = |index: usize, on: bool, icon_name: &str, label: String, tooltip: &str| {
+        let area = egui::Rect::from_center_size(
+            pos2(
+                actions_left + action * (index as f32 + 0.5),
+                rect.center().y,
+            ),
+            vec2(action, 26.),
+        );
+        let response = ui.interact(
+            area,
+            ui.scope_id().with((base.id.as_str(), icon_name)),
+            if enabled {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
+        );
+        let hovered = enabled && response.hovered();
+        let dark = ui.visuals().dark_mode;
+        if on {
+            ui.painter().rect_filled(
+                area,
+                tokens.number("r-sm"),
+                tokens.color("surface-selected"),
+            );
+        } else if hovered {
+            ui.painter()
+                .rect_filled(area, tokens.number("r-sm"), tokens.color("surface-active"));
+        }
+        // Shipping dims quick actions until the row is hovered or active.
+        let ink = if on {
+            tokens.color(if dark {
+                "theme-accent-text"
+            } else {
+                "theme-accent-readable"
+            })
+        } else if hovered {
+            tokens.color("text")
+        } else {
+            let color = tokens.color("text-subtle");
+            if selected || body.hovered() {
+                color
+            } else {
+                color.gamma_multiply(0.5)
+            }
+        };
+        icon(
+            ui.painter(),
+            icon_name,
+            area.center(),
+            14.,
+            1.8,
+            dim(ink, enabled),
+        );
+        accessible(&response, egui::WidgetType::Button, on, &label);
+        response.on_hover_text(tooltip).clicked()
+    };
+    let visibility = quick(
+        0,
+        !base.visible,
+        if base.visible { "eye" } else { "eye-off" },
+        model::visibility_label(element),
+        if base.visible {
+            model::layers::HIDE
+        } else {
+            model::layers::SHOW
+        },
+    );
+    let lock = quick(
+        1,
+        base.locked,
+        if base.locked { "lock" } else { "unlock" },
+        model::lock_label(element),
+        if base.locked {
+            model::layers::UNLOCK
+        } else {
+            model::layers::LOCK
+        },
+    );
+    LayerRow {
+        body,
+        visibility,
+        lock,
+    }
 }

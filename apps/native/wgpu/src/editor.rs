@@ -1641,11 +1641,11 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
         ui.add_enabled_ui(!view.pending && view.inline.is_none() && view.presented.is_some(), |ui| {
             if view.section == Section::Layers {
-                show_layers(ui, view, tx);
+                show_layers(ui, tokens, view, tx);
                 return;
             }
             if view.section == Section::Draw {
-                ui.heading("Draw shapes");
+                chrome::section_heading(ui, tokens, view);
                 let previous_tool = view.draw_shape;
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Text, "Text");
@@ -1776,7 +1776,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 }
                 return;
             }
-            ui.heading("Crop");
+            chrome::section_heading(ui, tokens, view);
             ui.label("Coordinates in image pixels");
             egui::Grid::new("crop-fields").show(ui, |ui| {
                 for (label, value) in ["X", "Y", "Width", "Height"].into_iter().zip(&mut view.crop) {
@@ -4533,15 +4533,14 @@ fn layer_context_menu(
     }
 }
 
-fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
+fn show_layers(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let Some(presented) = &view.presented else {
         return;
     };
     let document = presented.document.clone();
     let elements = &document.elements;
-    ui.horizontal(|ui| {
-        ui.heading("Layers");
-        ui.menu_button("Combine layers", |ui| {
+    if let Some(combine) = chrome::section_heading(ui, tokens, view) {
+        egui::Popup::menu(&combine).show(|ui| {
             for (label, action) in [
                 ("Merge down", LayerAction::MergeDown),
                 ("Merge visible", LayerAction::MergeVisible),
@@ -4560,7 +4559,7 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
                 }
             }
         });
-    });
+    }
     ui.small("Front to back");
     egui::ScrollArea::vertical()
         .id_salt("layer-list")
@@ -4570,24 +4569,35 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
         .show(ui, |ui| {
             for element in elements.iter().rev() {
                 let base = element.base();
-                let label = format!(
-                    "{}{}{}",
-                    layer_label(element),
-                    if base.locked { " · locked" } else { "" },
-                    if base.visible { "" } else { " · hidden" }
-                );
                 let selected = view.selected_layer.as_deref() == Some(&base.id);
                 ui.push_id(&base.id, |ui| {
-                    let response = ui
-                        .add_sized(
-                            [ui.available_width(), 30.],
-                            egui::Button::selectable(selected, &label).truncate(),
-                        )
-                        .on_hover_text(&label);
-                    if response.clicked() {
+                    let row = chrome::layer_row(ui, tokens, element, selected, ui.is_enabled());
+                    if row.visibility {
+                        view.submit(
+                            tx,
+                            Request::Layer {
+                                id: base.id.clone(),
+                                edit: LayerEdit::Visibility {
+                                    visible: !base.visible,
+                                },
+                            },
+                        );
+                    } else if row.lock {
+                        // Shipping selects the row it locks or unlocks.
+                        view.select_layer(Some(base.id.clone()));
+                        view.submit(
+                            tx,
+                            Request::Layer {
+                                id: base.id.clone(),
+                                edit: LayerEdit::Lock {
+                                    locked: !base.locked,
+                                },
+                            },
+                        );
+                    } else if row.body.clicked() {
                         view.select_layer(Some(base.id.clone()));
                     }
-                    response.context_menu(|ui| {
+                    row.body.context_menu(|ui| {
                         layer_context_menu(ui, view, tx, Some(base.id.clone()));
                     });
                 });
@@ -5113,6 +5123,7 @@ mod tests {
     #[test]
     fn context_menu_targets_row_not_selection_and_keeps_output_until_acceptance() {
         let ctx = egui::Context::default();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
         let mut view = View::default();
         let mut initial = presented(false);
         let target = initial.document.elements[0].base().id.clone();
@@ -5141,7 +5152,7 @@ mod tests {
                 },
                 |ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
-                        show_layers(ui, view, &tx);
+                        show_layers(ui, &tokens, view, &tx);
                     });
                     if ctx.current_pass_index() == 0 {
                         ctx.request_discard("layer menu multipass");
@@ -5179,7 +5190,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing text: {label}"))
         };
         let output = frame(&mut view, vec![]);
-        let row = position(&output, "Original screenshot · locked");
+        let row = position(&output, "Original screenshot");
         click(&mut view, row, egui::PointerButton::Secondary);
         assert!(egui::Popup::is_any_open(&ctx));
         assert_eq!(view.selected_layer.as_deref(), Some("other"));
@@ -5342,6 +5353,135 @@ mod tests {
         );
         // At 560px the toolbar has to yield: it compacts, then clips.
         assert!(layout(560.).canvas.width() < wide.canvas.width());
+    }
+
+    #[test]
+    fn restored_draft_banner_draft_menu_and_layer_quick_actions_follow_shipping() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut view = View::default();
+        // A draft present at open is restored: shipping shows its banner.
+        view.receive(&ctx, Ok(presented(false)));
+        assert!(view.draft_restored);
+        view.section = Section::Layers;
+        let size = egui::vec2(1100., 700.);
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ui| show(ui, &tokens, view, &tx),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        // Accessible names locate controls without assuming platform font widths.
+        let find = |output: &egui::FullOutput, label: &str| {
+            let update = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .expect("accesskit tree");
+            update
+                .nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some(label))
+                .and_then(|(_, node)| node.bounds())
+                .map(|rect| {
+                    egui::pos2(
+                        ((rect.x0 + rect.x1) / 2.) as f32,
+                        ((rect.y0 + rect.y1) / 2.) as f32,
+                    )
+                })
+                .unwrap_or_else(|| panic!("missing control: {label}"))
+        };
+        let click = |view: &mut View, pos| {
+            frame(view, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    view,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+        };
+        frame(&mut view, vec![]);
+        let output = frame(&mut view, vec![]);
+        for label in [
+            "Undo",
+            "Redo",
+            "Fit canvas",
+            "Zoom out",
+            "Zoom in",
+            "Add images",
+            "Draft actions",
+            "Canvas width",
+            "Canvas height",
+            "Trim edges",
+            "Add image layer",
+            "Combine layers",
+        ] {
+            find(&output, label);
+        }
+        let dismiss = find(&output, "Dismiss restored-edits notice");
+        click(&mut view, dismiss);
+        assert!(
+            !view.draft_restored && rx.try_recv().is_err(),
+            "Dismiss only hides the notice"
+        );
+
+        // Row quick actions target their own layer; the eye does not select it.
+        let output = frame(&mut view, vec![]);
+        let hide = find(&output, "Hide Original screenshot");
+        view.selected_layer = None;
+        click(&mut view, hide);
+        match rx.try_recv() {
+            Ok(Job::Apply(Request::Layer {
+                id,
+                edit: LayerEdit::Visibility { visible: false },
+            })) => {
+                assert_eq!(id, "capture-background");
+            }
+            _ => panic!("the eye hides its row"),
+        }
+        assert!(view.selected_layer.is_none());
+        view.pending = false;
+        let output = frame(&mut view, vec![]);
+        let unlock = find(&output, "Unlock Original screenshot");
+        click(&mut view, unlock);
+        match rx.try_recv() {
+            Ok(Job::Apply(Request::Layer {
+                id,
+                edit: LayerEdit::Lock { locked: false },
+            })) => {
+                assert_eq!(id, "capture-background");
+            }
+            _ => panic!("the lock unlocks its row"),
+        }
+        assert_eq!(
+            view.selected_layer.as_deref(),
+            Some("capture-background"),
+            "lock selects its row"
+        );
+        view.pending = false;
+
+        // Native drafts stay explicit behind the header's draft menu.
+        let output = frame(&mut view, vec![]);
+        click(&mut view, find(&output, "Draft actions"));
+        let output = frame(&mut view, vec![]);
+        click(&mut view, find(&output, "Save draft"));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Job::Apply(Request::SaveDraft { .. }))
+        ));
     }
 
     #[test]

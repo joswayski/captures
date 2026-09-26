@@ -275,7 +275,11 @@ def main():
     # Inspector rows were authored below the former two-row workbench toolbar.
     # The shipping 52px header ends 29px higher; bottom-clamped rows (bottom())
     # keep their window position.
-    INSPECTOR_SHIFT = -29
+    # Its 30px section heading then sits 9px lower than the former headings.
+    INSPECTOR_SHIFT = -20
+
+    # The Layers heading's quiet Combine menu button, beside Add image layer.
+    COMBINE_MENU = (177, 87)
 
     def inspector_click(x, y):
         click(editor, inspector_x(x), y + INSPECTOR_SHIFT)
@@ -927,9 +931,9 @@ def main():
 
             # Exercise the shared heading menu. Merge visible replaces only
             # visible layers and leaves the hidden annotation in its old slot.
-            inspector_click(115, 104)
+            inspector_click(*COMBINE_MENU)
             shot(editor, "combine-heading-menu")
-            inspector_click(120, 170)  # Merge visible.
+            inspector_click(135, 169)  # Merge visible.
             merged_visible = save_layers(
                 lambda values: len(values) == 2, "heading menu merge visible")
             hidden = [value for value in merged_visible if not value["visible"]]
@@ -951,8 +955,8 @@ def main():
             save_until(lambda: json.loads(draft.read_text())["document"]["background"] == "#214365",
                        "combine fixture background")
             toolbar_click("layers")
-            inspector_click(115, 104)
-            inspector_click(120, 214)  # Flatten image.
+            inspector_click(*COMBINE_MENU)
+            inspector_click(135, 213)  # Flatten image.
             flattened = save_layers(lambda values: len(values) == 1, "flatten image")
             flattened_document = json.loads(draft.read_text())["document"]
             assert flattened_document["background"] is None
@@ -974,7 +978,7 @@ def main():
             shot(editor, "combine-flattened-reopened")
 
             resize_editor(760, 540, "sleep", ".3")
-            inspector_click(115, 148)
+            inspector_click(*COMBINE_MENU)
             shot(editor, "combine-minimum-disabled-menu")
             run("xdotool", "key", "Escape", "sleep", ".2")
             resize_editor(1000, 801, "sleep", ".3")
