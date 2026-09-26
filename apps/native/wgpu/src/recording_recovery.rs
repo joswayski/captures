@@ -221,7 +221,7 @@ impl View {
                 .size(tokens.number("text-sm"))
                 .color(tokens.color("text-subtle")),
         );
-        egui::ScrollArea::vertical().id_salt("recording-recovery").max_height(height).show(ui, |ui| {
+        crate::primitives::scroll_area(ui, tokens, egui::ScrollArea::vertical().id_salt("recording-recovery").max_height(height), |ui| {
             if matches!(self.pending, Some(Pending::Listing)) {
                 ui.label("Checking recovery files…");
             }

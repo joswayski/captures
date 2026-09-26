@@ -249,13 +249,20 @@ impl Selector {
                 .color(tokens.color("glass-text-subtle")),
         );
         let previous = self.aspect;
-        egui::ComboBox::from_id_salt("region-aspect")
-            .selected_text(self.aspect.label())
-            .show_ui(ui, |ui| {
-                for aspect in Aspect::ALL {
-                    ui.selectable_value(&mut self.aspect, aspect, aspect.label());
-                }
-            });
+        let choices: Vec<_> = Aspect::ALL
+            .into_iter()
+            .map(|aspect| crate::primitives::SelectOption::new(aspect, aspect.label()))
+            .collect();
+        let height = ui.spacing().interact_size.y;
+        if let Some(aspect) =
+            crate::primitives::Select::new("region-aspect", "Aspect", ui.spacing().combo_width)
+                .style(crate::primitives::SelectStyle::Glass)
+                .height(height)
+                .show(ui, tokens, &choices, &self.aspect)
+                .chosen
+        {
+            self.aspect = aspect;
+        }
         if previous != self.aspect {
             self.apply_aspect(bounds);
         }

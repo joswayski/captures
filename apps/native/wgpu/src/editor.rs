@@ -1638,7 +1638,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     view.drive_estimate(ui.ctx());
     show_export_bar(ui, tokens, view, tx);
     egui::Panel::right("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
-        egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
+        crate::primitives::scroll_area(ui, tokens, egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]), |ui| {
         ui.add_enabled_ui(!view.pending && view.inline.is_none() && view.presented.is_some(), |ui| {
             if view.section == Section::Layers {
                 show_layers(ui, tokens, view, tx);
@@ -3544,15 +3544,19 @@ fn show_export_bar(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sen
                         let inner = height - 2. * tokens.number("s-4") - 2.;
                         ui.set_width(ui.available_width());
                         ui.set_height(inner);
-                        egui::ScrollArea::vertical()
-                            .id_salt("export-settings")
-                            .max_height(inner)
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
+                        crate::primitives::scroll_area(
+                            ui,
+                            tokens,
+                            egui::ScrollArea::vertical()
+                                .id_salt("export-settings")
+                                .max_height(inner)
+                                .auto_shrink([false, false]),
+                            |ui| {
                                 ui.add_enabled_ui(ready, |ui| {
                                     show_export_settings(ui, tokens, view, tx)
                                 });
-                            });
+                            },
+                        );
                     });
             }
             let bar = view.export_view();
@@ -3954,6 +3958,7 @@ fn export_disclosure(
             stroke,
         );
         if response.has_focus() {
+            crate::primitives::focus_indicated(ui.ctx());
             painter.rect_stroke(
                 rect.expand(2.),
                 tokens.number("r-md") + 2.,
@@ -4033,6 +4038,7 @@ fn export_switch(
             tokens.color("text").gamma_multiply(alpha),
         );
         if response.has_focus() {
+            crate::primitives::focus_indicated(ui.ctx());
             painter.rect_stroke(
                 track.expand(2.),
                 track.height() / 2. + 2.,
@@ -4561,12 +4567,15 @@ fn show_layers(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
         });
     }
     ui.small("Front to back");
-    egui::ScrollArea::vertical()
-        .id_salt("layer-list")
-        .max_height(112.)
-        .min_scrolled_height(112.)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
+    crate::primitives::scroll_area(
+        ui,
+        tokens,
+        egui::ScrollArea::vertical()
+            .id_salt("layer-list")
+            .max_height(112.)
+            .min_scrolled_height(112.)
+            .auto_shrink([false, false]),
+        |ui| {
             for element in elements.iter().rev() {
                 let base = element.base();
                 let selected = view.selected_layer.as_deref() == Some(&base.id);
@@ -4612,7 +4621,8 @@ fn show_layers(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
                 egui::Sense::click(),
             );
             empty.context_menu(|ui| layer_context_menu(ui, view, tx, None));
-        });
+        },
+    );
     let Some(index) = elements
         .iter()
         .position(|element| Some(&element.base().id) == view.selected_layer.as_ref())

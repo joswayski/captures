@@ -298,33 +298,6 @@ struct UnifiedCaptureControlsState: Equatable {
     static let initial = UnifiedCaptureControlsState(mode: .screenshot, target: .region, aspectIndex: 0)
 }
 
-private final class GlassPopUpButton: NSPopUpButton {
-    var tokens: Tokens!
-    var change: ((Int) -> Void)?
-
-    @objc private func selectedValue() { change?(indexOfSelectedItem) }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
-            xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
-        tokens.color("glass-raised").setFill(); path.fill()
-        tokens.color(window?.firstResponder === self ? "theme-accent" : "glass-border").setStroke()
-        path.stroke()
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium),
-            .foregroundColor: tokens.color(isEnabled ? "glass-text" : "glass-text-subtle"),
-        ]
-        (title as NSString).draw(at: NSPoint(x: tokens.number("s-4"), y: 10),
-            withAttributes: attributes)
-        ("⌄" as NSString).draw(at: NSPoint(x: bounds.width - tokens.number("s-7"), y: 10),
-            withAttributes: attributes)
-    }
-
-    func bindChange(_ callback: @escaping (Int) -> Void) {
-        change = callback; target = self; action = #selector(selectedValue)
-    }
-}
-
 /// Shipping `recording-toggle`: a 30×18 switch followed by On/Off/Unavailable,
 /// with the unavailable reason as its tooltip.
 final class RecordingSwitchButton: NSButton {
@@ -489,8 +462,8 @@ final class CaptureControlsView: NSView {
     private let visibility: CaptureControlsVisibility
     private var targetButtons: [UnifiedCaptureTarget: CaptureButton] = [:]
     private let aspectLabel = NSTextField(labelWithString: "Aspect")
-    private let aspectMenu: GlassPopUpButton
-    private let displayMenu: GlassPopUpButton
+    private let aspectMenu: ClosurePopUpButton
+    private let displayMenu: ClosurePopUpButton
     private let captureButton: CaptureButton
     private let screenshotButton: CaptureButton
     private let recordButton: CaptureButton
@@ -498,9 +471,9 @@ final class CaptureControlsView: NSView {
     private var recordingSwitches: [RecordingSwitchButton] = []
     private var fieldLabels: [NSTextField] = []
     private var noteViews: [NSView] = []
-    private let fpsMenu: GlassPopUpButton
-    private let resolutionMenu: GlassPopUpButton
-    private let microphoneMenu: GlassPopUpButton
+    private let fpsMenu: ClosurePopUpButton
+    private let resolutionMenu: ClosurePopUpButton
+    private let microphoneMenu: ClosurePopUpButton
     private var microphoneIDs: [String?] = []
     private var panelDragOffset: NSPoint?
     /// Shipping `.capture-segmented-indicator`s for the mode and target switches.
@@ -544,15 +517,18 @@ final class CaptureControlsView: NSView {
          visibility: CaptureControlsVisibility = .excludedByDefault) {
         self.tokens = tokens; self.autoStart = autoStart; self.visibility = visibility
         self.recordingState = recordingState; self.recordingAvailability = recordingAvailability
-        aspectMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
-        displayMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
-        fpsMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
-        resolutionMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
-        microphoneMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
+        aspectMenu = ClosurePopUpButton(frame: .zero, pullsDown: false)
+        displayMenu = ClosurePopUpButton(frame: .zero, pullsDown: false)
+        fpsMenu = ClosurePopUpButton(frame: .zero, pullsDown: false)
+        resolutionMenu = ClosurePopUpButton(frame: .zero, pullsDown: false)
+        microphoneMenu = ClosurePopUpButton(frame: .zero, pullsDown: false)
         captureButton = CaptureButton("Capture", frame: .zero, tokens: tokens, glass: true) {}
         screenshotButton = CaptureButton("Screenshot", frame: .zero, tokens: tokens, glass: true) {}
         recordButton = CaptureButton("Record", frame: .zero, tokens: tokens, glass: true) {}
         super.init(frame: frame)
+        for menu in [aspectMenu, displayMenu, fpsMenu, resolutionMenu, microphoneMenu] {
+            menu.selectStyle = .glass
+        }
         wantsLayer = true
         layer?.backgroundColor = tokens.color("glass-strong").cgColor
         layer?.cornerRadius = tokens.number("r-2xl")

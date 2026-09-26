@@ -1706,6 +1706,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineTextScroll.isHidden = true
         inlineTextScroll.borderType = .lineBorder
         inlineTextScroll.hasVerticalScroller = true
+        inlineTextScroll.useTokenScrollers(tokens)
         inlineTextScroll.drawsBackground = true
         inlineTextScroll.backgroundColor = tokens.color("surface-raised")
         inlineTextScroll.wantsLayer = true
@@ -1775,6 +1776,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let geometryScroll = NSScrollView(frame: geometryPanel.bounds)
         geometryScroll.autoresizingMask = [.width, .height]
         geometryScroll.hasVerticalScroller = true; geometryScroll.drawsBackground = false
+        geometryScroll.useTokenScrollers(tokens)
         geometryContent.frame = NSRect(x: 0, y: 0, width: 252, height: 240)
         geometryScroll.documentView = geometryContent
         geometryPanel.addSubview(geometryScroll)
@@ -2089,6 +2091,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let scroll = NSScrollView(frame: drawPanel.bounds)
         scroll.autoresizingMask = [.width, .height]
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
+        scroll.useTokenScrollers(tokens)
         let content = Surface(frame: NSRect(x: 0, y: 0, width: 252, height: 390))
         scroll.documentView = content; drawPanel.addSubview(scroll)
         drawHeading = panelLabel("Draw", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
@@ -2279,6 +2282,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let contentLabel = panelFieldLabel("Content", x: 0, y: 416, parent: content)
         let textScroll = NSScrollView(frame: NSRect(x: 0, y: 438, width: 252, height: 82))
         textScroll.hasVerticalScroller = true; textScroll.borderType = .lineBorder
+        textScroll.useTokenScrollers(tokens)
         textEditor.frame = NSRect(x: 0, y: 0, width: 234, height: 82)
         textEditor.isRichText = false; textEditor.isVerticallyResizable = true
         textEditor.allowsUndo = true
@@ -2521,12 +2525,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                                      height: max(0, layersPanel.bounds.height - headingHeight)))
         panelScroll.autoresizingMask = [.width, .height]
         panelScroll.hasVerticalScroller = true; panelScroll.scrollerStyle = .overlay
+        panelScroll.useTokenScrollers(tokens)
         panelScroll.drawsBackground = false
         layerContent.frame = NSRect(x: 0, y: 0, width: 272, height: 550)
         panelScroll.documentView = layerContent; layersPanel.addSubview(panelScroll)
 
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 272, height: 106))
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
+        scroll.useTokenScrollers(tokens)
         layerTable = EditorLayerTable(frame: scroll.bounds)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("editor-layer"))
         column.width = 252; layerTable.addTableColumn(column); layerTable.headerView = nil
@@ -5002,6 +5008,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func restyle(_ tokens: Tokens) {
         self.tokens = tokens; root.wantsLayer = true
+        restyleTokenScrollers(in: root, tokens)
         root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
         let dark = tokens.color("text").brightnessComponent > 0.5
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)

@@ -160,10 +160,13 @@ impl Feedback {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(t.color("surface-canvas")))
             .show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("feedback-form")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                crate::primitives::scroll_area(
+                    ui,
+                    t,
+                    egui::ScrollArea::vertical()
+                        .id_salt("feedback-form")
+                        .auto_shrink([false, false]),
+                    |ui| {
                         self.probe("Page", ui.clip_rect());
                         let side = t.number("s-8");
                         egui::Frame::new()
@@ -184,7 +187,8 @@ impl Feedback {
                                     self.form(ui, t, live);
                                 });
                             });
-                    });
+                    },
+                );
             });
         if let Some(probes) = self.probes.take()
             && self.last_probes.as_ref() != Some(&probes)
@@ -378,7 +382,7 @@ impl Feedback {
                         t.color("text-subtle"),
                     );
                     if response.has_focus() {
-                        widgets::focus_ring(ui, t, rect, radius);
+                        crate::primitives::focus_ring(ui, t, rect, radius);
                     }
                     self.probe(&format!("Category.{}", category.label), rect);
                 }
@@ -482,7 +486,7 @@ impl Feedback {
             t.color("theme-accent-ink").gamma_multiply(alpha),
         );
         if response.has_focus() {
-            widgets::focus_ring(ui, t, rect, radius);
+            crate::primitives::focus_ring(ui, t, rect, radius);
         }
         self.probe("Send", rect);
         if enabled && response.clicked() {
@@ -660,7 +664,7 @@ fn field_frame(ui: &egui::Ui, t: &Tokens, id: egui::Id) -> egui::Frame {
 /// `--focus-ring-tight` around a focused field.
 fn field_focus(ui: &egui::Ui, t: &Tokens, response: &egui::Response) {
     if response.has_focus() {
-        widgets::focus_ring(ui, t, response.rect, t.number("r-md"));
+        crate::primitives::focus_ring(ui, t, response.rect, t.number("r-md"));
     }
 }
 

@@ -908,7 +908,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let previewNote = NSTextField(labelWithString:
         "First-attempt preview. Size-limited saves may reduce resolution, frame rate or audio quality.")
     private let comparisonView: RecordingComparisonView
-    private let comparisonSlider = NSSlider(value: 50, minValue: 0, maxValue: 100,
+    private let comparisonSlider = TokenSlider(value: 50, minValue: 0, maxValue: 100,
                                              target: nil, action: nil)
     private let comparisonBeforeLabel = NSTextField(labelWithString: "Before")
     private let comparisonAfterLabel = NSTextField(labelWithString: "Encoded")
@@ -919,17 +919,17 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let geometryTitle = NSTextField(labelWithString: "Crop & size")
     private let cropEnabled = NSButton(checkboxWithTitle: "Crop recording", target: nil, action: nil)
     private let cropLock = NSButton(checkboxWithTitle: "Lock aspect ratio", target: nil, action: nil)
-    private let cropX = NSTextField()
-    private let cropY = NSTextField()
-    private let cropWidth = NSTextField()
-    private let cropHeight = NSTextField()
+    private let cropX = TokenNumberField()
+    private let cropY = TokenNumberField()
+    private let cropWidth = TokenNumberField()
+    private let cropHeight = TokenNumberField()
     private var cropFieldLabels: [NSTextField] = []
     private let outputModeLabel = NSTextField(labelWithString: "Output resolution")
-    private let outputMode = NSPopUpButton()
+    private let outputMode = ClosurePopUpButton()
     private let outputWidthLabel = NSTextField(labelWithString: "Width")
     private let outputHeightLabel = NSTextField(labelWithString: "Height")
-    private let outputWidth = NSTextField()
-    private let outputHeight = NSTextField()
+    private let outputWidth = TokenNumberField()
+    private let outputHeight = TokenNumberField()
     private let geometryHelp = NSTextField(wrappingLabelWithString:
         "Apply previews even-pixel sizes for the selected format and quality.")
     private var stagedCrop: NativeRecordingCropRect?
@@ -938,7 +938,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var customOutput = false
     /// Preview caption: position, source and accepted output identity.
     private let sourceLabel = NSTextField(labelWithString: "Opening recording…")
-    private let seekSlider = NSSlider(value: 0, minValue: 0, maxValue: 1,
+    private let seekSlider = TokenSlider(value: 0, minValue: 0, maxValue: 1,
                                       target: nil, action: nil)
     private let seekLabel = NSTextField(labelWithString: "0:00.000")
     private let positionLabel = NSTextField(labelWithString: "Position")
@@ -948,8 +948,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let thumbnailStatusLabel = NSTextField(labelWithString: "Source thumbnails unavailable.")
     private let trimStartLabel = NSTextField(labelWithString: "Start (ms)")
     private let trimEndLabel = NSTextField(labelWithString: "End (ms)")
-    private let trimStart = NSTextField()
-    private let trimEnd = NSTextField()
+    private let trimStart = TokenNumberField()
+    private let trimEnd = TokenNumberField()
     private let trimTimeline: RecordingTrimTimeline
     private var resetTrimButton: CaptureButton!
     private let gifPanel = Surface()
@@ -959,29 +959,29 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let gifAudioNote = NSTextField(wrappingLabelWithString: "GIFs do not include recorded audio.")
     private let systemVolume = NSTextField()
     private let microphoneVolume = NSTextField()
-    private let systemVolumeSlider = NSSlider(value: 100, minValue: 0, maxValue: 200,
+    private let systemVolumeSlider = TokenSlider(value: 100, minValue: 0, maxValue: 200,
                                               target: nil, action: nil)
-    private let microphoneVolumeSlider = NSSlider(value: 100, minValue: 0, maxValue: 200,
+    private let microphoneVolumeSlider = TokenSlider(value: 100, minValue: 0, maxValue: 200,
                                                   target: nil, action: nil)
     /// Checked includes the track, like shipping's audio rows.
     private let systemAudio = NSButton(checkboxWithTitle: "System audio", target: nil, action: nil)
     private let microphoneAudio = NSButton(checkboxWithTitle: "Microphone", target: nil, action: nil)
     private let monoOutput = NSButton(checkboxWithTitle: "Convert to mono", target: nil, action: nil)
-    private let format = NSPopUpButton()
+    private let format = ClosurePopUpButton()
     private let qualityPanel = Surface()
     private let qualityTitle = NSTextField(labelWithString: "Save quality")
     private let qualityModeLabel = NSTextField(labelWithString: "Quality mode")
-    private let qualityMode = NSPopUpButton()
+    private let qualityMode = ClosurePopUpButton()
     private let qualityModeHelp = NSTextField(wrappingLabelWithString: "")
     private let qualityLabel = NSTextField(labelWithString: "Quality")
-    private let quality = NSPopUpButton()
+    private let quality = ClosurePopUpButton()
     private let gifFrameRateLabel = NSTextField(labelWithString: "Frame rate")
-    private let gifFrameRate = NSPopUpButton()
+    private let gifFrameRate = ClosurePopUpButton()
     private let gifMaximumWidthLabel = NSTextField(labelWithString: "Maximum width")
-    private let gifMaximumWidthControl = NSPopUpButton()
+    private let gifMaximumWidthControl = ClosurePopUpButton()
     private let maximumSizeLabel = NSTextField(labelWithString: "Maximum file size")
     private let maximumSizeValue = NSTextField()
-    private let maximumSizeUnits = NSPopUpButton()
+    private let maximumSizeUnits = ClosurePopUpButton()
     private let maximumSizeInvalid = NSTextField(labelWithString: "Enter at least 100 KB (decimal units).")
     private let maximumSizeWarning = NSTextField(wrappingLabelWithString:
         "Preserve quality with a hard limit. Save fails if no retry fits; the original stays unchanged.")
@@ -1237,7 +1237,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
         pageScroll.drawsBackground = false; pageScroll.borderType = .noBorder
         pageScroll.hasVerticalScroller = true; pageScroll.autohidesScrollers = true
-        pageScroll.scrollerStyle = .overlay
+        pageScroll.scrollerStyle = .overlay; pageScroll.useTokenScrollers(tokens)
         pageScroll.contentView.drawsBackground = false
         pageScroll.documentView = page
         pageScroll.setAccessibilityLabel("Recording editor page")
@@ -1294,6 +1294,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         previewActualButton.toolTip = "One decoded image pixel per screen point. Scroll to see overflow; playback may use a reduced-size frame."
         previewScroll.drawsBackground = false; previewScroll.borderType = .noBorder
         previewScroll.scrollerStyle = .overlay; previewScroll.autohidesScrollers = true
+        previewScroll.useTokenScrollers(tokens)
         previewScroll.contentView.drawsBackground = false
         previewScroll.contentView.postsBoundsChangedNotifications = true
         previewScroll.setAccessibilityLabel("Recording preview viewport")
@@ -1395,6 +1396,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         style(gifTitle, size: "text-lg", color: "text", weight: .semibold, parent: gifPanel)
         style(gifFrameRateLabel, size: "text-xs", color: "text-subtle", parent: gifPanel)
         style(gifMaximumWidthLabel, size: "text-xs", color: "text-subtle", parent: gifPanel)
+        // Shipping `RangeSlider` tracks and thumbs.
+        for slider in [comparisonSlider, seekSlider, systemVolumeSlider, microphoneVolumeSlider] {
+            slider.tokens = tokens
+        }
+        // Shipping `CustomSelect` triggers; the filename format sits inside its field.
+        for popUp in [outputMode, format, qualityMode, quality, gifFrameRate, gifMaximumWidthControl,
+                       maximumSizeUnits] {
+            popUp.tokens = tokens
+        }
+        format.selectStyle = .inline
         gifFrameRate.addItems(withTitles: ["8 FPS", "10 FPS", "12 FPS", "15 FPS",
                                               "20 FPS", "24 FPS", "30 FPS"])
         gifFrameRate.selectItem(withTitle: "15 FPS")
@@ -3462,6 +3473,53 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private func configureNumberField(_ field: NSTextField, label: String) {
         field.delegate = self; field.setAccessibilityLabel(label)
         field.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        if let number = field as? TokenNumberField {
+            // Shipping `NumberInput`: token field and Increase/Decrease steppers.
+            number.tokens = tokens
+            let (minimum, maximum) = numberBounds(number)
+            number.minimum = minimum; number.maximum = maximum
+            number.stepped = { [weak self] field in self?.numberFieldStepped(field) }
+        }
+    }
+
+    /// Shipping `NumberInput` min/max for each stepped field.
+    private func numberBounds(_ field: TokenNumberField) -> (() -> Double?, () -> Double?) {
+        let source: () -> NativeRecordingDimensions? = { [weak self] in
+            guard let self, let snapshot = self.presentation?.snapshot else { return nil }
+            return self.sourceDimensions(snapshot)
+        }
+        switch field {
+        case cropX:
+            return ({ 0 }, { [weak self] in
+                guard let source = source(), let crop = self?.stagedCrop else { return nil }
+                return Double(source.width) - Double(crop.width)
+            })
+        case cropY:
+            return ({ 0 }, { [weak self] in
+                guard let source = source(), let crop = self?.stagedCrop else { return nil }
+                return Double(source.height) - Double(crop.height)
+            })
+        case cropWidth: return ({ 2 }, { source().map { Double($0.width) } })
+        case cropHeight: return ({ 2 }, { source().map { Double($0.height) } })
+        case outputWidth, outputHeight: return ({ 2 }, { nil })
+        default:
+            return ({ 0 }, { [weak self] in self.map { Double($0.trimTimeline.durationMilliseconds) } })
+        }
+    }
+
+    /// A stepper or arrow key changed a number field: handle it like typing,
+    /// and commit crop fields as Enter would.
+    private func numberFieldStepped(_ field: TokenNumberField) {
+        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        commitCropField(field)
+    }
+
+    /// Shipping `NumberInput` steps on ArrowUp/ArrowDown while editing.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard let field = control as? TokenNumberField else { return false }
+        if commandSelector == #selector(NSResponder.moveUp(_:)) { field.step(up: true); return true }
+        if commandSelector == #selector(NSResponder.moveDown(_:)) { field.step(up: false); return true }
+        return false
     }
 
     private func configureVolumeField(_ field: NSTextField, label: String) {

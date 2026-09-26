@@ -93,6 +93,39 @@ are pointer-only there. Feedback (being rebuilt) is not covered. XCTest checks t
 loop orders and wgpu tests inspect the AccessKit tree. VoiceOver, Narrator, Orca and
 physical Full Keyboard Access checks remain open.
 
+Shared UI primitives now follow shipping `base.css` and `primitives.css` on both
+hosts, from one helper per host (`Primitives.swift`, wgpu `primitives.rs`). Keyboard
+focus draws the `--focus-ring-tight` token ring: AppKit `CaptureButton` (Feedback,
+setup, History and notices) uses it in place of a solid accent stroke, and wgpu
+paints it around whichever stock egui control (button, text edit, checkbox…) holds
+focus at the end of each pass unless a custom control drew its own indicator.
+AppKit clips drawing to a view, so its ring sits just inside the control. Scroll
+bars are a 4 pt pill thumb inside a 10 pt bar in `--border-strong` (`--text-faint`
+on hover) over a transparent track. wgpu sets this globally as overlay bars so no
+layout reflows; AppKit uses a token `NSScroller` that keeps the system scroller style,
+so overlay scrollers still fade when idle, and the recovery list no longer forces
+legacy scrollers. Preview stacks hide their scroll bar like `.thumbnail-stack`.
+Selects share one primitive per host. wgpu draws the `CustomSelect` field trigger
+(media palette in the capture menu, borderless for the recording filename format)
+and a token listbox with option descriptions, placed and driven by shared
+`captures_app::controls::select` (ArrowUp/Down, Home/End, Enter/Space, Escape), in
+Preferences, the capture menu, the region aspect picker, the recording editor and
+the History display picker. AppKit's token `ClosurePopUpButton` trigger replaces the
+capture menu's glass popups and the recording editor's stock popups; its native
+menu keeps AppKit keyboard handling (no Home/End) and shows descriptions as a second
+line. Screenshot editor selects remain stock on both hosts.
+Recording editor number fields (crop, output size, trim; wgpu also Position) follow
+`NumberInput`: wgpu `primitives::NumberInput` and AppKit `TokenNumberField` draw the
+token field with Increase/Decrease steppers ("Increase {label}", hidden while
+disabled, outside the Tab order) and step on ArrowUp/ArrowDown through shared
+`captures_app::controls::number` (AppKit via `captures_controls_v1`). Sliders follow
+`RangeSlider`: wgpu `primitives::RangeSlider` (value readout, 4 pt accent track,
+14 pt thumb, optional ticks, labels and description; arrow, Page, Home and End keys)
+replaces egui sliders for the encoded split and track volumes; AppKit `TokenSlider`
+draws the same track and thumb on its NSSliders and keeps the editable volume
+percent fields. The maximum file size field stays a plain text field on both hosts.
+Physical focus-visibility and scroller checks on macOS and Windows remain open.
+
 Direct region and window overlays (shortcut, tray and screenshot-during-recording)
 now follow the shipping `CaptureOverlay`: no toolbar, a completed region drag
 commits on release, a window/desktop click commits that window or the display,
