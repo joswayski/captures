@@ -4,6 +4,7 @@
 pub mod capture_flow;
 pub mod capture_menu;
 pub mod clipboard;
+pub mod compression_compare;
 pub mod controls;
 pub mod editor;
 pub mod editor_chrome;

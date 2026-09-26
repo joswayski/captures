@@ -662,6 +662,13 @@ char *captures_editor_save_v1(const CapturesEditorSession *session, const char *
  * write and the size the percentage compares against (the original file for
  * Preserve, the lossless flattened PNG otherwise). No I/O. */
 char *captures_editor_estimate_v1(const CapturesEditorFrame *frame, const char *request_json);
+/* ENCODE a retained frame exactly as Save would, off the session, for the
+ * automatic before/after comparison. options_json is export options; returns
+ * owned bytes for captures_editor_export_bytes_v1/captures_editor_export_free_v1
+ * (NULL on failure) and writes an owned {ok,result:{length}} or error response
+ * to output (free with captures_settings_free_v1). NULL output refuses. No I/O. */
+CapturesEditorExport *captures_editor_frame_encode_v1(const CapturesEditorFrame *frame,
+    const char *options_json, char **output);
 
 /* Allocation-free recording crop/output-size geometry. Crop resize preserves
  * the crop's current aspect ratio and fits at its existing origin; staged width
@@ -750,7 +757,10 @@ bool captures_recording_timeline_trim_update_v1(CapturesRecordingTimelineTrimDra
  * {message}; filename_error {stem} -> {error: null|string}; dropped_frames
  * {count} -> {warning: null|string}; menus {gif, base_width, base_height} ->
  * {quality_modes, quality_presets, resolutions, gif_frame_rates,
- * gif_maximum_widths}, each [{value, label, description}].
+ * gif_maximum_widths}, each [{value, label, description}];
+ * compression_compare {before_bytes?, after_bytes?, processing?} -> {badges:
+ * {before, after, savings: null|string}, copy, min_split, max_split,
+ * refresh_delay_ms}, the before/after split both editors show.
  * Envelopes follow captures_app_request_v1; free with captures_settings_free_v1. */
 char *captures_recording_editor_ui_v1(const char *request_json);
 

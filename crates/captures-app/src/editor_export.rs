@@ -341,6 +341,23 @@ pub struct ExportBarView {
     pub plan: Option<SavePlan>,
     /// Filename, folder or option problems; Save stays disabled until fixed.
     pub error: Option<String>,
+    /// Save quality listbox rows for the current format.
+    pub quality_modes: Vec<Choice>,
+    /// Compress preset rows with their per-format descriptions.
+    pub quality_presets: Vec<Choice>,
+    /// Hover help on Maximum file size for the current format.
+    pub maximum_help: String,
+    /// Compress or Maximum: the automatic before/after comparison applies.
+    pub compresses: bool,
+}
+
+/// One listbox row: a label, its `<small>` description and the value it sets
+/// (a quality value for presets, the mode's index for Save quality).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Choice {
+    pub label: String,
+    pub description: String,
+    pub value: u32,
 }
 
 pub fn present(
@@ -385,6 +402,25 @@ pub fn present(
         saving_copy: target.saving_copy(format),
         error: validated.err().or_else(|| plan.as_ref().err().cloned()),
         plan: plan.ok(),
+        quality_modes: SAVE_QUALITY_MODES
+            .iter()
+            .enumerate()
+            .map(|(index, mode)| Choice {
+                label: quality_mode_label(*mode).into(),
+                description: quality_mode_description(*mode, format).into(),
+                value: index as u32,
+            })
+            .collect(),
+        quality_presets: QUALITY_PRESETS
+            .iter()
+            .map(|preset| Choice {
+                label: preset.label.into(),
+                description: preset.description(format).into(),
+                value: u32::from(preset.quality),
+            })
+            .collect(),
+        maximum_help: maximum_size_help(format),
+        compresses: options.quality != ExportQuality::Preserve,
     }
 }
 
@@ -575,6 +611,212 @@ pub fn filename_error(stem: &str) -> Option<&'static str> {
         || reserved;
     invalid.then_some("Enter a filename without folders or reserved characters.")
 }
+
+/// One shipping Compress preset (`SCREENSHOT_QUALITY_OPTIONS`). JPEG and WebP
+/// use it as encode quality; PNG maps Tiny–High onto palette size and Highest
+/// onto compact lossless packing only.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct QualityPreset {
+    pub label: &'static str,
+    pub quality: u8,
+    jpeg: &'static str,
+    webp: &'static str,
+    png: &'static str,
+}
+
+impl QualityPreset {
+    /// The listbox description for `format`.
+    pub const fn description(&self, format: ExportFormat) -> &'static str {
+        match format {
+            ExportFormat::Jpeg => self.jpeg,
+            ExportFormat::Webp => self.webp,
+            ExportFormat::Png => self.png,
+        }
+    }
+}
+
+pub const QUALITY_PRESETS: [QualityPreset; 5] = [
+    QualityPreset {
+        label: "Tiny",
+        quality: 55,
+        jpeg: "Smallest file with the most visible compression.",
+        webp: "Smallest lossy WebP with the most visible compression.",
+        png: "Smallest PNG with the most visible dithering.",
+    },
+    QualityPreset {
+        label: "Smaller",
+        quality: 70,
+        jpeg: "Very small file with more visible compression.",
+        webp: "Very small lossy WebP with more visible compression.",
+        png: "Very small PNG with more visible dithering.",
+    },
+    QualityPreset {
+        label: "Balanced",
+        quality: 85,
+        jpeg: "Good quality with a meaningfully smaller file.",
+        webp: "Good lossy WebP quality with a meaningfully smaller file.",
+        png: "Good quality with a meaningfully smaller PNG.",
+    },
+    QualityPreset {
+        label: "High",
+        quality: 92,
+        jpeg: "Much smaller file with little visible quality loss.",
+        webp: "Much smaller lossy WebP with little visible quality loss.",
+        png: "Much smaller PNG by reducing colors; usually looks similar.",
+    },
+    QualityPreset {
+        label: "Highest",
+        quality: 98,
+        jpeg: "Light JPEG compression. Near-original quality, a modest size cut.",
+        webp: "Light lossy WebP. Near-original quality, a modest size cut.",
+        png: "Same pixels, tighter packing. No color reduction.",
+    },
+];
+
+/// The preset whose quality is exactly `quality`, if any.
+pub fn quality_preset(quality: u8) -> Option<&'static QualityPreset> {
+    QUALITY_PRESETS
+        .iter()
+        .find(|preset| preset.quality == quality)
+}
+
+pub const SAVE_QUALITY_MODES: [ExportQuality; 3] = [
+    ExportQuality::Preserve,
+    ExportQuality::Compress,
+    ExportQuality::Maximum,
+];
+
+pub const fn quality_mode_label(mode: ExportQuality) -> &'static str {
+    match mode {
+        ExportQuality::Preserve => "Preserve quality",
+        ExportQuality::Compress => "Compress",
+        ExportQuality::Maximum => "Maximum file size",
+    }
+}
+
+/// The Save quality listbox description for `mode` and `format`.
+pub const fn quality_mode_description(mode: ExportQuality, format: ExportFormat) -> &'static str {
+    match (mode, format) {
+        (ExportQuality::Preserve, _) => {
+            "Original quality with no extra compression unless an edit requires it."
+        }
+        (ExportQuality::Compress, ExportFormat::Png) => {
+            "Smaller PNG with Tiny through Highest quality presets."
+        }
+        (ExportQuality::Compress, ExportFormat::Webp) => {
+            "Smaller lossy WebP with Tiny through Highest quality presets."
+        }
+        (ExportQuality::Compress, ExportFormat::Jpeg) => {
+            "Smaller JPEG with Tiny through Highest quality presets."
+        }
+        (ExportQuality::Maximum, _) => "Set a hard size limit for the saved file.",
+    }
+}
+
+/// Hover help on the Maximum file size control.
+pub fn maximum_size_help(format: ExportFormat) -> String {
+    let label = format_label(format);
+    match format {
+        ExportFormat::Jpeg | ExportFormat::Webp => format!(
+            "{label} quality is lowered only when needed to meet this limit. If the original already fits, it stays uncompressed."
+        ),
+        ExportFormat::Png => {
+            format!("Uses stronger {label} compression only when the original exceeds this limit.")
+        }
+    }
+}
+
+/// Decimal file-size units of the Maximum file size field (shipping
+/// `SCREENSHOT_FILE_SIZE_UNIT_BYTES` and the recording editor's units).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileSizeUnit {
+    Kb,
+    #[default]
+    Mb,
+    Gb,
+}
+
+impl FileSizeUnit {
+    pub const ALL: [Self; 3] = [Self::Kb, Self::Mb, Self::Gb];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Kb => "KB",
+            Self::Mb => "MB",
+            Self::Gb => "GB",
+        }
+    }
+
+    const fn digits(self) -> usize {
+        match self {
+            Self::Kb => 3,
+            Self::Mb => 6,
+            Self::Gb => 9,
+        }
+    }
+
+    /// The screenshot field's minimum and stepper increment in this unit.
+    pub const fn step(self) -> f64 {
+        match self {
+            Self::Kb => 1.,
+            Self::Mb => 0.01,
+            Self::Gb => 0.000_01,
+        }
+    }
+
+    pub const fn minimum(self) -> f64 {
+        match self {
+            Self::Kb => 10.,
+            Self::Mb => 0.01,
+            Self::Gb => 0.000_01,
+        }
+    }
+
+    /// Whole bytes for decimal `text` in this unit, floored without
+    /// floating-point rounding; `None` for anything but digits and one dot.
+    pub fn bytes(self, text: &str) -> Option<u64> {
+        let value = text.trim();
+        let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+        if whole.is_empty() && fraction.is_empty()
+            || !whole
+                .bytes()
+                .chain(fraction.bytes())
+                .all(|c| c.is_ascii_digit())
+        {
+            return None;
+        }
+        let whole = if whole.is_empty() {
+            0
+        } else {
+            whole.parse::<u64>().ok()?
+        };
+        let fraction = &fraction[..fraction.len().min(self.digits())];
+        let part = if fraction.is_empty() {
+            0
+        } else {
+            fraction.parse::<u64>().ok()?
+        };
+        whole
+            .checked_mul(10_u64.pow(self.digits() as u32))?
+            .checked_add(part * 10_u64.pow((self.digits() - fraction.len()) as u32))
+    }
+
+    /// `bytes` written in this unit without trailing zeros ("10", "0.25").
+    pub fn value(self, bytes: u64) -> String {
+        let factor = 10_u64.pow(self.digits() as u32);
+        let fraction = format!("{:0width$}", bytes % factor, width = self.digits());
+        let fraction = fraction.trim_end_matches('0');
+        if fraction.is_empty() {
+            (bytes / factor).to_string()
+        } else {
+            format!("{}.{}", bytes / factor, fraction)
+        }
+    }
+}
+
+/// Shipping's screenshot Maximum file size default: 10 MB.
+pub const DEFAULT_MAX_SIZE_BYTES: u64 = 10_000_000;
 
 #[cfg(test)]
 mod tests {
@@ -956,5 +1198,82 @@ mod tests {
                 .to_rgba8(),
             second
         );
+    }
+
+    #[test]
+    fn quality_copy_follows_the_shipping_export_bar() {
+        assert_eq!(
+            QUALITY_PRESETS.map(|preset| preset.quality),
+            [55, 70, 85, 92, 98]
+        );
+        let tiny = quality_preset(55).unwrap();
+        assert_eq!(tiny.label, "Tiny");
+        assert_eq!(
+            tiny.description(ExportFormat::Png),
+            "Smallest PNG with the most visible dithering."
+        );
+        assert_eq!(
+            quality_preset(98).unwrap().description(ExportFormat::Webp),
+            "Light lossy WebP. Near-original quality, a modest size cut."
+        );
+        assert!(quality_preset(80).is_none());
+        assert_eq!(
+            quality_mode_description(ExportQuality::Compress, ExportFormat::Jpeg),
+            "Smaller JPEG with Tiny through Highest quality presets."
+        );
+        assert!(maximum_size_help(ExportFormat::Png).starts_with("Uses stronger PNG"));
+        assert!(maximum_size_help(ExportFormat::Jpeg).starts_with("JPEG quality is lowered"));
+
+        let target = ExportTarget::new(None, Path::new("/tmp"), "shot");
+        let view = present(
+            &target,
+            options(ExportFormat::Webp, ExportQuality::Compress),
+            (10, 10),
+            false,
+            EstimateState::default(),
+        );
+        assert!(view.compresses);
+        assert_eq!(view.quality_modes.len(), 3);
+        assert_eq!(view.quality_modes[2].label, "Maximum file size");
+        assert_eq!(view.quality_presets[1].value, 70);
+        assert_eq!(
+            view.quality_presets[1].description,
+            "Very small lossy WebP with more visible compression."
+        );
+        assert!(
+            !present(
+                &target,
+                options(ExportFormat::Png, ExportQuality::Preserve),
+                (10, 10),
+                false,
+                EstimateState::default(),
+            )
+            .compresses
+        );
+    }
+
+    #[test]
+    fn file_size_units_are_decimal_and_floor_exactly() {
+        assert_eq!(FileSizeUnit::Mb.bytes("10"), Some(10_000_000));
+        assert_eq!(FileSizeUnit::Kb.bytes("10.5"), Some(10_500));
+        assert_eq!(FileSizeUnit::Kb.bytes("0.0009"), Some(0));
+        assert_eq!(FileSizeUnit::Gb.bytes(".25"), Some(250_000_000));
+        assert_eq!(FileSizeUnit::Mb.bytes(""), None);
+        assert_eq!(FileSizeUnit::Mb.bytes("1e3"), None);
+        assert_eq!(FileSizeUnit::Mb.bytes("-1"), None);
+        assert_eq!(FileSizeUnit::Mb.value(10_000_000), "10");
+        assert_eq!(FileSizeUnit::Kb.value(10_500), "10.5");
+        assert_eq!(FileSizeUnit::Gb.value(250_000_000), "0.25");
+        assert_eq!(
+            FileSizeUnit::Kb.minimum() * 1_000.,
+            MINIMUM_MAX_SIZE_BYTES as f64
+        );
+        assert_eq!(FileSizeUnit::default(), FileSizeUnit::Mb);
+        assert_eq!(
+            FileSizeUnit::ALL.map(FileSizeUnit::label),
+            ["KB", "MB", "GB"]
+        );
+        let bytes = FileSizeUnit::Mb.bytes("1.5").unwrap();
+        assert_eq!(FileSizeUnit::Kb.value(bytes), "1500");
     }
 }

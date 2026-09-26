@@ -284,6 +284,24 @@ const TOOLBAR_EXIT: &[Keyframe] = &[
     frame(1., Pose::hidden(6., 0.9)),
 ];
 const TOOLBAR_CLEAR: &[Keyframe] = &[frame(0., Pose::REST), frame(1., Pose::hidden(6., 0.9))];
+/// `onboarding-cta-pulse`: the `--surface-active` halo's strength. Opacity is
+/// the halo's colour mix and its spread as a fraction of
+/// [`ONBOARDING_CTA_SPREAD`], which grow together as the box-shadow does.
+const ONBOARDING_CTA_PULSE: &[Keyframe] = &[
+    frame(0., Pose::with(0., 0., 1.)),
+    frame(0.5, Pose::REST),
+    frame(1., Pose::with(0., 0., 1.)),
+];
+/// `recording-ready-ping` on the record dot's `::after` copy, which starts at
+/// the pseudo-element's own `opacity: 0.7` and grows to twice its size.
+const RECORD_READY_PING: &[Keyframe] = &[
+    frame(0., Pose::with(0.7, 0., 1.)),
+    frame(0.75, Pose::with(0., 0., 2.)),
+    frame(1., Pose::with(0., 0., 2.)),
+];
+
+/// Box-shadow spread of the onboarding CTA halo at full strength, in points.
+pub const ONBOARDING_CTA_SPREAD: f64 = 5.;
 
 /// Shipping entrance, exit and lifecycle animations the native hosts play.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -360,10 +378,20 @@ pub enum Motion {
     /// `.thumbnail-stack-toolbar-clearing`: `thumbnail-stack-toolbar-clear
     /// 0.45s cubic-bezier(0.4, 0, 0.2, 1) both` on Clear all.
     PreviewToolbarClear,
+    /// `.onboarding-primary-button.cta-pulse:not(:disabled)`:
+    /// `onboarding-cta-pulse 2.6s ease-in-out infinite`, a neutral halo on
+    /// the ready Start button. Hosts draw a `--surface-active` ring whose
+    /// spread is [`ONBOARDING_CTA_SPREAD`] × the pose opacity.
+    OnboardingCtaPulse,
+    /// `.capture-selector-primary-recording:not(:disabled) >
+    /// .capture-record-dot::after`: `recording-ready-ping 1.1s
+    /// cubic-bezier(0, 0, 0.2, 1) infinite`, a signal copy of the Start
+    /// recording dot that grows and fades.
+    CaptureRecordReadyPing,
 }
 
 impl Motion {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 27] = [
         Self::UpdateNoticeIn,
         Self::UpdateNoticeRestartExit,
         Self::StartupNoticeIn,
@@ -389,6 +417,8 @@ impl Motion {
         Self::PreviewToolbarOut,
         Self::PreviewToolbarExit,
         Self::PreviewToolbarClear,
+        Self::OnboardingCtaPulse,
+        Self::CaptureRecordReadyPing,
     ];
 
     /// Stable name used by the settings ABI.
@@ -419,6 +449,8 @@ impl Motion {
             Self::PreviewToolbarOut => "preview_toolbar_out",
             Self::PreviewToolbarExit => "preview_toolbar_exit",
             Self::PreviewToolbarClear => "preview_toolbar_clear",
+            Self::OnboardingCtaPulse => "onboarding_cta_pulse",
+            Self::CaptureRecordReadyPing => "capture_record_ready_ping",
         }
     }
 
@@ -495,6 +527,19 @@ impl Motion {
                 TOOLBAR_EXIT,
             ),
             Self::PreviewToolbarClear => spec(Millis(450.), 0., STANDARD_MOTION, TOOLBAR_CLEAR),
+            // CSS `ease-in-out` keyword, not the `--ease-in-out` token.
+            Self::OnboardingCtaPulse => spec(
+                Millis(2_600.),
+                0.,
+                Bezier([0.42, 0., 0.58, 1.]),
+                ONBOARDING_CTA_PULSE,
+            ),
+            Self::CaptureRecordReadyPing => spec(
+                Millis(1_100.),
+                0.,
+                Bezier([0., 0., 0.2, 1.]),
+                RECORD_READY_PING,
+            ),
         }
     }
 
@@ -1158,5 +1203,41 @@ mod tests {
         }
         assert!(Motion::UpdateNoticeIn.resolve(&Empty).is_none());
         assert!(Motion::PreviewCardArrive.resolve(&Empty).is_some());
+    }
+
+    #[test]
+    fn onboarding_pulse_and_ready_ping_loop_and_rest_invisible_under_reduced_motion() {
+        let pulse = Motion::OnboardingCtaPulse.resolve(&Shipping).unwrap();
+        assert_eq!(pulse.duration_ms, 2_600.);
+        assert!(close(pulse.pose_repeating(0., false).opacity, 0.));
+        assert!(close(pulse.pose_repeating(1_300., false).opacity, 1.));
+        assert!(close(
+            pulse.pose_repeating(1_300. + 2_600. * 3., false).opacity,
+            1.
+        ));
+        let quarter = pulse.pose_repeating(650., false).opacity;
+        assert!(quarter > 0.2 && quarter < 0.8, "{quarter}");
+        // Shipping's 0.01 ms iteration lands on the transparent final frame.
+        assert_eq!(pulse.pose_repeating(1_300., true).opacity, 0.);
+        assert!(!pulse.running(0., true));
+
+        let ping = Motion::CaptureRecordReadyPing.resolve(&Shipping).unwrap();
+        assert_eq!(ping.duration_ms, 1_100.);
+        let start = ping.pose_repeating(0., false);
+        assert!(close(start.opacity, 0.7) && close(start.scale, 1.));
+        let settled = ping.pose_repeating(1_000., false);
+        assert!(close(settled.opacity, 0.) && close(settled.scale, 2.));
+        let growing = ping.pose_repeating(1_100. + 200., false);
+        assert!(growing.scale > 1. && growing.scale < 2. && growing.opacity < 0.7);
+        assert_eq!(ping.pose_repeating(200., true).opacity, 0.);
+        let catalog = catalog();
+        assert_eq!(
+            catalog["keyframes"]["onboarding_cta_pulse"]["duration"]["millis"],
+            2_600.
+        );
+        assert_eq!(
+            catalog["keyframes"]["capture_record_ready_ping"]["frames"][0]["opacity"],
+            0.7
+        );
     }
 }
