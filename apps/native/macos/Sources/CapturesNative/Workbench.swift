@@ -98,6 +98,8 @@ final class CaptureButton: NSButton {
     private var hovered = false
     var icon: CaptureButtonIcon? { didSet { updateTrackingAreas(); needsDisplay = true } }
     var actionBlock: (() -> Void)?
+    /// Hover or keyboard focus changed; the recording HUD shows its styled tooltip.
+    var highlightChanged: ((CaptureButton, Bool) -> Void)?
     var enterActionBlock: (() -> Void)?
     var escapeActionBlock: (() -> Void)?
 
@@ -128,18 +130,26 @@ final class CaptureButton: NSButton {
         }
     }
 
-    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+    override func mouseEntered(with event: NSEvent) {
+        hovered = true; needsDisplay = true
+        highlightChanged?(self, true)
+    }
+    override func mouseExited(with event: NSEvent) {
+        hovered = false; needsDisplay = true
+        highlightChanged?(self, window?.firstResponder === self)
+    }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
         needsDisplay = true
+        if accepted { highlightChanged?(self, true) }
         return accepted
     }
 
     override func resignFirstResponder() -> Bool {
         let accepted = super.resignFirstResponder()
         needsDisplay = true
+        if accepted { highlightChanged?(self, hovered) }
         return accepted
     }
 
