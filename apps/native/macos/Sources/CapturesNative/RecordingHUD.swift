@@ -342,9 +342,11 @@ final class RecordingHUDView: NSView {
 
     private func setState(_ state: String, elapsedMilliseconds: UInt64) {
         let paused = state == "paused"
-        if self.paused != paused || self.state != state { setMicrophoneLevel(0) }
+        let changed = self.paused != paused || self.state != state
         if state != "failed" { sessionError = nil }
         self.state = state; self.paused = paused
+        // Reset the meter after the new state is stored so its label reads it.
+        if changed { setMicrophoneLevel(0) }
         self.elapsedMilliseconds = elapsedMilliseconds
         refreshControls()
         let running = policy?.timerRunning ?? (state == "recording")
