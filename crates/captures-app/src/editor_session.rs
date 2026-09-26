@@ -272,6 +272,13 @@ pub struct LayerRow {
     pub icon: &'static str,
 }
 
+/// One font menu row: the draft font key and its visible label.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct FontFamilyOption {
+    pub key: String,
+    pub label: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Snapshot<'a> {
     pub artifact_id: &'a str,
@@ -289,6 +296,9 @@ pub struct Snapshot<'a> {
     /// Only these pinned session fonts are available; host defaults never replace
     /// a reopened draft's exact files or expand its font set implicitly.
     pub font_families: Option<&'a BTreeMap<String, String>>,
+    /// Font menu rows for `font_families`: shipping order and labels
+    /// (`editor_text::font_family_options`), never asset names for known keys.
+    pub font_family_options: Vec<FontFamilyOption>,
     pub text_style_presets: Vec<crate::editor_text::TextStylePreset>,
     pub annotation_controls: BTreeMap<&'a str, AnnotationControls<'a>>,
     /// Resolved display defaults; reading them never authors custom shadow data.
@@ -484,6 +494,12 @@ impl EditorSession {
             }),
             document,
             font_families: self.fonts.as_ref().map(|fonts| &fonts.assets.families),
+            font_family_options: self.fonts.as_ref().map_or_else(Vec::new, |fonts| {
+                crate::editor_text::font_family_options(&fonts.assets.families)
+                    .into_iter()
+                    .map(|(key, label)| FontFamilyOption { key, label })
+                    .collect()
+            }),
             text_style_presets: crate::editor_text::TEXT_STYLE_PRESETS
                 .iter()
                 .filter(|preset| {

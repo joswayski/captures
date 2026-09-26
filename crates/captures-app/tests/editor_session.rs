@@ -4265,6 +4265,16 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
         .id
         .clone();
     assert_eq!(editor.snapshot().font_families, Some(&fonts.families));
+    let menu = serde_json::to_value(&editor.snapshot().font_family_options).unwrap();
+    assert_eq!(
+        menu,
+        json!([
+            {"key": "sans", "label": "Sans serif"},
+            {"key": "serif", "label": "Serif"},
+            {"key": "mono", "label": "Monospace"},
+            {"key": "rounded", "label": "Rounded"},
+        ])
+    );
     assert_eq!(
         editor
             .snapshot()
@@ -4368,6 +4378,10 @@ fn older_drafts_offer_only_their_persisted_fonts_without_implicit_font_migration
     let accepted = editor.pixels();
     let mut reopened = open_text(data.path(), &id, captures_app::editor_fonts::bundled()).unwrap();
     assert_eq!(reopened.snapshot().font_families, Some(&legacy.families));
+    assert_eq!(
+        serde_json::to_value(&reopened.snapshot().font_family_options).unwrap(),
+        json!([{"key": "sans", "label": "Sans serif"}])
+    );
     assert_eq!(
         reopened
             .snapshot()

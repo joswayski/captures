@@ -1062,11 +1062,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let cropHeight = NSTextField()
     private let canvasWidth = NSTextField()
     private let canvasHeight = NSTextField()
-    private let backgroundColor = NSTextField()
-    private var backgroundMode: NSPopUpButton!
-    private var backgroundApply: CaptureButton!
-    private var backgroundReset: CaptureButton!
-    private var lastSolidBackground = "#f7f7f5"
+    private var backgroundSolid: NSButton!
+    private var backgroundSwatches: ColorSwatchRow!
+    /// Shipping `lastSolid`: restored when Solid background is turned back on.
+    private var lastSolidBackground = EditorColors.defaultCanvasBackground
+    /// A live background change made while other work runs; only the latest
+    /// is applied once the editor is free (one undo step).
+    private var queuedBackground: String??
     private let status = NSTextField(wrappingLabelWithString: "")
     private let geometryPanel = Surface()
     private let geometryContent = Surface()
@@ -1391,7 +1393,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelPendingImport()
         inlineTextInput = nil; hideInlineTextEditor(); closeAfterTextInput = false
         let generation = state.beginOpen(artifactID: artifact.id)
-        lastSolidBackground = "#f7f7f5"
+        lastSolidBackground = EditorColors.defaultCanvasBackground; queuedBackground = nil
         self.historyRoot = historyRoot
         captureMode = artifact.mode
         self.outputDirectory = outputDirectory ?? URL(fileURLWithPath: historyRoot)
@@ -1474,6 +1476,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         switch result {
         case .success:
             inlineTextInput = nil; hideInlineTextEditor()
+            backgroundSwatches?.deactivate(); queuedBackground = nil
             state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
             estimateWork?.cancel(); estimateWork = nil; estimateGeneration += 1
             window.orderOut(nil); publishPresence(); return true
@@ -2135,31 +2138,33 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             if !icon.isEmpty { control.icon = .shipping(icon); control.iconSide = 13 }
         }
         trimButton.toolTip = EditorChrome.text("header", "trim_tooltip")
-        backgroundButton.toolTip = "Canvas background color"
+        backgroundButton.toolTip = EditorColors.text("background_tooltip")
         backgroundButton.swatch = tokens.color("surface-raised")
 
-        // Canvas background card (native keeps its explicit hex field and Apply).
-        backgroundCard.frame = NSRect(x: 0, y: 0, width: 264, height: 128)
+        // Shipping canvas background card: a Solid toggle and the compact swatch
+        // row. Every change applies at once as its own undo step.
+        let cardWidth = EditorColors.metric("menu_width")
+        let cardPadding = tokens.number("s-5")
+        let swatchWidth = cardWidth - 2 * cardPadding
+        let swatchHeight = ColorSwatchRow.height(width: swatchWidth, compact: true, tokens: tokens)
+        backgroundCard.frame = NSRect(x: 0, y: 0, width: cardWidth,
+                                      height: 2 * cardPadding + 24 + tokens.number("s-4") + swatchHeight)
         backgroundCard.layer?.cornerRadius = tokens.number("r-xl")
         backgroundCard.layer?.borderWidth = 1
-        backgroundCard.setAccessibilityLabel("Canvas background")
+        backgroundCard.setAccessibilityLabel(EditorColors.text("canvas_background"))
         backgroundCard.isHidden = true
-        backgroundMode = NSPopUpButton()
-        backgroundMode.addItems(withTitles: ["Solid", "Transparent"])
-        backgroundMode.frame = NSRect(x: 12, y: 12, width: 240, height: 28)
-        backgroundMode.setAccessibilityLabel("Canvas background mode")
-        backgroundMode.target = self; backgroundMode.action = #selector(changeBackgroundMode)
-        backgroundCard.addSubview(backgroundMode)
-        configure(backgroundColor, frame: NSRect(x: 12, y: 48, width: 240, height: 26),
-                  label: "Canvas background color", parent: backgroundCard)
-        backgroundColor.placeholderString = "#RRGGBB or #RRGGBBAA"
-        backgroundColor.formatter = nil; backgroundColor.alignment = .left
-        backgroundApply = button("Apply background", frame: NSRect(x: 12, y: 86, width: 144, height: 30),
-                                 parent: backgroundCard) { [weak self] in self?.applyBackground() }
-        backgroundReset = button("Reset fields", frame: NSRect(x: 164, y: 86, width: 88, height: 30),
-                                 parent: backgroundCard) { [weak self] in
-            self?.publishBackgroundFields(); self?.updateControls()
-        }
+        backgroundSolid = NSButton(checkboxWithTitle: EditorColors.text("solid_background"),
+                                   target: self, action: #selector(toggleSolidBackground))
+        backgroundSolid.font = .systemFont(ofSize: tokens.number("text-sm"))
+        backgroundSolid.frame = NSRect(x: cardPadding, y: cardPadding, width: swatchWidth, height: 24)
+        backgroundSolid.setAccessibilityLabel(EditorColors.text("solid_background"))
+        backgroundCard.addSubview(backgroundSolid)
+        backgroundSwatches = ColorSwatchRow(tokens: tokens, label: EditorColors.text("canvas_background"),
+                                            compact: true)
+        backgroundSwatches.frame = NSRect(x: cardPadding, y: backgroundSolid.frame.maxY + tokens.number("s-4"),
+                                          width: swatchWidth, height: swatchHeight)
+        backgroundSwatches.changed = { [weak self] color in self?.setBackground(color) }
+        backgroundCard.addSubview(backgroundSwatches)
 
         undoButton = headerIcon("undo", label: EditorChrome.text("header", "undo")) {
             [weak self] in self?.undoDocument()
@@ -2259,6 +2264,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func toggleBackgroundCard() {
         backgroundCard.isHidden.toggle()
         backgroundButton.selected = !backgroundCard.isHidden
+        if backgroundCard.isHidden { backgroundSwatches.deactivate() }
         if !backgroundCard.isHidden { publishBackgroundFields(); updateControls() }
         backgroundButton.needsDisplay = true
     }
@@ -2472,6 +2478,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         for preset in state.snapshot?.textStylePresets ?? [] {
             createTextPreset.addItem(withTitle: preset.label)
             createTextPreset.lastItem?.representedObject = preset.id
+            // Shipping `TextStylePicker` preview chip, also shown on the trigger.
+            createTextPreset.lastItem?.image = TextStyleChip.image(for: preset, tokens: tokens)
         }
         let desiredID = createTextDefaultsPublished ? selectedID
             : (state.snapshot?.textStylePresets.first(where: { $0.id == "rounded-box" })?.id
@@ -4077,7 +4085,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textFieldsID = selectedLayer?.id; acceptedTextStyle = style
         textPreset.removeAllItems()
         textPreset.addItem(withTitle: "Style…")
-        for preset in state.snapshot?.textStylePresets ?? [] { textPreset.addItem(withTitle: preset.label) }
+        for preset in state.snapshot?.textStylePresets ?? [] {
+            textPreset.addItem(withTitle: preset.label)
+            textPreset.lastItem?.image = TextStyleChip.image(for: preset, tokens: tokens)
+        }
         if preserve { return }
         textPresetRounded = nil
         textEditor.string = style.text; textSize.stringValue = format(style.fontSize)
@@ -4095,9 +4106,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateTextShadowControls()
         textFamily.removeAllItems()
         let families = state.snapshot?.fontFamilies ?? [:]
-        for key in families.keys.sorted() {
-            textFamily.addItem(withTitle: families[key]!)
-            textFamily.lastItem?.representedObject = key
+        for option in state.snapshot?.fontFamilyOptions ?? [] {
+            textFamily.addItem(withTitle: option.label)
+            textFamily.lastItem?.representedObject = option.key
         }
         if families[style.fontFamily] == nil {
             textFamily.addItem(withTitle: "Saved font: \(style.fontFamily)")
@@ -5038,21 +5049,44 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 message: "Resizing canvas…", resetCrop: true)
     }
 
-    @objc private func changeBackgroundMode() { updateControls() }
-
-    private func publishBackgroundFields() {
-        guard let snapshot = state.snapshot else { return }
-        if let color = snapshot.background { lastSolidBackground = color }
-        backgroundMode.selectItem(at: snapshot.background == nil ? 1 : 0)
-        backgroundColor.stringValue = lastSolidBackground
-        backgroundButton?.swatch = snapshot.background.flatMap { NSColor(hex: $0) } ?? .clear
-        backgroundButton?.setAccessibilityLabel("Background color: \(snapshot.background ?? "transparent")")
+    @objc private func toggleSolidBackground() {
+        setBackground(backgroundSolid.state == .on ? lastSolidBackground : nil)
     }
 
-    private func applyBackground() {
-        let color: Any = backgroundMode.indexOfSelectedItem == 0
-            ? backgroundColor.stringValue as Any : NSNull()
-        command(["operation": "set_background", "color": color],
+    /// The background the card shows: a queued live change, else the document's.
+    private var shownBackground: String? {
+        if let queuedBackground { return queuedBackground }
+        return state.snapshot?.background
+    }
+
+    private func publishBackgroundFields() {
+        guard state.snapshot != nil else { return }
+        if let color = state.snapshot?.background, queuedBackground == nil { lastSolidBackground = color }
+        let shown = shownBackground
+        backgroundSolid?.state = shown == nil ? .off : .on
+        backgroundSwatches?.selectedHex = shown ?? lastSolidBackground
+        backgroundButton?.swatch = shown.flatMap { NSColor(hex: $0) } ?? .clear
+        backgroundButton?.setAccessibilityLabel(EditorColors.backgroundLabel(shown))
+    }
+
+    /// Shipping applies each background change at once as its own undo step;
+    /// an unchanged value adds none (the session skips identical commits).
+    private func setBackground(_ color: String?) {
+        guard state.snapshot != nil, inlineTextInput == nil else { return }
+        if let color { lastSolidBackground = color }
+        if state.busy {
+            queuedBackground = .some(color); publishBackgroundFields(); return
+        }
+        queuedBackground = nil
+        command(["operation": "set_background", "color": color.map { $0 as Any } ?? NSNull()],
+                message: "Changing canvas background…")
+    }
+
+    private func flushQueuedBackground() {
+        guard let queued = queuedBackground, state.snapshot != nil, !state.busy,
+              inlineTextInput == nil else { return }
+        queuedBackground = nil
+        command(["operation": "set_background", "color": queued.map { $0 as Any } ?? NSNull()],
                 message: "Changing canvas background…")
     }
 
@@ -5165,6 +5199,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         closeAfterCommand = false; closeAfterTextInput = false
         inlineTextInput = nil; hideInlineTextEditor()
         selectedLayerID = nil; preferredLayerID = nil
+        backgroundSwatches?.deactivate(); queuedBackground = nil
         state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
         estimateWork?.cancel(); estimateWork = nil; estimateGeneration += 1
         cancelViewportPan()
@@ -5178,9 +5213,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         fields.forEach { $0.isEnabled = ready }
         applyCropButton?.isEnabled = ready
         trimButton?.isEnabled = ready; backgroundButton?.isEnabled = ready
-        backgroundMode?.isEnabled = ready
-        backgroundColor.isEnabled = ready && backgroundMode?.indexOfSelectedItem == 0
-        backgroundApply?.isEnabled = ready; backgroundReset?.isEnabled = ready
+        // The card stays live while a change applies, like shipping; changes
+        // made meanwhile queue (see `setBackground`).
+        let backgroundLive = state.snapshot != nil && inlineTextInput == nil
+        backgroundSolid?.isEnabled = backgroundLive
+        backgroundSwatches?.isEnabled = backgroundLive
+        if ready && queuedBackground != nil {
+            DispatchQueue.main.async { [weak self] in self?.flushQueuedBackground() }
+        }
         undoButton?.isEnabled = ready && state.snapshot?.canUndo == true
         redoButton?.isEnabled = ready && state.snapshot?.canRedo == true
         saveDraftItem.isEnabled = ready && state.snapshot?.unsavedChanges == true
@@ -5427,6 +5467,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         canvasToolbarLabels.forEach { $0.textColor = tokens.color("text-subtle") }
         for field in [canvasWidth, canvasHeight] { field.textColor = tokens.color("text") }
         backgroundCard.layer?.backgroundColor = tokens.color("surface-overlay").cgColor
+        backgroundSwatches?.tokens = tokens
         backgroundCard.layer?.borderColor = tokens.color("border").cgColor
         draftBanner.layer?.backgroundColor = tokens.color("caution-surface").cgColor
         draftBannerLabel.textColor = tokens.color("caution-text")

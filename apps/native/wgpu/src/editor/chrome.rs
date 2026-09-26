@@ -3,7 +3,7 @@
 //! Recenter pill (`ScreenshotEditor.tsx`, `styles/editor-image.css`). Copy,
 //! icon names and responsive rules come from `captures_app::editor_chrome`.
 use super::*;
-use captures_app::editor_chrome::{self as model, header as copy};
+use captures_app::editor_chrome::{self as model, colors, header as copy};
 use eframe::egui::{
     Align, Color32, FontFamily, FontId, Layout, Pos2, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
     pos2, vec2,
@@ -779,7 +779,7 @@ fn canvas_toolbar(
     let h = galley(ui, "H", xs.clone(), subtle);
     let times = galley(ui, "×", xs, subtle);
     let trim_text = galley(ui, copy::TRIM, sm.clone(), Color32::PLACEHOLDER);
-    let background_text = galley(ui, BACKGROUND, sm, Color32::PLACEHOLDER);
+    let background_text = galley(ui, colors::BACKGROUND, sm, Color32::PLACEHOLDER);
     let field = model::CANVAS_FIELD as f32;
     let gap = tokens.number("s-2");
     let pad = tokens.number("s-4");
@@ -919,9 +919,6 @@ fn canvas_toolbar(
     rect
 }
 
-const BACKGROUND: &str = "Background color";
-const BACKGROUND_TOOLTIP: &str = "Canvas background color";
-
 /// Shipping `.screenshot-canvas-tool`: transparent until hover or open.
 #[allow(clippy::too_many_arguments)]
 fn canvas_tool(
@@ -968,7 +965,7 @@ fn canvas_tool_ink(
 }
 
 /// Shipping `CanvasBackgroundPicker`: a color chip trigger opening the canvas
-/// background card. Native keeps its explicit hex field and Apply.
+/// background card: a Solid toggle and the compact swatch row, applied live.
 #[allow(clippy::too_many_arguments)]
 fn canvas_background(
     ui: &mut egui::Ui,
@@ -994,10 +991,7 @@ fn canvas_background(
         open,
     );
     let ink = canvas_tool_ink(tokens, &response, enabled, open);
-    let background = view
-        .presented
-        .as_ref()
-        .and_then(|presented| presented.document.background.clone());
+    let background = view.shown_background();
     let chip = egui::Rect::from_center_size(
         if text.is_some() {
             pos2(rect.left() + tokens.number("s-4") + 7., rect.center().y)
@@ -1055,12 +1049,9 @@ fn canvas_background(
             tokens.color("text-subtle"),
         );
     }
-    let label = format!(
-        "Background color: {}",
-        background.as_deref().unwrap_or("transparent")
-    );
+    let label = colors::background_label(background.as_deref());
     accessible(&response, egui::WidgetType::Button, open, &label);
-    let response = response.on_hover_text(BACKGROUND_TOOLTIP);
+    let response = response.on_hover_text(colors::BACKGROUND_TOOLTIP);
     egui::Popup::menu(&response)
         .id(popup_id)
         .align(egui::RectAlign::BOTTOM_START)
@@ -1075,30 +1066,41 @@ fn canvas_background(
                 .shadow(ui.visuals().popup_shadow),
         )
         .show(|ui| {
-            ui.set_width(236.);
-            ui.add_enabled_ui(enabled, |ui| {
-                ui.checkbox(&mut view.background_solid, "Solid background");
-                ui.add_enabled(
-                    view.background_solid,
-                    egui::TextEdit::singleline(&mut view.background_color)
-                        .desired_width(ui.available_width())
-                        .hint_text("#RRGGBB or #RRGGBBAA"),
-                );
-                ui.horizontal(|ui| {
-                    if ui.button("Apply background").clicked() {
-                        view.submit(
-                            tx,
-                            Request::SetBackground {
-                                color: view.background_solid.then(|| view.background_color.clone()),
-                            },
-                        );
-                    }
-                    if ui.button("Reset fields").clicked() {
-                        view.reset_background_fields();
-                    }
-                });
-                ui.small("Changes the canvas fill, not an image layer's background.");
-            });
+            let inner = model::colors::MENU_WIDTH as f32 - 2. * tokens.number("s-5");
+            ui.set_width(inner);
+            ui.spacing_mut().item_spacing.y = tokens.number("s-4");
+            // Live like shipping: the card stays usable while a change applies.
+            let live = view.presented.is_some()
+                && view.inline.is_none()
+                && !view.closed
+                && !view.close_requested
+                && !view.confirm_discard;
+            let shown = view.shown_background();
+            let mut solid = shown.is_some();
+            let toggle = ui.add_enabled(
+                live,
+                egui::Checkbox::new(
+                    &mut solid,
+                    egui::RichText::new(colors::SOLID_BACKGROUND)
+                        .size(tokens.number("text-sm"))
+                        .color(tokens.color("text-muted")),
+                ),
+            );
+            if toggle.changed() {
+                let color = solid.then(|| view.last_solid_background.clone());
+                view.set_background(tx, color);
+            }
+            let swatch_value = shown.unwrap_or_else(|| view.last_solid_background.clone());
+            if let Some(color) = super::pickers::color_field(
+                ui,
+                tokens,
+                colors::CANVAS_BACKGROUND,
+                &swatch_value,
+                true,
+                live,
+            ) {
+                view.set_background(tx, Some(color));
+            }
         });
 }
 

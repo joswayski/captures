@@ -371,6 +371,19 @@ def main():
     # Widths below are measured under the token fonts.
     ADD_IMAGES_WIDTH = 116
     HEADER_Y = 26
+    # Top-left of the background card's swatch grid relative to its trigger-derived
+    # left edge, and the first tile row's centre.
+    BACKGROUND_GRID_X = 13
+    BACKGROUND_GRID_Y = 115
+    # Bottom-clamped Layers → Annotation style rows (see `bottom`): first swatch
+    # row centres and toggles, for fill-only, stroke+fill and shadow layouts.
+    ANNOTATION_FILL_ROW = 349
+    ANNOTATION_STROKE_TOGGLE = 234
+    ANNOTATION_STROKE_ROW = 124
+    ANNOTATION_STROKE_WIDTH = 234
+    ANNOTATION_FILL_TOGGLE = 278
+    ANNOTATION_SHADOW_ROW = 218
+    ANNOTATION_SHADOW_TOGGLE = 146
 
     def header_controls(width):
         compact = width <= 1040
@@ -418,12 +431,20 @@ def main():
         type_text(value, 60)
         run("xdotool", "key", "Return", "sleep", ".2")
 
-    # The canvas background card opens below its trigger's left edge.
+    # The canvas background card opens below its trigger's left edge: a Solid
+    # background toggle, then the shipping compact swatch grid (224 px wide,
+    # six 37.33 px columns, 24 px tiles with 6 px row gaps).
+    SWATCHES = ["#ff3b5c", "#ff8a22", "#ffd22e", "#36c96b", "#2d9cff", "#8b5cf6",
+                "#111318", "#ffffff"]
+
     def background_point(name):
         x, _ = canvas_toolbar_point("background")
         left = {440: 375, 385: 320, 260: 246}[x]
-        return {"solid": (left + 30, 75), "color": (left + 100, 112),
-                "apply": (left + 72, 150), "reset": (left + 181, 150)}[name]
+        if name == "solid":
+            return left + 30, 75
+        index = SWATCHES.index(name)
+        return (round(left + BACKGROUND_GRID_X + (index % 6 + .5) * 224 / 6),
+                BACKGROUND_GRID_Y + index // 6 * 30)
 
     def background_click(name, dy=0):
         # dy: a banner above the header moves the header and its card down.
@@ -435,13 +456,9 @@ def main():
         click(editor, x, y + dy)
 
     def background_color(value, dy=0):
+        # Swatches apply live, one undo step each; Escape closes the card.
         background_open(dy)
-        background_click("color", dy)
-        run("xdotool", "key", "ctrl+a")
-        type_text(value, 60)
-
-    def background_apply(dy=0):
-        background_click("apply", dy)
+        background_click(value, dy)
         run("xdotool", "key", "Escape", "sleep", ".2")
 
     # Rail button centres: 8px top padding, 38px buttons and 2px gaps.
@@ -952,9 +969,8 @@ def main():
 
             # Set a real canvas background, then flatten from the same Combine
             # menu. Flatten bakes it, removes hidden slots and locks one image.
-            background_color("#214365")
-            background_apply()
-            save_until(lambda: json.loads(draft.read_text())["document"]["background"] == "#214365",
+            background_color("#2d9cff")
+            save_until(lambda: json.loads(draft.read_text())["document"]["background"] == "#2d9cff",
                        "combine fixture background")
             toolbar_click("layers")
             inspector_click(*COMBINE_MENU)
@@ -1949,7 +1965,7 @@ def main():
             toolbar_click("draw")
             draw_tool("text")
             shot(editor, "text-defaults-initial")
-            fixture_click((488, 289))  # Default Rounded box centered at document (480,200).
+            fixture_click((488, 289))  # Default Rounded Box centered at document (480,200).
             type_text("Rounded")
             run("xdotool", "key", "Escape", "sleep", ".3")
             rounded = save_layers(lambda values: len(values) == 2, "default rounded Text placed")[-1]
@@ -1974,13 +1990,11 @@ def main():
             toolbar_click("draw")
             draw_tool("text")
             inspector_click(95, draw_row(337))
+            # The shipping TextStylePicker menu: 38 px chip rows, Plain first.
             shot(editor, "text-defaults-menu")
-            inspector_move(60, draw_row(506),
-                "click", "--repeat", "5", "5", "sleep", ".2")
-            shot(editor, "text-defaults-menu-scrolled")
-            inspector_click(60, draw_row(499))  # Mono box, before Rounded box.
-            field(draw_row(381), 37.5, x=59)
-            field(draw_row(452), "#2367ab", x=105)
+            inspector_click(120, draw_row(622))  # Mono Box, before Rounded Box.
+            field(draw_row(385), 37.5, x=59)
+            field(draw_row(455), "#2367ab", x=105)
             shot(editor, "text-defaults-staged")
             assert draft.read_bytes() == before, "defaults must not write a draft"
             fixture_click((208, 169))  # Document (200,80), at actual-size scale.
@@ -2012,7 +2026,7 @@ def main():
             draw_tool("text")
             shot(editor, "text-defaults-reopened")
             assert layers()[-1] == text
-            fixture_click((408, 269))  # Fresh editor defaults, not saved Mono box/37.5.
+            fixture_click((408, 269))  # Fresh editor defaults, not saved Mono Box/37.5.
             type_text("Fresh")
             run("xdotool", "key", "Escape", "sleep", ".3")
             reset = save_layers(lambda values: len(values) == 3, "fresh editor Text defaults")[-1]
@@ -2062,7 +2076,7 @@ def main():
             # Text properties precede generic layer geometry in the sidebar.
             text_click(100, 431)
             shot(editor, f"text-font-menu-{args.appearance}")
-            text_click(100, 605)  # Liberation Serif, after Nunito.
+            text_click(100, 515)  # Serif: shipping order Sans serif, Serif, Monospace, Rounded.
             text_click(105, 505)
             run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--delay", "35",
                 "--", "Readable native text")
@@ -2125,7 +2139,7 @@ def main():
             assert edited["id"] == created["id"]
             shot(editor, f"text-edited-{args.appearance}")
             text_click(100, 431)
-            text_click(100, 471)  # Stage Mono without applying.
+            text_click(100, 559)  # Stage Monospace without applying.
             save_layers(lambda values: values[-1]["fontFamily"] == "serif",
                         "saving accepted pixels preserves staged family")
             shot(editor, f"text-family-pending-{args.appearance}")
@@ -2152,7 +2166,7 @@ def main():
             save_layers(lambda values: values[-1]["background"] is not None, "redo shadowed plate")
             before_preset = draft.read_bytes()
             text_click(90, 357)
-            text_click(90, 622)  # Mono box, preserving the accepted plate color.
+            text_click(90, 602)  # Mono Box chip row, preserving the accepted plate color.
             shot(editor, "text-preset-staged")
             assert draft.read_bytes() == before_preset
             assert text_pixels("text-preset-staged") == text_pixels(f"text-edited-{args.appearance}")
@@ -2509,33 +2523,44 @@ def main():
             canvas_field("height", 420)
             save(720, 420, 0, 0)
             before = draft.read_bytes()
-            background_color("#214365")
+            background_open()
             shot(editor, "background-controls")
-            assert draft.read_bytes() == before, "unapplied fields must not edit the draft"
-            background_apply()
+            assert draft.read_bytes() == before, "opening the card must not edit the draft"
 
             def background_is(color):
                 return json.loads(draft.read_text())["document"]["background"] == color
 
-            save_until(lambda: background_is("#214365"), "solid canvas background")
+            # A swatch applies live, as shipping does; no Apply button.
+            background_click("#2d9cff")
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "live background applied")
+            shot(editor, "background-live")
+            fixture_pixel("background-live", 700, 500, (45, 156, 255))
+            run("xdotool", "key", "Escape", "sleep", ".2")
+            save_until(lambda: background_is("#2d9cff"), "solid canvas background")
             shot(editor, "background-solid")
-            fixture_pixel("background-solid", 700, 500, (33, 67, 101))
+            fixture_pixel("background-solid", 700, 500, (45, 156, 255))
             fixture_pixel("background-solid", 40, 120, (40, 110, 166))
-            background_color("invalid")
-            background_apply()
-            shot(editor, "background-error")
-            assert background_is("#214365")
-            fixture_pixel("background-error", 700, 500, (33, 67, 101))
-            # Errors share the export status line; the layout does not move.
+            # Re-choosing the same swatch adds no undo step.
+            background_color("#2d9cff")
             background_open()
             background_click("solid")
-            background_apply()
             save_until(lambda: background_is(None), "transparent canvas background")
             shot(editor, "background-transparent")
             toolbar_click("undo")
-            save_until(lambda: background_is("#214365"), "undo canvas background")
+            save_until(lambda: background_is("#2d9cff"), "undo canvas background")
+            toolbar_click("undo")
+            save_until(lambda: background_is("#f7f7f5"), "undo skips the unchanged swatch")
             toolbar_click("redo")
-            save_until(lambda: background_is(None), "redo canvas background")
+            save_until(lambda: background_is("#2d9cff"), "redo canvas background")
+            # Solid on restores the last solid color; undo returns to transparent.
+            toolbar_click("redo")
+            save_until(lambda: background_is(None), "redo transparent background")
+            background_open()
+            background_click("solid")
+            save_until(lambda: background_is("#2d9cff"), "solid restores the last color")
+            toolbar_click("undo")
+            save_until(lambda: background_is(None), "undo solid toggle")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "background draft closes")
             editor = reopen()
@@ -2560,11 +2585,12 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["background-unapplied-no-write", "background-solid-pixels",
-                           "background-invalid-rollback", "background-transparent-undo-redo",
+                "checks": ["background-open-no-write", "background-live-swatch-pixels",
+                           "background-same-swatch-no-undo-step", "background-transparent-undo-redo",
+                           "background-solid-restores-last-color",
                            "background-minimum-draft-reopen", "background-clipboard-alpha-original-unchanged"],
             }, indent=2) + "\n")
-            print("PASS native canvas backgrounds: color, rollback, transparency, undo/redo, draft, clipboard alpha")
+            print("PASS native canvas backgrounds: live swatches, transparency, undo/redo, draft, clipboard alpha")
             return
 
         resize_editor(886, 700)
@@ -2859,43 +2885,55 @@ def main():
         save_layers(lambda values: values[-1]["locked"], "locked annotation remains style editable")
         inspector_move(180, 400, "click", "--repeat", "20", "5")
         shot(editor, "annotation-fields")
+
+        # Stroke, fill and shadow colors use the shipping swatch row: four 53.5 px
+        # columns across the inspector, 24 px tiles, 32 px row pitch, then the
+        # custom tile. Rows are bottom-clamped like the other annotation controls.
+        def swatch_click(first_row, color):
+            index = SWATCHES.index(color) if color in SWATCHES else len(SWATCHES)
+            inspector_click(round(8 + (index % 4 + .5) * 53.5), bottom(first_row + index // 4 * 32))
+
+        def scroll_inspector_end():
+            inspector_move(180, 400, "click", "--repeat", "25", "5")
+
         unchanged = draft.read_bytes()
         inspector_click(50, bottom(503))  # Unchanged Apply is disabled.
-        field(bottom(415), "#23b5a9")
+        swatch_click(ANNOTATION_FILL_ROW, "#36c96b")
         assert draft.read_bytes() == unchanged
         shot(editor, "annotation-unapplied")
         fixture_pixel("annotation-unapplied", 170, 310, (255, 59, 92))
         inspector_click(150, bottom(503))  # Reset does not mutate the document.
         assert draft.read_bytes() == unchanged
-        inspector_click(50, bottom(503))  # A broken Reset would apply the staged cyan here.
+        inspector_click(50, bottom(503))  # A broken Reset would apply the staged green here.
         save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "reset cleared staged fill")
-        field(bottom(415), "#23b5a9")
+        swatch_click(ANNOTATION_FILL_ROW, "#36c96b")
         inspector_click(50, bottom(503))
-        save_layers(lambda values: values[-1]["style"]["fill"] == "#23b5a9", "annotation fill")
+        save_layers(lambda values: values[-1]["style"]["fill"] == "#36c96b", "annotation fill")
         shot(editor, "annotation-fill")
-        fixture_pixel("annotation-fill", 170, 310, (35, 181, 169))
+        fixture_pixel("annotation-fill", 170, 310, (54, 201, 107))
         toolbar_click("undo")
         save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "one-step style undo")
         toolbar_click("redo")
-        save_layers(lambda values: values[-1]["style"]["fill"] == "#23b5a9", "style redo")
-        inspector_click(15, bottom(300))  # Enable stroke, then keep the final controls in view.
-        inspector_move(180, 400, "click", "--repeat", "20", "5")
-        field(bottom(256), "#3269d6")
-        field(bottom(300), 12, 130)
-        inspector_click(15, bottom(344))  # Clear fill.
-        inspector_move(180, 400, "click", "--repeat", "20", "5")
+        save_layers(lambda values: values[-1]["style"]["fill"] == "#36c96b", "style redo")
+        inspector_click(15, bottom(ANNOTATION_STROKE_TOGGLE))  # Enable stroke.
+        scroll_inspector_end()
+        shot(editor, "annotation-stroke-fields")
+        swatch_click(ANNOTATION_STROKE_ROW, "#8b5cf6")
+        field(bottom(ANNOTATION_STROKE_WIDTH), 12, 130)
+        inspector_click(15, bottom(ANNOTATION_FILL_TOGGLE))  # Clear fill.
+        scroll_inspector_end()
         inspector_click(50, bottom(503))
         save_layers(lambda values: values[-1]["style"]["fill"] is None and values[-1]["style"]["strokeWidth"] == 12, "annotation outline")
         shot(editor, "annotation-outline")
         fixture_pixel("annotation-outline", 170, 310, (40, 110, 166))
-        fixture_pixel("annotation-outline", 93, 310, (50, 105, 214))
-        inspector_click(15, bottom(415))  # Restore fill; enter a different color from the stroke.
-        inspector_move(180, 400, "click", "--repeat", "20", "5")
-        field(bottom(415), "#23b5a9")
+        fixture_pixel("annotation-outline", 93, 310, (139, 92, 246))
+        inspector_click(15, bottom(415))  # Restore fill; choose a color other than the stroke.
+        scroll_inspector_end()
+        swatch_click(ANNOTATION_FILL_ROW, "#36c96b")
         inspector_click(15, bottom(459))  # Enable custom shadow controls.
-        inspector_move(180, 400, "click", "--repeat", "25", "5")
+        scroll_inspector_end()
         shot(editor, "annotation-shadow-fields")
-        field(bottom(283), "#ff8800")
+        swatch_click(ANNOTATION_SHADOW_ROW, "#ff8a22")
         field(bottom(327), 80, 125)
         field(bottom(371), 0)
         field(bottom(415), 25, 90)
@@ -2903,14 +2941,14 @@ def main():
         inspector_click(50, bottom(503))
         styled = save_layers(lambda values: values[-1]["style"].get("dropShadowStyle", {}).get("offsetX") == 25, "custom annotation shadow")[-1]
         assert styled["id"] == annotation["id"] and styled["locked"]
-        assert styled["style"]["dropShadowStyle"] == {"color": "#ff8800", "opacity": 80, "blur": 0, "offsetX": 25, "offsetY": -12}
+        assert styled["style"]["dropShadowStyle"] == {"color": "#ff8a22", "opacity": 80, "blur": 0, "offsetX": 25, "offsetY": -12}
         shot(editor, "annotation-shadow")
-        fixture_pixel("annotation-shadow", 279, 310, (212, 131, 33), tolerance=1)
-        inspector_click(28, bottom(283))
+        fixture_pixel("annotation-shadow", 279, 310, (212, 132, 60), tolerance=1)
+        swatch_click(ANNOTATION_SHADOW_ROW, "custom")  # The custom tile opens the picker inline.
         shot(editor, "annotation-color-picker")
-        run("xdotool", "key", "Escape", "sleep", ".2")
-        inspector_click(15, bottom(212))  # Disable shadow without losing custom knobs.
-        inspector_move(180, 400, "click", "--repeat", "20", "5")
+        swatch_click(ANNOTATION_SHADOW_ROW, "custom")  # And closes it without an edit.
+        inspector_click(15, bottom(ANNOTATION_SHADOW_TOGGLE))  # Disable shadow without losing custom knobs.
+        scroll_inspector_end()
         inspector_click(50, bottom(503))
         disabled = save_layers(lambda values: values[-1]["style"]["dropShadow"] is False, "shadow off")[-1]
         assert disabled["style"]["dropShadowStyle"] == styled["style"]["dropShadowStyle"]
@@ -2928,7 +2966,7 @@ def main():
         editor = reopen()
         resize_editor(942, 701)
         shot(editor, "annotation-reopened")
-        fixture_pixel("annotation-reopened", 279, 310, (212, 131, 33), tolerance=1)
+        fixture_pixel("annotation-reopened", 279, 310, (212, 132, 60), tolerance=1)
         assert layers()[-1]["style"] == styled["style"]
         assert (artifact / "capture.png").read_bytes() == original
         toolbar_click("discard")
