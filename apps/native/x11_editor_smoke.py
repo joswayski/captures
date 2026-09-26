@@ -213,6 +213,10 @@ def main():
     def editor_width():
         return window_size()[0]
 
+    def editor_width_of(window):
+        geometry = run("xdotool", "getwindowgeometry", "--shell", window).decode()
+        return int(re.search(r"^WIDTH=(\d+)$", geometry, re.MULTILINE).group(1))
+
     def document_size():
         if draft is not None and draft.exists():
             document = json.loads(draft.read_text())["document"]
@@ -222,7 +226,7 @@ def main():
     def fit_geometry(size=None, window=None):
         width, height = window or window_size()
         image_width, image_height = size or document_size()
-        available = (64., 89., width - 238., height - 8. - export_bar_height())
+        available = (64., 60., width - 238., height - 8. - export_bar_height())
         scale = min(1., max(.02, (available[2] - available[0]) / image_width),
                     max(.02, (available[3] - available[1]) / image_height))
         center = ((available[0] + available[2]) / 2, (available[1] + available[3]) / 2)
@@ -251,8 +255,10 @@ def main():
         # document's centered Fit origin lands on an integer device pixel. They
         # predate the full-width export bar: add its collapsed 80px so the canvas
         # keeps its historical geometry. The minimum size stays the minimum.
+        # The shipping header moved the canvas top from y=89 to y=60; one more
+        # pixel keeps those authored heights' Fit origin on an integer pixel.
         if height > 540:
-            height += 80
+            height += 80 + 1
         run("xdotool", "windowsize", "--sync", editor, str(width), str(height), *map(str, tail))
 
     def resize_inspector_fixture(width, height, *tail):
@@ -266,8 +272,13 @@ def main():
     def inspector_x(x):
         return editor_width() - 230 + x
 
+    # Inspector rows were authored below the former two-row workbench toolbar.
+    # The shipping 52px header ends 29px higher; bottom-clamped rows (bottom())
+    # keep their window position.
+    INSPECTOR_SHIFT = -29
+
     def inspector_click(x, y):
-        click(editor, inspector_x(x), y)
+        click(editor, inspector_x(x), y + INSPECTOR_SHIFT)
 
     # The full-width export bar is below the canvas and inspector: a fixed
     # collapsed height, plus a fixed settings area while its disclosure is open.
@@ -349,17 +360,141 @@ def main():
         type_text(stem, 30)
         run("xdotool", "key", "Return", "sleep", ".3")
 
-    # Toolbar row button centers at y=62, measured under the shipping token
-    # font stack (egui's default font packed the row about 10% narrower).
-    # Without an Output tab the row also fits the 760px minimum unwrapped.
-    toolbar_x = {"undo": 37, "redo": 102, "save-draft": 184, "discard": 298,
-                 "geometry": 425, "layers": 511, "import": 615, "draw": 715}
+    # Shipping header (52px): the Canvas toolbar on the left; Undo/Redo (only
+    # above 1040px), the zoom group, Add images and the draft menu on the right.
+    # Widths below are measured under the token fonts.
+    ADD_IMAGES_WIDTH = 116
+    HEADER_Y = 26
+
+    def header_controls(width):
+        compact = width <= 1040
+        slider, preset = (72, 72) if compact else (92, 76)
+        add_right = width - 12 - 34 - 4
+        zoom_left = add_right - ADD_IMAGES_WIDTH - 8 - (3 * 30 + slider + preset + 6)
+        x = zoom_left + 1
+        points = {"more": width - 29, "import": add_right - ADD_IMAGES_WIDTH // 2,
+                  "fit": x + 15, "minus": x + 46}
+        pad = 6 if compact else 8
+        points["slider-min"] = x + 62 + pad
+        points["slider-max"] = x + 62 + slider - pad - 1
+        points["plus"] = x + 62 + slider + 1 + 15
+        points["zoom"] = x + 62 + slider + 32 + preset // 2
+        left = zoom_left
+        if not compact:
+            points["redo"] = zoom_left - 8 - 17
+            points["undo"] = points["redo"] - 38
+            left = points["undo"] - 17
+        return points, left
+
+    def canvas_toolbar_point(name):
+        # The toolbar drops its "Canvas" label, then its Trim/Background text,
+        # as the right-hand controls leave less room.
+        # Thresholds are window widths measured under the token fonts.
+        width = editor_width()
+        if width <= 1040:
+            assert not 956 <= width <= 980, width
+            mode = "label" if width > 980 else "compact"
+        else:
+            assert not 1053 <= width <= 1069, width
+            mode = "label" if width > 1069 else "full"
+        return {
+            "label": {"width": 124, "height": 224, "trim": 323, "background": 440},
+            "full": {"width": 69, "height": 169, "trim": 268, "background": 385},
+            "compact": {"width": 68, "height": 167, "trim": 230, "background": 260},
+        }[mode][name], HEADER_Y
+
+    def canvas_click(name):
+        click(editor, *canvas_toolbar_point(name))
+
+    def canvas_field(axis, value):
+        canvas_click(axis)
+        run("xdotool", "key", "ctrl+a")
+        type_text(value, 60)
+        run("xdotool", "key", "Return", "sleep", ".2")
+
+    # The canvas background card opens below its trigger's left edge.
+    def background_point(name):
+        x, _ = canvas_toolbar_point("background")
+        left = {440: 375, 385: 320, 260: 246}[x]
+        return {"solid": (left + 30, 75), "color": (left + 100, 112),
+                "apply": (left + 72, 150), "reset": (left + 181, 150)}[name]
+
+    def background_click(name, dy=0):
+        # dy: a banner above the header moves the header and its card down.
+        x, y = background_point(name)
+        click(editor, x, y + dy)
+
+    def background_open(dy=0):
+        x, y = canvas_toolbar_point("background")
+        click(editor, x, y + dy)
+
+    def background_color(value, dy=0):
+        background_open(dy)
+        background_click("color", dy)
+        run("xdotool", "key", "ctrl+a")
+        type_text(value, 60)
+
+    def background_apply(dy=0):
+        background_click("apply", dy)
+        run("xdotool", "key", "Escape", "sleep", ".2")
+
+    # Rail button centres: 8px top padding, 38px buttons and 2px gaps.
+    rail_keys = ["select", "crop", "text", "shapes", "arrow", "pen", "eraser"]
+
+    def rail_point(name):
+        return 28, 52 + 27 + 40 * rail_keys.index(name)
+
+    def rail_click(name):
+        click(editor, *rail_point(name))
+
+    shape_keys = ["rectangle", "ellipse", "line", "triangle", "diamond", "star"]
+
+    def shape_flyout_point(name):
+        # 10px right of Shapes, centred on it: 3x2 grid of 44px buttons,
+        # 4px gaps and 6px padding.
+        index = shape_keys.index(name)
+        _, y = rail_point("shapes")
+        return 47 + 10 + 7 + 48 * (index % 3) + 22, y - 53 + 7 + 48 * (index // 3) + 22
+
+    tool_state = {"draw": "rectangle"}
+
+    def select_draw_tool(name):
+        if name in shape_keys:
+            rail_click("shapes")
+            click(editor, *shape_flyout_point(name))
+        elif name in ("wand", "erase", "restore"):
+            rail_click("eraser")
+            inspector_click(*draw_tool_points[name])
+        else:
+            rail_click({"text": "text", "arrow": "arrow", "pen": "pen"}[name])
 
     def toolbar_click(name):
-        click(editor, toolbar_x[name], 62)
+        if name in ("undo", "redo"):
+            points, _ = header_controls(editor_width())
+            if name in points:
+                click(editor, points[name], HEADER_Y)
+            else:
+                # Shipping hides Undo/Redo at 1040px and below; use the key.
+                click(editor, 28, 52 + 8 + 7 * 40 + 30)  # Empty rail: drop field focus.
+                run("xdotool", "key", "ctrl+z" if name == "undo" else "ctrl+shift+z",
+                    "sleep", ".2")
+        elif name in ("save-draft", "discard"):
+            width = editor_width()
+            click(editor, width - 29, HEADER_Y)
+            click(editor, width - 80, 66 if name == "save-draft" else 110)
+        elif name == "import":
+            click(editor, header_controls(editor_width())[0]["import"], HEADER_Y)
+        elif name == "layers":
+            rail_click("select")
+        elif name == "geometry":
+            rail_click("crop")
+        elif name == "draw":
+            select_draw_tool(tool_state["draw"])
+        else:
+            raise AssertionError(name)
 
-    # Draw tool grid centers (inspector x, window y) under the token fonts.
-    # The wider labels wrap the twelve tools onto five rows instead of four.
+    # Draw panel tool grid centers (inspector x, window y) under the token fonts,
+    # authored below the former toolbar like every inspector row.
     draw_tool_points = {
         "text": (34, 132), "rectangle": (111, 132),
         "ellipse": (41, 176), "line": (108, 176), "arrow": (172, 176),
@@ -369,29 +504,46 @@ def main():
     }
 
     def draw_tool(name):
-        inspector_click(*draw_tool_points[name])
+        tool_state["draw"] = name
+        select_draw_tool(name)
 
     def draw_row(y):
         # Draw rows authored below the historical four-row tool grid.
         return y + 44
 
-    # Right-aligned title-bar zoom controls, as offsets from the window's right
-    # edge under the token fonts. Slider ends are the track's first/last pixels.
-    topbar_offset = {"slider-min": 462, "slider-max": 336, "fit": 308, "zoom": 232,
-                     "minus": 159, "plus": 116, "recenter": 49}
+    def zoom_menu_x():
+        # Preset menu rows, 44px apart from y=64, right-aligned to the preset.
+        return header_controls(editor_width())[0]["zoom"] + 10
+
+    def discard_confirm():
+        # The confirmation banner sits above the header; actions are right-aligned.
+        click(editor, editor_width() - 171, 20)
+
+    def discard_cancel():
+        click(editor, editor_width() - 64, 20)
+
+    def blur_click():
+        # Empty rail space below the tools: takes focus from fields, edits nothing.
+        click(editor, 28, 52 + 8 + 7 * 40 + 30)
 
     def topbar_click(name):
-        click(editor, editor_width() - topbar_offset[name], 18)
+        points, _ = header_controls(editor_width())
+        if name == "recenter":
+            # Shipping's floating pill at the top of the canvas viewport.
+            click(editor, 64 + (editor_width() - 238 - 64) // 2, 60 + 12 + 14)
+        else:
+            click(editor, points[name], HEADER_Y)
 
     def inspector_move(x, y, *tail):
-        run("xdotool", "mousemove", "--window", editor, str(inspector_x(x)), str(y), *tail)
+        run("xdotool", "mousemove", "--window", editor, str(inspector_x(x)),
+            str(y + INSPECTOR_SHIFT), *tail)
 
     def bottom(y):
         # Rows authored against an inspector scrolled until it clamps at its end.
         # Its content used to end with a 125px development footer; without it,
         # a bottom-clamped scroll leaves every row 125px lower in the window.
         # The export bar below the inspector adds 80px more to a taller window.
-        return y + 125 + 80
+        return y + 125 + 80 - INSPECTOR_SHIFT
 
     def canvas_point(point):
         # Existing authored gestures describe points in the fixture screenshot.
@@ -597,10 +749,17 @@ def main():
 
         def reopen(edit_y=590):
             export_bar["open"] = False  # Every editor window starts collapsed.
+            tool_state["draw"] = "rectangle"  # Each editor starts with Rectangle.
             click(root, *history_edit_point(edit_y))  # The original capture's History card: Edit.
+            restored = draft.exists()
             window = wait(lambda: windows("Screenshot editor"), "reopened editor")[0]
             run("xdotool", "windowmove", "--sync", window, "100", "80")
             time.sleep(.6)
+            if restored:
+                # A restored draft shows shipping's banner above the header; keep
+                # the authored layout by dismissing it (Discard stays explicit).
+                shot(window, "restored-draft-banner")
+                click(window, editor_width_of(window) - 42, 20)
             return window
 
         def layers():
@@ -682,7 +841,7 @@ def main():
             shot(editor, "external-draft-restored")
             assert len(layers()) == 2
             toolbar_click("discard")
-            click(editor, 55, 128)
+            discard_confirm()
             wait(lambda: not draft.exists(), "explicitly discard the saved draft")
             close(root)
             wait(lambda: app.poll() is not None, "draft-resolution process quits")
@@ -787,9 +946,8 @@ def main():
 
             # Set a real canvas background, then flatten from the same Combine
             # menu. Flatten bakes it, removes hidden slots and locks one image.
-            toolbar_click("geometry")
-            field(633, "#214365", x=95)
-            inspector_click(75, 670)
+            background_color("#214365")
+            background_apply()
             save_until(lambda: json.loads(draft.read_text())["document"]["background"] == "#214365",
                        "combine fixture background")
             toolbar_click("layers")
@@ -850,25 +1008,25 @@ def main():
 
         if args.history_shortcuts_only:
             resize_editor(1000, 901, "sleep", ".3")  # Integer-pixel Fit origin for exact movement.
-            click(editor, 28, 227)  # Persistent Shapes rail button.
+            rail_click("shapes")  # Persistent Shapes rail button.
             shot(editor, "tool-rail-shapes-menu")
             run("xdotool", "key", "Escape", "sleep", ".3")
             assert not draft.exists(), "opening/closing tool menus must not save edits"
-            click(editor, 28, 269)  # Arrow, independent of the inspector section.
+            rail_click("arrow")  # Arrow, independent of the inspector section.
             drag((320, 250), (480, 370))
             arrow = save_layers(lambda values: len(values) == 2, "rail Arrow creates one layer")[-1]
             assert arrow["shape"] == "arrow", arrow
             resize_editor(760, 540, "sleep", ".3")
-            click(editor, 28, 271)  # Shapes after the compact toolbar wraps.
+            rail_click("shapes")  # Shapes at the minimum size.
             shot(editor, "tool-rail-minimum-menu")
             run("xdotool", "key", "Escape", "sleep", ".3")
-            click(editor, 28, 313)
+            rail_click("arrow")
             shot(editor, "tool-rail-minimum-arrow")
             resize_editor(1000, 901, "sleep", ".3")
             toolbar_click("discard")
-            click(editor, 55, 128)
+            discard_confirm()
             wait(lambda: not draft.exists(), "discard rail fixture")
-            click(editor, 300, 20)
+            blur_click()
             run("xdotool", "key", "s", "sleep", ".3")
             drag((320, 250), (480, 370))
             star = save_layers(lambda values: len(values) == 2, "S selects Star")[-1]
@@ -888,30 +1046,28 @@ def main():
             assert draft.read_bytes() == before_crop, "tool selection/cancellation must not save edits"
             assert save_layers(lambda values: len(values) == 2, "crop cancellation")[-1] == moved
             toolbar_click("discard")
-            click(editor, 55, 128)
+            discard_confirm()
             wait(lambda: not draft.exists(), "discard tool-key fixture")
-            click(editor, 300, 20)  # Leave control focus before selecting a canvas tool.
+            blur_click()  # Leave control focus before selecting a canvas tool.
             run("xdotool", "key", "r", "sleep", ".3")
             drag((320, 250), (480, 370))
             shape = save_layers(lambda values: len(values) == 2, "shortcut shape fixture")[-1]
             assert shape["shape"] == "rectangle", shape
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             save_layers(lambda values: len(values) == 1, "keyboard undo")
-            toolbar_click("geometry")
-            inspector_click(75, 428)
+            canvas_click("width")
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
             save_layers(lambda values: len(values) == 1, "field focus does not redo document")
             toolbar_click("draw")
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "keyboard redo")[-1] == shape
 
-            toolbar_click("geometry")  # Geometry.
-            inspector_click(75, 428)  # Focus canvas width, not a document action.
+            canvas_click("width")  # Focus canvas width, not a document action.
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "field focus keeps document")[-1] == shape
             toolbar_click("discard")  # Open discard confirmation.
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
-            click(editor, 190, 128)  # Toolbar confirmation: cancel discard.
+            discard_cancel()  # Banner confirmation: cancel discard.
             assert save_layers(lambda values: len(values) == 2, "confirmation owns shortcuts")[-1] == shape
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             save_layers(lambda values: len(values) == 1, "document shortcut restored after dialog")
@@ -938,8 +1094,7 @@ def main():
                 run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 3, "undo nudges exactly")[-1] == copied
             inspector_click(100, 158)  # Restore the copy selection after Undo.
-            toolbar_click("geometry")
-            inspector_click(75, 428)
+            canvas_click("width")
             run("xdotool", "key", "ctrl+d", "Delete", "Left", "shift+Up", "sleep", ".3")
             run("xdotool", "key", "p", "c", "r", "sleep", ".3")
             shot(editor, "shortcut-field-keeps-tool-letters")
@@ -1047,7 +1202,7 @@ def main():
             export_click("filename")
             run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
             assert run("xclip", "-selection", "clipboard", "-o").decode() == "original"
-            click(editor, 300, 20)  # Leave the field without editing it.
+            blur_click()  # Leave the field without editing it.
             shot(editor, "overwrite-controls")
             assert source_export.read_bytes() == original
             assert json.loads(metadata_path.read_text()) == original_metadata
@@ -2168,12 +2323,12 @@ def main():
 
         if args.trim_only:
             run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
-            field(428, 720)
-            field(472, 420)
-            inspector_click(58, 516)
+            canvas_field("width", 720)
+            save(720, 360, 0, 0)
+            canvas_field("height", 420)
             save(720, 420, 0, 0)
             shot(editor, "trim-before")
-            inspector_click(52, 807)
+            canvas_click("trim")
             save(640, 360, 0, 0)
             shot(editor, "trim-applied")
             toolbar_click("undo")
@@ -2208,15 +2363,15 @@ def main():
 
         if args.background_only:
             resize_editor(1000, 801)
-            field(428, 720)
-            field(472, 420)
-            inspector_click(58, 516)
+            canvas_field("width", 720)
+            save(720, 360, 0, 0)
+            canvas_field("height", 420)
             save(720, 420, 0, 0)
             before = draft.read_bytes()
+            background_color("#214365")
             shot(editor, "background-controls")
-            field(633, "#214365", x=95)
             assert draft.read_bytes() == before, "unapplied fields must not edit the draft"
-            inspector_click(75, 670)
+            background_apply()
 
             def background_is(color):
                 return json.loads(draft.read_text())["document"]["background"] == color
@@ -2225,14 +2380,15 @@ def main():
             shot(editor, "background-solid")
             fixture_pixel("background-solid", 700, 500, (33, 67, 101))
             fixture_pixel("background-solid", 40, 120, (40, 110, 166))
-            field(633, "invalid", x=95)
-            inspector_click(75, 670)
+            background_color("invalid")
+            background_apply()
             shot(editor, "background-error")
             assert background_is("#214365")
             fixture_pixel("background-error", 700, 500, (33, 67, 101))
-            # The error row adds 27px below the toolbar until the next command.
-            inspector_click(20, 595 + 27)
-            inspector_click(75, 670 + 27)
+            # Errors share the export status line; the layout does not move.
+            background_open()
+            background_click("solid")
+            background_apply()
             save_until(lambda: background_is(None), "transparent canvas background")
             shot(editor, "background-transparent")
             toolbar_click("undo")
@@ -2299,16 +2455,27 @@ def main():
         pixel(f"viewport-pan-settled-{args.appearance}", zoom_probe[0] + 65,
               zoom_probe[1] + 40, (46, 158, 113))
         assert not draft.exists(), "settled pan must not enqueue an edit"
-        # Recenter keeps zoom; Fit restores the historical fixture geometry.
+        # Shipping shows Recenter only once pan leaves the canvas mostly off
+        # screen. Recenter keeps zoom; Fit restores the historical fixture geometry.
+        for _ in range(2):
+            run("xdotool", "mousemove", "--sync", "--window", editor, "90", "90",
+                "mousedown", "2", "mousemove", "--sync", "--window", editor, "340", "380",
+                "mousemove", "--sync", "--window", editor, "620", "660",
+                "mouseup", "2", "sleep", ".3")
+        shot(editor, f"viewport-offscreen-{args.appearance}")
+        viewport_center = (64 + (editor_width() - 238 - 64) // 2, 376)
+        pixel(f"viewport-offscreen-{args.appearance}", *viewport_center,
+              (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
         topbar_click("recenter")
         shot(editor, f"viewport-recenter-{args.appearance}")
+        pixel(f"viewport-recenter-{args.appearance}", *viewport_center, (40, 110, 166))
         topbar_click("fit")
         shot(editor, f"viewport-fit-{args.appearance}")
         document_pixel(f"viewport-fit-{args.appearance}", 102, 111, (229, 179, 68))
         document_pixel(f"viewport-fit-{args.appearance}", 72, 111, (40, 110, 166))
         topbar_click("zoom")
         shot(editor, "viewport-presets-menu")
-        click(editor, 660, 145)  # 100% preset, without a custom row.
+        click(editor, zoom_menu_x(), 152)  # 100% preset, without a custom row.
         shot(editor, "viewport-actual-button")
         topbar_click("plus")  # 1.25x
         shot(editor, "viewport-125-button")
@@ -2323,13 +2490,13 @@ def main():
         assert viewport_pixels("viewport-actual-key") == viewport_pixels("viewport-actual-button")
         assert viewport_pixels("viewport-125-key") == viewport_pixels("viewport-125-button")
         assert viewport_pixels("viewport-actual-key") != viewport_pixels("viewport-125-key")
-        inspector_click(75, 428)  # Focus the canvas width field; shortcuts still zoom.
+        canvas_click("width")  # Focus the canvas width field; shortcuts still zoom.
         run("xdotool", "key", "ctrl+minus", "sleep", ".3")
         shot(editor, "viewport-field-key")
         assert viewport_pixels("viewport-field-key") == viewport_pixels("viewport-actual-button")
         run("xdotool", "key", "Escape")
         topbar_click("zoom")
-        click(editor, 660, 101)  # 50% preset.
+        click(editor, zoom_menu_x(), 108)  # 50% preset.
         shot(editor, "viewport-preset-50")
         # 640×360 at 50% is 320×180, centered in the 584×603 viewport.
         # The 56px rail moves the viewport center right by 28px.
@@ -2340,18 +2507,18 @@ def main():
         pixel("viewport-preset-50", 516, 310,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
         topbar_click("zoom")
-        click(editor, 660, 189)  # 200% preset.
+        click(editor, zoom_menu_x(), 196)  # 200% preset.
         shot(editor, "viewport-preset-200")
         run("xdotool", "key", "ctrl+0", "ctrl+equal", "ctrl+equal", "sleep", ".3")
         shot(editor, "viewport-preset-custom")
         topbar_click("zoom")
         shot(editor, "viewport-presets-custom-menu")
-        click(editor, 660, 233)  # 200% now follows the custom percentage row.
+        click(editor, zoom_menu_x(), 240)  # 200% now follows the custom percentage row.
         shot(editor, "viewport-preset-200-from-custom")
         assert viewport_pixels("viewport-preset-200") == viewport_pixels("viewport-preset-200-from-custom")
         assert viewport_pixels("viewport-preset-50") != viewport_pixels("viewport-preset-200")
         topbar_click("zoom")
-        click(editor, 660, 57)  # Fit removes the custom row and resets pan.
+        click(editor, zoom_menu_x(), 64)  # Fit removes the custom row and resets pan.
         shot(editor, "viewport-preset-fit")
         assert viewport_pixels("viewport-preset-fit") == viewport_pixels(f"viewport-fit-{args.appearance}")
         run("xdotool", "mousemove", "--sync", "--window", editor, "290", "250",
@@ -2360,7 +2527,7 @@ def main():
         shot(editor, "viewport-fit-panned")
         assert viewport_pixels("viewport-fit-panned") != viewport_pixels("viewport-preset-fit")
         topbar_click("zoom")
-        click(editor, 660, 57)  # Reselecting Fit must reset pan even when already selected.
+        click(editor, zoom_menu_x(), 64)  # Reselecting Fit must reset pan even when already selected.
         shot(editor, "viewport-preset-fit-reselected")
         assert viewport_pixels("viewport-preset-fit-reselected") == viewport_pixels("viewport-preset-fit")
         assert not draft.exists(), "toolbar zoom must remain outside draft state"
@@ -2372,13 +2539,13 @@ def main():
             shot(editor, "viewport-fit-no-upscale")
             surface = (245, 245, 247) if args.appearance == "light" else (16, 16, 20)
             # Client 1180×900 minus the rail, inspector and central-panel margins
-            # leaves x=64..942, y=89..892. Its center is (503,490.5), so the
-            # 640×360 source spans x=183..823, y=310.5..670.5. Raster sample
+            # leaves x=64..942, y=60..892. Its center is (503,476), so the
+            # 640×360 source spans x=183..823, y=296..656. Raster sample
             # centers at the bottom edge are excluded by the top-left fill rule.
             pixel("viewport-fit-no-upscale", 822, 400, (40, 110, 166))
             pixel("viewport-fit-no-upscale", 823, 400, surface)
-            pixel("viewport-fit-no-upscale", 300, 669, (40, 110, 166))
-            pixel("viewport-fit-no-upscale", 300, 670, surface)
+            pixel("viewport-fit-no-upscale", 300, 655, (40, 110, 166))
+            pixel("viewport-fit-no-upscale", 300, 656, surface)
             assert not draft.exists(), "Fit resizing must not create a draft"
             run("xdotool", "windowsize", "--sync", editor, "760", "540",
                 "key", "ctrl+0", "ctrl+equal", "ctrl+equal", "sleep", ".3")
@@ -2389,12 +2556,12 @@ def main():
             topbar_click("fit")  # Fit resets the viewport-center anchor.
             topbar_click("slider-min")  # Left end of the logarithmic slider: 5%.
             shot(editor, "viewport-slider-minimum")
-            # The toolbar and export bar leave x=64..522, y=89..452, center
-            # (293,270.5). The 5% source is 32×18, starting at (277,261.5).
-            pixel("viewport-slider-minimum", 278, 263, (40, 110, 166))
-            pixel("viewport-slider-minimum", 276, 263, surface)
-            pixel("viewport-slider-minimum", 309, 263, surface)
-            pixel("viewport-slider-minimum", 278, 279, surface)
+            # The header and export bar leave x=64..522, y=60..452, center
+            # (293,256). The 5% source is 32×18, starting at (277,247).
+            pixel("viewport-slider-minimum", 278, 248, (40, 110, 166))
+            pixel("viewport-slider-minimum", 276, 248, surface)
+            pixel("viewport-slider-minimum", 309, 248, surface)
+            pixel("viewport-slider-minimum", 278, 265, surface)
             topbar_click("slider-max")  # Right end: 800%, preserving the same anchor.
             shot(editor, "viewport-slider-maximum")
             pixel("viewport-slider-maximum", 66, 150, (40, 110, 166))
@@ -2478,7 +2645,7 @@ def main():
         assert layers()[1]["id"] == curve["id"] and layers()[1]["points"] == curve["points"]
         assert (artifact / "capture.png").read_bytes() == original
         toolbar_click("discard")
-        click(editor, 55, 128)
+        discard_confirm()
         wait(lambda: not draft.exists(), "discard freehand edits")
 
         resize_editor(942, 701)
@@ -2535,7 +2702,7 @@ def main():
         assert layers()[-1]["id"] == arrow["id"]
         assert (artifact / "capture.png").read_bytes() == original
         toolbar_click("discard")
-        click(editor, 55, 128)
+        discard_confirm()
         wait(lambda: not draft.exists(), "discard open-shape edits")
 
         # Leave room below the annotation form for rotation-snap controls. This
@@ -2624,7 +2791,7 @@ def main():
         assert layers()[-1]["style"] == styled["style"]
         assert (artifact / "capture.png").read_bytes() == original
         toolbar_click("discard")
-        click(editor, 55, 128)
+        discard_confirm()
         wait(lambda: not draft.exists(), "discard annotation edits")
         resize_editor(1000, 701)
 
@@ -2785,7 +2952,7 @@ def main():
         assert saved(640, 440, 0, 0)
         # Discard returns to the original capture, without deleting exports or source data.
         toolbar_click("discard")
-        click(editor, 55, 128)
+        discard_confirm()
         wait(lambda: not draft.exists(), "discard imported draft")
         chooser.selected = artifact / "capture.png"
         toolbar_click("import")
@@ -2998,7 +3165,7 @@ def main():
         toolbar_click("undo")
         save_layers(lambda values: [value["id"] for value in values] == [copy_id], "undo empty document")
         toolbar_click("discard")
-        click(editor, 55, 128)
+        discard_confirm()
         wait(lambda: not draft.exists(), "discard layer edits")
         toolbar_click("geometry")  # Geometry has an independent scroll position.
 
@@ -3061,11 +3228,10 @@ def main():
         shot(editor, "shape-outside-expanded")
         assert (artifact / "capture.png").read_bytes() == original
         toolbar_click("discard")
-        click(editor, 55, 128)
+        discard_confirm()
         wait(lambda: not draft.exists(), "discard shape edits")
-        toolbar_click("geometry")
+        toolbar_click("geometry")  # The Crop tool starts a crop selection.
 
-        inspector_click(159, 335)
         drag((638, 359), (278, 119))  # Reverse drag: 40,30 with size 360x240.
         shot(editor, "crop-selection")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
@@ -3123,9 +3289,9 @@ def main():
         save(640, 360, 0, 0)
         toolbar_click("redo")  # Redo
         save(360, 240, -40, -30)
-        field(428, 480)
-        field(472, 300)
-        inspector_click(58, 516)
+        canvas_field("width", 480)  # Each committed dimension is one canvas resize.
+        save(480, 240, -40, -30)
+        canvas_field("height", 300)
         save(480, 300, -40, -30)
         shot(editor, "editor-resized")
         fixture_pixel("editor-resized", 428, 289, (46, 158, 113))
@@ -3285,17 +3451,16 @@ def main():
         editor = reopen()
         shot(editor, "editor-reopened")
         fixture_pixel("editor-reopened", 428, 289, (46, 158, 113))
-        field(428, 510)
-        inspector_click(58, 516)
+        canvas_field("width", 510)
         close(editor)
         shot(editor, "editor-unsaved-close")
-        click(editor, 200, 128)  # Close without saving retains the previous draft.
+        click(editor, editor_width() - 180, 20)  # Close without saving retains the previous draft.
         wait(lambda: not windows("Screenshot editor"), "unsaved editor closes")
         assert saved(480, 300, -40, -30)
         editor = reopen()
         toolbar_click("discard")
         shot(editor, "editor-discard-confirmation")
-        click(editor, 55, 128)
+        discard_confirm()
         wait(lambda: not draft.exists(), "explicit discard removes the saved draft")
         shot(editor, "editor-discarded")
 
@@ -3303,8 +3468,7 @@ def main():
         drafts = output / "editor-drafts"
         drafts.rename(output / "previous-drafts")
         drafts.write_text("blocks directory creation")
-        field(428, 500)
-        inspector_click(58, 516)
+        canvas_field("width", 500)
         toolbar_click("save-draft")
         shot(editor, "editor-save-error")
         assert app.poll() is None and windows("Screenshot editor")
