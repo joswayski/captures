@@ -471,6 +471,12 @@ struct NativeActiveTextInput: Equatable {
     }
 }
 
+/// One font menu row: a pinned draft font key and its shipping label.
+struct NativeFontFamilyOption: Equatable {
+    let key: String
+    let label: String
+}
+
 struct NativeEditorSnapshot: Equatable {
     let artifactID: String
     let originalExportPath: String?
@@ -489,11 +495,17 @@ struct NativeEditorSnapshot: Equatable {
     let hasDraft: Bool
     let activeTextInput: NativeActiveTextInput?
     let fontFamilies: [String: String]
+    /// Shipping font menu order and labels ("Sans serif", …) for `fontFamilies`.
+    let fontFamilyOptions: [NativeFontFamilyOption]
     let textStylePresets: [NativeTextPreset]
     /// Shared documents store back-to-front. Native layer panels display front-to-back.
     let layers: [NativeEditorLayer]
     /// Stable, sorted JSON used by pointer-down hit testing without touching the session.
     let documentJSON: String
+    /// Curve dots and Curve/Straighten state per line/arrow layer ID.
+    let curveHandles: [String: NativeCurveHandles]
+    /// Overflow ghost and Expand canvas action per layer past the canvas edge.
+    let canvasExpand: [String: NativeCanvasExpand]
 
     init?(_ value: [String: Any]) {
         guard let artifactID = value["artifact_id"] as? String,
@@ -584,12 +596,27 @@ struct NativeEditorSnapshot: Equatable {
         self.activeTextInput = activeTextInput
         let fontFamilies = value["font_families"] as? [String: String] ?? [:]
         self.fontFamilies = fontFamilies
+        var options: [NativeFontFamilyOption] = []
+        for row in value["font_family_options"] as? [[String: Any]] ?? [] {
+            guard let key = row["key"] as? String, let label = row["label"] as? String,
+                  fontFamilies[key] != nil else { continue }
+            options.append(NativeFontFamilyOption(key: key, label: label))
+        }
+        // Older payloads without menu rows fall back to pinned keys and names.
+        fontFamilyOptions = options.isEmpty
+            ? fontFamilies.keys.sorted().map { NativeFontFamilyOption(key: $0, label: fontFamilies[$0]!) }
+            : options
         let presets = value["text_style_presets"] as? [[String: Any]] ?? []
         let parsedPresets = presets.compactMap(NativeTextPreset.init)
         guard presets.count == parsedPresets.count else { return nil }
         textStylePresets = parsedPresets.filter { fontFamilies[$0.fontFamily] != nil }
         self.layers = Array(layers.reversed())
         self.documentJSON = String(decoding: documentData, as: UTF8.self)
+        // Older host-only fixtures predate these shared snapshot fields.
+        curveHandles = (value["curve_handles"] as? [String: [String: Any]] ?? [:])
+            .compactMapValues(NativeCurveHandles.init)
+        canvasExpand = (value["canvas_expand"] as? [String: [String: Any]] ?? [:])
+            .compactMapValues(NativeCanvasExpand.init)
     }
 }
 
@@ -1014,10 +1041,12 @@ private final class NativeEditorSession {
         }
     }
 
-    func importImage(_ image: EditorDecodedImage, selectedID: String?) throws
+    func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint? = nil) throws
         -> EditorImportPresentation {
         var request: [String: Any] = ["name": image.name]
         if let selectedID { request["selected_id"] = selectedID }
+        // A drop sample places the image where the drop guide showed.
+        if let point { request["point"] = ["x": Double(point.x), "y": Double(point.y)] }
         let requestData = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
         guard let width = UInt32(exactly: image.width), let height = UInt32(exactly: image.height),
               width > 0, height > 0 else { throw AppBridgeError.invalidResponse }
@@ -1067,7 +1096,7 @@ protocol EditorWorking: AnyObject {
     /// session queue like `estimate`.
     func compare(_ options: [String: Any],
                  completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void)
-    func importImage(_ image: EditorDecodedImage, selectedID: String?,
+    func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void)
     func close()
     func prepareForTermination(textInput: EditorTerminationTextInput?) -> Result<Void, Error>
@@ -1241,7 +1270,7 @@ final class EditorWorker: EditorWorking {
         }
     }
 
-    func importImage(_ image: EditorDecodedImage, selectedID: String?,
+    func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void) {
         let storage = storage
         Self.queue.async {
@@ -1252,7 +1281,7 @@ final class EditorWorker: EditorWorking {
                 guard storage.snapshot?.activeTextInput == nil else {
                     throw AppBridgeError.backend("Finish or cancel inline text before importing an image.")
                 }
-                let imported = try session.importImage(image, selectedID: selectedID)
+                let imported = try session.importImage(image, selectedID: selectedID, point: point)
                 storage.snapshot = imported.presentation.snapshot
                 return imported
             }

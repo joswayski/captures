@@ -152,8 +152,8 @@ strokes remain dots; release does not add an extra sample. Switching tools also
 cancels the unfinished stroke. The chosen tool remains active. Resize/curve grips and
 other drawing tools remain unconnected.
 Layers → Annotation style now edits closed-shape fill/stroke toggles, stroke/fill
-colors, stroke width and drop-shadow color, opacity, blur and offsets. Color pickers
-and hex fields edit local values; Apply style sends only changed fields as one
+colors, stroke width and drop-shadow color, opacity, blur and offsets. Stroke, fill
+and shadow colors use the shipping swatch row with a custom color and edit local values; Apply style sends only changed fields as one
 undoable patch. Reset fields or changing the selected layer drops unapplied values.
 Shared Rust supplies shadow defaults/clamps; toggling shadow off preserves its
 stored custom settings. Hidden and locked annotations remain editable. Open shapes

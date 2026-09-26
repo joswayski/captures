@@ -2,7 +2,10 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use captures_app::{
     editor::{Element, Rect, TextElement},
-    editor_text::{TEXT_STYLE_PRESETS, fit_auto_width, layout, resize, selection_bounds},
+    editor_text::{
+        FONT_FAMILY_LABELS, TEXT_STYLE_PRESETS, fit_auto_width, font_family_options, layout,
+        resize, selection_bounds,
+    },
 };
 use captures_image::text::{TextRenderer, TextStyle};
 use serde::Deserialize;
@@ -38,6 +41,59 @@ fn named_style_catalog_matches_shipping_preset_flags_fonts_and_plate_defaults() 
         preset.as_object_mut().unwrap().remove("label");
     }
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn named_style_labels_match_shipping_menu_copy() {
+    // `TEXT_STYLE_ITEMS` in ScreenshotEditor.tsx, title-cased as shipped.
+    let labels: Vec<_> = TEXT_STYLE_PRESETS
+        .iter()
+        .map(|preset| preset.label)
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Standard",
+            "Rounded",
+            "Outlined",
+            "Mono",
+            "Box",
+            "Mono Box",
+            "Rounded Box"
+        ]
+    );
+}
+
+#[test]
+fn font_menu_uses_shipping_labels_and_order_not_asset_names() {
+    let bundled = captures_app::editor_fonts::bundled().families;
+    let options = font_family_options(&bundled);
+    let expected: Vec<(String, String)> = FONT_FAMILY_LABELS
+        .iter()
+        .map(|(key, label)| ((*key).into(), (*label).into()))
+        .collect();
+    assert_eq!(options, expected);
+    assert_eq!(
+        options
+            .iter()
+            .map(|(_, label)| label.as_str())
+            .collect::<Vec<_>>(),
+        ["Sans serif", "Serif", "Monospace", "Rounded"]
+    );
+    // A legacy draft without Rounded, plus an unknown pinned key.
+    let mut legacy = bundled.clone();
+    legacy.remove("rounded");
+    legacy.insert("display".into(), "Display Face".into());
+    assert_eq!(
+        font_family_options(&legacy),
+        [
+            ("sans".to_owned(), "Sans serif".to_owned()),
+            ("serif".into(), "Serif".into()),
+            ("mono".into(), "Monospace".into()),
+            ("display".into(), "Display Face".into()),
+        ]
+    );
+    assert!(font_family_options(&BTreeMap::new()).is_empty());
 }
 
 fn compare(actual: &Value, expected: &Value) {

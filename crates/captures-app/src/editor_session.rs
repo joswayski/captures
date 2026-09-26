@@ -272,6 +272,13 @@ pub struct LayerRow {
     pub icon: &'static str,
 }
 
+/// One font menu row: the draft font key and its visible label.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct FontFamilyOption {
+    pub key: String,
+    pub label: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Snapshot<'a> {
     pub artifact_id: &'a str,
@@ -289,11 +296,19 @@ pub struct Snapshot<'a> {
     /// Only these pinned session fonts are available; host defaults never replace
     /// a reopened draft's exact files or expand its font set implicitly.
     pub font_families: Option<&'a BTreeMap<String, String>>,
+    /// Font menu rows for `font_families`: shipping order and labels
+    /// (`editor_text::font_family_options`), never asset names for known keys.
+    pub font_family_options: Vec<FontFamilyOption>,
     pub text_style_presets: Vec<crate::editor_text::TextStylePreset>,
     pub annotation_controls: BTreeMap<&'a str, AnnotationControls<'a>>,
     /// Resolved display defaults; reading them never authors custom shadow data.
     pub text_shadow_styles: BTreeMap<&'a str, DropShadowStyle>,
     pub selection_outlines: BTreeMap<&'a str, [Point; 4]>,
+    /// Curve dots, Curve slider state and centerline per line/arrow layer.
+    pub curve_handles: BTreeMap<&'a str, crate::editor_canvas::CurveHandles>,
+    /// Overflow ghost and Expand canvas action per visible layer that hangs
+    /// past the canvas edge.
+    pub canvas_expand: BTreeMap<&'a str, crate::editor_canvas::CanvasExpandPreview>,
     /// Shipping Layers-panel row copy per layer ID (`editor_chrome`).
     pub layer_rows: BTreeMap<&'a str, LayerRow>,
     /// Capabilities for committed document history. Transient text previews do
@@ -479,6 +494,12 @@ impl EditorSession {
             }),
             document,
             font_families: self.fonts.as_ref().map(|fonts| &fonts.assets.families),
+            font_family_options: self.fonts.as_ref().map_or_else(Vec::new, |fonts| {
+                crate::editor_text::font_family_options(&fonts.assets.families)
+                    .into_iter()
+                    .map(|(key, label)| FontFamilyOption { key, label })
+                    .collect()
+            }),
             text_style_presets: crate::editor_text::TEXT_STYLE_PRESETS
                 .iter()
                 .filter(|preset| {
@@ -510,6 +531,29 @@ impl EditorSession {
                         .selection_outline()
                         .ok()
                         .map(|outline| (element.base().id.as_str(), outline))
+                })
+                .collect(),
+            curve_handles: document
+                .elements
+                .iter()
+                .filter_map(|element| match element {
+                    Element::Shape(shape) => crate::editor_canvas::curve_handles(shape)
+                        .map(|handles| (shape.base.id.as_str(), handles)),
+                    _ => None,
+                })
+                .collect(),
+            canvas_expand: document
+                .elements
+                .iter()
+                .filter_map(|element| {
+                    crate::editor_canvas::canvas_expand_preview(
+                        element,
+                        document.width,
+                        document.height,
+                    )
+                    .ok()
+                    .flatten()
+                    .map(|preview| (element.base().id.as_str(), preview))
                 })
                 .collect(),
             layer_rows: self
@@ -1497,13 +1541,109 @@ fn prepare_text_create(
     Ok(id)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ImportPlacement {
+/// Where an imported or dropped image lands relative to its target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImportPlacement {
     Top,
     Right,
     Bottom,
     Left,
     Stack,
+}
+
+impl ImportPlacement {
+    /// Shipping `imageDropLabel`: short, similar-length toast copy.
+    #[must_use]
+    pub fn drop_label(self) -> &'static str {
+        match self {
+            Self::Stack => "Place on top",
+            Self::Top => "Place above",
+            Self::Right => "Place right",
+            Self::Left => "Place left",
+            Self::Bottom => "Place below",
+        }
+    }
+}
+
+/// Shipping drop toast before any placement is known.
+pub const DROP_IMAGE: &str = "Drop image";
+/// Error when a drop carries no image the native decoders accept.
+pub const DROP_UNSUPPORTED: &str = "Drop PNG, JPEG, WebP, or TIFF image files.";
+
+/// True for file names the native import decoders accept.
+#[must_use]
+pub fn is_supported_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff"
+            )
+        })
+}
+
+/// Live placement guide while an image file is dragged over the canvas.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ImageDropGuide {
+    pub placement: ImportPlacement,
+    pub label: &'static str,
+    /// Image (or canvas) the drop snaps against, in document coordinates.
+    pub target: Rect,
+    /// The drop sample; without a pointer sample, the target's bottom center.
+    pub point: Point,
+    /// Stack snap-light footprint under the pointer.
+    pub focus: Rect,
+}
+
+/// Shipping `imageDropGuideAtPoint` / `defaultImageDropGuide`. Passing the
+/// same `point` to [`ImportImage`] places the image where the guide shows.
+#[must_use]
+pub fn image_drop_guide(
+    document: &Document,
+    selected_id: Option<&str>,
+    point: Option<Point>,
+) -> ImageDropGuide {
+    let (target, placement, sample) = import_placement(document, selected_id, point);
+    let point = sample.unwrap_or(Point {
+        x: target.x + target.width / 2.,
+        y: target.y + target.height,
+    });
+    ImageDropGuide {
+        placement,
+        label: placement.drop_label(),
+        target,
+        point,
+        focus: stack_drop_light_focus(point, target),
+    }
+}
+
+/// Shipping `stackDropLightFocusAtPoint`: the estimated drag-preview footprint.
+fn stack_drop_light_focus(point: Point, target: Rect) -> Rect {
+    let short_side = target.width.min(target.height).max(1.);
+    let width = (short_side * 0.32)
+        .min(target.width * 0.36)
+        .clamp(72., 260.);
+    let height = (width * 0.78).min(target.height * 0.36).clamp(54., 200.);
+    let min_x = target.x - width * 0.2;
+    let max_x = target.x + target.width - width * 0.8;
+    let min_y = target.y - height * 0.2;
+    let max_y = target.y + target.height - height * 0.8;
+    Rect {
+        x: if min_x <= max_x {
+            (point.x - width / 2.).clamp(min_x, max_x)
+        } else {
+            target.x + (target.width - width) / 2.
+        },
+        y: if min_y <= max_y {
+            (point.y - height / 2.).clamp(min_y, max_y)
+        } else {
+            target.y + (target.height - height) / 2.
+        },
+        width,
+        height,
+    }
 }
 
 fn fresh_id(mut exists: impl FnMut(&str) -> bool) -> String {

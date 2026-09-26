@@ -1684,41 +1684,62 @@ final class ScreenshotEditorTests: XCTestCase {
             let encoded = try XCTUnwrap(controller.compareView.afterImage)
             // Shipping's header Background color trigger opens the canvas background card.
             try showBackgroundCard(in: controller.root)
-            let mode = try popup("Canvas background mode", in: controller.root)
-            let color = try field("Canvas background color", in: controller.root)
-            let apply = try button("Apply background", in: controller.root)
-            color.stringValue = "#21436580"
-            XCTAssertEqual(controller.state.snapshot?.background, "#f7f7f5", "fields are not edits")
-            apply.performClick(nil)
-            XCTAssertFalse(apply.isEnabled); XCTAssertFalse(mode.isEnabled)
+            let solid = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
+                .first { $0.accessibilityLabel() == "Solid background" })
+            let blue = try swatchButton("Canvas background: #2d9cff", in: controller.root)
+            let red = try swatchButton("Canvas background: #ff3b5c", in: controller.root)
+            let white = try swatchButton("Canvas background: #ffffff", in: controller.root)
+            XCTAssertEqual(solid.state, .on)
+            XCTAssertEqual(controller.state.snapshot?.background, "#f7f7f5", "opening the card is not an edit")
+            XCTAssertFalse(blue.active)
+            blue.performClick(nil)
+            XCTAssertTrue(controller.state.busy, "a swatch applies at once, without Apply")
+            XCTAssertTrue(solid.isEnabled, "the card stays live while a change applies")
             waitUntil { !controller.state.busy }
-            XCTAssertEqual(controller.state.snapshot?.background, "#21436580")
+            XCTAssertEqual(controller.state.snapshot?.background, "#2d9cff")
+            XCTAssertTrue(blue.active); XCTAssertFalse(red.active)
             waitUntil(timeout: 5) {
                 controller.compareView.afterImage.map { $0 !== encoded } == true && !controller.comparisonPending
             }
             XCTAssertEqual(controller.state.snapshot?.layers, layers)
             try render(controller.root, name: "screenshot-editor-background-solid-\(appearance)")
 
-            color.stringValue = "invalid"; apply.performClick(nil)
+            // Re-choosing the current swatch adds no undo step; a choice made while
+            // the worker is busy queues, and only the latest one applies.
+            blue.performClick(nil)
             waitUntil { !controller.state.busy }
-            XCTAssertEqual(controller.state.snapshot?.background, "#21436580")
-            XCTAssertEqual(color.stringValue, "#21436580")
-            XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Editor action failed") })
-            try render(controller.root, name: "screenshot-editor-background-error-minimum-\(appearance)")
-            mode.selectItem(withTitle: "Transparent"); _ = mode.sendAction(mode.action, to: mode.target)
-            XCTAssertFalse(color.isEnabled)
-            color.stringValue = "invalid-but-disabled"; apply.performClick(nil)
+            red.performClick(nil)
+            XCTAssertTrue(controller.state.busy)
+            white.performClick(nil)
+            XCTAssertTrue(white.active, "the queued choice shows at once")
+            waitUntil(timeout: 5) {
+                !controller.state.busy && controller.state.snapshot?.background == "#ffffff"
+            }
+            solid.performClick(nil)
+            XCTAssertEqual(solid.state, .off)
             waitUntil { !controller.state.busy }
             XCTAssertNil(controller.state.snapshot?.background)
-            XCTAssertEqual(color.stringValue, "#21436580", "remember the last accepted solid color")
+            XCTAssertTrue(white.active, "swatches keep the last solid color")
             try render(controller.root, name: "screenshot-editor-background-transparent-\(appearance)")
+            for expected in ["#ffffff", "#ff3b5c", "#2d9cff", "#f7f7f5"] {
+                try press("Undo", in: controller.root)
+                waitUntil { !controller.state.busy }
+                XCTAssertEqual(controller.state.snapshot?.background, expected)
+                XCTAssertEqual(solid.state, .on)
+            }
+            for _ in 0..<4 {
+                try press("Redo", in: controller.root)
+                waitUntil { !controller.state.busy }
+            }
+            XCTAssertNil(controller.state.snapshot?.background)
+            XCTAssertEqual(solid.state, .off)
+            // Solid on restores the last solid color.
+            solid.performClick(nil)
+            waitUntil { !controller.state.busy }
+            XCTAssertEqual(controller.state.snapshot?.background, "#ffffff")
             try press("Undo", in: controller.root)
             waitUntil { !controller.state.busy }
-            XCTAssertEqual(mode.titleOfSelectedItem, "Solid")
-            XCTAssertEqual(controller.state.snapshot?.background, "#21436580")
-            try press("Redo", in: controller.root)
-            waitUntil { !controller.state.busy }
-            XCTAssertEqual(mode.titleOfSelectedItem, "Transparent")
+            XCTAssertNil(controller.state.snapshot?.background)
             try showOutput(in: controller.root)
             try copyButton(in: controller.root).performClick(nil)
             waitUntil { !controller.state.busy && copied != nil }
@@ -3084,7 +3105,7 @@ final class ScreenshotEditorTests: XCTestCase {
         wait(for: [opened], timeout: 5)
         let imported = expectation(description: "import")
         var importedLayerID: String?
-        worker.importImage(decoded, selectedID: nil) { result in
+        worker.importImage(decoded, selectedID: nil, point: nil) { result in
             let value = try? result.get()
             importedLayerID = value?.layerID
             XCTAssertTrue(value?.presentation.snapshot.unsavedChanges == true)
@@ -3309,13 +3330,24 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(patches.count, 1)
         XCTAssertEqual(patches[0] as NSDictionary, ["dropShadowStyle": ["offsetY": -12.75]] as NSDictionary)
         XCTAssertTrue(errors.isEmpty, "unchanged legacy colors are not revalidated")
-        try field("Stroke color", in: controls).stringValue = "bad-new-color"
-        try button("Apply style", in: controls).performClick(nil)
-        XCTAssertEqual(patches.count, 1); XCTAssertEqual(errors.count, 1)
+        // Stroke, fill and shadow colors use the shared shipping swatch row.
+        for name in ["Stroke color", "Fill color", "Shadow color"] {
+            let row = try swatchRow(name, in: controls)
+            XCTAssertEqual(row.swatchButtons.map(\.swatchHex), EditorColors.swatches)
+            XCTAssertEqual(row.swatchButtons.map { $0.accessibilityLabel() ?? "" },
+                           EditorColors.swatches.map { "\(name): \($0)" })
+            XCTAssertEqual(row.customWell.accessibilityLabel(), "Custom color")
+        }
+        XCTAssertFalse(try swatchRow("Stroke color", in: controls).swatchButtons.contains(where: \.active),
+                       "a legacy value matches no swatch")
+        try swatchButton("Stroke color: #2d9cff", in: controls).performClick(nil)
+        XCTAssertEqual(patches.count, 1, "a swatch stages; Apply style commits")
+        XCTAssertTrue(try swatchButton("Stroke color: #2d9cff", in: controls).active)
         try button("Reset fields", in: controls).performClick(nil)
-        XCTAssertEqual(try field("Stroke color", in: controls).stringValue, "legacy-color")
-        let picker = try XCTUnwrap(descendants(in: controls).compactMap { $0 as? ClosureColorWell }
-            .first { $0.accessibilityLabel() == "Choose stroke color" })
+        XCTAssertFalse(try swatchButton("Stroke color: #2d9cff", in: controls).active)
+        try button("Apply style", in: controls).performClick(nil)
+        XCTAssertEqual(patches.count, 1, "Reset drops the staged swatch")
+        let picker = try swatchRow("Stroke color", in: controls).customWell
         picker.color = NSColor(srgbRed: 0.2, green: 0.4, blue: 0.6, alpha: 1)
         _ = picker.sendAction(picker.action, to: picker.target)
         try button("Apply style", in: controls).performClick(nil)
@@ -3358,29 +3390,30 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(worker.requests.isEmpty)
         XCTAssertNotNil(controller.compareView.afterImage, "an unchanged style keeps the comparison")
         worker.deferRequests = true
-        try field("Fill color", in: controller.root).stringValue = "#2c4"
+        try swatchButton("Fill color: #36c96b", in: controller.root).performClick(nil)
         try button("Apply style", in: controller.root).performClick(nil)
         XCTAssertEqual(worker.requests.last?["id"] as? String, "shape")
         let edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
-        XCTAssertEqual(edit as NSDictionary, ["action": "annotation_style", "patch": ["fill": "#22CC44"]] as NSDictionary)
+        XCTAssertEqual(edit as NSDictionary, ["action": "annotation_style", "patch": ["fill": "#36c96b"]] as NSDictionary)
         XCTAssertTrue(controller.state.busy)
         XCTAssertEqual(worker.compares.count, 1, "a pending edit does not encode")
-        XCTAssertFalse(try field("Fill color", in: controller.root).isEnabled)
+        XCTAssertFalse(try swatchRow("Fill color", in: controller.root).isEnabled)
+        XCTAssertFalse(try swatchButton("Fill color: #36c96b", in: controller.root).isEnabled)
         XCTAssertFalse(try table("Screenshot layers", in: controller.root).isEnabled)
         worker.completePending(with: published)
-        XCTAssertEqual(try field("Fill color", in: controller.root).stringValue, "#E04090")
+        XCTAssertEqual(try swatchRow("Fill color", in: controller.root).selectedHex, "#E04090")
         worker.deferRequests = false; worker.failLayerAction = "annotation_style"
-        try field("Fill color", in: controller.root).stringValue = "#123456"
+        try swatchButton("Fill color: #2d9cff", in: controller.root).performClick(nil)
         try button("Apply style", in: controller.root).performClick(nil)
         XCTAssertFalse(controller.state.busy)
-        XCTAssertEqual(try field("Fill color", in: controller.root).stringValue, "#E04090")
+        XCTAssertEqual(try swatchRow("Fill color", in: controller.root).selectedHex, "#E04090")
         XCTAssertEqual(try table("Screenshot layers", in: controller.root).selectedRow, 0)
-        try field("Fill color", in: controller.root).stringValue = "#abcdef"
-        let table = try table("Screenshot layers", in: controller.root)
-        table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        try swatchButton("Fill color: #8b5cf6", in: controller.root).performClick(nil)
+        let layerTable = try table("Screenshot layers", in: controller.root)
+        layerTable.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
         XCTAssertTrue(try button("Apply style", in: controller.root).isHiddenOrHasHiddenAncestor)
-        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        XCTAssertEqual(try field("Fill color", in: controller.root).stringValue, "#E04090")
+        layerTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        XCTAssertEqual(try swatchRow("Fill color", in: controller.root).selectedHex, "#E04090")
     }
 
     func testAnnotationRenderedStates() throws {
@@ -3397,9 +3430,11 @@ final class ScreenshotEditorTests: XCTestCase {
             scroll.contentView.scroll(to: NSPoint(x: 0, y: 550))
             scroll.reflectScrolledClipView(scroll.contentView)
             controller.root.layoutSubtreeIfNeeded()
-            for field in descendants(in: controller.root).compactMap({ $0 as? NSTextField })
-                where ["Shadow opacity", "Stroke color", "Shadow color"].contains(field.stringValue) {
-                XCTAssertLessThanOrEqual(field.intrinsicContentSize.width, field.frame.width)
+            for row in descendants(in: controller.root).compactMap({ $0 as? ColorSwatchRow })
+                where !row.isHiddenOrHasHiddenAncestor {
+                let tiles: [NSView] = row.swatchButtons + [row.customWell]
+                XCTAssertTrue(tiles.allSatisfy { row.bounds.contains($0.frame) },
+                              "\(row.fieldLabel) tiles stay inside their row")
             }
             try render(controller.root, name: "screenshot-editor-style-\(appearance)")
             let document = try XCTUnwrap(scroll.documentView)
@@ -3409,7 +3444,7 @@ final class ScreenshotEditorTests: XCTestCase {
                           "style actions remain reachable in the minimum window")
             worker.failLayerAction = "annotation_style"
             worker.failureMessage = "The annotation style could not be applied. The previous draft, layer selection, pixels and undo history remain recoverable."
-            try field("Fill color", in: controller.root).stringValue = "#00aa44"
+            try swatchButton("Fill color: #36c96b", in: controller.root).performClick(nil)
             try button("Apply style", in: controller.root).performClick(nil)
             try render(controller.root, name: "screenshot-editor-style-error-minimum-\(appearance)")
             try annotationToggle("Shadow", in: controller.root).performClick(nil)
@@ -4578,9 +4613,9 @@ final class ScreenshotEditorTests: XCTestCase {
         let tool = try popup("Drawing tool", in: controller.root)
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
         let preset = try popup("New text style", in: controller.root)
-        XCTAssertEqual(preset.itemTitles, ["Plain", "Standard", "Outlined", "Mono", "Box", "Mono box"])
+        XCTAssertEqual(preset.itemTitles, ["Plain", "Standard", "Outlined", "Mono", "Box", "Mono Box"])
         XCTAssertEqual(preset.titleOfSelectedItem, "Standard")
-        preset.selectItem(withTitle: "Mono box")
+        preset.selectItem(withTitle: "Mono Box")
         let size = try field("New text size", in: controller.root)
         let color = try field("New text color", in: controller.root)
         XCTAssertEqual(size.stringValue, "39", "use shared capture size, not the restored canvas")
@@ -4598,7 +4633,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(create["stylePreset"] as? String, "mono-box")
         XCTAssertEqual(create["fontSize"] as? Double, 48.5)
         XCTAssertEqual(create["color"] as? String, "#12abef")
-        XCTAssertEqual(preset.titleOfSelectedItem, "Mono box")
+        XCTAssertEqual(preset.titleOfSelectedItem, "Mono Box")
         XCTAssertEqual(size.stringValue, "48,5"); XCTAssertEqual(color.stringValue, "#12abef")
 
         worker.failOperation = nil
@@ -4621,7 +4656,7 @@ final class ScreenshotEditorTests: XCTestCase {
         create = try XCTUnwrap((retriedBegin?["target"] as? [String: Any])?["create"] as? [String: Any])
         XCTAssertEqual(create["stylePreset"] as? String, "mono-box")
         XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "fresh-default-text")
-        XCTAssertEqual(preset.titleOfSelectedItem, "Mono box", "accepted snapshots must retain creation defaults")
+        XCTAssertEqual(preset.titleOfSelectedItem, "Mono Box", "accepted snapshots must retain creation defaults")
         XCTAssertEqual(size.stringValue, "48,5"); XCTAssertEqual(color.stringValue, "#12abef")
 
         let freshWorker = FakeEditorWorker(snapshot: snapshot(id: "fresh", fonts: fonts))
@@ -4645,8 +4680,8 @@ final class ScreenshotEditorTests: XCTestCase {
             let tool = try popup("Drawing tool", in: controller.root)
             tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
             let preset = try popup("New text style", in: controller.root)
-            XCTAssertEqual(preset.itemTitles, ["Plain", "Standard", "Rounded", "Outlined", "Box", "Rounded box"])
-            XCTAssertEqual(preset.titleOfSelectedItem, "Rounded box")
+            XCTAssertEqual(preset.itemTitles, ["Plain", "Standard", "Rounded", "Outlined", "Box", "Rounded Box"])
+            XCTAssertEqual(preset.titleOfSelectedItem, "Rounded Box")
             let size = try field("New text size", in: controller.root)
             let color = try field("New text color", in: controller.root)
             XCTAssertEqual(size.stringValue, "39")
@@ -4670,7 +4705,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(first["stylePreset"] as? String, "rounded-box")
             XCTAssertEqual(first["fontSize"] as? Double, 39)
             XCTAssertEqual(first["color"] as? String, "#ff3b5c")
-            XCTAssertEqual(preset.titleOfSelectedItem, "Rounded box", "failure must retain the creation default")
+            XCTAssertEqual(preset.titleOfSelectedItem, "Rounded Box", "failure must retain the creation default")
 
             preset.selectItem(withTitle: "Standard")
             size.stringValue = "52"; color.stringValue = "#12abef"
@@ -4707,7 +4742,7 @@ final class ScreenshotEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "old"), historyRoot: "/native/History")
             let preset = try popup("New text style", in: controller.root)
-            XCTAssertFalse(preset.itemTitles.contains("Rounded box"), "missing rounded font is not substituted")
+            XCTAssertFalse(preset.itemTitles.contains("Rounded Box"), "missing rounded font is not substituted")
             XCTAssertEqual(preset.titleOfSelectedItem, includeStandard ? "Standard" : "Plain")
         }
     }
@@ -5221,6 +5256,44 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.text, "applied")
     }
 
+    func testTextFontMenuUsesSharedLabelsAndStyleMenusShowPreviewChips() throws {
+        _ = NSApplication.shared
+        let families = ["sans": "Liberation Sans", "serif": "Liberation Serif",
+                        "mono": "Liberation Mono", "rounded": "Nunito"]
+        // Shared Rust orders and labels the font menu (`editor_text::font_family_options`).
+        let options = [["key": "sans", "label": "Sans serif"], ["key": "serif", "label": "Serif"],
+                       ["key": "mono", "label": "Monospace"], ["key": "rounded", "label": "Rounded"],
+                       ["key": "missing", "label": "Not pinned"]]
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot",
+            layers: [textLayer(id: "copy", text: "accepted", family: "serif")],
+            fonts: families, fontOptions: options))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        XCTAssertEqual(controller.state.snapshot?.fontFamilyOptions.map(\.key), ["sans", "serif", "mono", "rounded"],
+                       "rows for fonts the draft does not pin are dropped")
+        try showDraw(in: controller.root)
+        let family = try popup("Text font", in: controller.root)
+        XCTAssertEqual(family.itemTitles, ["Sans serif", "Serif", "Monospace", "Rounded"])
+        XCTAssertEqual(family.titleOfSelectedItem, "Serif")
+        XCTAssertFalse(family.itemTitles.contains { $0.hasPrefix("Liberation") || $0 == "Nunito" })
+        let styles = try popup("Text style preset", in: controller.root)
+        XCTAssertEqual(styles.itemTitles, ["Style…", "Standard", "Rounded", "Outlined", "Mono", "Box",
+                                           "Mono Box", "Rounded Box"])
+        XCTAssertNil(styles.item(at: 0)?.image, "the pull-down title has no chip")
+        for item in styles.itemArray.dropFirst() {
+            XCTAssertEqual(item.image?.size, TextStyleChip.size, item.title)
+            XCTAssertEqual(item.image?.accessibilityDescription, item.title)
+        }
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        let fresh = try popup("New text style", in: controller.root)
+        XCTAssertEqual(fresh.titleOfSelectedItem, "Rounded Box")
+        XCTAssertNil(fresh.item(at: 0)?.image, "Plain has no shipping chip")
+        XCTAssertTrue(fresh.itemArray.dropFirst().allSatisfy { $0.image?.size == TextStyleChip.size })
+        try render(controller.root, name: "screenshot-editor-text-style-chips")
+    }
+
     func testTextFamilyChangesAreStagedAndUseOnlySessionFonts() throws {
         _ = NSApplication.shared
         let families = ["sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"]
@@ -5279,11 +5352,11 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showDraw(in: controller.root)
         let picker = try popup("Text style preset", in: controller.root)
-        XCTAssertEqual(picker.itemTitles, ["Style…", "Standard", "Outlined", "Mono", "Box", "Mono box"])
+        XCTAssertEqual(picker.itemTitles, ["Style…", "Standard", "Outlined", "Mono", "Box", "Mono Box"])
         func choose(_ name: String) {
             picker.selectItem(withTitle: name); _ = picker.sendAction(picker.action, to: picker.target)
         }
-        choose("Mono box")
+        choose("Mono Box")
         XCTAssertTrue(worker.requests.isEmpty)
         XCTAssertEqual(try field("Text plate color", in: controller.root).stringValue, "#abcdef")
         XCTAssertEqual(try popup("Text font", in: controller.root).titleOfSelectedItem, "Liberation Mono")
@@ -5327,7 +5400,7 @@ final class ScreenshotEditorTests: XCTestCase {
             let selectedSize = try field("Text size", in: controller.root)
             let selectedColor = try field("Text color", in: controller.root)
             let family = try popup("Text font", in: controller.root)
-            XCTAssertEqual(future.titleOfSelectedItem, "Rounded box",
+            XCTAssertEqual(future.titleOfSelectedItem, "Rounded Box",
                            "merely selecting a Standard-styled label must not carry its style")
             XCTAssertEqual(futureSize.stringValue, "39")
             XCTAssertEqual(futureColor.stringValue, "#ff3b5c")
@@ -5447,7 +5520,7 @@ final class ScreenshotEditorTests: XCTestCase {
         let fresh = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: freshWorker)
         defer { fresh.window.orderOut(nil) }
         fresh.present(artifact: artifact(id: "fresh"), historyRoot: "/native/History")
-        XCTAssertEqual(try popup("New text style", in: fresh.root).titleOfSelectedItem, "Rounded box")
+        XCTAssertEqual(try popup("New text style", in: fresh.root).titleOfSelectedItem, "Rounded Box")
     }
 
     func testTextShadowIsStagedAndOnlyPatchesTheEnabledFlag() throws {
@@ -6178,7 +6251,7 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
             waitUntil { controller.state.snapshot?.hasDraft == true && !controller.state.busy }
             XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle, style)
-            XCTAssertEqual(try popup("New text style", in: controller.root).titleOfSelectedItem, "Rounded box")
+            XCTAssertEqual(try popup("New text style", in: controller.root).titleOfSelectedItem, "Rounded Box")
             try showDraw(in: controller.root)
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-rounded-box-saved-normal-\(appearance)")
@@ -6455,6 +6528,18 @@ final class ScreenshotEditorTests: XCTestCase {
                              "offsetX": 6.0, "offsetY": -3.0]]
     }
 
+    private func swatchButton(_ label: String, in view: NSView) throws -> ColorSwatchButton {
+        let matches = descendants(in: view).compactMap { $0 as? ColorSwatchButton }
+            .filter { $0.accessibilityLabel() == label }
+        return try XCTUnwrap(matches.first { !$0.isHiddenOrHasHiddenAncestor } ?? matches.first)
+    }
+
+    private func swatchRow(_ label: String, in view: NSView) throws -> ColorSwatchRow {
+        let matches = descendants(in: view).compactMap { $0 as? ColorSwatchRow }
+            .filter { $0.fieldLabel == label }
+        return try XCTUnwrap(matches.first { !$0.isHiddenOrHasHiddenAncestor } ?? matches.first)
+    }
+
     private func annotationToggle(_ label: String, in view: NSView) throws -> CaptureButton {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }
             .first { $0.accessibilityLabel() == label })
@@ -6488,12 +6573,14 @@ final class ScreenshotEditorTests: XCTestCase {
                           annotations: [String: [String: Any]] = [:],
                           textShadows: [String: [String: Any]]? = nil,
                           fonts: [String: String] = [:],
+                          fontOptions: [[String: String]]? = nil,
                           includeStandardPreset: Bool = true,
                           canPaste: Bool = false,
                           mergeDownIDs: [String] = [],
                           canMergeVisible: Bool = false,
                           canFlatten: Bool = false,
-                          activeTextInput: [String: Any]? = nil) -> NativeEditorSnapshot {
+                          activeTextInput: [String: Any]? = nil,
+                          extra: [String: Any] = [:]) -> NativeEditorSnapshot {
         var value: [String: Any] = [
             "artifact_id": id, "document": ["width": width, "height": height,
                                                   "elements": layers],
@@ -6508,8 +6595,8 @@ final class ScreenshotEditorTests: XCTestCase {
                 ["id": "outlined", "label": "Outlined", "fontFamily": "sans", "background": NSNull(), "outlined": true, "roundedBackground": false],
                 ["id": "mono", "label": "Mono", "fontFamily": "mono", "background": NSNull(), "outlined": false, "roundedBackground": false],
                 ["id": "box", "label": "Box", "fontFamily": "sans", "background": "#111318", "outlined": false, "roundedBackground": false],
-                ["id": "mono-box", "label": "Mono box", "fontFamily": "mono", "background": "#111318", "outlined": false, "roundedBackground": false],
-                ["id": "rounded-box", "label": "Rounded box", "fontFamily": "rounded", "background": "#111318", "outlined": false, "roundedBackground": true],
+                ["id": "mono-box", "label": "Mono Box", "fontFamily": "mono", "background": "#111318", "outlined": false, "roundedBackground": false],
+                ["id": "rounded-box", "label": "Rounded Box", "fontFamily": "rounded", "background": "#111318", "outlined": false, "roundedBackground": true],
             ] as [[String: Any]]).filter {
                 fonts[$0["fontFamily"] as! String] != nil
                     && (includeStandardPreset || $0["id"] as? String != "standard")
@@ -6529,6 +6616,8 @@ final class ScreenshotEditorTests: XCTestCase {
             "active_text_input": activeTextInput ?? NSNull(),
         ]
         if let originalExportPath { value["original_export_path"] = originalExportPath }
+        if let fontOptions { value["font_family_options"] = fontOptions }
+        value.merge(extra) { _, new in new }
         return NativeEditorSnapshot(value)!
     }
 
@@ -6849,7 +6938,7 @@ private final class FakeEditorWorker: EditorWorking {
     var encodes: [[String: Any]] = []
     var saves: [[String: Any]] = []
     var originalSaves: [[String: Any]] = []
-    var imports: [(image: EditorDecodedImage, selectedID: String?)] = []
+    var imports: [(image: EditorDecodedImage, selectedID: String?, point: CGPoint?)] = []
     var openArtifactIDs: [String] = []
     var closeCount = 0
     var draftsRoot: String?
@@ -6990,9 +7079,9 @@ private final class FakeEditorWorker: EditorWorking {
         completion?(.success(output()))
     }
 
-    func importImage(_ image: EditorDecodedImage, selectedID: String?,
+    func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void) {
-        imports.append((image, selectedID))
+        imports.append((image, selectedID, point))
         if failImport {
             completion(.failure(AppBridgeError.backend(failureMessage))); return
         }
@@ -7026,5 +7115,248 @@ private extension CGImage {
             bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue), provider: provider,
             decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+    }
+}
+
+// MARK: - Canvas interactions: drop guides, Expand canvas and curve editing
+
+extension ScreenshotEditorTests {
+    private func curveHandlesValue(slider: Bool = true, bend: Double = 0,
+                                   controls: [[String: Double]] = []) -> [String: Any] {
+        ["start": ["x": 180.0, "y": 150.0], "end": ["x": 580.0, "y": 150.0], "controls": controls,
+         "starters": controls.isEmpty ? [["x": 280.0, "y": 150.0], ["x": 380.0, "y": 150.0],
+                                         ["x": 480.0, "y": 150.0]] : [],
+         "bend_percent": bend, "slider": slider,
+         "straighten_label": "Straighten line",
+         "path": [["x": 180.0, "y": 150.0], ["x": 580.0, "y": 150.0]]]
+    }
+
+    private func expandValue() -> [String: Any] {
+        ["edges": ["right"], "rect": ["x": 0.0, "y": 0.0, "width": 725.0, "height": 360.0],
+         "gaps": [["x": 640.0, "y": 294.0, "width": 85.0, "height": 12.0]],
+         "bounds": ["x": 515.0, "y": 294.0, "width": 210.0, "height": 12.0],
+         "anchor": ["x": 640.0, "y": 300.0], "anchor_edge": "right"]
+    }
+
+    private func fittedController(_ worker: FakeEditorWorker,
+                                  decoder: @escaping (URL) throws -> EditorDecodedImage = { _ in
+                                      throw AppBridgeError.invalidResponse
+                                  }) -> ScreenshotEditorController {
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker,
+                                                    imageDecoder: decoder)
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        controller.window.setContentSize(NSSize(width: 1000, height: 600))
+        controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+        return controller
+    }
+
+    func testCanvasSnapshotParsesCurveHandlesAndExpandPreviewsLeniently() throws {
+        let parsed = snapshot(id: "shot", layers: [shapeLayer(id: "line", x: 180, y: 150)], extra: [
+            "curve_handles": ["line": curveHandlesValue(), "broken": ["start": "nope"]],
+            "canvas_expand": ["line": expandValue(), "broken": ["edges": ["sideways"]]],
+        ])
+        let handles = try XCTUnwrap(parsed.curveHandles["line"])
+        XCTAssertEqual(handles.starters.count, 3)
+        XCTAssertTrue(handles.slider)
+        XCTAssertEqual(handles.straightenLabel, "Straighten line")
+        XCTAssertNil(parsed.curveHandles["broken"])
+        let expand = try XCTUnwrap(parsed.canvasExpand["line"])
+        XCTAssertEqual(expand.edges, [.right])
+        XCTAssertEqual(expand.anchor(inset: 22), CGPoint(x: 662, y: 300))
+        XCTAssertNil(parsed.canvasExpand["broken"])
+        XCTAssertTrue(snapshot(id: "legacy").curveHandles.isEmpty, "older fixtures omit the fields")
+    }
+
+    func testRealCanvasQueriesReturnSharedDropGuidesAndCurveHits() throws {
+        let document: [String: Any] = ["width": 640.0, "height": 360.0, "background": NSNull(), "elements": [[
+            "kind": "shape", "id": "line", "x": 180.0, "y": 150.0, "locked": false, "visible": true,
+            "opacity": 100.0, "blendMode": "source-over", "shape": "line", "endX": 580.0, "endY": 150.0,
+            "controls": [], "style": ["color": "#ff3b5c", "fill": NSNull(), "strokeWidth": 8.0],
+        ]]]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]),
+                          as: UTF8.self)
+        let guide = try NativeEditorCanvas.dropGuide(documentJSON: json, selectedID: nil,
+                                                     point: CGPoint(x: 320, y: 4))
+        XCTAssertEqual(guide.placement, "top")
+        XCTAssertEqual(guide.label, "Place above")
+        XCTAssertEqual(guide.target, CGRect(x: 0, y: 0, width: 640, height: 360))
+        let fallback = try NativeEditorCanvas.dropGuide(documentJSON: json, selectedID: nil, point: nil)
+        XCTAssertEqual(fallback.label, "Place below")
+        let hit = try NativeEditorCanvas.curveHit(documentJSON: json, layerID: "line",
+                                                  point: CGPoint(x: 380, y: 152), radius: 10)
+        XCTAssertEqual(hit.handleKind, "starter_control")
+        XCTAssertEqual(hit.handleIndex, 1)
+        XCTAssertEqual(hit.hint, "Drag a dot to curve · Double-click the path to add points")
+        let path = try NativeEditorCanvas.curveHit(documentJSON: json, layerID: "line",
+                                                   point: CGPoint(x: 230, y: 151), radius: 10)
+        XCTAssertNil(path.handle)
+        XCTAssertTrue(path.onPath)
+        XCTAssertEqual(path.hint, "Double-click to add a curve point")
+        let moved = try NativeEditorCanvas.curvePreview(documentJSON: json, layerID: "line",
+            handle: ["kind": "starter_control", "index": 1], point: CGPoint(x: 380, y: 230))
+        XCTAssertEqual(moved.controls.count, 3)
+        XCTAssertEqual(moved.controls[1], CGPoint(x: 380, y: 230))
+        XCTAssertFalse(moved.slider)
+        XCTAssertTrue(NativeEditorCanvas.isSupportedImage(URL(fileURLWithPath: "/tmp/a.PNG")))
+        XCTAssertFalse(NativeEditorCanvas.isSupportedImage(URL(fileURLWithPath: "/tmp/notes.txt")))
+    }
+
+    func testSelectionOverlayCurveDotsDragOnceOnReleaseAndClicksNeverEdit() throws {
+        let overlay = EditorSelectionOverlay(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        overlay.canvasSize = NSSize(width: 400, height: 200)
+        overlay.selectionEnabled = true
+        overlay.selectedLayerID = "line"
+        let handles = try XCTUnwrap(NativeCurveHandles(curveHandlesValue()))
+        overlay.curveHandles = handles
+        var queries: [(String, CGPoint)] = []
+        overlay.curveHitTest = { id, point, _ in
+            queries.append((id, point))
+            return NativeCurveHit(handle: ["kind": "starter_control", "index": 1], hint: nil,
+                                  onPath: true, closest: point)
+        }
+        var previews = 0
+        overlay.curvePreviewer = { _, _, _ in previews += 1; return handles }
+        var edits: [(String, [String: Any])] = []
+        overlay.onCurve = { id, edit in edits.append((id, edit)) }
+        overlay.begin(at: CGPoint(x: 200, y: 100))
+        XCTAssertEqual(queries.first?.0, "line")
+        XCTAssertEqual(overlay.curvePreview, handles)
+        overlay.drag(to: CGPoint(x: 201, y: 101))
+        XCTAssertEqual(previews, 0, "sub-threshold movement keeps the dots still")
+        overlay.drag(to: CGPoint(x: 200, y: 140))
+        XCTAssertEqual(previews, 1)
+        XCTAssertTrue(edits.isEmpty, "dragging previews without committing")
+        overlay.end(at: CGPoint(x: 200, y: 140))
+        XCTAssertEqual(edits.count, 1)
+        let edit = try XCTUnwrap(edits.first)
+        XCTAssertEqual(edit.0, "line")
+        XCTAssertEqual(edit.1["kind"] as? String, "move")
+        XCTAssertEqual((edit.1["handle"] as? [String: Any])?["index"] as? Int, 1)
+        XCTAssertEqual((edit.1["point"] as? [String: Double])?["y"], 140)
+        XCTAssertNil(overlay.curvePreview)
+        overlay.begin(at: CGPoint(x: 200, y: 100)); overlay.end(at: CGPoint(x: 201, y: 100))
+        XCTAssertEqual(edits.count, 1, "a click on a dot never edits")
+        overlay.begin(at: CGPoint(x: 200, y: 100)); overlay.cancelGesture()
+        overlay.end(at: CGPoint(x: 200, y: 160))
+        XCTAssertEqual(edits.count, 1, "Escape cancels the drag")
+    }
+
+    func testExpandCanvasActionSitsPastTheOverflowEdgeAndSubmitsOneEdit() throws {
+        _ = NSApplication.shared
+        let base = layer(id: "background", name: "Original", x: 0, y: 0, visible: true, locked: true, opacity: 100)
+        let worker = FakeEditorWorker(snapshot: snapshot(
+            id: "shot", layers: [base, shapeLayer(id: "hanging", x: 520, y: 300)],
+            extra: ["canvas_expand": ["hanging": expandValue()]]))
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        try showLayers(in: controller.root)
+        let layerList = try table("Screenshot layers", in: controller.root)
+        layerList.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        let action = try XCTUnwrap(controller.expandCanvasButton)
+        let overlay = controller.selectionOverlay
+        XCTAssertFalse(action.isHidden)
+        XCTAssertEqual(action.title, "Expand canvas")
+        XCTAssertTrue(overlay.bounds.insetBy(dx: 3, dy: 3).contains(action.frame))
+        let image = overlay.presentedImageRect, scale = image.width / 640
+        XCTAssertEqual(action.frame.midY, image.minY + 300 * scale, accuracy: 1)
+        let expectedX = min(image.maxX + 22, overlay.bounds.maxX - 4 - action.frame.width / 2)
+        XCTAssertEqual(action.frame.midX, expectedX, accuracy: 1)
+        overlay.updateHover(at: CGPoint(x: action.frame.midX, y: action.frame.midY))
+        XCTAssertTrue(overlay.expandArmed, "hovering the action shows the ghost")
+        overlay.updateHover(at: nil)
+        XCTAssertFalse(overlay.expandArmed)
+        action.performClick(nil)
+        waitUntil { worker.requests.count == 1 && !controller.state.busy }
+        let request = try XCTUnwrap(worker.requests.last)
+        XCTAssertEqual(request["operation"] as? String, "layer")
+        XCTAssertEqual(request["id"] as? String, "hanging")
+        XCTAssertEqual((request["edit"] as? [String: Any])?["action"] as? String, "expand_canvas")
+        layerList.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        XCTAssertTrue(action.isHidden, "fitting layers show no action")
+    }
+
+    func testCurveInspectorCommitsBendOnReleaseAndStraightensMultiPointStrokes() throws {
+        _ = NSApplication.shared
+        let base = layer(id: "background", name: "Original", x: 0, y: 0, visible: true, locked: true, opacity: 100)
+        let straight = snapshot(id: "shot", layers: [base, shapeLayer(id: "line", x: 180, y: 150)],
+                                extra: ["curve_handles": ["line": curveHandlesValue()]])
+        let worker = FakeEditorWorker(snapshot: straight)
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        try showLayers(in: controller.root)
+        let layerList = try table("Screenshot layers", in: controller.root)
+        layerList.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        let curve = try XCTUnwrap(controller.curveControls)
+        XCTAssertFalse(curve.isHidden)
+        XCTAssertFalse(curve.bendSlider.isHidden)
+        XCTAssertTrue(curve.straightenButton.isHidden)
+        XCTAssertNotNil(controller.selectionOverlay.curveHandles)
+        curve.bendSlider.doubleValue = 40
+        _ = curve.bendSlider.sendAction(curve.bendSlider.action, to: curve.bendSlider.target)
+        waitUntil { worker.requests.count == 1 && !controller.state.busy }
+        var edit = try XCTUnwrap((worker.requests.last?["edit"] as? [String: Any])?["edit"] as? [String: Any])
+        XCTAssertEqual(edit["kind"] as? String, "bend")
+        XCTAssertEqual(edit["bend"] as? Double, 0.4)
+        worker.response = { _ in
+            self.snapshot(id: "shot", layers: [base, self.shapeLayer(id: "line", x: 180, y: 150)],
+                          extra: ["curve_handles": ["line": self.curveHandlesValue(
+                            slider: false, controls: [["x": 280, "y": 150], ["x": 380, "y": 230],
+                                                      ["x": 480, "y": 150]])]])
+        }
+        curve.bendSlider.doubleValue = 40
+        _ = curve.bendSlider.sendAction(curve.bendSlider.action, to: curve.bendSlider.target)
+        waitUntil { worker.requests.count == 2 && !controller.state.busy }
+        XCTAssertTrue(curve.bendSlider.isHidden)
+        XCTAssertFalse(curve.straightenButton.isHidden)
+        XCTAssertEqual(curve.straightenButton.title, "Straighten line")
+        curve.straightenButton.performClick(nil)
+        waitUntil { worker.requests.count == 3 && !controller.state.busy }
+        edit = try XCTUnwrap((worker.requests.last?["edit"] as? [String: Any])?["edit"] as? [String: Any])
+        XCTAssertEqual(edit["kind"] as? String, "straighten")
+    }
+
+    func testFileDropShowsTheSharedGuideAndImportsAtThePointerSample() throws {
+        _ = NSApplication.shared
+        let background: [String: Any] = [
+            "kind": "image", "id": "capture-background", "name": "Original screenshot",
+            "x": 0.0, "y": 0.0, "visible": true, "locked": true, "opacity": 100.0,
+            "blendMode": "source-over", "source": "background", "src": "draft-asset:original",
+            "width": 640.0, "height": 360.0, "naturalWidth": 640.0, "naturalHeight": 360.0,
+        ]
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [background]))
+        var decoded: [URL] = []
+        let controller = fittedController(worker) { url in
+            decoded.append(url)
+            return EditorDecodedImage(data: Data(repeating: 255, count: 16), width: 2, height: 2,
+                                      bytesPerRow: 8, name: url.lastPathComponent)
+        }
+        defer { controller.window.orderOut(nil) }
+        let image = controller.selectionOverlay.presentedImageRect
+        let nearTop = NSPoint(x: image.midX, y: image.minY + 2)
+        let png = URL(fileURLWithPath: "/tmp/dropped.png")
+        XCTAssertTrue(controller.handleFileDrop(.hover, urls: [png], at: nearTop))
+        XCTAssertTrue(controller.dropGuideView.active)
+        XCTAssertFalse(controller.dropGuideView.isHidden)
+        let guide = try XCTUnwrap(controller.dropGuideView.guide)
+        XCTAssertEqual(guide.label, "Place above")
+        XCTAssertEqual(controller.dropGuideView.toastLabel, "Place above")
+        XCTAssertTrue(controller.handleFileDrop(.exit, urls: [], at: .zero))
+        XCTAssertTrue(controller.dropGuideView.isHidden)
+
+        XCTAssertFalse(controller.handleFileDrop(.drop, urls: [URL(fileURLWithPath: "/tmp/notes.txt")],
+                                                 at: nearTop))
+        XCTAssertTrue(worker.imports.isEmpty && decoded.isEmpty)
+        XCTAssertTrue(labels(in: controller.root).contains("Drop PNG, JPEG, WebP, or TIFF image files."))
+
+        XCTAssertTrue(controller.handleFileDrop(.hover, urls: [png], at: nearTop))
+        XCTAssertTrue(controller.handleFileDrop(.drop, urls: [png, URL(fileURLWithPath: "/tmp/b.jpg")],
+                                                at: nearTop))
+        XCTAssertTrue(controller.dropGuideView.isHidden)
+        waitUntil { worker.imports.count == 2 && !controller.state.busy }
+        XCTAssertEqual(decoded.map(\.lastPathComponent), ["dropped.png", "b.jpg"])
+        let first = try XCTUnwrap(worker.imports.first?.point)
+        XCTAssertEqual(first.x, guide.point.x, accuracy: 0.001)
+        XCTAssertEqual(first.y, guide.point.y, accuracy: 0.001)
+        XCTAssertNil(worker.imports.last?.point, "later files stack below the previous import")
     }
 }

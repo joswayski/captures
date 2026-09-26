@@ -1086,13 +1086,6 @@ impl<'a> RangeSlider<'a> {
         }
     }
     /// Ticks and labels under the track (shipping `marks`).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "shipping RangeSlider API; no native surface passes marks yet"
-        )
-    )]
     pub fn marks(mut self, marks: &'a [RangeMark<'a>]) -> Self {
         self.marks = marks;
         self

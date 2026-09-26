@@ -7,6 +7,7 @@ pub mod clipboard;
 pub mod compression_compare;
 pub mod controls;
 pub mod editor;
+pub mod editor_canvas;
 pub mod editor_chrome;
 pub mod editor_export;
 pub mod editor_fonts;

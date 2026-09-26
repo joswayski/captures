@@ -57,7 +57,7 @@ fn rect([x, y, width, height]: [f64; 4]) -> Result<Rect, String> {
 }
 
 fn copy() -> Value {
-    use chrome::{header as h, layers as l};
+    use chrome::{colors as c, header as h, layers as l};
     json!({
         "metrics": {
             "header_height": chrome::HEADER_HEIGHT,
@@ -86,6 +86,16 @@ fn copy() -> Value {
             "discard_edits": h::DISCARD_EDITS, "draft_restored": h::DRAFT_RESTORED,
             "draft_discard": h::DRAFT_DISCARD, "draft_dismiss": h::DRAFT_DISMISS,
             "draft_dismiss_label": h::DRAFT_DISMISS_LABEL,
+        },
+        "colors": {
+            "swatches": c::SWATCHES,
+            "default_canvas_background": c::DEFAULT_CANVAS_BACKGROUND,
+            "tile": c::TILE, "custom_inset": c::CUSTOM_INSET,
+            "cell": c::CELL, "compact_cell": c::COMPACT_CELL, "menu_width": c::MENU_WIDTH,
+            "background": c::BACKGROUND, "background_tooltip": c::BACKGROUND_TOOLTIP,
+            "canvas_background": c::CANVAS_BACKGROUND, "solid_background": c::SOLID_BACKGROUND,
+            "custom_color": c::CUSTOM_COLOR, "stroke_color": c::STROKE_COLOR,
+            "fill_color": c::FILL_COLOR, "shadow_color": c::SHADOW_COLOR,
         },
         "layers": {
             "title": l::TITLE, "add": l::ADD, "hide": l::HIDE, "show": l::SHOW,
@@ -186,6 +196,14 @@ mod tests {
         assert_eq!(result["header"]["zoom_presets"], json!([50., 100., 200.]));
         assert_eq!(result["layers"]["menu"], "Layer settings and actions");
         assert_eq!(result["metrics"]["compact_width"], 1040.);
+        let colors = &result["colors"];
+        assert_eq!(colors["swatches"], json!(chrome::colors::SWATCHES));
+        assert_eq!(colors["swatches"][0], "#ff3b5c");
+        assert_eq!(colors["default_canvas_background"], "#f7f7f5");
+        assert_eq!(colors["solid_background"], "Solid background");
+        assert_eq!(colors["custom_color"], "Custom color");
+        assert_eq!(colors["compact_cell"], 36.);
+        assert_eq!(colors["menu_width"], 248.);
     }
 
     #[test]

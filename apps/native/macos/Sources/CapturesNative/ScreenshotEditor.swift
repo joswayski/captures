@@ -140,6 +140,34 @@ class EditorViewportGestureView: NSView {
         if newSize != frame.size { cancelViewportPan() }
         super.setFrameSize(newSize)
     }
+
+    /// Image file drops onto the canvas. Every visible canvas gesture view
+    /// forwards to one controller handler with points in its own coordinates.
+    enum FileDropPhase { case hover, exit, drop }
+    var fileDropHandler: ((FileDropPhase, [URL], NSPoint) -> Bool)? {
+        didSet { if fileDropHandler != nil { registerForDraggedTypes([.fileURL]) } else { unregisterDraggedTypes() } }
+    }
+    private func draggedFileURLs(_ sender: NSDraggingInfo) -> [URL] {
+        sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+    }
+    private func fileDrag(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let urls = draggedFileURLs(sender)
+        guard !urls.isEmpty, let fileDropHandler,
+              fileDropHandler(.hover, urls, convert(sender.draggingLocation, from: nil)) else { return [] }
+        return .copy
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { fileDrag(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { fileDrag(sender) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { _ = fileDropHandler?(.exit, [], .zero) }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { fileDropHandler != nil }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = draggedFileURLs(sender)
+        guard !urls.isEmpty, let fileDropHandler else { return false }
+        return fileDropHandler(.drop, urls, convert(sender.draggingLocation, from: nil))
+    }
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) { _ = fileDropHandler?(.exit, [], .zero) }
+
     override var acceptsFirstResponder: Bool { true }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { cancelViewportPan() }
@@ -558,7 +586,9 @@ final class EditorDrawOverlay: EditorViewportGestureView {
 
 final class EditorSelectionOverlay: EditorViewportGestureView {
     var canvasSize = NSSize.zero { didSet { cancelGesture(); needsDisplay = true } }
-    var selectionEnabled = false { didSet { if !selectionEnabled { cancelGesture() }; isHidden = !selectionEnabled } }
+    var selectionEnabled = false {
+        didSet { if !selectionEnabled { cancelGesture() }; isHidden = !selectionEnabled; layoutExpandButton() }
+    }
     var selectedOutline: [CGPoint]? { didSet { needsDisplay = true } }
     var selectedLayerID: String? { didSet { if selectedLayerID != oldValue { cancelGesture() }; needsDisplay = true } }
     var documentJSON: String? { didSet { if documentJSON != oldValue { cancelGesture() } } }
@@ -569,6 +599,9 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var rotationEnabled = false { didSet { if !rotationEnabled { cancelGesture() }; needsDisplay = true } }
     var resizeEnabled = false { didSet { if !resizeEnabled { cancelGesture() }; needsDisplay = true } }
     var strokeColor = NSColor.controlAccentColor { didSet { needsDisplay = true } }
+    var dotFill = NSColor.windowBackgroundColor { didSet { needsDisplay = true } }
+    var hintFill = NSColor(white: 0.08, alpha: 0.9) { didSet { needsDisplay = true } }
+    var hintText = NSColor.white { didSet { needsDisplay = true } }
     var imageRect: (() -> NSRect)?
     var hitTestLayer: ((CGPoint, Double) throws -> String?)?
     var outlineForLayer: ((String) -> [CGPoint]?)?
@@ -578,6 +611,28 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var onResize: ((String, String, CGPoint, Double, Bool) -> Void)?
     var onDoubleClick: ((CGPoint, Double) -> Bool)?
     var onError: ((Error) -> Void)?
+    /// Curve dots for the selected visible, unlocked line/arrow.
+    var curveHandles: NativeCurveHandles? { didSet { needsDisplay = true } }
+    var curveHitTest: ((String, CGPoint, Double) -> NativeCurveHit?)?
+    var curvePreviewer: ((String, [String: AnyHashable], CGPoint) -> NativeCurveHandles?)?
+    var onCurve: ((String, [String: Any]) -> Void)?
+    var hoverHintProvider: ((CGPoint, Double) -> String?)?
+    /// The selected layer's overflow preview and its Expand canvas action.
+    var expandPreview: NativeCanvasExpand? { didSet { layoutExpandButton(); needsDisplay = true } }
+    var expandButton: CaptureButton? {
+        didSet {
+            oldValue?.removeFromSuperview()
+            if let expandButton { addSubview(expandButton) }
+            layoutExpandButton()
+        }
+    }
+    private(set) var expandArmed = false
+    private(set) var hoverHint: String?
+    private var hoverPoint: CGPoint?
+    private var curveLayerID: String?
+    private var curveHandle: [String: AnyHashable]?
+    private(set) var curvePreview: NativeCurveHandles?
+    private var hoverTracking: NSTrackingArea?
     private(set) var startPoint: CGPoint?
     private(set) var currentPoint: CGPoint?
     private var hitLayerID: String?
@@ -612,6 +667,48 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     override func setFrameSize(_ newSize: NSSize) {
         if newSize != frame.size { cancelGesture() }
         super.setFrameSize(newSize)
+        layoutExpandButton()
+    }
+    override func updateTrackingAreas() {
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited,
+                                                         .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area); hoverTracking = area
+        super.updateTrackingAreas()
+    }
+    override func mouseMoved(with event: NSEvent) {
+        updateHover(at: convert(event.locationInWindow, from: nil))
+    }
+    override func mouseExited(with event: NSEvent) { updateHover(at: nil) }
+    /// Curve hints near the pointer and the armed Expand canvas ghost.
+    func updateHover(at point: CGPoint?) {
+        let armed = point.map { expandButton?.isHidden == false && expandButton?.frame.contains($0) == true } ?? false
+        var hint: String?
+        if let point, startPoint == nil, !armed, presentedImageRect.contains(point), canvasSize.width > 0 {
+            let scale = presentedImageRect.width / canvasSize.width
+            hint = hoverHintProvider?(canvasPoint(for: point), 10 / scale)
+        }
+        if armed != expandArmed || hint != hoverHint || (hint != nil && point != hoverPoint) {
+            expandArmed = armed; hoverHint = hint; hoverPoint = point; needsDisplay = true
+        }
+    }
+    /// Place the action outside the largest overflow gap, kept inside the view.
+    func layoutExpandButton() {
+        guard let expandButton else { return }
+        guard let expandPreview, selectionEnabled, startPoint == nil, canvasSize.width > 0 else {
+            expandButton.isHidden = true; expandArmed = false; return
+        }
+        let image = presentedImageRect, scale = image.width / canvasSize.width
+        let anchor = expandPreview.anchor(inset: NativeEditorCanvas.expandInset / max(0.01, scale))
+        let center = CGPoint(x: image.minX + anchor.x * scale, y: image.minY + anchor.y * scale)
+        let size = expandButton.frame.size
+        let inner = bounds.insetBy(dx: 4, dy: 4)
+        guard inner.width >= size.width, inner.height >= size.height else { expandButton.isHidden = true; return }
+        expandButton.frame.origin = CGPoint(
+            x: min(max(center.x - size.width / 2, inner.minX), inner.maxX - size.width),
+            y: min(max(center.y - size.height / 2, inner.minY), inner.maxY - size.height))
+        expandButton.isHidden = false
     }
     var presentedImageRect: NSRect {
         if let imageRect { return imageRect() }
@@ -647,16 +744,25 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         }
         do {
             let scale = presentedImageRect.width / canvasSize.width
+            var result: (NativeEditorResizeDrag?, Int?) = (nil, nil)
             if resizeEnabled, let id = selectedLayerID, let documentJSON {
-                let result = try NativeEditorResizeDrag.begin(documentJSON: documentJSON, layerID: id,
+                result = try NativeEditorResizeDrag.begin(documentJSON: documentJSON, layerID: id,
                     point: documentPoint, displayScale: scale)
-                if let drag = result.0, let handle = result.1 {
-                    resizeDrag = drag; resizeHandle = handle
-                    startPoint = point; currentPoint = point
-                    lockResizeAspect = snap && handle.isMultiple(of: 2)
-                    resizePreview = drag.preview(current: documentPoint, lockAspect: lockResizeAspect)
-                    needsDisplay = true; return
-                }
+            }
+            // Shipping priority: corner resize, then curve dots, then edge resize.
+            let corner = result.1?.isMultiple(of: 2) ?? false
+            if !corner, curveHandles != nil, let id = selectedLayerID,
+               let hit = curveHitTest?(id, documentPoint, 10 / scale), let handle = hit.handle {
+                curveLayerID = id; curveHandle = handle; curvePreview = curveHandles
+                startPoint = point; currentPoint = point; hoverHint = nil
+                expandButton?.isHidden = true; needsDisplay = true; return
+            }
+            if let drag = result.0, let handle = result.1 {
+                resizeDrag = drag; resizeHandle = handle
+                startPoint = point; currentPoint = point
+                lockResizeAspect = snap && handle.isMultiple(of: 2)
+                resizePreview = drag.preview(current: documentPoint, lockAspect: lockResizeAspect)
+                needsDisplay = true; return
             }
             hitLayerID = try hitTestLayer?(documentPoint, 8 / scale)
             if let id = hitLayerID {
@@ -670,7 +776,11 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     }
     func drag(to point: CGPoint, snap: Bool? = nil) {
         guard let startPoint else { return }; currentPoint = point
-        if rotatingLayerID != nil, let outline = rotationStartOutline {
+        if let id = curveLayerID, let handle = curveHandle {
+            if hypot(point.x - startPoint.x, point.y - startPoint.y) >= 3 {
+                curvePreview = curvePreviewer?(id, handle, canvasPoint(for: point)) ?? curvePreview
+            }
+        } else if rotatingLayerID != nil, let outline = rotationStartOutline {
             if let snap { snapRotation = snap }
             rotationPreview = NativeEditorRotationPreview(outline: outline, radians: rotationStartRadians,
                 start: canvasPoint(for: startPoint), current: canvasPoint(for: point), snap: snapRotation,
@@ -695,6 +805,16 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     }
     func end(at point: CGPoint, snap: Bool? = nil) {
         guard let start = startPoint else { return }
+        if let id = curveLayerID, let handle = curveHandle {
+            let distance = hypot(point.x - start.x, point.y - start.y)
+            let current = canvasPoint(for: point)
+            cancelGesture()
+            if distance >= 3 {
+                onCurve?(id, ["kind": "move", "handle": handle as [String: Any],
+                              "point": ["x": Double(current.x), "y": Double(current.y)]])
+            }
+            return
+        }
         if let id = rotatingLayerID {
             drag(to: point, snap: snap)
             let angle = rotationPreview?.radians
@@ -726,6 +846,8 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         rotationStartOutline = nil; rotatingLayerID = nil; rotationPreview = nil; needsDisplay = true
         resizeDrag = nil; resizeHandle = nil; resizePreview = nil; lockResizeAspect = false
         moveDrag = nil; movePreview = nil
+        curveLayerID = nil; curveHandle = nil; curvePreview = nil
+        layoutExpandButton()
     }
     override func mouseDown(with event: NSEvent) {
         if beginViewportPan(event) { cancelGesture(); return }
@@ -749,6 +871,10 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     override func resignFirstResponder() -> Bool { cancelGesture(); return super.resignFirstResponder() }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        drawSelection()
+        drawCanvasInteractions()
+    }
+    private func drawSelection() {
         guard canvasSize.width > 0, canvasSize.height > 0,
               let outline = resizePreview?.outline ?? movePreview?.outline ?? rotationPreview?.outline
                 ?? (startPoint == nil ? selectedOutline : transientOutline),
@@ -779,7 +905,8 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         }
         if resizeEnabled, startPoint == nil || resizeDrag != nil {
             strokeColor.setFill()
-            for point in resizeHandlePoints {
+            // Lines/arrows keep corner grips only so curve dots stay easy to grab.
+            for (index, point) in resizeHandlePoints.enumerated() where curveHandles == nil || index.isMultiple(of: 2) {
                 let center = CGPoint(x: image.minX + point.x * scale, y: image.minY + point.y * scale)
                 NSBezierPath(rect: NSRect(x: center.x - 4, y: center.y - 4, width: 8, height: 8)).fill()
             }
@@ -793,6 +920,67 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             let center = map(geometry.handle), radius: CGFloat = 5
             strokeColor.setFill(); NSBezierPath(ovalIn: NSRect(x: center.x-radius, y: center.y-radius,
                                                                width: radius*2, height: radius*2)).fill()
+        }
+    }
+    /// Overflow tint and armed ghost, curve dots (live while dragging) and the
+    /// floating curve hint.
+    private func drawCanvasInteractions() {
+        guard canvasSize.width > 0, canvasSize.height > 0 else { return }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: bounds).addClip()
+        let image = presentedImageRect, scale = image.width / canvasSize.width
+        let map: (CGPoint) -> CGPoint = { CGPoint(x: image.minX + $0.x * scale, y: image.minY + $0.y * scale) }
+        let mapRect: (CGRect) -> CGRect = {
+            CGRect(x: image.minX + $0.minX * scale, y: image.minY + $0.minY * scale,
+                   width: $0.width * scale, height: $0.height * scale)
+        }
+        if let expandPreview, expandButton?.isHidden == false {
+            for gap in expandPreview.gaps {
+                let rect = mapRect(gap)
+                strokeColor.withAlphaComponent(0.16).setFill(); NSBezierPath(rect: rect).fill()
+                let border = NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5))
+                strokeColor.withAlphaComponent(0.5).setStroke(); border.lineWidth = 1; border.stroke()
+            }
+            if expandArmed {
+                let ghost = mapRect(expandPreview.rect)
+                let outline = NSBezierPath(roundedRect: ghost, xRadius: 3, yRadius: 3)
+                outline.lineWidth = 1.5; outline.setLineDash([6, 4], count: 2, phase: 0)
+                strokeColor.withAlphaComponent(0.42).setStroke(); outline.stroke()
+                for edge in expandPreview.edges {
+                    EditorDropGuideView.drawEdgeGlow(ghost, edge: edge, accent: strokeColor)
+                }
+            }
+        }
+        if let handles = curvePreview ?? (startPoint == nil ? curveHandles : nil) {
+            if curvePreview != nil, handles.path.count >= 2 {
+                let path = NSBezierPath()
+                for (index, point) in handles.path.enumerated() {
+                    if index == 0 { path.move(to: map(point)) } else { path.line(to: map(point)) }
+                }
+                strokeColor.withAlphaComponent(0.85).setStroke(); path.lineWidth = 1.5; path.stroke()
+            }
+            func dot(_ point: CGPoint, radius: CGFloat, filled: Bool) {
+                let center = map(point)
+                let oval = NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius,
+                                                       width: radius * 2, height: radius * 2))
+                (filled ? strokeColor : dotFill).setFill(); oval.fill()
+                strokeColor.setStroke(); oval.lineWidth = filled ? 2 : 1.5; oval.stroke()
+            }
+            handles.starters.forEach { dot($0, radius: 4.5, filled: false) }
+            handles.controls.forEach { dot($0, radius: 5, filled: true) }
+            [handles.start, handles.end].forEach { dot($0, radius: 4.5, filled: false) }
+        }
+        if let hoverHint, let hoverPoint, startPoint == nil {
+            let font = NSFont.systemFont(ofSize: 11)
+            let text = hoverHint as NSString
+            let size = text.size(withAttributes: [.font: font])
+            let bubble = CGRect(x: hoverPoint.x + 14, y: hoverPoint.y + 18,
+                                width: ceil(size.width) + 16, height: ceil(size.height) + 8)
+            let plate = NSBezierPath(roundedRect: bubble, xRadius: 6, yRadius: 6)
+            hintFill.setFill(); plate.fill()
+            text.draw(at: CGPoint(x: bubble.minX + 8, y: bubble.minY + 4),
+                      withAttributes: [.font: font, .foregroundColor: hintText])
         }
     }
 }
@@ -874,11 +1062,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let cropHeight = NSTextField()
     private let canvasWidth = NSTextField()
     private let canvasHeight = NSTextField()
-    private let backgroundColor = NSTextField()
-    private var backgroundMode: NSPopUpButton!
-    private var backgroundApply: CaptureButton!
-    private var backgroundReset: CaptureButton!
-    private var lastSolidBackground = "#f7f7f5"
+    private var backgroundSolid: NSButton!
+    private var backgroundSwatches: ColorSwatchRow!
+    /// Shipping `lastSolid`: restored when Solid background is turned back on.
+    private var lastSolidBackground = EditorColors.defaultCanvasBackground
+    /// A live background change made while other work runs; only the latest
+    /// is applied once the editor is free (one undo step).
+    private var queuedBackground: String??
     private let status = NSTextField(wrappingLabelWithString: "")
     private let geometryPanel = Surface()
     private let geometryContent = Surface()
@@ -889,6 +1079,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var addLayerButton: CaptureButton!
     private var drawHeading: NSTextField?
     private var annotationControls: EditorAnnotationControls!
+    private(set) var curveControls: EditorCurveControls!
+    private var annotationControlsHeight: CGFloat = 0
+    let dropGuideView = EditorDropGuideView()
+    private(set) var expandCanvasButton: CaptureButton!
+    /// Remaining files from one drop; each imports after the previous one.
+    private var pendingDropURLs: [URL] = []
     private let rotationSnap = NSTextField()
     private var rotationSnapLabel: NSTextField!
     private let drawPanel = Surface()
@@ -1121,7 +1317,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                                         qos: .userInitiated)
     private var importToken = 0
     private var importLoading = false
-    private var pendingImport: (image: EditorDecodedImage, generation: Int, artifactID: String)?
+    private var pendingImport: (image: EditorDecodedImage, generation: Int, artifactID: String, point: CGPoint?)?
 
     private enum Section {
         static let geometry = 0
@@ -1207,7 +1403,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelPendingImport()
         inlineTextInput = nil; hideInlineTextEditor(); closeAfterTextInput = false
         let generation = state.beginOpen(artifactID: artifact.id)
-        lastSolidBackground = "#f7f7f5"
+        lastSolidBackground = EditorColors.defaultCanvasBackground; queuedBackground = nil
         self.historyRoot = historyRoot
         captureMode = artifact.mode
         self.outputDirectory = outputDirectory ?? URL(fileURLWithPath: historyRoot)
@@ -1290,6 +1486,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         switch result {
         case .success:
             inlineTextInput = nil; hideInlineTextEditor()
+            backgroundSwatches?.deactivate(); queuedBackground = nil
             state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
             estimateWork?.cancel(); estimateWork = nil; estimateGeneration += 1
             comparisonWork?.cancel(); comparisonWork = nil; comparisonGeneration += 1
@@ -1703,8 +1900,28 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                     displayScale: scale, lockAspect: lockAspect)
         }
         selectionOverlay.onDoubleClick = { [weak self] point, tolerance in
-            self?.beginExistingTextInput(at: point, tolerance: tolerance) ?? false
+            guard let self else { return false }
+            if self.curveDoubleClick(at: point, radius: tolerance * 10 / 8) { return true }
+            return self.beginExistingTextInput(at: point, tolerance: tolerance)
         }
+        selectionOverlay.curveHitTest = { [weak self] id, point, radius in
+            guard let json = self?.state.snapshot?.documentJSON else { return nil }
+            return try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: id, point: point, radius: radius)
+        }
+        selectionOverlay.curvePreviewer = { [weak self] id, handle, point in
+            guard let json = self?.state.snapshot?.documentJSON else { return nil }
+            return try? NativeEditorCanvas.curvePreview(documentJSON: json, layerID: id, handle: handle, point: point)
+        }
+        selectionOverlay.onCurve = { [weak self] id, edit in self?.curveCanvasLayer(id, edit: edit) }
+        selectionOverlay.hoverHintProvider = { [weak self] point, radius in
+            self?.curveHoverHint(at: point, radius: radius)
+        }
+        expandCanvasButton = CaptureButton(NativeEditorCanvas.expandCanvas,
+                                           frame: NSRect(x: 0, y: 0, width: 118, height: 28),
+                                           tokens: tokens) { [weak self] in self?.expandSelectedCanvas() }
+        expandCanvasButton.primary = true
+        expandCanvasButton.setAccessibilityLabel(NativeEditorCanvas.expandCanvas)
+        selectionOverlay.expandButton = expandCanvasButton
         selectionOverlay.onError = { [weak self] error in self?.showError("Layer interaction failed: \(error.localizedDescription)") }
         viewportInput.addSubview(selectionOverlay)
         cropOverlay.frame = viewportInput.bounds
@@ -1722,6 +1939,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         compareView.isHidden = true
         compareView.onDismiss = { [weak self] in self?.dismissComparison() }
         viewportInput.addSubview(compareView)
+        dropGuideView.frame = viewportInput.bounds
+        dropGuideView.autoresizingMask = [.width, .height]
+        dropGuideView.isHidden = true
+        dropGuideView.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
+        viewportInput.addSubview(dropGuideView)
         inlineTextScroll.isHidden = true
         inlineTextScroll.borderType = .lineBorder
         inlineTextScroll.hasVerticalScroller = true
@@ -1935,31 +2157,33 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             if !icon.isEmpty { control.icon = .shipping(icon); control.iconSide = 13 }
         }
         trimButton.toolTip = EditorChrome.text("header", "trim_tooltip")
-        backgroundButton.toolTip = "Canvas background color"
+        backgroundButton.toolTip = EditorColors.text("background_tooltip")
         backgroundButton.swatch = tokens.color("surface-raised")
 
-        // Canvas background card (native keeps its explicit hex field and Apply).
-        backgroundCard.frame = NSRect(x: 0, y: 0, width: 264, height: 128)
+        // Shipping canvas background card: a Solid toggle and the compact swatch
+        // row. Every change applies at once as its own undo step.
+        let cardWidth = EditorColors.metric("menu_width")
+        let cardPadding = tokens.number("s-5")
+        let swatchWidth = cardWidth - 2 * cardPadding
+        let swatchHeight = ColorSwatchRow.height(width: swatchWidth, compact: true, tokens: tokens)
+        backgroundCard.frame = NSRect(x: 0, y: 0, width: cardWidth,
+                                      height: 2 * cardPadding + 24 + tokens.number("s-4") + swatchHeight)
         backgroundCard.layer?.cornerRadius = tokens.number("r-xl")
         backgroundCard.layer?.borderWidth = 1
-        backgroundCard.setAccessibilityLabel("Canvas background")
+        backgroundCard.setAccessibilityLabel(EditorColors.text("canvas_background"))
         backgroundCard.isHidden = true
-        backgroundMode = NSPopUpButton()
-        backgroundMode.addItems(withTitles: ["Solid", "Transparent"])
-        backgroundMode.frame = NSRect(x: 12, y: 12, width: 240, height: 28)
-        backgroundMode.setAccessibilityLabel("Canvas background mode")
-        backgroundMode.target = self; backgroundMode.action = #selector(changeBackgroundMode)
-        backgroundCard.addSubview(backgroundMode)
-        configure(backgroundColor, frame: NSRect(x: 12, y: 48, width: 240, height: 26),
-                  label: "Canvas background color", parent: backgroundCard)
-        backgroundColor.placeholderString = "#RRGGBB or #RRGGBBAA"
-        backgroundColor.formatter = nil; backgroundColor.alignment = .left
-        backgroundApply = button("Apply background", frame: NSRect(x: 12, y: 86, width: 144, height: 30),
-                                 parent: backgroundCard) { [weak self] in self?.applyBackground() }
-        backgroundReset = button("Reset fields", frame: NSRect(x: 164, y: 86, width: 88, height: 30),
-                                 parent: backgroundCard) { [weak self] in
-            self?.publishBackgroundFields(); self?.updateControls()
-        }
+        backgroundSolid = NSButton(checkboxWithTitle: EditorColors.text("solid_background"),
+                                   target: self, action: #selector(toggleSolidBackground))
+        backgroundSolid.font = .systemFont(ofSize: tokens.number("text-sm"))
+        backgroundSolid.frame = NSRect(x: cardPadding, y: cardPadding, width: swatchWidth, height: 24)
+        backgroundSolid.setAccessibilityLabel(EditorColors.text("solid_background"))
+        backgroundCard.addSubview(backgroundSolid)
+        backgroundSwatches = ColorSwatchRow(tokens: tokens, label: EditorColors.text("canvas_background"),
+                                            compact: true)
+        backgroundSwatches.frame = NSRect(x: cardPadding, y: backgroundSolid.frame.maxY + tokens.number("s-4"),
+                                          width: swatchWidth, height: swatchHeight)
+        backgroundSwatches.changed = { [weak self] color in self?.setBackground(color) }
+        backgroundCard.addSubview(backgroundSwatches)
 
         undoButton = headerIcon("undo", label: EditorChrome.text("header", "undo")) {
             [weak self] in self?.undoDocument()
@@ -2059,6 +2283,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func toggleBackgroundCard() {
         backgroundCard.isHidden.toggle()
         backgroundButton.selected = !backgroundCard.isHidden
+        if backgroundCard.isHidden { backgroundSwatches.deactivate() }
         if !backgroundCard.isHidden { publishBackgroundFields(); updateControls() }
         backgroundButton.needsDisplay = true
     }
@@ -2272,6 +2497,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         for preset in state.snapshot?.textStylePresets ?? [] {
             createTextPreset.addItem(withTitle: preset.label)
             createTextPreset.lastItem?.representedObject = preset.id
+            // Shipping `TextStylePicker` preview chip, also shown on the trigger.
+            createTextPreset.lastItem?.image = TextStyleChip.image(for: preset, tokens: tokens)
         }
         let desiredID = createTextDefaultsPublished ? selectedID
             : (state.snapshot?.textStylePresets.first(where: { $0.id == "rounded-box" })?.id
@@ -2641,11 +2868,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         annotationControls.reportError = { [weak self] message in self?.showError(message) }
         annotationControls.resized = { [weak self] height in
-            self?.rotationSnapLabel.frame.origin.y = 558 + height
-            self?.rotationSnap.frame.origin.y = 582 + height
-            self?.layerContent.frame.size.height = 620 + height
+            self?.annotationControlsHeight = height
+            self?.layoutLayerInspectorTail()
         }
         layerContent.addSubview(annotationControls)
+        curveControls = EditorCurveControls(tokens: tokens)
+        curveControls.apply = { [weak self] edit in
+            guard let self, let id = self.selectedLayer?.id else { return }
+            self.curveCanvasLayer(id, edit: edit)
+        }
+        curveControls.resized = { [weak self] _ in self?.layoutLayerInspectorTail() }
+        layerContent.addSubview(curveControls)
+        layoutLayerInspectorTail()
     }
 
     @objc private func changeSection() {
@@ -3940,7 +4174,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textFieldsID = selectedLayer?.id; acceptedTextStyle = style
         textPreset.removeAllItems()
         textPreset.addItem(withTitle: "Style…")
-        for preset in state.snapshot?.textStylePresets ?? [] { textPreset.addItem(withTitle: preset.label) }
+        for preset in state.snapshot?.textStylePresets ?? [] {
+            textPreset.addItem(withTitle: preset.label)
+            textPreset.lastItem?.image = TextStyleChip.image(for: preset, tokens: tokens)
+        }
         if preserve { return }
         textPresetRounded = nil
         textEditor.string = style.text; textSize.stringValue = format(style.fontSize)
@@ -3958,9 +4195,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateTextShadowControls()
         textFamily.removeAllItems()
         let families = state.snapshot?.fontFamilies ?? [:]
-        for key in families.keys.sorted() {
-            textFamily.addItem(withTitle: families[key]!)
-            textFamily.lastItem?.representedObject = key
+        for option in state.snapshot?.fontFamilyOptions ?? [] {
+            textFamily.addItem(withTitle: option.label)
+            textFamily.lastItem?.representedObject = option.key
         }
         if families[style.fontFamily] == nil {
             textFamily.addItem(withTitle: "Saved font: \(style.fontFamily)")
@@ -4091,6 +4328,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func configureViewportGestures(_ view: EditorViewportGestureView) {
+        view.fileDropHandler = { [weak self, weak view] phase, urls, point in
+            guard let self, let view else { return false }
+            return self.handleFileDrop(phase, urls: urls, at: view.convert(point, to: self.viewportInput))
+        }
         view.onViewportZoom = { [weak self] factor, anchor in self?.scaleViewport(by: factor, anchor: anchor) }
         view.onViewportPan = { [weak self] delta in self?.panViewport(by: delta) }
         view.onViewportPanBegan = { [weak self] in self?.cancelDrawing() }
@@ -4282,6 +4523,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.needsDisplay = true; selectionOverlay.needsDisplay = true
         cropOverlay.needsDisplay = true
         publishComparison()
+        selectionOverlay.layoutExpandButton(); dropGuideView.needsDisplay = true
     }
 
     private func publishTextInputPresentation(_ presentation: EditorPresentation) {
@@ -4405,6 +4647,105 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             && state.snapshot != nil && !state.busy && inputResolved && !importLoading
     }
 
+    /// Annotation style, then Curve, then the rotation snap field.
+    private func layoutLayerInspectorTail() {
+        guard let curveControls else { return }
+        curveControls.frame.origin = CGPoint(x: 0, y: 550 + annotationControlsHeight
+                                             + (annotationControlsHeight > 0 ? 8 : 0))
+        let curve = curveControls.isHidden ? 0 : curveControls.frame.height + 8
+        let tail = annotationControlsHeight + curve
+        rotationSnapLabel.frame.origin.y = 558 + tail
+        rotationSnap.frame.origin.y = 582 + tail
+        layerContent.frame.size.height = 620 + tail
+    }
+
+    private func curveCanvasLayer(_ id: String, edit: [String: Any]) {
+        guard !state.busy, let layer = state.snapshot?.layers.first(where: { $0.id == id }),
+              !layer.locked else { return }
+        command(["operation": "layer", "id": id, "edit": ["action": "curve", "edit": edit]],
+                message: "Editing curve…", preferredSelection: id)
+    }
+
+    private func expandSelectedCanvas() {
+        guard !state.busy, let id = selectedLayer?.id, state.snapshot?.canvasExpand[id] != nil else { return }
+        command(["operation": "layer", "id": id, "edit": ["action": "expand_canvas"]],
+                message: "Expanding canvas…", preferredSelection: id)
+    }
+
+    /// Shipping double-click on a line/arrow: remove a control dot, add a point
+    /// on the selected path, or select an unselected path and add a point.
+    private func curveDoubleClick(at point: CGPoint, radius: Double) -> Bool {
+        guard !state.busy, let json = state.snapshot?.documentJSON else { return false }
+        if let layer = selectedLayer, layer.visible, !layer.locked, state.snapshot?.curveHandles[layer.id] != nil,
+           let hit = try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: layer.id,
+                                                      point: point, radius: radius) {
+            if hit.handleKind == "control", let index = hit.handleIndex {
+                curveCanvasLayer(layer.id, edit: ["kind": "remove", "index": index]); return true
+            }
+            if hit.handle != nil { return true }
+            if hit.onPath, let closest = hit.closest {
+                curveCanvasLayer(layer.id, edit: ["kind": "insert",
+                    "point": ["x": Double(closest.x), "y": Double(closest.y)]])
+                return true
+            }
+        }
+        guard let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
+              id != selectedLayer?.id, state.snapshot?.curveHandles[id] != nil,
+              let hit = try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: id, point: point, radius: radius),
+              hit.onPath, let closest = hit.closest else { return false }
+        curveCanvasLayer(id, edit: ["kind": "insert", "point": ["x": Double(closest.x), "y": Double(closest.y)]])
+        return true
+    }
+
+    private func curveHoverHint(at point: CGPoint, radius: Double) -> String? {
+        guard !state.busy, let json = state.snapshot?.documentJSON else { return nil }
+        if let layer = selectedLayer, layer.visible, !layer.locked, state.snapshot?.curveHandles[layer.id] != nil,
+           let hint = (try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: layer.id,
+                                                        point: point, radius: radius))?.hint {
+            return hint
+        }
+        guard let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
+              id != selectedLayer?.id, state.snapshot?.curveHandles[id] != nil,
+              let hit = try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: id, point: point, radius: radius),
+              hit.onPath else { return nil }
+        return "Click to select · double-click path to add curve points"
+    }
+
+    /// File drags over any canvas gesture view. Points are in viewport coordinates.
+    func handleFileDrop(_ phase: EditorViewportGestureView.FileDropPhase, urls: [URL], at point: NSPoint) -> Bool {
+        switch phase {
+        case .exit:
+            dropGuideView.active = false; dropGuideView.guide = nil
+            return true
+        case .hover:
+            guard let snapshot = state.snapshot, state.artifactID != nil, inlineTextInput == nil else {
+                dropGuideView.active = false; dropGuideView.guide = nil; return false
+            }
+            let image = presentedImageRect
+            let documentPoint = image.contains(point) && image.width > 0
+                ? CGPoint(x: (point.x - image.minX) * snapshot.width / image.width,
+                          y: (point.y - image.minY) * snapshot.height / image.height) : nil
+            dropGuideView.canvasSize = NSSize(width: snapshot.width, height: snapshot.height)
+            dropGuideView.guide = try? NativeEditorCanvas.dropGuide(documentJSON: snapshot.documentJSON,
+                selectedID: selectedLayerID, point: documentPoint)
+            dropGuideView.active = true
+            return true
+        case .drop:
+            let guide = dropGuideView.guide
+            dropGuideView.active = false; dropGuideView.guide = nil
+            guard let artifactID = state.artifactID, state.snapshot != nil, inlineTextInput == nil,
+                  !importLoading else { return false }
+            let images = urls.filter(NativeEditorCanvas.isSupportedImage)
+            guard let first = images.first else { showError(NativeEditorCanvas.dropUnsupported); return false }
+            selectionOverlay.cancelGesture()
+            importToken += 1
+            pendingDropURLs = Array(images.dropFirst())
+            decodeImport(first, point: guide?.point, token: importToken,
+                         generation: state.generation, artifactID: artifactID)
+            return true
+        }
+    }
+
     private func selectCanvasLayer(_ id: String?) {
         guard !state.busy else { return }
         selectedLayerID = id
@@ -4453,34 +4794,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         importToken += 1
         let token = importToken
         let generation = state.generation
+        pendingDropURLs = []
         let completion: (URL?) -> Void = { [weak self] url in
             DispatchQueue.main.async {
-                guard let self, self.importToken == token,
-                      self.state.generation == generation,
-                      self.state.artifactID == artifactID,
-                      let url else { return }
-                self.importLoading = true
-                self.status.textColor = self.tokens.color("text-muted")
-                self.status.stringValue = "Reading image…"
-                self.updateControls()
-                let decoder = self.imageDecoder
-                Self.imageDecodeQueue.async {
-                    let result = Result { try decoder(url) }
-                    DispatchQueue.main.async {
-                        guard self.importToken == token,
-                              self.state.generation == generation,
-                              self.state.artifactID == artifactID else { return }
-                        switch result {
-                        case .success(let image):
-                            self.pendingImport = (image, generation, artifactID)
-                            self.submitPendingImportIfReady()
-                        case .failure(let error):
-                            self.importLoading = false
-                            self.showError("Couldn’t import image: \(error.localizedDescription)")
-                            self.updateControls()
-                        }
-                    }
-                }
+                guard let self, let url else { return }
+                self.decodeImport(url, point: nil, token: token, generation: generation, artifactID: artifactID)
             }
         }
         if let imagePicker {
@@ -4490,6 +4808,35 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let panel = Self.imagePanel()
         panel.beginSheetModal(for: window) { response in
             completion(response == .OK ? panel.url : nil)
+        }
+    }
+
+    /// Decode off the main thread, then import as one undoable edit. A drop
+    /// point places the image where the drop guide showed.
+    private func decodeImport(_ url: URL, point: CGPoint?, token: Int, generation: Int, artifactID: String) {
+        guard importToken == token, state.generation == generation, state.artifactID == artifactID else { return }
+        importLoading = true
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Reading image…"
+        updateControls()
+        let decoder = imageDecoder
+        Self.imageDecodeQueue.async {
+            let result = Result { try decoder(url) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.importToken == token,
+                      self.state.generation == generation,
+                      self.state.artifactID == artifactID else { return }
+                switch result {
+                case .success(let image):
+                    self.pendingImport = (image, generation, artifactID, point)
+                    self.submitPendingImportIfReady()
+                case .failure(let error):
+                    self.importLoading = false
+                    self.pendingDropURLs = []
+                    self.showError("Couldn’t import image: \(error.localizedDescription)")
+                    self.updateControls()
+                }
+            }
         }
     }
 
@@ -4518,7 +4865,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         status.textColor = tokens.color("text-muted")
         status.stringValue = "Adding image layer…"
         updateControls()
-        worker.importImage(pendingImport.image, selectedID: selectedID) { [weak self] result in
+        worker.importImage(pendingImport.image, selectedID: selectedID, point: pendingImport.point) { [weak self] result in
             guard let self, self.importToken == token else { return }
             self.importLoading = false
             switch result {
@@ -4530,8 +4877,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.publish(imported.presentation, resetCrop: false)
                 self.status.textColor = self.tokens.color("text-muted")
                 self.status.stringValue = "Image added. Unsaved changes."
+                if !self.pendingDropURLs.isEmpty, let artifactID = self.state.artifactID {
+                    // Later files in one drop stack below the layer just added.
+                    let next = self.pendingDropURLs.removeFirst()
+                    self.updateControls()
+                    self.decodeImport(next, point: nil, token: token,
+                                      generation: self.state.generation, artifactID: artifactID)
+                    return
+                }
             case .failure(let error):
                 guard self.state.fail(generation: generation) else { return }
+                self.pendingDropURLs = []
                 self.showError("Couldn’t import image: \(error.localizedDescription)")
             }
             self.updateControls()
@@ -4542,6 +4898,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         importToken += 1
         importLoading = false
         pendingImport = nil
+        pendingDropURLs = []
     }
 
     private func toggleLock() {
@@ -4783,21 +5140,44 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 message: "Resizing canvas…", resetCrop: true)
     }
 
-    @objc private func changeBackgroundMode() { updateControls() }
-
-    private func publishBackgroundFields() {
-        guard let snapshot = state.snapshot else { return }
-        if let color = snapshot.background { lastSolidBackground = color }
-        backgroundMode.selectItem(at: snapshot.background == nil ? 1 : 0)
-        backgroundColor.stringValue = lastSolidBackground
-        backgroundButton?.swatch = snapshot.background.flatMap { NSColor(hex: $0) } ?? .clear
-        backgroundButton?.setAccessibilityLabel("Background color: \(snapshot.background ?? "transparent")")
+    @objc private func toggleSolidBackground() {
+        setBackground(backgroundSolid.state == .on ? lastSolidBackground : nil)
     }
 
-    private func applyBackground() {
-        let color: Any = backgroundMode.indexOfSelectedItem == 0
-            ? backgroundColor.stringValue as Any : NSNull()
-        command(["operation": "set_background", "color": color],
+    /// The background the card shows: a queued live change, else the document's.
+    private var shownBackground: String? {
+        if let queuedBackground { return queuedBackground }
+        return state.snapshot?.background
+    }
+
+    private func publishBackgroundFields() {
+        guard state.snapshot != nil else { return }
+        if let color = state.snapshot?.background, queuedBackground == nil { lastSolidBackground = color }
+        let shown = shownBackground
+        backgroundSolid?.state = shown == nil ? .off : .on
+        backgroundSwatches?.selectedHex = shown ?? lastSolidBackground
+        backgroundButton?.swatch = shown.flatMap { NSColor(hex: $0) } ?? .clear
+        backgroundButton?.setAccessibilityLabel(EditorColors.backgroundLabel(shown))
+    }
+
+    /// Shipping applies each background change at once as its own undo step;
+    /// an unchanged value adds none (the session skips identical commits).
+    private func setBackground(_ color: String?) {
+        guard state.snapshot != nil, inlineTextInput == nil else { return }
+        if let color { lastSolidBackground = color }
+        if state.busy {
+            queuedBackground = .some(color); publishBackgroundFields(); return
+        }
+        queuedBackground = nil
+        command(["operation": "set_background", "color": color.map { $0 as Any } ?? NSNull()],
+                message: "Changing canvas background…")
+    }
+
+    private func flushQueuedBackground() {
+        guard let queued = queuedBackground, state.snapshot != nil, !state.busy,
+              inlineTextInput == nil else { return }
+        queuedBackground = nil
+        command(["operation": "set_background", "color": queued.map { $0 as Any } ?? NSNull()],
                 message: "Changing canvas background…")
     }
 
@@ -4912,6 +5292,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         closeAfterCommand = false; closeAfterTextInput = false
         inlineTextInput = nil; hideInlineTextEditor()
         selectedLayerID = nil; preferredLayerID = nil
+        backgroundSwatches?.deactivate(); queuedBackground = nil
         state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
         estimateWork?.cancel(); estimateWork = nil; estimateGeneration += 1
         comparisonWork?.cancel(); comparisonWork = nil; comparisonGeneration += 1
@@ -4926,9 +5307,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         fields.forEach { $0.isEnabled = ready }
         applyCropButton?.isEnabled = ready
         trimButton?.isEnabled = ready; backgroundButton?.isEnabled = ready
-        backgroundMode?.isEnabled = ready
-        backgroundColor.isEnabled = ready && backgroundMode?.indexOfSelectedItem == 0
-        backgroundApply?.isEnabled = ready; backgroundReset?.isEnabled = ready
+        // The card stays live while a change applies, like shipping; changes
+        // made meanwhile queue (see `setBackground`).
+        let backgroundLive = state.snapshot != nil && inlineTextInput == nil
+        backgroundSolid?.isEnabled = backgroundLive
+        backgroundSwatches?.isEnabled = backgroundLive
+        if ready && queuedBackground != nil {
+            DispatchQueue.main.async { [weak self] in self?.flushQueuedBackground() }
+        }
         undoButton?.isEnabled = ready && state.snapshot?.canUndo == true
         redoButton?.isEnabled = ready && state.snapshot?.canRedo == true
         saveDraftItem.isEnabled = ready && state.snapshot?.unsavedChanges == true
@@ -4966,6 +5352,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         combineLayers?.item(at: 2)?.isEnabled = combineReady && state.snapshot?.canMergeVisible == true
         combineLayers?.item(at: 3)?.isEnabled = combineReady && state.snapshot?.canFlatten == true
         annotationControls?.setReady(ready)
+        curveControls?.setReady(ready)
         let layer = ready ? selectedLayer : nil
         let image = layer?.kind == .image
         rotationSnap.isEnabled = layer != nil
@@ -5027,6 +5414,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.selectedRotation = selectedLayer?.rotation ?? 0
         selectionOverlay.rotationEnabled = selectedLayer?.visible == true && selectedLayer?.locked == false
         selectionOverlay.resizeEnabled = selectedLayer?.visible == true && selectedLayer?.locked == false
+        let curve = selectedLayer.flatMap { state.snapshot?.curveHandles[$0.id] }
+        selectionOverlay.curveHandles = selectionOverlay.resizeEnabled ? curve : nil
+        selectionOverlay.expandPreview = selectedLayer.flatMap { state.snapshot?.canvasExpand[$0.id] }
+        curveControls?.setHandles(selectedLayer?.locked == false ? curve : nil)
         guard let layer = selectedLayer else {
             [layerName, layerOpacity, layerX, layerY].forEach { $0.stringValue = "" }
             updateControls(); return
@@ -5136,6 +5527,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.strokeColor = tokens.color("theme-accent")
         drawOverlay.brushOutlineColor = tokens.color("text")
         selectionOverlay.strokeColor = tokens.color("theme-accent")
+        selectionOverlay.dotFill = tokens.color("surface-raised")
+        selectionOverlay.hintFill = tokens.color("glass-strong")
+        selectionOverlay.hintText = tokens.color("glass-text")
+        dropGuideView.accent = tokens.color("theme-accent")
+        dropGuideView.glassFill = tokens.color("glass-strong")
+        dropGuideView.glassText = tokens.color("glass-text")
         drawOverlay.needsDisplay = true
         preview.superview?.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         preview.superview?.layer?.borderColor = tokens.color("border").cgColor
@@ -5162,6 +5559,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         canvasToolbarLabels.forEach { $0.textColor = tokens.color("text-subtle") }
         for field in [canvasWidth, canvasHeight] { field.textColor = tokens.color("text") }
         backgroundCard.layer?.backgroundColor = tokens.color("surface-overlay").cgColor
+        backgroundSwatches?.tokens = tokens
         backgroundCard.layer?.borderColor = tokens.color("border").cgColor
         draftBanner.layer?.backgroundColor = tokens.color("caution-surface").cgColor
         draftBannerLabel.textColor = tokens.color("caution-text")

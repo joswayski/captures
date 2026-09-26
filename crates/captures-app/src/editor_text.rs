@@ -63,7 +63,7 @@ pub const TEXT_STYLE_PRESETS: [TextStylePreset; 7] = [
     },
     TextStylePreset {
         id: "mono-box",
-        label: "Mono box",
+        label: "Mono Box",
         font_family: "mono",
         background: Some("#111318"),
         outlined: false,
@@ -71,13 +71,41 @@ pub const TEXT_STYLE_PRESETS: [TextStylePreset; 7] = [
     },
     TextStylePreset {
         id: "rounded-box",
-        label: "Rounded box",
+        label: "Rounded Box",
         font_family: "rounded",
         background: Some("#111318"),
         outlined: false,
         rounded_background: true,
     },
 ];
+
+/// Shipping font family select (`ScreenshotEditor.tsx` text properties):
+/// draft font keys in menu order with their visible labels. Pinned asset names
+/// such as "Liberation Sans" are never shown for these keys.
+pub const FONT_FAMILY_LABELS: [(&str, &str); 4] = [
+    ("sans", "Sans serif"),
+    ("serif", "Serif"),
+    ("mono", "Monospace"),
+    ("rounded", "Rounded"),
+];
+
+/// Font menu rows for a draft's pinned families (`key -> asset name`): the
+/// shipping keys first, in shipping order and with shipping labels, then any
+/// other pinned key under its asset name. Keys the draft lacks are omitted.
+#[must_use]
+pub fn font_family_options(
+    available: &std::collections::BTreeMap<String, String>,
+) -> Vec<(String, String)> {
+    let known = FONT_FAMILY_LABELS
+        .iter()
+        .filter(|(key, _)| available.contains_key(*key))
+        .map(|(key, label)| ((*key).to_owned(), (*label).to_owned()));
+    let other = available
+        .iter()
+        .filter(|(key, _)| !FONT_FAMILY_LABELS.iter().any(|(known, _)| known == key))
+        .map(|(key, name)| (key.clone(), name.clone()));
+    known.chain(other).collect()
+}
 
 #[derive(Debug, PartialEq, Serialize)]
 pub struct TextRow {
