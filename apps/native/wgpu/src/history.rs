@@ -201,6 +201,7 @@ pub fn filters(
                 painter.rect_filled(rect, radius, t.color("surface-hover"));
             }
             if response.has_focus() {
+                crate::primitives::focus_indicated(ui.ctx());
                 painter.rect_stroke(
                     rect.expand(1.),
                     radius,
@@ -311,10 +312,13 @@ pub fn grid(
     let mut events = Vec::new();
     let mut visible = 0..0;
     let mut width = 0.;
-    egui::ScrollArea::vertical()
-        .id_salt("history-grid")
-        .auto_shrink([false, false])
-        .show_viewport(ui, |ui, viewport| {
+    crate::primitives::scroll_viewport(
+        ui,
+        t,
+        egui::ScrollArea::vertical()
+            .id_salt("history-grid")
+            .auto_shrink([false, false]),
+        |ui, viewport| {
             width = f64::from(ui.available_width());
             let layout = shared::grid(width);
             ui.set_height(layout.content_height(items.len()) as f32);
@@ -354,7 +358,8 @@ pub fn grid(
             if let Some(index) = scroll_to.filter(|index| *index < items.len()) {
                 ui.scroll_to_rect(rect_for(index), None);
             }
-        });
+        },
+    );
     GridOutput {
         events,
         visible,
@@ -594,6 +599,9 @@ fn card(
         card.delete_label
     });
 
+    if body.has_focus() || open.has_focus() {
+        crate::primitives::focus_indicated(ui.ctx());
+    }
     let stroke = if item.selected || body.has_focus() || open.has_focus() {
         Stroke::new(2., t.color("theme-accent"))
     } else if hover > 0. {
@@ -782,6 +790,7 @@ fn button(
         );
     }
     if response.has_focus() {
+        crate::primitives::focus_indicated(ui.ctx());
         painter.rect_stroke(
             rect.expand(1.),
             radius,

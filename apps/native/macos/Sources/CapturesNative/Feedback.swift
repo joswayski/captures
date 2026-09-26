@@ -144,7 +144,7 @@ final class FeedbackCategoryButton: PreferenceHoverButton {
                                                      height: max(0, bounds.height - detailTop)),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: detailFont, .foregroundColor: tokens.color("text-subtle").withAlphaComponent(alpha)])
-        if isFocused { drawPreferenceFocusRing(tokens, in: bounds, radius: radius) }
+        if isFocused { drawFocusRing(tokens, in: bounds, radius: radius) }
     }
 }
 
@@ -179,7 +179,7 @@ final class FeedbackSendButton: PreferenceHoverButton {
         let size = (title as NSString).size(withAttributes: attributes)
         (title as NSString).draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2),
                                  withAttributes: attributes)
-        if isFocused { drawPreferenceFocusRing(tokens, in: bounds.insetBy(dx: -2, dy: -2), radius: radius + 2) }
+        if isFocused { drawFocusRing(tokens, in: bounds.insetBy(dx: -2, dy: -2), radius: radius + 2) }
     }
 }
 
@@ -266,6 +266,7 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         window.contentMinSize = NSSize(width: FeedbackCopy.number("window_min_width"),
                                        height: FeedbackCopy.number("window_min_height"))
         scrollView.hasVerticalScroller = true; scrollView.autohidesScrollers = true
+        scrollView.useTokenScrollers(tokens)
         scrollView.borderType = .noBorder; scrollView.drawsBackground = true
         scrollView.documentView = document
         window.contentView = scrollView
@@ -293,6 +294,7 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         messageLabel.identifier = NSUserInterfaceItemIdentifier("feedback-message-label")
         formCard.addSubview(messageLabel)
         messageScroll.hasVerticalScroller = true; messageScroll.autohidesScrollers = true
+        messageScroll.useTokenScrollers(tokens)
         messageScroll.borderType = .noBorder; messageScroll.drawsBackground = false
         messageScroll.wantsLayer = true
         message.isRichText = false; message.isVerticallyResizable = true
@@ -360,6 +362,7 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         let dark = tokens.color("text").brightnessComponent > 0.5
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         scrollView.backgroundColor = tokens.color("surface-canvas")
+        restyleTokenScrollers(in: scrollView, tokens)
         document.wantsLayer = true; document.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
         func style(_ label: NSTextField, size: String, color: String, weight: NSFont.Weight = .regular) {
             label.font = .systemFont(ofSize: tokens.number(size), weight: weight)

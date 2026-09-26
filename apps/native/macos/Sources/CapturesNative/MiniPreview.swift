@@ -917,7 +917,8 @@ final class MiniPreviewView: NSView {
         wantsLayer = true
 
         scroll.frame = bounds; scroll.autoresizingMask = [.width, .height]
-        scroll.drawsBackground = false; scroll.hasVerticalScroller = !collapsed
+        // Shipping `.thumbnail-stack` hides its scroll bar; edge chevrons cue overflow.
+        scroll.drawsBackground = false; scroll.hasVerticalScroller = false
         scroll.scrollerStyle = .overlay; scroll.borderType = .noBorder
         scroll.contentView.drawsBackground = false
         addSubview(scroll)

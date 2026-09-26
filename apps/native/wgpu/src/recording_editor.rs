@@ -1834,6 +1834,7 @@ fn loop_toggle(ui: &mut egui::Ui, tokens: &Tokens, on: bool, enabled: bool) -> e
         painter.rect_filled(rect, tokens.number("r-md"), tokens.color("surface-hover"));
     }
     if response.has_focus() {
+        crate::primitives::focus_indicated(ui.ctx());
         painter.rect_stroke(
             rect,
             tokens.number("r-md"),
@@ -1942,6 +1943,7 @@ fn preview_size_segmented(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             color,
         );
         if response.has_focus() {
+            crate::primitives::focus_indicated(ui.ctx());
             ui.painter().rect_stroke(
                 segment,
                 tokens.number("r-sm"),
@@ -2071,6 +2073,7 @@ fn show_overlay_play(
             ));
         }
         if response.has_focus() {
+            crate::primitives::focus_indicated(ui.ctx());
             painter.circle_stroke(
                 center,
                 size / 2. + 3.,
@@ -2412,6 +2415,7 @@ fn show_trim_timeline(
                     (gesture.edge == TimelineTrimEdge::Start) == (index == 0)
                 }));
         if response.has_focus() {
+            crate::primitives::focus_indicated(ui.ctx());
             painter.rect_stroke(
                 bar.expand(2.),
                 tokens.number("r-xs"),
@@ -2471,10 +2475,13 @@ fn show(
             if view.confirm_replace.is_some() || view.requires_reopen {
                 ui.disable();
             }
-            egui::ScrollArea::vertical()
-                .id_salt("recording-editor-page")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
+            crate::primitives::scroll_area(
+                ui,
+                tokens,
+                egui::ScrollArea::vertical()
+                    .id_salt("recording-editor-page")
+                    .auto_shrink([false, false]),
+                |ui| {
                     probe(ui, "Page", ui.clip_rect());
                     let pad = tokens.number("s-8");
                     let side = ((ui.available_width() - 1220.) / 2.).max(pad);
@@ -2486,7 +2493,8 @@ fn show(
                             bottom: pad as i8,
                         })
                         .show(ui, |ui| show_page(ui, tokens, view, tx));
-                });
+                },
+            );
         });
     if view.unapplied() {
         view.comparison = None;
@@ -2717,6 +2725,10 @@ fn show_filename(
         ),
         egui::StrokeKind::Inside,
     );
+    // Shipping `.recording-filename-input:focus-within` rings the whole field.
+    if response.has_focus() {
+        crate::primitives::focus_ring(ui, tokens, field, tokens.number("r-md"));
+    }
     ui.painter().vline(
         format_rect.left(),
         field.y_range().shrink(1.),
@@ -3195,7 +3207,7 @@ fn show_preview_card(
             if scale_changed {
                 scroll = scroll.scroll_offset(egui::Vec2::ZERO);
             }
-            scroll.show(&mut viewport, |ui| {
+            crate::primitives::scroll_area(&mut viewport, tokens, scroll, |ui| {
                 let extent = (size + egui::Vec2::splat(margin * 2.)).max(ui.available_size());
                 let (content, _) = ui.allocate_exact_size(extent, egui::Sense::hover());
                 paint(ui, egui::Rect::from_center_size(content.center(), size));

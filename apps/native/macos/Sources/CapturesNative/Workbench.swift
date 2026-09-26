@@ -126,6 +126,8 @@ final class CaptureButton: NSButton {
         self.title = title
         actionBlock = action
         isBordered = false
+        // The token ring replaces the system focus ring.
+        focusRingType = .none
         setButtonType(.momentaryPushIn)
         target = self
         self.action = #selector(activate)
@@ -273,12 +275,13 @@ final class CaptureButton: NSButton {
         }
         (label as NSString).draw(at: CGPoint(x: startX + iconWidth,
             y: (bounds.height - size.height) / 2), withAttributes: attributes)
-        if window?.firstResponder === self {
-            tokens.color("theme-accent").setStroke()
-            path.lineWidth = 2
-            path.stroke()
-        }
+        // Shipping `.ui-btn:focus-visible`: AppKit only gives a button first
+        // responder through keyboard navigation, so this is focus-visible.
+        if focusRingVisible { drawFocusRing(tokens, in: bounds, radius: radius) }
     }
+
+    /// Keyboard focus in a key window, like shipping `:focus-visible`.
+    var focusRingVisible: Bool { window?.firstResponder === self && isEnabled }
 
     /// Shipping `.screenshot-canvas-bg-chip`: a 14 px swatch, checkered when clear.
     private func drawSwatch(_ color: NSColor, in rect: NSRect) {
@@ -1590,7 +1593,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             return
         }
         let scroll = NSScrollView(frame: NSRect(x: 220, y: 130, width: 752, height: 550))
-        scroll.hasVerticalScroller = true
+        scroll.hasVerticalScroller = true; scroll.useTokenScrollers(tokens)
         scroll.drawsBackground = false
         let table = NSTableView(frame: scroll.bounds)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("capture"))

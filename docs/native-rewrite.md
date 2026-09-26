@@ -93,6 +93,20 @@ are pointer-only there. Feedback (being rebuilt) is not covered. XCTest checks t
 loop orders and wgpu tests inspect the AccessKit tree. VoiceOver, Narrator, Orca and
 physical Full Keyboard Access checks remain open.
 
+Shared UI primitives now follow shipping `base.css` and `primitives.css` on both
+hosts, from one helper per host (`Primitives.swift`, wgpu `primitives.rs`). Keyboard
+focus draws the `--focus-ring-tight` token ring: AppKit `CaptureButton` (Feedback,
+setup, History and notices) uses it in place of a solid accent stroke, and wgpu
+paints it around whichever stock egui control (button, text edit, checkbox…) holds
+focus at the end of each pass unless a custom control drew its own indicator.
+AppKit clips drawing to a view, so its ring sits just inside the control. Scroll
+bars are a 4 pt pill thumb inside a 10 pt bar in `--border-strong` (`--text-faint`
+on hover) over a transparent track. wgpu sets this globally as overlay bars so no
+layout reflows; AppKit uses a token `NSScroller` that keeps the system scroller style,
+so overlay scrollers still fade when idle, and the recovery list no longer forces
+legacy scrollers. Preview stacks hide their scroll bar like `.thumbnail-stack`.
+Physical focus-visibility and scroller checks on macOS and Windows remain open.
+
 Direct region and window overlays (shortcut, tray and screenshot-during-recording)
 now follow the shipping `CaptureOverlay`: no toolbar, a completed region drag
 commits on release, a window/desktop click commits that window or the display,

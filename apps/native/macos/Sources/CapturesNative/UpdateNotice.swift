@@ -624,6 +624,7 @@ final class UpdateNoticeView: NSView {
             let scroll = NSScrollView(frame: NSRect(x: s5, y: innerY, width: innerWidth,
                 height: max(20, box.frame.height - innerY - s5)))
             scroll.drawsBackground = false; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
+            scroll.useTokenScrollers(tokens)
             scroll.borderType = .noBorder
             let list = UpdateNoticeLinkText(frame: NSRect(x: 0, y: 0, width: innerWidth - 4, height: 10), text: text)
             list.linkTextAttributes = [.foregroundColor: tokens.color("text"), .underlineStyle: NSUnderlineStyle.single.rawValue,

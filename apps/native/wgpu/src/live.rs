@@ -4704,6 +4704,10 @@ impl Live {
                         ui.scope_builder(egui::UiBuilder::new().max_rect(card_area), |ui| {
                             egui::ScrollArea::vertical()
                                 .id_salt("preview-stack-scroll")
+                                // Shipping `.thumbnail-stack` hides its scroll bar.
+                                .scroll_bar_visibility(
+                                    egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                )
                                 .auto_shrink([false, false])
                                 .stick_to_bottom(!top_anchor)
                                 .show(ui, |ui| {

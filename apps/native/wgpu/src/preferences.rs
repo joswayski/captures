@@ -800,10 +800,13 @@ impl Preferences {
             top: t.number("s-8") as i8,
             bottom: t.number("s-12") as i8,
         };
-        let output = egui::ScrollArea::vertical()
-            .id_salt("preferences-scroll")
-            .auto_shrink(false)
-            .show(ui, |ui| {
+        let output = crate::primitives::scroll_area(
+            ui,
+            t,
+            egui::ScrollArea::vertical()
+                .id_salt("preferences-scroll")
+                .auto_shrink(false),
+            |ui| {
                 egui::Frame::new().inner_margin(margin).show(ui, |ui| {
                     ui.set_max_width(720. - 2. * t.number("s-8"));
                     ui.spacing_mut().item_spacing.y = 0.;
@@ -818,7 +821,8 @@ impl Preferences {
                     self.about(ui, t);
                     self.paint_find(ui, t);
                 });
-            });
+            },
+        );
         let viewport = output.inner_rect;
         let at_end = output.state.offset.y + viewport.height() >= output.content_size.y - 1.;
         self.active_section = preferences::visible_section(
@@ -2275,6 +2279,7 @@ fn shortcut_recorder(
         egui::StrokeKind::Inside,
     );
     if recording || response.has_focus() {
+        crate::primitives::focus_indicated(ui.ctx());
         painter.rect_stroke(
             rect.expand(2.),
             radius + 2.,

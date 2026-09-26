@@ -6,6 +6,7 @@ use eframe::egui::{
     self, Color32, FontId, Rect, Response, Sense, Stroke, StrokeKind, Vec2, pos2, vec2,
 };
 
+use crate::primitives::focus_ring;
 use crate::tokens::Tokens;
 
 /// `--shadow-sm` for the current appearance.
@@ -42,16 +43,6 @@ fn shadow_xs(ui: &egui::Ui, rect: Rect, radius: f32) -> egui::Shape {
     }
     .as_shape(rect, radius)
     .into()
-}
-
-/// `--focus-ring-tight`: a 2 px accent ring just outside `rect`.
-pub fn focus_ring(ui: &egui::Ui, t: &Tokens, rect: Rect, radius: f32) {
-    ui.painter().rect_stroke(
-        rect.expand(1.),
-        radius + 1.,
-        Stroke::new(2., t.color("theme-accent").gamma_multiply(0.45)),
-        StrokeKind::Outside,
-    );
 }
 
 fn text(ui: &egui::Ui, value: &str, size: f32, color: Color32) -> std::sync::Arc<egui::Galley> {
@@ -590,6 +581,7 @@ pub fn corner_picker(
                 StrokeKind::Inside,
             );
             if response.has_focus() {
+                crate::primitives::focus_indicated(ui.ctx());
                 ui.painter().rect_stroke(
                     corner.expand(2.),
                     corner_radius + 2.,

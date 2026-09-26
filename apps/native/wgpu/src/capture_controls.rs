@@ -853,6 +853,7 @@ fn recording_switch(
         }),
     );
     if response.has_focus() {
+        crate::primitives::focus_indicated(ui.ctx());
         painter.rect_stroke(
             track_rect.expand(2.),
             track.y / 2. + 2.,
@@ -945,6 +946,7 @@ impl NotePiece<'_> {
             painter.rect_filled(rect, tokens.number("r-sm"), tokens.color("glass-hover"));
         }
         if response.has_focus() {
+            crate::primitives::focus_indicated(ui.ctx());
             painter.rect_stroke(
                 rect.expand(2.),
                 tokens.number("r-sm"),

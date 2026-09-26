@@ -312,6 +312,7 @@ final class LiveCaptureController: NSObject {
 
         historyScroll = NSScrollView(frame: NSRect(x: 28, y: 246, width: 944, height: 300))
         historyScroll.hasVerticalScroller = true; historyScroll.autohidesScrollers = true
+        historyScroll.useTokenScrollers(tokens)
         historyScroll.drawsBackground = false
         grid = HistoryGridView(tokens: tokens)
         grid.frame = NSRect(origin: .zero, size: historyScroll.contentSize)
@@ -360,7 +361,7 @@ final class LiveCaptureController: NSObject {
         recoveryPanel.addSubview(recoveryRetryButton)
         recoveryScroll = NSScrollView(frame: NSRect(x: 12, y: 78, width: 920, height: 90))
         recoveryScroll.hasVerticalScroller = true; recoveryScroll.drawsBackground = false
-        recoveryScroll.scrollerStyle = .legacy
+        recoveryScroll.useTokenScrollers(tokens)
         recoveryScroll.setAccessibilityLabel("Interrupted recording details")
         recoveryPanel.addSubview(recoveryScroll)
         recoveryStatus = NSTextField(wrappingLabelWithString: "")

@@ -194,11 +194,14 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, notice: &Notice) -> Option<Actio
                     .strong()
                     .color(tokens.color("glass-text")),
             );
-            egui::ScrollArea::vertical()
-                .id_salt("recording-notice-detail")
-                .max_height(32.)
-                .min_scrolled_height(0.)
-                .show(ui, |ui| {
+            crate::primitives::glass_scroll_area(
+                ui,
+                tokens,
+                egui::ScrollArea::vertical()
+                    .id_salt("recording-notice-detail")
+                    .max_height(32.)
+                    .min_scrolled_height(0.),
+                |ui| {
                     ui.label(
                         RichText::new(notice.error.as_deref().unwrap_or(
                             if notice.saved_path.is_some() {
@@ -211,7 +214,8 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, notice: &Notice) -> Option<Actio
                         .color(tokens.color("glass-text")),
                     )
                     .on_hover_text(notice.error.as_deref().unwrap_or(""));
-                });
+                },
+            );
         },
     );
     let label = if notice.saved_path.is_some() {

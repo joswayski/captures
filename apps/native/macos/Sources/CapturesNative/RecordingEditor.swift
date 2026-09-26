@@ -1237,7 +1237,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
         pageScroll.drawsBackground = false; pageScroll.borderType = .noBorder
         pageScroll.hasVerticalScroller = true; pageScroll.autohidesScrollers = true
-        pageScroll.scrollerStyle = .overlay
+        pageScroll.scrollerStyle = .overlay; pageScroll.useTokenScrollers(tokens)
         pageScroll.contentView.drawsBackground = false
         pageScroll.documentView = page
         pageScroll.setAccessibilityLabel("Recording editor page")
@@ -1294,6 +1294,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         previewActualButton.toolTip = "One decoded image pixel per screen point. Scroll to see overflow; playback may use a reduced-size frame."
         previewScroll.drawsBackground = false; previewScroll.borderType = .noBorder
         previewScroll.scrollerStyle = .overlay; previewScroll.autohidesScrollers = true
+        previewScroll.useTokenScrollers(tokens)
         previewScroll.contentView.drawsBackground = false
         previewScroll.contentView.postsBoundsChangedNotifications = true
         previewScroll.setAccessibilityLabel("Recording preview viewport")
