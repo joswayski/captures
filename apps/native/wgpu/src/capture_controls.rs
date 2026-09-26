@@ -1,3 +1,6 @@
+use captures_app::capture_menu::{
+    self, Guidance, MenuMode, PreferenceTarget, PrimaryState, RecordingToggle,
+};
 use captures_app::selection::{Bounds, Rect};
 use captures_app::shortcuts::CaptureShortcut;
 use captures_capture::{DisplayDescriptor, WindowDescriptor};
@@ -39,6 +42,8 @@ pub enum Action {
     Capture(Target),
     StartRecording(Target),
     SwitchDisplay(String),
+    /// Close the menu and open Preferences at this row, highlighted.
+    OpenPreference(PreferenceTarget),
     Cancel,
 }
 
@@ -51,6 +56,8 @@ pub struct View<'a> {
     pub auto_start: bool,
     pub recording_available: bool,
     pub recording_unavailable_reason: Option<&'a str>,
+    /// A start or display switch failed while the menu stayed open.
+    pub error: Option<&'a str>,
 }
 
 pub struct CaptureControls {
@@ -61,6 +68,8 @@ pub struct CaptureControls {
     recording: RecordingSelection,
     recording_capabilities: RecordingCapabilities,
     microphones: Vec<AudioDevice>,
+    /// Devices enumerate on the recording worker after the menu opens.
+    microphones_loading: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -94,6 +103,7 @@ impl Default for CaptureControls {
             },
             recording_capabilities: RecordingCapabilities::current(false),
             microphones: vec![],
+            microphones_loading: false,
         }
     }
 }
@@ -136,11 +146,13 @@ impl CaptureControls {
                 .flatten(),
             mono_audio: settings.mono_audio,
         };
+        self.microphones_loading = capabilities.microphone;
         self.recording_capabilities = capabilities;
     }
 
     pub fn set_microphones(&mut self, microphones: Vec<AudioDevice>) {
         self.microphones = microphones;
+        self.microphones_loading = false;
     }
 
     pub fn recording_selection(&self) -> RecordingSelection {
@@ -229,16 +241,17 @@ impl CaptureControls {
             width: overlay_width,
             height: overlay_height,
         };
+        let menu_mode = self.menu_mode();
         let mut action = match self.mode {
             TargetMode::Region => self
                 .region
-                .show_surface(ui, tokens, view.frozen, view.auto_start, Some(bounds))
+                .show_menu_surface(ui, tokens, view.frozen, view.auto_start, Some(bounds))
                 .and_then(|action| match action {
                     selector::Action::Confirm => self.current_action(),
                     selector::Action::Cancel => Some(Action::Cancel),
                 }),
             TargetMode::Window => {
-                let target = self.window.show_surface(
+                let target = self.window.show_menu_surface(
                     ui,
                     tokens,
                     &window_selector::View {
@@ -266,6 +279,13 @@ impl CaptureControls {
                         windows: view.windows,
                         auto_start: view.auto_start,
                     },
+                    &capture_menu::display_identity(
+                        &view.display.name,
+                        view.display.width,
+                        view.display.height,
+                        (self.action_mode == ActionMode::Recording)
+                            .then_some(self.recording.frames_per_second),
+                    ),
                 );
                 (clicked && view.auto_start).then(|| self.action_for_target(Target::Display))
             }
@@ -279,6 +299,14 @@ impl CaptureControls {
             action = Some(self.action_for_target(target));
         }
 
+        let primary = capture_menu::primary_action(
+            menu_mode,
+            view.auto_start,
+            PrimaryState {
+                error: view.error.is_some(),
+                ..PrimaryState::default()
+            },
+        );
         let content_rect = ui.ctx().content_rect();
         let panel_bounds = content_rect.shrink(16.);
         let panel = egui::Area::new(view.panel_id)
@@ -408,32 +436,23 @@ impl CaptureControls {
                                         action = Some(Action::SwitchDisplay(display_id));
                                     }
                                 }
-                                if !view.auto_start {
+                                if !primary.hidden {
                                     ui.separator();
                                     let target = self.current_target();
                                     if ui
                                         .add_enabled(
                                             target.is_some(),
                                             egui::Button::new(
-                                                RichText::new(if self.action_mode
-                                                    == ActionMode::Recording
-                                                {
-                                                    "Start recording"
-                                                } else {
-                                                    "Capture"
-                                                })
+                                                RichText::new(primary.label)
                                                     .color(tokens.color("theme-accent-ink")),
                                             )
                                             .fill(tokens.color("theme-accent"))
                                             .stroke(Stroke::NONE),
                                         )
-                                        .on_hover_text(if self.action_mode
-                                            == ActionMode::Recording
-                                        {
-                                            "Start recording (Enter)"
-                                        } else {
-                                            "Take screenshot (Enter)"
-                                        })
+                                        .on_hover_text(format!(
+                                            "{} (Enter)",
+                                            primary.accessibility_label
+                                        ))
                                         .clicked()
                                         && let Some(target) = target
                                     {
@@ -445,35 +464,22 @@ impl CaptureControls {
                                 ui.separator();
                                 self.show_recording_options(ui, tokens);
                             }
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(if self.action_mode == ActionMode::Recording {
-                                        if self.recording_capabilities.controls_excluded {
-                                            "These controls won’t show in recordings"
-                                        } else {
-                                            "These controls will show in recordings"
-                                        }
-                                    } else {
-                                        "These controls won’t show in screenshots"
-                                    })
-                                        .small()
-                                        .color(tokens.color("glass-text-muted")),
-                                );
-                                ui.label(
-                                    RichText::new(if view.auto_start {
-                                        "· Auto-capture is on. Selecting a target starts immediately."
-                                    } else {
-                                        "· Press Enter to confirm"
-                                    })
-                                    .small()
-                                    .color(tokens.color("glass-text-subtle")),
-                                );
-                            });
+                            if let Some(target) = self.show_note(ui, tokens, menu_mode, view.auto_start)
+                            {
+                                action = Some(Action::OpenPreference(target));
+                            }
                             if let Some(reason) = view.recording_unavailable_reason {
                                 ui.label(
                                     RichText::new(reason)
                                         .small()
                                         .color(tokens.color("theme-signal")),
+                                );
+                            }
+                            if let Some(error) = view.error {
+                                ui.label(
+                                    RichText::new(error)
+                                        .small()
+                                        .color(tokens.color("danger-text")),
                                 );
                             }
                         });
@@ -486,6 +492,68 @@ impl CaptureControls {
             }
         }
         action
+    }
+
+    fn menu_mode(&self) -> MenuMode {
+        match self.action_mode {
+            ActionMode::Screenshot => MenuMode::Screenshot,
+            ActionMode::Recording => MenuMode::Recording,
+        }
+    }
+
+    /// Shipping `capture-selector-note`: the capability-driven visibility note
+    /// (linked to its Preferences row when this platform can exclude the
+    /// controls), then the Enter hint or the linked auto-capture notice.
+    fn show_note(
+        &self,
+        ui: &mut egui::Ui,
+        tokens: &Tokens,
+        mode: MenuMode,
+        auto_start: bool,
+    ) -> Option<PreferenceTarget> {
+        let note = capture_menu::visibility_note(
+            mode,
+            self.recording_capabilities.can_exclude_controls,
+            self.recording_capabilities.controls_excluded,
+        );
+        let confirm = capture_menu::confirm_note(auto_start);
+        let hint = note.hint.unwrap_or_default();
+        let pieces = [
+            NotePiece {
+                parts: vec![
+                    (note.lead, false),
+                    (note.emphasis, true),
+                    (note.trail.as_str(), false),
+                    (hint, false),
+                ],
+                target: note.target,
+            },
+            NotePiece {
+                parts: vec![(capture_menu::NOTE_SEPARATOR, false)],
+                target: None,
+            },
+            NotePiece {
+                parts: vec![(confirm.text, false)],
+                target: confirm.target,
+            },
+        ];
+        let gap = tokens.number("s-2");
+        let width = pieces
+            .iter()
+            .map(|piece| piece.size(ui, tokens).x)
+            .sum::<f32>()
+            + gap * (pieces.len() - 1) as f32;
+        let mut opened = None;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            ui.add_space(((ui.available_width() - width) / 2.).max(0.));
+            for piece in &pieces {
+                if piece.show(ui, tokens).clicked() {
+                    opened = piece.target;
+                }
+            }
+        });
+        opened
     }
 
     fn current_target(&self) -> Option<Target> {
@@ -513,117 +581,453 @@ impl CaptureControls {
         }
     }
 
+    /// Shipping `recording-options-row`: labelled FPS / Max resolution selects,
+    /// Show cursor / Show clicks / Desktop audio switches and the microphone.
     fn show_recording_options(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("FPS")
-                    .small()
-                    .color(tokens.color("glass-text-muted")),
-            );
-            egui::ComboBox::from_id_salt("recording-fps")
-                .selected_text(self.recording.frames_per_second.to_string())
-                .show_ui(ui, |ui| {
-                    for fps in [60, 30, 15] {
-                        ui.selectable_value(
-                            &mut self.recording.frames_per_second,
-                            fps,
-                            fps.to_string(),
-                        );
-                    }
-                });
-            ui.label(
-                RichText::new("MAX RESOLUTION")
-                    .small()
-                    .color(tokens.color("glass-text-muted")),
-            );
-            egui::ComboBox::from_id_salt("recording-resolution")
-                .selected_text(match self.recording.max_resolution {
-                    MaxResolution::Original => "Original",
-                    MaxResolution::P1080 => "1080p",
-                    MaxResolution::P720 => "720p",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.recording.max_resolution,
-                        MaxResolution::Original,
-                        "Original",
-                    );
-                    ui.selectable_value(
-                        &mut self.recording.max_resolution,
-                        MaxResolution::P1080,
-                        "1080p",
-                    );
-                    ui.selectable_value(
-                        &mut self.recording.max_resolution,
-                        MaxResolution::P720,
-                        "720p",
-                    );
-                });
-            option_checkbox(
-                ui,
-                "Cursor",
-                &mut self.recording.show_cursor,
-                self.recording_capabilities.cursor_control,
-            );
-            if !self.recording.show_cursor {
-                self.recording.highlight_clicks = false;
-            }
-            option_checkbox(
-                ui,
-                "Clicks",
-                &mut self.recording.highlight_clicks,
-                self.recording_capabilities.click_highlights,
-            );
-            if self.recording.highlight_clicks {
-                self.recording.show_cursor = true;
-            }
-            option_checkbox(
-                ui,
-                "Desktop audio",
-                &mut self.recording.capture_system_audio,
-                self.recording_capabilities.system_audio,
-            );
-            ui.label(
-                RichText::new("MIC")
-                    .small()
-                    .color(tokens.color("glass-text-muted")),
-            );
-            let selected = self.recording.microphone_device_id.clone();
-            let selected_label = selected
-                .as_ref()
-                .and_then(|id| self.microphones.iter().find(|device| &device.id == id))
-                .map_or_else(
-                    || {
-                        if selected.is_some() {
-                            "Selected"
-                        } else {
-                            "Off"
-                        }
-                        .to_owned()
-                    },
-                    |device| device.name.clone(),
-                );
-            ui.add_enabled_ui(self.recording_capabilities.microphone, |ui| {
-                egui::ComboBox::from_id_salt("recording-microphone")
-                    .selected_text(truncate_label(&selected_label, 18))
+        let capabilities = self.recording_capabilities.clone();
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = tokens.number("s-4");
+            field(ui, tokens, capture_menu::FIELD_FPS, 76., |ui| {
+                egui::ComboBox::from_id_salt("recording-fps")
+                    .width(ui.available_width())
+                    .selected_text(self.recording.frames_per_second.to_string())
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.recording.microphone_device_id, None, "Off");
-                        for device in &self.microphones {
+                        for fps in capture_menu::FPS_OPTIONS {
                             ui.selectable_value(
-                                &mut self.recording.microphone_device_id,
-                                Some(device.id.clone()),
-                                &device.name,
+                                &mut self.recording.frames_per_second,
+                                fps,
+                                fps.to_string(),
                             );
                         }
-                    });
+                    })
+                    .response
+                    .on_hover_text(capture_menu::FPS_ACCESSIBILITY_LABEL);
+            });
+            field(ui, tokens, capture_menu::FIELD_MAX_RESOLUTION, 132., |ui| {
+                egui::ComboBox::from_id_salt("recording-resolution")
+                    .width(ui.available_width())
+                    .selected_text(resolution_label(self.recording.max_resolution))
+                    .show_ui(ui, |ui| {
+                        for resolution in [
+                            MaxResolution::Original,
+                            MaxResolution::P1080,
+                            MaxResolution::P720,
+                        ] {
+                            ui.selectable_value(
+                                &mut self.recording.max_resolution,
+                                resolution,
+                                resolution_label(resolution),
+                            );
+                        }
+                    })
+                    .response
+                    .on_hover_text(capture_menu::MAX_RESOLUTION_ACCESSIBILITY_LABEL);
+            });
+            for (toggle, width, available) in [
+                (
+                    RecordingToggle::ShowCursor,
+                    92.,
+                    capabilities.cursor_control,
+                ),
+                (
+                    RecordingToggle::ShowClicks,
+                    92.,
+                    capabilities.click_highlights,
+                ),
+                (
+                    RecordingToggle::DesktopAudio,
+                    118.,
+                    capabilities.system_audio,
+                ),
+            ] {
+                field(ui, tokens, toggle.label(), width, |ui| {
+                    let value = match toggle {
+                        RecordingToggle::ShowCursor => &mut self.recording.show_cursor,
+                        RecordingToggle::ShowClicks => &mut self.recording.highlight_clicks,
+                        RecordingToggle::DesktopAudio => &mut self.recording.capture_system_audio,
+                    };
+                    if recording_switch(ui, tokens, toggle, value, available) {
+                        (self.recording.show_cursor, self.recording.highlight_clicks) =
+                            capture_menu::couple_pointer_options(
+                                toggle,
+                                self.recording.show_cursor,
+                                self.recording.highlight_clicks,
+                            );
+                    }
+                });
+            }
+            let width = ui.available_width().clamp(120., 240.);
+            field(ui, tokens, capture_menu::FIELD_MICROPHONE, width, |ui| {
+                self.show_microphone_select(ui, capabilities.microphone);
             });
         });
     }
+
+    fn show_microphone_select(&mut self, ui: &mut egui::Ui, available: bool) {
+        let devices = self
+            .microphones
+            .iter()
+            .map(|device| (device.id.as_str(), device.name.as_str()))
+            .collect::<Vec<_>>();
+        let selected = self.recording.microphone_device_id.as_deref();
+        let entries = capture_menu::microphone_entries(
+            available,
+            self.microphones_loading,
+            selected,
+            &devices,
+        );
+        let label = capture_menu::microphone_selected_label(
+            available,
+            self.microphones_loading,
+            selected,
+            &devices,
+        );
+        let mut choice = self.recording.microphone_device_id.clone();
+        let width = ui.available_width();
+        ui.add_enabled_ui(available && !self.microphones_loading, |ui| {
+            egui::ComboBox::from_id_salt("recording-microphone")
+                .width(width)
+                .selected_text(truncate_label(&label, 22))
+                .show_ui(ui, |ui| {
+                    for entry in &entries {
+                        ui.add_enabled_ui(entry.enabled, |ui| {
+                            ui.selectable_value(&mut choice, entry.id.clone(), &entry.label);
+                        });
+                    }
+                })
+                .response
+                .on_hover_text(capture_menu::FIELD_MICROPHONE);
+        });
+        self.recording.microphone_device_id = choice;
+    }
 }
 
-fn option_checkbox(ui: &mut egui::Ui, label: &str, value: &mut bool, enabled: bool) {
-    ui.add_enabled(enabled, egui::Checkbox::new(value, label))
-        .on_disabled_hover_text(format!("{label} is unavailable in this desktop session"));
+/// One shipping `recording-field`: an uppercase caption over its control.
+fn field(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    label: &str,
+    width: f32,
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 0.),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_width(width);
+            ui.spacing_mut().item_spacing.y = tokens.number("s-3");
+            // Shipping `.recording-field` renders its caption uppercase.
+            ui.label(
+                RichText::new(label.to_uppercase())
+                    .size(tokens.number("text-2xs"))
+                    .color(tokens.color("glass-text-subtle")),
+            );
+            add(ui);
+        },
+    );
+}
+
+/// Shipping `recording-toggle`: a 30×18 switch and its On/Off/Unavailable text,
+/// with the unavailable reason as a tooltip. Returns true when toggled.
+fn recording_switch(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    toggle: RecordingToggle,
+    value: &mut bool,
+    available: bool,
+) -> bool {
+    let on = available && *value;
+    let status = capture_menu::toggle_status(available, *value);
+    let font = egui::FontId::proportional(tokens.number("text-xs"));
+    let text_width = ui
+        .painter()
+        .layout_no_wrap(
+            status.into(),
+            font.clone(),
+            tokens.color("glass-text-muted"),
+        )
+        .size()
+        .x;
+    let track = egui::vec2(30., 18.);
+    let gap = tokens.number("s-3");
+    let (rect, mut response) = ui.allocate_exact_size(
+        egui::vec2(track.x + gap + text_width, ui.spacing().interact_size.y),
+        if available {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    let changed = available && response.clicked();
+    if changed {
+        *value = !*value;
+        response.mark_changed();
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            available,
+            available && *value,
+            toggle.accessibility_label(),
+        )
+    });
+    let response = if available {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response.on_hover_text(toggle.unavailable_reason())
+    };
+    let on = if changed { available && *value } else { on };
+    let painter = ui.painter();
+    let track_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left(), rect.center().y - track.y / 2.),
+        track,
+    );
+    painter.rect(
+        track_rect,
+        track.y / 2.,
+        if on {
+            tokens.color("theme-accent")
+        } else {
+            egui::Color32::from_black_alpha(89)
+        },
+        if on {
+            Stroke::NONE
+        } else {
+            Stroke::new(1., tokens.color("glass-border-strong"))
+        },
+        egui::StrokeKind::Inside,
+    );
+    painter.circle_filled(
+        egui::pos2(
+            track_rect.left() + 8. + if on { 12. } else { 0. },
+            track_rect.center().y,
+        ),
+        6.,
+        tokens.color(if on {
+            "theme-accent-ink"
+        } else {
+            "glass-text-subtle"
+        }),
+    );
+    if response.has_focus() {
+        painter.rect_stroke(
+            track_rect.expand(2.),
+            track.y / 2. + 2.,
+            Stroke::new(1., tokens.color("theme-accent")),
+            egui::StrokeKind::Outside,
+        );
+    }
+    painter.text(
+        egui::pos2(track_rect.right() + gap, rect.center().y),
+        Align2::LEFT_CENTER,
+        status,
+        font,
+        tokens.color(if available && response.hovered() {
+            "glass-text"
+        } else {
+            "glass-text-muted"
+        }),
+    );
+    changed
+}
+
+fn resolution_label(resolution: MaxResolution) -> &'static str {
+    let key = match resolution {
+        MaxResolution::Original => "original",
+        MaxResolution::P1080 => "p1080",
+        MaxResolution::P720 => "p720",
+    };
+    capture_menu::RESOLUTION_OPTIONS
+        .iter()
+        .find(|(value, _)| *value == key)
+        .map_or("Original", |(_, label)| label)
+}
+
+/// A run of note text; a `target` makes it a Preferences link with the
+/// shipping external-link glyph, hover wash and accent text.
+struct NotePiece<'a> {
+    parts: Vec<(&'a str, bool)>,
+    target: Option<PreferenceTarget>,
+}
+
+impl NotePiece<'_> {
+    const PADDING: egui::Vec2 = egui::vec2(5., 2.);
+    const ICON: f32 = 10.;
+
+    fn galley(
+        &self,
+        ui: &egui::Ui,
+        tokens: &Tokens,
+        hovered: bool,
+    ) -> std::sync::Arc<egui::Galley> {
+        let mut job = egui::text::LayoutJob::default();
+        let font = egui::FontId::proportional(tokens.number("text-xs"));
+        for (text, strong) in &self.parts {
+            let color = if hovered {
+                tokens.color("theme-accent-text-strong")
+            } else if *strong {
+                tokens.color("glass-text")
+            } else {
+                tokens.color("glass-text-subtle")
+            };
+            job.append(text, 0., egui::TextFormat::simple(font.clone(), color));
+        }
+        ui.painter().layout_job(job)
+    }
+
+    fn size(&self, ui: &egui::Ui, tokens: &Tokens) -> egui::Vec2 {
+        let text = self.galley(ui, tokens, false).size();
+        if self.target.is_some() {
+            text + 2. * Self::PADDING + egui::vec2(Self::ICON + 5., 0.)
+        } else {
+            text
+        }
+    }
+
+    fn show(&self, ui: &mut egui::Ui, tokens: &Tokens) -> egui::Response {
+        let size = self.size(ui, tokens);
+        let Some(_) = self.target else {
+            let galley = self.galley(ui, tokens, false);
+            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+            ui.painter()
+                .galley(rect.min, galley, tokens.color("glass-text-subtle"));
+            return response;
+        };
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        let text = self.parts.iter().map(|(text, _)| *text).collect::<String>();
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Link, true, &text));
+        let active = response.hovered() || response.has_focus();
+        let painter = ui.painter();
+        if active {
+            painter.rect_filled(rect, tokens.number("r-sm"), tokens.color("glass-hover"));
+        }
+        if response.has_focus() {
+            painter.rect_stroke(
+                rect.expand(2.),
+                tokens.number("r-sm"),
+                Stroke::new(2., tokens.color("theme-accent")),
+                egui::StrokeKind::Outside,
+            );
+        }
+        let galley = self.galley(ui, tokens, active);
+        let origin = rect.min + Self::PADDING;
+        let icon = egui::Rect::from_min_size(
+            egui::pos2(
+                origin.x + galley.size().x + 5.,
+                rect.center().y - Self::ICON / 2.,
+            ),
+            egui::vec2(Self::ICON, Self::ICON),
+        );
+        painter.galley(origin, galley, tokens.color("glass-text-subtle"));
+        // Shipping `ExternalPreferenceIcon`: an open box with an outward arrow.
+        let color = if active {
+            tokens.color("theme-accent-text-strong")
+        } else {
+            tokens.color("glass-text-subtle").gamma_multiply(0.72)
+        };
+        let stroke = Stroke::new(1., color);
+        let at = |x: f32, y: f32| icon.min + egui::vec2(x, y) * (Self::ICON / 16.);
+        painter.line(
+            vec![
+                at(6.5, 3.),
+                at(3., 3.),
+                at(3., 13.),
+                at(13., 13.),
+                at(13., 9.5),
+            ],
+            stroke,
+        );
+        painter.line(vec![at(9., 3.), at(13., 3.), at(13., 7.)], stroke);
+        painter.line_segment([at(8.5, 7.5), at(13., 3.)], stroke);
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    }
+}
+
+/// Shipping `CaptureGuidance` chip, 16% from the top of the overlay. It hides
+/// while `hidden` (a region drag) and ducks out of the way when the pointer
+/// comes within 28 points, restoring only past a 12-point leave slack.
+pub(crate) fn paint_guidance(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    surface: egui::Rect,
+    guidance: Guidance,
+    hidden: bool,
+) {
+    let painter = ui.painter();
+    let title = painter.layout_no_wrap(
+        guidance.title.into(),
+        egui::FontId::proportional(tokens.number("text-md")),
+        tokens.color("glass-text"),
+    );
+    let hint = painter.layout_no_wrap(
+        guidance.hint.into(),
+        egui::FontId::proportional(tokens.number("text-xs")),
+        tokens.color("glass-text-muted"),
+    );
+    let padding = egui::vec2(tokens.number("s-6"), tokens.number("s-4"));
+    let size = egui::vec2(
+        title.size().x.max(hint.size().x),
+        title.size().y + 2. + hint.size().y,
+    ) + 2. * padding;
+    let chip = egui::Rect::from_min_size(
+        egui::pos2(
+            surface.center().x - size.x / 2.,
+            surface.top() + surface.height() * 0.16,
+        ),
+        size,
+    );
+    let id = egui::Id::unique("capture-guidance-pointer");
+    let was_over = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
+    let over = ui
+        .input(|input| input.pointer.latest_pos())
+        .filter(|_| ui.input(|input| input.pointer.has_pointer()))
+        .is_some_and(|pointer| {
+            capture_menu::pointer_over_guidance(
+                pointer.x.into(),
+                pointer.y.into(),
+                chip.left().into(),
+                chip.top().into(),
+                chip.right().into(),
+                chip.bottom().into(),
+                was_over,
+            )
+        });
+    if over != was_over {
+        ui.data_mut(|data| data.insert_temp(id, over));
+    }
+    let opacity = ui.ctx().animate_bool_with_time(
+        egui::Id::unique("capture-guidance-opacity"),
+        !hidden && !over,
+        tokens.number("dur-3") / 1000.,
+    );
+    if opacity <= 0. {
+        return;
+    }
+    let mut painter = painter.clone();
+    painter.multiply_opacity(opacity);
+    painter.rect(
+        chip,
+        tokens.number("r-xl"),
+        tokens.color("glass-strong"),
+        Stroke::new(1., tokens.color("glass-border-strong")),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(
+        egui::pos2(
+            chip.center().x - title.size().x / 2.,
+            chip.top() + padding.y,
+        ),
+        title,
+        egui::Color32::WHITE,
+    );
+    painter.galley(
+        egui::pos2(
+            chip.center().x - hint.size().x / 2.,
+            chip.bottom() - padding.y - hint.size().y,
+        ),
+        hint,
+        egui::Color32::WHITE,
+    );
 }
 
 fn window_target(target: SelectionTarget) -> Target {
@@ -707,6 +1111,19 @@ mod tests {
         panel_id: egui::Id,
         auto_start: bool,
     ) -> Option<Action> {
+        render(ctx, controls, size, events, panel_id, auto_start, None).0
+    }
+
+    /// One pass; also returns every painted text run with its screen rect.
+    fn render(
+        ctx: &egui::Context,
+        controls: &mut CaptureControls,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+        panel_id: egui::Id,
+        auto_start: bool,
+        error: Option<&str>,
+    ) -> (Option<Action>, Vec<(String, egui::Rect)>) {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
         let display = display();
         let displays = [
@@ -742,12 +1159,53 @@ mod tests {
                 auto_start,
                 recording_available: true,
                 recording_unavailable_reason: None,
+                error,
             },
             |_| None,
         );
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
-        action
+        fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(text) => {
+                    texts.push((text.galley.text().to_owned(), text.visual_bounding_rect()));
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, texts);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            collect(&clipped.shape, &mut texts);
+        }
+        (action, texts)
+    }
+
+    fn painted(texts: &[(String, egui::Rect)], text: &str) -> Option<egui::Rect> {
+        texts
+            .iter()
+            .find(|(painted, _)| painted == text)
+            .map(|(_, rect)| *rect)
+    }
+
+    /// Settle the Area layout and guidance animation, then return painted text.
+    fn settle(
+        controls: &mut CaptureControls,
+        auto_start: bool,
+        error: Option<&str>,
+    ) -> (egui::Context, egui::Id, Vec<(String, egui::Rect)>) {
+        let ctx = egui::Context::default();
+        let panel_id = egui::Id::unique("capture-controls-settle");
+        let size = egui::vec2(1280., 900.);
+        for _ in 0..2 {
+            render(&ctx, controls, size, vec![], panel_id, auto_start, error);
+        }
+        let texts = render(&ctx, controls, size, vec![], panel_id, auto_start, error).1;
+        (ctx, panel_id, texts)
     }
 
     fn run_input(controls: &mut CaptureControls, events: Vec<egui::Event>) -> Option<Action> {
@@ -1098,5 +1556,142 @@ mod tests {
         assert_eq!(display_label(&named), "Built-in Retina Display");
         named.name = " ".into();
         assert_eq!(display_label(&named), "Display");
+    }
+
+    #[test]
+    fn primary_button_follows_shipping_labels_and_auto_start_hide_rule() {
+        let mut controls = CaptureControls::default();
+        let (_, _, texts) = settle(&mut controls, false, None);
+        assert!(painted(&texts, "Capture").is_some());
+        let (_, _, texts) = settle(&mut controls, true, None);
+        assert!(
+            painted(&texts, "Capture").is_none(),
+            "auto-start hides the button"
+        );
+        let (_, _, texts) = settle(&mut controls, true, Some("Display changed"));
+        assert!(painted(&texts, "Retry capture").is_some());
+        assert!(painted(&texts, "Display changed").is_some());
+        controls.action_mode = ActionMode::Recording;
+        let (_, _, texts) = settle(&mut controls, false, None);
+        assert!(painted(&texts, "Start recording").is_some());
+    }
+
+    #[test]
+    fn visibility_note_follows_capabilities_and_links_to_preferences() {
+        let mut controls = CaptureControls::default();
+        let (ctx, panel_id, texts) = settle(&mut controls, true, None);
+        let expected = if cfg!(target_os = "linux") {
+            "These controls will show in screenshots"
+        } else {
+            "These controls won’t show in screenshots"
+        };
+        assert!(painted(&texts, expected).is_some(), "{texts:?}");
+        let auto_start = painted(&texts, capture_menu::AUTO_START_NOTE).expect("auto-start link");
+        let size = egui::vec2(1280., 900.);
+        let position = auto_start.center();
+        render(
+            &ctx,
+            &mut controls,
+            size,
+            vec![
+                egui::Event::PointerMoved(position),
+                pointer_button(position, true),
+            ],
+            panel_id,
+            true,
+            None,
+        );
+        let (action, _) = render(
+            &ctx,
+            &mut controls,
+            size,
+            vec![pointer_button(position, false)],
+            panel_id,
+            true,
+            None,
+        );
+        assert_eq!(
+            action,
+            Some(Action::OpenPreference(
+                PreferenceTarget::AutoStartOnSelection
+            ))
+        );
+        let (_, _, texts) = settle(&mut controls, false, None);
+        assert!(painted(&texts, "Press Enter to confirm").is_some());
+    }
+
+    #[test]
+    fn recording_row_uses_labelled_fields_switch_states_and_microphone_loading() {
+        let mut controls = CaptureControls::recording_fixture();
+        let mut capabilities = RecordingCapabilities::current(false);
+        capabilities.cursor_control = true;
+        capabilities.click_highlights = false;
+        capabilities.microphone = true;
+        controls.configure_recording(&RecordingSettings::default(), capabilities);
+        let (_, _, texts) = settle(&mut controls, false, None);
+        for label in [
+            "FPS",
+            "MAX RESOLUTION",
+            "SHOW CURSOR",
+            "SHOW CLICKS",
+            "DESKTOP AUDIO",
+            "MICROPHONE",
+            "Unavailable",
+            "Off",
+        ] {
+            assert!(
+                painted(&texts, label).is_some(),
+                "{label} missing: {texts:?}"
+            );
+        }
+        assert!(painted(&texts, "Loading microphones…").is_none());
+        controls.recording.microphone_device_id = Some("missing".into());
+        let (_, _, texts) = settle(&mut controls, false, None);
+        assert!(
+            painted(&texts, "Loading microphone…").is_some(),
+            "{texts:?}"
+        );
+        controls.set_microphones(vec![]);
+        let (_, _, texts) = settle(&mut controls, false, None);
+        assert!(
+            painted(&texts, "Selected microphone").is_some(),
+            "{texts:?}"
+        );
+    }
+
+    #[test]
+    fn full_screen_shows_display_identity_with_record_fps() {
+        let mut controls = CaptureControls {
+            mode: TargetMode::Display,
+            ..Default::default()
+        };
+        let (_, _, texts) = settle(&mut controls, false, None);
+        assert!(painted(&texts, "Fixture display").is_some());
+        assert!(painted(&texts, "1000 × 720").is_some());
+        assert!(painted(&texts, "Click to capture this display").is_none());
+        controls.action_mode = ActionMode::Recording;
+        let (_, _, texts) = settle(&mut controls, false, None);
+        assert!(
+            painted(&texts, "1000 × 720 · 60 FPS").is_some(),
+            "{texts:?}"
+        );
+    }
+
+    #[test]
+    fn menu_guidance_uses_shipping_copy_and_hides_after_window_selection() {
+        let mut controls = CaptureControls::default();
+        let (_, _, texts) = settle(&mut controls, false, None);
+        let chip = painted(&texts, "Drag to select a region").expect("region guidance");
+        assert!(painted(&texts, "Shift for square · Esc to cancel").is_some());
+        assert!(
+            (chip.top() - 900. * 0.16).abs() < 24.,
+            "chip at 16%: {chip:?}"
+        );
+        controls.mode = TargetMode::Window;
+        let (_, _, texts) = settle(&mut controls, false, None);
+        assert!(painted(&texts, "Select a window to continue").is_some());
+        controls.window.exercise(0, |_| Some(0));
+        let (_, _, texts) = settle(&mut controls, false, None);
+        assert!(painted(&texts, "Select a window to continue").is_none());
     }
 }
