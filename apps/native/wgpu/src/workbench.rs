@@ -83,6 +83,8 @@ pub struct Workbench {
     permission_dialog_presented: bool,
     root_was_focused: bool,
     tray: Option<Tray>,
+    /// Preferences generation last applied to tray accelerators.
+    tray_shortcuts_generation: u64,
     tray_error: Option<String>,
     startup_notice: Option<crate::startup_notice::Notice>,
     startup_notice_generation: u64,
@@ -188,7 +190,8 @@ impl Workbench {
             .live
             .then(|| Live::new(cc.egui_ctx.clone(), options.history_root.clone()));
         let (tray, tray_error) = if options.live {
-            match Tray::new(cc.egui_ctx.clone()) {
+            // Accelerators refresh once saved settings load (tray_shortcuts_generation).
+            match Tray::new(cc.egui_ctx.clone(), Default::default()) {
                 Ok(tray) => (Some(tray), None),
                 Err(error) => (
                     None,
@@ -261,6 +264,7 @@ impl Workbench {
             permission_dialog_presented: false,
             root_was_focused: false,
             tray,
+            tray_shortcuts_generation: u64::MAX,
             tray_error,
             startup_notice: None,
             startup_notice_generation: 0,
@@ -322,7 +326,6 @@ impl Workbench {
                     live.request_capture(CaptureRequest::NewCapture);
                 }
             }
-            TrayAction::ShowRecordingControls => {}
             TrayAction::CaptureDisplay => {
                 if restored_controls {
                     return;
@@ -346,6 +349,24 @@ impl Workbench {
                 if let Some(live) = &mut self.live {
                     live.request_capture(CaptureRequest::Window);
                 }
+            }
+            TrayAction::RecordRegion | TrayAction::RecordWindow | TrayAction::RecordDisplay => {
+                if restored_controls {
+                    return;
+                }
+                let target = match action {
+                    TrayAction::RecordRegion => crate::capture_controls::TargetMode::Region,
+                    TrayAction::RecordWindow => crate::capture_controls::TargetMode::Window,
+                    _ => crate::capture_controls::TargetMode::Display,
+                };
+                if let Some(live) = &mut self.live {
+                    live.request_capture(CaptureRequest::Recording(target));
+                }
+            }
+            TrayAction::SendFeedback => {
+                self.live_preferences = true;
+                self.preferences_state.open_feedback(ctx);
+                self.show_root(ctx);
             }
             TrayAction::History => {
                 self.live_preferences = false;
@@ -1068,57 +1089,140 @@ impl Workbench {
     }
 }
 
+impl Workbench {
+    /// First-run setup, laid out like the shipping Tauri window.
+    fn setup_ui(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        use crate::onboarding::{self as view, Target};
+        use captures_app::onboarding as shared;
+        let prefs = &mut self.preferences_state;
+        let busy = view::Busy::from_action(prefs.onboarding_busy_action());
+        let presentation = prefs.onboarding_state().map(|state| state.presentation());
+        let error = prefs.onboarding_error().map(str::to_owned);
+        let title = presentation
+            .as_ref()
+            .map_or(shared::copy().title, |p| p.title);
+        view::stage(ui, t, |ui| {
+            ui.spacing_mut().item_spacing.y = t.number("s-3");
+            view::header(ui, t, title, shared::LEDE, true);
+            ui.add_space(t.number("s-7") - t.number("s-3"));
+            ui.spacing_mut().item_spacing.y = t.number("s-5");
+            match view::cards(ui, t, presentation.as_ref(), busy) {
+                Some(Target::Screen) => prefs.request_onboarding_screen(),
+                Some(Target::Microphone) => prefs.request_onboarding_microphone(),
+                None => {}
+            }
+            if view::wayland_session() {
+                view::note(
+                    ui,
+                    t,
+                    "Wayland live capture is not supported yet. Setup does not enable capture on this display server.",
+                );
+            }
+            if let Some(error) = &error {
+                view::error_block(
+                    ui,
+                    t,
+                    &[
+                        &format!("Setup could not continue: {error}"),
+                        "Your settings were left unchanged. Correct the problem, then retry.",
+                    ],
+                );
+            }
+            view::actions(ui, t, |ui| {
+                let ready = presentation.as_ref().is_some_and(|p| p.screen_ready);
+                let finishing =
+                    busy.any && prefs.onboarding_busy_action() == Some(shared::Action::Complete);
+                // Restart is macOS-only (AppKit); a required restart never
+                // enables finishing here.
+                let label = if finishing {
+                    shared::FINISHING
+                } else {
+                    presentation
+                        .as_ref()
+                        .map_or(shared::START, |p| p.primary_label)
+                };
+                let enabled = ready && error.is_none() && !busy.any;
+                if view::primary_button(ui, t, label, enabled, enabled) {
+                    prefs.complete_onboarding();
+                }
+                if error.is_some() && view::secondary_button(ui, t, "Retry setup", !busy.any) {
+                    prefs.retry_onboarding();
+                }
+            });
+        });
+    }
+}
+
+/// Capture permissions over the completed workspace: the setup cards in a
+/// centered card instead of a stock window, with Refresh and Done.
 fn permission_recovery_ui(preferences: &mut Preferences, ctx: &egui::Context, t: &Tokens) {
-    egui::Window::new("Capture permissions")
+    use captures_app::onboarding as shared;
+    let frame = egui::Frame::new()
+        .fill(t.color("surface-canvas"))
+        .stroke(Stroke::new(1., t.color("border")))
+        .corner_radius(t.number("r-xl") as u8)
+        .inner_margin(t.number("s-7") as i8)
+        .shadow(egui::Shadow {
+            offset: [0, 8],
+            blur: 24,
+            spread: 0,
+            color: egui::Color32::from_black_alpha(60),
+        });
+    egui::Window::new(shared::RECOVERY_TITLE)
         .id(egui::Id::unique("permission-recovery-dialog"))
         .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+        .title_bar(false)
         .collapsible(false)
         .resizable(false)
+        .frame(frame)
         .show(ctx, |ui| {
-            ui.set_width(480.);
-            ui.label("Review access used for screenshots, GIFs, and video. Captures only asks the operating system after you choose a request button.");
+            ui.set_width(520.);
+            ui.spacing_mut().item_spacing.y = t.number("s-3");
+            crate::onboarding::header(ui, t, shared::RECOVERY_TITLE, shared::RECOVERY_LEDE, false);
             ui.add_space(t.number("s-4"));
-            if preferences.permission_recovery_busy() {
-                ui.spinner();
-                ui.label("Checking permissions…");
-            } else if let Some(error) = preferences.permission_recovery_error() {
-                ui.colored_label(t.color("danger-text"), format!("Permissions could not be checked: {error}"));
-                ui.label("Your completed setup and settings are unchanged.");
-            } else if let Some(state) = preferences.permission_recovery_state() {
-                let values = (state.screen_recording_required, state.screen_recording_granted,
-                    state.screen_recording_can_request, state.microphone_granted,
-                    state.microphone_can_request);
-                if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some() {
-                    ui.colored_label(t.color("theme-signal"), "Wayland live capture remains unavailable in this build.");
-                } else if values.0 {
-                    ui.label(if values.1 { "Screen recording: allowed" } else { "Screen recording: not allowed" });
-                    if !values.1 {
-                        let label = if values.2 { "Request screen access" } else { "Open Screen Settings" };
-                        if ui.button(label).clicked() { preferences.request_screen_permission(); }
+            let busy =
+                crate::onboarding::Busy::from_action(preferences.permission_recovery_busy_action());
+            let view = preferences
+                .permission_recovery_state()
+                .filter(|_| !busy.any || busy.opening.is_some())
+                .map(|state| state.presentation());
+            if let Some(error) = preferences.permission_recovery_error().map(str::to_owned) {
+                crate::onboarding::error_block(
+                    ui,
+                    t,
+                    &[
+                        &format!("Permissions could not be checked: {error}"),
+                        "Your completed setup and settings are unchanged.",
+                    ],
+                );
+            } else {
+                match crate::onboarding::cards(ui, t, view.as_ref(), busy) {
+                    Some(crate::onboarding::Target::Screen) => {
+                        preferences.request_screen_permission()
                     }
-                } else {
-                    ui.label(if cfg!(target_os = "windows") { "Windows does not require upfront screen access." } else { "X11 does not require upfront screen access." });
+                    Some(crate::onboarding::Target::Microphone) => {
+                        preferences.request_microphone_permission()
+                    }
+                    None => {}
                 }
-                if !cfg!(target_os = "macos") {
-                    ui.label("Microphone: status is not reported on this platform. Choose an audio source when recording.");
-                } else if values.3 {
-                    ui.label("Microphone: allowed");
-                } else if values.4 {
-                    ui.label("Microphone: not allowed");
-                    if ui.button("Request microphone access").clicked() { preferences.request_microphone_permission(); }
-                } else {
-                    ui.label("Microphone: not allowed");
-                    if ui.button("Open Mic Settings").clicked() { preferences.request_microphone_permission(); }
+                if crate::onboarding::wayland_session() {
+                    crate::onboarding::note(
+                        ui,
+                        t,
+                        "Wayland live capture remains unavailable in this build.",
+                    );
                 }
             }
-            ui.add_space(t.number("s-4"));
-            ui.label("Your captures and editors stay open. Refresh status after granting access, then retry your capture. Save your work before manually restarting if your OS requires it.");
-            if ui.add_enabled(!preferences.permission_recovery_busy(), egui::Button::new("Refresh status")).clicked() {
-                preferences.open_permission_recovery();
-            }
-            if ui.add_enabled(!preferences.permission_recovery_busy(), egui::Button::new("Done")).clicked() {
-                preferences.close_permission_recovery();
-            }
+            ui.add_space(t.number("s-3"));
+            crate::onboarding::actions(ui, t, |ui| {
+                if crate::onboarding::primary_button(ui, t, shared::RECOVERY_DONE, !busy.any, false)
+                {
+                    preferences.close_permission_recovery();
+                }
+                if crate::onboarding::secondary_button(ui, t, shared::REFRESH, !busy.any) {
+                    preferences.open_permission_recovery();
+                }
+            });
         });
 }
 
@@ -1285,6 +1389,15 @@ impl eframe::App for Workbench {
                 }
             });
         }
+        let persisted = self.preferences_state.persisted_generation();
+        if let Some(tray) = &mut self.tray
+            && self.tray_shortcuts_generation != persisted
+        {
+            self.tray_shortcuts_generation = persisted;
+            if let Ok(settings) = self.preferences_state.snapshot() {
+                tray.set_shortcuts(crate::tray::MenuShortcuts::from_settings(&settings));
+            }
+        }
         let mut tray_actions = Vec::new();
         if let Some(tray) = &self.tray {
             while let Some(action) = tray.try_recv() {
@@ -1391,45 +1504,8 @@ impl eframe::App for Workbench {
         ui.set_style(ctx.style_of(ctx.theme()));
         if self.live.is_some() && !self.preferences_state.onboarding_complete() {
             egui::CentralPanel::default().show(ui, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(t.number("s-12"));
-                        ui.heading("Welcome to Captures");
-                        ui.add_space(t.number("s-4"));
-                        ui.label("Capture screenshots, GIFs, and video with native tools.");
-                        ui.add_space(t.number("s-6"));
-                        egui::Frame::new()
-                            .fill(t.color("surface-raised"))
-                            .stroke(Stroke::new(1., t.color("border-subtle")))
-                            .corner_radius(t.number("r-xl") as u8)
-                            .inner_margin(t.number("s-6") as i8)
-                            .show(ui, |ui| {
-                                ui.set_max_width(560.);
-                                ui.heading("Your captures stay under your control");
-                                ui.label("Captures only reads the screen when you start a capture. Files and preferences are stored on this computer.");
-                                ui.add_space(t.number("s-4"));
-                                #[cfg(target_os = "windows")]
-                                ui.label("Windows does not require an upfront screen-recording permission. You can choose microphone access when recording.");
-                                #[cfg(target_os = "linux")]
-                                if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-                                    ui.colored_label(t.color("theme-signal"), "Wayland live capture is not supported yet. Setup does not enable capture on this display server.");
-                                } else {
-                                    ui.label("X11 does not require an upfront screen-recording permission. You can choose audio sources when recording.");
-                                }
-                                ui.add_space(t.number("s-6"));
-                                if self.preferences_state.onboarding_pending() {
-                                    ui.add_enabled(false, egui::Button::new("Checking setup…"));
-                                } else if let Some(error) = self.preferences_state.onboarding_error().map(str::to_owned) {
-                                    ui.colored_label(t.color("danger-text"), format!("Setup could not continue: {error}"));
-                                    ui.label("Your settings were left unchanged. Correct the problem, then retry.");
-                                    if ui.button("Retry setup").clicked() {
-                                        self.preferences_state.retry_onboarding();
-                                    }
-                                } else if ui.button("Start capturing").clicked() {
-                                    self.preferences_state.complete_onboarding();
-                                }
-                            });
-                    });
-                });
+                self.setup_ui(ui, &t);
+            });
             self.sync_shortcut_routing();
             if self.options.screenshot.is_some()
                 && !self.screenshot_requested
@@ -1654,7 +1730,7 @@ impl eframe::App for Workbench {
                 Scene::Region => {
                     let texture = self.texture(ui.ctx(), false);
                     let texture = self.texture.as_ref().filter(|image| image.id() == texture);
-                    if let Some(action) = self.region_selector.show(ui, &t, texture, false, None)
+                    if let Some(action) = self.region_selector.show(ui, &t, texture, None)
                         && let Some(event) =
                             apply_region_fixture_action(&mut self.region_selector, action)
                     {

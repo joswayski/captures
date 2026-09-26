@@ -816,7 +816,12 @@ char *captures_recording_request_v1(CapturesRecordingSession *handle,
     const char *request_json, CapturesRecordingIsCurrent is_current, void *context);
 void captures_recording_free_v1(CapturesRecordingSession *handle);
 
-/* Versioned JSON ABI. Operations are load, save, default_path, and theme.
+/* Versioned JSON ABI. Operations are load, save, default_path, theme,
+ * login_item, onboarding, onboarding_copy, and onboarding_presentation.
+ * Onboarding returns {"ok":true,"state":{...,"presentation":{...}}};
+ * onboarding_copy returns the state-independent setup strings as
+ * {"ok":true,"copy":{...}}; onboarding_presentation takes {"state":{...}}
+ * and returns {"ok":true,"presentation":{...}} without any I/O.
  * Theme accepts {"operation":"theme","accent":"#rgb","signal":"#rrggbb",
  * "light":true} and returns {"ok":true,"colors":{...}}.
  * `request_json` must be a non-null, NUL-terminated UTF-8

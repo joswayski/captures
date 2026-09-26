@@ -5,13 +5,16 @@ import CCapturesSettings
 /// New Capture and the direct region/window overlays.
 enum CaptureGuidanceCopy {
     static let regionTitle = "Drag to select a region"
+    /// Shipping feedback after a click that selected nothing (1.8 s).
+    static let regionFeedbackTitle = "Click and drag to select a region"
     static let regionHint = "Shift for square · Esc to cancel"
     static let windowTitle = "Select a window to continue"
     static let hint = "Esc to cancel"
     static let confirm = "Press Enter to confirm"
     static let autoStart = "Auto-capture is on. Selecting a target starts immediately."
 
-    /// Direct overlays keep a confirm step until they commit on release/click.
+    /// Direct overlays commit on release/click; `confirm` is only for fixtures
+    /// and the manual selection mode.
     static func directHint(_ title: String, _ hint: String, confirm: Bool) -> String {
         ([title, hint] + (confirm ? [Self.confirm] : [])).joined(separator: " · ")
     }

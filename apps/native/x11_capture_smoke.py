@@ -226,6 +226,9 @@ def main():
                  ("window", True, 0, False, True)]
         for mode, freeze, countdown, occluded, auto_start in cases:
             prefix = f"{mode}-freeze-{freeze}-countdown-{countdown}-occluded-{occluded}-auto-{auto_start}"
+            # Shipping direct overlays commit on release/click; only the unified
+            # New Capture controls honor "confirm with Enter" (auto-start off).
+            commits = auto_start or not args.controls
             title = "Captures Capture Controls" if args.controls else f"Captures {mode.title()} Selection"
             fixture = cover = None
             if mode == "window":
@@ -273,7 +276,7 @@ def main():
                 else:
                     click(selector, {"region": 492, "window": 568, "display": 653}[target], 811)
 
-            def begin_selection(full_display=False):
+            def begin_selection(full_display=False, select=True):
                 nonlocal checked_toolbar_drag
                 click(root, 341 if args.controls else (575 if mode == "region" else 696), 141)
                 selector = wait(lambda: windows(title), f"{mode} selector")[0]
@@ -281,7 +284,9 @@ def main():
                     raise RuntimeError("capture workspace was not hidden")
                 # Mapping precedes the first GL paint. Do not inject a complete
                 # drag into an unpainted window during cold texture preparation.
-                paint_crop = "1280x96+0+804" if mode == "region" or args.controls else "1280x120+0+0"
+                # Direct region shows centered guidance and no toolbar.
+                paint_crop = ("1280x96+0+804" if args.controls else
+                              "640x120+320+390" if mode == "region" else "1280x120+0+0")
                 wait(lambda: int(run("import", "-window", selector, "-crop", paint_crop,
                                      "-format", "%k", "info:")) > 16, "selector controls paint")
                 if args.controls and mode == "region" and not checked_toolbar_drag:
@@ -314,11 +319,16 @@ def main():
                     return selector
                 if args.controls and mode == "window":
                     select_target(selector, "window")
+                if not select:
+                    return selector
                 if mode == "region":
                     run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window",
                         selector, "140", "180", "sleep", ".1", "mousedown", "1", "sleep", ".2", "mousemove",
-                        "--window", selector, "450", "350", "sleep", ".2", "mouseup", "1")
-                elif not auto_start:
+                        "--window", selector, "450", "350", "sleep", ".2")
+                    if not commits:
+                        run("xdotool", "mouseup", "1")
+                    # Direct overlays hold the drag here; release commits below.
+                elif not commits:
                     # This point belongs to the target even with the covering
                     # window present. Clicking must latch it before Enter.
                     click(selector, 660, 360)
@@ -361,14 +371,16 @@ def main():
                     fixture.paint(capture_index)
                 selector = begin_selection()
                 screenshot(selector, f"{capture_prefix}-selection")
-                if mode == "window" and not auto_start:
+                if mode == "window" and not commits:
                     # Confirm the clicked target, not the later hovered desktop.
                     run("xdotool", "mousemove", "--window", selector, "100", "700", "sleep", ".3")
                     assert entries() == captured, "click captured despite automatic start being disabled"
                 background(1 - capture_index)
                 if fixture:
                     fixture.paint(1 - capture_index)
-                if auto_start:
+                if commits and mode == "region" and not args.controls:
+                    run("xdotool", "mouseup", "1")  # Release commits; no Enter.
+                elif commits:
                     click(selector, 660, 360)  # Deliberately no Enter.
                 else:
                     run("xdotool", "key", "Return")
@@ -412,7 +424,10 @@ def main():
                 selector = begin_selection(full_display=args.controls)
                 screenshot(selector, f"{prefix}-display-selection")
                 background(1)
-                run("xdotool", "key", "Return")
+                if args.controls:
+                    run("xdotool", "key", "Return")
+                else:
+                    click(selector, 660, 360)  # Empty desktop commits the display.
                 new_entries = wait(lambda: entries() - captured, "display capture from window picker")
                 wait(lambda: windows("Captures"), "display capture workspace restored")
                 assert len(new_entries) == 1
@@ -429,8 +444,11 @@ def main():
                 fixture.show()
 
             if fixture and countdown:
-                begin_selection()
-                run("xdotool", "key", "Return")
+                selector = begin_selection()
+                if args.controls:
+                    run("xdotool", "key", "Return")
+                else:
+                    click(selector, 660, 360)
                 wait(lambda: windows("Captures Screenshot Countdown"), "vanishing-target countdown")
                 fixture.hide()
                 wait(lambda: not windows("Captures Screenshot Countdown") and windows("Captures"),
@@ -439,7 +457,7 @@ def main():
                 screenshot(root, f"{prefix}-vanished-target")
                 fixture.show()
 
-            begin_selection()
+            begin_selection(select=args.controls)
             focus = spawn(f"{prefix}-focus", ["xmessage", "-title", "Captures X11 focus fixture",
                                                "-geometry", "220x70+900+20", "Disposable keyboard focus"])
             other = wait(lambda: windows("Captures X11 focus fixture"), "other application")[0]
@@ -451,7 +469,7 @@ def main():
             focus.terminate()
             focus.wait(timeout=5)
 
-            begin_selection()
+            begin_selection(select=args.controls)
             queries = saver.queries
             saver.locked = True
             wait(lambda: saver.queries > queries and not windows(title)

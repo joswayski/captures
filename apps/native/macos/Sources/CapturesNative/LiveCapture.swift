@@ -969,8 +969,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                         throw AppBridgeError.backend("The selected display changed. Select the region again.")
                     }
                     self.regionSession = session
+                    // Shipping direct overlays commit on release; auto-start
+                    // applies only to the New Capture menu.
                     let panel = RegionSelectionPanel(screen: screen, image: image, tokens: self.tokens,
-                        autoStart: preferences.autoStart, confirm: { [weak self] rect in
+                        autoStart: true, confirm: { [weak self] rect in
                             guard let self, self.flowGeneration == generation, self.regionPanel != nil else { return }
                             do {
                                 self.regionRect = rect
@@ -1015,7 +1017,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     self.windowSession = session
                     let panel = WindowSelectionPanel(screen: screen, image: image,
                         targets: session.windows, tokens: self.tokens,
-                        autoStart: preferences.autoStart,
+                        autoStart: true,
                         hitTest: { [weak session] point in session?.hitTest(point) },
                         confirm: { [weak self] target in
                             guard let self, self.flowGeneration == generation, self.windowPanel != nil else { return }
@@ -1224,7 +1226,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                         }
                         self.recordingScreenshotSession = session
                         let panel = RegionSelectionPanel(screen: screen, image: image,
-                            tokens: self.tokens, autoStart: preferences.autoStart,
+                            tokens: self.tokens, autoStart: true,
                             confirm: { [weak self] rect in
                                 guard let self,
                                       self.recordingScreenshotGeneration == generation.uint64Value,

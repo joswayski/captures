@@ -40,6 +40,13 @@ Explorer, physical Finder/Linux file-manager acceptance, accessibility, Wayland
 live capture, signing/notarization, redistributable dependency bundling and update
 installation remain open. No parity gate closes from this development package.
 
+Direct region and window overlays (shortcut, tray and screenshot-during-recording)
+now follow the shipping `CaptureOverlay`: no toolbar, a completed region drag
+commits on release, a window/desktop click commits that window or the display,
+and a click without a region shows "Click and drag to select a region" for 1.8
+seconds. "Automatically start on selection" applies only to the New Capture
+controls, which keep aspect presets and Enter confirmation.
+
 Shortcut, tray and New Capture flows now start on the display under the pointer,
 like the shipping `capture_display_at_point`: wgpu resolves it through the shared
 `XcapBackend::display_id_at_point` and AppKit through `NSEvent.mouseLocation`, and
@@ -83,6 +90,24 @@ are blocked while it is open. Foreground return and Refresh recheck access witho
 prompting. Windows/X11 report no upfront screen grant and unknown microphone status;
 Wayland capture remains gated. Physical revocation/retry, OS prompts and accessibility
 acceptance remain open. No permission or onboarding acceptance gate closes here.
+
+Both hosts now render setup like the shipping `Onboarding.tsx` window: app mark,
+"Welcome to Captures" eyebrow, the per-platform title ("Required permissions" on
+macOS, "You’re ready to capture" elsewhere), the shipping privacy lede, and
+permission cards with icon, description and either an action or a status
+("Granted ✓", "Ready ✓", "Restart required", "Still off"). The macOS-only
+microphone card carries "Optional" and offers Open Settings only after it was
+asked once this launch. The primary action is Start capturing, or Restart Captures
+when macOS needs a relaunch; a static halo stands in for the CTA pulse, so there
+is no motion to reduce. AppKit keeps Refresh status as a secondary action.
+`captures_app::onboarding` derives the copy and per-state decisions once
+(`State::presentation`, `copy()`), exposed to AppKit through the settings JSON ABI
+(`onboarding` responses carry `presentation`; `onboarding_copy` and
+`onboarding_presentation` are I/O-free). Permission recovery reuses the same cards
+in both hosts; the wgpu dialog is a token-styled card instead of a stock egui window.
+Private-X11 onboarding smoke covers the new layout in light/dark; AppKit XCTests
+render setup/recovery states. Physical macOS TCC, Windows presentation, screen
+reader and Wayland acceptance remain open; no onboarding gate closes here.
 
 Both native hosts now connect pointer dragging on the collapsed preview front
 card, separately from click-to-expand. Desktop-coordinate tracking compensates
