@@ -660,7 +660,9 @@ mod tests {
     #[test]
     fn every_motion_and_transition_resolves_against_shipping_tokens() {
         for motion in Motion::ALL {
-            let animation = motion.resolve(&Shipping).expect(motion.name());
+            let animation = motion
+                .resolve(&Shipping)
+                .unwrap_or_else(|| panic!("{}", motion.name()));
             assert!(animation.duration_ms > 0.);
             assert_eq!(animation.frames.first().unwrap().offset, 0.);
             assert_eq!(animation.frames.last().unwrap().offset, 1.);
