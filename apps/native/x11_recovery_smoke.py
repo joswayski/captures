@@ -122,53 +122,58 @@ exec /usr/bin/ffmpeg "$@"
                             "sleep", ".1", "mousedown", "1", "sleep", ".1", "mouseup", "1")
                         time.sleep(.3)
 
+                    def key(name):
+                        run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
+                            "key", name)
+                        time.sleep(.3)
+
                     def screenshot(name):
                         run("import", "-window", window, str(output / f"{appearance}-{name}.png"))
 
                     screenshot("populated")
-                    click(134, 533)  # First bundle's Discard… action (token-font card wraps).
+                    click(918, 380)  # First bundle's Discard… action.
                     screenshot("confirmation")
                     assert digest_tree(video) == video_before
                     run("xdotool", "key", "Escape")
                     time.sleep(.2)
                     assert digest_tree(video) == video_before
-                    click(134, 533)
+                    click(918, 380)
                     click(395, 410)  # Keep recording.
                     assert digest_tree(video) == video_before
-                    click(134, 533)
+                    click(918, 380)
                     click(545, 410)  # Discard permanently.
                     wait(lambda: not video.exists())
                     assert digest_tree(gif) == gif_before
                     assert digest_tree(history) == original_history
                     screenshot("discarded")
                     gate.touch()
-                    click(50, 552)  # Recover the remaining GIF, partly scrolled below the discard notice.
+                    click(834, 403)  # Recover the remaining GIF.
                     wait(entered.exists)
                     screenshot("busy")
-                    click(65, 484)  # Cancel recovery while the encoder is gated.
+                    click(99, 403)  # Cancel recovery while the encoder is gated.
                     wait(lambda: not list(gif.glob(".recovery-*")))
                     gate.unlink()
                     assert digest_tree(gif) == gif_before
                     assert digest_tree(history) == original_history
                     screenshot("cancelled")
-                    click(180, 413)  # Refresh clears the previous action's error.
+                    click(235, 318)  # Refresh clears the previous action's error.
                     history.chmod(0o555)
                     try:
-                        click(50, 533)
+                        click(834, 380)
                         wait(lambda: (gif / "publication-intent-v1.json").exists())
                         time.sleep(.5)
                         assert digest_tree(history) == original_history
                         screenshot("publication-error")
                     finally:
                         history.chmod(0o755)
-                    click(180, 413)
+                    click(235, 318)
                     if appearance == "dark":
                         entered.unlink()
                         gate.touch()
-                    click(50, 533)  # Retry the same publication intent after restoring access.
+                    click(834, 380)  # Retry the same publication intent after restoring access.
                     if appearance == "dark":
                         wait(entered.exists)
-                        click(100, 615)  # A newer History selection must prevent automatic editor focus.
+                        key("Right")  # A newer History card selection must prevent automatic editor focus.
                         gate.unlink()
                     wait(lambda: len(list(history.glob("*/metadata.json"))) == 2)
                     entries = [json.loads(path.read_text()) for path in history.glob("*/metadata.json")]
@@ -186,8 +191,8 @@ exec /usr/bin/ffmpeg "$@"
                         found = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "Recording editor"],
                                                env=env, stdout=subprocess.PIPE, stderr=log, timeout=5)
                         assert found.returncode == 1, "stale recovery completion stole editor focus"
-                        click(100, 615)  # Explicitly select the newly recovered GIF.
-                        click(800, 210)  # Explicit Edit recording.
+                        key("Left")  # Explicitly select the newly recovered (newest) GIF card.
+                        key("Return")  # Open it, like the card's Edit action.
                     editor = run("xdotool", "search", "--sync", "--onlyvisible", "--name", "Recording editor").decode().splitlines()[0]
                     time.sleep(1)
                     run("import", "-window", editor, str(output / f"{appearance}-recovered-editor.png"))
