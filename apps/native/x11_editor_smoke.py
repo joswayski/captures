@@ -2343,7 +2343,7 @@ def main():
             click(editor, 465, 18)  # Fit resets the viewport-center anchor.
             click(editor, 311, 18)  # Left end of the logarithmic slider: 5%.
             shot(editor, "viewport-slider-minimum")
-            # The toolbar and export bar leave x=64..522, y=81..460, center
+            # The toolbar and export bar leave x=64..522, y=89..452, center
             # (293,270.5). The 5% source is 32×18, starting at (277,261.5).
             pixel("viewport-slider-minimum", 278, 263, (40, 110, 166))
             pixel("viewport-slider-minimum", 276, 263, surface)
@@ -2352,7 +2352,7 @@ def main():
             click(editor, 437, 18)  # Right end: 800%, preserving the same anchor.
             shot(editor, "viewport-slider-maximum")
             pixel("viewport-slider-maximum", 66, 150, (40, 110, 166))
-            pixel("viewport-slider-maximum", 520, 455, (40, 110, 166))
+            pixel("viewport-slider-maximum", 520, 450, (40, 110, 166))
             assert not draft.exists(), "slider changes must not create a draft"
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
