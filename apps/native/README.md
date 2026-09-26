@@ -114,10 +114,12 @@ compositor and accessibility acceptance; Wayland remains gated.
 
 Only `--live` creates the macOS menu-bar item or Windows/Linux tray and registers
 the persisted New Capture and region/window/display shortcuts. The menu uses the
-shipping labels and order: New Capture…, Show Recording Controls (native only),
-Screenshot Region/Window/Display, Capture History…, Open Save Location,
-Preferences and Quit Captures. Record items, accelerators, separators on
-Windows/Linux, Send Feedback… and the update item remain open. Closing the root hides it when a usable tray is available; previews and
+shipping labels, order and separators: New Capture…, Screenshot
+Region/Window/Display, Record Region/Window/Display, Capture History…, Open Save
+Location, Preferences, Send Feedback…, a disabled Check for Updates… (signed
+updates are not connected) and Quit Captures. Capture items show the saved
+shortcuts as accelerators where the platform menu displays them (Linux SNI hosts
+may not), and any tray capture action brings hidden recording controls back. Closing the root hides it when a usable tray is available; previews and
 accepted work stay alive.
 Quit cancels pending capture, drains accepted file work and removes shortcuts/tray.
 Timed and framebuffer-screenshot completion also explicitly quit, not hide.
@@ -356,6 +358,8 @@ apps/native/macos/.build/release/CapturesNative --scene hud --appearance light
 apps/native/macos/.build/release/CapturesNative --scene preview
 # Compare identical workbench content using the original per-chip filter strategy:
 apps/native/macos/.build/release/CapturesNative --scene preview --reference-chips
+# Update notice fixture (stub status source; no updater is connected):
+apps/native/macos/.build/release/CapturesNative --scene update --update-state error
 ```
 
 Close each instance before starting another. Cmd+Q quits. Nothing installs into
@@ -371,6 +375,13 @@ and warm dissolve buttons plus Reset. Reduce Motion uses an immediate change.
 `--exercise` runs six scripted actions (appearance changes, history end-to-end
 scroll, HUD pause/resume, or alternating cold/warm dust); `--quit-after 30` exits
 automatically. `--scene idle` creates no visible window.
+`--scene update` opens the update notice in a transparent panel below a
+simulated menu-bar icon. `--update-state` accepts `available`, `single`, `closing`,
+`manual`, `downloading`, `restarting`, `error`, `checking` or `up-to-date`.
+Buttons in the window switch states. Update now and Try again run the shared stub
+through download progress and the restart countdown. Nothing is downloaded,
+installed or relaunched, and links are logged rather than opened. Hide / What’s
+new persists only to an explicit `--settings-file`.
 
 These screens are **not full pixel or functional parity**. Native Preferences
 includes Find, custom colors, persisted defaults and live system appearance.

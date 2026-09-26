@@ -7,6 +7,7 @@ mod editor;
 mod feedback;
 mod live;
 mod mini_preview;
+mod onboarding;
 mod options;
 mod outbound_drag;
 mod preferences;
@@ -24,6 +25,7 @@ mod shortcut_input;
 mod startup_notice;
 mod tokens;
 mod tray;
+mod update_notice;
 mod window_selector;
 #[cfg(target_os = "windows")]
 mod windows_drag;

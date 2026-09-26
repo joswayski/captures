@@ -96,6 +96,14 @@ def main():
         assert found.returncode in (0, 1), found.stderr
         return found.stdout.split()
 
+    def active_window():
+        result = subprocess.run(["xdotool", "getactivewindow"], env=env,
+                                capture_output=True, text=True, timeout=5)
+        # Openbox can temporarily unset _NET_ACTIVE_WINDOW while changing focus.
+        # Keep polling until the expected window actually owns focus.
+        assert result.returncode in (0, 1), result.stderr
+        return result.stdout.strip() if result.returncode == 0 else None
+
     def shot(window, name):
         if window != "root":
             idle(window)
@@ -328,7 +336,7 @@ def main():
                            "four imported artifacts without alias duplicate")
             wait(lambda: len(windows("Recording editor")) == 3 and len(windows("Screenshot editor")) == 1,
                  "mixed recording and screenshot editor routing")
-            wait(lambda: run("xdotool", "getactivewindow").decode().strip() == editor,
+            wait(lambda: active_window() == editor,
                  "final canonical alias refocuses the original GIF editor")
             shot(editor, "external-gif-alias-staged")
             assert gif_metadata.read_bytes() == gif_before_alias, "alias must not republish History"

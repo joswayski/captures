@@ -3007,7 +3007,8 @@ def main():
         outside = save_layers(lambda values: len(values) == 4, "outside shape retained")[-1]
         assert outside["shape"] == "rectangle"
         assert (outside["x"], outside["y"], outside["endX"]) == (60, 411, 120)
-        assert outside["endY"] > outside["y"] > 360
+        # The release point, not one remapped through the grown live preview.
+        assert abs(outside["endY"] - 481) < 1e-6
         stroke_extent = math.ceil(outside["style"]["strokeWidth"] / 2) + 1
         expected_height = math.ceil(max(outside["y"], outside["endY"]) + stroke_extent)
         assert saved(640, expected_height, 0, 0)

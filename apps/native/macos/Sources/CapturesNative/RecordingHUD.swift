@@ -47,7 +47,7 @@ final class RecordingHUDView: NSView {
         defaultNotice = excludedFromCapture
             ? "These controls won’t show in recordings"
             : "These controls will show in recordings · Use Hide controls to keep them out"
-        pauseButton = CaptureButton("Ⅱ", frame: .zero, tokens: tokens, glass: true) {}
+        pauseButton = CaptureButton("", frame: .zero, tokens: tokens, glass: true) {}
         microphoneButton = CaptureButton("", frame: .zero, tokens: tokens, glass: true) {}
         super.init(frame: frame)
         wantsLayer = true
@@ -67,8 +67,14 @@ final class RecordingHUDView: NSView {
         addSubview(noticeLabel)
         showNotice(defaultNotice, warning: false)
 
-        statusDot.frame = NSRect(x: 18, y: 44, width: 9, height: 9)
-        statusDot.wantsLayer = true; statusDot.layer?.cornerRadius = 4.5
+        statusDot.frame = NSRect(x: 17, y: 43, width: 10, height: 10)
+        statusDot.wantsLayer = true; statusDot.layer?.cornerRadius = 5
+        // Shipping `box-shadow: 0 0 0 4px rgba(signal, 0.16)` halo.
+        statusDot.layer?.borderWidth = 0; statusDot.layer?.masksToBounds = false
+        statusDot.layer?.shadowOpacity = 1; statusDot.layer?.shadowRadius = 0
+        statusDot.layer?.shadowOffset = .zero
+        statusDot.layer?.shadowPath = CGPath(ellipseIn: CGRect(x: -4, y: -4, width: 18, height: 18),
+                                             transform: nil)
         addSubview(statusDot)
         timerLabel.frame = NSRect(x: 34, y: 31, width: 68, height: 30)
         timerLabel.font = .monospacedDigitSystemFont(ofSize: 22, weight: .semibold)
@@ -78,16 +84,16 @@ final class RecordingHUDView: NSView {
         statusLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         addSubview(statusLabel)
 
-        let stop = hudButton("■", x: 104, help: "Stop and save") { [weak self] in self?.stop() }
+        let stop = hudButton(.stopSquare, x: 104, help: "Stop and save") { [weak self] in self?.stop() }
         stop.signal = true; stop.setAccessibilityLabel("Stop recording")
         pauseButton.frame = NSRect(x: 144, y: 39, width: 38, height: 34)
         pauseButton.actionBlock = { [weak self] in self?.pauseOrResume() }
         pauseButton.setAccessibilityLabel("Pause recording"); addSubview(pauseButton)
-        let restart = hudButton("↻", x: 184, help: "Restart recording") {
+        let restart = hudButton(.shipping("restart"), x: 184, help: "Restart recording") {
             [weak self] in self?.restart()
         }
         restart.setAccessibilityLabel("Restart recording")
-        let screenshot = hudButton("⌗", x: 224, help: "Take a region screenshot") {
+        let screenshot = hudButton(.shipping("capture"), x: 224, help: "Take a region screenshot") {
             [weak self] in self?.screenshot()
         }
         screenshot.setAccessibilityLabel("Take a region screenshot")
@@ -113,10 +119,10 @@ final class RecordingHUDView: NSView {
         microphoneButton.frame = NSRect(x: 304, y: 39, width: 38, height: 34)
         microphoneButton.actionBlock = { [weak self] in self?.toggleMicrophone() }
         addSubview(microphoneButton)
-        let trash = hudButton("⌫", x: 344, help: "Delete recording") { [weak self] in self?.discard() }
+        let trash = hudButton(.shipping("trash"), x: 344, help: "Delete recording") { [weak self] in self?.discard() }
         trash.setAccessibilityLabel("Delete recording")
         lifecycleButtons = [stop, pauseButton, restart, screenshot, microphoneButton, trash]
-        let hide = hudButton("◉̸", x: 384, help: "Hide controls") {
+        let hide = hudButton(.shipping("hide-controls"), x: 384, help: "Hide controls") {
             [weak self] in self?.hide()
         }
         hide.setAccessibilityLabel("Hide recording controls")
@@ -127,12 +133,31 @@ final class RecordingHUDView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    private func hudButton(_ title: String, x: CGFloat, help: String,
+    private func hudButton(_ icon: CaptureButtonIcon, x: CGFloat, help: String,
                            action: @escaping () -> Void) -> CaptureButton {
-        let button = CaptureButton(title, frame: NSRect(x: x, y: 39, width: 38, height: 34),
+        let button = CaptureButton("", frame: NSRect(x: x, y: 39, width: 38, height: 34),
             tokens: tokens, glass: true, action: action)
+        button.icon = icon
         button.toolTip = help; addSubview(button); return button
     }
+
+    /// Shipping `recording-pulse`: 1.6 s, opacity 0.6 and scale 0.84 at the midpoint.
+    private func setDotPulsing(_ pulsing: Bool) {
+        guard let layer = statusDot.layer else { return }
+        layer.removeAnimation(forKey: "recording-pulse")
+        guard pulsing, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let opacity = CAKeyframeAnimation(keyPath: "opacity")
+        opacity.values = [1, 0.6, 1]
+        let scale = CAKeyframeAnimation(keyPath: "transform.scale")
+        scale.values = [1, 0.84, 1]
+        let group = CAAnimationGroup()
+        group.animations = [opacity, scale]
+        group.duration = 1.6; group.repeatCount = .infinity
+        group.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(group, forKey: "recording-pulse")
+    }
+
+    var dotPulsing: Bool { statusDot.layer?.animation(forKey: "recording-pulse") != nil }
 
     func setPaused(_ paused: Bool, elapsedMilliseconds: UInt64) {
         if self.paused != paused { setMicrophoneLevel(0) }
@@ -144,7 +169,9 @@ final class RecordingHUDView: NSView {
         updateMeterLabel()
         let statusToken: RecordingHUDColorToken = paused ? .themeAccent : .themeSignal
         statusDot.layer?.backgroundColor = tokens.color(statusToken.rawValue).cgColor
-        pauseButton.title = paused ? "▶" : "Ⅱ"
+        statusDot.layer?.shadowColor = tokens.color(statusToken.rawValue).withAlphaComponent(0.16).cgColor
+        setDotPulsing(!paused)
+        pauseButton.icon = .shipping(paused ? "resume" : "pause")
         pauseButton.setAccessibilityLabel(paused ? "Resume recording" : "Pause recording")
         updateTimer()
         timer?.invalidate()
@@ -185,7 +212,9 @@ final class RecordingHUDView: NSView {
         if microphoneMuted != muted || microphoneAvailable != available { setMicrophoneLevel(0) }
         microphoneMuted = muted
         microphoneAvailable = available
-        microphoneButton.icon = .microphone(muted: muted)
+        microphoneButton.icon = .shipping(muted ? "microphone-muted" : "microphone")
+        // Shipping hides the level meter entirely without a selected microphone.
+        meterTrack.isHidden = !available; meterLabel.isHidden = !available
         microphoneButton.selected = muted
         microphoneButton.isEnabled = available && lifecycleActionsEnabled
         let action = muted ? "Unmute microphone" : "Mute microphone"
@@ -266,6 +295,8 @@ final class RecordingHUDPanel: NSPanel {
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear
         hasShadow = false; level = .floating; collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         sharingType = excludedFromCapture ? .none : .readOnly
+        // Shipping `startHudDrag`: the HUD background moves the window; buttons still click.
+        isMovableByWindowBackground = true
         contentView = hud
     }
 }

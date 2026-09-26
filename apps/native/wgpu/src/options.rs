@@ -3,7 +3,9 @@ use std::{path::PathBuf, time::Duration};
 pub const USAGE: &str = "Captures wgpu native host\n\
   --live [--history-root PATH] [--open-media PATH (repeatable; --open-image alias)]\n\
   --live -- FILE... (Open With; everything after -- is a local path)\n\
-  --scene preferences|history|hud|preview|editor|capture-controls|region|window|countdown|idle\n\
+  --scene preferences|history|hud|preview|editor|capture-controls|region|window|update|countdown|idle\n\
+  --update-state available|single|closing|manual|downloading|restarting|error|checking|up-to-date\n\
+  --update-tray top|bottom|none (update scene only; stub status source)\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
   --capture-controls-recording --hud-state unmuted|muted|busy|no-microphone\n\
@@ -25,6 +27,7 @@ pub enum Scene {
     CaptureControls,
     Region,
     Window,
+    Update,
     Countdown,
     Idle,
 }
@@ -38,7 +41,7 @@ pub enum HudState {
 }
 
 impl Scene {
-    pub const VISIBLE: [Self; 8] = [
+    pub const VISIBLE: [Self; 9] = [
         Self::Preferences,
         Self::History,
         Self::Hud,
@@ -47,6 +50,7 @@ impl Scene {
         Self::CaptureControls,
         Self::Region,
         Self::Window,
+        Self::Update,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -58,6 +62,7 @@ impl Scene {
             Self::CaptureControls => "capture-controls",
             Self::Region => "region",
             Self::Window => "window",
+            Self::Update => "update",
             Self::Countdown => "countdown",
             Self::Idle => "idle",
         }
@@ -72,6 +77,7 @@ impl Scene {
             Self::CaptureControls => "New Capture controls",
             Self::Region => "Region selector fixture",
             Self::Window => "Window selector fixture",
+            Self::Update => "Update notice",
             Self::Countdown => "Screenshot countdown",
             Self::Idle => "Hidden window",
         }
@@ -99,6 +105,8 @@ pub struct Options {
     pub appearance_override: bool,
     pub theme_override: bool,
     pub permission_dialog: Option<String>,
+    pub update_state: Option<String>,
+    pub update_tray: Option<crate::update_notice::FixtureTray>,
 }
 
 impl Options {
@@ -123,6 +131,8 @@ impl Options {
             appearance_override: false,
             theme_override: false,
             permission_dialog: None,
+            update_state: None,
+            update_tray: None,
         };
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
@@ -152,6 +162,21 @@ impl Options {
                         .filter(|path| !path.is_empty())
                         .ok_or("Missing media path")?;
                     options.open_media.push(path.into());
+                }
+                "--update-state" => {
+                    let value = args.next().ok_or("Missing update state")?;
+                    if !captures_app::update_notice::FIXTURES.contains(&value.as_str()) {
+                        return Err("Unknown update state".into());
+                    }
+                    options.update_state = Some(value);
+                }
+                "--update-tray" => {
+                    options.update_tray = Some(
+                        crate::update_notice::FixtureTray::parse(
+                            &args.next().ok_or("Missing update tray")?,
+                        )
+                        .ok_or("Update tray must be top, bottom or none")?,
+                    );
                 }
                 "--exercise" => options.exercise = true,
                 "--floating" => options.floating = true,
@@ -232,6 +257,14 @@ impl Options {
             return Err(
                 "Countdown is a static rendering probe; use --live for timing/cancellation".into(),
             );
+        }
+        if (options.update_state.is_some() || options.update_tray.is_some())
+            && options.scene != Scene::Update
+        {
+            return Err("--update-state/--update-tray require --scene update".into());
+        }
+        if options.scene == Scene::Update && options.exercise {
+            return Err("The update notice fixture has no scripted exercise".into());
         }
         if options.live
             && (options.exercise
@@ -402,6 +435,30 @@ mod tests {
             parse(&["--scene", "countdown"]).unwrap().scene,
             Scene::Countdown
         );
+        let update = parse(&[
+            "--scene",
+            "update",
+            "--update-state",
+            "error",
+            "--update-tray",
+            "bottom",
+        ])
+        .unwrap();
+        assert_eq!(update.scene, Scene::Update);
+        assert_eq!(update.update_state.as_deref(), Some("error"));
+        assert_eq!(
+            update.update_tray,
+            Some(crate::update_notice::FixtureTray::Bottom)
+        );
+        for args in [
+            vec!["--update-state", "error"],
+            vec!["--scene", "update", "--update-state", "unknown"],
+            vec!["--scene", "update", "--update-tray", "left"],
+            vec!["--scene", "update", "--exercise"],
+            vec!["--live", "--scene", "update"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
         assert_eq!(
             parse(&["--screenshot", "test.png"]).unwrap().quit_after,
             Some(Duration::from_secs(16))

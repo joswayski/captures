@@ -13,6 +13,7 @@ pub mod editor_render;
 pub mod editor_session;
 pub mod editor_text;
 pub mod editor_viewport;
+pub mod icons;
 pub mod login_item;
 pub mod onboarding;
 pub mod preview;
@@ -23,6 +24,7 @@ pub mod region;
 pub mod selection;
 pub mod shortcuts;
 pub mod tray_notice;
+pub mod update_notice;
 pub mod window;
 
 pub use captures_session::instance;

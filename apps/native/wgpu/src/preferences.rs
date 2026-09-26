@@ -278,13 +278,17 @@ pub struct Preferences {
     login_error: Option<String>,
     onboarding: Option<captures_app::onboarding::State>,
     onboarding_error: Option<String>,
-    onboarding_busy: bool,
+    /// The in-flight setup request, if any.
+    onboarding_busy: Option<captures_app::onboarding::Action>,
     permission_recovery_open: bool,
     permission_recovery: Option<captures_app::onboarding::State>,
     permission_recovery_error: Option<String>,
-    permission_recovery_busy: bool,
+    permission_recovery_busy: Option<captures_app::onboarding::Action>,
     system_reduced_motion: bool,
     motion_pending: bool,
+    /// Microphones for the Default microphone select, enumerated off the UI thread.
+    microphones: Option<Vec<(String, String)>>,
+    microphones_rx: Option<Receiver<Vec<(String, String)>>>,
 }
 
 impl Preferences {
@@ -349,13 +353,15 @@ impl Preferences {
             login_error: None,
             onboarding: None,
             onboarding_error: None,
-            onboarding_busy: true,
+            onboarding_busy: Some(captures_app::onboarding::Action::Check),
             permission_recovery_open: false,
             permission_recovery: None,
             permission_recovery_error: None,
-            permission_recovery_busy: false,
+            permission_recovery_busy: None,
             system_reduced_motion: false,
             motion_pending: false,
+            microphones: None,
+            microphones_rx: None,
         }
     }
 
@@ -413,7 +419,8 @@ impl Preferences {
     }
 
     pub fn onboarding_pending(&self) -> bool {
-        self.onboarding_busy || (self.onboarding.is_none() && self.onboarding_error.is_none())
+        self.onboarding_busy.is_some()
+            || (self.onboarding.is_none() && self.onboarding_error.is_none())
     }
 
     pub fn onboarding_error(&self) -> Option<&str> {
@@ -429,14 +436,30 @@ impl Preferences {
         self.send_onboarding(captures_app::onboarding::Action::Complete);
     }
 
+    pub fn request_onboarding_screen(&mut self) {
+        self.send_onboarding(captures_app::onboarding::Action::RequestScreen);
+    }
+
+    pub fn request_onboarding_microphone(&mut self) {
+        self.send_onboarding(captures_app::onboarding::Action::RequestMicrophone);
+    }
+
+    pub fn onboarding_state(&self) -> Option<&captures_app::onboarding::State> {
+        self.onboarding.as_ref()
+    }
+
+    pub fn onboarding_busy_action(&self) -> Option<captures_app::onboarding::Action> {
+        self.onboarding_busy
+    }
+
     fn send_onboarding(&mut self, action: captures_app::onboarding::Action) {
-        if self.onboarding_busy {
+        if self.onboarding_busy.is_some() {
             return;
         }
-        self.onboarding_busy = true;
+        self.onboarding_busy = Some(action);
         self.onboarding_error = None;
         if self.io.tx.send(Command::Onboarding(action)).is_err() {
-            self.onboarding_busy = false;
+            self.onboarding_busy = None;
             self.onboarding_error =
                 Some("Setup service is unavailable. Restart Captures to retry.".into());
         }
@@ -449,7 +472,7 @@ impl Preferences {
 
     pub fn show_permission_recovery_error_fixture(&mut self) {
         self.permission_recovery_open = true;
-        self.permission_recovery_busy = false;
+        self.permission_recovery_busy = None;
         self.permission_recovery = None;
         self.permission_recovery_error = Some("Permission check fixture failed.".into());
     }
@@ -466,7 +489,12 @@ impl Preferences {
         self.permission_recovery_error.as_deref()
     }
 
+    #[cfg(test)]
     pub fn permission_recovery_busy(&self) -> bool {
+        self.permission_recovery_busy.is_some()
+    }
+
+    pub fn permission_recovery_busy_action(&self) -> Option<captures_app::onboarding::Action> {
         self.permission_recovery_busy
     }
 
@@ -479,7 +507,7 @@ impl Preferences {
     }
 
     pub fn close_permission_recovery(&mut self) {
-        if !self.permission_recovery_busy {
+        if self.permission_recovery_busy.is_none() {
             self.permission_recovery_open = false;
             self.permission_recovery = None;
             self.permission_recovery_error = None;
@@ -487,11 +515,11 @@ impl Preferences {
     }
 
     fn send_permission_recovery(&mut self, action: captures_app::onboarding::Action) {
-        if self.permission_recovery_busy {
+        if self.permission_recovery_busy.is_some() {
             return;
         }
         debug_assert_ne!(action, captures_app::onboarding::Action::Complete);
-        self.permission_recovery_busy = true;
+        self.permission_recovery_busy = Some(action);
         self.permission_recovery_error = None;
         if self
             .io
@@ -499,7 +527,7 @@ impl Preferences {
             .send(Command::PermissionRecovery(action))
             .is_err()
         {
-            self.permission_recovery_busy = false;
+            self.permission_recovery_busy = None;
             self.permission_recovery_error =
                 Some("Permission service is unavailable. Reopen Captures to retry.".into());
         }
@@ -522,6 +550,18 @@ impl Preferences {
     }
     pub fn flush(&mut self) {
         self.io.flush();
+    }
+
+    /// The update notice's Hide / What's new toggle persists like shipping.
+    pub fn set_show_update_changelog(&mut self, show: bool) {
+        if !self.value.is_null() {
+            self.set(&["show_update_changelog"], json!(show));
+        }
+    }
+
+    /// Tray "Send Feedback…": show the feedback form in Preferences.
+    pub fn open_feedback(&mut self, ctx: &egui::Context) {
+        self.feedback.open(ctx);
     }
 
     pub fn persisted_generation(&self) -> u64 {
@@ -590,7 +630,7 @@ impl Preferences {
                     }
                 }
                 Message::Onboarding(result) => {
-                    self.onboarding_busy = false;
+                    self.onboarding_busy = None;
                     match result {
                         Ok(state) => {
                             self.onboarding = Some(state);
@@ -600,7 +640,7 @@ impl Preferences {
                     }
                 }
                 Message::PermissionRecovery(result) => {
-                    self.permission_recovery_busy = false;
+                    self.permission_recovery_busy = None;
                     match result {
                         Ok(state) => {
                             self.permission_recovery = Some(state);
@@ -1176,15 +1216,7 @@ impl Preferences {
             let response = ui
                 .vertical(|ui| {
                     ui.set_width(230.);
-                    let label = if keys.is_empty() {
-                        "Press shortcut…".to_owned()
-                    } else {
-                        keys.join("  +  ")
-                    };
-                    let response = ui.add_sized(
-                        [230., t.number("h-md")],
-                        egui::Button::new(label).selected(recording),
-                    );
+                    let response = shortcut_recorder(ui, t, field.label(), &keys, recording);
                     if let Some(error) = &error {
                         ui.colored_label(t.color("danger-text"), error);
                     }
@@ -1313,12 +1345,90 @@ impl Preferences {
             ui.separator();
             this.combo(ui,&["recording","countdown_seconds"],"Countdown","Delay before a recording starts.",&countdowns());
             ui.separator();
-            this.row(ui,"Default microphone","Choose a microphone in New Capture.",|_,ui| { ui.add_enabled(false,egui::Button::new("Unavailable")); });
+            this.microphone_combo(ui);
             for (key,title,desc) in [("capture_system_audio","Record desktop audio","Records sound playing through the system output."),("mono_audio","Export recording audio in mono",""),("show_cursor","Show cursor in recordings",""),("highlight_clicks","Show clicks in recordings",""),("open_editor_after_recording","Open the editor after recording","The recording is kept in Capture History for 30 days, so closing the editor never loses it.")] {
                 ui.separator(); this.toggle(ui,&["recording",key],title,desc,true);
             }
         });
     }
+    /// Shipping Default microphone select: Off, then each input device. A saved
+    /// device that is not connected stays selectable by its id. Devices are
+    /// enumerated off the UI thread the first time the menu opens, because
+    /// ALSA/PulseAudio probing can be slow or start an audio daemon.
+    fn microphone_combo(&mut self, ui: &mut egui::Ui) {
+        if let Some(devices) = self
+            .microphones_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
+            self.microphones = Some(devices);
+            self.microphones_rx = None;
+        }
+        let path = ["recording", "microphone_device_id"];
+        let saved = at(&self.value, &path)
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let mut options = vec![(None, "Off".to_owned())];
+        options.extend(
+            self.microphones
+                .iter()
+                .flatten()
+                .map(|(id, name)| (Some(id.clone()), name.clone())),
+        );
+        if let Some(saved) = &saved
+            && !options.iter().any(|(id, _)| id.as_ref() == Some(saved))
+        {
+            options.push((Some(saved.clone()), saved.clone()));
+        }
+        let loading = self.microphones.is_none();
+        let mut open_requested = false;
+        let mut chosen = None;
+        self.row(
+            ui,
+            "Default microphone",
+            "Used when a recording starts with microphone audio.",
+            |_, ui| {
+                egui::ComboBox::from_id_salt(path.join("."))
+                    .width(160.)
+                    .selected_text(
+                        options
+                            .iter()
+                            .find(|(id, _)| *id == saved)
+                            .map_or_else(|| "Off".to_owned(), |(_, label)| label.clone()),
+                    )
+                    .show_ui(ui, |ui| {
+                        open_requested = true;
+                        for (id, label) in &options {
+                            if ui.selectable_label(*id == saved, label).clicked() {
+                                chosen = Some(id.clone());
+                            }
+                        }
+                        if loading {
+                            ui.add_enabled(false, egui::Label::new("Finding microphones…"));
+                        }
+                    });
+            },
+        );
+        if open_requested && loading && self.microphones_rx.is_none() {
+            let (tx, rx) = mpsc::channel();
+            let wake = ui.ctx().clone();
+            std::thread::spawn(move || {
+                let devices = captures_recording_platform::microphone_devices()
+                    .into_iter()
+                    .map(|device| (device.id, device.name))
+                    .collect();
+                let _ = tx.send(devices);
+                wake.request_repaint_of(egui::ViewportId::ROOT);
+            });
+            self.microphones_rx = Some(rx);
+        }
+        if let Some(id) = chosen
+            && id != saved
+        {
+            self.set(&path, id.map_or(Value::Null, Value::String));
+        }
+    }
+
     fn gif(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         self.card(
             ui,
@@ -1425,6 +1535,95 @@ pub(crate) fn shortcut_platform() -> ShortcutPlatform {
     return ShortcutPlatform::Macos;
     #[allow(unreachable_code)]
     ShortcutPlatform::Linux
+}
+
+/// Shipping `.shortcut-recorder`: a field with `<kbd>` key chips, or the
+/// "Press shortcut…" prompt while empty.
+fn shortcut_recorder(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    label: &str,
+    keys: &[String],
+    recording: bool,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(230., t.number("h-md")), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, recording, label)
+    });
+    let radius = t.number("r-md");
+    let border = if recording || response.has_focus() {
+        t.color("theme-accent")
+    } else if response.hovered() {
+        t.color("border-strong")
+    } else {
+        t.color("control-border")
+    };
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        radius,
+        t.color("surface-field"),
+        egui::Stroke::new(1., border),
+        egui::StrokeKind::Inside,
+    );
+    if recording || response.has_focus() {
+        painter.rect_stroke(
+            rect.expand(2.),
+            radius + 2.,
+            egui::Stroke::new(2., t.color("theme-accent").gamma_multiply(0.35)),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let mut x = rect.left() + t.number("s-4");
+    if keys.is_empty() {
+        let prompt = painter.layout_no_wrap(
+            "Press shortcut…".into(),
+            egui::FontId::proportional(t.number("text-sm")),
+            t.color("text-faint"),
+        );
+        painter.galley(
+            egui::pos2(x, rect.center().y - prompt.size().y / 2.),
+            prompt,
+            t.color("text-faint"),
+        );
+        return response;
+    }
+    for key in keys {
+        let text = painter.layout_no_wrap(
+            key.clone(),
+            egui::FontId::proportional(t.number("text-2xs")),
+            t.color("text-muted"),
+        );
+        let size = egui::vec2((text.size().x + 10.).max(20.), text.size().y + 6.);
+        let chip = egui::Rect::from_min_size(egui::pos2(x, rect.center().y - size.y / 2.), size);
+        if chip.right() > rect.right() - t.number("s-4") {
+            break;
+        }
+        let chip_radius = t.number("r-xs");
+        painter.rect(
+            chip,
+            chip_radius,
+            t.color("surface-raised"),
+            egui::Stroke::new(1., t.color("border")),
+            egui::StrokeKind::Inside,
+        );
+        // `border-bottom-width: 2px`
+        painter.line_segment(
+            [
+                chip.left_bottom() + egui::vec2(chip_radius, -1.5),
+                chip.right_bottom() + egui::vec2(-chip_radius, -1.5),
+            ],
+            egui::Stroke::new(1., t.color("border")),
+        );
+        painter.galley(
+            chip.center() - text.size() / 2. - egui::vec2(0., 1.),
+            text,
+            t.color("text-muted"),
+        );
+        x = chip.right() + t.number("s-3");
+    }
+    response
 }
 
 fn choices(values: &[(&str, &str)]) -> Vec<(Value, String)> {
@@ -1938,7 +2137,7 @@ mod tests {
 
         prefs.permission_recovery_open = true;
         prefs.permission_recovery = Some(captures_app::onboarding::State {
-            platform: "test",
+            platform: "test".into(),
             onboarding_completed: true,
             screen_recording_required: true,
             screen_recording_granted: false,
@@ -1946,6 +2145,7 @@ mod tests {
             screen_recording_requested_this_launch: true,
             microphone_granted: false,
             microphone_can_request: false,
+            microphone_requested_this_launch: false,
         });
         prefs.close_permission_recovery();
         assert!(!prefs.permission_recovery_open(), "Done works while denied");

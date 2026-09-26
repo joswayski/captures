@@ -187,10 +187,10 @@ types regardless of the selected filter, and keeps exported files and recovery d
 It uses separate development data; Wayland capture is gated
 until the candidate can hide its window reliably. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
-in a separate development settings file. Fresh native profiles show setup before
-capture or opening queued media. macOS offers explicit Screen Recording and
-optional Microphone access, Settings links, and a permission restart; Windows/X11
-do not require upfront screen access. Setup does not enable Wayland capture.
+in a separate development settings file. Fresh native profiles show the shipping
+setup screen before capture or opening queued media. macOS offers explicit Screen
+Recording and optional Microphone access, Settings links, and a permission restart;
+Windows/X11 show screen capture as ready and do not require upfront screen access. Setup does not enable Wayland capture.
 Finishing setup, or a hidden launch into the menu bar or tray, briefly shows a
 "Captures is ready to use" notice with the New Capture shortcut.
 The native workspace now applies
@@ -387,6 +387,9 @@ hosts offer counted All, Screenshots, Video and GIF history filters; filtering
 does not delete captures or exports. After finalization, a temporary **Recording ready**
 notice offers Save file, then Show in Folder after saving a permanent copy. Dismissing
 or letting it expire preserves History and exports; failed saves can be retried.
+Both native workbenches also render the Preview update notice (release notes,
+download progress, restart countdown and errors) from a simulated status source.
+Native builds cannot check for, download or install updates yet.
 The AppKit History view enables **Edit screenshot** for screenshots only. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
@@ -664,7 +667,7 @@ Custom shadows and pinned-font named styles are connected, including style/size/
 choices for new text. Font import and physical input/IME/accessibility acceptance
 remain open.
 The native capture workspace includes a **Capture permissions** recovery dialog
-(**Screen access** on macOS). Check or refresh without prompting; request macOS
+(**Screen access** on macOS) that reuses the setup permission cards. Check or refresh without prompting; request macOS
 screen or optional microphone access explicitly. Done returns to the workspace
 even after denial or a check failure, without restarting or closing editors.
 Windows/X11 need no upfront screen grant; microphone status is not reported there.

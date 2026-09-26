@@ -1,6 +1,7 @@
 mod editor;
 mod editor_export;
 mod feedback;
+mod icons;
 mod instance;
 mod preview;
 mod recording;
@@ -12,6 +13,7 @@ mod region;
 mod selection;
 mod shortcuts;
 mod tray_notice;
+mod update_notice;
 mod window;
 
 use captures_settings::AppSettings;
@@ -203,6 +205,10 @@ enum Request {
         path: String,
         action: captures_app::onboarding::Action,
     },
+    OnboardingCopy,
+    OnboardingPresentation {
+        state: Box<captures_app::onboarding::State>,
+    },
 }
 
 fn response(request: *const c_char) -> Value {
@@ -233,8 +239,19 @@ fn response(request: *const c_char) -> Value {
             .lock()
             .map_err(|_| "The onboarding service is unavailable. Restart Captures.".to_owned())
             .and_then(|mut session| session.execute(Path::new(&path), action))
-            .map(|state| json!({"ok":true,"state":state}))
+            .map(|state| {
+                // Hosts render the shared presentation instead of re-deriving copy.
+                let mut value = json!(state);
+                value["presentation"] = json!(state.presentation());
+                json!({"ok":true,"state":value})
+            })
             .unwrap_or_else(|error| json!({"ok":false,"error":error})),
+        Ok(Request::OnboardingPresentation { state }) => {
+            json!({"ok":true,"presentation":state.presentation()})
+        }
+        Ok(Request::OnboardingCopy) => {
+            json!({"ok":true,"copy":captures_app::onboarding::copy()})
+        }
         Ok(Request::LoginItem {
             history_root,
             settings_file,
@@ -343,9 +360,48 @@ mod tests {
                 assert_eq!(result["state"]["onboarding_completed"], false);
                 assert_eq!(result["state"]["platform"], std::env::consts::OS);
                 assert!(result["state"]["screen_recording_required"].is_boolean());
+                let presentation = &result["state"]["presentation"];
+                assert!(presentation["title"].is_string());
+                assert!(presentation["screen_ready"].is_boolean());
+                assert!(presentation["primary_label"].is_string());
             }
             assert!(!path.exists());
         }
+    }
+
+    #[test]
+    fn onboarding_copy_abi_is_available_without_a_settings_path() {
+        let input = CString::new(r#"{"operation":"onboarding_copy"}"#).unwrap();
+        let pointer = unsafe { captures_settings_request_v1(input.as_ptr()) };
+        let result: Value =
+            serde_json::from_slice(unsafe { CStr::from_ptr(pointer) }.to_bytes()).unwrap();
+        unsafe { captures_settings_free_v1(pointer) };
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["copy"]["eyebrow"], "Welcome to Captures");
+        assert_eq!(result["copy"]["lede"], captures_app::onboarding::LEDE);
+        assert_eq!(result["copy"]["refresh"], "Refresh status");
+
+        let input = CString::new(
+            json!({"operation":"onboarding_presentation","state":{
+                "platform":"macos","onboarding_completed":false,
+                "screen_recording_required":true,"screen_recording_granted":false,
+                "screen_recording_can_request":false,
+                "screen_recording_requested_this_launch":true,
+                "microphone_granted":false,"microphone_can_request":false}})
+            .to_string(),
+        )
+        .unwrap();
+        let pointer = unsafe { captures_settings_request_v1(input.as_ptr()) };
+        let result: Value =
+            serde_json::from_slice(unsafe { CStr::from_ptr(pointer) }.to_bytes()).unwrap();
+        unsafe { captures_settings_free_v1(pointer) };
+        assert_eq!(result["ok"], true);
+        let presentation = &result["presentation"];
+        assert_eq!(presentation["title"], "Required permissions");
+        assert_eq!(presentation["restart_required"], true);
+        assert_eq!(presentation["primary_label"], "Restart Captures");
+        assert_eq!(presentation["screen_status"]["label"], "Restart required");
+        assert_eq!(presentation["microphone_action"], "Allow microphone");
     }
 
     #[test]

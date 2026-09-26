@@ -13,9 +13,10 @@ use an explicit test file. Screenshots and scripted exercises without that flag
 use disposable settings. `--live` opts into the shared Rust New Capture controls
 plus direct full-display, region and window PNG, history, copy, export and delete
 flows; see the [live slice and limits](../README.md#live-display-capture-slice).
-Live mode also provides a native tray menu with the shipping labels: New Capture…,
-Show Recording Controls, Screenshot Region/Window/Display, Capture History…,
-Open Save Location, Preferences and Quit Captures. Its persisted
+Live mode also provides a native tray menu with the shipping labels and order:
+New Capture…, Screenshot Region/Window/Display, Record Region/Window/Display,
+Capture History…, Open Save Location, Preferences, Send Feedback…, a disabled
+Check for Updates… and Quit Captures. Its persisted
 display, region, window, recording and New Capture shortcuts work globally except while
 capture is unavailable or a focused Preferences window is editing them. All seven
 shortcut rows can be edited from Preferences with
@@ -260,6 +261,7 @@ apps/native/wgpu/target/release/captures-wgpu-workbench --scene editor
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene region --exercise
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene window --exercise
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene capture-controls --capture-controls-recording
+apps/native/wgpu/target/release/captures-wgpu-workbench --scene update --update-state available --update-tray top
 ```
 
 Appearance: `--appearance system|light|dark`; palettes: `--theme cobalt` (or any
@@ -288,6 +290,7 @@ quits so the process cannot be stranded. Opening the output folder also requires
 | Capture Controls | Unified Screenshot/Record and Region/Window/Full screen controls over one prepared session; recording options, frozen/live previews, aspect/display pickers, keyboard confirm/cancel and draggable toolbar | Fixture uses synthetic pixels; real recording editing/export is a separate History action |
 | Region | Deterministic blank/draw/move/corner-resize/aspect/Shift/cancel selector fixture using the live component | Fixture uses synthetic pixels and does not request screen permission |
 | Window | Deterministic blank/frontmost-overlap/window/shell/display/cancel fixture using the live component and shared hit testing | Fixture uses synthetic pixels and does not request screen permission |
+| Update notice | Shared `captures_app::update_notice` copy for available/stacked notes, Hide / What’s new, open-captures warning, downloading, restart countdown, error/Try again, checking and up to date; `--update-state` picks the starting status and `--update-tray top\|bottom\|none` the tray position used for shared placement. The notice opens in its own transparent window with a caret. Escape dismisses it unless busy. | Stub status source only: no updater, download, install or relaunch; links are reported, not opened. Real tray-icon placement is not connected |
 | Idle | Hidden native window; no scheduled application work except optional quit deadline | Process/GPU teardown after last window; production tray lifecycle |
 
 The current screens are token-styled fixtures, not pixel-parity reproductions.

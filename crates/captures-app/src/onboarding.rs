@@ -3,7 +3,7 @@
 //! Checking access never displays an OS prompt. Restart and window ownership
 //! belong to the host, not this service.
 
-use std::path::Path;
+use std::{borrow::Cow, path::Path};
 
 use captures_settings::AppSettings;
 use serde::{Deserialize, Serialize};
@@ -17,9 +17,11 @@ pub enum Action {
     Complete,
 }
 
-#[derive(Debug, Serialize)]
+/// Deserializable so a host can ask for the presentation of a state snapshot
+/// (`onboarding_presentation`), e.g. in its own UI tests.
+#[derive(Debug, Deserialize, Serialize)]
 pub struct State {
-    pub platform: &'static str,
+    pub platform: Cow<'static, str>,
     pub onboarding_completed: bool,
     pub screen_recording_required: bool,
     pub screen_recording_granted: bool,
@@ -27,17 +29,23 @@ pub struct State {
     pub screen_recording_requested_this_launch: bool,
     pub microphone_granted: bool,
     pub microphone_can_request: bool,
+    /// Microphone was requested by this process. Mirrors the shipping setup
+    /// window, which offers Open Settings only after the user asked once.
+    #[serde(default)]
+    pub microphone_requested_this_launch: bool,
 }
 
 #[derive(Default)]
 pub struct Session {
     screen_requested: bool,
+    microphone_requested: bool,
 }
 
 impl Session {
     pub const fn new() -> Self {
         Self {
             screen_requested: false,
+            microphone_requested: false,
         }
     }
 
@@ -69,7 +77,10 @@ impl Session {
                 permissions.request_screen(can_request)?;
             }
             Action::RequestScreen => {}
-            Action::RequestMicrophone => permissions.request_microphone()?,
+            Action::RequestMicrophone => {
+                self.microphone_requested = true;
+                permissions.request_microphone()?;
+            }
             Action::Complete => {
                 if identity.is_some() && !permissions.screen_granted() {
                     return Err(
@@ -94,7 +105,7 @@ impl Session {
         let screen_granted = identity.is_none() || permissions.screen_granted();
         let (microphone_granted, microphone_can_request) = permissions.microphone_status();
         State {
-            platform: std::env::consts::OS,
+            platform: Cow::Borrowed(std::env::consts::OS),
             onboarding_completed: settings.onboarding_completed,
             screen_recording_required: identity.is_some(),
             screen_recording_granted: screen_granted,
@@ -103,6 +114,223 @@ impl Session {
             screen_recording_requested_this_launch: self.screen_requested,
             microphone_granted,
             microphone_can_request: !microphone_granted && microphone_can_request,
+            microphone_requested_this_launch: self.microphone_requested,
+        }
+    }
+}
+
+// Shipping setup copy (apps/desktop/ui/src/Onboarding.tsx). Both native hosts
+// render these strings; keep them identical to the Tauri window.
+pub const EYEBROW: &str = "Welcome to Captures";
+pub const LEDE: &str = "Captures only reads the pixels you choose to capture. Nothing is uploaded, \
+and nothing leaves this computer unless you send it somewhere.";
+pub const CHECKING: &str = "Checking the access available on this computer…";
+pub const SCREEN_TITLE: &str = "Screen capture";
+pub const MICROPHONE_TITLE: &str = "Microphone";
+pub const OPTIONAL: &str = "Optional";
+pub const OPENING: &str = "Opening…";
+pub const RESTARTING: &str = "Restarting…";
+pub const FINISHING: &str = "Finishing…";
+pub const REFRESH: &str = "Refresh status";
+pub const START: &str = "Start capturing";
+pub const RESTART: &str = "Restart Captures";
+const MACOS_TITLE: &str = "Required permissions";
+const READY_TITLE: &str = "You’re ready to capture";
+/// Permission recovery reuses the setup cards from a completed workspace.
+pub const RECOVERY_TITLE: &str = "Capture permissions";
+pub const RECOVERY_LEDE: &str = "Your captures and editors stay open. Grant access, refresh status, \
+then retry your capture. If your OS requires a restart, save your work before quitting and \
+reopening Captures.";
+pub const RECOVERY_DONE: &str = "Done";
+
+/// State-independent setup copy, available before the first permission check.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct Copy {
+    pub eyebrow: &'static str,
+    pub title: &'static str,
+    pub lede: &'static str,
+    pub checking: &'static str,
+    pub screen_title: &'static str,
+    pub microphone_title: &'static str,
+    pub optional: &'static str,
+    pub opening: &'static str,
+    pub restarting: &'static str,
+    pub finishing: &'static str,
+    pub refresh: &'static str,
+    pub start: &'static str,
+    pub recovery_title: &'static str,
+    pub recovery_lede: &'static str,
+    pub recovery_done: &'static str,
+}
+
+pub const fn copy() -> Copy {
+    Copy {
+        eyebrow: EYEBROW,
+        title: setup_title_for_os(),
+        lede: LEDE,
+        checking: CHECKING,
+        screen_title: SCREEN_TITLE,
+        microphone_title: MICROPHONE_TITLE,
+        optional: OPTIONAL,
+        opening: OPENING,
+        restarting: RESTARTING,
+        finishing: FINISHING,
+        refresh: REFRESH,
+        start: START,
+        recovery_title: RECOVERY_TITLE,
+        recovery_lede: RECOVERY_LEDE,
+        recovery_done: RECOVERY_DONE,
+    }
+}
+
+const fn setup_title_for_os() -> &'static str {
+    if cfg!(target_os = "macos") {
+        MACOS_TITLE
+    } else {
+        READY_TITLE
+    }
+}
+
+/// A right-aligned status next to a permission. `ready` pills are positive
+/// and carry a check mark; the others are neutral hints beside an action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Status {
+    pub label: &'static str,
+    pub ready: bool,
+}
+
+/// Everything the setup surface shows for one state, derived exactly like
+/// the shipping React component so both native hosts stay in lockstep.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Presentation {
+    pub title: &'static str,
+    pub screen_description: &'static str,
+    pub screen_status: Option<Status>,
+    pub screen_action: Option<&'static str>,
+    pub show_microphone: bool,
+    pub microphone_description: &'static str,
+    pub microphone_status: Option<Status>,
+    pub microphone_action: Option<&'static str>,
+    /// Screen access is usable; finishing setup is allowed.
+    pub screen_ready: bool,
+    /// The OS applies the grant only after a relaunch; offer Restart instead.
+    pub restart_required: bool,
+    pub primary_label: &'static str,
+}
+
+pub fn setup_title(platform: &str) -> &'static str {
+    if platform == "macos" {
+        MACOS_TITLE
+    } else {
+        READY_TITLE
+    }
+}
+
+fn screen_description(
+    platform: &str,
+    required: bool,
+    restart_required: bool,
+    still_off: bool,
+) -> &'static str {
+    match platform {
+        "macos" if still_off => {
+            "The switch for this copy of Captures is still off. A local build is a different row \
+             from a downloaded app. Turn it on, then restart."
+        }
+        "macos" if restart_required => {
+            "Turn the switch on next to this copy of Captures, then restart. A local build is a \
+             different row from a downloaded app. macOS does not apply the permission until \
+             Captures relaunches."
+        }
+        "macos" => {
+            "This allows Captures to read the pixels you choose to capture. macOS keeps everything \
+             else hidden."
+        }
+        "windows" => {
+            "Windows provides screen capture access without a separate permission prompt. Secure \
+             and protected windows remain private."
+        }
+        "linux" => {
+            "Your desktop may show its own screen-sharing picker when a capture starts. There is \
+             nothing to approve ahead of time."
+        }
+        _ if required => {
+            "Allow your operating system to share the part of the screen you choose to capture."
+        }
+        _ => "Screen capture is available without an additional setup step.",
+    }
+}
+
+fn microphone_description(granted: bool, asked: bool) -> &'static str {
+    if granted {
+        "macOS will not ask again. Turn the microphone on when you start a recording."
+    } else if asked {
+        "Turn Captures on in Microphone settings. macOS only lists apps after they ask."
+    } else {
+        "Allow it now so a recording does not pause to ask, or wait until you pick a mic."
+    }
+}
+
+impl State {
+    pub fn presentation(&self) -> Presentation {
+        let screen_ready = !self.screen_recording_required || self.screen_recording_granted;
+        let pending = !screen_ready;
+        let restart_required = pending && self.screen_recording_requested_this_launch;
+        let still_off = pending
+            && !self.screen_recording_can_request
+            && !self.screen_recording_requested_this_launch;
+        let granted = |label| Status { label, ready: true };
+        let hint = |label| Status {
+            label,
+            ready: false,
+        };
+        let (screen_status, screen_action) = if screen_ready {
+            let label = if self.screen_recording_required {
+                "Granted"
+            } else {
+                "Ready"
+            };
+            (Some(granted(label)), None)
+        } else {
+            let status = if restart_required {
+                Some(hint("Restart required"))
+            } else if still_off {
+                Some(hint("Still off"))
+            } else {
+                None
+            };
+            let action = if self.screen_recording_can_request {
+                "Allow access"
+            } else {
+                "Open Settings"
+            };
+            (status, Some(action))
+        };
+        let asked = self.microphone_requested_this_launch;
+        let (microphone_status, microphone_action) = if self.microphone_granted {
+            (Some(granted("Granted")), None)
+        } else if asked && !self.microphone_can_request {
+            (None, Some("Open Settings"))
+        } else {
+            (None, Some("Allow microphone"))
+        };
+        Presentation {
+            title: setup_title(&self.platform),
+            screen_description: screen_description(
+                &self.platform,
+                self.screen_recording_required,
+                restart_required,
+                still_off,
+            ),
+            screen_status,
+            screen_action,
+            show_microphone: self.platform == "macos",
+            microphone_description: microphone_description(self.microphone_granted, asked),
+            microphone_status,
+            microphone_action,
+            screen_ready,
+            restart_required,
+            primary_label: if restart_required { RESTART } else { START },
         }
     }
 }
@@ -370,5 +598,143 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "not settings");
         assert_eq!(permissions.requests, [true]);
+    }
+
+    fn mac_state() -> State {
+        State {
+            platform: "macos".into(),
+            onboarding_completed: false,
+            screen_recording_required: true,
+            screen_recording_granted: false,
+            screen_recording_can_request: true,
+            screen_recording_requested_this_launch: false,
+            microphone_granted: false,
+            microphone_can_request: true,
+            microphone_requested_this_launch: false,
+        }
+    }
+
+    #[test]
+    fn presentation_matches_shipping_macos_setup_states() {
+        let mut state = mac_state();
+        let fresh = state.presentation();
+        assert_eq!(fresh.title, "Required permissions");
+        assert!(fresh.screen_description.starts_with("This allows Captures"));
+        assert_eq!(fresh.screen_status, None);
+        assert_eq!(fresh.screen_action, Some("Allow access"));
+        assert!(fresh.show_microphone && !fresh.screen_ready && !fresh.restart_required);
+        assert_eq!(fresh.microphone_action, Some("Allow microphone"));
+        assert_eq!(fresh.primary_label, "Start capturing");
+
+        state.screen_recording_can_request = false;
+        state.screen_recording_requested_this_launch = true;
+        let restart = state.presentation();
+        assert!(restart.restart_required);
+        assert_eq!(restart.primary_label, "Restart Captures");
+        assert_eq!(
+            restart.screen_status,
+            Some(Status {
+                label: "Restart required",
+                ready: false
+            })
+        );
+        assert_eq!(restart.screen_action, Some("Open Settings"));
+        assert!(
+            restart
+                .screen_description
+                .ends_with("macOS does not apply the permission until Captures relaunches.")
+        );
+        assert!(!restart.screen_description.contains("  "));
+
+        // A relaunch after the prompt: the switch is still off.
+        state.screen_recording_requested_this_launch = false;
+        let off = state.presentation();
+        assert_eq!(off.screen_status.map(|s| s.label), Some("Still off"));
+        assert!(
+            off.screen_description
+                .starts_with("The switch for this copy")
+        );
+        assert_eq!(off.primary_label, "Start capturing");
+
+        state.screen_recording_granted = true;
+        let granted = state.presentation();
+        assert!(granted.screen_ready && !granted.restart_required);
+        assert_eq!(
+            granted.screen_status,
+            Some(Status {
+                label: "Granted",
+                ready: true
+            })
+        );
+        assert_eq!(granted.screen_action, None);
+    }
+
+    #[test]
+    fn presentation_microphone_offers_settings_only_after_asking() {
+        let mut state = mac_state();
+        state.microphone_can_request = false;
+        assert_eq!(
+            state.presentation().microphone_action,
+            Some("Allow microphone")
+        );
+        state.microphone_requested_this_launch = true;
+        let asked = state.presentation();
+        assert_eq!(asked.microphone_action, Some("Open Settings"));
+        assert!(asked.microphone_description.starts_with("Turn Captures on"));
+        state.microphone_granted = true;
+        let granted = state.presentation();
+        assert_eq!(granted.microphone_action, None);
+        assert_eq!(granted.microphone_status.map(|s| s.label), Some("Granted"));
+        assert!(
+            granted
+                .microphone_description
+                .starts_with("macOS will not ask")
+        );
+    }
+
+    #[test]
+    fn presentation_on_windows_and_linux_is_ready_without_microphone_card() {
+        for (platform, start) in [
+            ("windows", "Windows provides"),
+            ("linux", "Your desktop may"),
+        ] {
+            let state = State {
+                platform: platform.into(),
+                screen_recording_required: false,
+                screen_recording_granted: true,
+                screen_recording_can_request: false,
+                microphone_granted: true,
+                ..mac_state()
+            };
+            let view = state.presentation();
+            assert_eq!(view.title, "You’re ready to capture");
+            assert!(view.screen_description.starts_with(start));
+            assert_eq!(
+                view.screen_status,
+                Some(Status {
+                    label: "Ready",
+                    ready: true
+                })
+            );
+            assert!(view.screen_ready && !view.show_microphone);
+        }
+        assert!(LEDE.ends_with("unless you send it somewhere."));
+        assert!(!LEDE.contains("  ") && !RECOVERY_LEDE.contains("  "));
+    }
+
+    #[test]
+    fn microphone_request_is_remembered_for_this_launch_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut permissions = Fake::mac();
+        let mut session = Session::new();
+        let state = session
+            .execute_with(&path, Action::RequestMicrophone, &mut permissions)
+            .unwrap();
+        assert!(state.microphone_requested_this_launch);
+        let state = Session::new()
+            .execute_with(&path, Action::Check, &mut permissions)
+            .unwrap();
+        assert!(!state.microphone_requested_this_launch);
     }
 }

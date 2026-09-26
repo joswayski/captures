@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import CCapturesSettings
 
 enum Metrics {
     static func emit(_ event: String, milliseconds: Double, detail: String = "") {
@@ -27,11 +28,57 @@ enum CaptureButtonIcon {
     case display
     case microphone(muted: Bool)
     case editorSelect, editorCrop, editorText, editorShapes, editorArrow, editorPen, editorBackground
+    /// A named icon from the shared shipping set (`captures_icon_polylines_v1`).
+    case shipping(String)
+    /// The shipping HUD stop control: an 11-point rounded signal square.
+    case stopSquare
 
     var isEditorTool: Bool {
         switch self {
-        case .capture, .record, .window, .display, .microphone: return false
+        case .capture, .record, .window, .display, .microphone, .shipping, .stopSquare: return false
         default: return true
+        }
+    }
+
+    var isShipping: Bool {
+        switch self {
+        case .shipping, .stopSquare: return true
+        default: return false
+        }
+    }
+}
+
+/// Polylines for the shared shipping icon set, in 24-unit y-down space.
+enum ShippingIcons {
+    private static var cache: [String: [[NSPoint]]] = [:]
+
+    static func polylines(_ name: String) -> [[NSPoint]] {
+        if let cached = cache[name] { return cached }
+        guard let response = captures_icon_polylines_v1(name) else { return [] }
+        defer { captures_settings_free_v1(response) }
+        guard let object = try? JSONSerialization.jsonObject(with: Data(String(cString: response).utf8))
+                as? [String: Any],
+              object["ok"] as? Bool == true,
+              let lines = object["result"] as? [[[NSNumber]]] else { return [] }
+        let result = lines.map { line in
+            line.compactMap { $0.count == 2 ? NSPoint(x: $0[0].doubleValue, y: $0[1].doubleValue) : nil }
+        }
+        cache[name] = result
+        return result
+    }
+
+    /// Stroke a named icon into `rect` (flipped view coordinates), 1.8-unit round strokes.
+    static func stroke(_ name: String, in rect: NSRect) {
+        for line in polylines(name) where line.count > 1 {
+            let path = NSBezierPath()
+            path.lineWidth = 1.8 * rect.width / 24
+            path.lineCapStyle = .round; path.lineJoinStyle = .round
+            for (index, point) in line.enumerated() {
+                let mapped = NSPoint(x: rect.minX + point.x * rect.width / 24,
+                                     y: rect.minY + point.y * rect.height / 24)
+                if index == 0 { path.move(to: mapped) } else { path.line(to: mapped) }
+            }
+            path.stroke()
         }
     }
 }
@@ -43,6 +90,8 @@ final class CaptureButton: NSButton {
     var selected = false
     var glass = false
     var primary = false
+    /// Neutral high-contrast action (`--solid`), e.g. the setup primary button.
+    var solid = false { didSet { needsDisplay = true } }
     var signal = false
     var hudControl = false { didSet { updateTrackingAreas(); needsDisplay = true } }
     private var hoverTracking: NSTrackingArea?
@@ -125,6 +174,10 @@ final class CaptureButton: NSButton {
                 tokens.color(selected ? "theme-accent" : "surface-hover").setFill()
                 path.fill()
             }
+        } else if solid {
+            tokens.color(cell?.isHighlighted == true ? "solid-hover" : "solid")
+                .withAlphaComponent(isEnabled ? 1 : 0.4).setFill()
+            path.fill()
         } else {
             let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
                 : signal ? "theme-signal-surface"
@@ -140,8 +193,10 @@ final class CaptureButton: NSButton {
             path.lineWidth = 1
             path.stroke()
         }
-        let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium)
-        var foreground = tokens.color(isEnabled
+        let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: solid ? .semibold : .medium)
+        var foreground = solid
+            ? tokens.color("solid-ink").withAlphaComponent(isEnabled ? 1 : 0.4)
+            : tokens.color(isEnabled
             ? (signal ? "theme-signal"
                 : primary ? "theme-accent-ink" : glass ? "glass-text" : "text")
             : (glass ? "glass-text-subtle" : "text-faint"))
@@ -157,7 +212,8 @@ final class CaptureButton: NSButton {
             .font: font, .foregroundColor: foreground,
         ]
         let size = (title as NSString).size(withAttributes: attributes)
-        let iconSide: CGFloat = icon?.isEditorTool == true ? tokens.number("s-6") + tokens.number("s-1") : 14
+        let iconSide: CGFloat = icon?.isEditorTool == true ? tokens.number("s-6") + tokens.number("s-1")
+            : icon?.isShipping == true ? 16 : 14
         let iconWidth: CGFloat = icon == nil ? 0 : (title.isEmpty ? iconSide : iconSide + 6)
         let startX = (bounds.width - size.width - iconWidth) / 2
         if let icon { draw(icon, in: NSRect(x: startX, y: (bounds.height - iconSide) / 2,
@@ -174,6 +230,12 @@ final class CaptureButton: NSButton {
     private func draw(_ icon: CaptureButtonIcon, in rect: NSRect, color: NSColor) {
         color.setStroke(); color.setFill()
         switch icon {
+        case .shipping(let name):
+            ShippingIcons.stroke(name, in: rect)
+        case .stopSquare:
+            tokens.color(isEnabled ? "theme-signal" : "glass-text-subtle").setFill()
+            NSBezierPath(roundedRect: NSRect(x: rect.midX - 5.5, y: rect.midY - 5.5, width: 11, height: 11),
+                         xRadius: 2, yRadius: 2).fill()
         case .editorSelect, .editorCrop, .editorText, .editorShapes, .editorArrow, .editorPen, .editorBackground:
             // The shipping EditorIcon silhouettes, in their 24-unit coordinate space.
             func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
@@ -295,54 +357,109 @@ final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
 
 final class LiveStatusActions: NSObject {
     private let newCaptureAction: () -> Void
-    private let showRecordingControlsAction: () -> Void
     private let captureAction: (StillCaptureKind) -> Void
+    private let recordAction: (UnifiedCaptureTarget) -> Void
     private let historyAction: () -> Void
     private let preferencesAction: () -> Void
+    private let feedbackAction: () -> Void
     private let outputFolderAction: () -> Void
     private let quitAction: () -> Void
+    /// `captureShortcutSignature` order: New Capture, Screenshot Region/Window/
+    /// Display, Record Region/Window/Display. Shown as key equivalents.
+    var shortcuts: [String] = []
 
-    init(newCapture: @escaping () -> Void, showRecordingControls: @escaping () -> Void = {},
+    init(newCapture: @escaping () -> Void,
          capture: @escaping (StillCaptureKind) -> Void,
+         record: @escaping (UnifiedCaptureTarget) -> Void = { _ in },
          history: @escaping () -> Void, preferences: @escaping () -> Void,
+         feedback: @escaping () -> Void = {},
          outputFolder: @escaping () -> Void, quit: @escaping () -> Void) {
-        newCaptureAction = newCapture; showRecordingControlsAction = showRecordingControls
-        captureAction = capture; historyAction = history
-        preferencesAction = preferences; outputFolderAction = outputFolder
-        quitAction = quit
+        newCaptureAction = newCapture; captureAction = capture; recordAction = record
+        historyAction = history; preferencesAction = preferences; feedbackAction = feedback
+        outputFolderAction = outputFolder; quitAction = quit
     }
 
     @objc func newCapture() { newCaptureAction() }
-    @objc func showRecordingControls() { showRecordingControlsAction() }
     @objc func captureRegion() { captureAction(.region) }
     @objc func captureWindow() { captureAction(.window) }
     @objc func captureDisplay() { captureAction(.display) }
+    @objc func recordRegion() { recordAction(.region) }
+    @objc func recordWindow() { recordAction(.window) }
+    @objc func recordDisplay() { recordAction(.display) }
     @objc func showHistory() { historyAction() }
     @objc func showPreferences() { preferencesAction() }
+    @objc func sendFeedback() { feedbackAction() }
     @objc func openOutputFolder() { outputFolderAction() }
     @objc func quit() { quitAction() }
 
+    /// Shipping `build_tray_menu` order. Hidden recording controls return
+    /// through any capture item or New Capture, as in the shipping tray.
     func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        add("New Capture…", action: #selector(newCapture), to: menu)
-        add("Show Recording Controls", action: #selector(showRecordingControls), to: menu)
-        add("Screenshot Region", action: #selector(captureRegion), to: menu)
-        add("Screenshot Window", action: #selector(captureWindow), to: menu)
-        add("Screenshot Display", action: #selector(captureDisplay), to: menu)
+        add("New Capture…", action: #selector(newCapture), shortcut: 0, to: menu)
+        add("Screenshot Region", action: #selector(captureRegion), shortcut: 1, to: menu)
+        add("Screenshot Window", action: #selector(captureWindow), shortcut: 2, to: menu)
+        add("Screenshot Display", action: #selector(captureDisplay), shortcut: 3, to: menu)
+        add("Record Region", action: #selector(recordRegion), shortcut: 4, to: menu)
+        add("Record Window", action: #selector(recordWindow), shortcut: 5, to: menu)
+        add("Record Display", action: #selector(recordDisplay), shortcut: 6, to: menu)
         menu.addItem(.separator())
         add("Capture History…", action: #selector(showHistory), to: menu)
         add("Open Save Location", action: #selector(openOutputFolder), to: menu)
         add("Preferences", action: #selector(showPreferences), to: menu)
+        add("Send Feedback…", action: #selector(sendFeedback), to: menu)
+        // Signed updates are not connected yet; keep the shipping row visible.
+        let updates = NSMenuItem(title: "Check for Updates…", action: nil, keyEquivalent: "")
+        updates.isEnabled = false
+        menu.addItem(updates)
         menu.addItem(.separator())
         add("Quit Captures", action: #selector(quit), to: menu)
+        menu.autoenablesItems = false
         return menu
     }
 
-    private func add(_ title: String, action: Selector, to menu: NSMenu) {
+    private func add(_ title: String, action: Selector, shortcut: Int? = nil, to menu: NSMenu) {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        if let shortcut, shortcuts.indices.contains(shortcut),
+           let key = menuKeyEquivalent(shortcuts[shortcut]) {
+            item.keyEquivalent = key.character
+            item.keyEquivalentModifierMask = key.modifiers
+        }
         item.target = self
         menu.addItem(item)
     }
+}
+
+/// A saved shortcut ("CommandOrControl+Shift+Space", "Ctrl+Alt+KeyR") as an
+/// NSMenuItem key equivalent, or nil when AppKit cannot display it.
+func menuKeyEquivalent(_ shortcut: String) -> (character: String, modifiers: NSEvent.ModifierFlags)? {
+    let tokens = shortcut.split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces) }
+    guard let key = tokens.last, !key.isEmpty else { return nil }
+    var modifiers: NSEvent.ModifierFlags = []
+    for token in tokens.dropLast() {
+        switch token.lowercased() {
+        case "commandorcontrol", "commandorctrl", "cmdorctrl", "cmdorcontrol",
+             "command", "cmd", "super", "meta": modifiers.insert(.command)
+        case "control", "ctrl": modifiers.insert(.control)
+        case "shift": modifiers.insert(.shift)
+        case "alt", "option": modifiers.insert(.option)
+        default: return nil
+        }
+    }
+    let lower = key.lowercased()
+    let character: String
+    if lower.hasPrefix("key"), key.count == 4 { character = String(key.suffix(1)).lowercased() }
+    else if lower.hasPrefix("digit"), key.count == 6 { character = String(key.suffix(1)) }
+    else if key.count == 1 { character = key.lowercased() }
+    else if lower == "space" { character = " " }
+    else if lower == "enter" || lower == "return" { character = "\r" }
+    else if lower == "tab" { character = "\t" }
+    else if lower == "escape" || lower == "esc" { character = "\u{1b}" }
+    else if lower.hasPrefix("f"), let number = Int(lower.dropFirst()), (1...20).contains(number),
+            let scalar = UnicodeScalar(UInt32(NSF1FunctionKey + number - 1)) {
+        character = String(Character(scalar))
+    } else { return nil }
+    return (character, modifiers)
 }
 
 enum LiveReopenAction: Equatable {
@@ -453,6 +570,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var renderedLiveStyleRevision = -1
     private var regionSelector: RegionSelectionView?
     private var windowSelector: WindowSelectionView?
+    private var updateNotice: UpdateNoticeController?
+    private var updateNoticeSettings: SettingsStore?
     private var scene: String
     private var appearance: String
     private var theme: String
@@ -797,7 +916,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func restartAfterPermissionRequest() {
         // This first-run restart is unavailable after the workspace opens, so
         // there can be no active recording or unsaved editor to abandon.
-        guard !onboardingReady, !terminating, onboardingController?.busy == false else { return }
+        guard !onboardingReady, !terminating, onboardingController?.busy == false else {
+            onboardingView?.restartFailed()
+            return
+        }
         onboardingController?.flush()
         preferencesController?.flush()
         LiveCaptureController.flush()
@@ -825,6 +947,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     NSApp.terminate(nil)
                     return
                 }
+                onboardingView?.restartFailed()
                 presentHostError(title: "Couldn’t Restart Captures", message: restartError)
             } catch {
                 presentHostError(title: "Couldn’t Restart Captures",
@@ -840,6 +963,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         table = nil
         regionSelector = nil
         windowSelector = nil
+        if scene != "update" {
+            updateNotice?.close(); updateNotice = nil; updateNoticeSettings = nil
+        }
         if !options.live {
             liveController?.finishCapture(restoreWindow: false)
             liveController = nil
@@ -983,8 +1109,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             sidebar.addSubview(icon)
         }
         label("Captures", x: 58, y: 22, width: 125, size: "text-xl", parent: sidebar)
-        for (i, name) in ["preferences", "history", "hud", "preview", "region", "window"].enumerated() {
-            let button = CaptureButton(name == "hud" ? "Recording controls" : name.capitalized,
+        for (i, name) in ["preferences", "history", "hud", "preview", "region", "window", "update"].enumerated() {
+            let button = CaptureButton(Self.sceneTitle(name),
                 frame: NSRect(x: 12, y: 70 + i * 44, width: 172, height: 34), tokens: tokens) { [weak self] in
                     self?.scene = name
                     self?.render()
@@ -994,7 +1120,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }
         label("Fixture mode", x: 24, y: 640, width: 155, size: "text-sm", muted: true, parent: sidebar)
         label("No capture access", x: 24, y: 663, width: 155, size: "text-sm", muted: true, parent: sidebar)
-        label(scene == "hud" ? "Recording controls" : scene.capitalized,
+        label(Self.sceneTitle(scene),
             x: 220, y: 20, width: 650, size: "text-xl")
         label("Native rendering workbench · synthetic data, not functional parity",
             x: 220, y: 47, width: 740, size: "text-sm", muted: true)
@@ -1002,9 +1128,54 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         case "history": history()
         case "hud": hud()
         case "preview": previews()
+        case "update": updateNoticeFixture()
         default: break
         }
         Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+    }
+
+    static func sceneTitle(_ name: String) -> String {
+        switch name {
+        case "hud": return "Recording controls"
+        case "update": return "Update notice"
+        default: return name.capitalized
+        }
+    }
+
+    /// Stub-driven update notice. Only an explicit --settings-file persists the
+    /// Hide / What's new choice; fixtures never touch the development profile.
+    private func updateNoticeFixture() {
+        label("Stub status source: no updater, download, install or relaunch is connected.",
+            x: 220, y: 90, width: 740, size: "text-sm", muted: true)
+        for (i, name) in UpdateNoticeModel.fixtures.enumerated() {
+            let button = CaptureButton(name, frame: NSRect(x: 220 + (i % 5) * 150, y: 130 + (i / 5) * 44,
+                width: 140, height: 34), tokens: tokens) { [weak self] in self?.showUpdateNotice(name) }
+            content.addSubview(button)
+        }
+        if updateNotice == nil { showUpdateNotice(options.updateState ?? "available") }
+    }
+
+    private func showUpdateNotice(_ fixture: String) {
+        if updateNotice == nil {
+            let controller = UpdateNoticeController(tokens: tokens, tray: options.updateTray ?? "top")
+            if let path = options.settingsFile, let store = try? SettingsStore(path: path) {
+                updateNoticeSettings = store
+                store.load { [weak controller] result in
+                    guard case .success(let settings) = result else { return }
+                    controller?.model.showChangelog = settings.bool("show_update_changelog", true)
+                    controller?.refresh()
+                }
+                controller.model.persistShowChangelog = { [weak store] show in
+                    store?.load { result in
+                        guard case .success(var settings) = result else { return }
+                        settings["show_update_changelog"] = show
+                        store?.save(settings) { _, _ in }
+                    }
+                }
+            }
+            updateNotice = controller
+        }
+        updateNotice?.present(fixture: fixture)
     }
 
     private func openPreview(_ artifact: CaptureArtifact) {
@@ -1016,16 +1187,18 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         let actions = LiveStatusActions(newCapture: { [weak self] in
             self?.preferencesController?.flush()
             self?.launchNewCapture()
-        }, showRecordingControls: { [weak self] in
-            guard self?.onboardingReady == true else { self?.showOnboarding(); return }
-            _ = self?.liveController?.showRecordingControls()
         }, capture: { [weak self] kind in
             self?.preferencesController?.flush()
             self?.launchCapture(kind)
+        }, record: { [weak self] target in
+            self?.preferencesController?.flush()
+            self?.launchNewCapture(recordingTarget: target)
         }, history: { [weak self] in
             self?.showHistory()
         }, preferences: { [weak self] in
             self?.showPreferences()
+        }, feedback: { [weak self] in
+            self?.showFeedback()
         }, outputFolder: { [weak self] in
             self?.openOutputFolder()
         }, quit: {
@@ -1079,6 +1252,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 shortcutEnabled = nil
             }
             shortcutSignature = signature
+            statusActions?.shortcuts = signature
+            if let statusActions { statusItem?.menu = statusActions.makeMenu() }
             updateShortcutState()
         } catch {
             reportShortcutError(error)
@@ -1156,6 +1331,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func launchCapture(_ kind: StillCaptureKind) {
         guard onboardingReady else { showOnboarding(); return }
         guard permissionSheet == nil else { window.makeKeyAndOrderFront(nil); return }
+        // Tray capture items bring hidden recording controls back, like New Capture.
+        if liveController?.showRecordingControls() == true { return }
         guard liveController?.capture(kind) == true else {
             presentHostError(title: "Capture Unavailable",
                 message: "The capture workspace is still loading or another capture is already active.")
