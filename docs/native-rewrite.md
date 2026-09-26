@@ -40,6 +40,12 @@ Explorer, physical Finder/Linux file-manager acceptance, accessibility, Wayland
 live capture, signing/notarization, redistributable dependency bundling and update
 installation remain open. No parity gate closes from this development package.
 
+Preferences now offer the shipping Default microphone select (Off plus enumerated
+inputs; wgpu enumerates when the menu first opens, AppKit off the main thread),
+the AppKit GIF export card (frames per second, maximum width, palette colors)
+and AppKit scroll-spy highlighting of the section in view. The wgpu shortcut
+recorder shows `<kbd>`-style key chips and the "Press shortcut…" prompt.
+
 Direct region and window overlays (shortcut, tray and screenshot-during-recording)
 now follow the shipping `CaptureOverlay`: no toolbar, a completed region drag
 commits on release, a window/desktop click commits that window or the display,
