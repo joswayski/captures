@@ -857,13 +857,11 @@ pub struct Live {
     clipboard: captures_app::clipboard::ClipboardOwnership,
     root_hide_deferred: bool,
     region_freeze: bool,
-    region_auto_start: bool,
     region_countdown_seconds: u8,
     window_session: Option<Arc<WindowSession>>,
     window_texture: Option<egui::TextureHandle>,
     window_selector: Arc<Mutex<WindowSelector>>,
     window_freeze: bool,
-    window_auto_start: bool,
     window_countdown_seconds: u8,
     controls: Arc<Mutex<CaptureControls>>,
     selector_scope_generation: Arc<AtomicU64>,
@@ -1131,13 +1129,11 @@ impl Live {
             clipboard: Default::default(),
             root_hide_deferred: false,
             region_freeze: false,
-            region_auto_start: false,
             region_countdown_seconds: 0,
             window_session: None,
             window_texture: None,
             window_selector: Arc::new(Mutex::new(WindowSelector::default())),
             window_freeze: false,
-            window_auto_start: false,
             window_countdown_seconds: 0,
             controls: Arc::new(Mutex::new(CaptureControls::default())),
             selector_scope_generation: Arc::new(AtomicU64::new(0)),
@@ -1546,7 +1542,6 @@ impl Live {
             CaptureRequest::Region => {
                 self.capture_phase = Some(CapturePhase::RegionPreparing);
                 self.region_freeze = settings.freeze_screen;
-                self.region_auto_start = settings.auto_start_on_selection;
                 self.region_countdown_seconds = settings.screenshot_countdown_seconds;
                 self.status = "Preparing region selector… Press Escape to cancel.".into();
                 self.hide_for_capture(ctx);
@@ -1554,7 +1549,6 @@ impl Live {
             CaptureRequest::Window => {
                 self.capture_phase = Some(CapturePhase::WindowPreparing);
                 self.window_freeze = settings.freeze_screen;
-                self.window_auto_start = settings.auto_start_on_selection;
                 self.window_countdown_seconds = settings.screenshot_countdown_seconds;
                 self.status = "Preparing window selector… Press Escape to cancel.".into();
                 self.hide_for_capture(ctx);
@@ -4885,12 +4879,11 @@ impl Live {
             let target = self.countdown_target.expect("region target validated");
             let selector = Arc::clone(&self.region_selector);
             let sender = self.selector_tx.clone();
-            let (texture, auto_start, display) = if recording_screenshot {
+            // Shipping direct overlays commit on release; auto-start applies
+            // only to the New Capture menu.
+            let (texture, display) = if recording_screenshot {
                 (
                     self.recording_screenshot_texture.clone(),
-                    self.recording_screenshot_settings
-                        .as_ref()
-                        .is_some_and(|settings| settings.auto_start_on_selection),
                     self.recording_screenshot_session
                         .as_ref()
                         .expect("recording screenshot selection owns region session")
@@ -4899,7 +4892,6 @@ impl Live {
             } else {
                 (
                     self.region_texture.clone(),
-                    self.region_auto_start,
                     self.region_session
                         .as_ref()
                         .expect("selection owns region session")
@@ -4934,7 +4926,6 @@ impl Live {
                         ui,
                         &t,
                         texture.as_ref(),
-                        auto_start,
                         Some(overlay_bounds),
                     );
                     if let Some(action) = action {
@@ -4968,7 +4959,8 @@ impl Live {
             let selector = Arc::clone(&self.window_selector);
             let sender = self.selector_tx.clone();
             let texture = self.window_texture.clone();
-            let auto_start = self.window_auto_start;
+            // Shipping direct window overlay commits the clicked target.
+            let auto_start = true;
             let session = Arc::clone(
                 self.window_session
                     .as_ref()
