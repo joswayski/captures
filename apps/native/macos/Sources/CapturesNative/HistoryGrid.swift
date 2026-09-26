@@ -759,10 +759,10 @@ final class HistoryFilterPill: NSButton {
         needsDisplay = true
     }
 
-    private var font: NSFont { .systemFont(ofSize: tokens.number("text-sm"), weight: .medium) }
+    private var pillFont: NSFont { .systemFont(ofSize: tokens.number("text-sm"), weight: .medium) }
     var preferredWidth: CGFloat {
-        let label = (self.label as NSString).size(withAttributes: [.font: font]).width
-        let count = ("\(self.count)" as NSString).size(withAttributes: [.font: font]).width
+        let label = (self.label as NSString).size(withAttributes: [.font: pillFont]).width
+        let count = ("\(self.count)" as NSString).size(withAttributes: [.font: pillFont]).width
         return ceil(label + tokens.number("s-3") + count + 2 * tokens.number("s-4"))
     }
 
@@ -790,9 +790,9 @@ final class HistoryFilterPill: NSButton {
             tokens.color("surface-hover").setFill(); path.fill()
         }
         let text = tokens.color(active || hover ? "text" : "text-subtle").withAlphaComponent(alpha)
-        let labelAttributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: text]
+        let labelAttributes: [NSAttributedString.Key: Any] = [.font: pillFont, .foregroundColor: text]
         let countAttributes: [NSAttributedString.Key: Any] = [
-            .font: font, .foregroundColor: tokens.color("text-faint").withAlphaComponent(alpha),
+            .font: pillFont, .foregroundColor: tokens.color("text-faint").withAlphaComponent(alpha),
         ]
         let labelSize = (label as NSString).size(withAttributes: labelAttributes)
         let x = tokens.number("s-4"), y = (bounds.height - labelSize.height) / 2
