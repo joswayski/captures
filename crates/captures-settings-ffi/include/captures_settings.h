@@ -15,6 +15,20 @@
  * Never call on the UI thread or serialize behind capture/recording work. */
 char *captures_feedback_request_v1(const char *request_json);
 
+/* Pure, allocation-returning update notice helpers; safe on the UI thread.
+ * No network, download or install happens here (no signed updater yet).
+ * present {status: UpdateStatus|null, view?: {show_changelog, action_error,
+ * installing}} returns the shared copy/presentation both hosts render.
+ * fixture {name} returns {status} for workbench fixtures; stub {status, event:
+ * "install"|"check"|"tick"} returns {status: UpdateStatus|null, tick_ms} from
+ * the deterministic simulated source (null status closes the notice).
+ * placement {monitor, work_area, tray|null, menu_bar_at_top, card_width,
+ * card_height} takes top-left logical rectangles {x, y, width, height} and
+ * returns {placement: {x, y, width, height, caret: "none"|"top"|"bottom",
+ * caret_x}, card: rect relative to the window}. Envelopes follow
+ * captures_app_request_v1; free with captures_settings_free_v1. */
+char *captures_update_notice_request_v1(const char *request_json);
+
 /* Event-loop-thread-only native capture-launch shortcuts. One owner per process.
  * JSON requests: configure {settings: AppSettings}, enabled {enabled: bool},
  * next, close. Envelopes follow captures_app_request_v1. next returns
@@ -229,6 +243,13 @@ bool captures_preview_stack_card_v2(const CapturesPreviewStack *handle, size_t i
 /* Pure compact-card shade policy. Paint glass-strong-solid at this opacity.
  * Depth zero is undimmed. Expanded cards never use this overlay. */
 double captures_preview_dim_opacity_v1(size_t depth);
+
+/* Shipping vector icon ("pause", "resume", "restart", "capture", "microphone",
+ * "microphone-muted", "trash", "hide-controls", "close", "check", "copy",
+ * "save", "folder", "edit") as owned JSON {ok,result:[[[x,y],...],...]} in its
+ * 24-unit viewBox with y down. Stroke each polyline with round caps/joins at
+ * 1.8 units. Free with captures_settings_free_v1. */
+char *captures_icon_polylines_v1(const char *name);
 
 /* Idle mini-preview metadata, e.g. "1440 × 900 · 246 KB", matching the
  * shipping card. Returns owned UTF-8; free with captures_settings_free_v1. */

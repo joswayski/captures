@@ -368,6 +368,8 @@ apps/native/macos/.build/release/CapturesNative --scene hud --appearance light
 apps/native/macos/.build/release/CapturesNative --scene preview
 # Compare identical workbench content using the original per-chip filter strategy:
 apps/native/macos/.build/release/CapturesNative --scene preview --reference-chips
+# Update notice fixture (stub status source; no updater is connected):
+apps/native/macos/.build/release/CapturesNative --scene update --update-state error
 ```
 
 Close each instance before starting another. Cmd+Q quits. Nothing installs into
@@ -383,6 +385,13 @@ and warm dissolve buttons plus Reset. Reduce Motion uses an immediate change.
 `--exercise` runs six scripted actions (appearance changes, history end-to-end
 scroll, HUD pause/resume, or alternating cold/warm dust); `--quit-after 30` exits
 automatically. `--scene idle` creates no visible window.
+`--scene update` opens the update notice in a transparent panel below a
+simulated menu-bar icon. `--update-state` accepts `available`, `single`, `closing`,
+`manual`, `downloading`, `restarting`, `error`, `checking` or `up-to-date`.
+Buttons in the window switch states. Update now and Try again run the shared stub
+through download progress and the restart countdown. Nothing is downloaded,
+installed or relaunched, and links are logged rather than opened. Hide / What’s
+new persists only to an explicit `--settings-file`.
 
 These screens are **not full pixel or functional parity**. Native Preferences
 includes Find, custom colors, persisted defaults and live system appearance.

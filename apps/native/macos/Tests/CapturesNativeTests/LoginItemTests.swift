@@ -151,6 +151,24 @@ final class LoginItemTests: XCTestCase {
         }
     }
 
+    func testPreferencesShowGifCardMicrophoneAndHighlightSectionInView() throws {
+        let (root, controller) = try preferencesFixture(service: nil)
+        drainMainQueue()
+        let text = labels(root)
+        for title in ["Default microphone", "Frames per second", "Maximum width", "Palette colors"] {
+            XCTAssertTrue(text.contains(title), title)
+        }
+        XCTAssertFalse(text.contains("GIF quality"), "the stub GIF card is replaced")
+        XCTAssertEqual(controller.activeSection, "appearance")
+        let scroll = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first)
+        let document = try XCTUnwrap(scroll.documentView)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: document.frame.height - scroll.contentSize.height))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        drainMainQueue()
+        XCTAssertEqual(controller.activeSection, "about", "the end of the page highlights the last section")
+        withExtendedLifetime(controller) {}
+    }
+
     private func preferencesFixture(service: LoginItemServicing?, appearance: String = "dark") throws
         -> (Surface, PreferencesController) {
         _ = NSApplication.shared
