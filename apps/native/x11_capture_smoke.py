@@ -278,7 +278,7 @@ def main():
 
             def begin_selection(full_display=False, select=True):
                 nonlocal checked_toolbar_drag
-                click(root, 341 if args.controls else (575 if mode == "region" else 696), 141)
+                click(root, 341 if args.controls else (575 if mode == "region" else 696), 171)
                 selector = wait(lambda: windows(title), f"{mode} selector")[0]
                 if windows("Captures"):
                     raise RuntimeError("capture workspace was not hidden")

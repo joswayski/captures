@@ -460,7 +460,7 @@ def main():
                 run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
                 wait(lambda: windows("Captures"), "workspace restored before positioning")
                 move_root(300, 280)
-                click(root, 575, 126)
+                click(root, 575, 171)
                 selector = wait(lambda: windows(SELECTOR), "region selector")[0]
                 wait(lambda: int(run("import", "-window", selector, "-crop", "640x120+320+390",
                     "-format", "%k", "info:")) > 16, "painted region guidance")

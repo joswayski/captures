@@ -5,6 +5,7 @@ mod countdown;
 mod diagnostics;
 mod editor;
 mod feedback;
+mod history;
 mod live;
 mod mini_preview;
 mod onboarding;

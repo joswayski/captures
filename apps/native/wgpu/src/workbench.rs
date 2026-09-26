@@ -1557,7 +1557,7 @@ impl eframe::App for Workbench {
                     ui.disable();
                 }
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.live_preferences, false, "Capture workspace");
+                    ui.selectable_value(&mut self.live_preferences, false, "Capture History");
                     ui.selectable_value(&mut self.live_preferences, true, "Preferences");
                 });
             });

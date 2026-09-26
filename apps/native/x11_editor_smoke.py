@@ -415,7 +415,7 @@ def main():
             shot(root, "history")
         else:
             shot(root, "history")
-            click(root, 810, 191)
+            click(root, 105, 546)  # First History card: Edit.
             editor = wait(lambda: windows("Screenshot editor"), "screenshot editor")[0]
         run("xdotool", "windowmove", "--sync", editor, "100", "80")
         time.sleep(1)
@@ -465,7 +465,7 @@ def main():
                 "sleep", ".1", "keyup", "Alt_L", "sleep", ".4")
 
         def reopen():
-            click(root, 810, 191)
+            click(root, 105, 546)  # First History card: Edit.
             window = wait(lambda: windows("Screenshot editor"), "reopened editor")[0]
             run("xdotool", "windowmove", "--sync", window, "100", "80")
             time.sleep(.6)
