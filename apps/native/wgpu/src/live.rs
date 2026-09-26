@@ -5745,7 +5745,7 @@ fn clipboard_matches(
     }
 }
 
-fn reveal(path: &Path) -> std::io::Result<()> {
+pub(crate) fn reveal(path: &Path) -> std::io::Result<()> {
     if !path.is_file() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
