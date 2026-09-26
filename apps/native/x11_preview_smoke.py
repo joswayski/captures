@@ -317,11 +317,11 @@ def main():
                 root = wait(lambda: windows("Captures"), "login Preferences workspace")[0]
                 time.sleep(1)
                 click(root, 196, 18)
-                click(root, 75, 265)
+                click(root, 75, 321)
                 time.sleep(1)
                 shot(root, f"login-{appearance}-off")
                 assert not list(autostart.glob("*.desktop")), "saved setting must not register a login item"
-                click(root, 829, 576)
+                click(root, 857, 607)
                 entry = wait(lambda: next(autostart.glob("*.desktop"), None), "explicit login registration")
                 owned = entry.read_bytes()
                 shot(root, f"login-{appearance}-on")
@@ -349,10 +349,10 @@ def main():
                     result = subprocess.run(common, env=env, capture_output=True, timeout=10)
                     assert result.returncode == 0, result.stderr
                     root = wait(lambda: windows("Captures"), "relaunch restores live Preferences")[0]
-                    click(root, 75, 265)
+                    click(root, 75, 321)
                     time.sleep(1)
                     shot(root, f"login-{appearance}-restored")
-                    click(root, 829, 576)
+                    click(root, 857, 607)
                     wait(lambda: not entry.exists(), "explicit disable after hidden launch")
                     run("xdotool", "key", "ctrl+q")
                     wait(lambda: not Path(f"/proc/{pid}").exists(), "normal exit after login launch")
@@ -371,7 +371,7 @@ def main():
                 root = wait(lambda: windows("Captures"), "conflicting login entry Preferences")[0]
                 time.sleep(1)
                 click(root, 196, 18)
-                click(root, 75, 265)
+                click(root, 75, 321)
                 time.sleep(1)
                 shot(root, f"login-{appearance}-conflict")
                 assert entry.read_bytes() == conflict
@@ -387,7 +387,7 @@ def main():
             root = wait(lambda: windows("Captures"), "missing tray exposes login recovery window")[0]
             time.sleep(1)
             click(root, 196, 18)
-            click(root, 75, 265)
+            click(root, 75, 321)
             time.sleep(1)
             shot(root, "login-without-tray")
             run("xdotool", "key", "ctrl+q")
