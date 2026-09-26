@@ -65,11 +65,16 @@ pub enum Action {
     Cancel,
 }
 
+/// Shipping empty-click feedback duration (`showSelectionFeedback`).
+const SELECTION_FEEDBACK: std::time::Duration = std::time::Duration::from_millis(1_800);
+
 #[derive(Default)]
 pub struct Selector {
     rect: Option<Rect>,
     aspect: Aspect,
     drag: Option<Drag>,
+    /// "Click and drag to select a region" after a click that selected nothing.
+    feedback_until: Option<std::time::Instant>,
 }
 
 impl Selector {
@@ -96,62 +101,26 @@ impl Selector {
         }
     }
 
+    /// The shipping direct region overlay: no toolbar, a completed drag
+    /// commits immediately, and a click without a region shows feedback.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         tokens: &Tokens,
         frozen: Option<&TextureHandle>,
-        auto_start: bool,
         overlay_bounds: Option<Bounds>,
     ) -> Option<Action> {
-        let bounds = overlay_bounds.unwrap_or(Bounds {
-            width: ui.max_rect().width().into(),
-            height: ui.max_rect().height().into(),
-        });
-        let mut action = self.show_surface(ui, tokens, frozen, auto_start, overlay_bounds);
+        let mut action = self.show_surface(ui, tokens, frozen, true, overlay_bounds);
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             action = Some(Action::Cancel);
-        } else if ui.input(|input| input.key_pressed(egui::Key::Enter)) && self.can_confirm() {
-            action = Some(Action::Confirm);
         }
-
-        let panel = egui::Area::new(egui::Id::unique("region-selector-toolbar"))
-            .anchor(Align2::CENTER_BOTTOM, egui::vec2(0., -26.))
-            .order(egui::Order::Foreground)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::new()
-                    .fill(tokens.color("glass-strong"))
-                    .stroke(Stroke::new(1., tokens.color("glass-border")))
-                    .corner_radius(tokens.number("r-2xl") as u8)
-                    .inner_margin(tokens.number("s-4") as i8)
-                    .show(ui, |ui| {
-                        tokens.glass_controls(ui);
-                        ui.horizontal(|ui| {
-                            if ui.button("×").on_hover_text("Cancel (Esc)").clicked() {
-                                action = Some(Action::Cancel);
-                            }
-                            ui.separator();
-                            self.show_aspect_picker(ui, tokens, bounds);
-                            if ui
-                                .add_enabled(
-                                    self.can_confirm(),
-                                    egui::Button::new(
-                                        RichText::new("Capture region")
-                                            .color(tokens.color("theme-accent-ink")),
-                                    )
-                                    .fill(tokens.color("theme-accent"))
-                                    .stroke(Stroke::NONE),
-                                )
-                                .on_hover_text("Capture region (Enter)")
-                                .clicked()
-                            {
-                                action = Some(Action::Confirm);
-                            }
-                        });
-                    });
-            });
-        if panel.response.contains_pointer() && ui.input(|input| input.pointer.any_pressed()) {
-            self.drag = None;
+        if let Some(until) = self.feedback_until {
+            let remaining = until.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                self.feedback_until = None;
+            } else {
+                ui.ctx().request_repaint_after(remaining);
+            }
         }
         action
     }
@@ -192,6 +161,11 @@ impl Selector {
         let created = self.drag_creates_selection();
         let capturable = drag_stopped && self.end();
         let auto_confirm = drag_stopped && created && capturable && auto_start;
+        if auto_start && (response.clicked() || (drag_stopped && created && !capturable)) {
+            self.feedback_until = Some(std::time::Instant::now() + SELECTION_FEEDBACK);
+        } else if response.drag_started() {
+            self.feedback_until = None;
+        }
 
         paint_surface(
             ui,
@@ -200,6 +174,7 @@ impl Selector {
             frozen,
             self.rect,
             self.drag.is_some(),
+            self.feedback_until.is_some(),
         );
         auto_confirm.then_some(Action::Confirm)
     }
@@ -414,6 +389,7 @@ fn paint_surface(
     frozen: Option<&TextureHandle>,
     selection: Option<Rect>,
     dragging: bool,
+    feedback: bool,
 ) {
     let surface = coordinates.surface;
     let painter = ui.painter();
@@ -491,7 +467,11 @@ fn paint_surface(
         painter.text(
             surface.center() - egui::vec2(0., 28.),
             Align2::CENTER_CENTER,
-            "Drag to select a region",
+            if feedback {
+                "Click and drag to select a region"
+            } else {
+                "Drag to select a region"
+            },
             FontId::proportional(tokens.number("text-xl")),
             tokens.color("glass-text"),
         );
@@ -566,7 +546,13 @@ mod tests {
             egui::Id::unique("selector-input-test"),
             egui::UiBuilder::new().max_rect(screen),
         );
-        let action = selector.show(&mut ui, &tokens, None, auto_start, None);
+        // `auto_start` exercises the direct overlay; otherwise the New Capture
+        // menu's shared confirm-later surface.
+        let action = if auto_start {
+            selector.show(&mut ui, &tokens, None, None)
+        } else {
+            selector.show_surface(&mut ui, &tokens, None, false, None)
+        };
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         action
@@ -604,6 +590,7 @@ mod tests {
             }),
             aspect: Aspect::SixteenNine,
             drag: None,
+            feedback_until: None,
         };
         selector.apply_aspect(BOUNDS);
         let preset = selector.rect().unwrap();
@@ -643,6 +630,7 @@ mod tests {
             }),
             aspect: Aspect::SixteenNine,
             drag: None,
+            feedback_until: None,
         };
         selector.begin(Point { x: 30., y: 40. });
         selector.clear_selection();
@@ -729,6 +717,49 @@ mod tests {
         );
         assert_eq!(action, None);
         assert_rect(selector.rect().unwrap(), [50., 60., 230., 130.]);
+    }
+
+    #[test]
+    fn direct_overlay_click_without_region_shows_shipping_feedback() {
+        let ctx = egui::Context::default();
+        let mut selector = Selector::default();
+        run_input(&ctx, &mut selector, vec![], true);
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![
+                egui::Event::PointerMoved(egui::pos2(50., 60.)),
+                pointer(egui::pos2(50., 60.), true, egui::Modifiers::NONE),
+            ],
+            true,
+        );
+        let action = run_input(
+            &ctx,
+            &mut selector,
+            vec![pointer(egui::pos2(50., 60.), false, egui::Modifiers::NONE)],
+            true,
+        );
+        assert_eq!(action, None, "a click is not a region");
+        assert!(
+            selector.feedback_until.is_some(),
+            "shows Click and drag to select a region"
+        );
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![pointer(egui::pos2(60., 70.), true, egui::Modifiers::NONE)],
+            true,
+        );
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![egui::Event::PointerMoved(egui::pos2(260., 170.))],
+            true,
+        );
+        assert!(
+            selector.feedback_until.is_none(),
+            "dragging clears the feedback"
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::{
 use eframe::egui;
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder, TrayIconEvent,
-    menu::{Menu, MenuEvent, MenuItem},
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, accelerator::Accelerator},
 };
 #[cfg(target_os = "windows")]
 use tray_icon::{MouseButton, MouseButtonState};
@@ -15,45 +15,197 @@ use tray_icon::{MouseButton, MouseButtonState};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     NewCapture,
-    ShowRecordingControls,
     CaptureDisplay,
     CaptureRegion,
     CaptureWindow,
+    RecordRegion,
+    RecordWindow,
+    RecordDisplay,
     History,
     Preferences,
+    SendFeedback,
     OpenOutputFolder,
     #[cfg(target_os = "linux")]
     Unavailable,
     Quit,
 }
 
-/// Shipping tray labels and order (`build_tray_menu`), plus the native-only
-/// Show Recording Controls item. Separators are deferred: the X11 smokes
-/// address rows by equal-height index.
-const MENU_ITEMS: [(&str, &str); 9] = [
-    ("new-capture", "New Capture…"),
-    ("show-recording-controls", "Show Recording Controls"),
-    ("capture-region", "Screenshot Region"),
-    ("capture-window", "Screenshot Window"),
-    ("capture-display", "Screenshot Display"),
-    ("history", "Capture History…"),
-    ("output", "Open Save Location"),
-    ("preferences", "Preferences"),
-    ("quit", "Quit Captures"),
+/// One row of the shipping tray menu (`build_tray_menu`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Row {
+    Item {
+        id: &'static str,
+        label: &'static str,
+        shortcut: Option<Shortcut>,
+    },
+    /// "Check for Updates…" stays disabled until signed updates are connected.
+    Updates,
+    Separator,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Shortcut {
+    NewCapture,
+    Region,
+    Window,
+    Display,
+    RecordRegion,
+    RecordWindow,
+    RecordDisplay,
+}
+
+const fn item(id: &'static str, label: &'static str, shortcut: Option<Shortcut>) -> Row {
+    Row::Item {
+        id,
+        label,
+        shortcut,
+    }
+}
+
+/// Shipping order, without the pinned update row used only when an update is
+/// available. Hidden recording controls return through any tray action, as the
+/// shipping tray restores them through activation and New Capture.
+const MENU: [Row; 15] = [
+    item("new-capture", "New Capture…", Some(Shortcut::NewCapture)),
+    item(
+        "capture-region",
+        "Screenshot Region",
+        Some(Shortcut::Region),
+    ),
+    item(
+        "capture-window",
+        "Screenshot Window",
+        Some(Shortcut::Window),
+    ),
+    item(
+        "capture-display",
+        "Screenshot Display",
+        Some(Shortcut::Display),
+    ),
+    item(
+        "record-region",
+        "Record Region",
+        Some(Shortcut::RecordRegion),
+    ),
+    item(
+        "record-window",
+        "Record Window",
+        Some(Shortcut::RecordWindow),
+    ),
+    item(
+        "record-display",
+        "Record Display",
+        Some(Shortcut::RecordDisplay),
+    ),
+    Row::Separator,
+    item("history", "Capture History…", None),
+    item("output", "Open Save Location", None),
+    item("preferences", "Preferences", None),
+    item("send-feedback", "Send Feedback…", None),
+    Row::Updates,
+    Row::Separator,
+    item("quit", "Quit Captures", None),
 ];
 
+/// Saved shortcuts shown as menu accelerators, refreshed when settings change.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MenuShortcuts {
+    new_capture: String,
+    region: String,
+    window: String,
+    display: String,
+    record_region: String,
+    record_window: String,
+    record_display: String,
+}
+
+impl MenuShortcuts {
+    pub fn from_settings(settings: &captures_settings::AppSettings) -> Self {
+        Self {
+            new_capture: settings.new_capture_shortcut.clone(),
+            region: settings.region_shortcut.clone(),
+            window: settings.window_shortcut.clone(),
+            display: settings.display_shortcut.clone(),
+            record_region: settings.recording.video_shortcut.clone(),
+            record_window: settings.recording.window_shortcut.clone(),
+            record_display: settings.recording.display_shortcut.clone(),
+        }
+    }
+
+    fn get(&self, shortcut: Shortcut) -> &str {
+        match shortcut {
+            Shortcut::NewCapture => &self.new_capture,
+            Shortcut::Region => &self.region,
+            Shortcut::Window => &self.window,
+            Shortcut::Display => &self.display,
+            Shortcut::RecordRegion => &self.record_region,
+            Shortcut::RecordWindow => &self.record_window,
+            Shortcut::RecordDisplay => &self.record_display,
+        }
+    }
+}
+
+/// Shipping `tray_accelerator`: `KeyA`/`Digit1` codes become their key.
+fn accelerator(shortcut: &str) -> Option<Accelerator> {
+    let shortcut = shortcut.trim();
+    if shortcut.is_empty() {
+        return None;
+    }
+    shortcut
+        .split('+')
+        .map(|token| {
+            let token = token.trim();
+            let lower = token.to_ascii_lowercase();
+            if (lower.starts_with("digit") && token.len() == 6)
+                || (lower.starts_with("key") && token.len() == 4)
+            {
+                token[token.len() - 1..].to_owned()
+            } else {
+                token.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+        .parse()
+        .ok()
+}
+
+fn build_menu(shortcuts: &MenuShortcuts) -> Result<Menu, String> {
+    let menu = Menu::new();
+    for row in MENU {
+        let result = match row {
+            Row::Item {
+                id,
+                label,
+                shortcut,
+            } => menu.append(&MenuItem::with_id(
+                id,
+                label,
+                true,
+                shortcut.and_then(|shortcut| accelerator(shortcuts.get(shortcut))),
+            )),
+            Row::Updates => menu.append(&MenuItem::with_id(
+                "check-updates",
+                "Check for Updates…",
+                false,
+                None,
+            )),
+            Row::Separator => menu.append(&PredefinedMenuItem::separator()),
+        };
+        result.map_err(|error| error.to_string())?;
+    }
+    Ok(menu)
+}
+
 pub struct Tray {
-    _icon: TrayIcon,
+    icon: TrayIcon,
     actions: Receiver<Action>,
+    shortcuts: MenuShortcuts,
 }
 
 impl Tray {
-    pub fn new(ctx: egui::Context) -> Result<Self, String> {
-        let menu = Menu::new();
-        for (id, label) in MENU_ITEMS {
-            menu.append(&MenuItem::with_id(id, label, true, None))
-                .map_err(|error| error.to_string())?;
-        }
+    pub fn new(ctx: egui::Context, shortcuts: MenuShortcuts) -> Result<Self, String> {
+        let menu = build_menu(&shortcuts)?;
 
         let image =
             image::load_from_memory(include_bytes!("../../../desktop/src-tauri/icons/32x32.png"))
@@ -79,12 +231,15 @@ impl Tray {
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             let action = match event.id.0.as_str() {
                 "new-capture" => Some(Action::NewCapture),
-                "show-recording-controls" => Some(Action::ShowRecordingControls),
                 "capture-display" => Some(Action::CaptureDisplay),
                 "capture-region" => Some(Action::CaptureRegion),
                 "capture-window" => Some(Action::CaptureWindow),
+                "record-region" => Some(Action::RecordRegion),
+                "record-window" => Some(Action::RecordWindow),
+                "record-display" => Some(Action::RecordDisplay),
                 "history" => Some(Action::History),
                 "preferences" => Some(Action::Preferences),
+                "send-feedback" => Some(Action::SendFeedback),
                 "output" => Some(Action::OpenOutputFolder),
                 "quit" => Some(Action::Quit),
                 _ => None,
@@ -111,13 +266,28 @@ impl Tray {
             let _ = (&tray_actions, &ctx, event);
         }));
         Ok(Self {
-            _icon: icon,
+            icon,
             actions: receiver,
+            shortcuts,
         })
     }
 
     pub fn try_recv(&self) -> Option<Action> {
         self.actions.try_recv().ok()
+    }
+
+    /// Rebuild accelerators after the saved shortcuts change.
+    pub fn set_shortcuts(&mut self, shortcuts: MenuShortcuts) {
+        if shortcuts == self.shortcuts {
+            return;
+        }
+        match build_menu(&shortcuts) {
+            Ok(menu) => {
+                self.icon.set_menu(Some(Box::new(menu)));
+                self.shortcuts = shortcuts;
+            }
+            Err(error) => eprintln!("Could not refresh tray shortcuts: {error}"),
+        }
     }
 
     /// Physical screen rect `(x, y, width, height)` of the tray icon, where
@@ -126,7 +296,7 @@ impl Tray {
     pub fn rect(&self) -> Option<(f64, f64, f64, f64)> {
         #[cfg(target_os = "windows")]
         {
-            let rect = self._icon.rect()?;
+            let rect = self.icon.rect()?;
             let (width, height) = (f64::from(rect.size.width), f64::from(rect.size.height));
             (width > 0. && height > 0.).then_some((rect.position.x, rect.position.y, width, height))
         }
@@ -286,21 +456,47 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
-    fn tray_labels_match_shipping_menu_order() {
+    fn tray_rows_match_shipping_menu_order() {
+        let rows = MENU.map(|row| match row {
+            Row::Item { label, .. } => label,
+            Row::Updates => "Check for Updates…",
+            Row::Separator => "---",
+        });
         assert_eq!(
-            MENU_ITEMS.map(|(_, label)| label),
+            rows,
             [
                 "New Capture…",
-                "Show Recording Controls",
                 "Screenshot Region",
                 "Screenshot Window",
                 "Screenshot Display",
+                "Record Region",
+                "Record Window",
+                "Record Display",
+                "---",
                 "Capture History…",
                 "Open Save Location",
                 "Preferences",
+                "Send Feedback…",
+                "Check for Updates…",
+                "---",
                 "Quit Captures",
             ]
         );
+    }
+
+    #[test]
+    fn saved_shortcuts_become_menu_accelerators() {
+        for shortcut in [
+            "CommandOrControl+Shift+Space",
+            "Ctrl+Shift+F10",
+            "Alt+KeyR",
+            "Shift+Digit4",
+        ] {
+            assert!(accelerator(shortcut).is_some(), "{shortcut}");
+        }
+        assert_eq!(accelerator("Alt+KeyR"), "Alt+R".parse().ok());
+        assert!(accelerator("").is_none());
+        assert!(accelerator("Nonsense+Key").is_none());
     }
 
     #[test]

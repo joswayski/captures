@@ -228,6 +228,8 @@ Run `python3 apps/native/x11_onboarding_smoke.py --binary PATH --output NEW_DIRE
 for first-run, hidden-launch, capture-gating, queued-media and completion/relaunch
 checks. Other live smoke fixtures explicitly represent completed profiles.
 AppKit tests render permission/error states under `CAPTURES_TEST_ARTIFACTS`.
+Setup copy and per-state labels come from `captures_app::onboarding`; change them
+there so both native hosts stay identical to `Onboarding.tsx`.
 These do not verify physical TCC, Windows input or Wayland capture.
 
 Run `python3 apps/native/x11_update_notice_smoke.py --binary PATH --output NEW_DIRECTORY`

@@ -278,11 +278,12 @@ pub struct Preferences {
     login_error: Option<String>,
     onboarding: Option<captures_app::onboarding::State>,
     onboarding_error: Option<String>,
-    onboarding_busy: bool,
+    /// The in-flight setup request, if any.
+    onboarding_busy: Option<captures_app::onboarding::Action>,
     permission_recovery_open: bool,
     permission_recovery: Option<captures_app::onboarding::State>,
     permission_recovery_error: Option<String>,
-    permission_recovery_busy: bool,
+    permission_recovery_busy: Option<captures_app::onboarding::Action>,
     system_reduced_motion: bool,
     motion_pending: bool,
 }
@@ -349,11 +350,11 @@ impl Preferences {
             login_error: None,
             onboarding: None,
             onboarding_error: None,
-            onboarding_busy: true,
+            onboarding_busy: Some(captures_app::onboarding::Action::Check),
             permission_recovery_open: false,
             permission_recovery: None,
             permission_recovery_error: None,
-            permission_recovery_busy: false,
+            permission_recovery_busy: None,
             system_reduced_motion: false,
             motion_pending: false,
         }
@@ -413,7 +414,8 @@ impl Preferences {
     }
 
     pub fn onboarding_pending(&self) -> bool {
-        self.onboarding_busy || (self.onboarding.is_none() && self.onboarding_error.is_none())
+        self.onboarding_busy.is_some()
+            || (self.onboarding.is_none() && self.onboarding_error.is_none())
     }
 
     pub fn onboarding_error(&self) -> Option<&str> {
@@ -429,14 +431,30 @@ impl Preferences {
         self.send_onboarding(captures_app::onboarding::Action::Complete);
     }
 
+    pub fn request_onboarding_screen(&mut self) {
+        self.send_onboarding(captures_app::onboarding::Action::RequestScreen);
+    }
+
+    pub fn request_onboarding_microphone(&mut self) {
+        self.send_onboarding(captures_app::onboarding::Action::RequestMicrophone);
+    }
+
+    pub fn onboarding_state(&self) -> Option<&captures_app::onboarding::State> {
+        self.onboarding.as_ref()
+    }
+
+    pub fn onboarding_busy_action(&self) -> Option<captures_app::onboarding::Action> {
+        self.onboarding_busy
+    }
+
     fn send_onboarding(&mut self, action: captures_app::onboarding::Action) {
-        if self.onboarding_busy {
+        if self.onboarding_busy.is_some() {
             return;
         }
-        self.onboarding_busy = true;
+        self.onboarding_busy = Some(action);
         self.onboarding_error = None;
         if self.io.tx.send(Command::Onboarding(action)).is_err() {
-            self.onboarding_busy = false;
+            self.onboarding_busy = None;
             self.onboarding_error =
                 Some("Setup service is unavailable. Restart Captures to retry.".into());
         }
@@ -449,7 +467,7 @@ impl Preferences {
 
     pub fn show_permission_recovery_error_fixture(&mut self) {
         self.permission_recovery_open = true;
-        self.permission_recovery_busy = false;
+        self.permission_recovery_busy = None;
         self.permission_recovery = None;
         self.permission_recovery_error = Some("Permission check fixture failed.".into());
     }
@@ -466,7 +484,12 @@ impl Preferences {
         self.permission_recovery_error.as_deref()
     }
 
+    #[cfg(test)]
     pub fn permission_recovery_busy(&self) -> bool {
+        self.permission_recovery_busy.is_some()
+    }
+
+    pub fn permission_recovery_busy_action(&self) -> Option<captures_app::onboarding::Action> {
         self.permission_recovery_busy
     }
 
@@ -479,7 +502,7 @@ impl Preferences {
     }
 
     pub fn close_permission_recovery(&mut self) {
-        if !self.permission_recovery_busy {
+        if self.permission_recovery_busy.is_none() {
             self.permission_recovery_open = false;
             self.permission_recovery = None;
             self.permission_recovery_error = None;
@@ -487,11 +510,11 @@ impl Preferences {
     }
 
     fn send_permission_recovery(&mut self, action: captures_app::onboarding::Action) {
-        if self.permission_recovery_busy {
+        if self.permission_recovery_busy.is_some() {
             return;
         }
         debug_assert_ne!(action, captures_app::onboarding::Action::Complete);
-        self.permission_recovery_busy = true;
+        self.permission_recovery_busy = Some(action);
         self.permission_recovery_error = None;
         if self
             .io
@@ -499,7 +522,7 @@ impl Preferences {
             .send(Command::PermissionRecovery(action))
             .is_err()
         {
-            self.permission_recovery_busy = false;
+            self.permission_recovery_busy = None;
             self.permission_recovery_error =
                 Some("Permission service is unavailable. Reopen Captures to retry.".into());
         }
@@ -529,6 +552,11 @@ impl Preferences {
         if !self.value.is_null() {
             self.set(&["show_update_changelog"], json!(show));
         }
+    }
+
+    /// Tray "Send Feedback…": show the feedback form in Preferences.
+    pub fn open_feedback(&mut self, ctx: &egui::Context) {
+        self.feedback.open(ctx);
     }
 
     pub fn persisted_generation(&self) -> u64 {
@@ -597,7 +625,7 @@ impl Preferences {
                     }
                 }
                 Message::Onboarding(result) => {
-                    self.onboarding_busy = false;
+                    self.onboarding_busy = None;
                     match result {
                         Ok(state) => {
                             self.onboarding = Some(state);
@@ -607,7 +635,7 @@ impl Preferences {
                     }
                 }
                 Message::PermissionRecovery(result) => {
-                    self.permission_recovery_busy = false;
+                    self.permission_recovery_busy = None;
                     match result {
                         Ok(state) => {
                             self.permission_recovery = Some(state);
@@ -1945,7 +1973,7 @@ mod tests {
 
         prefs.permission_recovery_open = true;
         prefs.permission_recovery = Some(captures_app::onboarding::State {
-            platform: "test",
+            platform: "test".into(),
             onboarding_completed: true,
             screen_recording_required: true,
             screen_recording_granted: false,
@@ -1953,6 +1981,7 @@ mod tests {
             screen_recording_requested_this_launch: true,
             microphone_granted: false,
             microphone_can_request: false,
+            microphone_requested_this_launch: false,
         });
         prefs.close_permission_recovery();
         assert!(!prefs.permission_recovery_open(), "Done works while denied");
