@@ -277,10 +277,12 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         // the previous frame's widgets, so skipping it while the pointer was
         // over a control would lose the next drag that starts off-control.
         // Controls are added later and stay on top for clicks.
+        // Not focusable: shipping's draggable image is no Tab stop, so Tab
+        // goes straight to the card controls (`:focus-within`).
         let response = ui.interact(
             card,
             ui.scope_id().with(("file-drag", view.artifact_id)),
-            egui::Sense::drag(),
+            egui::Sense::DRAG,
         );
         if response.drag_started_by(egui::PointerButton::Primary) && !pointer_over_control {
             action = Some(Action::DragFile);
@@ -1577,6 +1579,84 @@ mod tests {
                 );
             }
             output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn tab_walks_card_controls_in_shipping_order_and_reveals_them() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let texture = ctx.load_texture(
+            "tab",
+            egui::ColorImage::filled([2, 2], Color32::WHITE),
+            Default::default(),
+        );
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 160.));
+        let tab = egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let frame = |events: Vec<egui::Event>| {
+            // The pointer stays outside: only keyboard focus reveals chrome.
+            let mut events = events;
+            events.insert(0, egui::Event::PointerMoved(egui::pos2(500., 500.)));
+            let mut output = ctx.run_ui(raw(screen, events), |ui| {
+                show(
+                    ui,
+                    &tokens,
+                    View {
+                        artifact_id: "fixture",
+                        texture: &texture,
+                        width: 391,
+                        height: 207,
+                        size_bytes: 245_760,
+                        clipboard_current: false,
+                        saved_feedback: false,
+                        busy: None,
+                        message: None,
+                        can_save: true,
+                        saved: true,
+                        interactive: true,
+                        collapsed: false,
+                        stack_count: 1,
+                        depth: 0,
+                        desktop_pointer: None,
+                        reject_offset: 0.,
+                        right_anchor: true,
+                        top_anchor: false,
+                        blurred: None,
+                        editor: EditorPhase::Idle,
+                        editor_elapsed_ms: 0.,
+                        hover_locked: false,
+                        reduced_motion: false,
+                    },
+                );
+            });
+            output.textures_delta.clear();
+            let update = output.platform_output.accesskit_update.take().unwrap();
+            let focused = update
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == update.focus)
+                .and_then(|(_, node)| node.label().map(str::to_owned));
+            let painted = |label: &str| {
+                output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)
+                })
+            };
+            (focused, painted("Copy"), painted("391 × 207 · 246 KB"))
+        };
+        let (_, copy, size) = frame(vec![]);
+        assert!(!copy && size, "idle chrome stays hidden");
+        for label in ["Close", "Delete", "Edit", "Copy", "Show in Folder"] {
+            frame(vec![tab.clone()]);
+            let (focused, copy, size) = frame(vec![]);
+            assert_eq!(focused.as_deref(), Some(label));
+            assert!(copy && !size, "focus within the card reveals its controls");
         }
     }
 

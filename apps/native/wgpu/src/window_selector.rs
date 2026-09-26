@@ -161,6 +161,12 @@ impl WindowSelector {
         menu: bool,
     ) -> Option<SelectionTarget> {
         let surface = ui.max_rect();
+        let ui = &mut crate::accessibility::group(
+            ui,
+            surface,
+            "window-selector",
+            capture_menu::WINDOW_SELECTOR_LABEL,
+        );
         let coordinates = CoordinateMap::new(surface, view.display);
         let response = ui.allocate_rect(surface, Sense::click());
         if self.scripted
@@ -186,6 +192,22 @@ impl WindowSelector {
             }
         }
 
+        // AppKit names the hovered target, or the display over the desktop.
+        let target = selection_label(
+            Some(
+                self.presentation_target()
+                    .unwrap_or(SelectionTarget::Display),
+            ),
+            view.windows,
+        );
+        crate::accessibility::set_value(ui, target);
+        crate::accessibility::text(
+            ui,
+            "target",
+            egui::Rect::from_min_size(surface.min, egui::Vec2::ZERO),
+            &capture_menu::target_description(target),
+            true,
+        );
         paint_surface(
             ui,
             tokens,
@@ -619,7 +641,7 @@ fn window_label(window: &WindowDescriptor) -> &str {
 
 fn selection_label(target: Option<SelectionTarget>, windows: &[WindowDescriptor]) -> &str {
     match target {
-        Some(SelectionTarget::Display) => "Entire display",
+        Some(SelectionTarget::Display) => capture_menu::DISPLAY_TARGET,
         Some(SelectionTarget::Window(index)) => windows
             .get(index)
             .map(window_label)
@@ -999,6 +1021,56 @@ mod tests {
             Some(Action::Confirm(SelectionTarget::Window(1)))
         );
         assert_eq!(selector.selected(), None);
+    }
+
+    #[test]
+    fn overlay_exposes_appkit_group_name_and_live_target() {
+        use crate::accessibility::tests::{contains, find, find_value, tree};
+        use egui::accesskit::{Live, Role};
+        let ctx = egui::Context::default();
+        let mut selector = WindowSelector::default();
+        let display = display();
+        let (windows, shell) = targets();
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let mut frame = |events| {
+            tree(&ctx, egui::vec2(1000., 720.), events, |ui| {
+                selector.show(
+                    ui,
+                    &tokens,
+                    View {
+                        frozen: None,
+                        display: &display,
+                        windows: &windows,
+                        auto_start: true,
+                    },
+                    |point| {
+                        target_index_at_point(
+                            &windows,
+                            &shell,
+                            point,
+                            Point {
+                                x: f64::from(display.x),
+                                y: f64::from(display.y),
+                            },
+                            1.,
+                        )
+                    },
+                );
+            })
+        };
+        let idle = frame(vec![]);
+        let (group, node) = find(&idle, "Capture window selector").expect("selector group");
+        assert_eq!(node.role(), Role::Group);
+        assert_eq!(node.value(), Some("Entire display"));
+        let (target, text) = find_value(&idle, "Target: Entire display").expect("target");
+        assert_eq!(text.role(), Role::Label);
+        assert_eq!(text.live(), Some(Live::Polite));
+        assert!(contains(&idle, group, target));
+
+        let hovered = frame(vec![egui::Event::PointerMoved(egui::pos2(600., 300.))]);
+        let (_, node) = find(&hovered, "Capture window selector").expect("selector group");
+        assert_eq!(node.value(), Some("front"));
+        assert!(find_value(&hovered, "Target: front").is_some());
     }
 
     #[test]

@@ -393,7 +393,10 @@ If the candidate cannot query usable bounds, the screenshot stays in history and
 the host reports that it cannot position a preview rather than guessing.
 
 macOS uses a nonactivating panel; X11 uses an unmanaged notification window to
-avoid activation by the window manager. Private-X11 tests cover real pixels,
+avoid activation by the window manager. Keyboard focus on a card reveals its
+controls like shipping `:focus-within`. The macOS panel takes keyboard focus only
+while Captures is active (Ctrl-F6, Cmd-`), and clicks never make it key. The X11
+window never receives keyboard focus, so its controls are pointer-only there. Private-X11 tests cover real pixels,
 placement, focus and actions; `x11_preview_smoke.py --stack` additionally checks
 per-card routing, compact arrivals/cancellation and nondestructive Clear all in
 all four corners, plus eight-card overflow at bottom-left. CI runs this stack

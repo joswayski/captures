@@ -289,6 +289,44 @@ final class HistoryClearTests: XCTestCase {
         }
     }
 
+    func testHistoryTabOrderFollowsShippingHeaderFiltersRecoveryThenGrid() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = PreviewView.fixtureImage(scale: 1)
+        let path = directory.appendingPathComponent("fixture.png")
+        try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])).write(to: path)
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 600)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame); window.contentView = root
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
+            failPartway: false, kinds: ["screenshot", "video"], missing: [])
+        let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
+            historyRoot: directory.path, settingsPath: nil, transport: transport,
+            recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
+        defer { withExtendedLifetime(controller) {} }
+        let grid = try historyGrid(root)
+        try waitUntil { grid.numberOfRows == 2 }
+        XCTAssertTrue(window.initialFirstResponder === grid, "The grid starts focused for its arrow keys")
+        let order = KeyViewLoop.order(from: grid)
+        XCTAssertFalse(order.contains { $0.isDescendant(of: grid) && $0 !== grid },
+                       "Tab visits the grid once, not each card control")
+        let copy = HistoryCopy.current
+        let cancel = try XCTUnwrap(order.firstIndex { $0.accessibilityLabel() == copy.cancelLabel })
+        let deleteAll = try XCTUnwrap(order.firstIndex { $0.accessibilityLabel() == copy.deleteAllLabel })
+        XCTAssertLessThan(cancel, deleteAll, "Cancel precedes Delete all, like shipping")
+        let pills = order.indices.filter { order[$0] is HistoryFilterPill }
+        XCTAssertEqual(pills.count, CaptureHistoryFilter.allCases.count)
+        XCTAssertGreaterThan(pills.first ?? 0, deleteAll)
+        let retry = try XCTUnwrap(keyViewIndex(order, "Retry list"))
+        XCTAssertGreaterThan(retry, pills.last ?? 0, "Interrupted recordings follow the filters")
+        XCTAssertTrue(order.last?.nextKeyView === grid, "The grid ends the loop after interrupted recordings")
+    }
+
     private func historyGrid(_ root: NSView) throws -> HistoryGridView {
         try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? HistoryGridView)
     }

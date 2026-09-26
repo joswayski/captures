@@ -70,6 +70,29 @@ yet and opens keyboard settings in live mode, and fixtures show the login item a
 unavailable. Rendering was checked on X11 only; AppKit is covered by XCTest, and
 Windows, Wayland and screen-reader acceptance remain open.
 
+Accessibility and keyboard parity for setup, overlays and the main windows:
+wgpu now names the direct overlays like AppKit (AccessKit groups "Capture region
+selector" and "Capture window selector"; the window group's value is the hovered
+target, with a polite live "Target: …" description, and a capturable region reads
+"Selected region W × H logical pixels"). Its setup and recovery cards follow the
+shipping `Onboarding.tsx` aria attributes: the header is named by its title, the
+cards are a polite live region, each card is an article named by its heading, and
+errors are alerts. Statuses read "Granted", because shipping hides the check mark;
+AppKit matches that and exposes each card as a named group. AppKit windows no longer
+rely on the geometric default key-view loop. Setup, Preferences, History, the
+recording editor and the screenshot editor (whole window, with the export footer in
+shipping order) install explicit loops that follow the shipping DOM order, and each
+sets a first responder: the first usable setup control, the first Preferences
+section, the History grid, recording Play, and the active screenshot canvas.
+Preview cards reveal their controls on keyboard focus like shipping `:focus-within`.
+The AppKit panel stays nonactivating: it takes keyboard focus (Ctrl-F6, Cmd-`) only
+while Captures is already active, and clicks never make it key. On Windows the wgpu
+preview reaches its controls with Tab once its window is active. On X11 the preview
+is an override-redirect window that never receives keyboard focus, so its controls
+are pointer-only there. Feedback (being rebuilt) is not covered. XCTest checks the
+loop orders and wgpu tests inspect the AccessKit tree. VoiceOver, Narrator, Orca and
+physical Full Keyboard Access checks remain open.
+
 Direct region and window overlays (shortcut, tray and screenshot-during-recording)
 now follow the shipping `CaptureOverlay`: no toolbar, a completed region drag
 commits on release, a window/desktop click commits that window or the display,
@@ -116,8 +139,10 @@ Fresh live profiles now gate capture, shortcuts and queued external media on nat
 setup. Checking never prompts; explicit macOS requests record the executable
 identity before asking, offer Settings after denial, and keep microphone optional.
 Completion rechecks screen access and preserves trusted settings fields against
-older Preferences saves. AppKit provides foreground refresh and an explicit
-first-run restart, not automatic restart on focus. It flushes work, stops delivery,
+older Preferences saves. AppKit re-checks access every 1.5 seconds while setup
+waits for a grant and restarts automatically when the user returns from 2.5 seconds
+or more in System Settings with screen access still unreported, like shipping
+`Onboarding.tsx`; Restart Captures stays available. The restart flushes work, stops delivery,
 drains queued media and releases the instance owner before spawning the same
 development profile. Windows/X11 have no upfront screen prompt; hidden first-run
 launches expose setup, while completed profiles retain resident startup behavior.
@@ -144,7 +169,8 @@ permission cards with icon, description and either an action or a status
 microphone card carries "Optional" and offers Open Settings only after it was
 asked once this launch. The primary action is Start capturing, or Restart Captures
 when macOS needs a relaunch; a static halo stands in for the CTA pulse, so there
-is no motion to reduce. AppKit keeps Refresh status as a secondary action.
+is no motion to reduce. First-run setup has no Refresh button, like shipping;
+permission recovery keeps Refresh status in both hosts.
 `captures_app::onboarding` derives the copy and per-state decisions once
 (`State::presentation`, `copy()`), exposed to AppKit through the settings JSON ABI
 (`onboarding` responses carry `presentation`; `onboarding_copy` and
@@ -1293,7 +1319,8 @@ idle/hover media contrast and repeat outbound drags that start right after a
 control click (see [handoff](native-preview-handoff.md)). AppKit fixture coverage
 checks mirrored geometry, hidden controls and in-place saved-state updates;
 macOS CI must verify it. Windows physical presentation and input, screen-reader
-and keyboard traversal on nonactivating panels, and Wayland live-host rendering
+and physical keyboard traversal on nonactivating panels (see the keyboard slice
+below), and Wayland live-host rendering
 remain unverified. Cards now show shared `W × H · size` metadata, the shipping
 "Copied to clipboard" chip with Copy hidden while the clipboard still holds that
 capture, and a one-second ✓ Saved confirmation. Ownership follows the shared

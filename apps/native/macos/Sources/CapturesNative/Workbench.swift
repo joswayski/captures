@@ -801,9 +801,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !options.live }
     func applicationDidBecomeActive(_ notification: Notification) {
         if let permissionController, !permissionController.busy { permissionController.check() }
-        guard scene == "onboarding", onboardingController?.busy == false,
-              onboardingController?.state != nil else { return }
-        onboardingController?.check()
+        // Re-checks access, and restarts after a long enough visit to System
+        // Settings like the shipping setup window.
+        guard scene == "onboarding" else { return }
+        onboardingController?.becameActive()
+    }
+    func applicationDidResignActive(_ notification: Notification) {
+        guard scene == "onboarding" else { return }
+        onboardingController?.resignedActive()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

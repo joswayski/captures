@@ -143,6 +143,14 @@ then retry your capture. If your OS requires a restart, save your work before qu
 reopening Captures.";
 pub const RECOVERY_DONE: &str = "Done";
 
+/// Shipping `PERMISSION_POLL_MS`: re-check access this often while waiting
+/// for the user to grant it in the OS (see [`Presentation::waiting_for_permission`]).
+pub const PERMISSION_POLL_MS: u64 = 1_500;
+/// Shipping `SETTINGS_AWAY_MS`: after sending the user to screen settings,
+/// returning from at least this long away restarts automatically when
+/// access is still not reported (macOS applies it only after a relaunch).
+pub const SETTINGS_AWAY_MS: u64 = 2_500;
+
 /// State-independent setup copy, available before the first permission check.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct Copy {
@@ -161,6 +169,8 @@ pub struct Copy {
     pub recovery_title: &'static str,
     pub recovery_lede: &'static str,
     pub recovery_done: &'static str,
+    pub poll_interval_ms: u64,
+    pub settings_away_ms: u64,
 }
 
 pub const fn copy() -> Copy {
@@ -180,6 +190,8 @@ pub const fn copy() -> Copy {
         recovery_title: RECOVERY_TITLE,
         recovery_lede: RECOVERY_LEDE,
         recovery_done: RECOVERY_DONE,
+        poll_interval_ms: PERMISSION_POLL_MS,
+        settings_away_ms: SETTINGS_AWAY_MS,
     }
 }
 
@@ -216,6 +228,9 @@ pub struct Presentation {
     /// The OS applies the grant only after a relaunch; offer Restart instead.
     pub restart_required: bool,
     pub primary_label: &'static str,
+    /// Shipping polls while screen access is pending after a request (or its
+    /// switch is off) or the microphone was asked for and is still off.
+    pub waiting_for_permission: bool,
 }
 
 pub fn setup_title(platform: &str) -> &'static str {
@@ -331,6 +346,10 @@ impl State {
             screen_ready,
             restart_required,
             primary_label: if restart_required { RESTART } else { START },
+            waiting_for_permission: (pending
+                && (!self.screen_recording_can_request
+                    || self.screen_recording_requested_this_launch))
+                || (asked && !self.microphone_granted),
         }
     }
 }
@@ -720,6 +739,41 @@ mod tests {
         }
         assert!(LEDE.ends_with("unless you send it somewhere."));
         assert!(!LEDE.contains("  ") && !RECOVERY_LEDE.contains("  "));
+    }
+
+    #[test]
+    fn waiting_for_permission_matches_shipping_poll_conditions() {
+        let mut state = mac_state();
+        assert!(
+            !state.presentation().waiting_for_permission,
+            "nothing asked yet"
+        );
+        // Waiting for screen: requested this launch, or the switch is off.
+        state.screen_recording_requested_this_launch = true;
+        assert!(state.presentation().waiting_for_permission);
+        state.screen_recording_requested_this_launch = false;
+        state.screen_recording_can_request = false;
+        assert!(state.presentation().waiting_for_permission);
+        state.screen_recording_granted = true;
+        assert!(!state.presentation().waiting_for_permission);
+        // Waiting for the microphone once it was asked for.
+        state.microphone_requested_this_launch = true;
+        assert!(state.presentation().waiting_for_permission);
+        state.microphone_granted = true;
+        assert!(!state.presentation().waiting_for_permission);
+        // Screen access that needs no grant never polls.
+        let ready = State {
+            platform: "linux".into(),
+            screen_recording_required: false,
+            screen_recording_granted: true,
+            screen_recording_can_request: false,
+            ..mac_state()
+        };
+        assert!(!ready.presentation().waiting_for_permission);
+        assert_eq!(
+            (copy().poll_interval_ms, copy().settings_away_ms),
+            (1_500, 2_500)
+        );
     }
 
     #[test]

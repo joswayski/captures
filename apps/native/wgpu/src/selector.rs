@@ -152,6 +152,12 @@ impl Selector {
         menu: bool,
     ) -> Option<Action> {
         let surface = ui.max_rect();
+        let ui = &mut crate::accessibility::group(
+            ui,
+            surface,
+            "region-selector",
+            capture_menu::REGION_SELECTOR_LABEL,
+        );
         let bounds = overlay_bounds.unwrap_or(Bounds {
             width: surface.width().into(),
             height: surface.height().into(),
@@ -210,6 +216,16 @@ impl Selector {
             } else {
                 ui.ctx().request_repaint_after(remaining);
             }
+        }
+        // AppKit's size badge label: present only for a capturable region.
+        if let Some(rect) = self.rect.filter(|rect| selection::capturable(Some(*rect))) {
+            crate::accessibility::text(
+                ui,
+                "selection",
+                coordinates.rect(rect),
+                &capture_menu::region_description(rect.width, rect.height),
+                false,
+            );
         }
         paint_surface(
             ui,
@@ -869,6 +885,45 @@ mod tests {
 
         selector.begin(Point { x: 300., y: 180. });
         assert!(!selector.drag_creates_selection(), "resize is adjust-only");
+    }
+
+    #[test]
+    fn overlay_exposes_appkit_group_name_and_selected_region() {
+        use crate::accessibility::tests::{contains, find, find_value, tree};
+        use egui::accesskit::Role;
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let mut selector = Selector::default();
+        let mut frame = |events| {
+            tree(&ctx, egui::vec2(800., 600.), events, |ui| {
+                selector.show(ui, &tokens, None, None);
+            })
+        };
+        let idle = frame(vec![]);
+        let (_, node) = find(&idle, "Capture region selector").expect("selector group");
+        assert_eq!(node.role(), Role::Group);
+        assert!(
+            !idle.nodes.iter().any(|(_, node)| node
+                .value()
+                .is_some_and(|v| v.starts_with("Selected region"))),
+            "no size before a region exists"
+        );
+        frame(vec![
+            egui::Event::PointerMoved(egui::pos2(50., 60.)),
+            pointer(egui::pos2(50., 60.), true, egui::Modifiers::NONE),
+        ]);
+        frame(vec![egui::Event::PointerMoved(egui::pos2(250., 160.))]);
+        frame(vec![pointer(
+            egui::pos2(250., 160.),
+            false,
+            egui::Modifiers::NONE,
+        )]);
+        let selected = frame(vec![]);
+        let (group, _) = find(&selected, "Capture region selector").expect("selector group");
+        let (size, node) =
+            find_value(&selected, "Selected region 200 × 100 logical pixels").expect("size");
+        assert_eq!(node.role(), Role::Label);
+        assert!(contains(&selected, group, size));
     }
 
     #[test]

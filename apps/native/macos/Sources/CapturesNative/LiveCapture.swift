@@ -372,6 +372,18 @@ final class LiveCaptureController: NSObject {
         root.addSubview(recoveryPanel)
         renderRecovery()
         updateActions()
+        installKeyViewLoop()
+    }
+
+    /// Shipping DOM order for the controls both windows share: Cancel before
+    /// Delete all, the filters, interrupted recordings, then the grid. The
+    /// native capture controls follow the header in reading order. The grid
+    /// starts focused so its arrow keys work without a click.
+    private func installKeyViewLoop() {
+        guard let grid, let historyScroll, let recoveryPanel else { return }
+        var order = root.subviews.filter { $0 !== recoveryPanel }
+        order.insert(recoveryPanel, at: order.firstIndex { $0 === historyScroll } ?? order.endIndex)
+        KeyViewLoop.install(order, window: window, initial: grid)
     }
 
     /// Stack the toolbar, recovery section and grid from the current root size.
@@ -600,6 +612,7 @@ final class LiveCaptureController: NSObject {
         }
         content.frame.size.height = max(86, nextY)
         recoveryScroll.documentView = content
+        installKeyViewLoop()
         recoveryStatus.stringValue = recoveryBusy ? recoveryStage
             : (nextY > recoveryScroll.bounds.height ? "Scroll for full details." : "")
         if changed { layoutHistory() }

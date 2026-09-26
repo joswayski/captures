@@ -2,9 +2,11 @@
 //! setup window (`Onboarding.tsx` + `windows.css`). Copy and per-state
 //! decisions come from `captures_app::onboarding`, shared with AppKit.
 use captures_app::onboarding::{self as shared, Presentation, Status};
-use eframe::egui::{self, Align, FontId, Layout, Pos2, Rect, RichText, Stroke, Vec2};
+use eframe::egui::{
+    self, Align, FontId, Layout, Pos2, Rect, RichText, Stroke, Vec2, accesskit::Role,
+};
 
-use crate::tokens::Tokens;
+use crate::{accessibility, tokens::Tokens};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -40,6 +42,15 @@ const ACTIONS_WIDTH: f32 = 132.;
 /// (`welcome`) adds the app mark and the "Welcome to Captures" eyebrow;
 /// permission recovery uses the plain heading.
 pub fn header(ui: &mut egui::Ui, t: &Tokens, title: &str, lede: &str, welcome: bool) {
+    // `<header aria-labelledby="onboarding-setup-title">`; the mark is
+    // `aria-hidden` (it has no AccessKit node).
+    ui.scope(|ui| {
+        accessibility::set_group(ui, Role::Group, title);
+        header_contents(ui, t, title, lede, welcome);
+    });
+}
+
+fn header_contents(ui: &mut egui::Ui, t: &Tokens, title: &str, lede: &str, welcome: bool) {
     if welcome {
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(40.), egui::Sense::hover());
         app_mark(ui.painter(), t, rect);
@@ -53,12 +64,13 @@ pub fn header(ui: &mut egui::Ui, t: &Tokens, title: &str, lede: &str, welcome: b
         );
         ui.add_space(-t.number("s-2"));
     }
-    ui.label(
+    let heading = ui.label(
         RichText::new(title)
             .size(t.number("text-2xl"))
             .color(t.color("text"))
             .strong(),
     );
+    accessibility::heading(&heading, 1, title);
     ui.add_space(-t.number("s-2"));
     ui.label(
         RichText::new(lede)
@@ -81,6 +93,8 @@ pub fn cards(
         .stroke(Stroke::new(1., t.color("border-subtle")))
         .corner_radius(t.number("r-xl") as u8)
         .show(ui, |ui| {
+            // `.onboarding-permissions` is `aria-live="polite"`.
+            accessibility::set_live(ui);
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.;
             let screen = card(
@@ -145,6 +159,8 @@ fn card(
     let mut clicked = false;
     let pad = t.number("s-6");
     egui::Frame::new().inner_margin(pad as i8).show(ui, |ui| {
+        // `<article>` named by its `<h3>`.
+        accessibility::set_group(ui, Role::Article, title);
         ui.set_width(ui.available_width());
         let gap = t.number("s-5");
         let copy_width = (ui.available_width() - ICON - ACTIONS_WIDTH - 2. * gap).max(120.);
@@ -162,12 +178,13 @@ fn card(
                     ui.spacing_mut().interact_size.y = 0.;
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = t.number("s-4");
-                        ui.label(
+                        let heading = ui.label(
                             RichText::new(title)
                                 .size(t.number("text-md"))
                                 .color(t.color("text"))
                                 .strong(),
                         );
+                        accessibility::heading(&heading, 3, title);
                         if optional {
                             ui.label(
                                 RichText::new(shared::OPTIONAL)
@@ -239,12 +256,8 @@ fn status_pill(ui: &mut egui::Ui, t: &Tokens, status: Status) {
         ];
         ui.painter().line(points.to_vec(), Stroke::new(2., color));
     }
-    let label = if status.ready {
-        format!("{} ✓", status.label)
-    } else {
-        status.label.to_owned()
-    };
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &label));
+    // Shipping's check mark is `aria-hidden`, so the status reads as its text.
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, status.label));
 }
 
 /// Neutral high-contrast action (`.onboarding-primary-button`). A static
@@ -296,6 +309,8 @@ pub fn error_block(ui: &mut egui::Ui, t: &Tokens, lines: &[&str]) {
             t.number("s-4") as i8,
         ))
         .show(ui, |ui| {
+            // `.onboarding-error` is `role="alert"`.
+            accessibility::set_role(ui, Role::Alert);
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = t.number("s-2");
             for line in lines {
@@ -442,6 +457,97 @@ fn permission_glyph(painter: &egui::Painter, t: &Tokens, rect: Rect, glyph: Glyp
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn state(granted: bool) -> shared::State {
+        shared::State {
+            platform: "macos".into(),
+            onboarding_completed: false,
+            screen_recording_required: true,
+            screen_recording_granted: granted,
+            screen_recording_can_request: false,
+            screen_recording_requested_this_launch: true,
+            microphone_granted: false,
+            microphone_can_request: true,
+            microphone_requested_this_launch: false,
+        }
+    }
+
+    fn render(view: &Presentation, error: bool) -> egui::accesskit::TreeUpdate {
+        let ctx = egui::Context::default();
+        let t = crate::tokens::load().remove("light-mustard").unwrap();
+        crate::accessibility::tests::tree(&ctx, Vec2::new(800., 600.), vec![], |ui| {
+            header(ui, &t, view.title, shared::LEDE, true);
+            cards(ui, &t, Some(view), Busy::default());
+            if error {
+                error_block(ui, &t, &["Setup could not continue: denied"]);
+            }
+        })
+    }
+
+    #[test]
+    fn cards_statuses_and_actions_expose_shipping_names_and_roles() {
+        use crate::accessibility::tests::{contains, find, find_role, find_value};
+        use egui::accesskit::{Live, Role};
+        let tree = render(&state(false).presentation(), true);
+        let (header, _) =
+            find_role(&tree, Role::Group, "Required permissions").expect("aria-labelledby header");
+        let heading = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| node.role() == Role::Heading && node.level() == Some(1))
+            .expect("h1");
+        assert_eq!(heading.1.label(), Some("Required permissions"));
+        assert!(contains(&tree, header, heading.0));
+
+        let (screen, _) =
+            find_role(&tree, Role::Article, shared::SCREEN_TITLE).expect("screen card");
+        let (live, _) = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| node.live() == Some(Live::Polite))
+            .expect("aria-live region");
+        assert!(contains(&tree, *live, screen));
+        let (status, node) = find_value(&tree, "Restart required").expect("status");
+        assert_eq!(node.role(), Role::Label);
+        assert!(contains(&tree, screen, status));
+        let (action, node) = find(&tree, "Open Settings").expect("screen action");
+        assert_eq!(node.role(), Role::Button);
+        assert!(contains(&tree, screen, action));
+        assert!(
+            tree.nodes
+                .iter()
+                .any(|(id, node)| node.role() == Role::Heading
+                    && node.level() == Some(3)
+                    && node.label() == Some(shared::SCREEN_TITLE)
+                    && contains(&tree, screen, *id))
+        );
+
+        let (microphone, _) =
+            find_role(&tree, Role::Article, shared::MICROPHONE_TITLE).expect("microphone card");
+        let (allow, _) = find(&tree, "Allow microphone").expect("microphone action");
+        assert!(contains(&tree, microphone, allow));
+
+        let (alert, _) = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| node.role() == Role::Alert)
+            .expect("role=alert");
+        let (text, _) = find_value(&tree, "Setup could not continue: denied").expect("error text");
+        assert!(contains(&tree, *alert, text));
+
+        // The check mark is aria-hidden: the granted status reads as its text.
+        let ready = render(&state(true).presentation(), false);
+        let (screen, _) =
+            find_role(&ready, Role::Article, shared::SCREEN_TITLE).expect("screen card");
+        let (granted, _) = find_value(&ready, "Granted").expect("granted status");
+        assert!(contains(&ready, screen, granted));
+        assert!(
+            !ready
+                .nodes
+                .iter()
+                .any(|(_, node)| node.role() == Role::Alert)
+        );
+    }
 
     #[test]
     fn busy_labels_follow_the_in_flight_request() {

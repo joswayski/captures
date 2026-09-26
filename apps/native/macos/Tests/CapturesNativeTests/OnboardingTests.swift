@@ -3,7 +3,10 @@ import XCTest
 @testable import CapturesNative
 
 private final class OnboardingTransport: SettingsTransport {
-    var requests: [[String: Any]] = []
+    private let lock = NSLock()
+    private var log: [[String: Any]] = []
+    /// Requests run on the settings worker; read them from the main thread.
+    var requests: [[String: Any]] { lock.lock(); defer { lock.unlock() }; return log }
     var failure: Error?
     var granted = false
     var microphone = false
@@ -14,7 +17,7 @@ private final class OnboardingTransport: SettingsTransport {
     var grantsOnRequest = true
 
     func request(_ object: [String: Any]) throws -> [String: Any] {
-        requests.append(object)
+        lock.lock(); log.append(object); lock.unlock()
         if let failure { throw failure }
         let action = object["action"] as? String
         if action == "request_screen" { granted = granted || grantsOnRequest; screenRequested = true }
@@ -31,6 +34,26 @@ private final class OnboardingTransport: SettingsTransport {
         let derived = try SettingsBridge().request(["operation": "onboarding_presentation", "state": state])
         state["presentation"] = derived["presentation"]
         return ["ok": true, "state": state]
+    }
+}
+
+/// Records scheduled permission polls; tests fire them by hand.
+private final class ManualTimer: OnboardingTimer {
+    let interval: TimeInterval
+    private let action: () -> Void
+    private(set) var invalidated = false
+    init(interval: TimeInterval, action: @escaping () -> Void) { self.interval = interval; self.action = action }
+    func fire() { if !invalidated { action() } }
+    func invalidate() { invalidated = true }
+}
+
+private final class ManualTimers {
+    private(set) var all: [ManualTimer] = []
+    var active: [ManualTimer] { all.filter { !$0.invalidated } }
+    func schedule(_ interval: TimeInterval, _ action: @escaping () -> Void) -> OnboardingTimer {
+        let timer = ManualTimer(interval: interval, action: action)
+        all.append(timer)
+        return timer
     }
 }
 
@@ -123,8 +146,8 @@ final class OnboardingTests: XCTestCase {
                 XCTAssertTrue(view.subviews.contains {
                     ($0 as? NSTextField)?.stringValue.hasPrefix("Captures only reads the pixels you choose to capture.") == true
                 })
-                XCTAssertEqual(view.refreshButton.title, "Refresh status", "Refresh stays as a secondary action")
-                XCTAssertLessThan(view.refreshButton.frame.maxX, primary.frame.minX)
+                XCTAssertNil(view.refreshButton.superview,
+                             "First-run setup polls like shipping and has no Refresh button")
                 switch state {
                 case "denied":
                     XCTAssertEqual(primary.title, "Restart Captures")
@@ -145,7 +168,7 @@ final class OnboardingTests: XCTestCase {
                     XCTAssertEqual(view.screenRow.detail.stringValue, "Checking the access available on this computer…")
                     XCTAssertTrue(view.subviews.contains { box in !box.isHidden && box.subviews.contains { label in
                         (label as? NSTextField)?.stringValue == "Settings are read-only. Fix access and retry." } })
-                    XCTAssertTrue(view.refreshButton.isEnabled, "Errors stay actionable")
+                    XCTAssertFalse(allButtons(view).contains { !$0.isHidden && $0.title == "Refresh status" })
                 }
                 if let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
                     let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
@@ -185,7 +208,10 @@ final class OnboardingTests: XCTestCase {
         wait(for: [granted], timeout: 2)
         XCTAssertTrue(view.microphoneRow.button.isHidden)
         XCTAssertEqual(view.microphoneRow.status.status?.label, "Granted")
-        XCTAssertEqual(view.microphoneRow.status.accessibilityLabel(), "Granted ✓")
+        XCTAssertEqual(view.microphoneRow.status.accessibilityLabel(), "Granted",
+                       "Shipping hides the check mark from assistive technology")
+        XCTAssertEqual(view.microphoneRow.accessibilityLabel(), "Microphone")
+        XCTAssertEqual(view.microphoneRow.accessibilityRole(), .group)
     }
 
     func testSharedCopyMatchesTheShippingSetupWindow() throws {
@@ -195,6 +221,177 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(copy.lede, "Captures only reads the pixels you choose to capture. Nothing is uploaded, and nothing leaves this computer unless you send it somewhere.")
         XCTAssertEqual(copy.refresh, "Refresh status")
         XCTAssertEqual(copy.start, "Start capturing")
+        XCTAssertEqual(copy.pollInterval, 1.5)
+        XCTAssertEqual(copy.settingsAway, 2.5)
+    }
+
+    func testFirstRunPollsWhileWaitingAndStopsOnceGranted() throws {
+        _ = NSApplication.shared
+        let transport = OnboardingTransport()
+        transport.grantsOnRequest = false
+        let timers = ManualTimers()
+        let controller = OnboardingController(store: try SettingsStore(path: "/fixture.json",
+            transport: transport, debounceInterval: 0), now: { 0 }, schedule: timers.schedule)
+        let view = OnboardingView(frame: NSRect(x: 0, y: 0, width: 700, height: 560),
+            tokens: Tokens.variants["light-mustard"]!, controller: controller)
+        XCTAssertTrue(controller.pollsWhileWaiting)
+        var changes = 0
+        let redraw = controller.changed
+        controller.changed = { redraw(); changes += 1 }
+        controller.check()
+        try settle { !controller.busy }
+        XCTAssertTrue(timers.active.isEmpty, "Nothing to wait for before a request")
+
+        controller.requestScreen()
+        try settle { !controller.busy }
+        let timer = try XCTUnwrap(timers.active.first)
+        XCTAssertEqual(timers.active.count, 1)
+        XCTAssertEqual(timer.interval, 1.5, "Shipping PERMISSION_POLL_MS")
+        XCTAssertEqual(view.primaryButton.title, "Restart Captures")
+
+        // A poll is a quiet check: it never disables the window's controls.
+        var seen = changes
+        timer.fire()
+        XCTAssertFalse(controller.busy)
+        XCTAssertTrue(view.screenRow.button.isEnabled)
+        XCTAssertTrue(view.primaryButton.isEnabled)
+        try settle { changes == seen + 1 }
+        XCTAssertEqual(transport.requests.count, 3)
+        XCTAssertEqual(transport.requests.last?["action"] as? String, "check")
+        XCTAssertFalse(timer.invalidated)
+
+        transport.granted = true
+        seen = changes
+        timer.fire()
+        try settle { changes == seen + 1 }
+        XCTAssertEqual(controller.state?.screenGranted, true)
+        XCTAssertTrue(timer.invalidated, "Polling stops once access is granted")
+        XCTAssertFalse(controller.isPolling)
+        XCTAssertEqual(view.screenRow.status.status?.label, "Granted")
+
+        // Permission recovery keeps Refresh status and never polls.
+        let recovery = OnboardingController(store: try SettingsStore(path: "/fixture.json",
+            transport: transport, debounceInterval: 0), now: { 0 }, schedule: timers.schedule)
+        let sheet = OnboardingView(frame: NSRect(x: 0, y: 0, width: 700, height: 560),
+            tokens: Tokens.variants["light-mustard"]!, controller: recovery, done: {})
+        XCTAssertFalse(recovery.pollsWhileWaiting)
+        XCTAssertNotNil(sheet.refreshButton.superview)
+        XCTAssertFalse(sheet.refreshButton.isHidden)
+    }
+
+    func testReturningFromSettingsRestartsOnlyAfterTheAwayThreshold() throws {
+        _ = NSApplication.shared
+        let transport = OnboardingTransport()
+        transport.canRequest = false
+        transport.grantsOnRequest = false
+        var clock: TimeInterval = 100
+        let timers = ManualTimers()
+        let controller = OnboardingController(store: try SettingsStore(path: "/fixture.json",
+            transport: transport, debounceInterval: 0), now: { clock }, schedule: timers.schedule)
+        let view = OnboardingView(frame: NSRect(x: 0, y: 0, width: 700, height: 560),
+            tokens: Tokens.variants["light-mustard"]!, controller: controller)
+        var restarts = 0
+        view.restartRequested = { restarts += 1 }
+        controller.check()
+        try settle { !controller.busy }
+        XCTAssertFalse(controller.leftForSettings)
+        controller.requestScreen()
+        try settle { !controller.busy }
+        XCTAssertTrue(controller.leftForSettings, "Open Settings sent the user away")
+
+        // Back after 2.25 s: re-check without restarting.
+        clock = 200
+        controller.resignedActive()
+        clock = 202.25
+        controller.becameActive()
+        XCTAssertTrue(controller.busy)
+        try settle { !controller.busy }
+        XCTAssertEqual(transport.requests.count, 3)
+        XCTAssertEqual(restarts, 0)
+        XCTAssertEqual(view.primaryButton.title, "Restart Captures")
+
+        // Focus without a preceding blur never restarts.
+        clock = 300
+        controller.becameActive()
+        try settle { !controller.busy }
+        XCTAssertEqual(transport.requests.count, 4)
+        XCTAssertEqual(restarts, 0)
+
+        // Back after 2.5 s with access still unreported: restart once.
+        clock = 400
+        controller.resignedActive()
+        clock = 402.5
+        controller.becameActive()
+        try settle { restarts == 1 }
+        XCTAssertEqual(view.primaryButton.title, "Restarting…")
+        XCTAssertFalse(view.primaryButton.isEnabled)
+        clock = 500
+        controller.resignedActive()
+        clock = 510
+        controller.becameActive()
+        try settle { !controller.busy }
+        XCTAssertEqual(transport.requests.count, 6)
+        XCTAssertEqual(restarts, 1, "A pending restart is not repeated")
+
+        // Access reported on return: no restart, even after a long visit.
+        let granted = OnboardingTransport()
+        granted.canRequest = false
+        granted.grantsOnRequest = false
+        let other = OnboardingController(store: try SettingsStore(path: "/fixture.json",
+            transport: granted, debounceInterval: 0), now: { clock }, schedule: timers.schedule)
+        let otherView = OnboardingView(frame: NSRect(x: 0, y: 0, width: 700, height: 560),
+            tokens: Tokens.variants["light-mustard"]!, controller: other)
+        var otherRestarts = 0
+        otherView.restartRequested = { otherRestarts += 1 }
+        other.requestScreen()
+        try settle { !other.busy }
+        XCTAssertTrue(other.leftForSettings)
+        clock = 600
+        other.resignedActive()
+        granted.granted = true
+        clock = 630
+        other.becameActive()
+        try settle { !other.busy }
+        XCTAssertEqual(granted.requests.count, 2)
+        XCTAssertEqual(otherRestarts, 0)
+        XCTAssertEqual(otherView.primaryButton.title, "Start capturing")
+    }
+
+    func testSetupTabOrderFollowsShippingCardsThenActions() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let transport = OnboardingTransport()
+        let controller = OnboardingController(store: try SettingsStore(path: "/fixture.json",
+            transport: transport, debounceInterval: 0), now: { 0 }, schedule: ManualTimers().schedule)
+        let frame = NSRect(x: 0, y: 0, width: 700, height: 560)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let view = OnboardingView(frame: frame, tokens: tokens, controller: controller)
+        window.contentView = view
+        XCTAssertTrue(window.initialFirstResponder === view.primaryButton,
+                      "While checking, only the primary action exists")
+        controller.check()
+        try settle { !controller.busy }
+        XCTAssertTrue(window.initialFirstResponder === view.screenRow.button,
+                      "Allow access is the first control, like Tab from the top of the page")
+        XCTAssertTrue(KeyViewLoop.order(from: view.screenRow.button).elementsEqual(
+            [view.screenRow.button, view.microphoneRow.button, view.primaryButton] as [NSView], by: ===))
+
+        let recovery = OnboardingView(frame: frame, tokens: tokens, controller: OnboardingController(
+            store: try SettingsStore(path: "/fixture.json", transport: transport, debounceInterval: 0),
+            now: { 0 }, schedule: ManualTimers().schedule), done: {})
+        XCTAssertTrue(KeyViewLoop.order(from: recovery.screenRow.button).elementsEqual(
+            [recovery.screenRow.button, recovery.microphoneRow.button, recovery.refreshButton,
+             recovery.primaryButton] as [NSView], by: ===), "Recovery's Refresh precedes Done")
+    }
+
+    /// Runs the main loop until `condition` holds, failing after a deadline.
+    private func settle(_ condition: () -> Bool) throws {
+        let deadline = Date().addingTimeInterval(3)
+        while !condition() && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertTrue(condition())
+        guard condition() else { throw SettingsStoreError.invalidResponse }
     }
 
     func testFirstRunRequestsScreenAndCompletesWithoutMicrophone() throws {

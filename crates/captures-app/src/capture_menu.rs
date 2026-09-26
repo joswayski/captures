@@ -369,6 +369,29 @@ pub const fn guidance(target: GuidanceTarget, feedback: bool) -> Guidance {
     }
 }
 
+/// Accessible name of the region overlay. AppKit `RegionSelection` uses the
+/// same text; shipping exposes the overlay as an unlabelled `<main>`.
+pub const REGION_SELECTOR_LABEL: &str = "Capture region selector";
+/// Accessible name of the window overlay (AppKit `WindowSelection`).
+pub const WINDOW_SELECTOR_LABEL: &str = "Capture window selector";
+/// Name for the window overlay's current target when nothing is hovered.
+pub const DISPLAY_TARGET: &str = "Entire display";
+
+/// The window overlay's live target description (`Target: Safari`).
+pub fn target_description(name: &str) -> String {
+    format!("Target: {name}")
+}
+
+/// The region overlay's selection description, in logical pixels like the
+/// visible size badge.
+pub fn region_description(width: f64, height: f64) -> String {
+    format!(
+        "Selected region {} × {} logical pixels",
+        width.round() as i64,
+        height.round() as i64
+    )
+}
+
 /// Fade when the pointer is this close to the chip (shipping 28 px).
 pub const GUIDANCE_APPROACH_PAD: f64 = 28.0;
 /// Extra slack before a faded chip restores, so it cannot thrash at the edge.
@@ -419,6 +442,17 @@ pub fn display_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_accessibility_copy_matches_appkit() {
+        assert_eq!(REGION_SELECTOR_LABEL, "Capture region selector");
+        assert_eq!(WINDOW_SELECTOR_LABEL, "Capture window selector");
+        assert_eq!(target_description(DISPLAY_TARGET), "Target: Entire display");
+        assert_eq!(
+            region_description(319.6, 180.2),
+            "Selected region 320 × 180 logical pixels"
+        );
+    }
 
     #[test]
     fn visibility_note_follows_capabilities_like_shipping() {

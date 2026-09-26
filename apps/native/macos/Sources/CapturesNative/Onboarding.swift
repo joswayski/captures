@@ -18,6 +18,8 @@ struct OnboardingCopy: Equatable {
     let eyebrow, title, lede, checking, screenTitle, microphoneTitle, optional: String
     let opening, restarting, finishing, refresh, start: String
     let recoveryTitle, recoveryLede, recoveryDone: String
+    /// Shipping `PERMISSION_POLL_MS` and `SETTINGS_AWAY_MS`, in seconds.
+    let pollInterval, settingsAway: TimeInterval
 
     static let current: OnboardingCopy = {
         do { return try OnboardingCopy(transport: SettingsBridge()) }
@@ -38,6 +40,9 @@ struct OnboardingCopy: Equatable {
         finishing = try text("finishing"); refresh = try text("refresh"); start = try text("start")
         recoveryTitle = try text("recovery_title"); recoveryLede = try text("recovery_lede")
         recoveryDone = try text("recovery_done")
+        guard let poll = copy["poll_interval_ms"] as? Double, let away = copy["settings_away_ms"] as? Double
+        else { throw SettingsStoreError.invalidResponse }
+        pollInterval = poll / 1000; settingsAway = away / 1000
     }
 }
 
@@ -67,6 +72,8 @@ struct OnboardingPresentation: Equatable {
     let screenReady: Bool
     let restartRequired: Bool
     let primaryLabel: String
+    /// Shipping re-checks access while waiting for a grant in the OS.
+    let waitingForPermission: Bool
 
     init(_ value: [String: Any]) throws {
         guard let title = value["title"] as? String,
@@ -91,6 +98,7 @@ struct OnboardingPresentation: Equatable {
         self.microphoneAction = try optionalText("microphone_action")
         self.screenReady = screenReady; self.restartRequired = restartRequired
         self.primaryLabel = primaryLabel
+        self.waitingForPermission = value["waiting_for_permission"] as? Bool ?? false
     }
 }
 
@@ -129,7 +137,12 @@ struct OnboardingState: Equatable {
     }
 }
 
+/// A repeating permission poll; `Timer` in the app, a manual timer in tests.
+protocol OnboardingTimer: AnyObject { func invalidate() }
+extension Timer: OnboardingTimer {}
+
 final class OnboardingController {
+    typealias Schedule = (TimeInterval, @escaping () -> Void) -> OnboardingTimer
     private let store: SettingsStore
     private(set) var state: OnboardingState?
     private(set) var busy = false
@@ -139,8 +152,41 @@ final class OnboardingController {
     var changed: () -> Void = {}
     var completed: () -> Void = {}
     var requiresAttention: () -> Void = {}
+    /// Called when the user returns from at least `settingsAway` in System
+    /// Settings and screen access is still not reported (shipping restarts
+    /// then, because macOS applies the grant only after a relaunch). First-run
+    /// setup sets it; permission recovery never restarts.
+    var autoRestart: (() -> Void)?
+    /// First-run setup re-checks every `pollInterval` while waiting for a
+    /// grant, like shipping. Permission recovery keeps Refresh status instead.
+    var pollsWhileWaiting = false { didSet { updatePolling() } }
+    /// A screen request sent the user to System Settings (shipping `leftForSettings`).
+    private(set) var leftForSettings = false
+    private var awaySince: TimeInterval?
+    private var pollTimer: OnboardingTimer?
+    private var polling = false
+    private let pollInterval: TimeInterval
+    private let settingsAway: TimeInterval
+    private let now: () -> TimeInterval
+    private let schedule: Schedule
 
-    init(store: SettingsStore) { self.store = store }
+    init(store: SettingsStore,
+         pollInterval: TimeInterval = OnboardingCopy.current.pollInterval,
+         settingsAway: TimeInterval = OnboardingCopy.current.settingsAway,
+         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+         schedule: @escaping Schedule = OnboardingController.repeatingTimer) {
+        self.store = store; self.pollInterval = pollInterval; self.settingsAway = settingsAway
+        self.now = now; self.schedule = schedule
+    }
+    deinit { pollTimer?.invalidate() }
+
+    static func repeatingTimer(_ interval: TimeInterval, _ fire: @escaping () -> Void) -> OnboardingTimer {
+        let timer = Timer(timeInterval: interval, repeats: true) { _ in fire() }
+        RunLoop.main.add(timer, forMode: .common)
+        return timer
+    }
+
+    var isPolling: Bool { pollTimer != nil }
 
     func check() { request("check") }
     func requestScreen() { request("request_screen") }
@@ -148,7 +194,27 @@ final class OnboardingController {
     func complete() { request("complete") }
     func flush() { store.flush() }
 
-    private func request(_ action: String) {
+    /// The app lost focus (shipping `blur`): time the visit to System Settings.
+    func resignedActive() {
+        if leftForSettings { awaySince = now() }
+    }
+
+    /// The app is active again (shipping `focus`): re-check access and, after
+    /// a long enough visit to System Settings, restart automatically.
+    func becameActive() {
+        let blurredAt = awaySince
+        awaySince = nil
+        // Like shipping's focus reload, this also retries a failed first check.
+        guard !busy else { return }
+        let returning = leftForSettings && autoRestart != nil
+        request("check") { [weak self] next in
+            guard let self, returning, !next.presentation.screenReady,
+                  let blurredAt, self.now() - blurredAt >= self.settingsAway else { return }
+            self.autoRestart?()
+        }
+    }
+
+    private func request(_ action: String, then: ((OnboardingState) -> Void)? = nil) {
         guard !busy else { return }
         busy = true; pendingAction = action; error = nil; changed()
         store.onboarding(action) { [weak self] result in
@@ -157,12 +223,48 @@ final class OnboardingController {
             switch result {
             case .success(let state):
                 self.state = state
+                if action == "request_screen", !state.screenGranted, !state.screenCanRequest,
+                   !self.leftForSettings {
+                    self.leftForSettings = true
+                    self.awaySince = self.now()
+                }
                 if state.completed { self.completed() }
                 else { self.requiresAttention() }
+                self.updatePolling()
+                self.changed()
+                then?(state)
             case .failure(let error):
                 self.error = error.localizedDescription
                 self.requiresAttention()
+                self.updatePolling()
+                self.changed()
             }
+        }
+    }
+
+    private func updatePolling() {
+        let waiting = pollsWhileWaiting && state?.completed == false
+            && state?.presentation.waitingForPermission == true
+        if waiting, pollTimer == nil {
+            pollTimer = schedule(pollInterval) { [weak self] in self?.poll() }
+        } else if !waiting, let timer = pollTimer {
+            timer.invalidate(); pollTimer = nil
+        }
+    }
+
+    /// Shipping's interval refresh: a quiet check that never disables the
+    /// window's controls or reopens it.
+    private func poll() {
+        guard !busy, !polling else { return }
+        polling = true
+        store.onboarding("check") { [weak self] result in
+            guard let self else { return }
+            self.polling = false
+            switch result {
+            case .success(let state): self.state = state
+            case .failure(let error): self.error = error.localizedDescription
+            }
+            self.updatePolling()
             self.changed()
         }
     }
@@ -236,7 +338,8 @@ final class OnboardingStatusView: NSView {
     var status: OnboardingStatus? {
         didSet {
             isHidden = status == nil
-            setAccessibilityLabel(status.map { $0.ready ? "\($0.label) ✓" : $0.label })
+            // Shipping's check mark is `aria-hidden`: the status reads as its text.
+            setAccessibilityLabel(status?.label)
             needsDisplay = true
         }
     }
@@ -305,6 +408,8 @@ final class OnboardingPermissionRow: NSView {
         var views: [NSView] = [icon, titleLabel, detail, status, button]
         if let optionalLabel { views.append(optionalLabel) }
         views.forEach(addSubview)
+        // Shipping `<article>` named by its `<h3>`.
+        setAccessibilityElement(true); setAccessibilityRole(.group); setAccessibilityLabel(title)
     }
     required init?(coder: NSCoder) { nil }
 
@@ -405,7 +510,9 @@ final class OnboardingCardsView: NSView {
 
 /// First-run setup (and, with `done`, permission recovery) laid out like the
 /// shipping Tauri window: app mark, eyebrow, title, lede, permission cards,
-/// and a right-aligned action row with Refresh status as the secondary action.
+/// and a right-aligned action row. First-run setup polls and restarts after
+/// System Settings like shipping, so it has no Refresh button; recovery keeps
+/// Refresh status as its secondary action.
 final class OnboardingView: NSView {
     override var isFlipped: Bool { true }
     private let controller: OnboardingController
@@ -471,11 +578,40 @@ final class OnboardingView: NSView {
             title.stringValue = strings.title; lede.stringValue = strings.lede
             addSubview(mark); addSubview(eyebrow)
         }
-        let views: [NSView] = [title, lede, cards, errorBox, refreshButton, primaryButton]
+        var views: [NSView] = [title, lede, cards, errorBox]
+        if done != nil { views.append(refreshButton) }
+        views.append(primaryButton)
         views.forEach(addSubview)
+        refreshButton.isHidden = done == nil
         controller.changed = { [weak self] in self?.update() }
+        if done == nil {
+            controller.autoRestart = { [weak self] in self?.restart() }
+            controller.pollsWhileWaiting = true
+        }
         needsLayout = true
         update()
+    }
+
+    /// Shipping DOM order: the screen action, the microphone action, then the
+    /// action row (recovery's Refresh before Done).
+    var keyViewOrder: [NSView] {
+        var views: [NSView] = [screenRow.button, microphoneRow.button]
+        if done != nil { views.append(refreshButton) }
+        views.append(primaryButton)
+        return views
+    }
+
+    /// The first control a keyboard user can act on, like Tab from the top
+    /// of the shipping page; the primary action while nothing else is.
+    var firstControl: NSView {
+        keyViewOrder.first { view in
+            !view.isHiddenOrHasHiddenAncestor && (view as? NSControl)?.isEnabled != false
+        } ?? primaryButton
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        KeyViewLoop.install(keyViewOrder, window: window, initial: firstControl)
     }
     required init?(coder: NSCoder) { nil }
 
@@ -513,6 +649,7 @@ final class OnboardingView: NSView {
             primaryButton.isEnabled = !busy && (view?.screenReady == true || view?.restartRequired == true)
         }
         primaryButton.setAccessibilityLabel(primaryButton.title)
+        KeyViewLoop.install(keyViewOrder, window: window, initial: firstControl)
         refreshButton.needsDisplay = true; primaryButton.needsDisplay = true
         needsLayout = true
         needsDisplay = true
@@ -521,11 +658,18 @@ final class OnboardingView: NSView {
     private func primary() {
         if let done { done(); return }
         if controller.state?.presentation.restartRequired == true {
-            restarting = true; update()
-            restartRequested()
+            restart()
         } else {
             controller.complete()
         }
+    }
+
+    /// Restart Captures, from the primary action or automatically after the
+    /// user returns from System Settings. Runs once until the host fails it.
+    private func restart() {
+        guard done == nil, !restarting else { return }
+        restarting = true; update()
+        restartRequested()
     }
 
     /// Clears a restart that the host could not perform.
@@ -578,7 +722,7 @@ final class OnboardingView: NSView {
         }
         let primaryWidth = buttonWidth(primaryButton.title, minimum: 148)
         primaryButton.frame = NSRect(x: x + width - primaryWidth, y: y, width: primaryWidth, height: actionsHeight)
-        let refreshWidth = buttonWidth(refreshButton.title, minimum: 0)
+        let refreshWidth = refreshButton.isHidden ? 0 : buttonWidth(refreshButton.title, minimum: 0)
         refreshButton.frame = NSRect(x: primaryButton.frame.minX - tokens.number("s-4") - refreshWidth, y: y,
                                      width: refreshWidth, height: actionsHeight)
     }

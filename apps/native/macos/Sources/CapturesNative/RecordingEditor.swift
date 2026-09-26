@@ -1561,6 +1561,24 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         saveButton.primary = true
         saveButton.icon = .shipping("save")
         saveButton.toolTip = "Creates a separate copy. The original and existing files are never replaced."
+        installKeyViewLoop()
+    }
+
+    /// Shipping DOM order: the preview toolbar (Fit, 100%, then the native
+    /// Compare/Hide), the media (Play, then the crop canvas and its handles)
+    /// and playback options, the timeline, the output, crop and quality cards,
+    /// audio, then the save footer. Play starts focused.
+    private func installKeyViewLoop() {
+        let order: [NSView] = [
+            previewSizeTrack, comparisonButton, comparisonHideButton, playbackButton, cropOverlay,
+            comparisonSlider, playbackLoop, playbackSound, trimPanel, gifPanel,
+            cropEnabled, cropAdjustmentButton, cropX, cropY, cropWidth, cropHeight, cropLock,
+            outputMode, outputWidth, outputHeight, geometryPanel, qualityPanel,
+            systemAudio, systemVolumeSlider, systemVolume,
+            microphoneAudio, microphoneVolumeSlider, microphoneVolume, monoOutput, audioPanel,
+            footer,
+        ]
+        KeyViewLoop.install(order, window: window, initial: playbackButton)
     }
 
     /// A shipping `.editor-card`: raised, hairline border, large radius.
@@ -3490,3 +3508,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         return alert.runModal() == .alertSecondButtonReturn
     }
 }
+
+// Trim and crop handles take focus only while editing is enabled; they stay in
+// the key-view loop so enabling them needs no rebuild.
+extension RecordingTrimHandle: KeyViewParticipant {}
+extension RecordingCropHandle: KeyViewParticipant {}
+extension RecordingCropOverlay: KeyViewParticipant {}

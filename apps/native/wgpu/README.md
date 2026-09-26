@@ -305,8 +305,10 @@ quits so the process cannot be stranded. Opening the output folder also requires
 
 The current screens are token-styled fixtures, not pixel-parity reproductions.
 Default bundled fonts differ from the shipping system-font stack. AccessKit is
-enabled, but screen-reader navigation and IME need real platform testing; painted
-images/canvas layers lack full semantic nodes. Reduce motion is an explicit probe
+enabled, and the capture overlays and setup cards carry shipping/AppKit names, but
+screen-reader navigation and IME need real platform testing; painted images/canvas
+layers lack full semantic nodes. The X11 mini preview never takes keyboard focus
+(override-redirect), so its controls are pointer-only there. Reduce motion is an explicit probe
 switch, not yet connected to each OS setting. Transparency does not imply desktop
 blur, click-through, topmost behavior, or correct Wayland overlay placement.
 Live previews support stacking, collapse and overflow; drag placement, hover fan
