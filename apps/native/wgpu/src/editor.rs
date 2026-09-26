@@ -1549,7 +1549,13 @@ impl Editor {
 
 impl Drop for Editor {
     fn drop(&mut self) {
-        self.view.lock().unwrap().closed = true;
+        // Never panic here: a panic while holding the view lock (for example a
+        // failed assertion) poisons it, and a second panic during unwinding
+        // aborts the process and hides the original failure.
+        self.view
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closed = true;
         let _ = self.tx.send(Job::Shutdown);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
