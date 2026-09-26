@@ -96,6 +96,14 @@ def main():
         assert found.returncode in (0, 1), found.stderr
         return found.stdout.split()
 
+    def active_window():
+        result = subprocess.run(["xdotool", "getactivewindow"], env=env,
+                                capture_output=True, text=True, timeout=5)
+        # Openbox can temporarily unset _NET_ACTIVE_WINDOW while changing focus.
+        # Keep polling until the expected window actually owns focus.
+        assert result.returncode in (0, 1), result.stderr
+        return result.stdout.strip() if result.returncode == 0 else None
+
     def shot(window, name):
         if window != "root":
             idle(window)
@@ -140,7 +148,13 @@ def main():
         run("xdotool", "key", "Return", "sleep", ".3")
 
     def close(window):
-        run("xdotool", "windowactivate", "--sync", window, "key", "alt+F4", "sleep", ".5")
+        # Alt+F4 goes to whichever client Openbox has focused; while it briefly
+        # clears the active window during activation the key closes nothing.
+        run("xdotool", "windowactivate", "--sync", window)
+        # A modal child may legitimately own focus, so only wait for Openbox to
+        # finish the transfer rather than for this exact window.
+        wait(lambda: active_window() is not None, "close target owns focus")
+        run("xdotool", "key", "alt+F4", "sleep", ".5")
 
     def dominant(path, channel, at=None):
         if at is None:
@@ -328,7 +342,7 @@ def main():
                            "four imported artifacts without alias duplicate")
             wait(lambda: len(windows("Recording editor")) == 3 and len(windows("Screenshot editor")) == 1,
                  "mixed recording and screenshot editor routing")
-            wait(lambda: run("xdotool", "getactivewindow").decode().strip() == editor,
+            wait(lambda: active_window() == editor,
                  "final canonical alias refocuses the original GIF editor")
             shot(editor, "external-gif-alias-staged")
             assert gif_metadata.read_bytes() == gif_before_alias, "alias must not republish History"
