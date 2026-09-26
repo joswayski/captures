@@ -39,6 +39,8 @@ struct Presented {
     export: ExportSpec,
     position_ms: u64,
     frame: Arc<RgbaImage>,
+    /// Frames the source capture dropped (shipping's header warning).
+    dropped_frames: u64,
 }
 
 impl Presented {
@@ -52,6 +54,7 @@ impl Presented {
             export: snapshot.save_export.clone(),
             position_ms: snapshot.editor.position_ms,
             frame: session.frame(),
+            dropped_frames: snapshot.editor.dropped_frames,
         }
     }
 }
@@ -2871,6 +2874,26 @@ fn show_page(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
             recording_editor_ui::title(&p.source.mime_type)
         });
     ui.label(text(tokens, title, "text-2xl", "text").strong());
+    // `.recording-editor-warning`: a caution band for sources that dropped frames.
+    if let Some(warning) = view
+        .presented
+        .as_ref()
+        .and_then(|p| recording_editor_ui::dropped_frames_warning(p.dropped_frames))
+    {
+        let band = egui::Frame::new()
+            .fill(tokens.color("caution-surface"))
+            .corner_radius(tokens.number("r-md") as u8)
+            .inner_margin(egui::Margin::symmetric(
+                tokens.number("s-5") as i8,
+                tokens.number("s-4") as i8,
+            ))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(text(tokens, warning, "text-sm", "caution-text"));
+            })
+            .response;
+        probe(ui, "Dropped frames warning", band.rect);
+    }
     let window_height = ui.ctx().content_rect().height();
     card_frame(ui, tokens, |ui| {
         show_preview_card(ui, tokens, view, tx, window_height)
@@ -3932,9 +3955,30 @@ mod tests {
                 export: view.export_spec(),
                 position_ms: 700,
                 frame: Arc::new(RgbaImage::new(4, 2)),
+                dropped_frames: 0,
             })),
         );
         view
+    }
+
+    #[test]
+    fn dropped_frames_show_the_shipping_header_warning() {
+        let tokens = crate::tokens::load().into_iter().next().unwrap().1;
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let size = egui::vec2(760., 580.);
+        let (_, controls) = probe_frame(&ctx, &tokens, &mut view, size, vec![]);
+        assert!(!controls.contains_key("Dropped frames warning"));
+        view.presented.as_mut().unwrap().dropped_frames = 1_234;
+        let (output, controls) = probe_frame(&ctx, &tokens, &mut view, size, vec![]);
+        let warning = probed(&controls, "Dropped frames warning");
+        assert!(
+            warning.width() > 0. && warning.bottom() < probed(&controls, "Preview viewport").top()
+        );
+        let copy =
+            "This source dropped 1,234 frames during capture. The original timing is preserved.";
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.job.text == copy)));
     }
 
     #[test]
@@ -5380,6 +5424,7 @@ mod tests {
                 export: p.export.clone(),
                 position_ms: 1200,
                 frame: frame.clone(),
+                dropped_frames: 0,
             })),
         );
         assert_eq!(
@@ -5418,6 +5463,7 @@ mod tests {
                 export: view.export_spec(),
                 position_ms: 1200,
                 frame: frame.clone(),
+                dropped_frames: 0,
             })),
         );
         assert!(
@@ -6279,6 +6325,7 @@ mod tests {
                 export: view.export_spec(),
                 position_ms: 700,
                 frame: Arc::new(RgbaImage::new(8, 6)),
+                dropped_frames: 0,
             })),
         );
         assert!(!view.unapplied() && view.dirty());
@@ -6371,6 +6418,7 @@ mod tests {
                 export: view.export_spec(),
                 position_ms: 700,
                 frame: Arc::new(RgbaImage::new(480, 720)),
+                dropped_frames: 0,
             })),
         );
         assert_eq!(view.max_resolution, MaxResolution::P720);
@@ -6573,6 +6621,7 @@ mod tests {
                 export: view.export_spec(),
                 position_ms: 700,
                 frame,
+                dropped_frames: 0,
             })),
         );
         assert!(!view.unapplied() && view.dirty());
@@ -6755,6 +6804,7 @@ mod tests {
                 position_ms: p.position_ms,
                 frame,
                 export: export.clone(),
+                dropped_frames: 0,
             })),
         );
         assert!(

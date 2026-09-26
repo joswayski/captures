@@ -574,9 +574,10 @@ bool captures_recording_timeline_trim_update_v1(CapturesRecordingTimelineTrimDra
  * estimate_exact?, original_bytes?} -> {label, muted, delta: null|{percent,
  * label, smaller}}; stage {stage: "preparing"|"encoding"|"verifying"|
  * "complete"|"cancelled"|"failed"} -> {label}; saved {gif, size_bytes} ->
- * {message}; filename_error {stem} -> {error: null|string}; menus {gif,
- * base_width, base_height} -> {quality_modes, quality_presets, resolutions,
- * gif_frame_rates, gif_maximum_widths}, each [{value, label, description}].
+ * {message}; filename_error {stem} -> {error: null|string}; dropped_frames
+ * {count} -> {warning: null|string}; menus {gif, base_width, base_height} ->
+ * {quality_modes, quality_presets, resolutions, gif_frame_rates,
+ * gif_maximum_widths}, each [{value, label, description}].
  * Envelopes follow captures_app_request_v1; free with captures_settings_free_v1. */
 char *captures_recording_editor_ui_v1(const char *request_json);
 

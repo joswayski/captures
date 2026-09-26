@@ -842,6 +842,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let footer = Surface()
     private let footerDivider = Surface()
     private let titleLabel = NSTextField(labelWithString: "Edit recording")
+    /// `.recording-editor-warning` for sources that dropped frames.
+    private let droppedFramesBand = Surface()
+    private let droppedFramesLabel = NSTextField(wrappingLabelWithString: "")
     private let previewPanel = Surface()
     private let previewTitle = NSTextField(labelWithString: "Preview")
     /// Toolbar playback-mode note beside "Preview".
@@ -1046,7 +1049,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             gifMaximumWidthControl.removeItem(withTitle: "Original")
         }
         maximumSizeEnabled = false; preserveQuality = true; estimating = false; replacing = false
-        lastSavedPath = nil
+        lastSavedPath = nil; droppedFramesBand.isHidden = true
         maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
         maximumSizeValue.stringValue = "10"
         qualityPreference = "preserve"; compressQuality = "highest"
@@ -1199,6 +1202,13 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
         style(titleLabel, size: "text-2xl", color: "text", weight: .semibold, parent: page)
         titleLabel.setAccessibilityLabel("Recording editor title")
+        droppedFramesBand.wantsLayer = true
+        droppedFramesBand.layer?.backgroundColor = tokens.color("caution-surface").cgColor
+        droppedFramesBand.layer?.cornerRadius = tokens.number("r-md")
+        droppedFramesBand.isHidden = true
+        page.addSubview(droppedFramesBand)
+        style(droppedFramesLabel, size: "text-sm", color: "caution-text", parent: droppedFramesBand)
+        droppedFramesLabel.setAccessibilityLabel("Dropped frames warning")
 
         // `.recording-editor-preview`: toolbar, sunken viewport and caption.
         card(previewPanel, parent: page)
@@ -1562,6 +1572,13 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         var y = pad
         titleLabel.frame = NSRect(x: side, y: y, width: inner, height: 30)
         y += 30 + gap
+        if !droppedFramesBand.isHidden {
+            let inset = NSSize(width: tokens.number("s-5"), height: tokens.number("s-4"))
+            droppedFramesBand.frame = NSRect(x: side, y: y, width: inner, height: 20 + inset.height * 2)
+            droppedFramesLabel.frame = NSRect(x: inset.width, y: inset.height,
+                                              width: max(0, inner - inset.width * 2), height: 20)
+            y = droppedFramesBand.frame.maxY + gap
+        }
 
         // Preview card.
         let toolbarHeight: CGFloat = 46
@@ -1961,6 +1978,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         if let mimeType = value.snapshot.source["mime_type"] as? String {
             titleLabel.stringValue = RecordingEditorCopy.title(mimeType: mimeType)
         }
+        let droppedWarning = RecordingEditorCopy.droppedFramesWarning(value.snapshot.droppedFrames)
+        droppedFramesLabel.stringValue = droppedWarning ?? ""
+        droppedFramesBand.isHidden = droppedWarning == nil
         seekSlider.maxValue = Double(max(1, value.snapshot.durationMilliseconds))
         seekSlider.doubleValue = Double(value.snapshot.positionMilliseconds)
         seekLabel.stringValue = time(value.snapshot.positionMilliseconds)
@@ -3283,7 +3303,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             quality.isHidden, maximumSizeValue.isHidden, maximumSizeInvalid.isHidden,
             comparison != nil, previewNote.isHidden, thumbnailRetryButton?.isHidden ?? true,
             cancelButton?.isHidden ?? true, replaceButton?.isHidden ?? true,
-            showInFolderButton?.isHidden ?? true,
+            showInFolderButton?.isHidden ?? true, droppedFramesBand.isHidden,
             systemAudio.isHidden, microphoneAudio.isHidden,
         ]
         let signature = flags.map { $0 ? "1" : "0" }.joined()
@@ -3331,7 +3351,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             gifMaximumWidthControl.removeItem(withTitle: "Original")
         }
         maximumSizeEnabled = false; preserveQuality = true; estimating = false; replacing = false
-        lastSavedPath = nil
+        lastSavedPath = nil; droppedFramesBand.isHidden = true
         maximumSizeUnit = .megabytes; maximumSizeUnits.selectItem(withTitle: "MB")
         maximumSizeValue.stringValue = "10"
         qualityPreference = "preserve"; compressQuality = "highest"

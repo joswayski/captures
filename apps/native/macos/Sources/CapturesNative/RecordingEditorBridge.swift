@@ -11,6 +11,8 @@ struct NativeRecordingEditorSnapshot {
     let revision: UInt64
     let hasSystemAudio: Bool
     let hasMicrophoneAudio: Bool
+    /// Frames the source capture dropped, for shipping's header warning.
+    let droppedFrames: UInt64
 
     var durationMilliseconds: UInt64 {
         (source["duration_ms"] as? NSNumber)?.uint64Value ?? 0
@@ -34,6 +36,7 @@ struct NativeRecordingEditorSnapshot {
         self.revision = revision.uint64Value
         self.hasSystemAudio = hasSystemAudio
         self.hasMicrophoneAudio = hasMicrophoneAudio
+        droppedFrames = (value["dropped_frames"] as? NSNumber)?.uint64Value ?? 0
     }
 }
 
@@ -1039,6 +1042,10 @@ enum RecordingEditorCopy {
 
     static func saved(gif: Bool, sizeBytes: UInt64) -> String? {
         request(["operation": "saved", "gif": gif, "size_bytes": sizeBytes])?["message"] as? String
+    }
+
+    static func droppedFramesWarning(_ count: UInt64) -> String? {
+        request(["operation": "dropped_frames", "count": count])?["warning"] as? String
     }
 
     static func filenameError(_ stem: String) -> String? {

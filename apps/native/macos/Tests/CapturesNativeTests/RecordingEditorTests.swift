@@ -3210,6 +3210,35 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertFalse(controller.dirty)
     }
 
+    func testDroppedFramesShowTheShippingHeaderWarningPerItem() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(droppedFrames: 1_234))
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        let warning = try field("Dropped frames warning", in: controller.root)
+        XCTAssertEqual(warning.stringValue,
+            "This source dropped 1,234 frames during capture. The original timing is preserved.")
+        XCTAssertFalse(warning.isHiddenOrHasHiddenAncestor)
+        let title = try field("Recording editor title", in: controller.root)
+        let viewport = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? NSScrollView }
+            .first { $0.accessibilityLabel() == "Recording preview viewport" })
+        let warningFrame = warning.convert(warning.bounds, to: controller.root)
+        XCTAssertGreaterThanOrEqual(warningFrame.minY, title.convert(title.bounds, to: controller.root).maxY)
+        XCTAssertLessThanOrEqual(warningFrame.maxY, viewport.convert(viewport.bounds, to: controller.root).minY,
+                                 "the warning sits between the header and the preview, like shipping")
+        try render(controller.root, name: "recording-editor-dropped-frames-dark")
+
+        worker.initial = try presentation(artifactID: "clean")
+        controller.present(artifact: recordingArtifact(id: "clean"), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        XCTAssertEqual(worker.openCount, 2)
+        XCTAssertTrue(warning.isHiddenOrHasHiddenAncestor, "a clean source shows no warning")
+    }
+
     func testShowInFolderRevealsOnlyTheLastSuccessfulCopy() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation())
@@ -4069,7 +4098,7 @@ final class RecordingEditorTests: XCTestCase {
                               hasSystemAudio: Bool = false, hasMicrophoneAudio: Bool = false,
                               systemVolume: Double = 1, microphoneVolume: Double = 1,
                               muteSystem: Bool = false, muteMicrophone: Bool = false,
-                              monoOutput: Bool = false) throws
+                              monoOutput: Bool = false, droppedFrames: UInt64 = 0) throws
         -> RecordingEditorPresentation {
         let endValue: Any = end.map { NSNumber(value: $0) } ?? NSNull()
         let cropValue: Any = crop == nil ? NSNull() : crop!.dictionary
@@ -4108,6 +4137,7 @@ final class RecordingEditorTests: XCTestCase {
             "position_ms": position, "revision": revision,
             "has_system_audio": hasSystemAudio,
             "has_microphone_audio": hasMicrophoneAudio,
+            "dropped_frames": droppedFrames,
         ]))
         return RecordingEditorPresentation(snapshot: snapshot,
                                            image: try fixtureImage(width: previewWidth,

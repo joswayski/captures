@@ -39,6 +39,9 @@ enum Request {
     FilenameError {
         stem: String,
     },
+    DroppedFrames {
+        count: u64,
+    },
     Menus {
         gif: bool,
         base_width: u32,
@@ -87,6 +90,9 @@ fn respond(bytes: &[u8]) -> Result<Value, String> {
             }
             Request::FilenameError { stem } => {
                 json!({"error": recording_editor_ui::filename_error(&stem)})
+            }
+            Request::DroppedFrames { count } => {
+                json!({"warning": recording_editor_ui::dropped_frames_warning(count)})
             }
             Request::Menus {
                 gif,
@@ -166,6 +172,13 @@ mod tests {
         );
         assert!(
             call(json!({"operation":"filename_error","stem":"clip"}))["result"]["error"].is_null()
+        );
+        assert_eq!(
+            call(json!({"operation":"dropped_frames","count":2}))["result"]["warning"],
+            "This source dropped 2 frames during capture. The original timing is preserved."
+        );
+        assert!(
+            call(json!({"operation":"dropped_frames","count":0}))["result"]["warning"].is_null()
         );
         let menus =
             call(json!({"operation":"menus","gif":false,"base_width":640,"base_height":360}));

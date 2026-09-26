@@ -28,6 +28,26 @@ pub fn title(mime_type: &str) -> &'static str {
     }
 }
 
+/// Shipping's `.recording-editor-warning` for a source that dropped frames
+/// (`toLocaleString` grouping, en-US).
+pub fn dropped_frames_warning(dropped_frames: u64) -> Option<String> {
+    if dropped_frames == 0 {
+        return None;
+    }
+    let digits = dropped_frames.to_string();
+    let mut grouped = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    Some(format!(
+        "This source dropped {grouped} frame{} during capture. The original timing is preserved.",
+        if dropped_frames == 1 { "" } else { "s" }
+    ))
+}
+
 /// `formatEditorTime`: millisecond precision under a minute, else `m:ss`.
 pub fn format_editor_time(milliseconds: u64, duration_ms: u64) -> String {
     let minutes = milliseconds / 60_000;
@@ -461,6 +481,17 @@ mod tests {
         assert_eq!(summary.range, "0:00.250 – 0:02.750");
         assert_eq!(summary.selected, "0:02.500 selected");
         assert_eq!(trim_summary(5, 5, 0).selected, "0:00.001 selected");
+        assert_eq!(dropped_frames_warning(0), None);
+        assert_eq!(
+            dropped_frames_warning(1).as_deref(),
+            Some("This source dropped 1 frame during capture. The original timing is preserved.")
+        );
+        assert_eq!(
+            dropped_frames_warning(1_234_567).as_deref(),
+            Some(
+                "This source dropped 1,234,567 frames during capture. The original timing is preserved."
+            )
+        );
     }
 
     #[test]
