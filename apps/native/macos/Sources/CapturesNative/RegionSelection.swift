@@ -94,6 +94,8 @@ final class RegionSelectionView: NSView {
         let width = buttonWidth * 8.5 + gap * 9
         toolbar.frame = NSRect(x: (frame.width - width) / 2, y: frame.height - height - gap * 4, width: width, height: height + gap * 2)
         addSubview(toolbar)
+        // The shipping direct overlay has no toolbar: a drag commits on release.
+        toolbar.isHidden = autoStart
         for (index, preset) in RegionSelection.presets.enumerated() {
             let button = CaptureButton(preset.0, frame: NSRect(x: gap + CGFloat(index) * (buttonWidth + gap), y: gap,
                 width: buttonWidth, height: height), tokens: tokens, glass: true) { [weak self] in
@@ -134,8 +136,26 @@ final class RegionSelectionView: NSView {
         guard selection.mode != nil else { return }
         let created = selection.mode == 0
         selection.end(); update()
-        if autoStart && created { confirmSelection() }
+        guard autoStart && created else { return }
+        if selection.capturable { confirmSelection() } else { showSelectionFeedback() }
     }
+
+    private var feedbackToken = 0
+    /// Shipping `showSelectionFeedback`: a click without a region swaps the
+    /// title for "Click and drag to select a region" for 1.8 seconds.
+    private func showSelectionFeedback() {
+        feedbackToken &+= 1
+        let token = feedbackToken
+        hint.stringValue = CaptureGuidanceCopy.directHint(CaptureGuidanceCopy.regionFeedbackTitle,
+            CaptureGuidanceCopy.regionHint, confirm: false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in
+            guard let self, self.feedbackToken == token else { return }
+            self.hint.stringValue = CaptureGuidanceCopy.directHint(CaptureGuidanceCopy.regionTitle,
+                CaptureGuidanceCopy.regionHint, confirm: false)
+        }
+    }
+
+    var guidanceText: String { hint.stringValue }
     func confirmSelection() { if selection.capturable && selection.mode == nil { confirm(selection.rect) } }
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self); begin(convert(event.locationInWindow, from: nil), shift: event.modifierFlags.contains(.shift))

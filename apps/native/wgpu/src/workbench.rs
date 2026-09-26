@@ -1729,7 +1729,7 @@ impl eframe::App for Workbench {
                 Scene::Region => {
                     let texture = self.texture(ui.ctx(), false);
                     let texture = self.texture.as_ref().filter(|image| image.id() == texture);
-                    if let Some(action) = self.region_selector.show(ui, &t, texture, false, None)
+                    if let Some(action) = self.region_selector.show(ui, &t, texture, None)
                         && let Some(event) =
                             apply_region_fixture_action(&mut self.region_selector, action)
                     {

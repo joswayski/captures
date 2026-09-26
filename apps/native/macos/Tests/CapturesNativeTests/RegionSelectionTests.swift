@@ -46,9 +46,14 @@ final class RegionSelectionTests: XCTestCase {
                 modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
                 eventNumber: 1, clickCount: 1, pressure: 1))
         }
+        XCTAssertFalse(view.subviews.flatMap(\.subviews).contains { $0 is CaptureButton && !$0.isHidden && !($0.superview?.isHidden ?? false) },
+            "the direct overlay has no toolbar")
+        XCTAssertEqual(view.guidanceText, "Drag to select a region · Shift for square · Esc to cancel")
         view.mouseDown(with: try event(.leftMouseDown, 100, 80))
         view.mouseUp(with: try event(.leftMouseUp, 101, 81))
         XCTAssertTrue(confirmed.isEmpty)
+        XCTAssertEqual(view.guidanceText, "Click and drag to select a region · Shift for square · Esc to cancel",
+            "a click without a region shows the shipping feedback")
         view.mouseDown(with: try event(.leftMouseDown, 100, 80))
         view.mouseDragged(with: try event(.leftMouseDragged, 420, 260))
         XCTAssertTrue(confirmed.isEmpty, "do not auto-start before release")
