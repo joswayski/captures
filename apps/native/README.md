@@ -192,8 +192,9 @@ Record). Record mode shows labelled FPS / Max resolution selects, Show cursor /
 Show clicks / Desktop audio switches (On/Off/Unavailable with a reason tooltip;
 clicks imply the cursor) and the microphone select. The primary button hides under
 auto-start unless a start failed. Guidance stays until a window is selected, hides
-while dragging and fades when the pointer comes within 28 points. Segmented-control
-animation/icons, the panel entrance animation and Wayland remain open; physical
+while dragging and fades when the pointer comes within 28 points. Segmented
+indicators slide and the Record row arrives as shipped; wgpu segment icons and
+Wayland remain open; physical
 displays, platform input and accessibility acceptance remain open.
 
 Configured Region/Window/Full screen global shortcuts switch the open selector's
