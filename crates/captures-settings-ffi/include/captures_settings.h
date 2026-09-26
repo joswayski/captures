@@ -376,7 +376,8 @@ char *captures_preview_dust_particles_v1(double card_width, double card_height,
     double image_width, double image_height, double origin_x, double origin_y, uint32_t seed);
 
 /* Preview stack motion tables: {exits:{dismiss|dust|delete_fallback:
- * {hold_ms,settle_delay_ms},clear_stagger_ms,clear_stagger_max_ms,dust_pad},
+ * {hold_ms,settle_delay_ms},clear_stagger_ms,clear_stagger_max_ms,dust_pad,
+ * delete_origin:{first_x,after_close_x,y}},
  * sparkles:{reach,side,near,early|late:[{x,y,core,fade,accent,alpha}]}}.
  * Timings and curves of the animations themselves are in the "motion"
  * operation. Owned UTF-8; free with captures_settings_free_v1. */

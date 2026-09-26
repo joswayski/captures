@@ -29,7 +29,13 @@ enum MiniPreviewButtonKind { case close, trash, edit, copy, save, folder, collap
 
 /// Preview-only control so this floating chrome does not inherit Workbench button styling.
 final class MiniPreviewButton: NSButton {
-    var kind: MiniPreviewButtonKind
+    /// A main action's glyph pops in when it changes (Save → Saved → Show in
+    /// Folder), as shipping remounts its SVG.
+    var kind: MiniPreviewButtonKind {
+        didSet { if popsIcon && kind != oldValue { popIcon() } }
+    }
+    /// Shipping `.thumbnail-main-actions svg`: Copy and Save pop new glyphs.
+    var popsIcon = false
     private let tokens: Tokens
     private let primary: Bool
     private var tracking: NSTrackingArea?
@@ -45,6 +51,14 @@ final class MiniPreviewButton: NSButton {
     var growsFromTrailingEdge = false
     private var restFrame: NSRect?
     var showsHoverLabel: Bool { hoverLabel != nil && (hovered || focused) }
+    /// Show less morph: 0 is the 28 pt stack icon, 1 the hover pill. The width
+    /// follows the 240 ms morph, the icon/label crossfade the 180 ms swap.
+    private(set) var morphWidth: Double = 0
+    private(set) var morphSwap: Double = 0
+    private var morphAnimation: (start: CFTimeInterval, width: Double, swap: Double, target: Double)?
+    private var iconPopStart: CFTimeInterval?
+    /// Drives self-drawn motion (the morph and the icon pop) while it runs.
+    private var ticker: Timer?
     /// Shipping instant glass tip (`data-tooltip`). Labelled actions have none;
     /// the system tooltip is never used.
     var tooltipText: String?
@@ -72,9 +86,54 @@ final class MiniPreviewButton: NSButton {
         setAccessibilityLabel(title); toolTip = nil
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { ticker?.invalidate() }
     @objc private func activate() {
         if kind == .edit { editorJustOpened = true; needsDisplay = true }
         actionBlock()
+    }
+
+    /// Shipping `thumbnail-action-pop`: the glyph scales and fades in.
+    func popIcon() {
+        guard window?.isVisible == true, !NativeMotion.reduceMotion else { return }
+        iconPopStart = CACurrentMediaTime()
+        startTicker(); needsDisplay = true
+    }
+
+    private func startTicker() {
+        guard ticker == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tick() }
+        RunLoop.main.add(timer, forMode: .common); ticker = timer
+    }
+
+    /// Advance the morph and the icon pop; the ticker stops once both rest.
+    private func tick() {
+        let now = CACurrentMediaTime()
+        var running = false
+        if let morph = morphAnimation {
+            let elapsed = now - morph.start
+            func value(_ name: String, from: Double) -> Double {
+                let spec = NativeMotion.transition(name, tokens: tokens)
+                guard spec.duration > 0, elapsed < spec.duration else { return morph.target }
+                return from + (morph.target - from) * NativeMotion.ease(spec.timing, elapsed / spec.duration)
+            }
+            morphWidth = value("preview_minimize_morph", from: morph.width)
+            morphSwap = value("preview_minimize_swap", from: morph.swap)
+            if morphWidth == morph.target && morphSwap == morph.target {
+                morphAnimation = nil
+            } else {
+                running = true
+            }
+            layoutMorph()
+        }
+        if let start = iconPopStart {
+            if now - start < NativeMotion.duration("preview_action_icon_pop", tokens: tokens) {
+                running = true
+            } else {
+                iconPopStart = nil
+            }
+            needsDisplay = true
+        }
+        if !running { ticker?.invalidate(); ticker = nil }
     }
     override var isHidden: Bool {
         didSet {
@@ -158,30 +217,71 @@ final class MiniPreviewButton: NSButton {
         guard hoverLabel != nil else { return }
         let rest = restFrame ?? frame
         restFrame = rest
-        let width = showsHoverLabel ? max(hoverWidth, rest.width) : rest.width
+        let target: Double = showsHoverLabel ? 1 : 0
+        let morph = NativeMotion.transition("preview_minimize_morph", tokens: tokens)
+        if window?.isVisible == true, morph.duration > 0, morphWidth != target || morphSwap != target {
+            if morphAnimation?.target != target {
+                morphAnimation = (CACurrentMediaTime(), morphWidth, morphSwap, target)
+            }
+            startTicker()
+        } else {
+            morphAnimation = nil; morphWidth = target; morphSwap = target
+        }
+        layoutMorph()
+    }
+
+    /// Width between the resting icon and the hover pill, growing inward from
+    /// the pile's screen edge.
+    private func layoutMorph() {
+        guard let rest = restFrame else { return }
+        let width = rest.width + (max(hoverWidth, rest.width) - rest.width) * CGFloat(morphWidth)
         let next = NSRect(x: growsFromTrailingEdge ? rest.maxX - width : rest.minX,
                           y: rest.minY, width: width, height: rest.height)
         if frame != next { frame = next }
         needsDisplay = true
+    }
+
+    /// The morphing Show less control: the stack icon slides toward the pile
+    /// edge and fades as the label arrives from it (`--thumbnail-minimize-slide`).
+    private func drawMorph(_ label: String) {
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                                xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
+        tokens.color("glass-strong").setFill(); path.fill()
+        tokens.color("glass-border").setStroke(); path.stroke()
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: bounds).addClip()
+        let slide: CGFloat = growsFromTrailingEdge ? -1 : 1
+        let swap = CGFloat(morphSwap)
+        let restWidth = restFrame?.width ?? bounds.height
+        let restMidX = growsFromTrailingEdge ? bounds.width - restWidth / 2 : restWidth / 2
+        if swap < 1 {
+            let side = 16 * (1 - 0.2 * swap)
+            tokens.color("glass-text").withAlphaComponent(1 - swap).setStroke()
+            drawIcon(in: NSRect(x: restMidX - side / 2 - 8 * slide * swap,
+                                y: (bounds.height - side) / 2, width: side, height: side))
+        }
+        if swap > 0 {
+            let text = NSAttributedString(string: label, attributes: [
+                .font: NSFont.systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold),
+                .foregroundColor: tokens.color("glass-text").withAlphaComponent(swap)])
+            let size = text.size()
+            text.draw(at: NSPoint(x: (bounds.width - size.width) / 2 + 4 * slide * (1 - swap),
+                                  y: (bounds.height - size.height) / 2))
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        if focused {
+            tokens.color("theme-accent").setStroke()
+            let focus = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5)
+            focus.lineWidth = 2; focus.stroke()
+        }
     }
     override func draw(_ dirtyRect: NSRect) {
         if kind == .edit && editorPresent { drawEditorPill(); return }
         let active = cell?.isHighlighted == true
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
                                 xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
-        if showsHoverLabel, let hoverLabel {
-            tokens.color("glass-strong").setFill(); path.fill()
-            tokens.color("glass-border").setStroke(); path.stroke()
-            let text = NSAttributedString(string: hoverLabel, attributes: [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold),
-                .foregroundColor: tokens.color("glass-text")])
-            let size = text.size()
-            text.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2))
-            if focused {
-                tokens.color("theme-accent").setStroke()
-                let focus = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5)
-                focus.lineWidth = 2; focus.stroke()
-            }
+        if let hoverLabel, morphWidth > 0 || morphSwap > 0 {
+            drawMorph(hoverLabel)
             return
         }
         (primary ? tokens.color("theme-accent") : tokens.color(hovered || active ? "glass-raised" : "glass-strong")).setFill()
@@ -197,7 +297,14 @@ final class MiniPreviewButton: NSButton {
             iconX = (bounds.width - size.width - gap - 16) / 2
             text.draw(at: NSPoint(x: iconX + 16 + gap, y: (bounds.height - size.height) / 2))
         }
-        drawIcon(in: NSRect(x: iconX, y: (bounds.height - 16) / 2, width: 16, height: 16))
+        // A new main-action glyph pops in from 65 % at a quarter opacity.
+        let pop = iconPopStart.flatMap {
+            NativeMotion.pose("preview_action_icon_pop", at: CACurrentMediaTime() - $0, tokens: tokens)
+        }
+        let side = 16 * CGFloat(pop?.scale ?? 1)
+        color.withAlphaComponent(CGFloat(pop?.opacity ?? 1)).setStroke()
+        drawIcon(in: NSRect(x: iconX + (16 - side) / 2, y: (bounds.height - side) / 2,
+                            width: side, height: side))
         if window?.firstResponder === self {
             tokens.color("theme-accent").setStroke(); let focus = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5); focus.lineWidth = 2; focus.stroke()
         }
@@ -321,7 +428,11 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     /// `.thumbnail-editor-active` ring outside the card edge.
     private let editorRing = CALayer()
     private let depthShade = NSView()
+    /// `thumbnail-capture-highlight`: the accent outline a new card fades out.
+    private let highlightRing = CALayer()
     private let dimensions: NSTextField
+    /// `.thumbnail-meta .warning` beside the metadata.
+    private let warningLabel = NSTextField(labelWithString: "")
     private let status = NSTextField(labelWithString: "")
     private var actionButtons: [MiniPreviewButton] = []
     private var saveButton: MiniPreviewButton?
@@ -331,6 +442,14 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private let clipboardChip: MiniPreviewClipboardChip
     /// The clipboard still holds this capture: Copy hides and the chip shows.
     private(set) var clipboardCurrent = false
+    /// The last copy of this capture failed ("Clipboard unavailable").
+    var copyFailed = false { didSet { updateWarning() } }
+    /// The shown warning chip, for tests and accessibility checks.
+    var warningText: String? { warningLabel.isHidden ? nil : warningLabel.stringValue }
+    /// Locked while an exit plays: no hover, focus or clicks.
+    private(set) var isExiting = false
+    /// The capture highlight is still fading.
+    var isHighlighting: Bool { highlightRing.animation(forKey: "preview-capture-highlight") != nil }
     private var savedFeedbackActive = false
     private var savedFeedbackToken = 0
     private var saved = false
@@ -365,7 +484,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
          width: Int, height: Int, sizeBytes: UInt64 = 0, saved: Bool, rightAnchor: Bool,
          copy: @escaping () -> Void, save: @escaping () -> Void,
          open: @escaping () -> Void, trash: @escaping () -> Void,
-         dismiss: @escaping () -> Void) {
+         dismiss: @escaping () -> Void, discard: @escaping () -> Void) {
         self.artifactID = artifactID; self.tokens = tokens
         self.mirrored = rightAnchor
         self.saved = saved
@@ -409,6 +528,10 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         dimensions.frame = NSRect(x: inset, y: bounds.height - 25,
                                   width: min(metadataWidth, bounds.width - inset * 2), height: 17)
         styleLabelBacking(dimensions); addSubview(dimensions)
+        warningLabel.font = .systemFont(ofSize: tokens.number("text-2xs"))
+        warningLabel.textColor = tokens.color("theme-accent-text")
+        warningLabel.alignment = .center
+        styleLabelBacking(warningLabel); warningLabel.isHidden = true; addSubview(warningLabel)
         let chipSize = clipboardChip.intrinsicContentSize
         clipboardChip.frame = NSRect(x: bounds.width - inset - chipSize.width,
                                      y: bounds.height - inset - chipSize.height,
@@ -426,8 +549,10 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         let close = addButton("Close", .close, x: groupStart, y: inset, action: dismiss)
         close.tooltipText = "Close"
         closeButton = close
+        // Before a folder save Delete dissolves only the preview; after it,
+        // Delete moves the export to the Trash.
         let delete = addButton("Delete", .trash, x: groupStart + (saved ? 28 + gap : 0), y: inset) { [weak self] in
-            self?.saved == true ? trash() : dismiss()
+            self?.saved == true ? trash() : discard()
         }
         delete.tooltipText = "Delete"
         let edit = addButton("Edit", .edit, x: mirrored ? inset : bounds.width - 36, y: inset, action: open)
@@ -438,8 +563,10 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         let centerX = (bounds.width - 140) / 2
         let centerTop = (bounds.height - 64 - gap) / 2
         copyButton = addButton("Copy", .copy, x: centerX, y: centerTop, width: 140, action: copy)
+        copyButton?.popsIcon = true
         let saveControl = addButton(saved ? "Show in Folder" : "Save file", saved ? .folder : .save,
                                     x: centerX, y: centerTop + 32 + gap, width: 140, primary: true, action: save)
+        saveControl.popsIcon = true
         saveButton = saveControl
         setChromeVisible(false)
         // `0 0 0 2px rgba(accent, .9), 0 0 14px rgba(accent, .28)`, drawn under
@@ -456,7 +583,129 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         editorRing.shadowOffset = .zero
         editorRing.opacity = 0
         layer?.insertSublayer(editorRing, at: 0)
+        // `0 0 0 1px rgba(accent, .85), 0 0 18px rgba(accent, .24)` over the card.
+        highlightRing.frame = bounds
+        highlightRing.cornerRadius = radius
+        highlightRing.borderWidth = 1
+        highlightRing.borderColor = accent.withAlphaComponent(0.85).cgColor
+        highlightRing.shadowColor = accent.cgColor
+        highlightRing.shadowOpacity = 0.24
+        highlightRing.shadowRadius = 9
+        highlightRing.shadowOffset = .zero
+        highlightRing.opacity = 0
+        layer?.addSublayer(highlightRing)
         setAccessibilityRole(.group); setAccessibilityLabel("Screenshot mini preview")
+    }
+
+    /// Shipping `thumbnail-capture-highlight`: hold the outline for a second,
+    /// then fade it. `startedAgo` resumes it on a rebuilt stack.
+    func playCaptureHighlight(startedAgo: Double = 0) {
+        NativeMotion.play("preview_capture_highlight", onLayer: highlightRing, down: 1, tokens: tokens,
+                          startedAgo: startedAgo, key: "preview-capture-highlight")
+    }
+
+    /// Shipping `.thumbnail-meta .warning`: "Not in History" or "Clipboard
+    /// unavailable" beside the metadata, which native captures reach only
+    /// through a failed copy (History is written before a card appears).
+    private func updateWarning() {
+        let pointer: UnsafePointer<CChar>? = captures_preview_card_warning_v1(clipboardCurrent, true, copyFailed)
+        let warning = pointer.map { String(cString: $0) }
+        warningLabel.stringValue = warning ?? ""
+        warningLabel.setAccessibilityLabel(warning)
+        let width = ceil(warningLabel.attributedStringValue.size().width) + 8
+        warningLabel.frame = NSRect(x: dimensions.frame.maxX + tokens.number("s-3"), y: dimensions.frame.minY,
+                                    width: min(width, max(0, bounds.width - dimensions.frame.maxX - 16)),
+                                    height: dimensions.frame.height)
+        warningLabel.isHidden = warning == nil || dimensions.isHidden || isExiting
+    }
+
+    /// Freeze the card for its exit: shipping locks the hover look, hides the
+    /// metadata and ignores input while the card leaves.
+    func beginExit() {
+        isExiting = true
+        setMediaHovered(true, animated: false)
+        dimensions.isHidden = true; warningLabel.isHidden = true; status.isHidden = true
+        actionButtons.forEach { $0.tooltipChanged?($0, false) }
+    }
+
+    /// `thumbnail-dismiss-streak`: the media stretches and smears into a
+    /// horizontal motion blur inside its clip.
+    func playDismissStreak(delay: Double) {
+        guard let layer = imageView.layer,
+              let spec = NativeMotion.catalog.keyframes["preview_dismiss_streak"] else { return }
+        NativeMotion.play("preview_dismiss_streak", onLayer: layer, down: 1, tokens: tokens,
+                          holdEnd: true, delay: delay, key: "preview-dismiss-streak")
+        guard let streak = CIFilter(name: "CIMotionBlur") else { return }
+        streak.setDefaults()
+        streak.setValue(0, forKey: kCIInputRadiusKey)
+        streak.setValue(0, forKey: kCIInputAngleKey)
+        streak.name = "streak"
+        layer.filters = (layer.filters ?? []) + [streak]
+        let blur = CAKeyframeAnimation(keyPath: "filters.streak.inputRadius")
+        // The first key is the locked 2 pt hover blur, already on the media.
+        blur.values = spec.frames.map { NSNumber(value: $0.offset == 0 ? 0 : $0.blur) }
+        blur.keyTimes = spec.frames.map { NSNumber(value: $0.offset) }
+        let timing = NativeMotion.timingFunction(spec.easing, tokens: tokens)
+        blur.timingFunctions = Array(repeating: timing, count: spec.frames.count - 1)
+        blur.duration = NativeMotion.seconds(spec.duration, tokens: tokens)
+        blur.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) + delay
+        blur.fillMode = .both
+        blur.isRemovedOnCompletion = false
+        layer.add(blur, forKey: "preview-dismiss-streak-blur")
+    }
+
+    /// The media as a dust source: cover-cropped to the card in its rounded
+    /// rect, unfiltered (the chips carry the hover blur and brightness).
+    func dustSource(scale: CGFloat) -> CGImage? {
+        let image = imageView.image
+        let width = Int((bounds.width * scale).rounded()), height = Int((bounds.height * scale).rounded())
+        guard width > 0, height > 0, image.size.width > 0, image.size.height > 0,
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: width * 4, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        let radius = tokens.number("thumbnail-card-radius")
+        let rect = CGRect(origin: .zero, size: bounds.size)
+        context.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        context.clip()
+        let cover = max(rect.width / image.size.width, rect.height / image.size.height)
+        let size = NSSize(width: image.size.width * cover, height: image.size.height * cover)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        image.draw(in: NSRect(x: (rect.width - size.width) / 2, y: (rect.height - size.height) / 2,
+                              width: size.width, height: size.height),
+                   from: .zero, operation: .copy, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        return context.makeImage()
+    }
+
+    /// Centre of Delete, where the ash front starts.
+    var deleteOrigin: CGPoint {
+        let tables = PreviewMotionTables.shared
+        let left = saved ? tables.deleteOriginAfterCloseX : tables.deleteOriginFirstX
+        return CGPoint(x: mirrored ? bounds.width - left : left, y: tables.deleteOriginY)
+    }
+
+    /// `thumbnail-delete-img-fade`: the frozen card fades over its dust chips
+    /// (hold 20 % of 0.55 s, then `cubic-bezier(0.22, 0.1, 0.25, 1)`).
+    func fadeForDust() {
+        guard let layer else { return }
+        let duration = 0.55
+        let fade = CAKeyframeAnimation(keyPath: "opacity")
+        fade.values = [1, 1, 0]
+        fade.keyTimes = [0, 0.2, 1]
+        fade.timingFunctions = [CAMediaTimingFunction(name: .linear),
+                                CAMediaTimingFunction(controlPoints: 0.22, 0.1, 0.25, 1)]
+        fade.duration = duration
+        fade.fillMode = .forwards
+        fade.isRemovedOnCompletion = false
+        layer.add(fade, forKey: "preview-dust-source")
+    }
+
+    /// The compact depth shade eases with the stack's flight.
+    func setDepthShade(visible: Bool, animated: Bool) {
+        if animated { depthShade.animator().alphaValue = visible ? 1 : 0 } else { depthShade.alphaValue = visible ? 1 : 0 }
     }
 
     /// Apply the shared editor presence: the Edit control morphs into the
@@ -528,6 +777,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     func hoverLockChanged() { refreshPointerChrome() }
 
     private func refreshPointerChrome() {
+        guard !isExiting else { return }
         let focusedControl = window?.firstResponder === self
             || actionButtons.contains { $0.window?.firstResponder === $0 }
         setChromeVisible((pointerInside && !isHoverLocked()) || focusedControl)
@@ -560,6 +810,14 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
             : (bounds.height - 64 - gap) / 2 + 32 + gap
         copyButton?.isHidden = compact || !chromeVisible || current
         clipboardChip.isHidden = compact || !current
+        // `clipboard-confirmation-arrive`; a returning Copy remounts its glyph.
+        if current && !compact {
+            NativeMotion.play("preview_clipboard_chip_arrive", on: clipboardChip, tokens: tokens,
+                              key: "preview-clipboard-arrive")
+        } else if !current {
+            copyButton?.popIcon()
+        }
+        updateWarning()
     }
 
     /// Brief shipping "Saved" confirmation on the Save/Show in Folder action.
@@ -608,6 +866,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         editorRing.opacity = !compact && editorPhase == UInt32(CAPTURES_EDITOR_PHASE_PRESENT) ? 1 : 0
         CATransaction.commit()
         setMediaHovered(!compact && chromeVisible, animated: false)
+        updateWarning()
     }
 
     @discardableResult private func addButton(_ title: String, _ kind: MiniPreviewButtonKind, x: CGFloat,
@@ -617,7 +876,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     }
 
     private func setChromeVisible(_ visible: Bool) {
-        guard !compact else { return }
+        guard !compact, !isExiting else { return }
         chromeVisible = visible
         actionButtons.forEach { if $0 !== editButton { $0.isHidden = !visible } }
         if clipboardCurrent { copyButton?.isHidden = true }
@@ -626,8 +885,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         editButton?.isHidden = !visible && !editorPinned
         dimensions.isHidden = visible
         setMediaHovered(visible)
+        updateWarning()
     }
-    override var acceptsFirstResponder: Bool { !compact }
+    override var acceptsFirstResponder: Bool { !compact && !isExiting }
     override func becomeFirstResponder() -> Bool { let result = super.becomeFirstResponder(); if result { setChromeVisible(true) }; return result }
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
@@ -669,7 +929,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard let hit = super.hitTest(point) else { return nil }
+        guard !isExiting, let hit = super.hitTest(point) else { return nil }
         // The image and labels are decorative; receive their gestures on the
         // card. Buttons retain their own click handling.
         return actionButtons.contains(where: { hit === $0 && !$0.isHidden }) ? hit : self
@@ -868,6 +1128,19 @@ final class MiniPreviewView: NSView {
     private var overflowCues: [MiniPreviewOverflowCue] = []
     /// Top-anchored stacks open icon tips below (not `topAnchor`, an NSView member).
     private let anchoredAtTop: Bool
+    /// Right-anchored stacks mirror the Close streak.
+    private let anchoredRight: Bool
+    /// One card slot (card plus gap), for survivors settling into a hole.
+    private let cardSlot: CGFloat
+    private let stackCollapsed: Bool
+    /// Cards playing an exit in place, and their dust overlays.
+    private(set) var exitingArtifactIDs: Set<String> = []
+    private var dustOverlays: [PreviewMotionOverlay] = []
+    /// Dust chips on screen, for tests.
+    var dustChipCount: Int { dustOverlays.reduce(0) { $0 + ($1.content.sublayers?.count ?? 0) } }
+    /// `.thumbnail-collapsed-hit-target::before/::after` sparkles.
+    private var sparkles: PreviewMotionOverlay?
+    private(set) var sparkling = false
     /// One shared glass tip for card icons and the stack toolbar.
     private let tooltipView: GlassTooltipView
     private weak var tooltipOwner: MiniPreviewButton?
@@ -907,10 +1180,14 @@ final class MiniPreviewView: NSView {
          topAnchor: Bool, rightAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          trash: @escaping (String) -> Void, dismiss: @escaping (String) -> Void,
+         discard: @escaping (String) -> Void = { _ in },
          setCollapsed: @escaping (Bool) -> Void,
          clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
         self.geometry = geometry; self.tokens = tokens; self.restLayouts = layouts
         self.hoverLayouts = hoverLayouts; anchoredAtTop = topAnchor
+        anchoredRight = rightAnchor; stackCollapsed = collapsed
+        let slots = ids.compactMap { id in layouts[id].map { CGFloat($0.y) } }.sorted()
+        cardSlot = slots.count >= 2 ? slots[1] - slots[0] : CGFloat(geometry.card_height)
         tooltipView = GlassTooltipView(tokens: tokens, style: .previewIcon)
         artifactIDs = ids
         super.init(frame: NSRect(x: 0, y: 0, width: geometry.width, height: geometry.height))
@@ -938,7 +1215,7 @@ final class MiniPreviewView: NSView {
                 sizeBytes: resource.artifact.sizeBytes,
                 saved: resource.artifact.savedPath != nil, rightAnchor: rightAnchor,
                 copy: { copy(id) }, save: { save(id) }, open: { open(id) },
-                trash: { trash(id) }, dismiss: { dismiss(id) })
+                trash: { trash(id) }, dismiss: { dismiss(id) }, discard: { discard(id) })
             card.isHidden = false
             card.setCompact(collapsed, depth: layout.depth)
             card.setAccessibilityElement(layout.interactive)
@@ -959,6 +1236,35 @@ final class MiniPreviewView: NSView {
                 setCollapsed(false)
             }
             document.addSubview(expand); pileExpandButton = expand
+            // The sparkle layers reach over the fanned pile (`inset: -96px
+            // -10px -6px`, flipped for top-anchored stacks).
+            let tables = PreviewMotionTables.shared
+            let above = topAnchor ? tables.near : tables.reach
+            let below = topAnchor ? tables.reach : tables.near
+            let area = NSRect(x: card.frame.minX - tables.side, y: card.frame.minY - above,
+                              width: card.frame.width + tables.side * 2,
+                              height: card.frame.height + above + below)
+            let overlay = PreviewMotionOverlay(frame: area)
+            for (dots, index) in [(tables.early, 0), (tables.late, 1)] {
+                let group = CALayer()
+                group.frame = overlay.bounds
+                group.opacity = 0
+                group.name = index == 0 ? "early" : "late"
+                for dot in dots {
+                    let center = CGPoint(x: (area.width - 6) * dot.x + 3, y: (area.height - 6) * dot.y + 3)
+                    let color = dot.accent ? tokens.color("theme-accent") : NSColor.white
+                    for (radius, alpha) in [(dot.fade, dot.alpha * 0.35), (dot.core, dot.alpha)] {
+                        let circle = CALayer()
+                        circle.frame = CGRect(x: center.x - radius, y: center.y - radius,
+                                              width: radius * 2, height: radius * 2)
+                        circle.cornerRadius = radius
+                        circle.backgroundColor = color.withAlphaComponent(alpha).cgColor
+                        group.addSublayer(circle)
+                    }
+                }
+                overlay.content.addSublayer(group)
+            }
+            document.addSubview(overlay); sparkles = overlay
         }
 
         if !collapsed {
@@ -1019,6 +1325,144 @@ final class MiniPreviewView: NSView {
     func setStatus(_ value: String, detail: String? = nil, for artifactID: String) {
         cards[artifactID]?.setStatus(value, detail: detail)
     }
+
+    /// Play `id`'s exit in its slot: the Close streak, or dust from the trash
+    /// control (the scale-and-fade fallback when chips cannot be built).
+    /// Returns how long the slot is held and when survivors may start to
+    /// settle, or nil when nothing plays (reduced motion, a hidden panel, a
+    /// compact pile, or an unknown card).
+    func playExit(for id: String, kind: MiniPreviewExitKind, delay: Double = 0,
+                  textures: DustTextures? = nil) -> PreviewMotionTables.Exit? {
+        guard let card = cards[id], !card.isExiting, !stackCollapsed, window?.isVisible == true,
+              !NativeMotion.reduceMotion else { return nil }
+        let tables = PreviewMotionTables.shared
+        if tooltipOwner?.isDescendant(of: card) == true { tooltipOwner = nil; tooltipView.isHidden = true }
+        // Paint above the survivors that slide into the slot.
+        if let superview = card.superview {
+            card.removeFromSuperview(); superview.addSubview(card)
+        }
+        card.beginExit()
+        exitingArtifactIDs.insert(id)
+        switch kind {
+        case .dismiss:
+            NativeMotion.play("preview_dismiss", on: card, tokens: tokens, holdEnd: true, delay: delay,
+                              mirrorX: anchoredRight, key: "preview-exit")
+            card.playDismissStreak(delay: delay)
+            return PreviewMotionTables.Exit(hold: delay + tables.dismiss.hold,
+                                            settleDelay: delay + tables.dismiss.settleDelay)
+        case .dust:
+            if let textures, playDust(on: card, textures: textures) { return tables.dust }
+            NativeMotion.play("preview_delete_fallback", on: card, tokens: tokens, holdEnd: true,
+                              key: "preview-exit")
+            return tables.fallback
+        }
+    }
+
+    private func playDust(on card: MiniPreviewCardView, textures: DustTextures) -> Bool {
+        let scale = window?.backingScaleFactor ?? 2
+        let pad = PreviewMotionTables.shared.dustPad
+        guard pad > 0, let source = card.dustSource(scale: scale) else { return false }
+        let seed = UInt32(truncatingIfNeeded: card.artifactID.unicodeScalars.reduce(5381) { ($0 &* 33) &+ Int($1.value) })
+        let particles = PreviewMotionTables.dustParticles(card: card.bounds.size,
+            image: NSSize(width: source.width, height: source.height), origin: card.deleteOrigin, seed: seed)
+        guard !particles.isEmpty,
+              let chips = try? textures.prepare(source: source, particles: particles, scale: scale, atlas: true),
+              chips.count == particles.count else { return false }
+        let overlay = PreviewMotionOverlay(frame: card.frame.insetBy(dx: -pad, dy: -pad))
+        card.superview?.addSubview(overlay, positioned: .above, relativeTo: card)
+        DustDissolve.play(in: overlay.content, chips: chips, particles: particles, pad: pad,
+                          radius: tokens.number("thumbnail-card-radius"), scale: scale)
+        card.fadeForDust()
+        dustOverlays.append(overlay)
+        return true
+    }
+
+    /// Older cards slide one slot toward the stack anchor into `id`'s slot
+    /// after `delay`: bottom-anchored stacks move them down, top-anchored up.
+    /// Cards already leaving keep their place.
+    func settleSurvivors(into id: String, after delay: Double) {
+        guard let index = artifactIDs.firstIndex(of: id) else { return }
+        let older = Array(artifactIDs[..<index])
+        let shift = anchoredAtTop ? -cardSlot : cardSlot
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay)) { [weak self] in
+            guard let self, self.window?.isVisible == true else { return }
+            let settle = NativeMotion.transition("preview_stack_settle", tokens: self.tokens)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = settle.duration
+                context.timingFunction = settle.timing
+                for id in older where !self.exitingArtifactIDs.contains(id) {
+                    guard let card = self.cards[id] else { continue }
+                    card.animator().setFrameOrigin(NSPoint(x: card.frame.minX, y: card.frame.minY + shift))
+                }
+            }
+        }
+    }
+
+    /// Play a stack toolbar motion on Clear all and Show less. The controls
+    /// ignore clicks while it plays, as shipping does; `holdEnd` keeps a
+    /// leaving toolbar on its last keyframe until the stack rebuilds, and an
+    /// entering one unlocks afterwards.
+    func playToolbar(_ name: String, holdEnd: Bool) {
+        let seconds = stackToolbarButtons.map {
+            NativeMotion.play(name, on: $0, tokens: tokens, holdEnd: holdEnd, key: "preview-toolbar")
+        }.max() ?? 0
+        guard seconds > 0 else { return }
+        stackToolbarButtons.forEach { $0.isEnabled = false }
+        guard !holdEnd else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            self?.stackToolbarButtons.forEach { $0.isEnabled = true }
+        }
+    }
+
+    /// Screen rects of every card, carried across a rebuild for the list ↔
+    /// pile flight.
+    func cardScreenFrames() -> [String: NSRect] {
+        guard let window else { return [:] }
+        return cards.mapValues { window.convertToScreen($0.convert($0.bounds, to: nil)) }
+    }
+
+    /// Shipping `thumbnail-card-expand` / minimize run: cards fly between the
+    /// list and the pile with the compact look (chrome hidden, depth shade
+    /// easing) over the shipping 0.52 s. Collapsing flies from the laid-out
+    /// frames to `screenFrames`; expanding flies from them. Returns seconds.
+    @discardableResult
+    func playFly(_ screenFrames: [String: NSRect], collapsing: Bool, depths: [String: Int]) -> Double {
+        let fly = NativeMotion.transition("preview_stack_fly", tokens: tokens)
+        guard let window, window.isVisible, fly.duration > 0 else { return 0 }
+        overflowCues.forEach { $0.isHidden = true }
+        var moves: [(MiniPreviewCardView, NSRect)] = []
+        for (id, card) in cards {
+            guard let screen = screenFrames[id], let superview = card.superview else { continue }
+            let local = superview.convert(window.convertFromScreen(screen), from: nil)
+            let laid = card.frame
+            let pile = NSRect(origin: local.origin, size: laid.size)
+            card.setCompact(true, depth: depths[id] ?? 0)
+            card.setDepthShade(visible: !collapsing, animated: false)
+            if !collapsing { card.frame = pile }
+            moves.append((card, collapsing ? pile : laid))
+        }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = fly.duration
+            context.timingFunction = fly.timing
+            for (card, target) in moves {
+                card.animator().frame = target
+                card.setDepthShade(visible: collapsing, animated: true)
+            }
+        }, completionHandler: {
+            guard !collapsing else { return }
+            for (card, _) in moves { card.setCompact(false, depth: 0) }
+        })
+        return fly.duration
+    }
+
+    /// Resume a new card's capture highlight on this (possibly rebuilt) stack.
+    func playCaptureHighlight(for artifactID: String, startedAgo: Double = 0) {
+        cards[artifactID]?.playCaptureHighlight(startedAgo: startedAgo)
+    }
+
+    func setCopyFailed(_ failed: Bool, for artifactID: String) { cards[artifactID]?.copyFailed = failed }
+
+    func warningText(for artifactID: String) -> String? { cards[artifactID]?.warningText }
 
     /// Shipping DOM order: the collapsed pile's expand control, the stack
     /// toolbar (Clear all, Minimize), the overflow cues, then each card and
@@ -1205,9 +1649,26 @@ final class MiniPreviewView: NSView {
 
     func activatePileExpand() { pileExpandButton?.performClick(nil) }
 
+    /// Shipping `thumbnail-stack-sparkle`: two dot layers drift up over the
+    /// hovered pile, looping until the pointer leaves.
+    private func setSparkling(_ active: Bool) {
+        guard let groups = sparkles?.content.sublayers else { return }
+        sparkling = false
+        for group in groups {
+            group.removeAnimation(forKey: "preview-sparkle")
+            guard active else { continue }
+            let name = group.name == "early" ? "preview_pile_sparkle" : "preview_pile_sparkle_late"
+            if NativeMotion.play(name, onLayer: group, down: 1, tokens: tokens, repeats: true,
+                                 key: "preview-sparkle") > 0 {
+                sparkling = true
+            }
+        }
+    }
+
     func setPileHovered(_ hovered: Bool) {
         guard hovered != pileHovered else { return }
         pileHovered = hovered
+        setSparkling(hovered)
         let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             ? 0 : Double(tokens.number("dur-3")) / 1000
         NSAnimationContext.runAnimationGroup { context in
@@ -1238,13 +1699,14 @@ final class MiniPreviewPanel: NSPanel {
          topAnchor: Bool, rightAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          trash: @escaping (String) -> Void, dismiss: @escaping (String) -> Void,
+         discard: @escaping (String) -> Void = { _ in },
          setCollapsed: @escaping (Bool) -> Void,
          clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
         previewView = MiniPreviewView(geometry: geometry, contentHeight: contentHeight,
             resources: resources, ids: ids,
             layouts: layouts, hoverLayouts: hoverLayouts, collapsed: collapsed,
             topAnchor: topAnchor, rightAnchor: rightAnchor, tokens: tokens,
-            copy: copy, save: save, open: open, trash: trash, dismiss: dismiss,
+            copy: copy, save: save, open: open, trash: trash, dismiss: dismiss, discard: discard,
             setCollapsed: setCollapsed, clearAll: clearAll, move: move)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
@@ -1268,6 +1730,9 @@ final class MiniPreviewPanel: NSPanel {
         draggingEntered(sender).contains(.copy)
     }
 }
+
+/// How a card leaves the stack: Close's streak, or Delete's dust.
+enum MiniPreviewExitKind { case dismiss, dust }
 
 /// How a History Restore ended (`MiniPreviewController.restore`).
 enum MiniPreviewRestoreOutcome {
@@ -1307,6 +1772,16 @@ final class MiniPreviewController {
     private var editorArtifactIDs: Set<String> = []
     private var editorPresence: [String: CapturesEditorPresence] = [:]
     private var editorPresenceWake: DispatchWorkItem?
+    /// The rebuild that ends running exits and flights (the panel keeps its
+    /// old layout until then), and when it is due.
+    private var viewTransition: DispatchWorkItem?
+    private var viewTransitionDeadline: CFTimeInterval = 0
+    /// When each card arrived, so a rebuilt stack resumes its highlight.
+    private var arrivals: [String: CFTimeInterval] = [:]
+    /// Captures whose last clipboard copy failed ("Clipboard unavailable").
+    private var copyFailures: Set<String> = []
+    /// One dust renderer per preview surface, made on the first Delete.
+    private lazy var dustTextures: DustTextures? = try? DustTextures()
     var copyArtifact: ArtifactAction = { _ in }
     var saveArtifact: ArtifactAction = { _ in }
     var openArtifact: ArtifactAction = { _ in }
@@ -1319,6 +1794,8 @@ final class MiniPreviewController {
     var decodedArtifactIDs: [String] { stack.ids.filter { resources[$0] != nil } }
     var isCollapsed: Bool { stack.isCollapsed }
     var isPanelVisible: Bool { panel?.isVisible == true }
+    /// The stack on screen, for tests (it may still show exiting cards).
+    var previewView: MiniPreviewView? { panel?.previewView }
     func statusText(for artifactID: String) -> String? {
         panel?.previewView.statusText(for: artifactID)
     }
@@ -1338,6 +1815,49 @@ final class MiniPreviewController {
 
     func showSavedFeedback(for artifactID: String) {
         panel?.previewView.showSavedFeedback(for: artifactID)
+    }
+
+    /// A copy of `artifactID` failed or succeeded: shipping warns
+    /// "Clipboard unavailable" on the card until a copy works.
+    func recordCopyResult(artifactID: String, succeeded: Bool) {
+        precondition(Thread.isMainThread)
+        if succeeded { copyFailures.remove(artifactID) } else if stack.ids.contains(artifactID) {
+            copyFailures.insert(artifactID)
+        }
+        panel?.previewView.setCopyFailed(!succeeded && stack.ids.contains(artifactID), for: artifactID)
+    }
+
+    func warningText(for artifactID: String) -> String? { panel?.previewView.warningText(for: artifactID) }
+
+    /// Whether exits or a flight are still playing before the stack rebuilds.
+    var isTransitioning: Bool { viewTransition != nil }
+
+    /// Rebuild once every running exit or flight has ended.
+    private func scheduleRebuild(after seconds: Double) {
+        let deadline = CACurrentMediaTime() + seconds
+        guard viewTransition == nil || deadline > viewTransitionDeadline else { return }
+        viewTransition?.cancel()
+        viewTransitionDeadline = deadline
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.viewTransition = nil
+            self.finishView()
+        }
+        viewTransition = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    /// End running exits and flights now.
+    private func settleTransitions() {
+        guard let work = viewTransition else { return }
+        work.cancel(); viewTransition = nil
+        finishView()
+    }
+
+    /// Show the stack as it now is: rebuilt, or closed when empty.
+    private func finishView() {
+        if stack.ids.isEmpty { panel?.close(); panel = nil; screenID = nil; stackOrigin = nil }
+        else { makePanel(); updateVisibility() }
     }
 
     /// The host's open screenshot editors changed: cards whose capture is in
@@ -1479,6 +1999,7 @@ final class MiniPreviewController {
                         self.visibilityPendingArtifactID = nil
                     }
                     self.resources[artifact.id] = MiniPreviewResource(artifact: artifact, image: image)
+                    self.arrivals[artifact.id] = CACurrentMediaTime()
                     self.makePanel()
                     self.updateVisibility()
                     self.panel?.previewView.playArrival(for: artifact.id)
@@ -1586,8 +2107,13 @@ final class MiniPreviewController {
         contains(artifact) && resources[artifact.id]?.artifact.savedPath == savedPath
     }
 
-    func dismiss(_ artifactID: String) {
+    /// Remove a card. Close plays shipping's streak and Delete its dust in
+    /// the card's slot while older cards settle into it; the stack rebuilds
+    /// once the exit ends. `exit: nil` (a drag onto another app, a replaced
+    /// original) removes it at once.
+    func dismiss(_ artifactID: String, exit: MiniPreviewExitKind? = .dismiss) {
         precondition(Thread.isMainThread)
+        let liveBefore = stack.ids.count
         guard stack.remove(artifactID) else { return }
         pendingDecodes[artifactID] = nil
         if visibilityPendingArtifactID == artifactID, policy.stopWaiting() {
@@ -1596,10 +2122,22 @@ final class MiniPreviewController {
         resources[artifactID] = nil
         preparedDrags[artifactID] = nil
         cardGenerations[artifactID] = nil
-        if stack.ids.isEmpty { panel?.close(); panel = nil; screenID = nil; stackOrigin = nil }
-        else { makePanel(); updateVisibility() }
+        arrivals[artifactID] = nil; copyFailures.remove(artifactID)
+        if let exit, let view = panel?.previewView,
+           let played = view.playExit(for: artifactID, kind: exit,
+                                      textures: exit == .dust ? dustTextures : nil) {
+            // Fewer than two live cards: the stack toolbar leaves with the card.
+            if liveBefore >= 2 && stack.ids.count < 2 { view.playToolbar("preview_toolbar_exit", holdEnd: true) }
+            view.settleSurvivors(into: artifactID, after: played.settleDelay)
+            if stack.ids.isEmpty { screenID = nil; stackOrigin = nil }
+            scheduleRebuild(after: played.hold)
+            return
+        }
+        finishView()
     }
 
+    /// Clear all: every card streaks out, bottom first, without settling, and
+    /// the stack toolbar leaves with the first streak.
     func clearAll() {
         precondition(Thread.isMainThread)
         let snapshot = stack.ids
@@ -1608,35 +2146,90 @@ final class MiniPreviewController {
         snapshot.forEach { id in
             resources[id] = nil; pendingDecodes[id] = nil
             preparedDrags[id] = nil; cardGenerations[id] = nil
+            arrivals[id] = nil; copyFailures.remove(id)
         }
         if let pending = visibilityPendingArtifactID, snapshot.contains(pending),
            policy.stopWaiting() {
             visibilityPendingArtifactID = nil
         }
-        if stack.ids.isEmpty { panel?.close(); panel = nil; screenID = nil; stackOrigin = nil }
-        else { makePanel(); updateVisibility() }
+        let topAnchor = settings.placement.hasPrefix("top_")
+        var hold: Double?
+        if let view = panel?.previewView {
+            for (index, id) in snapshot.enumerated() {
+                let delay = captures_preview_clear_delay_ms_v1(snapshot.count, index, topAnchor) / 1000
+                if let played = view.playExit(for: id, kind: .dismiss, delay: delay) {
+                    hold = max(hold ?? 0, played.hold)
+                }
+            }
+            if hold != nil { view.playToolbar("preview_toolbar_clear", holdEnd: true) }
+        }
+        if stack.ids.isEmpty { screenID = nil; stackOrigin = nil }
+        if let hold { scheduleRebuild(after: hold) } else { finishView() }
     }
 
+    /// Show less and expand. The cards fly between the list and the pile
+    /// (shipping `thumbnail-card-expand` and the minimize run) while the stack
+    /// toolbar leaves or enters; collapsing rebuilds once the pile is reached.
     func setCollapsed(_ collapsed: Bool) {
         precondition(Thread.isMainThread)
         guard stack.isCollapsed != collapsed else { return }
+        settleTransitions()
+        let before = panel?.isVisible == true ? panel?.previewView.cardScreenFrames() ?? [:] : [:]
         stack.setCollapsed(collapsed)
+        let depths = cardDepths()
+        if collapsed, let view = panel?.previewView, let pile = pileScreenFrames(),
+           view.playFly(pile, collapsing: true, depths: depths) > 0 {
+            view.playToolbar("preview_toolbar_out", holdEnd: true)
+            scheduleRebuild(after: NativeMotion.transition("preview_stack_fly", tokens: tokens).duration)
+            return
+        }
         makePanel(); updateVisibility()
+        if !collapsed, !before.isEmpty, let view = panel?.previewView,
+           view.playFly(before, collapsing: false, depths: depths) > 0 {
+            view.playToolbar("preview_toolbar_in", holdEnd: false)
+        }
         // Expanding leaves the pointer over a card it never hovered.
         if !collapsed { panel?.previewView.lockCardHover() }
     }
 
+    private func cardDepths() -> [String: Int] {
+        let count = stack.ids.count
+        return Dictionary(uniqueKeysWithValues: stack.ids.enumerated().map { ($1, count - 1 - $0) })
+    }
+
+    /// Where each card sits in the collapsed pile, in screen coordinates.
+    private func pileScreenFrames() -> [String: NSRect]? {
+        let ids = stack.ids
+        guard !ids.isEmpty, let screen = targetScreen(), let monitor = Self.monitor(for: screen),
+              let geometry = NativePreviewLayout.geometry(monitor: monitor, count: ids.count,
+                  collapsed: true, origin: stackOrigin, placement: settings.placement) else { return nil }
+        let frame = Self.appKitFrame(geometry: geometry, monitor: monitor, screenFrame: screen.frame)
+        let topAnchor = settings.placement.hasPrefix("top_")
+        let padding = CGFloat(geometry.padding), height = CGFloat(geometry.card_height)
+        var frames: [String: NSRect] = [:]
+        for (index, id) in ids.enumerated() {
+            guard let layout = stack.cardLayout(index: index, topAnchor: topAnchor) else { continue }
+            frames[id] = NSRect(x: frame.minX + padding, y: frame.maxY - CGFloat(layout.y) - height,
+                                width: frame.width - padding * 2, height: height)
+        }
+        return frames
+    }
+
     func close() {
         precondition(Thread.isMainThread)
+        viewTransition?.cancel(); viewTransition = nil
         _ = policy.stopWaiting(); visibilityPendingArtifactID = nil; screenID = nil
         stackOrigin = nil
         let ids = stack.ids; _ = stack.removeAll(ids)
         resources.removeAll(); pendingDecodes.removeAll()
         preparedDrags.removeAll(); cardGenerations.removeAll()
+        arrivals.removeAll(); copyFailures.removeAll()
         panel?.close(); panel = nil
     }
 
     private func makePanel() {
+        // A rebuild shows the current stack, ending any exit or flight.
+        viewTransition?.cancel(); viewTransition = nil
         panel?.close(); panel = nil
         let ids = stack.ids
         if ids.isEmpty { stackOrigin = nil }
@@ -1664,6 +2257,7 @@ final class MiniPreviewController {
             open: { [weak self] in self?.perform(\.openArtifact, artifactID: $0) },
             trash: { [weak self] in self?.perform(\.trashArtifact, artifactID: $0) },
             dismiss: { [weak self] in self?.dismiss($0) },
+            discard: { [weak self] in self?.dismiss($0, exit: .dust) },
             setCollapsed: { [weak self] in self?.setCollapsed($0) },
             clearAll: { [weak self] in self?.clearAll() },
             move: { [weak self] in self?.moveStack(to: $0) })
@@ -1684,13 +2278,22 @@ final class MiniPreviewController {
             } else if operation.contains(.copy) && !NSApp.windows.contains(where: {
                 $0 !== self.panel && $0.isVisible && $0.frame.contains(point)
             }) {
-                self.dismiss(id)
+                self.dismiss(id, exit: nil)
             }
         }
         panel = next
         refreshClipboardOwner()
         updateEditorPresence(animated: false)
         for id in ids { next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false) }
+        let now = CACurrentMediaTime()
+        let highlight = NativeMotion.duration("preview_capture_highlight", tokens: tokens)
+        for id in ids {
+            next.previewView.setCopyFailed(copyFailures.contains(id), for: id)
+            // A card keeps its capture highlight across rebuilds.
+            if let arrived = arrivals[id], now - arrived < highlight {
+                next.previewView.playCaptureHighlight(for: id, startedAgo: now - arrived)
+            }
+        }
     }
 
     private func perform(_ action: KeyPath<MiniPreviewController, ArtifactAction>,
@@ -1710,7 +2313,8 @@ final class MiniPreviewController {
     private func updateVisibility() {
         guard let panel else { return }
         panel.sharingType = settings.includeInCaptures ? .readOnly : .none
-        if let screen = targetScreen() { position(panel: panel, on: screen) }
+        // A panel playing exits or a flight keeps its frame until it rebuilds.
+        if viewTransition == nil, let screen = targetScreen() { position(panel: panel, on: screen) }
         if policy.visible(count: stack.ids.count, enabled: settings.enabled,
                           includeInCaptures: settings.includeInCaptures) {
             panel.orderFrontRegardless()
@@ -1729,6 +2333,7 @@ final class MiniPreviewController {
     }
 
     func moveStack(to position: NSPoint) {
+        settleTransitions()
         guard stack.isCollapsed, settings.enabled, let panel, panel.isVisible,
               let screen = targetScreen(), let monitor = Self.monitor(for: screen) else { return }
         let scale = max(1, monitor.scale_factor)
@@ -1847,11 +2452,13 @@ final class MiniPreviewActions {
                     let copied = pasteboard.setData(png, forType: .png)
                     // Success shows the shipping "Copied to clipboard" chip.
                     self.previews?.setStatus(copied ? "" : "Copy failed", for: artifact.id)
+                    self.previews?.recordCopyResult(artifactID: artifact.id, succeeded: copied)
                     if copied {
                         self.previews?.recordClipboardCopy(artifactID: artifact.id, pasteboard: pasteboard)
                     }
                 case .failure:
                     self.previews?.setStatus("Copy failed", for: artifact.id)
+                    self.previews?.recordCopyResult(artifactID: artifact.id, succeeded: false)
                 }
             }
         }
@@ -1941,7 +2548,8 @@ final class MiniPreviewActions {
                 guard !self.boundToPreviews
                         || self.previews?.contains(artifact, savedPath: savedPath) == true else { return }
                 switch result {
-                case .success: self.previews?.dismiss(artifact.id)
+                // A saved card's Delete dissolves once its export is in the Trash.
+                case .success: self.previews?.dismiss(artifact.id, exit: .dust)
                 case .failure(let error):
                     self.previews?.setStatus("Trash failed", detail: error.localizedDescription,
                                              for: artifact.id)

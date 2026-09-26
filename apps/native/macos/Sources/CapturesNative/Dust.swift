@@ -2,6 +2,7 @@ import AppKit
 import CoreImage
 import Metal
 import QuartzCore
+import CCapturesSettings
 
 struct DustFixture: Decodable {
     let particles: [ThumbnailDustParticle]
@@ -297,4 +298,151 @@ final class PreviewView: NSView {
         animation.calculationMode = .linear
         layer.add(animation, forKey: key)
     }
+}
+
+/// Preview stack exit timings, the dust pad and Delete's origin, and the pile
+/// sparkle tables from `captures_app::preview_motion` (the settings ABI's
+/// `captures_preview_motion_tables_v1`). Times are seconds.
+struct PreviewMotionTables {
+    struct Exit { let hold: Double; let settleDelay: Double }
+    struct Dot { let x, y, core, fade, alpha: CGFloat; let accent: Bool }
+
+    let dismiss, dust, fallback: Exit
+    let dustPad: CGFloat
+    let deleteOriginFirstX, deleteOriginAfterCloseX, deleteOriginY: CGFloat
+    let reach, side, near: CGFloat
+    let early, late: [Dot]
+
+    static let shared = load()
+
+    static func load() -> PreviewMotionTables {
+        var root: [String: Any] = [:]
+        if let raw = captures_preview_motion_tables_v1() {
+            defer { captures_settings_free_v1(raw) }
+            let text = String(cString: raw)
+            root = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] ?? [:]
+        }
+        let exits = root["exits"] as? [String: Any] ?? [:]
+        let sparkles = root["sparkles"] as? [String: Any] ?? [:]
+        let origin = exits["delete_origin"] as? [String: Any] ?? [:]
+        func number(_ object: [String: Any], _ key: String) -> CGFloat {
+            CGFloat((object[key] as? NSNumber)?.doubleValue ?? 0)
+        }
+        func exit(_ key: String) -> Exit {
+            let value = exits[key] as? [String: Any] ?? [:]
+            return Exit(hold: Double(number(value, "hold_ms")) / 1000,
+                        settleDelay: Double(number(value, "settle_delay_ms")) / 1000)
+        }
+        func dots(_ key: String) -> [Dot] {
+            (sparkles[key] as? [[String: Any]] ?? []).map { dot in
+                Dot(x: number(dot, "x"), y: number(dot, "y"), core: number(dot, "core"),
+                    fade: number(dot, "fade"), alpha: number(dot, "alpha"),
+                    accent: dot["accent"] as? Bool ?? false)
+            }
+        }
+        return PreviewMotionTables(dismiss: exit("dismiss"), dust: exit("dust"),
+            fallback: exit("delete_fallback"), dustPad: number(exits, "dust_pad"),
+            deleteOriginFirstX: number(origin, "first_x"),
+            deleteOriginAfterCloseX: number(origin, "after_close_x"),
+            deleteOriginY: number(origin, "y"),
+            reach: number(sparkles, "reach"), side: number(sparkles, "side"),
+            near: number(sparkles, "near"), early: dots("early"), late: dots("late"))
+    }
+
+    /// Shipping dust chips for a card (seeded, so a card always dissolves the
+    /// same way).
+    static func dustParticles(card: CGSize, image: CGSize, origin: CGPoint, seed: UInt32)
+        -> [ThumbnailDustParticle] {
+        guard let raw = captures_preview_dust_particles_v1(Double(card.width), Double(card.height),
+                Double(image.width), Double(image.height), Double(origin.x), Double(origin.y), seed)
+        else { return [] }
+        defer { captures_settings_free_v1(raw) }
+        let text = String(cString: raw)
+        return (try? JSONDecoder().decode([ThumbnailDustParticle].self, from: Data(text.utf8))) ?? []
+    }
+}
+
+/// Shipping dust delete on a live preview card, built like the Workbench
+/// dissolve: pre-filtered chips sampled from the tested scalar pose, the clip
+/// opening from the card's rounded rect, then the layer fading
+/// (`thumbnail-dust-clip`). No display link or CPU raster loop.
+enum DustDissolve {
+    /// Adds chip layers to `layer` (geometry-flipped, covering the card padded
+    /// by `pad` on every side) and returns the seconds the dissolve plays.
+    @discardableResult
+    static func play(in layer: CALayer, chips: [DustTextures.Chip], particles: [ThumbnailDustParticle],
+                     pad: CGFloat, radius: CGFloat, scale: CGFloat) -> Double {
+        let duration = 2.55
+        let times = (0...306).map { Double($0) / 306 * duration }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        layer.sublayers = nil
+        layer.opacity = 0 // Final model state; the animation supplies visibility.
+        for (particle, chip) in zip(particles, chips) {
+            let sublayer = CALayer()
+            sublayer.bounds = CGRect(origin: .zero, size: chip.size)
+            sublayer.position = CGPoint(x: particle.left + particle.width / 2,
+                                        y: particle.top + particle.height / 2)
+            sublayer.contents = chip.image
+            sublayer.contentsScale = scale
+            let poses = times.map { thumbnailDustVisualAt(particle, elapsedMs: $0 * 1000) }
+            animate(sublayer, key: "transform", values: poses.map { pose -> NSValue in
+                var t = CATransform3DMakeTranslation(pose.dx, pose.dy, 0)
+                t = CATransform3DRotate(t, pose.rotate * .pi / 180, 0, 0, 1)
+                return NSValue(caTransform3D: CATransform3DScale(t, pose.scale, pose.scale, 1))
+            }, duration: duration)
+            animate(sublayer, key: "opacity", values: poses.map { NSNumber(value: $0.opacity) },
+                    duration: duration)
+            layer.addSublayer(sublayer)
+        }
+        let mask = CAShapeLayer()
+        mask.frame = layer.bounds
+        layer.mask = mask
+        let paths: [CGPath] = times.map { time in
+            let linear = time / duration
+            let opening = linear <= 0.08 ? 0 : linear >= 0.7 ? 1
+                : cubicBezierProgress(0.33, 0, 0.2, 1, (linear - 0.08) / 0.62)
+            let inset = pad * CGFloat(1 - opening)
+            let corner = radius * CGFloat(1 - opening)
+            return CGPath(roundedRect: layer.bounds.insetBy(dx: inset, dy: inset),
+                          cornerWidth: corner, cornerHeight: corner, transform: nil)
+        }
+        animate(mask, key: "path", values: paths, duration: duration)
+        animate(layer, key: "opacity", values: times.map { time -> NSNumber in
+            let linear = time / duration
+            let fade = linear <= 0.7 ? 0 : linear >= 0.9 ? 1
+                : cubicBezierProgress(0.33, 0, 0.2, 1, (linear - 0.7) / 0.2)
+            return NSNumber(value: 1 - fade)
+        }, duration: duration)
+        return duration
+    }
+
+    private static func animate(_ layer: CALayer, key: String, values: [Any], duration: Double) {
+        let animation = CAKeyframeAnimation(keyPath: key)
+        animation.values = values
+        animation.duration = duration
+        animation.calculationMode = .linear
+        animation.fillMode = .forwards
+        animation.isRemovedOnCompletion = false
+        layer.add(animation, forKey: key)
+    }
+}
+
+/// A decorative, input-transparent overlay whose layer uses y-down geometry
+/// (dust chips and pile sparkles).
+final class PreviewMotionOverlay: NSView {
+    override var isFlipped: Bool { true }
+    let content = CALayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer!.isGeometryFlipped = true
+        content.frame = bounds
+        layer!.addSublayer(content)
+        setAccessibilityElement(false)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

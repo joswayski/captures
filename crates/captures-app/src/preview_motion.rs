@@ -788,6 +788,11 @@ pub fn exit_catalog() -> serde_json::Value {
         "clear_stagger_ms": CLEAR_STAGGER_MS,
         "clear_stagger_max_ms": CLEAR_STAGGER_MAX_MS,
         "dust_pad": DUST_LAYER_PAD,
+        "delete_origin": {
+            "first_x": DELETE_ORIGIN_FIRST_X,
+            "after_close_x": DELETE_ORIGIN_AFTER_CLOSE_X,
+            "y": DELETE_ORIGIN_Y,
+        },
     })
 }
 
@@ -1095,5 +1100,6 @@ mod tests {
         assert_eq!(catalog["early"].as_array().unwrap().len(), 6);
         assert_eq!(catalog["late"][1]["accent"], true);
         assert_eq!(exit_catalog()["dust"]["settle_delay_ms"], 1_800.);
+        assert_eq!(exit_catalog()["delete_origin"]["after_close_x"], 57.5);
     }
 }

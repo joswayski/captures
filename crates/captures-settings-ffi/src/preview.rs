@@ -812,7 +812,8 @@ pub extern "C" fn captures_preview_dust_particles_v1(
 
 /// Exit holds and settle delays, the Clear all stagger and the pile sparkle
 /// tables: `{exits:{dismiss:{hold_ms,settle_delay_ms},dust,delete_fallback,
-/// clear_stagger_ms,clear_stagger_max_ms,dust_pad},sparkles:{reach,side,near,
+/// clear_stagger_ms,clear_stagger_max_ms,dust_pad,delete_origin:{first_x,
+/// after_close_x,y}},sparkles:{reach,side,near,
 /// early:[{x,y,core,fade,accent,alpha}],late}}`. Owned UTF-8; free with
 /// captures_settings_free_v1.
 #[unsafe(no_mangle)]
