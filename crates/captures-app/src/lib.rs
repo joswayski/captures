@@ -12,6 +12,7 @@ pub mod editor_render;
 pub mod editor_session;
 pub mod editor_text;
 pub mod editor_viewport;
+pub mod history_view;
 pub mod login_item;
 pub mod onboarding;
 pub mod preview;

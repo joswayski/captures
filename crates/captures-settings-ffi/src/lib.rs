@@ -206,6 +206,22 @@ enum Request {
     OnboardingPresentation {
         state: Box<captures_app::onboarding::State>,
     },
+    HistoryCopy,
+    HistoryCards {
+        cards: Vec<HistoryCardInput>,
+    },
+    HistoryGrid {
+        width: f64,
+    },
+}
+
+/// One History entry plus the host's off-main `missing` result. Unknown fields
+/// (paths added by the history operations) are ignored.
+#[derive(Deserialize)]
+struct HistoryCardInput {
+    entry: captures_history::HistoryEntry,
+    #[serde(default)]
+    missing: bool,
 }
 
 fn response(request: *const c_char) -> Value {
@@ -245,6 +261,21 @@ fn response(request: *const c_char) -> Value {
             .unwrap_or_else(|error| json!({"ok":false,"error":error})),
         Ok(Request::OnboardingPresentation { state }) => {
             json!({"ok":true,"presentation":state.presentation()})
+        }
+        Ok(Request::HistoryCopy) => json!({
+            "ok":true,
+            "copy":captures_app::history_view::copy(),
+            "confirm_timeout_ms":captures_app::history_view::CONFIRM_TIMEOUT_MS,
+        }),
+        Ok(Request::HistoryCards { cards }) => json!({
+            "ok":true,
+            "cards":cards
+                .iter()
+                .map(|input| captures_app::history_view::card(&input.entry, input.missing))
+                .collect::<Vec<_>>(),
+        }),
+        Ok(Request::HistoryGrid { width }) => {
+            json!({"ok":true,"grid":captures_app::history_view::grid(width)})
         }
         Ok(Request::OnboardingCopy) => {
             json!({"ok":true,"copy":captures_app::onboarding::copy()})
@@ -364,6 +395,60 @@ mod tests {
             }
             assert!(!path.exists());
         }
+    }
+
+    fn settings_request(request: Value) -> Value {
+        let input = CString::new(request.to_string()).unwrap();
+        let pointer = unsafe { captures_settings_request_v1(input.as_ptr()) };
+        let result: Value =
+            serde_json::from_slice(unsafe { CStr::from_ptr(pointer) }.to_bytes()).unwrap();
+        unsafe { captures_settings_free_v1(pointer) };
+        result
+    }
+
+    #[test]
+    fn history_presentation_abi_shares_copy_cards_and_grid() {
+        let copy = settings_request(json!({"operation":"history_copy"}));
+        assert_eq!(copy["ok"], true);
+        assert_eq!(copy["copy"]["title"], "Capture History");
+        assert_eq!(copy["copy"]["eyebrow"], "On this device");
+        assert_eq!(copy["copy"]["delete_all_confirm"], "Delete all forever");
+        assert_eq!(copy["confirm_timeout_ms"], 4_000);
+
+        let entry = |kind: &str, id: &str| {
+            json!({"id":id,"kind":kind,"preview_url":"","full_url":"","width":640,
+                "height":480,"size_bytes":2_048,"created_at":"2026-09-26T15:04:05Z",
+                "duration_ms":65_000,"dropped_frames":2})
+        };
+        let cards = settings_request(json!({"operation":"history_cards","cards":[
+            {"entry":entry("screenshot","s"),"image_path":"/ignored.png"},
+            {"entry":entry("video","v"),"missing":true,"media_path":"/gone.mp4"},
+            {"entry":entry("gif","g"),"missing":false},
+        ]}));
+        assert_eq!(cards["ok"], true);
+        let cards = cards["cards"].as_array().unwrap();
+        assert_eq!(cards.len(), 3);
+        assert_eq!(cards[0]["details"], "640 × 480 · 2.0 KB");
+        assert_eq!(cards[0]["actions"], json!(["edit", "save_image"]));
+        assert_eq!(cards[0]["warning"], Value::Null);
+        assert_eq!(cards[1]["missing"], true);
+        assert_eq!(cards[1]["actions"], json!([]));
+        assert_eq!(cards[1]["delete_label"], "Remove missing entry");
+        assert_eq!(cards[2]["details"], "640 × 480 · 2.0 KB · 1:05");
+        assert_eq!(cards[2]["warning"], "2 frames dropped while recording");
+        assert_eq!(cards[2]["actions"], json!(["edit", "save_file"]));
+
+        let grid = settings_request(json!({"operation":"history_grid","width":952.0}));
+        assert_eq!(grid["ok"], true);
+        assert_eq!(grid["grid"]["columns"], 3);
+        assert_eq!(
+            grid["grid"]["card_height"],
+            captures_app::history_view::CARD_HEIGHT
+        );
+        assert_eq!(
+            settings_request(json!({"operation":"history_cards","cards":[{"entry":{}}]}))["ok"],
+            false
+        );
     }
 
     #[test]
