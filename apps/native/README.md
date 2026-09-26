@@ -225,13 +225,13 @@ All/Screenshots/Video/GIF filter pills (hidden while History is empty), the
 **Interrupted recordings** card, and an auto-fill grid of cards (minimum 252 pt,
 16 pt gaps, 168 pt thumbnail). Each card shows the thumbnail (`contain` fit),
 date ("Sep 26, 2026, 3:04 PM" in local time), "W × H · size" plus duration for
-recordings, and dropped-frame warnings. Screenshots offer **Edit** and **Save
-image**, recordings **Edit** and **Save file**; after export the second action
-becomes **Show in Folder**. Clicking the thumbnail opens the editor. A recording
+recordings, and dropped-frame warnings. Screenshots offer **Edit** and **Restore**,
+recordings **Edit** and **Save file**; after a recording is exported its second
+action becomes **Show in Folder**. Clicking the thumbnail opens the editor. A recording
 whose media is gone shows **File missing**, no actions, and is removed with one
 click. Otherwise the trash control arms **Delete forever** for four seconds and
 deletes on the second click. Secondary click lists the card's commands, including
-**Copy image** for screenshots. Loading, empty ("No captures yet") and load/delete
+**Copy image**, **Save image** and (once exported) **Show in Folder** for screenshots. Loading, empty ("No captures yet") and load/delete
 error states use the shipping copy.
 
 Copy, card details, actions, the missing-media rule and grid metrics come from
@@ -240,10 +240,18 @@ Copy, card details, actions, the missing-media rule and grid metrics come from
 cards by row and decode thumbnails off the UI thread with bounded residency.
 Unlike shipping, History never selects a card on load; an explicit selection
 (click, arrow keys, a new capture or import) shows the accent ring, arrow keys
-move it, Return opens it and Escape backs out of an armed deletion. Shipping's
-**Restore** (reopen a floating preview) is not connected: the native workspace
-keeps Save/Show in Folder instead. The workspace also keeps its native capture
-controls above the grid; the window is not resizable on macOS.
+move it, Return opens it and Escape backs out of an armed deletion. The workspace
+also keeps its native capture controls above the grid; the window is not resizable
+on macOS.
+
+**Restore** brings a screenshot back as a floating mini preview, like shipping: the
+button reads "Restoring…" and then "✓ Restored" for 2.5 seconds, with the tooltip
+"Bring this screenshot back as a floating preview". The card joins the front of the
+existing pile (or opens one on the selected display) without copying to the
+clipboard or changing History. If that screenshot's preview is already showing it
+stays where it is and the button still confirms. Failures appear in the workspace
+status line. Unlike shipping, History **Edit** opens the editor without also
+restoring a preview.
 
 ## Live display-capture slice
 

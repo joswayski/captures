@@ -371,8 +371,10 @@ while another application owns focus, simulated lock/unlock cancellation, region
 metadata and clean shutdown are checked in the same process.
 
 The Linux job also runs `x11_history_smoke.py` against disposable on-disk history.
-It checks two-step Delete all confirmation, Escape/Cancel, preserved exports, empty
-history, and a real permission-denied partial failure followed by retry. Light
+It checks History Restore (the mini-preview window opens, a second Restore adds no
+window and Delete all removes it), two-step Delete all confirmation, Escape/Cancel,
+preserved exports, empty history, and a real permission-denied partial failure
+followed by retry. Light
 and dark captures are emitted for inspection. Run it as an unprivileged user:
 
 ```sh
