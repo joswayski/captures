@@ -1071,7 +1071,9 @@ hosts; native countdown windows use the fixed media palette. Both hosts use the
 shipping "Screenshot in" / "Recording starts in" headings and hold "Cancelling…"
 for the shipping 180 ms exit window after Escape; the fade animations remain open.
 HUD, tray, guidance and Preferences copy follow the shipping strings, and recording
-times use the shared `h:mm:ss` formatter. Real mixed-DPI,
+times use the shared `h:mm:ss` formatter. The HUD's Delete recording asks the
+shipping "Delete recording?" question before discarding a take (AppKit alert,
+wgpu confirmation window). Real mixed-DPI,
 focus, compositor, accessibility, and animation acceptance remains open.
 Cursor inclusion now shares sampling/compositing with the shipping host (macOS
 system pixels, Windows/X11 synthetic arrow). Full region/window parity, recording, editor,
@@ -1093,7 +1095,14 @@ The native chrome now follows the shipping Tauri card rather than a permanent
 button footer: full-bleed cover images, idle dimensions, hover-revealed corner
 icons and centered Copy/Save file/Show in Folder controls. Saved cards expose
 Close plus Delete; unsaved Delete only dismisses. Right placements mirror the
-corner controls; the stack toolbar uses adjacent Clear all/Show less icons.
+corner controls. The stack toolbar appears only for two or more expanded
+previews: an outer Clear all icon (tooltip "Clear all") and a Minimize icon that
+swaps to a "Show less" label and widens inward on hover or focus (no morph
+animation). Card icon tooltips use the shipping short names (Close, Delete, Edit).
+When an expanded stack overflows, centered chevron cues at the window edges
+("Show older captures" / "Show newer captures", swapped for top placements)
+scroll one card slot; `captures_app::preview` owns the edge tolerance, slot
+target and copy for both hosts.
 AppKit and wgpu use the same 12-point radius token and fixed-glass palette.
 X11 checks exercise four corners, overflow, exact pixels, nonactivating actions,
 idle/hover media contrast and repeat outbound drags that start right after a
@@ -1107,16 +1116,20 @@ capture, and a one-second ✓ Saved confirmation. Ownership follows the shared
 `captures_app::clipboard` model: the macOS pasteboard change count, the Windows
 clipboard sequence number, or on Linux a host write counter plus a throttled
 pixel comparison that notices other apps replacing the clipboard. Hover blur,
-the editor-presence pill, stale-pointer hover suppression, toolbar morphing and
-animated transitions remain follow-up work; this does not close the visual parity gate. Share/sign-in
+the editor-presence pill, stale-pointer hover suppression, the animated Show less
+morph and other animated transitions remain follow-up work; this does not close the visual parity gate. Share/sign-in
 UI is deliberately outside this slice.
 Show less/expand preserves capture order, overflow scrolls without a
 count cap, and Clear all dismisses only snapshotted IDs, not later captures.
 Reveal uses the current exported path, with file checks off the UI thread and
 guarded async completion. A missing export reports an error without another save
 or removal of the capture. Saves through History also update the preview action.
-AppKit selects the export in Finder; Windows uses Explorer selection; Linux opens
-its parent directory. File-manager behavior on physical desktops remains unverified.
+AppKit selects the export in Finder; Windows uses Explorer selection; Linux asks
+the session's `org.freedesktop.FileManager1.ShowItems` implementer to select the
+`file://` URI, as shipping `reveal_item_in_dir` does, and opens the parent
+directory with `xdg-open` when no file manager answers. Private X11 checks both the
+exact ShowItems URI and the fallback; file-manager behavior on physical desktops
+remains unverified.
 Trash uses the shared `trash_preview` operation: move the explicit saved export
 to OS trash, then dismiss that card; unsaved cards only dismiss. Private History
 bytes and metadata remain untouched, matching shipping screenshot Trash rather
@@ -1268,6 +1281,22 @@ no editor or notice appears. Private-X11 input tests exercise export byte equali
 failure/retry, missing exports, intercepted OS-reveal arguments, hidden-root expiry,
 dismissal and capture cleanup; AppKit provides state and render fixtures. Physical
 macOS/Windows, Wayland, accessibility and motion parity remain open.
+
+The launch notice slice adds the shipping "Captures is ready to use" pill to both
+native hosts: fixed dark glass, a painted triangle caret pointing at the tray or
+menu bar item, the saved New Capture shortcut as key chips, and Close. It appears
+for 15 seconds after first-run setup completes and 5 seconds on a hidden,
+tray-resident live launch without media. It never appears on a visible relaunch.
+The Tauri placement policy and its tests moved into `captures_app::tray_notice`,
+and AppKit reaches it through `captures_startup_notice_placement_v1`. AppKit uses a
+nonactivating, floating, all-Spaces `NSPanel` anchored to the status item. It
+flips coordinates at the ABI boundary and retries briefly while the item is
+unplaced. wgpu uses a transparent, undecorated, always-on-top, nonactivating
+viewport. On Windows it anchors to `TrayIcon::rect()` with the same retry. X11 has
+no StatusNotifier rect, so it uses the panel-edge fallback. Private-X11 onboarding
+smoke checks the setup-completion notice title, size, focus retention and Close
+dismissal. AppKit has XCTest layout/copy/dismiss coverage. The macOS, Windows,
+Wayland and quiet-login paths have not been verified on physical hosts.
 
 Native region recordings now retain a passive display-local guide from countdown
 until finalization/discard/cancellation. AppKit and wgpu paint the fixed glass veil

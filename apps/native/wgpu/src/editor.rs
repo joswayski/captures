@@ -895,11 +895,23 @@ impl View {
     }
 
     fn reveal_saved(&mut self) {
-        if let Some(path) = &self.last_saved
-            && let Err(error) = crate::live::reveal(path)
-        {
-            self.export_error = Some(format!("Couldn’t show the saved file: {error}"));
+        let Some(path) = self.last_saved.clone() else {
+            return;
+        };
+        if !path.is_file() {
+            self.export_error = Some(format!(
+                "Couldn’t show the saved file: saved file no longer exists: {}",
+                path.display()
+            ));
+            return;
         }
+        // Asking the file manager over D-Bus can wait for a service to start;
+        // keep that off the UI thread like the preview card's Show in Folder.
+        std::thread::spawn(move || {
+            if let Err(error) = crate::reveal::reveal(&path) {
+                eprintln!("Couldn’t show the saved file: {error}");
+            }
+        });
     }
 
     /// Re-encode the export in the background after edits or option changes

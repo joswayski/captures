@@ -30,7 +30,10 @@ Both AppKit and wgpu replace permanent title/footer controls with full-bleed
 cover images, idle dimensions, hover-revealed Close/Delete/Edit icons and
 centered Copy plus Save file/Show in Folder. Saved cards offer Close and Delete;
 unsaved Delete only dismisses. Corners and the compact icon toolbar mirror on
-right placement. A shared radius token is 12 points. Fixed glass colors remain
+right placement. The toolbar needs two or more previews; Clear all keeps the
+outer edge with a "Clear all" tooltip, and Minimize swaps to a static "Show less"
+label while hovered or focused. Overflowing expanded stacks show shared
+"Show older/newer captures" chevron cues that scroll one card slot. A shared radius token is 12 points. Fixed glass colors remain
 independent of light/dark window appearance.
 
 Source ownership:
@@ -134,8 +137,9 @@ captures. Reference captures in this orb: `/tmp/tauri-preview-idle.png`,
 2. Done: metadata byte sizes, live clipboard confirmation with Copy hidden and
    ✓ Saved feedback. Remaining: the Edit → In editor / Show in editor presence
    pill, bound to actual editor state.
-3. Reproduce stationary-pointer hover suppression after arrival/expansion,
-   tooltips, control animations and Show less hover morph. Keep focus-visible
+3. Done: short shipping tooltips, the Show less hover label (static swap) and
+   overflow cues. Remaining: stationary-pointer hover suppression after
+   arrival/expansion, control animations and the animated Show less morph. Keep focus-visible
    actions usable and test nonactivating-panel keyboard/screen-reader behavior.
 4. Continue pile perspective/rotation/scale/blur, stagger, entry/exit dust and
    settle behavior, reduced motion, then cross-display/anchor changes. Follow
