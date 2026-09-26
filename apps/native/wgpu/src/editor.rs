@@ -21,6 +21,7 @@ use captures_app::{
         TextElement, arrow_fill_polygon, preview_rotation, rotation_angle, rotation_handle,
         smooth_path_centerline,
     },
+    editor_chrome::colors,
     editor_export::{
         self as export, EstimateState, ExportBarView, ExportEstimate, ExportSource, ExportTarget,
         SavePlan,
@@ -31,7 +32,7 @@ use captures_app::{
         EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize, ImportImage,
         OpenRequest, PngOptions, Request, TextCreate, TextPatch,
     },
-    editor_text::{TextStylePreset, shadow_style},
+    editor_text::{TextStylePreset, font_family_options, shadow_style},
     editor_viewport::{Viewport, wheel_zoom_factor, zoom_from_slider, zoom_slider_position},
 };
 use captures_capture::CaptureMode;
@@ -49,6 +50,7 @@ use crate::tokens::Tokens;
 
 mod chrome;
 mod drawing_preview;
+mod pickers;
 mod text_input;
 
 enum Job {
@@ -420,9 +422,11 @@ struct View {
     canvas_text: [String; 2],
     /// Shipping's "Restored unsaved edits" banner for a draft found at open.
     draft_restored: bool,
-    background_solid: bool,
-    background_color: String,
+    /// Shipping `lastSolid`: restored when Solid background is turned back on.
     last_solid_background: String,
+    /// A live background change made while another job runs; the latest one
+    /// is applied when the worker is free (one undo step).
+    background_queued: Option<Option<String>>,
     section: Section,
     export_options: ExportOptions,
     custom_export_size: [u32; 2],
@@ -506,9 +510,8 @@ impl Default for View {
             canvas: [1., 1.],
             canvas_text: [String::new(), String::new()],
             draft_restored: false,
-            background_solid: true,
-            background_color: "#f7f7f5".into(),
-            last_solid_background: "#f7f7f5".into(),
+            last_solid_background: colors::DEFAULT_CANVAS_BACKGROUND.into(),
+            background_queued: None,
             section: Section::Geometry,
             export_options: ExportOptions {
                 format: ExportFormat::Png,
@@ -828,13 +831,44 @@ impl View {
     }
 
     fn reset_background_fields(&mut self) {
-        if let Some(presented) = &self.presented {
-            self.background_solid = presented.document.background.is_some();
-            if let Some(color) = &presented.document.background {
-                self.last_solid_background.clone_from(color);
-            }
-            self.background_color
-                .clone_from(&self.last_solid_background);
+        if let Some(color) = self
+            .presented
+            .as_ref()
+            .and_then(|presented| presented.document.background.as_ref())
+        {
+            self.last_solid_background.clone_from(color);
+        }
+    }
+
+    /// The background the card shows: a queued live change, else the document's.
+    fn shown_background(&self) -> Option<String> {
+        self.background_queued.clone().unwrap_or_else(|| {
+            self.presented
+                .as_ref()
+                .and_then(|presented| presented.document.background.clone())
+        })
+    }
+
+    /// Shipping applies each background change at once as its own undo step;
+    /// an unchanged value adds none (the session skips identical commits).
+    fn set_background(&mut self, tx: &Sender<Job>, color: Option<String>) {
+        if let Some(color) = &color {
+            self.last_solid_background.clone_from(color);
+        }
+        if self.pending {
+            self.background_queued = Some(color);
+        } else {
+            self.background_queued = None;
+            self.submit(tx, Request::SetBackground { color });
+        }
+    }
+
+    fn flush_background(&mut self, tx: &Sender<Job>) {
+        if !self.pending
+            && self.inline.is_none()
+            && let Some(color) = self.background_queued.take()
+        {
+            self.submit(tx, Request::SetBackground { color });
         }
     }
 
@@ -1592,6 +1626,7 @@ impl Drop for Editor {
 }
 
 fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
+    view.flush_background(tx);
     let previous_section = view.section;
     handle_viewport_shortcuts(ui.ctx(), view);
     handle_document_shortcuts(ui.ctx(), view, tx);
@@ -1695,17 +1730,8 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 } else if view.draw_shape == DrawShape::Text {
                     ui.label("New text style");
                     if let Some(presented) = &view.presented {
-                        egui::ComboBox::from_id_salt("new-text-style")
-                            .selected_text(presented.text_style_presets.iter()
-                                .find(|preset| Some(preset.id) == view.new_text_preset.as_deref())
-                                .map_or("Plain", |preset| preset.label))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut view.new_text_preset, None, "Plain");
-                                for preset in &presented.text_style_presets {
-                                    ui.selectable_value(&mut view.new_text_preset,
-                                        Some(preset.id.into()), preset.label);
-                                }
-                            });
+                        pickers::text_style_picker(ui, tokens, "New text style",
+                            &presented.text_style_presets, &mut view.new_text_preset);
                     }
                     ui.horizontal(|ui| {
                         ui.label("Size");
@@ -1765,7 +1791,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                         let mut shadow = style.drop_shadow_style.clone()
                             .unwrap_or_else(|| style.resolved_drop_shadow_style());
                         let before = shadow.clone();
-                        shadow_fields(ui, &mut shadow);
+                        shadow_fields(ui, None, &mut shadow);
                         if shadow != before {
                             style.drop_shadow_style = Some(shadow);
                         }
@@ -4644,7 +4670,7 @@ fn show_layers(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
         }
     });
     if matches!(element, Element::Text(_)) {
-        show_text(ui, view, tx);
+        show_text(ui, tokens, view, tx);
         ui.separator();
     }
     if matches!(element, Element::Image(_)) {
@@ -4778,6 +4804,7 @@ fn show_layers(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
         Element::Text(_) => {}
         Element::Shape(shape) => show_annotation(
             ui,
+            tokens,
             view,
             tx,
             &shape.style,
@@ -4786,7 +4813,7 @@ fn show_layers(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
                 "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
             ),
         ),
-        Element::Path(path) => show_annotation(ui, view, tx, &path.style, false),
+        Element::Path(path) => show_annotation(ui, tokens, view, tx, &path.style, false),
         _ => {
             ui.small("Hidden and locked images can transform.");
         }
@@ -4810,7 +4837,7 @@ fn show_layers(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
     );
 }
 
-fn show_text(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
+fn show_text(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let mut request = None;
     let Some(fields) = &mut view.text else {
         return;
@@ -4820,8 +4847,12 @@ fn show_text(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
         ui.heading("Text");
         ui.menu_button("Style…", |ui| {
             if let Some(presented) = &view.presented {
+                // Shipping `TextStylePicker` rows: preview chip, then label.
+                ui.spacing_mut().item_spacing.y = 2.;
                 for preset in &presented.text_style_presets {
-                    if ui.button(preset.label).clicked() {
+                    if pickers::text_style_row(ui, tokens, Some(preset), preset.label, false)
+                        .clicked()
+                    {
                         fields.staged.apply_preset(preset);
                         view.new_text_preset = Some(preset.id.into());
                         ui.close();
@@ -4832,17 +4863,20 @@ fn show_text(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
     });
     if let Some(presented) = &view.presented {
         ui.label("Font");
+        // Shipping labels and order ("Sans serif", …), never pinned asset names.
+        let options = font_family_options(&presented.font_families);
+        let selected = options
+            .iter()
+            .find(|(key, _)| *key == fields.staged.font_family)
+            .map_or(fields.staged.font_family.clone(), |(_, label)| {
+                label.clone()
+            });
         egui::ComboBox::from_id_salt("text-font-family")
-            .selected_text(
-                presented
-                    .font_families
-                    .get(&fields.staged.font_family)
-                    .unwrap_or(&fields.staged.font_family),
-            )
+            .selected_text(selected)
             .width(190.)
             .show_ui(ui, |ui| {
-                for (key, name) in &presented.font_families {
-                    ui.selectable_value(&mut fields.staged.font_family, key.clone(), name);
+                for (key, label) in options {
+                    ui.selectable_value(&mut fields.staged.font_family, key, label);
                 }
             });
     }
@@ -4883,7 +4917,7 @@ fn show_text(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
         ui.checkbox(&mut fields.staged.outlined, "Outline");
     });
     if fields.staged.drop_shadow {
-        shadow_fields(ui, &mut fields.staged.shadow);
+        shadow_fields(ui, None, &mut fields.staged.shadow);
     }
     let changed = fields.staged.patch(&fields.accepted) != TextPatch::default();
     let invalid_color = egui::Color32::from_hex(&fields.staged.color).is_err()
@@ -4941,8 +4975,20 @@ fn annotation_color(ui: &mut egui::Ui, label: &str, value: &mut String) {
     });
 }
 
-fn shadow_fields(ui: &mut egui::Ui, shadow: &mut DropShadowStyle) {
-    annotation_color(ui, "Shadow color", &mut shadow.color);
+/// Shipping `ColorField` swatches for a staged annotation color.
+fn swatch_color(ui: &mut egui::Ui, tokens: &Tokens, label: &str, value: &mut String) {
+    if let Some(color) = pickers::color_field(ui, tokens, label, value, false, true) {
+        *value = color;
+    }
+}
+
+/// `swatches` gives the shadow color the shipping swatch row; text and draw
+/// defaults keep their explicit color field.
+fn shadow_fields(ui: &mut egui::Ui, swatches: Option<&Tokens>, shadow: &mut DropShadowStyle) {
+    match swatches {
+        Some(tokens) => swatch_color(ui, tokens, colors::SHADOW_COLOR, &mut shadow.color),
+        None => annotation_color(ui, "Shadow color", &mut shadow.color),
+    }
     for (label, value, range) in [
         ("Shadow opacity", &mut shadow.opacity, 0. ..=100.),
         ("Blur", &mut shadow.blur, 0. ..=100.),
@@ -4963,6 +5009,7 @@ fn shadow_fields(ui: &mut egui::Ui, shadow: &mut DropShadowStyle) {
 
 fn show_annotation(
     ui: &mut egui::Ui,
+    tokens: &Tokens,
     view: &mut View,
     tx: &Sender<Job>,
     original: &ElementStyle,
@@ -4981,7 +5028,7 @@ fn show_annotation(
         }
     }
     if !closed || style.has_stroke() {
-        annotation_color(ui, "Stroke color", &mut style.color);
+        swatch_color(ui, tokens, colors::STROKE_COLOR, &mut style.color);
         ui.horizontal(|ui| {
             ui.label("Stroke width");
             ui.add(
@@ -4998,7 +5045,7 @@ fn show_annotation(
             style.fill = filled.then(|| style.color.clone());
         }
         if let Some(fill) = &mut style.fill {
-            annotation_color(ui, "Fill color", fill);
+            swatch_color(ui, tokens, colors::FILL_COLOR, fill);
         }
     }
     let mut shadow = style.has_drop_shadow();
@@ -5006,7 +5053,7 @@ fn show_annotation(
         style.drop_shadow = Some(shadow);
     }
     if shadow {
-        shadow_fields(ui, &mut fields.shadow);
+        shadow_fields(ui, Some(tokens), &mut fields.shadow);
     }
     let patch = fields.patch(original);
     ui.horizontal(|ui| {
@@ -6257,7 +6304,7 @@ mod tests {
         view.section = Section::Draw;
         view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
         view.show_output = true;
-        view.background_color = "#123456".into();
+        view.last_solid_background = "#123456".into();
         let original_id = view.selected_layer.clone().unwrap();
         let (tx, rx) = mpsc::channel();
         let frame = |view: &mut View, events| {
@@ -6297,8 +6344,8 @@ mod tests {
         assert_eq!(view.selected_layer.as_ref(), Some(&original_id));
         assert!(view.output.is_some() && view.show_output);
         assert_eq!(
-            view.background_color, "#123456",
-            "copy preserves staged fields"
+            view.last_solid_background, "#123456",
+            "copy preserves remembered fields"
         );
         frame(
             &mut view,
@@ -6905,48 +6952,55 @@ mod tests {
     }
 
     #[test]
-    fn background_fields_remember_only_published_colors_and_restore_after_errors() {
+    fn background_changes_apply_live_and_queue_the_latest_while_busy() {
         let ctx = egui::Context::default();
+        let (tx, rx) = mpsc::channel();
         let mut view = View::default();
+        assert_eq!(
+            view.last_solid_background,
+            colors::DEFAULT_CANVAS_BACKGROUND
+        );
         let mut solid = presented(false);
         Arc::make_mut(&mut solid.document).background = Some("#21436580".into());
         view.receive(&ctx, Ok(solid));
-        assert!(view.background_solid);
-        assert_eq!(view.background_color, "#21436580");
-        let document = view.presented.as_ref().unwrap().document.clone();
-        view.background_color = "invalid".into();
-        view.reset_background_fields();
-        assert_eq!(view.background_color, "#21436580");
-        assert!(Arc::ptr_eq(
-            &document,
-            &view.presented.as_ref().unwrap().document
+        assert_eq!(view.last_solid_background, "#21436580");
+        assert_eq!(view.shown_background().as_deref(), Some("#21436580"));
+        // Turning Solid off applies at once and remembers the last solid color.
+        view.set_background(&tx, None);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Job::Apply(Request::SetBackground { color: None }))
         ));
-        view.background_color = "invalid".into();
-        view.pending = true;
-        view.receive(&ctx, Err("invalid background".into()));
-        assert!(!view.pending);
-        assert_eq!(view.background_color, "#21436580");
-        assert!(Arc::ptr_eq(
-            &document,
-            &view.presented.as_ref().unwrap().document
-        ));
+        assert!(view.pending);
+        assert_eq!(view.last_solid_background, "#21436580");
+        // While the worker is busy only the latest change is kept and shown.
+        view.set_background(&tx, Some("#2d9cff".into()));
+        view.set_background(&tx, Some("#ff3b5c".into()));
+        assert!(rx.try_recv().is_err());
+        assert_eq!(view.shown_background().as_deref(), Some("#ff3b5c"));
+        assert_eq!(view.last_solid_background, "#ff3b5c");
+        view.flush_background(&tx);
+        assert!(
+            rx.try_recv().is_err(),
+            "a busy worker defers the queued change"
+        );
         let mut transparent = presented(true);
         Arc::make_mut(&mut transparent.document).background = None;
         view.receive(&ctx, Ok(transparent));
-        assert!(!view.background_solid);
-        assert_eq!(view.background_color, "#21436580");
-        view.background_color = "unapplied".into();
+        assert!(!view.pending);
+        assert_eq!(view.last_solid_background, "#ff3b5c");
+        view.flush_background(&tx);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Job::Apply(Request::SetBackground { color: Some(color) })) if color == "#ff3b5c"
+        ));
+        assert!(view.background_queued.is_none());
+        view.flush_background(&tx);
+        assert!(rx.try_recv().is_err(), "each change is submitted once");
+        // A rejected change falls back to the published document.
         view.receive(&ctx, Err("retry".into()));
-        assert!(!view.background_solid);
-        assert_eq!(view.background_color, "#21436580");
-        assert!(
-            view.presented
-                .as_ref()
-                .unwrap()
-                .document
-                .background
-                .is_none()
-        );
+        assert_eq!(view.shown_background(), None);
+        assert_eq!(view.last_solid_background, "#ff3b5c");
     }
 
     pub(super) fn presented(unsaved: bool) -> Presented {
@@ -7143,6 +7197,7 @@ mod tests {
         fields.accepted.bold = true;
         fields.staged = fields.accepted.clone();
         let (tx, rx) = mpsc::channel();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
         let frame = |view: &mut View, events| {
             let mut output = ctx.run_ui(
                 egui::RawInput {
@@ -7154,7 +7209,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    egui::CentralPanel::default().show(ui, |ui| show_text(ui, view, &tx));
+                    egui::CentralPanel::default().show(ui, |ui| show_text(ui, &tokens, view, &tx));
                 },
             );
             output.textures_delta.clear();
@@ -7190,10 +7245,15 @@ mod tests {
             let output = frame(view, vec![]);
             click(view, position(&output, "Style…"));
             let output = frame(view, vec![]);
-            click(view, position(&output, "Mono box"));
+            click(view, position(&output, "Mono Box"));
         };
         choose_mono(&mut view);
         assert_eq!(view.new_text_preset.as_deref(), Some("mono-box"));
+        // The font menu uses shipping labels, not pinned asset names.
+        let output = frame(&mut view, vec![]);
+        position(&output, "Monospace");
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.job.text.starts_with("Liberation"))));
         assert_eq!(view.new_text_size, 39.);
         assert_eq!(view.new_text_color, "#2367ab");
         assert_eq!(view.text.as_ref().unwrap().staged.font_size, 83.);
@@ -7429,7 +7489,8 @@ mod tests {
             egui::Id::unique("annotation-test"),
             egui::UiBuilder::new().max_rect(screen),
         );
-        show_annotation(&mut ui, &mut view, &tx, &original, true);
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        show_annotation(&mut ui, &tokens, &mut view, &tx, &original, true);
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         let fields = view.annotation.as_ref().unwrap();
@@ -7437,6 +7498,91 @@ mod tests {
         assert_eq!(fields.shadow.blur, 170.);
         assert_eq!(fields.patch(&original), AnnotationStylePatch::default());
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn annotation_stroke_color_uses_shared_swatches_and_stages_until_apply() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let original = ElementStyle {
+            color: "#ff3b5c".into(),
+            ..ElementStyle::default()
+        };
+        let mut view = View {
+            annotation: Some(AnnotationFields::new(&original)),
+            ..View::default()
+        };
+        let (tx, rx) = mpsc::channel();
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(320., 900.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        show_annotation(ui, &tokens, view, &tx, &original, false)
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let circles = |output: &egui::FullOutput, color: &str| -> Vec<egui::Pos2> {
+            let fill = egui::Color32::from_hex(color).unwrap();
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Circle(circle) if circle.fill == fill => Some(circle.center),
+                    _ => None,
+                })
+                .collect()
+        };
+        let output = frame(&mut view, vec![]);
+        // The shipping palette, in order, on the stroke color row.
+        let mut previous = None;
+        for swatch in colors::SWATCHES {
+            let centers = circles(&output, swatch);
+            assert_eq!(centers.len(), 1, "{swatch}");
+            if let Some(previous) = previous {
+                let egui::Pos2 { x, y } = centers[0];
+                let prev: egui::Pos2 = previous;
+                assert!((x > prev.x && y == prev.y) || y > prev.y, "{swatch}");
+            }
+            previous = Some(centers[0]);
+        }
+        let blue = circles(&output, "#2d9cff")[0];
+        frame(&mut view, vec![egui::Event::PointerMoved(blue)]);
+        for pressed in [true, false] {
+            frame(
+                &mut view,
+                vec![egui::Event::PointerButton {
+                    pos: blue,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        let fields = view.annotation.as_ref().unwrap();
+        assert_eq!(fields.style.color, "#2d9cff");
+        assert_eq!(fields.patch(&original).color.as_deref(), Some("#2d9cff"));
+        assert!(
+            rx.try_recv().is_err(),
+            "a swatch stages; Apply style commits"
+        );
+        // The active ring moves to the chosen swatch.
+        let output = frame(&mut view, vec![]);
+        let accent = tokens.color("theme-accent");
+        assert!(
+            output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Circle(circle) if circle.center == blue && circle.stroke.color == accent))
+        );
     }
 
     #[test]

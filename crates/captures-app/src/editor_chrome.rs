@@ -354,6 +354,119 @@ pub fn layer_icon(element: &Element) -> &'static str {
     }
 }
 
+/// Shipping `ColorField` swatches and the `CanvasBackgroundPicker` card from
+/// `ScreenshotEditor.tsx` and `styles/editor-image.css`. Hosts draw the row;
+/// the palette, copy, selection rule and grid math are shared here.
+pub mod colors {
+    /// `COLOR_SWATCHES`, in row order. A custom-color tile follows them.
+    pub const SWATCHES: [&str; 8] = [
+        "#ff3b5c", "#ff8a22", "#ffd22e", "#36c96b", "#2d9cff", "#8b5cf6", "#111318", "#ffffff",
+    ];
+    /// Swatches plus the trailing custom-color tile.
+    pub const TILE_COUNT: usize = SWATCHES.len() + 1;
+    /// `DEFAULT_CANVAS_BACKGROUND`: restored when Solid is first turned on.
+    pub const DEFAULT_CANVAS_BACKGROUND: &str = "#f7f7f5";
+    /// Swatch circle and custom tile side (`width: 24px`).
+    pub const TILE: f64 = 24.;
+    /// Custom tile inner inset (`::after { inset: 4px }`).
+    pub const CUSTOM_INSET: f64 = 4.;
+    /// Panel rows: `repeat(auto-fill, minmax(44px, 1fr))`.
+    pub const CELL: f64 = 44.;
+    /// Canvas background card: `minmax(36px, 1fr)`.
+    pub const COMPACT_CELL: f64 = 36.;
+    /// Canvas background card `min-width`.
+    pub const MENU_WIDTH: f64 = 248.;
+
+    pub const BACKGROUND: &str = "Background color";
+    pub const BACKGROUND_TOOLTIP: &str = "Canvas background color";
+    /// Card and color-field accessible name.
+    pub const CANVAS_BACKGROUND: &str = "Canvas background";
+    pub const SOLID_BACKGROUND: &str = "Solid background";
+    pub const CUSTOM_COLOR: &str = "Custom color";
+    pub const STROKE_COLOR: &str = "Stroke color";
+    pub const FILL_COLOR: &str = "Fill color";
+    pub const SHADOW_COLOR: &str = "Shadow color";
+
+    /// A swatch's accessible name, e.g. "Stroke color: #ff3b5c".
+    #[must_use]
+    pub fn swatch_label(field: &str, color: &str) -> String {
+        format!("{field}: {color}")
+    }
+
+    /// The background trigger's accessible name.
+    #[must_use]
+    pub fn background_label(background: Option<&str>) -> String {
+        format!("{BACKGROUND}: {}", background.unwrap_or("transparent"))
+    }
+
+    /// Shipping marks a swatch active when the value starts with it, ignoring
+    /// case, so `#FF3B5C80` still selects `#ff3b5c`.
+    #[must_use]
+    pub fn swatch_active(value: &str, swatch: &str) -> bool {
+        value
+            .get(..swatch.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(swatch))
+    }
+
+    /// The custom picker's `#rrggbb` seed (`value.slice(0, 7)`), lowercased.
+    #[must_use]
+    pub fn custom_seed(value: &str) -> String {
+        value.get(..7).unwrap_or(value).to_ascii_lowercase()
+    }
+
+    /// One laid-out swatch grid.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct Grid {
+        pub columns: usize,
+        pub rows: usize,
+        /// Each `1fr` column; tiles centre in their cell.
+        pub cell_width: f64,
+    }
+
+    impl Grid {
+        /// Centre of tile `index` relative to the grid's top-left, given the
+        /// CSS row gap and vertical padding.
+        #[must_use]
+        pub fn center(&self, index: usize, row_gap: f64, padding: f64) -> (f64, f64) {
+            let column = index % self.columns;
+            let row = index / self.columns;
+            (
+                (column as f64 + 0.5) * self.cell_width,
+                padding + row as f64 * (TILE + row_gap) + TILE / 2.,
+            )
+        }
+
+        /// Total height including vertical padding.
+        #[must_use]
+        pub fn height(&self, row_gap: f64, padding: f64) -> f64 {
+            2. * padding + self.rows as f64 * TILE + self.rows.saturating_sub(1) as f64 * row_gap
+        }
+    }
+
+    /// `repeat(auto-fill, minmax(min_cell, 1fr))` for all tiles at `width`.
+    #[must_use]
+    pub fn grid(width: f64, min_cell: f64) -> Grid {
+        let width = if width.is_finite() { width.max(0.) } else { 0. };
+        let fit = if min_cell > 0. {
+            (width / min_cell).floor()
+        } else {
+            1.
+        };
+        let columns = (fit as usize).clamp(1, TILE_COUNT);
+        // auto-fill keeps empty tracks when every tile fits on one row.
+        let tracks = (fit as usize).max(1);
+        Grid {
+            columns,
+            rows: TILE_COUNT.div_ceil(columns),
+            cell_width: if width > 0. {
+                width / tracks as f64
+            } else {
+                min_cell
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,6 +479,62 @@ mod tests {
     fn base(kind: &str, id: &str) -> serde_json::Value {
         json!({"kind": kind, "id": id, "x": 0., "y": 0., "locked": false, "visible": true,
                "opacity": 100., "blendMode": "source-over"})
+    }
+
+    #[test]
+    fn swatches_match_shipping_palette_copy_and_active_rule() {
+        use colors::*;
+        assert_eq!(
+            SWATCHES,
+            [
+                "#ff3b5c", "#ff8a22", "#ffd22e", "#36c96b", "#2d9cff", "#8b5cf6", "#111318",
+                "#ffffff"
+            ]
+        );
+        assert_eq!(TILE_COUNT, 9);
+        assert_eq!(DEFAULT_CANVAS_BACKGROUND, "#f7f7f5");
+        assert_eq!(
+            swatch_label(STROKE_COLOR, "#ff3b5c"),
+            "Stroke color: #ff3b5c"
+        );
+        assert_eq!(
+            background_label(Some("#2d9cff")),
+            "Background color: #2d9cff"
+        );
+        assert_eq!(background_label(None), "Background color: transparent");
+        assert!(swatch_active("#FF3B5C", "#ff3b5c"));
+        assert!(swatch_active("#ff3b5c80", "#ff3b5c"));
+        assert!(!swatch_active("#ff3b5", "#ff3b5c"));
+        assert!(!swatch_active("", "#ff3b5c"));
+        assert!(!swatch_active("#ffffff", "#ff3b5c"));
+        assert!(!swatch_active("é#ff3b5c", "#ff3b5c"));
+        assert_eq!(custom_seed("#AABBCC80"), "#aabbcc");
+        assert_eq!(custom_seed("#abc"), "#abc");
+    }
+
+    #[test]
+    fn swatch_grid_follows_css_auto_fill() {
+        use colors::*;
+        // Background card: 248 - 2 * 12 padding = 224 → six 37.33 px tracks.
+        let card = grid(MENU_WIDTH - 24., COMPACT_CELL);
+        assert_eq!((card.columns, card.rows), (6, 2));
+        assert!((card.cell_width - 224. / 6.).abs() < 1e-9);
+        assert_eq!(card.height(6., 4.), 4. + 24. + 6. + 24. + 4.);
+        assert_eq!(card.center(0, 6., 4.), (224. / 12., 16.));
+        assert_eq!(card.center(6, 6., 4.).1, 4. + 30. + 12.);
+        // A 272 pt inspector row: six 44 px minimum cells.
+        let panel = grid(272., CELL);
+        assert_eq!((panel.columns, panel.rows), (6, 2));
+        // Wide rows keep empty auto-fill tracks, so tiles keep their pitch.
+        let wide = grid(500., CELL);
+        assert_eq!((wide.columns, wide.rows), (9, 1));
+        assert!((wide.cell_width - 500. / 11.).abs() < 1e-9);
+        // Degenerate widths still lay out one column.
+        for width in [0., -5., f64::NAN, 10.] {
+            let narrow = grid(width, CELL);
+            assert_eq!((narrow.columns, narrow.rows), (1, 9));
+            assert!(narrow.cell_width.is_finite() && narrow.cell_width > 0.);
+        }
     }
 
     #[test]
