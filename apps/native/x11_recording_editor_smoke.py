@@ -1094,9 +1094,7 @@ def main():
             time.sleep(1)
             run("import", "-window", editor, str(output / "maximum-cancelling.png"))
             # Bypass idle while the worker is deliberately paused inside FFmpeg.
-            run("xdotool", "windowactivate", "--sync", editor, "windowfocus", "--sync", editor,
-                "mousemove", "--sync", "--window", editor, "60", "1011", "sleep", ".4",
-                "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
+            raw_press(editor, "Cancel export")
             idle(editor)
             allowed.touch()
             shot(editor, "maximum-cancelled")
@@ -1196,7 +1194,22 @@ def main():
             for name, value in (("Crop X", 80), ("Crop Y", 40), ("Crop width", 160), ("Crop height", 80)):
                 fill(editor, name, value)
             press(editor, "Apply edits")
-            shot(editor, "crop-accepted-before-source")
+            preview_regions = {}
+
+            def preview_shot(name):
+                # Scroll the image into view and remember where it was shot:
+                # its top quarter, clear of the play control, which dims while
+                # a staged crop awaits Apply.
+                visible_rect(editor, "Preview image")
+                shot(editor, name)
+                # Measure after the shot settles so the probe matches its frame.
+                x0, y0, x1, y1 = visible_rect(editor, "Preview image")
+                preview_regions[name] = f"{x1 - x0}x{(y1 - y0) // 4}+{x0}+{y0}"
+
+            def preview_pixels(name):
+                return run("convert", str(output / f"{name}.png"), "-crop", preview_regions[name], "rgba:-")
+
+            preview_shot("crop-accepted-before-source")
             press(editor, "Adjust crop")
             wait(started.exists, "full-source request started")
             wait(lambda: "Working…" in run("xdotool", "getwindowname", editor).decode(),
@@ -1204,9 +1217,8 @@ def main():
             time.sleep(.5)
             run("import", "-window", editor, str(output / "crop-source-loading.png"))
             # Bypass idle(): Cancel must interrupt the blocked frame extraction.
-            run("xdotool", "mousemove", "--sync", "--window", editor, "85", "999",
-                "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
-            shot(editor, "crop-source-cancelled")
+            raw_press(editor, "Cancel source preview")
+            preview_shot("crop-source-cancelled")
             allowed.touch()
             missing = output / "temporarily-moved.mp4"
             source.rename(missing)
@@ -1216,22 +1228,21 @@ def main():
             finally:
                 missing.rename(source)
             press(editor, "Adjust crop")
+            # Bring the whole full-source image into view before sampling it;
+            # the crop card's button can leave the preview scrolled away.
+            visible_rect(editor, "Preview image")
             shot(editor, "crop-source-ready")
-
-            # Locate the actual green source image, including dimmed excluded
-            # pixels. Neutral chrome and mustard handles cannot match green.
-            rgb = run("convert", str(output / "crop-source-ready.png"), "-crop", "960x400+0+70",
-                      "-depth", "8", "rgb:-")
-            points = [(i // 3 % 960, i // 3 // 960 + 70) for i in range(0, len(rgb), 3)
-                      if rgb[i + 1] > max(rgb[i], rgb[i + 2]) + 10]
-            assert points, "full-source preview must be visible"
-            left, right = min(x for x, _ in points), max(x for x, _ in points) + 1
-            top, bottom = min(y for _, y in points), max(y for _, y in points) + 1
-            sx, sy = (right - left) / 320, (bottom - top) / 180
-            assert abs(sx - sy) < .03, (left, top, right, bottom)
+            x, y = image_point(editor, .9, .9)
+            pixel = run("convert", str(output / "crop-source-ready.png"), "-crop", f"1x1+{x}+{y}",
+                        "-depth", "8", "rgb:-")
+            assert pixel[1] > max(pixel[0], pixel[2]) + 10, ("full-source preview must be visible", pixel)
+            assert "Crop size" in controls(editor), "the crop box shows its size badge"
 
             def drag_source(start, delta):
-                x, y = round(left + start[0] * sx), round(top + start[1] * sy)
+                x0, y0, x1, y1 = visible_rect(editor, "Preview image")
+                sx, sy = (x1 - x0) / 320, (y1 - y0) / 180
+                assert abs(sx - sy) < .03, (x0, y0, x1, y1)
+                x, y = round(x0 + start[0] * sx), round(y0 + start[1] * sy)
                 dx, dy = round(delta[0] * sx), round(delta[1] * sy)
                 run("xdotool", "mousemove", "--window", editor, str(x), str(y),
                     "mousedown", "1", "sleep", ".15", "mousemove_relative", "--sync", "--",
@@ -1239,10 +1250,10 @@ def main():
 
             def crop_values():
                 values = []
-                for x in (51, 114, 208, 309):
+                for name in ("Crop X", "Crop Y", "Crop width", "Crop height"):
                     subprocess.run(["xclip", "-selection", "clipboard", "-i"], env=env,
                                    input=b"waiting", check=True, timeout=5)
-                    click(editor, x, 727)
+                    click(editor, *center(editor, name))
                     run("xdotool", "key", "ctrl+a", "ctrl+c")
                     def copied():
                         result = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
@@ -1260,21 +1271,19 @@ def main():
             assert (actual := crop_values()) == (30, 20, 160, 80), actual
             drag_source((190, 100), (30, 20))
             assert (actual := crop_values()) == (30, 20, 190, 100), actual
-            shot(editor, "crop-source-staged")
+            preview_shot("crop-source-staged")
             destination = exports / "graphical-crop.mp4"
             set_destination(editor, destination)
             press(editor, "Save new copy")
             assert not destination.exists() and len(list(history.glob("*/metadata.json"))) == 1
             press(editor, "Adjust crop")  # Done restores the unchanged accepted crop.
-            shot(editor, "crop-done-accepted")
-            def preview_pixels(name):
-                return run("convert", str(output / f"{name}.png"), "-crop", "960x380+0+85", "rgba:-")
-            assert preview_pixels("crop-source-cancelled") == preview_pixels("crop-accepted-before-source")
+            preview_shot("crop-done-accepted")
+            assert preview_pixels("crop-source-cancelled") == preview_pixels("crop-accepted-before-source"), preview_regions
             assert preview_pixels("crop-done-accepted") == preview_pixels("crop-accepted-before-source")
             source.rename(missing)
             try:
                 press(editor, "Adjust crop")  # Cached pixels work even when source is temporarily absent.
-                shot(editor, "crop-source-cached")
+                preview_shot("crop-source-cached")
                 assert preview_pixels("crop-source-cached") == preview_pixels("crop-source-staged")
             finally:
                 missing.rename(source)
@@ -1301,7 +1310,11 @@ def main():
             press(editor, "Seek")
             press(editor, "Adjust crop")
             shot(editor, "crop-source-after-seek")
-            dominant(output / "crop-source-after-seek.png", 0)
+            # Sample inside the staged crop; the default point is in the dimmed exclusion.
+            x, y = image_point(editor, .4, .4)
+            pixel = run("convert", str(output / "crop-source-after-seek.png"), "-crop", f"1x1+{x}+{y}",
+                        "-depth", "8", "rgb:-")
+            assert pixel[0] > 90 and pixel[0] > max(pixel[1], pixel[2]) + 40, pixel
             assert started.read_text().splitlines() == ["call"] * 4, "only cancel, failure, retry and changed-position loads"
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             close(editor)
@@ -1724,6 +1737,7 @@ def main():
         dominant(destination, 1, .2)
         dominant(destination, 2, 1.0)
         shot(editor, "saved")
+        assert "Show in Folder" in controls(editor), "a successful copy offers Show in Folder"
         saved_bytes = destination.read_bytes()
         if args.estimate:
             estimate_expectations["estimate-trimmed.png"] = expected_estimate(len(saved_bytes))
