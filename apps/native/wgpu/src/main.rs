@@ -5,6 +5,7 @@ mod countdown;
 mod diagnostics;
 mod editor;
 mod feedback;
+mod history;
 mod live;
 mod mini_preview;
 mod onboarding;
@@ -26,6 +27,7 @@ mod shortcut_input;
 mod startup_notice;
 mod tokens;
 mod tray;
+mod ui_fonts;
 mod update_notice;
 mod window_selector;
 #[cfg(target_os = "windows")]

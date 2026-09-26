@@ -115,6 +115,7 @@ impl Workbench {
         paste_input: crate::clipboard_input::PasteInput,
         instance: Option<captures_app::instance::Instance>,
     ) -> Self {
+        crate::ui_fonts::install(&cc.egui_ctx);
         if let Some(instance) = &instance {
             let wake = cc.egui_ctx.clone();
             // The socket worker can wake while an editor owns the current
@@ -1586,7 +1587,7 @@ impl eframe::App for Workbench {
                     ui.disable();
                 }
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.live_preferences, false, "Capture workspace");
+                    ui.selectable_value(&mut self.live_preferences, false, "Capture History");
                     ui.selectable_value(&mut self.live_preferences, true, "Preferences");
                 });
             });

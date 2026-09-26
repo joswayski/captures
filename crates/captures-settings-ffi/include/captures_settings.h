@@ -892,8 +892,8 @@ void captures_window_free_v1(CapturesWindowSession *session);
  * history_root/ffmpeg/ffprobe file paths and
  * returns FinalizedRecording metadata/path, never media JSON/base64. Stop/discard
  * an active handle before free. Info operations are capabilities,
- * microphone_devices, and history {root}; history returns recording metadata and
- * native media/poster paths only. Free may block while platform Drop aborts an
+ * microphone_devices, and history {root}; history returns recording metadata,
+ * native media/poster paths and a `missing` flag (media file absent) only. Free may block while platform Drop aborts an
  * active engine, but is not durable Stop/finalization: explicitly stop/discard
  * first on the worker. The generation callback must not reenter this ABI. All
  * responses use the standard owned envelope. */
@@ -907,11 +907,19 @@ char *captures_recording_request_v1(CapturesRecordingSession *handle,
 void captures_recording_free_v1(CapturesRecordingSession *handle);
 
 /* Versioned JSON ABI. Operations are load, save, default_path, theme,
- * login_item, onboarding, onboarding_copy, and onboarding_presentation.
+ * login_item, onboarding, onboarding_copy, onboarding_presentation,
+ * history_copy, history_cards and history_grid.
  * Onboarding returns {"ok":true,"state":{...,"presentation":{...}}};
  * onboarding_copy returns the state-independent setup strings as
  * {"ok":true,"copy":{...}}; onboarding_presentation takes {"state":{...}}
  * and returns {"ok":true,"presentation":{...}} without any I/O.
+ * History presentation is I/O-free: history_copy returns
+ * {"ok":true,"copy":{...},"actions":{id:{label,busy}},"confirm_timeout_ms":n};
+ * history_cards takes {"cards":[{"entry":HistoryEntry,"missing":bool},...]}
+ * (extra keys ignored) and returns {"ok":true,"cards":[{date,details,warning,
+ * actions,menu,...}|null]} in order (null for a malformed entry), formatted in
+ * the local time zone; history_grid takes {"width":n} and
+ * returns {"ok":true,"grid":{columns,card_width,card_height,gap}}.
  * Theme accepts {"operation":"theme","accent":"#rgb","signal":"#rrggbb",
  * "light":true} and returns {"ok":true,"colors":{...}}.
  * `request_json` must be a non-null, NUL-terminated UTF-8

@@ -161,7 +161,8 @@ def main():
             assert report["footer"] == {"dismiss": "Later", "primary": "Update now", "enabled": True}, report
             window = app.window()
             app.wait_size(window, window_height(434))
-            app.click(window, 346, 153)  # "#265" in the first stacked group.
+            # With the token font stack "#265" wraps under its bullet in the first group.
+            app.click(window, 73, 173)
             assert app.event("update-notice-action")["action"] == "open_pull_request"
             opened = app.event("update-notice-open-url")
             assert opened == {"kind": "pull_request", "url": "https://github.com/joswayski/captures/pull/265",

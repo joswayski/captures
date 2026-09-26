@@ -148,7 +148,13 @@ def main():
         run("xdotool", "key", "Return", "sleep", ".3")
 
     def close(window):
-        run("xdotool", "windowactivate", "--sync", window, "key", "alt+F4", "sleep", ".5")
+        # Alt+F4 goes to whichever client Openbox has focused; while it briefly
+        # clears the active window during activation the key closes nothing.
+        run("xdotool", "windowactivate", "--sync", window)
+        # A modal child may legitimately own focus, so only wait for Openbox to
+        # finish the transfer rather than for this exact window.
+        wait(lambda: active_window() is not None, "close target owns focus")
+        run("xdotool", "key", "alt+F4", "sleep", ".5")
 
     def dominant(path, channel, at=None):
         if at is None:
@@ -414,7 +420,7 @@ def main():
             return
         time.sleep(1)
         shot(root, "history")
-        click(root, 795, 191)
+        click(root, 105, 546)  # First History card: Edit.
         editor = wait(lambda: windows("Recording editor"), "recording editor opens")[0]
         run("xdotool", "windowmove", "--sync", editor, "80", "60")
         run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
@@ -456,7 +462,7 @@ def main():
                 field(editor, x, 727, value)
             click(editor, 22, 771)
             field(editor, 78, 815, 81)
-            field(editor, 170, 815, 61)
+            field(editor, 197, 815, 61)
             click(editor, 793, 1082)
             shot(editor, "replace-accepted")
             click(editor, 782, 1038)
@@ -536,7 +542,7 @@ def main():
             print("PASS replacement: confirmation, cancel, source/History rebase, real edited pixels and same-session save")
             return
         if args.comparison:
-            click(editor, 390, 57)
+            click(editor, 466, 57)
             shot(editor, "comparison-mp4")
             assert started.exists(), "Compare must invoke the real media tool"
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
@@ -545,17 +551,17 @@ def main():
             missing = output / "temporarily-moved.mp4"
             source.rename(missing)
             try:
-                click(editor, 390, 57)
+                click(editor, 466, 57)
                 shot(editor, "comparison-error-minimum")
             finally:
                 missing.rename(source)
-            click(editor, 390, 57)
+            click(editor, 466, 57)
             shot(editor, "comparison-retry-minimum")
             click(editor, 478, 57)
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
             calls = len(started.read_text().splitlines())
             allowed.unlink()
-            click(editor, 390, 57)
+            click(editor, 466, 57)
             wait(lambda: len(started.read_text().splitlines()) > calls, "comparison child starts")
             run("import", "-window", editor, str(output / "comparison-pending.png"))
             # Bypass idle: cancellation interrupts the running tool process.
@@ -566,7 +572,7 @@ def main():
             shot(editor, "comparison-cancelled")
             click(editor, 87, 882)
             click(editor, 793, 882)
-            click(editor, 390, 57)
+            click(editor, 466, 57)
             shot(editor, "comparison-gif")
             click(editor, 923, 57)  # 100% avoids interpolation in the pixel oracle.
             click(editor, 161, 200)
@@ -590,7 +596,7 @@ def main():
             click(editor, 793, 1082)
             click(editor, 22, 914)
             click(editor, 793, 1082)
-            click(editor, 390, 57)
+            click(editor, 466, 57)
             shot(editor, "comparison-maximum")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "comparison-maximum-minimum")
@@ -643,7 +649,7 @@ def main():
 
             silent = capture_playback("sound-default-off")
             assert silent and max(abs(v) for v in silent) < .00001, "Sound defaults off"
-            click(editor, 322, 57)
+            click(editor, 384, 57)
             audible = capture_playback("sound-on")
             assert max(abs(v) for v in audible) > .05, "Sound reaches the default virtual sink"
             # Independently measure both asymmetric source tones, rather than accepting noise.
@@ -688,7 +694,7 @@ def main():
             idle(editor)
             shot(editor, "sound-device-error")
             dominant(output / "sound-device-error.png", 0)
-            click(editor, 322, 57)
+            click(editor, 384, 57)
             motion_click()
             wait(playing, "explicit Sound-off retry works without an audio server")
             time.sleep(.7)
@@ -697,7 +703,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "sound-minimum-paused")
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
-            click(editor, 322, 57)  # Request Sound again, but GIF must not open a device.
+            click(editor, 384, 57)  # Request Sound again, but GIF must not open a device.
             click(editor, 87, 882)
             click(editor, 793, 882)
             idle(editor)  # Apply and Play share the Working title; finish Apply first.
@@ -906,7 +912,7 @@ def main():
             shot(editor, "maximum-invalid")
             assert not list(exports.iterdir())
             field(editor, 40, 961, ".1")
-            field(editor, 211, 598, 800)
+            field(editor, 240, 598, 800)
             click(editor, 793, 1082)
             shot(editor, "maximum-accepted")
             limited = exports / "limited.mp4"
@@ -1195,7 +1201,7 @@ def main():
                 return int(wait(copied_position, "fresh playback position clipboard value"))
 
             field(editor, 98, 598, 1500)
-            field(editor, 211, 598, 4500)
+            field(editor, 240, 598, 4500)
             motion_click()
             time.sleep(.3)
             assert not playing(), "unapplied trim gates Play"
@@ -1350,7 +1356,7 @@ def main():
             start = read_time(98)
             assert 1000 <= start <= 1100, ("start drag", start)
             drag(938, -200)
-            end = read_time(211)
+            end = read_time(240)
             assert 2250 <= end <= 2400, ("end drag", end)
             drag(355, 15, cancel=True)
             cancelled_start = read_time(98)
@@ -1534,7 +1540,7 @@ def main():
         click(editor, 222, 520)
         shot(editor, "seek-green")
         dominant(output / "seek-green.png", 1)
-        field(editor, 211, 598, 1100)
+        field(editor, 240, 598, 1100)
         field(editor, 98, 598, 2600)
         click(editor, 793, 882)  # Apply edits stays in the fixed save bar.
         shot(editor, "invalid-trim")
@@ -1614,7 +1620,7 @@ def main():
         field(editor, 208, 727, 160)
         click(editor, 22, 771)  # Custom output size.
         field(editor, 78, 815, 81)
-        field(editor, 170, 815, 61)
+        field(editor, 197, 815, 61)
         shot(editor, "crop-staged")
         click(editor, 793, 1082)
         shot(editor, "cropped")
@@ -1661,7 +1667,7 @@ def main():
         run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "20", "--delay", "60", "4", "sleep", ".5")
         field(editor, 227, 598, 1300)
         field(editor, 78, 815, 4001)
-        field(editor, 170, 815, 601)
+        field(editor, 197, 815, 601)
         click(editor, 33, 1082)
         large_destination = exports / "encoder-sized.mp4"
         field(editor, 360, 1038, large_destination)

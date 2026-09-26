@@ -115,7 +115,7 @@ retained text through navigation and failure, offline retry, and clean exit in
 both appearances. Shared client tests cover HTTP success, cooldown and payload
 privacy against disposable loopback servers. Physical input/AT acceptance remains open.
 
-History → Edit screenshot opens a worker-owned crop/canvas/draft editor. Undo/redo,
+A screenshot History card's Edit opens a worker-owned crop/canvas/draft editor. Undo/redo,
 Save draft, confirmed Discard edits, and unsaved-close choices preserve the original
 capture and exports. Closing without saving preserves any older saved draft.
 Geometry → Draw crop selects on the preview, including reverse and outside-image
@@ -360,7 +360,7 @@ while another application owns focus, simulated lock/unlock cancellation, region
 metadata and clean shutdown are checked in the same process.
 
 The Linux job also runs `x11_history_smoke.py` against disposable on-disk history.
-It checks Clear history confirmation, Escape/Cancel, preserved exports, empty
+It checks two-step Delete all confirmation, Escape/Cancel, preserved exports, empty
 history, and a real permission-denied partial failure followed by retry. Light
 and dark captures are emitted for inspection. Run it as an unprivileged user:
 
