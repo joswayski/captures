@@ -1899,10 +1899,10 @@ def main():
 
         if args.text_only:
             def text_click(x, y):
-                # The Combine layers menu makes the Layers heading 18 px taller
-                # than the authored text-inspector baseline. Draw-tool controls
-                # use a different header and must not receive this translation.
-                inspector_click(x, y + 18)
+                # The shipping Layers heading sits 1 px below the authored
+                # text-inspector baseline (the former Combine menu row made it
+                # 18 px taller). Draw-tool controls must not receive this.
+                inspector_click(x, y + 1)
 
             resize_editor(1000, 1501)
             toolbar_click("draw")  # Draw.
