@@ -17,6 +17,7 @@ pub mod editor_viewport;
 pub mod icons;
 pub mod login_item;
 pub mod onboarding;
+pub mod preferences;
 pub mod preview;
 pub mod preview_drag;
 pub mod recording_editor;
