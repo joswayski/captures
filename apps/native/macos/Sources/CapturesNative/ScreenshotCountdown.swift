@@ -55,6 +55,24 @@ final class ScreenshotCountdownContent: NSView {
         hint.stringValue = "Cancelling…"
     }
 
+    /// Shipping `recording-countdown-fade-in` on the scrim and `-content-in`
+    /// on the text. Presentation-only; skipped under Reduce Motion.
+    func playEntrance() {
+        NativeMotion.play("countdown_in", on: self, tokens: tokens)
+        for field in [heading, number, hint] {
+            NativeMotion.play("countdown_content_in", on: field, tokens: tokens)
+        }
+    }
+
+    /// Shipping `.recording-countdown.exiting`: the scrim and text fade out
+    /// and hold there until the panel closes (at once under Reduce Motion).
+    func playExit() {
+        NativeMotion.play("countdown_out", on: self, tokens: tokens, holdEnd: true)
+        for field in [heading, number, hint] {
+            NativeMotion.play("countdown_content_out", on: field, tokens: tokens, holdEnd: true)
+        }
+    }
+
     override func layout() {
         super.layout()
         let labelSize = min(tokens.number("countdown-label-max"), max(tokens.number("countdown-label-min"), bounds.width * 0.016))
@@ -74,7 +92,15 @@ final class ScreenshotCountdownPanel: NSPanel {
     /// Shipping `RECORDING_COUNTDOWN_FADE_OUT_MS`: how long "Cancelling…" stays up.
     static let cancelLinger: TimeInterval = 0.18
     let countdownContent: ScreenshotCountdownContent
+    private var playedEntrance = false
     override var canBecomeKey: Bool { true }
+
+    override func orderFrontRegardless() {
+        super.orderFrontRegardless()
+        guard !playedEntrance else { return }
+        playedEntrance = true
+        countdownContent.playEntrance()
+    }
 
     init(screen: NSScreen, tokens: Tokens, remaining: Int, kind: CountdownKind = .screenshot) {
         countdownContent = ScreenshotCountdownContent(frame: NSRect(origin: .zero, size: screen.frame.size),
@@ -89,6 +115,7 @@ final class ScreenshotCountdownPanel: NSPanel {
     /// it lingers so the restored desktop is immediately usable.
     func closeAfterCancelling() {
         countdownContent.setCancelling()
+        countdownContent.playExit()
         ignoresMouseEvents = true
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.cancelLinger) { [self] in close() }
     }

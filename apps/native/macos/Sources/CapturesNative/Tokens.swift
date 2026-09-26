@@ -3,6 +3,8 @@ import AppKit
 struct Tokens: Decodable {
     let colors: [String: [Double]]
     let numbers: [String: Double]
+    /// `--ease-*` tokens as cubic-bezier control points.
+    let easings: [String: [Double]]?
 
     static let variants: [String: Tokens] = {
         let url = NativeResources.bundle.url(forResource: "tokens", withExtension: "json")!
@@ -19,13 +21,18 @@ struct Tokens: Decodable {
         return CGFloat(n)
     }
 
+    func easing(_ name: String) -> [Double] {
+        guard let points = easings?[name], points.count == 4 else { preconditionFailure("Missing easing \(name)") }
+        return points
+    }
+
     func applyingCustomTheme(_ custom: [String: Any], light: Bool,
                              transport: SettingsTransport = SettingsBridge()) -> Tokens {
         guard let response = try? transport.request([
             "operation": "theme", "accent": custom.string("accent", "#32d3ff"),
             "signal": custom.string("signal", "#ff4fc3"), "light": light,
         ]), let derived = response["colors"] as? [String: [Double]] else { return self }
-        return Tokens(colors: colors.merging(derived) { _, value in value }, numbers: numbers)
+        return Tokens(colors: colors.merging(derived) { _, value in value }, numbers: numbers, easings: easings)
     }
 }
 

@@ -520,9 +520,33 @@ final class HistoryCardView: NSView {
                                   owner: self, userInfo: nil)
         addTrackingArea(area); tracking = area
     }
-    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+    override func mouseEntered(with event: NSEvent) { setHovered(true) }
+    override func mouseExited(with event: NSEvent) { setHovered(false) }
     override func mouseDown(with event: NSEvent) { requestSelection() }
+
+    /// Shipping `.history-card:hover`: the card lifts 2 pt over `--dur-3`
+    /// `--ease-standard` (instantly under Reduce Motion) as its border strengthens.
+    private func setHovered(_ value: Bool) {
+        hovered = value
+        needsDisplay = true
+        wantsLayer = true
+        guard let layer else { return }
+        let down: CGFloat = (layer.superlayer?.contentsAreFlipped() ?? superview?.isFlipped ?? true) ? 1 : -1
+        let target = value && enabled ? CATransform3DMakeTranslation(0, -2 * down, 0) : CATransform3DIdentity
+        let from = layer.presentation()?.transform ?? layer.transform
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = target
+        CATransaction.commit()
+        let tween = NativeMotion.transition("history_card_hover", tokens: tokens)
+        guard tween.duration > 0, window?.isVisible == true else { return }
+        let animation = CABasicAnimation(keyPath: "transform")
+        animation.fromValue = NSValue(caTransform3D: from)
+        animation.toValue = NSValue(caTransform3D: target)
+        animation.duration = tween.duration
+        animation.timingFunction = tween.timing
+        layer.add(animation, forKey: "history-card-hover")
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         guard enabled, let card else { return nil }

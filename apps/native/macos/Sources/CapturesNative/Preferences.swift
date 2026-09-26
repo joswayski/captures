@@ -480,6 +480,8 @@ final class PreferenceSwitchButton: PreferenceHoverButton {
 final class PreferenceSegmentButton: PreferenceHoverButton {
     private let tokens: Tokens
     var active = false { didSet { setAccessibilityValue(active); needsDisplay = true } }
+    /// False when the track's sliding indicator view paints the active fill.
+    var paintsActiveFill = true { didSet { needsDisplay = true } }
 
     init(_ label: String, frame: NSRect, tokens: Tokens, onPress: @escaping () -> Void) {
         self.tokens = tokens
@@ -496,7 +498,7 @@ final class PreferenceSegmentButton: PreferenceHoverButton {
 
     override func draw(_ dirtyRect: NSRect) {
         let radius = tokens.number("r-sm")
-        if active {
+        if active && paintsActiveFill {
             let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
             tokens.color("surface-raised").setFill(); path.fill()
             tokens.color("border-subtle").setStroke(); path.lineWidth = 1; path.stroke()
@@ -717,6 +719,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private(set) var highlightedSetting: String?
     private var highlightRevealed = false
     private var highlightGeneration = 0
+    /// Where the Appearance indicator last settled, in its track, so a rebuild
+    /// can slide it from there (shipping `.capture-segmented-indicator`).
+    private var appearanceIndicatorFrame: NSRect?
     private weak var highlightView: NSView?
 
     private static let sidebarWidth: CGFloat = 196
@@ -1160,6 +1165,25 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         return ceil((title as NSString).size(withAttributes: [.font: font]).width) + tokens.number("s-5") * 2 + 4
     }
 
+    /// Places the Appearance indicator, sliding from where it last settled
+    /// over the shipping `--dur-4` `--ease-standard` transition when visible.
+    private func slideAppearanceIndicator(_ indicator: NSView, to target: NSRect?) {
+        let previous = appearanceIndicatorFrame
+        appearanceIndicatorFrame = target
+        guard let target else { indicator.isHidden = true; return }
+        let tween = NativeMotion.transition("segmented_indicator", tokens: tokens)
+        guard let previous, previous != target, root.window?.isVisible == true, tween.duration > 0 else {
+            indicator.frame = target
+            return
+        }
+        indicator.frame = previous
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = tween.duration
+            context.timingFunction = tween.timing
+            indicator.animator().frame = target
+        }
+    }
+
     // MARK: Cards
 
     private func appearanceCard(_ y: CGFloat) -> CGFloat {
@@ -1178,15 +1202,27 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         track.setAccessibilityRole(.radioGroup); track.setAccessibilityLabel(appearance.title)
         card.addSubview(track)
         let selected = settings.string("appearance", "system")
+        let indicator = Surface(frame: .zero)
+        indicator.wantsLayer = true
+        indicator.layer?.cornerRadius = tokens.number("r-sm")
+        indicator.layer?.backgroundColor = tokens.color("surface-raised").cgColor
+        indicator.layer?.borderWidth = 1
+        indicator.layer?.borderColor = tokens.color("border-subtle").cgColor
+        indicator.setAccessibilityElement(false)
+        track.addSubview(indicator)
+        var activeFrame: NSRect?
         var x: CGFloat = 4
         for (mode, width) in zip(modes, widths) {
             let value = mode.value
             let button = PreferenceSegmentButton(mode.label, frame: NSRect(x: x, y: 4, width: width, height: segmentHeight),
                 tokens: tokens) { [weak self] in self?.set(value, for: "appearance", rerender: true) }
+            button.paintsActiveFill = false
             button.active = selected == value
+            if button.active { activeFrame = button.frame }
             track.addSubview(button)
             x += width
         }
+        slideAppearanceIndicator(indicator, to: activeFrame)
         y = divider(layout.row.maxY, card)
         let accent = PreferencesPolicy.row("theme")
         let accentHeight = copyHeight(accent.title, detail: accent.detail, width: contentWidth)
@@ -1845,6 +1881,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         statusKind = text.isEmpty ? "idle" : kind
         statusGeneration += 1
         let visible = statusKind != "idle"
+        let appearing = visible && statusPill.isHidden
         statusPill.isHidden = !visible
         status.stringValue = text
         status.setAccessibilityLabel(text)
@@ -1861,6 +1898,10 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         statusPill.frame.size.width = status.frame.minX + textWidth + tokens.number("s-4")
         retryButton?.isHidden = statusKind != "error" || !saveFailed
         layoutHeaderActions()
+        // Shipping `.preferences-save-status`: ui-pop-in over --dur-2 when it appears.
+        if appearing, root.window?.isVisible == true {
+            NativeMotion.play("popover_in", on: statusPill, tokens: tokens)
+        }
         if statusKind == "saved" {
             let generation = statusGeneration
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in

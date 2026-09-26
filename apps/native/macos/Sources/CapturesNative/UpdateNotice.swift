@@ -731,6 +731,9 @@ final class UpdateNoticeController {
     private var view: UpdateNoticeView?
     private var timer: Timer?
     private var lastReport: [String: Any] = [:]
+    /// When shipping's `update-restart-exit` (3 s into the restart state) ends;
+    /// the stub "restart" keeps the faded card until then.
+    private(set) var restartExitEnd: Date?
 
     init(tokens: Tokens, tray: String = "top", model: UpdateNoticeModel = UpdateNoticeModel()) {
         self.tokens = tokens; self.tray = tray; self.model = model
@@ -743,11 +746,21 @@ final class UpdateNoticeController {
         }
     }
 
-    func close() { timer?.invalidate(); timer = nil; panel?.close(); panel = nil; view = nil }
+    func close() {
+        timer?.invalidate(); timer = nil; panel?.close(); panel = nil; view = nil; restartExitEnd = nil
+    }
     func refresh() { render() }
 
     private func render() {
         timer?.invalidate(); timer = nil
+        if !model.visible, let end = restartExitEnd, end.timeIntervalSinceNow > 0, let panel {
+            // The stub restart finished: let the exit fade end, accepting no input.
+            panel.ignoresMouseEvents = true
+            timer = Timer.scheduledTimer(withTimeInterval: end.timeIntervalSinceNow, repeats: false) {
+                [weak self] _ in self?.close()
+            }
+            return
+        }
         guard model.visible, let screen = NSScreen.main ?? NSScreen.screens.first,
               let primaryHeight = NSScreen.screens.first?.frame.maxY else { close(); return }
         do {
@@ -763,6 +776,7 @@ final class UpdateNoticeController {
             let placement = try model.placement(monitor: monitor, workArea: workArea, tray: trayRect,
                 cardWidth: presentation.cardWidth, cardHeight: presentation.cardHeight)
             let frame = UpdateNoticePlacement.cocoaFrame(placement.frame, primaryHeight: primaryHeight)
+            let created = panel == nil
             if panel == nil {
                 let panel = UpdateNoticePanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
                     backing: .buffered, defer: false)
@@ -781,6 +795,23 @@ final class UpdateNoticeController {
             view?.frame = NSRect(origin: .zero, size: frame.size)
             view?.render(presentation, placement: placement)
             panel?.orderFrontRegardless()
+            panel?.ignoresMouseEvents = false
+            if let view {
+                if created {
+                    // Shipping `.update-notice`: ui-pop-in over --dur-4.
+                    NativeMotion.play("update_notice_in", on: view, tokens: tokens)
+                }
+                if presentation.visualState == "restarting" {
+                    if restartExitEnd == nil {
+                        let seconds = NativeMotion.play("update_notice_restart_exit", on: view,
+                                                        tokens: tokens, holdEnd: true)
+                        restartExitEnd = Date(timeIntervalSinceNow: seconds)
+                    }
+                } else if restartExitEnd != nil {
+                    restartExitEnd = nil
+                    NativeMotion.cancel(on: view)
+                }
+            }
             report(presentation, placement: placement)
             if model.simulating, let interval = model.tickInterval {
                 timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in

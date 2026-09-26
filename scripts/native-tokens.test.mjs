@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { declarations, resolveTokens, color, themes, particleFixture, parseArguments, prepare } from '../apps/native/prepare.mjs';
+import { declarations, resolveTokens, color, easing, themes, particleFixture, parseArguments, prepare } from '../apps/native/prepare.mjs';
 
 test('native tokens preserve light overrides, palette overrides and fixed media colors', async () => {
   const design = await readFile(new URL('../shared/design.css', import.meta.url), 'utf8');
@@ -24,6 +24,24 @@ test('native tokens preserve light overrides, palette overrides and fixed media 
   }
   assert.deepEqual(color(tokens('light', 'cobalt')['surface-selected']), [37 / 255, 99 / 255, 235 / 255, .13]);
   assert.deepEqual(color('#ffca28'), [1, 202 / 255, 40 / 255, 1]);
+});
+
+test('native tokens carry every ease token as cubic-bezier control points', async t => {
+  assert.deepEqual(easing('cubic-bezier(0.16, 1, 0.3, 1)'), [0.16, 1, 0.3, 1]);
+  assert.equal(easing('#ffffff'), null);
+  assert.throws(() => easing('cubic-bezier(1.5, 0, 0, 1)'), /Invalid easing/);
+  assert.throws(() => easing('cubic-bezier(0, 0, 1)'), /Invalid easing/);
+  const temporary = await mkdtemp(join(tmpdir(), 'captures-native-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  await prepare(temporary);
+  const tokens = JSON.parse(await readFile(join(temporary, 'tokens.json'), 'utf8'));
+  for (const variant of Object.values(tokens)) {
+    assert.deepEqual(variant.easings['ease-out'], [0.16, 1, 0.3, 1]);
+    assert.deepEqual(variant.easings['ease-standard'], [0.2, 0.8, 0.2, 1]);
+    assert.deepEqual(variant.easings['ease-in'], [0.4, 0, 1, 1]);
+    assert.deepEqual(variant.easings['ease-in-out'], [0.45, 0, 0.55, 1]);
+    assert.equal(variant.numbers['dur-4'], 280);
+  }
 });
 
 test('unsupported CSS, missing variables and cycles fail rather than silently changing native colors', () => {

@@ -9,6 +9,9 @@ use crate::tokens::Tokens;
 
 pub const SIZE: egui::Vec2 = egui::vec2(440.0, 116.0);
 pub const LIFETIME: Duration = Duration::from_millis(15_200);
+/// Shipping closes the window 200 ms after its 15 s `recording-saved-lifecycle`
+/// animation ends, so the exit fade finishes this long before expiry.
+const CLOSE_AFTER_ANIMATION_MS: f64 = 200.;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Guard {
@@ -29,6 +32,7 @@ pub struct Notice {
     pub saved_path: Option<PathBuf>,
     pub pending: bool,
     pub error: Option<String>,
+    shown_at: Instant,
     expires_at: Instant,
 }
 
@@ -42,8 +46,41 @@ impl Notice {
             saved_path: None,
             pending: false,
             error: None,
+            shown_at: now,
             expires_at: now + LIFETIME,
         }
+    }
+
+    /// Shipping lifecycle pose: arrive, hold, then fade out ending just before
+    /// the window closes. A save that extends the life holds steady instead of
+    /// replaying the entrance. Returns whether frames are still changing.
+    pub fn pose(
+        &self,
+        animation: &captures_app::motion::Animation,
+        now: Instant,
+        reduced_motion: bool,
+    ) -> (captures_app::motion::Pose, bool) {
+        let since = crate::motion::elapsed_ms(self.shown_at, now);
+        let until = self
+            .remaining(now)
+            .map(|remaining| (remaining.as_secs_f64() * 1000. - CLOSE_AFTER_ANIMATION_MS).max(0.));
+        (
+            animation.lifecycle_pose(since, until, reduced_motion),
+            animation.lifecycle_running(since, until, reduced_motion),
+        )
+    }
+
+    /// When the exit fade next needs frames while the notice holds still.
+    pub fn exit_wake(
+        &self,
+        animation: &captures_app::motion::Animation,
+        now: Instant,
+    ) -> Option<Duration> {
+        let remaining = self.remaining(now)?;
+        let until = (remaining.as_secs_f64() * 1000. - CLOSE_AFTER_ANIMATION_MS).max(0.);
+        Some(Duration::from_secs_f64(
+            animation.lifecycle_exit_in(until) / 1000.,
+        ))
     }
 
     pub fn begin_save(&mut self) -> Option<Guard> {
@@ -226,6 +263,44 @@ mod tests {
         assert!(!n.expired(now + LIFETIME - Duration::from_nanos(1)));
         assert!(n.expired(now + LIFETIME));
         assert_eq!(n.guard.artifact_id, "id");
+    }
+    #[test]
+    fn lifecycle_arrives_holds_and_fades_before_the_window_closes() {
+        let tokens = &crate::tokens::load()["dark-mustard"];
+        let lifecycle = tokens.motion(captures_app::motion::Motion::RecordingSavedLifecycle);
+        let now = Instant::now();
+        let mut n = Notice::new("id".into(), 1, now);
+        let (start, running) = n.pose(&lifecycle, now, false);
+        assert_eq!(start.opacity, 0.);
+        assert!(running);
+        let (steady, running) = n.pose(&lifecycle, now + Duration::from_secs(5), false);
+        assert_eq!(steady, captures_app::motion::Pose::REST);
+        assert!(!running, "the steady middle schedules no frames");
+        let wake = n
+            .exit_wake(&lifecycle, now + Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(wake.as_millis(), 7_900);
+        let (fading, running) = n.pose(&lifecycle, now + Duration::from_secs(14), false);
+        assert!(fading.opacity > 0. && fading.opacity < 1.);
+        assert!(running);
+        let (gone, _) = n.pose(&lifecycle, now + Duration::from_millis(15_000), false);
+        assert_eq!(gone.opacity, 0.);
+        // Reduced motion holds still and visible; the window close removes it.
+        let (reduced, running) = n.pose(&lifecycle, now, true);
+        assert_eq!(reduced, captures_app::motion::Pose::REST);
+        assert!(!running);
+        // Pending holds steady; a completed save restarts only the hold.
+        assert!(n.begin_save().is_some());
+        let later = now + Duration::from_secs(14);
+        assert_eq!(
+            n.pose(&lifecycle, later, false).0,
+            captures_app::motion::Pose::REST
+        );
+        assert!(n.mark_saved("id", "/saved.mp4".into(), later));
+        assert_eq!(
+            n.pose(&lifecycle, later, false).0,
+            captures_app::motion::Pose::REST
+        );
     }
     #[test]
     fn pending_gates_duplicates_and_suspends_expiry() {

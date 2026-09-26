@@ -220,6 +220,8 @@ enum Request {
     HistoryGrid {
         width: f64,
     },
+    /// Shipping keyframes and transitions (`captures_app::motion`).
+    Motion,
 }
 
 /// One History entry plus the host's off-main `missing` result. Unknown fields
@@ -307,6 +309,9 @@ fn response(request: *const c_char) -> Value {
         }),
         Ok(Request::HistoryGrid { width }) => {
             json!({"ok":true,"grid":captures_app::history_view::grid(width)})
+        }
+        Ok(Request::Motion) => {
+            json!({"ok":true,"motion":captures_app::motion::catalog()})
         }
         Ok(Request::OnboardingCopy) => {
             json!({"ok":true,"copy":captures_app::onboarding::copy()})
@@ -683,6 +688,13 @@ mod tests {
             call(r##"{"operation":"theme","accent":"#123abc","signal":"#de4567","light":true}"##);
         assert_eq!(theme["ok"], true);
         assert!(theme["colors"]["theme-accent"].is_array());
+        let motion = call(r#"{"operation":"motion"}"#);
+        assert_eq!(motion["ok"], true);
+        assert_eq!(
+            motion["motion"]["keyframes"]["update_notice_in"]["easing"]["token"],
+            "ease-out"
+        );
+        assert!(motion["motion"]["transitions"]["segmented_indicator"].is_object());
         assert_eq!(call("not json")["ok"], false);
         let ptr = unsafe { captures_settings_request_v1(std::ptr::null()) };
         assert!(!ptr.is_null());

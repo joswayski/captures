@@ -208,6 +208,13 @@ pub fn segmented(
         Stroke::new(1., t.color("border-subtle")),
         StrokeKind::Inside,
     );
+    // Shipping `.capture-segmented-indicator` slides over `--dur-4`.
+    let indicator = crate::motion::SlidingIndicator::begin(
+        ui,
+        ui.scope_id().with((label, "indicator")),
+        rect.min,
+    );
+    let mut active_segment = None;
     let mut chosen = None;
     let mut x = rect.left() + 4.;
     for (((value, name), galley), width) in options.iter().zip(galleys).zip(widths) {
@@ -222,14 +229,7 @@ pub fn segmented(
         });
         let inner = t.number("r-sm");
         if active {
-            ui.painter().add(shadow_xs(ui, segment, inner));
-            ui.painter().rect(
-                segment,
-                inner,
-                t.color("surface-raised"),
-                Stroke::new(1., t.color("border-subtle")),
-                StrokeKind::Inside,
-            );
+            active_segment = Some(segment);
         }
         let color = t.color(if active || response.hovered() {
             "text"
@@ -244,6 +244,24 @@ pub fn segmented(
         if response.clicked() && !active {
             chosen = Some(*value);
         }
+    }
+    if let Some(segment) = active_segment {
+        let inner = t.number("r-sm");
+        let fill = t.color("surface-raised");
+        let border = Stroke::new(1., t.color("border-subtle"));
+        let tween = t.transition(captures_app::motion::Transition::SegmentedIndicator);
+        indicator.finish(ui, segment, &tween, |rect| {
+            egui::Shape::Vec(vec![
+                shadow_xs(ui, rect, inner),
+                egui::Shape::Rect(egui::epaint::RectShape::new(
+                    rect,
+                    inner,
+                    fill,
+                    border,
+                    StrokeKind::Inside,
+                )),
+            ])
+        });
     }
     chosen
 }
@@ -593,7 +611,15 @@ pub fn corner_picker(
 }
 
 /// Shipping `.preferences-save-status` pill. `kind` is saving/saved/error.
-pub fn status_pill(ui: &mut egui::Ui, t: &Tokens, kind: &str, message: &str) -> Response {
+/// `pose` is its `ui-pop-in` entrance: opacity and offset apply to the whole
+/// pill and the scale to its capsule.
+pub fn status_pill(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    kind: &str,
+    message: &str,
+    pose: captures_app::motion::Pose,
+) -> Response {
     let (fill, border, color) = match kind {
         "saved" => ("positive-surface", None, "positive-text"),
         "error" => ("danger-surface", None, "danger-text"),
@@ -612,9 +638,12 @@ pub fn status_pill(ui: &mut egui::Ui, t: &Tokens, kind: &str, message: &str) -> 
     );
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, message));
-    let painter = ui.painter();
+    let mut painter = ui.painter().clone();
+    painter.multiply_opacity(pose.opacity.clamp(0., 1.) as f32);
+    let rect = rect.translate(vec2(0., pose.translate_y as f32));
+    let painter = &painter;
     painter.rect(
-        rect,
+        rect.scale_from_center(pose.scale as f32),
         rect.height() / 2.,
         t.color(fill),
         border.map_or(Stroke::NONE, |border| Stroke::new(1., t.color(border))),

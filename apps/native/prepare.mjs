@@ -91,6 +91,19 @@ export function color(value) {
   return parts.slice(0, 3).map(n => n / 255).concat(parts[3] ?? 1);
 }
 
+// `--ease-*` tokens as control points for native animators. Only the
+// cubic-bezier() form is accepted, so a new easing syntax fails the build.
+export function easing(value) {
+  const match = /^cubic-bezier\(([^)]+)\)$/.exec(value.trim());
+  if (!match) return null;
+  const parts = match[1].split(',').map(Number);
+  if (parts.length !== 4 || parts.some(n => !Number.isFinite(n)) || parts[0] < 0 || parts[0] > 1
+    || parts[2] < 0 || parts[2] > 1) {
+    throw new Error(`Invalid easing ${value}`);
+  }
+  return parts;
+}
+
 export function particleFixture() {
   let seed = 739;
   const particles = buildThumbnailDustParticles(284, 160, {
@@ -112,6 +125,7 @@ export async function prepare(destination, testDestination) {
       variants[`${appearance}-${theme}`] = {
         colors: Object.fromEntries(Object.entries(raw).flatMap(([key, value]) => color(value) ? [[key, color(value)]] : [])),
         numbers: Object.fromEntries(Object.entries(raw).flatMap(([key, value]) => /^-?[\d.]+(px|ms)?$/.test(value) ? [[key, parseFloat(value)]] : [])),
+        easings: Object.fromEntries(Object.entries(raw).flatMap(([key, value]) => key.startsWith('ease-') ? [[key, easing(value)]] : [])),
         raw,
       };
     }

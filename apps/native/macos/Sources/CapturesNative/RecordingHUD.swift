@@ -611,6 +611,8 @@ final class RecordingControlsHiddenNoticeView: NSView {
 }
 
 final class RecordingControlsHiddenNoticePanel: NSPanel {
+    static let motion = "recording_controls_hidden_lifecycle"
+
     init(screen: NSScreen, tokens: Tokens) {
         let size = NSSize(width: 360, height: 96)
         let visible = screen.visibleFrame

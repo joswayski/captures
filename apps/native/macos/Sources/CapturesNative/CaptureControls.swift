@@ -503,6 +503,9 @@ final class CaptureControlsView: NSView {
     private let microphoneMenu: GlassPopUpButton
     private var microphoneIDs: [String?] = []
     private var panelDragOffset: NSPoint?
+    /// Shipping `.capture-segmented-indicator`s for the mode and target switches.
+    let modeIndicator = NSView()
+    let targetIndicator = NSView()
     private var captureEnabled = false
     private(set) var menuState: CaptureMenuPolicy.Menu?
     var switchTarget: (UnifiedCaptureTarget) -> Void = { _ in }
@@ -632,6 +635,19 @@ final class CaptureControlsView: NSView {
         for button in subviews.compactMap({ $0 as? CaptureButton }) {
             button.escapeActionBlock = { [weak self] in self?.cancel() }
         }
+        let indicators: [(NSView, NSView?)] = [
+            (modeIndicator, screenshot), (targetIndicator, targetButtons[.region]),
+        ]
+        for (indicator, below) in indicators {
+            indicator.wantsLayer = true
+            indicator.layer?.backgroundColor = tokens.color("glass-active").cgColor
+            indicator.layer?.borderColor = tokens.color("theme-accent").cgColor
+            indicator.layer?.borderWidth = 1
+            indicator.layer?.cornerRadius = tokens.number("r-md")
+            indicator.setAccessibilityElement(false)
+            addSubview(indicator, positioned: .below, relativeTo: below)
+        }
+        for button in [screenshot, record] + Array(targetButtons.values) { button.slidingSegment = true }
         configureRecordingRow(microphoneDevices: microphoneDevices)
         selectTarget(.region, notify: false)
         selectMode(.screenshot, notify: false)
@@ -863,12 +879,44 @@ final class CaptureControlsView: NSView {
             microphoneMenu.frame.size.width = max(116, width - microphoneMenu.frame.minX - 16)
             if let label = fieldLabels.last { label.frame.size.width = microphoneMenu.frame.width }
         }
+        let arriving = mode == .record && !recordButton.selected
         screenshotButton.selected = mode == .screenshot
         recordButton.selected = mode == .record
         screenshotButton.setAccessibilityValue(mode == .screenshot ? 1 : 0)
         recordButton.setAccessibilityValue(mode == .record ? 1 : 0)
+        slideIndicator(modeIndicator, to: mode == .record ? recordButton : screenshotButton)
         updateRecordingControls()
+        if arriving { playRecordingRowEntrance() }
         if notify { switchMode(mode) }
+    }
+
+    /// Moves a switch's indicator under the selected segment. The first
+    /// placement and offscreen or Reduce Motion changes jump; otherwise it
+    /// slides over the shipping `--dur-4` `--ease-standard` transition.
+    private func slideIndicator(_ indicator: NSView, to button: NSButton) {
+        let target = button.frame.insetBy(dx: 1, dy: 1)
+        let placed = indicator.frame.width > 0
+        let tween = NativeMotion.transition("segmented_indicator", tokens: tokens)
+        guard placed, window?.isVisible == true, tween.duration > 0 else {
+            indicator.frame = target
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = tween.duration
+            context.timingFunction = tween.timing
+            indicator.animator().frame = target
+        }
+    }
+
+    /// Shipping `recording-options-arrive` (40 ms delay, 5 pt drop and fade)
+    /// on the Record row. Presentation-only; skipped under Reduce Motion.
+    private func playRecordingRowEntrance() {
+        guard window?.isVisible == true else { return }
+        let row: [NSView] = [fpsMenu, resolutionMenu, microphoneMenu]
+            + (fieldLabels as [NSView]) + (recordingSwitches as [NSView])
+        for view in row where !view.isHidden {
+            NativeMotion.play("capture_menu_options_arrive", on: view, tokens: tokens)
+        }
     }
 
     func selectTarget(_ target: UnifiedCaptureTarget, notify: Bool) {
@@ -878,6 +926,7 @@ final class CaptureControlsView: NSView {
             button.setAccessibilityValue(button.selected ? 1 : 0)
             button.needsDisplay = true
         }
+        if let button = targetButtons[target] { slideIndicator(targetIndicator, to: button) }
         aspectLabel.isHidden = target != .region
         aspectMenu.isHidden = target != .region
         displayMenu.isHidden = target != .display

@@ -8,6 +8,7 @@ mod feedback;
 mod history;
 mod live;
 mod mini_preview;
+mod motion;
 mod onboarding;
 mod options;
 mod outbound_drag;

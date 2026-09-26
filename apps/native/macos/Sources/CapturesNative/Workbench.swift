@@ -93,6 +93,9 @@ final class CaptureButton: NSButton {
     /// Neutral high-contrast action (`--solid`), e.g. the setup primary button.
     var solid = false { didSet { needsDisplay = true } }
     var signal = false
+    /// A segment whose selected fill is its switch's sliding indicator view
+    /// (shipping `.capture-segmented-indicator`), so it draws no idle chrome.
+    var slidingSegment = false { didSet { needsDisplay = true } }
     var hudControl = false { didSet { updateTrackingAreas(); needsDisplay = true } }
     private var hoverTracking: NSTrackingArea?
     private var hovered = false
@@ -187,6 +190,11 @@ final class CaptureButton: NSButton {
         } else if editorTool {
             if isEnabled && (selected || hovered || cell?.isHighlighted == true) {
                 tokens.color(selected ? "theme-accent" : "surface-hover").setFill()
+                path.fill()
+            }
+        } else if slidingSegment {
+            if isEnabled && cell?.isHighlighted == true {
+                tokens.color(glass ? "glass-active" : "surface-active").setFill()
                 path.fill()
             }
         } else if solid {

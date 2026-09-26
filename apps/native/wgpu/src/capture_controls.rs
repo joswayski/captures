@@ -1,15 +1,17 @@
 use captures_app::capture_menu::{
     self, Guidance, MenuMode, PreferenceTarget, PrimaryState, RecordingToggle,
 };
+use captures_app::motion::{Motion, Transition};
 use captures_app::selection::{Bounds, Rect};
 use captures_app::shortcuts::CaptureShortcut;
 use captures_capture::{DisplayDescriptor, WindowDescriptor};
 use captures_recording::{AudioDevice, MaxResolution};
 use captures_recording_platform::RecordingCapabilities;
 use captures_settings::RecordingSettings;
-use eframe::egui::{self, Align2, RichText, Stroke, TextureHandle};
+use eframe::egui::{self, Align2, Color32, RichText, Stroke, TextureHandle};
 
 use crate::{
+    motion::SlidingIndicator,
     selector::{self, Selector},
     tokens::Tokens,
     window_selector::{self, SelectionTarget, WindowSelector},
@@ -70,6 +72,8 @@ pub struct CaptureControls {
     microphones: Vec<AudioDevice>,
     /// Devices enumerate on the recording worker after the menu opens.
     microphones_loading: bool,
+    /// egui time the Record options row appeared, for its entrance.
+    recording_options_since: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -104,6 +108,7 @@ impl Default for CaptureControls {
             recording_capabilities: RecordingCapabilities::current(false),
             microphones: vec![],
             microphones_loading: false,
+            recording_options_since: None,
         }
     }
 }
@@ -343,17 +348,22 @@ impl CaptureControls {
                                     action = Some(Action::Cancel);
                                 }
                                 ui.separator();
-                                if segment(
+                                // Shipping `.capture-action-switch` indicator.
+                                let action_switch = SlidingIndicator::begin(
+                                    ui,
+                                    view.panel_id.with("action-indicator"),
+                                    ui.min_rect().min,
+                                );
+                                let screenshot = segment(
                                     ui,
                                     tokens,
                                     self.action_mode == ActionMode::Screenshot,
                                     "Screenshot",
-                                )
-                                .clicked()
-                                {
+                                );
+                                if screenshot.clicked() {
                                     self.action_mode = ActionMode::Screenshot;
                                 }
-                                if ui
+                                let record = ui
                                     .add_enabled(
                                         view.recording_available,
                                         egui::Button::new(
@@ -365,28 +375,41 @@ impl CaptureControls {
                                                 },
                                             )),
                                         )
-                                        .fill(tokens.color(if self.action_mode
-                                            == ActionMode::Recording
-                                        {
-                                            "glass-raised"
-                                        } else {
-                                            "glass-strong"
-                                        })),
+                                        .fill(Color32::TRANSPARENT),
                                     )
                                     .on_disabled_hover_text(view.recording_unavailable_reason.unwrap_or(
                                         "Screen recording is unavailable in this desktop session",
-                                    ))
-                                    .clicked()
-                                {
+                                    ));
+                                if record.clicked() {
                                     self.action_mode = ActionMode::Recording;
                                 }
+                                paint_indicator(
+                                    ui,
+                                    tokens,
+                                    action_switch,
+                                    if self.action_mode == ActionMode::Recording {
+                                        record.rect
+                                    } else {
+                                        screenshot.rect
+                                    },
+                                );
                                 ui.separator();
+                                // Shipping `.recording-target-switch` indicator.
+                                let target_switch = SlidingIndicator::begin(
+                                    ui,
+                                    view.panel_id.with("target-indicator"),
+                                    ui.min_rect().min,
+                                );
+                                let mut selected_segment = None;
                                 for (mode, label) in [
                                     (TargetMode::Region, "Region"),
                                     (TargetMode::Window, "Window"),
                                     (TargetMode::Display, "Full screen"),
                                 ] {
                                     let response = segment(ui, tokens, self.mode == mode, label);
+                                    if self.mode == mode {
+                                        selected_segment = Some(response.rect);
+                                    }
                                     if response.clicked() {
                                         let same = self.mode == mode;
                                         self.mode = mode;
@@ -400,6 +423,9 @@ impl CaptureControls {
                                             action = Some(self.action_for_target(target));
                                         }
                                     }
+                                }
+                                if let Some(rect) = selected_segment {
+                                    paint_indicator(ui, tokens, target_switch, rect);
                                 }
                                 if self.mode == TargetMode::Region {
                                     ui.separator();
@@ -462,7 +488,24 @@ impl CaptureControls {
                             });
                             if self.action_mode == ActionMode::Recording {
                                 ui.separator();
-                                self.show_recording_options(ui, tokens);
+                                // Shipping `recording-options-arrive` on the Record row.
+                                let now = ui.input(|input| input.time);
+                                let since = *self.recording_options_since.get_or_insert(now);
+                                let arrive = tokens.motion(Motion::CaptureMenuOptionsArrive);
+                                let reduced = crate::motion::reduced(ui.ctx());
+                                let elapsed = (now - since) * 1000.;
+                                if arrive.running(elapsed, reduced) {
+                                    ui.ctx().request_repaint();
+                                }
+                                let rect = ui.available_rect_before_wrap();
+                                crate::motion::with_pose(
+                                    ui,
+                                    arrive.pose_at(elapsed, reduced),
+                                    rect,
+                                    |ui| self.show_recording_options(ui, tokens),
+                                );
+                            } else {
+                                self.recording_options_since = None;
                             }
                             if let Some(target) = self.show_note(ui, tokens, menu_mode, view.auto_start)
                             {
@@ -1037,6 +1080,7 @@ fn window_target(target: SelectionTarget) -> Target {
     }
 }
 
+/// One segment; its raised fill is the switch's [`SlidingIndicator`].
 fn segment(ui: &mut egui::Ui, tokens: &Tokens, selected: bool, label: &str) -> egui::Response {
     ui.add(
         egui::Button::new(RichText::new(label).color(tokens.color(if selected {
@@ -1044,17 +1088,31 @@ fn segment(ui: &mut egui::Ui, tokens: &Tokens, selected: bool, label: &str) -> e
         } else {
             "glass-text-muted"
         })))
-        .fill(tokens.color(if selected {
-            "glass-raised"
-        } else {
-            "glass-strong"
-        }))
-        .stroke(if selected {
-            Stroke::new(1., tokens.color("glass-border"))
-        } else {
-            Stroke::NONE
-        }),
+        .fill(Color32::TRANSPARENT)
+        .stroke(Stroke::NONE),
     )
+}
+
+/// The selected segment's `glass-raised` pill, sliding over `--dur-4`.
+fn paint_indicator(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    indicator: SlidingIndicator,
+    selected: egui::Rect,
+) {
+    let radius = ui.visuals().widgets.inactive.corner_radius;
+    let fill = tokens.color("glass-raised");
+    let stroke = Stroke::new(1., tokens.color("glass-border"));
+    let tween = tokens.transition(Transition::SegmentedIndicator);
+    indicator.finish(ui, selected, &tween, |rect| {
+        egui::Shape::Rect(egui::epaint::RectShape::new(
+            rect,
+            radius,
+            fill,
+            stroke,
+            egui::StrokeKind::Inside,
+        ))
+    });
 }
 
 /// The OS display name, with the shipping `session.display.name || "Display"` fallback.
@@ -1199,9 +1257,12 @@ mod tests {
         error: Option<&str>,
     ) -> (egui::Context, egui::Id, Vec<(String, egui::Rect)>) {
         let ctx = egui::Context::default();
+        // Settle the Record row's entrance (40 ms delay, then instant); its
+        // timing has its own test.
+        crate::motion::set_reduced(&ctx, true);
         let panel_id = egui::Id::unique("capture-controls-settle");
         let size = egui::vec2(1280., 900.);
-        for _ in 0..2 {
+        for _ in 0..4 {
             render(&ctx, controls, size, vec![], panel_id, auto_start, error);
         }
         let texts = render(&ctx, controls, size, vec![], panel_id, auto_start, error).1;
@@ -1618,6 +1679,34 @@ mod tests {
         );
         let (_, _, texts) = settle(&mut controls, false, None);
         assert!(painted(&texts, "Press Enter to confirm").is_some());
+    }
+
+    #[test]
+    fn record_options_row_arrives_after_the_shipping_delay_and_never_under_reduced_motion() {
+        let mut controls = CaptureControls::recording_fixture();
+        let ctx = egui::Context::default();
+        let panel_id = egui::Id::unique("capture-controls-arrival");
+        let size = egui::vec2(1280., 900.);
+        // The first frames fall inside the 40 ms delay: the row is invisible.
+        let texts = render(&ctx, &mut controls, size, vec![], panel_id, false, None).1;
+        assert!(painted(&texts, "FPS").is_none(), "{texts:?}");
+        for _ in 0..30 {
+            render(&ctx, &mut controls, size, vec![], panel_id, false, None);
+        }
+        let texts = render(&ctx, &mut controls, size, vec![], panel_id, false, None).1;
+        assert!(painted(&texts, "FPS").is_some(), "{texts:?}");
+
+        // Reduced motion keeps the delay, then lands at rest with no frames between.
+        let mut controls = CaptureControls::recording_fixture();
+        let ctx = egui::Context::default();
+        crate::motion::set_reduced(&ctx, true);
+        let texts = render(&ctx, &mut controls, size, vec![], panel_id, false, None).1;
+        assert!(painted(&texts, "FPS").is_none(), "{texts:?}");
+        for _ in 0..3 {
+            render(&ctx, &mut controls, size, vec![], panel_id, false, None);
+        }
+        let texts = render(&ctx, &mut controls, size, vec![], panel_id, false, None).1;
+        assert!(painted(&texts, "FPS").is_some(), "{texts:?}");
     }
 
     #[test]

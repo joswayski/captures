@@ -1200,7 +1200,7 @@ lossless PNG. Screenshot countdown and temporary global Escape now share Rust
 deadlines, generation invalidation, and a cancellation/commit boundary across
 hosts; native countdown windows use the fixed media palette. Both hosts use the
 shipping "Screenshot in" / "Recording starts in" headings and hold "Cancelling…"
-for the shipping 180 ms exit window after Escape; the fade animations remain open.
+for the shipping 180 ms exit window after Escape, fading in and out as shipped.
 HUD, tray, guidance and Preferences copy follow the shipping strings, and recording
 times use the shared `h:mm:ss` formatter. The HUD's Delete recording asks the
 shipping "Delete recording?" question before discarding a take (AppKit alert,
@@ -1246,9 +1246,10 @@ remain unverified. Cards now show shared `W × H · size` metadata, the shipping
 capture, and a one-second ✓ Saved confirmation. Ownership follows the shared
 `captures_app::clipboard` model: the macOS pasteboard change count, the Windows
 clipboard sequence number, or on Linux a host write counter plus a throttled
-pixel comparison that notices other apps replacing the clipboard. Hover blur,
-the editor-presence pill, stale-pointer hover suppression, the animated Show less
-morph and other animated transitions remain follow-up work; this does not close the visual parity gate. Share/sign-in
+pixel comparison that notices other apps replacing the clipboard. New cards play
+the shipping arrival (see the motion slice). Hover blur, the editor-presence pill,
+stale-pointer hover suppression, the animated Show less morph, the dismiss/delete
+exits and other stack transitions remain follow-up work; this does not close the visual parity gate. Share/sign-in
 UI is deliberately outside this slice.
 Show less/expand preserves capture order, overflow scrolls without a
 count cap, and Clear all dismisses only snapshotted IDs, not later captures.
@@ -1410,8 +1411,9 @@ finished take opens the recording editor, and the notice appears when a recordin
 editor closes (including editors opened from History). With the preference off,
 no editor or notice appears. Private-X11 input tests exercise export byte equality,
 failure/retry, missing exports, intercepted OS-reveal arguments, hidden-root expiry,
-dismissal and capture cleanup; AppKit provides state and render fixtures. Physical
-macOS/Windows, Wayland, accessibility and motion parity remain open.
+dismissal and capture cleanup; AppKit provides state and render fixtures. Both
+hosts play the shipping lifecycle animation (see the motion slice). Physical
+macOS/Windows, Wayland and accessibility acceptance remain open.
 
 The launch notice slice adds the shipping "Captures is ready to use" pill to both
 native hosts: fixed dark glass, a painted triangle caret pointing at the tray or
@@ -1980,10 +1982,52 @@ pointer (12-point leave slack). The wgpu region drag also settles at the release
 point when a slow frame batches the release with later motion. Neither host keeps
 the menu open while starting or switching displays, so "Capturing…", "Starting…" and
 "Switching…" are shared but not reachable; AppKit enumerates microphones before
-opening and never shows the loading row. Segmented-control animation/icons, the
-panel entrance animation, the Full screen display icon and Wayland remain open.
+opening and never shows the loading row. The segmented indicators slide and the
+Record row arrives as shipped (see the motion slice below); wgpu segment icons,
+the Full screen display icon and Wayland remain open.
 Verified with Rust/XCTest source tests and private-X11 capture/recording smokes;
 AppKit compiles and runs only in macOS CI, and Windows presentation is unverified.
+
+The motion slice moves shipping animation into `captures_app::motion`: each
+shipping `@keyframes` rule with its `animation` timing, and each `transition`,
+as data whose durations and easings name the `--dur-*` / `--ease-*` tokens
+(literal values only where the shipping CSS hard-codes them, such as the 0.52 s
+preview arrival). `prepare.mjs` exports the `--ease-*` tokens as cubic-bezier
+control points; wgpu samples poses with the shared solver, and AppKit reads the
+same keyframes through the settings ABI's `motion` operation and hands them to
+Core Animation as presentation-only animations, so model frames and alpha stay
+settled for code and tests that read them. Both hosts now play:
+
+- update notice `ui-pop-in` (`--dur-4`) and the restart exit 3 s into the restart
+  state (the stub keeps the faded card until the fade ends);
+- launch notice `startup-arrive`, rising from below when the caret points down;
+- the recording-saved (15 s) and controls-hidden (6 s) lifecycles: arrive, hold,
+  and fade out ending 200 ms before the window closes. A save that extends the
+  saved notice's life holds it steady instead of replaying the entrance;
+- mini-preview `thumbnail-arrive` for each newly decoded card;
+- countdown scrim/content fade-in and the cancelling fade-out;
+- capture menu `recording-options-arrive` on the Record row, and sliding
+  `.capture-segmented-indicator`s for Screenshot/Record, Region/Window/Full
+  screen and the Preferences Appearance control (`--dur-4` `--ease-standard`);
+- the Preferences save-status pop-in (`--dur-2`);
+- History card hover lift (2 pt over `--dur-3`); wgpu also eases the border.
+
+Reduced motion follows the shipping global rule (0.01 ms animations and
+transitions): entrances and transitions land at rest with no frames between,
+and an exit keeps its delay and lands on its final keyframe. The two lifecycle
+notices are the exception: shipping's rule would jump straight to their
+invisible final keyframe, so both hosts keep them still and visible until their
+windows close. The existing system Reduce Motion wiring (AppKit workspace
+setting; wgpu portal/Windows preference or `--reduced-motion`) drives all of it.
+wgpu requests repaints only while a pose changes, and its motion wrapper keeps
+widget ids stable when an animation settles. Not reproduced: the preview
+arrival's 3 px blur (no egui/Core Animation equivalent without filters), the
+History hover shadow and AppKit's hover border easing, segment label colour
+transitions, and pop-ins on native select menus (AppKit uses system menus; wgpu
+uses egui popups). Confirmation dialogs are native in shipping and have no
+entrance to match. Verified with Rust/XCTest source tests and private-X11 smokes;
+AppKit runs only in macOS CI, and physical macOS/Windows motion acceptance remains
+open.
 
 Region preparation starts with `captures-app::selection`: shared create/move/
 corner-resize and settled-aspect geometry, including Shift precedence, fractional

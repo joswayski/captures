@@ -222,6 +222,8 @@ pub struct Preferences {
     save_error: Option<String>,
     saving: bool,
     saved_until: Option<Instant>,
+    /// When the save status pill appeared, for its pop-in.
+    status_shown_at: Option<Instant>,
     revision: u64,
     io: SettingsIo,
     rx: Receiver<Message>,
@@ -319,6 +321,7 @@ impl Preferences {
             save_error: None,
             saving: false,
             saved_until: None,
+            status_shown_at: None,
             revision: 0,
             io,
             rx,
@@ -849,15 +852,38 @@ impl Preferences {
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = t.number("s-4");
-                        if let Some(error) = self.save_error.clone() {
-                            if widgets::button(ui, t, "Retry", false).clicked() {
+                        let status = if let Some(error) = &self.save_error {
+                            Some(("error", preferences::save_error(error)))
+                        } else if self.saving {
+                            Some(("saving", preferences::SAVING.to_owned()))
+                        } else if self.saved_until.is_some_and(|until| Instant::now() < until) {
+                            Some(("saved", preferences::SAVED.to_owned()))
+                        } else {
+                            None
+                        };
+                        // Shipping `ui-pop-in` (--dur-2) when the pill appears.
+                        let now = Instant::now();
+                        self.status_shown_at =
+                            status.as_ref().map(|_| self.status_shown_at.unwrap_or(now));
+                        if let Some((kind, message)) = status {
+                            if kind == "error" && widgets::button(ui, t, "Retry", false).clicked() {
                                 self.changed();
                             }
-                            widgets::status_pill(ui, t, "error", &preferences::save_error(&error));
-                        } else if self.saving {
-                            widgets::status_pill(ui, t, "saving", preferences::SAVING);
-                        } else if self.saved_until.is_some_and(|until| Instant::now() < until) {
-                            widgets::status_pill(ui, t, "saved", preferences::SAVED);
+                            let pop = t.motion(captures_app::motion::Motion::PopoverIn);
+                            let elapsed = self
+                                .status_shown_at
+                                .map_or(f64::INFINITY, |at| crate::motion::elapsed_ms(at, now));
+                            let reduced = crate::motion::reduced(ui.ctx());
+                            if pop.running(elapsed, reduced) {
+                                ui.ctx().request_repaint();
+                            }
+                            widgets::status_pill(
+                                ui,
+                                t,
+                                kind,
+                                &message,
+                                pop.pose_at(elapsed, reduced),
+                            );
                         }
                         history =
                             widgets::button(ui, t, preferences::HISTORY_ACTION, true).clicked();
