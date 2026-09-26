@@ -3,6 +3,7 @@ use captures_app::preview::{
     self, ThumbnailMonitorBounds, ThumbnailStackAnchor, ThumbnailStackOrigin, ThumbnailVisibility,
 };
 use captures_app::preview_chrome::{self, CardHoverLock, EditorPhase, EditorPresence};
+use captures_app::preview_motion;
 use captures_app::tray_notice::LogicalRect;
 use captures_settings::MiniPreviewPlacement;
 use std::ffi::{CStr, CString, c_char};
@@ -756,10 +757,120 @@ pub extern "C" fn captures_preview_hover_media_v1() -> CapturesPreviewHoverMedia
     }
 }
 
+/// Shipping card warning beside the metadata ("Not in History", then
+/// "Clipboard unavailable"), or null. Static UTF-8; never free it.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_card_warning_v1(
+    clipboard_current: bool,
+    history_saved: bool,
+    copy_failed: bool,
+) -> *const c_char {
+    match preview_chrome::card_warning(clipboard_current, history_saved, copy_failed) {
+        Some(preview_chrome::WARNING_NOT_IN_HISTORY) => c"Not in History".as_ptr(),
+        Some(_) => c"Clipboard unavailable".as_ptr(),
+        None => std::ptr::null(),
+    }
+}
+
+/// Dust chips for a Delete as a JSON array of `DustParticle` objects
+/// (camelCase keys). Owned UTF-8; free with captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_dust_particles_v1(
+    card_width: f64,
+    card_height: f64,
+    image_width: f64,
+    image_height: f64,
+    origin_x: f64,
+    origin_y: f64,
+    seed: u32,
+) -> *mut c_char {
+    let finite = [
+        card_width,
+        card_height,
+        image_width,
+        image_height,
+        origin_x,
+        origin_y,
+    ]
+    .iter()
+    .all(|value| value.is_finite());
+    if !finite {
+        return std::ptr::null_mut();
+    }
+    let particles = preview_motion::dust_particles(
+        card_width,
+        card_height,
+        (image_width, image_height),
+        (origin_x, origin_y),
+        seed,
+    );
+    serde_json::to_string(&particles)
+        .ok()
+        .and_then(|json| CString::new(json).ok())
+        .map_or(std::ptr::null_mut(), CString::into_raw)
+}
+
+/// Exit holds and settle delays, the Clear all stagger and the pile sparkle
+/// tables: `{exits:{dismiss:{hold_ms,settle_delay_ms},dust,delete_fallback,
+/// clear_stagger_ms,clear_stagger_max_ms,dust_pad},sparkles:{reach,side,near,
+/// early:[{x,y,core,fade,accent,alpha}],late}}`. Owned UTF-8; free with
+/// captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_motion_tables_v1() -> *mut c_char {
+    let tables = serde_json::json!({
+        "exits": preview_motion::exit_catalog(),
+        "sparkles": preview_motion::sparkle_catalog(),
+    });
+    CString::new(tables.to_string()).map_or(std::ptr::null_mut(), CString::into_raw)
+}
+
+/// Clear all's start delay for chronological `index` of `count` cards.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_clear_delay_ms_v1(
+    count: usize,
+    index: usize,
+    top_anchor: bool,
+) -> f64 {
+    preview_motion::clear_delay_ms(count, index, top_anchor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ptr::{null, null_mut};
+
+    #[test]
+    fn warnings_dust_and_motion_tables_cross_the_abi() {
+        // SAFETY: Static and owned NUL-terminated strings returned above.
+        unsafe {
+            assert!(captures_preview_card_warning_v1(false, true, false).is_null());
+            assert_eq!(
+                CStr::from_ptr(captures_preview_card_warning_v1(false, false, true)).to_str(),
+                Ok("Not in History")
+            );
+            assert_eq!(
+                CStr::from_ptr(captures_preview_card_warning_v1(false, true, true)).to_str(),
+                Ok("Clipboard unavailable")
+            );
+            assert!(captures_preview_card_warning_v1(true, false, true).is_null());
+            assert!(
+                captures_preview_dust_particles_v1(f64::NAN, 160., 1., 1., 0., 0., 1).is_null()
+            );
+            let dust = captures_preview_dust_particles_v1(284., 160., 800., 600., 22.5, 22.5, 3);
+            let parsed: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(dust).to_str().unwrap()).unwrap();
+            crate::captures_settings_free_v1(dust);
+            assert_eq!(parsed.as_array().unwrap().len(), 198);
+            assert!(parsed[0]["sourceLeft"].is_number() && parsed[0]["delayMs"].is_number());
+            let tables = captures_preview_motion_tables_v1();
+            let parsed: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(tables).to_str().unwrap()).unwrap();
+            crate::captures_settings_free_v1(tables);
+            assert_eq!(parsed["exits"]["dismiss"]["hold_ms"], 1_030.);
+            assert_eq!(parsed["sparkles"]["early"][0]["accent"], true);
+        }
+        assert_eq!(captures_preview_clear_delay_ms_v1(3, 0, false), 72.);
+    }
 
     #[test]
     fn overflow_cues_cross_the_abi() {
