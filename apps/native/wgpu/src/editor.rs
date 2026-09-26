@@ -51,6 +51,7 @@ use crate::tokens::Tokens;
 mod canvas;
 mod chrome;
 mod drawing_preview;
+mod layers;
 mod pickers;
 mod text_input;
 
@@ -82,6 +83,8 @@ enum Job {
 
 struct Presented {
     document: Arc<Document>,
+    /// Live Layers-row previews by layer ID (`captures_app::editor_layers`).
+    thumbnails: BTreeMap<String, Arc<RgbaImage>>,
     pixels: Arc<RgbaImage>,
     original_export_path: Option<PathBuf>,
     initial_text_size: f64,
@@ -105,9 +108,24 @@ struct Presented {
 }
 
 impl Presented {
+    /// After an edit: refresh the session's row thumbnails, then present.
+    fn after_edit(session: &mut EditorSession) -> Self {
+        session.refresh_layer_thumbnails();
+        Self::from_session(session)
+    }
+
     fn from_session(session: &EditorSession) -> Self {
         let snapshot = session.snapshot();
         Self {
+            thumbnails: snapshot
+                .document
+                .elements
+                .iter()
+                .filter_map(|element| {
+                    let id = &element.base().id;
+                    session.layer_thumbnail(id).map(|image| (id.clone(), image))
+                })
+                .collect(),
             document: Arc::new(snapshot.document.clone()),
             pixels: session.pixels(),
             original_export_path: snapshot.original_export_path.map(Path::to_owned),
@@ -266,6 +284,9 @@ struct TextFields {
     id: String,
     accepted: TextValues,
     staged: TextValues,
+    /// The staged values last sent as a live edit; unchanged fields are not
+    /// resent while that edit is in flight.
+    sent: Option<TextValues>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -467,9 +488,15 @@ struct View {
     layer_gesture: Option<LayerGesture>,
     pending_layer_selection: Option<String>,
     combine_pending: bool,
-    layer_name: String,
     layer_opacity: f64,
-    layer_position: [f64; 2],
+    /// Image Width, Height, X and Y as shown by the live number fields.
+    layer_geometry: [f64; 4],
+    /// Live inspector edits waiting for the worker: the newest per key, in
+    /// order (see `View::live_edit`).
+    live_queue: Vec<(String, Request)>,
+    live_serial: u64,
+    /// Sidebar Layers rows: drag, inline rename, ⋯ menu and thumbnails.
+    layers: layers::State,
     annotation: Option<AnnotationFields>,
     text: Option<TextFields>,
     text_apply_pending: bool,
@@ -561,9 +588,11 @@ impl Default for View {
             layer_gesture: None,
             pending_layer_selection: None,
             combine_pending: false,
-            layer_name: String::new(),
             layer_opacity: 100.,
-            layer_position: [0., 0.],
+            layer_geometry: [1., 1., 0., 0.],
+            live_queue: Vec::new(),
+            live_serial: 0,
+            layers: layers::State::default(),
             annotation: None,
             text: None,
             text_apply_pending: false,
@@ -810,6 +839,7 @@ impl View {
                     self.error = Some(error);
                 }
                 self.inline_failed();
+                self.live_queue.clear();
                 // A rejected explicit text Apply keeps the user's staged composition.
                 if !self.text_apply_pending {
                     self.select_layer_exact(self.selected_layer.clone());
@@ -1216,10 +1246,11 @@ impl View {
         self.text = layer.and_then(|element| match element {
             Element::Text(text) => {
                 let accepted = TextValues::from_element(text);
-                let staged = previous_text
+                let previous = previous_text.filter(|fields| fields.id == text.base.id);
+                let sent = previous.as_ref().and_then(|fields| fields.sent.clone());
+                let staged = previous
                     .filter(|fields| {
-                        fields.id == text.base.id
-                            && fields.staged.patch(&fields.accepted) != TextPatch::default()
+                        fields.staged.patch(&fields.accepted) != TextPatch::default()
                             && !self.text_apply_pending
                     })
                     .map_or_else(|| accepted.clone(), |fields| fields.staged);
@@ -1227,14 +1258,20 @@ impl View {
                     id: text.base.id.clone(),
                     accepted,
                     staged,
+                    sent,
                 })
             }
             _ => None,
         });
-        if let Some(layer) = layer {
-            self.layer_name = layer_label(layer).into();
+        if let Some(layer) = layer
+            && self.live_queue.is_empty()
+        {
             self.layer_opacity = layer.base().opacity;
-            self.layer_position = [layer.base().x, layer.base().y];
+            let base = layer.base();
+            self.layer_geometry = match layer {
+                Element::Image(image) => [image.width, image.height, base.x, base.y],
+                _ => [1., 1., base.x, base.y],
+            };
         }
     }
 
@@ -1243,12 +1280,43 @@ impl View {
             self.selected_layer = None;
             self.annotation = None;
             self.text = None;
-            self.layer_name.clear();
             self.layer_opacity = 100.;
-            self.layer_position = [0., 0.];
+            self.layer_geometry = [1., 1., 0., 0.];
         } else {
             self.select_layer(id);
         }
+    }
+
+    /// Shipping live inspector edits (typing, steppers, sliders) apply at once.
+    /// Edits sharing `key` fold into one undo step in the session; while a
+    /// job runs, the newest edit per key waits here in order.
+    fn live_edit(&mut self, tx: &Sender<Job>, key: String, request: Request) {
+        match self.live_queue.last_mut() {
+            Some(last) if last.0 == key => last.1 = request,
+            _ => self.live_queue.push((key, request)),
+        }
+        self.flush_live(tx);
+    }
+
+    /// A key for one discrete live change (a toggle or menu choice): its own
+    /// undo step, still ordered behind queued edits.
+    fn live_once(&mut self, kind: &str) -> String {
+        self.live_serial += 1;
+        format!("{kind}:once:{}", self.live_serial)
+    }
+
+    fn flush_live(&mut self, tx: &Sender<Job>) {
+        if self.pending || self.inline.is_some() || self.live_queue.is_empty() {
+            return;
+        }
+        let (key, request) = self.live_queue.remove(0);
+        self.submit(
+            tx,
+            Request::Live {
+                key,
+                request: Box::new(request),
+            },
+        );
     }
 
     fn submit_layer(&mut self, tx: &Sender<Job>, edit: LayerEdit) {
@@ -1360,8 +1428,8 @@ impl Editor {
                 Some(captures_app::editor_fonts::bundled()),
             );
             let mut session = match opened {
-                Ok(session) => {
-                    let _ = out.send(Ok(Presented::from_session(&session)));
+                Ok(mut session) => {
+                    let _ = out.send(Ok(Presented::after_edit(&mut session)));
                     Some(session)
                 }
                 Err(error) => {
@@ -1400,7 +1468,7 @@ impl Editor {
                             let copied_layer = matches!(request, Request::CopyLayer { .. });
                             let pasted_layer = matches!(request, Request::PasteLayer { .. });
                             session.execute(request)?;
-                            let mut presented = Presented::from_session(session);
+                            let mut presented = Presented::after_edit(session);
                             presented.copied_layer = copied_layer;
                             presented.pasted_layer = pasted_layer;
                             if creates_layer {
@@ -1430,7 +1498,7 @@ impl Editor {
                                 selected_id,
                                 point,
                             })?;
-                            let mut presented = Presented::from_session(session);
+                            let mut presented = Presented::after_edit(session);
                             presented.created_layer = Some(id);
                             Ok(presented)
                         }),
@@ -1494,8 +1562,8 @@ impl Editor {
                             save_dirty(session)
                         });
                         let _ = reply.send(result.clone());
-                        match (result, session.as_ref()) {
-                            (Ok(()), Some(session)) => Ok(Presented::from_session(session)),
+                        match (result, session.as_mut()) {
+                            (Ok(()), Some(session)) => Ok(Presented::after_edit(session)),
                             (Err(error), _) => Err(error),
                             _ => continue,
                         }
@@ -1650,6 +1718,7 @@ impl Drop for Editor {
 
 fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     view.flush_background(tx);
+    view.flush_live(tx);
     let previous_section = view.section;
     handle_viewport_shortcuts(ui.ctx(), view);
     handle_document_shortcuts(ui.ctx(), view, tx);
@@ -1662,6 +1731,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         view.cancel_crop();
         view.cancel_drawing();
         view.cancel_layer_gesture();
+        view.layers.cancel();
     }
     egui::Panel::top("editor-actions")
         .resizable(false)
@@ -1685,6 +1755,10 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     {
         view.cancel_drawing();
     }
+    if view.section != Section::Layers || view.close_requested || view.confirm_discard {
+        view.layers.menu = None;
+        view.layers.rename = None;
+    }
     if view.section != Section::Layers
         || view.pending
         || view.close_requested
@@ -1695,175 +1769,43 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     }
     view.drive_estimate(ui.ctx());
     show_export_bar(ui, tokens, view, tx);
-    egui::Panel::right("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
-        crate::primitives::scroll_area(ui, tokens, egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]), |ui| {
-        ui.add_enabled_ui(!view.pending && view.inline.is_none() && view.presented.is_some(), |ui| {
-            if view.section == Section::Layers {
-                show_layers(ui, tokens, view, tx);
-                return;
-            }
-            if view.section == Section::Draw {
-                chrome::section_heading(ui, tokens, view);
-                let previous_tool = view.draw_shape;
-                ui.horizontal_wrapped(|ui| {
-                    ui.selectable_value(&mut view.draw_shape, DrawShape::Text, "Text");
-                    ui.selectable_value(&mut view.draw_shape, DrawShape::Rectangle, "Rectangle");
-                    ui.selectable_value(&mut view.draw_shape, DrawShape::Ellipse, "Ellipse");
-                    ui.selectable_value(&mut view.draw_shape, DrawShape::Line, "Line");
-                    ui.selectable_value(&mut view.draw_shape, DrawShape::Arrow, "Arrow");
-                    ui.selectable_value(&mut view.draw_shape, DrawShape::Freehand, "Pen");
-                    ui.selectable_value(&mut view.draw_shape, DrawShape::Wand, "Wand");
-                    ui.selectable_value(&mut view.draw_shape, DrawShape::Erase, "Erase");
-                    ui.selectable_value(&mut view.draw_shape, DrawShape::Restore, "Restore");
-                    ui.selectable_value(&mut view.draw_shape, DrawShape::Triangle, "Triangle");
-                    ui.selectable_value(&mut view.draw_shape, DrawShape::Diamond, "Diamond");
-                    ui.selectable_value(&mut view.draw_shape, DrawShape::Star, "Star");
-                });
-                if view.draw_shape != previous_tool { view.cancel_drawing(); }
-                if matches!(view.draw_shape, DrawShape::Wand | DrawShape::Erase | DrawShape::Restore) {
-                    view.last_background_tool = view.draw_shape;
-                }
-                if view.draw_shape.is_grouped() {
-                    view.last_grouped_shape = view.draw_shape;
-                }
-                if view.draw_shape == DrawShape::Wand {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("Tolerance");
-                        ui.add(
-                            egui::DragValue::new(&mut view.wand_tolerance)
-                                .range(0. ..=255.)
-                                .max_decimals(0)
-                                .speed(1.),
-                        );
-                        ui.checkbox(&mut view.wand_contiguous, "Contiguous");
-                    });
-                    ui.label("Click an image to remove pixels matching that color. Transparent areas still select the frontmost visible image.");
-                    ui.small("Tolerance controls the color range. Contiguous limits removal to the connected area around the click.");
-                } else if matches!(view.draw_shape, DrawShape::Erase | DrawShape::Restore) {
-                    ui.horizontal(|ui| {
-                        ui.label("Diameter");
-                        ui.add(egui::DragValue::new(&mut view.brush_size).range(4. ..=120.).max_decimals(0).suffix(" px").speed(1.));
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Softness");
-                        ui.add(egui::DragValue::new(&mut view.brush_softness).range(0. ..=100.).max_decimals(0).suffix("%").speed(1.));
-                    });
-                    ui.label("Pixels preview while dragging. Release commits one undo step; Escape cancels.");
-                    ui.small("Erase makes pixels transparent. Restore uses the image’s retained original pixels.");
-                } else if view.draw_shape == DrawShape::Text {
-                    ui.label("New text style");
-                    if let Some(presented) = &view.presented {
-                        pickers::text_style_picker(ui, tokens, "New text style",
-                            &presented.text_style_presets, &mut view.new_text_preset);
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label("Size");
-                        ui.add(egui::DragValue::new(&mut view.new_text_size).range(8. ..=512.).speed(1.));
-                    });
-                    annotation_color(ui, "Color", &mut view.new_text_color);
-                    ui.label("Click to type on the canvas, or click existing text to edit it.");
-                    ui.small("These defaults apply only to new text in this editor. Box styles center on the click.");
-                } else {
-                    let closed = view.draw_shape.closed_kind().is_some();
-                    let style = &mut view.new_annotation_style;
-                    if closed {
-                        let mut stroke = style.has_stroke();
-                        if ui.checkbox(&mut stroke, "Stroke").changed() {
-                            style.stroke_enabled = Some(stroke);
-                        }
-                    }
-                    if !closed || style.has_stroke() {
-                        annotation_color(
-                            ui,
-                            if closed { "Stroke color" } else { "Color" },
-                            &mut style.color,
-                        );
-                        ui.horizontal(|ui| {
-                            ui.label("Size");
-                            ui.add(
-                                egui::DragValue::new(&mut style.stroke_width)
-                                    .range(2. ..=40.)
-                                    .speed(1.)
-                                    .suffix(" px"),
-                            );
-                        });
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label("Opacity");
-                        ui.add(
-                            egui::DragValue::new(&mut view.new_annotation_opacity)
-                                .range(0. ..=100.)
-                                .speed(1.)
-                                .suffix("%"),
-                        );
-                    });
-                    if closed {
-                        let mut filled = style.fill.is_some();
-                        if ui.checkbox(&mut filled, "Filled shape").changed() {
-                            style.fill = filled.then(|| style.color.clone());
-                        }
-                        if let Some(fill) = &mut style.fill {
-                            annotation_color(ui, "Fill color", fill);
-                        }
-                    }
-                    let mut enabled = style.has_drop_shadow();
-                    if ui.checkbox(&mut enabled, "Drop shadow").changed() {
-                        style.drop_shadow = Some(enabled);
-                    }
-                    if enabled {
-                        let mut shadow = style.drop_shadow_style.clone()
-                            .unwrap_or_else(|| style.resolved_drop_shadow_style());
-                        let before = shadow.clone();
-                        shadow_fields(ui, None, &mut shadow);
-                        if shadow != before {
-                            style.drop_shadow_style = Some(shadow);
-                        }
-                        ui.small("Drawing pixels update in the background while dragging.");
-                    }
-                    ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
-                    ui.small("These defaults apply to new shapes in this editor. Change position and ordering in Layers.");
-                }
-                return;
-            }
-            chrome::section_heading(ui, tokens, view);
-            ui.label("Coordinates in image pixels");
-            egui::Grid::new("crop-fields").show(ui, |ui| {
-                for (label, value) in ["X", "Y", "Width", "Height"].into_iter().zip(&mut view.crop) {
-                    ui.label(label);
-                    ui.add(egui::DragValue::new(value).range(0. ..=32768.).speed(1.)); ui.end_row();
-                }
+    egui::Panel::right("editor-geometry")
+        .resizable(false)
+        .exact_size(230.)
+        .show(ui, |ui| {
+            // Shipping `.screenshot-sidebar`: Layers above Properties, always.
+            // Live fields stay enabled while a job runs; their edits queue.
+            let enabled = view.inline.is_none() && view.presented.is_some();
+            let layers_height = layers::section_height(ui.available_height());
+            let top = ui.cursor().top();
+            ui.add_enabled_ui(enabled, |ui| {
+                layers::show(ui, tokens, view, tx, layers_height)
             });
-            ui.horizontal(|ui| {
-                if ui.button("Apply crop").clicked() {
-                    let [x, y, width, height] = view.crop;
-                    view.crop_previous = None;
-                    view.crop_drag = None;
-                    view.submit(tx, Request::Crop { rect: Rect { x, y, width, height } });
-                }
-                if ui.button(if view.crop_previous.is_some() { "Cancel" } else { "Draw crop" }).clicked() {
-                    if view.crop_previous.is_some() {
-                        view.cancel_crop();
-                    } else {
-                        view.crop_previous = Some(view.crop);
-                    }
-                }
-            });
-            if view.crop_previous.is_some() {
-                ui.horizontal(|ui| {
-                    ui.label("Aspect");
-                    egui::ComboBox::from_id_salt("crop-aspect")
-                        .selected_text(CROP_ASPECTS[view.crop_aspect].0)
-                        .show_ui(ui, |ui| {
-                            for (index, (label, _)) in CROP_ASPECTS.iter().enumerate() {
-                                ui.selectable_value(&mut view.crop_aspect, index, *label);
-                            }
-                        });
-                });
-                ui.small("Drag on the canvas. Hold Shift to lock the ratio. Escape cancels; Apply crop commits.");
-            }
+            let used = ui.cursor().top() - top;
+            ui.add_space((layers_height - used).max(0.));
+            ui.painter().hline(
+                ui.max_rect().expand2(egui::vec2(8., 0.)).x_range(),
+                ui.cursor().top() - 0.5,
+                egui::Stroke::new(1., tokens.color("border-subtle")),
+            );
+            crate::primitives::scroll_area(
+                ui,
+                tokens,
+                egui::ScrollArea::vertical()
+                    .id_salt(view.section)
+                    .auto_shrink([false, false]),
+                |ui| {
+                    ui.add_enabled_ui(enabled, |ui| {
+                        chrome::properties_heading(ui, tokens, view);
+                        match view.section {
+                            Section::Layers => show_layer_properties(ui, tokens, view, tx),
+                            Section::Draw => show_draw_properties(ui, tokens, view),
+                            Section::Geometry => show_crop_properties(ui, view, tx),
+                        }
+                    });
+                },
+            );
         });
-        });
-    });
     chrome::show_tool_rail(ui, tokens, view);
     egui::CentralPanel::default().show(ui, |ui| {
         let texture = if view.show_output && view.export_settings_open {
@@ -1941,6 +1883,241 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     view.drain_inline(tx);
     if canvas::drain_drops(view, tx) {
         ui.ctx().request_repaint();
+    }
+}
+
+/// Shipping Properties for drawing tools. The rail picks the tool; the
+/// Eraser rail tool picks Wand, Erase or Restore here (`Eraser mode`).
+fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
+    let previous_tool = view.draw_shape;
+    if matches!(
+        view.draw_shape,
+        DrawShape::Wand | DrawShape::Erase | DrawShape::Restore
+    ) {
+        ui.label("Remove a color, paint it out, or paint it back.");
+        let gap = tokens.number("s-2");
+        let width = (ui.available_width() - 2. * gap) / 3.;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for (shape, label) in [
+                (DrawShape::Wand, "Wand"),
+                (DrawShape::Erase, "Erase"),
+                (DrawShape::Restore, "Restore"),
+            ] {
+                let active = view.draw_shape == shape;
+                let response = ui.add_sized(
+                    [width, tokens.number("h-md")],
+                    egui::Button::selectable(active, label),
+                );
+                response.widget_info(|| {
+                    egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label)
+                });
+                if response.clicked() {
+                    view.draw_shape = shape;
+                }
+            }
+        });
+    }
+    if view.draw_shape != previous_tool {
+        view.cancel_drawing();
+    }
+    if matches!(
+        view.draw_shape,
+        DrawShape::Wand | DrawShape::Erase | DrawShape::Restore
+    ) {
+        view.last_background_tool = view.draw_shape;
+    }
+    if view.draw_shape.is_grouped() {
+        view.last_grouped_shape = view.draw_shape;
+    }
+    if view.draw_shape == DrawShape::Wand {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Tolerance");
+            ui.add(
+                egui::DragValue::new(&mut view.wand_tolerance)
+                    .range(0. ..=255.)
+                    .max_decimals(0)
+                    .speed(1.),
+            );
+            ui.checkbox(&mut view.wand_contiguous, "Contiguous");
+        });
+        ui.label("Click an image to remove pixels matching that color. Transparent areas still select the frontmost visible image.");
+        ui.small("Tolerance controls the color range. Contiguous limits removal to the connected area around the click.");
+    } else if matches!(view.draw_shape, DrawShape::Erase | DrawShape::Restore) {
+        ui.horizontal(|ui| {
+            ui.label("Diameter");
+            ui.add(
+                egui::DragValue::new(&mut view.brush_size)
+                    .range(4. ..=120.)
+                    .max_decimals(0)
+                    .suffix(" px")
+                    .speed(1.),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("Softness");
+            ui.add(
+                egui::DragValue::new(&mut view.brush_softness)
+                    .range(0. ..=100.)
+                    .max_decimals(0)
+                    .suffix("%")
+                    .speed(1.),
+            );
+        });
+        ui.label("Pixels preview while dragging. Release commits one undo step; Escape cancels.");
+        ui.small(
+            "Erase makes pixels transparent. Restore uses the image’s retained original pixels.",
+        );
+    } else if view.draw_shape == DrawShape::Text {
+        ui.label("New text style");
+        if let Some(presented) = &view.presented {
+            pickers::text_style_picker(
+                ui,
+                tokens,
+                "New text style",
+                &presented.text_style_presets,
+                &mut view.new_text_preset,
+            );
+        }
+        ui.horizontal(|ui| {
+            ui.label("Size");
+            ui.add(
+                egui::DragValue::new(&mut view.new_text_size)
+                    .range(8. ..=512.)
+                    .speed(1.),
+            );
+        });
+        annotation_color(ui, "Color", &mut view.new_text_color);
+        ui.label("Click to type on the canvas, or click existing text to edit it.");
+        ui.small(
+            "These defaults apply only to new text in this editor. Box styles center on the click.",
+        );
+    } else {
+        let closed = view.draw_shape.closed_kind().is_some();
+        let style = &mut view.new_annotation_style;
+        if closed {
+            let mut stroke = style.has_stroke();
+            if ui.checkbox(&mut stroke, "Stroke").changed() {
+                style.stroke_enabled = Some(stroke);
+            }
+        }
+        if !closed || style.has_stroke() {
+            annotation_color(
+                ui,
+                if closed { "Stroke color" } else { "Color" },
+                &mut style.color,
+            );
+            ui.horizontal(|ui| {
+                ui.label("Size");
+                ui.add(
+                    egui::DragValue::new(&mut style.stroke_width)
+                        .range(2. ..=40.)
+                        .speed(1.)
+                        .suffix(" px"),
+                );
+            });
+        }
+        ui.horizontal(|ui| {
+            ui.label("Opacity");
+            ui.add(
+                egui::DragValue::new(&mut view.new_annotation_opacity)
+                    .range(0. ..=100.)
+                    .speed(1.)
+                    .suffix("%"),
+            );
+        });
+        if closed {
+            let mut filled = style.fill.is_some();
+            if ui.checkbox(&mut filled, "Filled shape").changed() {
+                style.fill = filled.then(|| style.color.clone());
+            }
+            if let Some(fill) = &mut style.fill {
+                annotation_color(ui, "Fill color", fill);
+            }
+        }
+        let mut enabled = style.has_drop_shadow();
+        if ui.checkbox(&mut enabled, "Drop shadow").changed() {
+            style.drop_shadow = Some(enabled);
+        }
+        if enabled {
+            let mut shadow = style
+                .drop_shadow_style
+                .clone()
+                .unwrap_or_else(|| style.resolved_drop_shadow_style());
+            let before = shadow.clone();
+            shadow_fields(ui, None, &mut shadow);
+            if shadow != before {
+                style.drop_shadow_style = Some(shadow);
+            }
+            ui.small("Drawing pixels update in the background while dragging.");
+        }
+        ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
+        ui.small("These defaults apply to new shapes in this editor. Change position and ordering in Layers.");
+    }
+}
+
+/// Shipping Crop properties: coordinates, Apply crop and the aspect menu.
+fn show_crop_properties(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
+    ui.label("Coordinates in image pixels");
+    egui::Grid::new("crop-fields").show(ui, |ui| {
+        for (label, value) in ["X", "Y", "Width", "Height"]
+            .into_iter()
+            .zip(&mut view.crop)
+        {
+            ui.label(label);
+            ui.add(egui::DragValue::new(value).range(0. ..=32768.).speed(1.));
+            ui.end_row();
+        }
+    });
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(!view.pending, egui::Button::new("Apply crop"))
+            .clicked()
+        {
+            let [x, y, width, height] = view.crop;
+            view.crop_previous = None;
+            view.crop_drag = None;
+            view.submit(
+                tx,
+                Request::Crop {
+                    rect: Rect {
+                        x,
+                        y,
+                        width,
+                        height,
+                    },
+                },
+            );
+        }
+        if ui
+            .button(if view.crop_previous.is_some() {
+                "Cancel"
+            } else {
+                "Draw crop"
+            })
+            .clicked()
+        {
+            if view.crop_previous.is_some() {
+                view.cancel_crop();
+            } else {
+                view.crop_previous = Some(view.crop);
+            }
+        }
+    });
+    if view.crop_previous.is_some() {
+        ui.horizontal(|ui| {
+            ui.label("Aspect");
+            egui::ComboBox::from_id_salt("crop-aspect")
+                .selected_text(CROP_ASPECTS[view.crop_aspect].0)
+                .show_ui(ui, |ui| {
+                    for (index, (label, _)) in CROP_ASPECTS.iter().enumerate() {
+                        ui.selectable_value(&mut view.crop_aspect, index, *label);
+                    }
+                });
+        });
+        ui.small(
+            "Drag on the canvas. Hold Shift to lock the ratio. Escape cancels; Apply crop commits.",
+        );
     }
 }
 
@@ -4730,291 +4907,166 @@ fn layer_context_menu(
     }
 }
 
-fn show_layers(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
+/// Shipping Properties for the selected layer under Select: live text
+/// fields, image Width/Height/X/Y, annotation style and curve controls, then
+/// the Shift rotation snap. Visibility, lock, rename, blend, opacity,
+/// transforms, arrange and combine live in the Layers rows and their ⋯ menu.
+fn show_layer_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let Some(presented) = &view.presented else {
         return;
     };
     let document = presented.document.clone();
-    let elements = &document.elements;
-    if let Some(combine) = chrome::section_heading(ui, tokens, view) {
-        egui::Popup::menu(&combine).show(|ui| {
-            for (label, action) in [
-                ("Merge down", LayerAction::MergeDown),
-                ("Merge visible", LayerAction::MergeVisible),
-                ("Flatten image", LayerAction::Flatten),
-            ] {
-                let target = view.selected_layer.clone();
-                if ui
-                    .add_enabled(
-                        layer_action_enabled(view, action, target.as_deref()),
-                        egui::Button::new(label),
-                    )
-                    .clicked()
-                {
-                    dispatch_layer_action(view, tx, action, target);
-                    ui.close();
-                }
-            }
-        });
-    }
-    ui.small("Front to back");
-    crate::primitives::scroll_area(
-        ui,
-        tokens,
-        egui::ScrollArea::vertical()
-            .id_salt("layer-list")
-            .max_height(112.)
-            .min_scrolled_height(112.)
-            .auto_shrink([false, false]),
-        |ui| {
-            for element in elements.iter().rev() {
-                let base = element.base();
-                let selected = view.selected_layer.as_deref() == Some(&base.id);
-                ui.push_id(&base.id, |ui| {
-                    let row = chrome::layer_row(ui, tokens, element, selected, ui.is_enabled());
-                    if row.visibility {
-                        view.submit(
-                            tx,
-                            Request::Layer {
-                                id: base.id.clone(),
-                                edit: LayerEdit::Visibility {
-                                    visible: !base.visible,
-                                },
-                            },
-                        );
-                    } else if row.lock {
-                        // Shipping selects the row it locks or unlocks.
-                        view.select_layer(Some(base.id.clone()));
-                        view.submit(
-                            tx,
-                            Request::Layer {
-                                id: base.id.clone(),
-                                edit: LayerEdit::Lock {
-                                    locked: !base.locked,
-                                },
-                            },
-                        );
-                    } else if row.body.clicked() {
-                        view.select_layer(Some(base.id.clone()));
-                    }
-                    row.body.context_menu(|ui| {
-                        layer_context_menu(ui, view, tx, Some(base.id.clone()));
-                    });
-                });
-            }
-            let empty = ui.allocate_response(
-                // A scrolling content Ui has unbounded available height. Only
-                // fill unused space in this list's 112px viewport.
-                egui::vec2(
-                    ui.available_width(),
-                    (112. - ui.min_rect().height()).max(1.),
-                ),
-                egui::Sense::click(),
-            );
-            empty.context_menu(|ui| layer_context_menu(ui, view, tx, None));
-        },
-    );
-    let Some(index) = elements
+    let Some(element) = document
+        .elements
         .iter()
-        .position(|element| Some(&element.base().id) == view.selected_layer.as_ref())
+        .find(|element| Some(&element.base().id) == view.selected_layer.as_ref())
     else {
-        ui.label("No layers. Undo to restore a deleted layer.");
+        if document.elements.is_empty() {
+            ui.label("No layers. Undo to restore a deleted layer.");
+        }
         return;
     };
-    let element = &elements[index];
-    let base = element.base();
-    ui.separator();
-    ui.horizontal(|ui| {
-        let mut visible = base.visible;
-        let mut locked = base.locked;
-        if ui.checkbox(&mut visible, "Visible").changed() {
-            view.submit_layer(tx, LayerEdit::Visibility { visible });
-        }
-        if ui.checkbox(&mut locked, "Locked").changed() {
-            view.submit_layer(tx, LayerEdit::Lock { locked });
-        }
-    });
-    if matches!(element, Element::Text(_)) {
-        show_text(ui, tokens, view, tx);
-        ui.separator();
-    }
-    if matches!(element, Element::Image(_)) {
-        ui.label("Name");
-        ui.horizontal(|ui| {
-            // Fit the field beside the token-font button so the row never
-            // overflows the fixed-width inspector and shifts the canvas.
-            let button_width = ui
-                .painter()
-                .layout_no_wrap(
-                    "Rename".into(),
-                    egui::TextStyle::Button.resolve(ui.style()),
-                    egui::Color32::PLACEHOLDER,
-                )
-                .size()
-                .x
-                + 2. * ui.spacing().button_padding.x;
-            let text_edit_margin = 8.; // TextEdit's default 4px horizontal margins.
-            let field_width = ui.available_width()
-                - button_width
-                - ui.spacing().item_spacing.x
-                - text_edit_margin;
-            ui.add(
-                egui::TextEdit::singleline(&mut view.layer_name)
-                    .desired_width(field_width.clamp(40., 132.)),
-            );
-            if ui.button("Rename").clicked() {
-                view.submit_layer(
-                    tx,
-                    LayerEdit::Rename {
-                        name: view.layer_name.clone(),
-                    },
-                );
-            }
-        });
-    }
-    ui.horizontal(|ui| {
-        ui.label("Opacity");
-        ui.add(
-            egui::DragValue::new(&mut view.layer_opacity)
-                .range(0. ..=100.)
-                .suffix("%"),
-        );
-        if ui.button("Apply").clicked() {
-            view.submit_layer(
-                tx,
-                LayerEdit::Opacity {
-                    opacity: view.layer_opacity,
-                },
-            );
-        }
-    });
-    ui.add_enabled_ui(!base.locked, |ui| {
-        egui::Grid::new("layer-position").show(ui, |ui| {
-            for (label, value) in ["X", "Y"].into_iter().zip(&mut view.layer_position) {
-                ui.label(label);
-                ui.add(
-                    egui::DragValue::new(value)
-                        .range(-32768. ..=32768.)
-                        .speed(1.),
-                );
-                ui.end_row();
-            }
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Move").clicked() {
-                view.submit_layer(
-                    tx,
-                    LayerEdit::Translate {
-                        delta_x: view.layer_position[0] - base.x,
-                        delta_y: view.layer_position[1] - base.y,
-                    },
-                );
-            }
-            for (label, target, placement) in [
-                ("Up", elements.get(index + 1), LayerPlacement::Before),
-                (
-                    "Down",
-                    index.checked_sub(1).and_then(|index| elements.get(index)),
-                    LayerPlacement::After,
-                ),
-            ] {
-                if ui
-                    .add_enabled(
-                        target.is_some_and(|element| !element.base().locked),
-                        egui::Button::new(label),
-                    )
-                    .clicked()
-                {
-                    view.submit_layer(
-                        tx,
-                        LayerEdit::Reorder {
-                            target_id: target.unwrap().base().id.clone(),
-                            placement,
-                        },
-                    );
-                }
-            }
-        });
-    });
-    ui.horizontal(|ui| {
-        if ui.button("Duplicate").clicked() {
-            dispatch_layer_action(view, tx, LayerAction::Duplicate, Some(base.id.clone()));
-        }
-        if ui
-            .add_enabled(
-                layer_action_enabled(view, LayerAction::Delete, Some(&base.id)),
-                egui::Button::new("Delete"),
-            )
-            .clicked()
-        {
-            dispatch_layer_action(view, tx, LayerAction::Delete, Some(base.id.clone()));
-        }
-    });
-    if matches!(element, Element::Image(_)) {
-        ui.menu_button("Transform image", |ui| {
-            for (label, transform) in [
-                ("Rotate left", ImageTransform::RotateCounterclockwise),
-                ("Rotate right", ImageTransform::RotateClockwise),
-                ("Flip horizontal", ImageTransform::FlipHorizontal),
-                ("Flip vertical", ImageTransform::FlipVertical),
-            ] {
-                if ui.button(label).clicked() {
-                    view.submit_layer(tx, LayerEdit::ImageTransform { transform });
-                    ui.close();
-                }
-            }
-        });
-    }
     match element {
-        Element::Text(_) => {}
+        Element::Text(_) => show_text(ui, tokens, view, tx),
+        Element::Image(image) => show_image_geometry(ui, tokens, view, tx, image),
         Element::Shape(shape) => {
-            show_annotation(
-                ui,
-                tokens,
-                view,
-                tx,
-                &shape.style,
-                matches!(
-                    shape.shape.as_str(),
-                    "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
-                ),
-            );
-            if !shape.base.locked {
-                canvas::show_curve_controls(ui, tokens, view, tx, shape);
-            }
+            ui.add_enabled_ui(!view.pending, |ui| {
+                show_annotation(
+                    ui,
+                    tokens,
+                    view,
+                    tx,
+                    &shape.style,
+                    matches!(
+                        shape.shape.as_str(),
+                        "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
+                    ),
+                );
+                if !shape.base.locked {
+                    canvas::show_curve_controls(ui, tokens, view, tx, shape);
+                }
+            });
         }
-        Element::Path(path) => show_annotation(ui, tokens, view, tx, &path.style, false),
-        _ => {
-            ui.small("Hidden and locked images can transform.");
+        Element::Path(path) => {
+            ui.add_enabled_ui(!view.pending, |ui| {
+                show_annotation(ui, tokens, view, tx, &path.style, false);
+            });
         }
     }
-    ui.separator();
+    ui.add_space(tokens.number("s-5"));
     ui.label("Shift rotation snap");
-    if ui
-        .add(
-            egui::DragValue::new(&mut view.rotation_snap_degrees)
-                .range(1. ..=180.)
-                .max_decimals(0)
-                .suffix("°"),
-        )
-        .changed()
+    let mut degrees = view.rotation_snap_degrees;
+    if crate::primitives::NumberInput::new(
+        "rotation-snap",
+        "Shift rotation snap",
+        ui.available_width(),
+    )
+    .range(1. ..=180.)
+    .show(ui, tokens, &mut degrees)
+    .changed()
     {
-        view.rotation_snap_degrees = view.rotation_snap_degrees.round();
+        view.rotation_snap_degrees = degrees.round().clamp(1., 180.);
         view.layer_gesture = None;
     }
-    ui.small(
-        "Hold Shift while dragging the rotate handle. This setting does not edit the document.",
-    );
+    ui.small(format!(
+        "Hold Shift while dragging the rotate handle to snap in {}° increments.",
+        view.rotation_snap_degrees
+    ));
+}
+
+/// Shipping image Width/Height/X/Y (`.screenshot-number-pair`): live
+/// NumberInputs; each field's burst of changes is one undo step.
+fn show_image_geometry(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    tx: &Sender<Job>,
+    image: &captures_app::editor::ImageElement,
+) {
+    use captures_app::editor_layers::{self as shared, geometry as copy};
+    let locked = image.base.locked;
+    let gap = tokens.number("s-4");
+    let width = ((ui.available_width() - gap) / 2.).floor();
+    let fields = [
+        (copy::WIDTH, copy::WIDTH_LABEL),
+        (copy::HEIGHT, copy::HEIGHT_LABEL),
+        ("X", copy::X_LABEL),
+        ("Y", copy::Y_LABEL),
+    ];
+    ui.add_enabled_ui(!locked, |ui| {
+        for row in 0..2 {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                for index in [row * 2, row * 2 + 1] {
+                    let (title, label) = fields[index];
+                    ui.vertical(|ui| {
+                        ui.set_width(width);
+                        ui.label(title);
+                        let mut value = view.layer_geometry[index].round();
+                        let mut input = crate::primitives::NumberInput::new(
+                            ("layer-geometry", index),
+                            label,
+                            width,
+                        );
+                        if index < 2 {
+                            input = input.range(1. ..=copy::MAX_SIZE);
+                        }
+                        let response = input.show(ui, tokens, &mut value);
+                        let response = if locked {
+                            response.on_disabled_hover_text(copy::LOCKED)
+                        } else if index < 2 {
+                            response.on_hover_text(copy::KEEPS_ASPECT)
+                        } else {
+                            response
+                        };
+                        if response.changed() {
+                            view.layer_geometry[index] = value;
+                            let (mut x, mut y, mut w, mut h) = (None, None, None, None);
+                            match index {
+                                0 => {
+                                    w = Some(value);
+                                    let size = shared::image_size_at_width(image, value);
+                                    view.layer_geometry[1] = size.1;
+                                }
+                                1 => {
+                                    h = Some(value);
+                                    let size = shared::image_size_at_height(image, value);
+                                    view.layer_geometry[0] = size.0;
+                                }
+                                2 => x = Some(value),
+                                _ => y = Some(value),
+                            }
+                            view.live_edit(
+                                tx,
+                                format!("geometry:{}:{index}", image.base.id),
+                                Request::Layer {
+                                    id: image.base.id.clone(),
+                                    edit: LayerEdit::Geometry {
+                                        x,
+                                        y,
+                                        width: w,
+                                        height: h,
+                                    },
+                                },
+                            );
+                        }
+                    });
+                }
+            });
+        }
+    });
+    ui.small(if locked {
+        copy::LOCKED
+    } else {
+        copy::PROPORTIONAL
+    });
 }
 
 fn show_text(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
-    let mut request = None;
     let Some(fields) = &mut view.text else {
         return;
     };
-    ui.separator();
     ui.horizontal(|ui| {
-        ui.heading("Text");
         ui.menu_button("Style…", |ui| {
             if let Some(presented) = &view.presented {
                 // Shipping `TextStylePicker` rows: preview chip, then label.
@@ -5059,11 +5111,9 @@ fn show_text(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
     .labelled_by(label.id);
     ui.horizontal(|ui| {
         ui.label("Size");
-        ui.add(
-            egui::DragValue::new(&mut fields.staged.font_size)
-                .range(8. ..=512.)
-                .speed(1.),
-        );
+        crate::primitives::NumberInput::new("text-size", "Text size", 84.)
+            .range(8. ..=512.)
+            .show(ui, tokens, &mut fields.staged.font_size);
         ui.checkbox(&mut fields.staged.bold, "Bold");
         ui.checkbox(&mut fields.staged.italic, "Italic");
     });
@@ -5089,7 +5139,6 @@ fn show_text(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
     if fields.staged.drop_shadow {
         shadow_fields(ui, None, &mut fields.staged.shadow);
     }
-    let changed = fields.staged.patch(&fields.accepted) != TextPatch::default();
     let invalid_color = egui::Color32::from_hex(&fields.staged.color).is_err()
         || (fields.staged.drop_shadow
             && egui::Color32::from_hex(&fields.staged.shadow.color).is_err())
@@ -5098,30 +5147,23 @@ fn show_text(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
             .background
             .as_deref()
             .is_some_and(|color| egui::Color32::from_hex(color).is_err());
-    let apply = ui
-        .add_enabled(changed, egui::Button::new("Apply text"))
-        .clicked();
-    let cancel = ui
-        .add_enabled(changed, egui::Button::new("Cancel changes"))
-        .clicked();
-    if cancel {
-        fields.staged = fields.accepted.clone();
-        view.error = None;
-    } else if apply {
-        if invalid_color {
-            view.error =
-                Some("Use a hex color such as #ff3b5c. Text changes were not applied.".into());
-        } else {
-            let id = fields.id.clone();
-            let patch = fields.staged.patch(&fields.accepted);
-            request = Some(Request::EditText { id, patch });
-        }
+    ui.small("Changes apply as you edit. Font choices come from this draft's pinned fonts.");
+    // Shipping applies text edits live. A typing burst in one field is one
+    // undo step; toggles and menu choices are each their own.
+    let patch = fields.staged.patch(&fields.accepted);
+    if patch == TextPatch::default()
+        || invalid_color
+        || fields.sent.as_ref() == Some(&fields.staged)
+    {
+        return;
     }
-    ui.small("Font choices come from this draft's pinned fonts. Apply commits all text fields as one undo step.");
-    if let Some(request) = request {
-        view.text_apply_pending = true;
-        view.submit(tx, request);
-    }
+    fields.sent = Some(fields.staged.clone());
+    let id = fields.id.clone();
+    let key = match ui.memory(|memory| memory.focused()) {
+        Some(focused) => format!("text:{id}:{focused:?}"),
+        None => view.live_once("text"),
+    };
+    view.live_edit(tx, key, Request::EditText { id, patch });
 }
 
 fn annotation_color(ui: &mut egui::Ui, label: &str, value: &mut String) {
@@ -5379,7 +5421,7 @@ mod tests {
                 },
                 |ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
-                        show_layers(ui, &tokens, view, &tx);
+                        layers::show(ui, &tokens, view, &tx, 400.);
                     });
                     if ctx.current_pass_index() == 0 {
                         ctx.request_discard("layer menu multipass");
@@ -5654,7 +5696,7 @@ mod tests {
             "Canvas height",
             "Trim edges",
             "Add image layer",
-            "Combine layers",
+            "Layer settings for Original screenshot",
         ] {
             find(&output, label);
         }
@@ -7176,6 +7218,7 @@ mod tests {
     pub(super) fn presented(unsaved: bool) -> Presented {
         Presented {
             document: Arc::new(Document::new_capture("fixture", 7., 3., None)),
+            thumbnails: BTreeMap::new(),
             pixels: Arc::new(RgbaImage::new(7, 3)),
             original_export_path: None,
             initial_text_size: 24.,
@@ -7427,22 +7470,17 @@ mod tests {
         assert_eq!(view.new_text_size, 39.);
         assert_eq!(view.new_text_color, "#2367ab");
         assert_eq!(view.text.as_ref().unwrap().staged.font_size, 83.);
+        // Shipping applies the preset at once: one live edit, its own undo step.
+        let Ok(Job::Apply(Request::Live { key, request })) = rx.try_recv() else {
+            panic!("the preset applies live");
+        };
+        assert!(key.starts_with("text:once:"));
+        assert!(matches!(*request, Request::EditText { .. }));
         assert!(
             rx.try_recv().is_err(),
-            "choosing a preset only stages the label"
+            "an unchanged composition is not resent"
         );
-        let output = frame(&mut view, vec![]);
-        click(&mut view, position(&output, "Cancel changes"));
-        let fields = view.text.as_ref().unwrap();
-        assert_eq!(fields.staged, fields.accepted);
         assert_eq!(view.new_text_preset.as_deref(), Some("mono-box"));
-        choose_mono(&mut view);
-        let output = frame(&mut view, vec![]);
-        click(&mut view, position(&output, "Apply text"));
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(Job::Apply(Request::EditText { .. }))
-        ));
         view.receive(&ctx, Err("render rejected".into()));
         assert_eq!(view.new_text_preset.as_deref(), Some("mono-box"));
         // A no-op choice on this label still chooses the next label's preset.
@@ -9945,7 +9983,7 @@ mod tests {
             .unwrap();
         view.receive(&ctx, Ok(value));
         assert_eq!(view.selected_layer.as_deref(), Some("copy"));
-        assert_eq!(view.layer_position, [24., 24.]);
+        assert_eq!(view.layer_geometry, [7., 3., 24., 24.]);
         let (tx, rx) = mpsc::channel();
         view.submit_layer(&tx, LayerEdit::Visibility { visible: false });
         assert!(
@@ -9953,14 +9991,14 @@ mod tests {
         );
         assert!(view.pending);
         view.selected_layer = Some("rejected-duplicate".into());
-        view.layer_position = [999., 999.];
+        view.layer_geometry = [999., 999., 999., 999.];
         view.receive(&ctx, Err("unsupported layer".into()));
         assert_eq!(view.selected_layer.as_deref(), Some("copy"));
-        assert_eq!(view.layer_position, [24., 24.]);
+        assert_eq!(view.layer_geometry, [7., 3., 24., 24.]);
         assert!(!view.pending);
         view.receive(&ctx, Ok(presented(false))); // Undo removed the selected copy.
         assert_eq!(view.selected_layer.as_deref(), Some("capture-background"));
-        assert_eq!(view.layer_position, [0., 0.]);
+        assert_eq!(view.layer_geometry, [7., 3., 0., 0.]);
         let mut empty = presented(true);
         Arc::make_mut(&mut empty.document).elements.clear();
         view.receive(&ctx, Ok(empty));
