@@ -1117,12 +1117,19 @@ visible and cannot justify a renderer selection or performance claim.
 ## Windows and Linux evaluation plan
 
 Native AppKit and wgpu Preferences now connect explicit, optional feedback through
-`captures-feedback`. The form displays its app/system context before Send, permits
+`captures-feedback`. Like shipping, both hosts open it in its own Send Feedback
+window (About → Open or tray Send Feedback…) with `Feedback.tsx`'s layout, copy,
+category cards, placeholders and limits shared through `captures_app::feedback`
+(AppKit reads them through the feedback bridge's `copy` operation). The form
+displays its app/system context before Send, permits
 an optional contact, blocks duplicate submissions, and retains drafts after errors
 or closing/reopening. Submission runs separately from capture/settings workers;
 fixtures cannot send. No captures, files, or crash diagnostics are attached and
 no startup network request is introduced. This advances the manual feedback slice,
 not automatic crash reporting or full accessibility/physical-platform acceptance.
+The window layout is verified on private X11/software GL (`x11_feedback_smoke.py`,
+dark and light); the AppKit window relies on CI XCTests, and Windows and Wayland
+remain unverified.
 
 No renderer is selected for these platforms yet. The same fixture scenes, token
 resources, resource budgets, visual checkpoints and input scripts are mandatory.
