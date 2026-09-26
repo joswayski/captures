@@ -250,8 +250,8 @@ button reads "Restoring…" and then "✓ Restored" for 2.5 seconds, with the to
 existing pile (or opens one on the selected display) without copying to the
 clipboard or changing History. If that screenshot's preview is already showing it
 stays where it is and the button still confirms. Failures appear in the workspace
-status line. Unlike shipping, History **Edit** opens the editor without also
-restoring a preview.
+status line. History **Edit** on a screenshot restores its preview the same way
+before opening the editor, like shipping; a failed restore opens nothing.
 
 ## Live display-capture slice
 
@@ -357,8 +357,8 @@ behavior and exported pixels on each OS before accepting the slice.
 Both live workbenches retain recent screenshots in fixed-glass native cards.
 Copy uses full-resolution pixels, Save uses current screenshot preferences and
 becomes Reveal after export. Trash moves only that export to the OS trash,
-then dismisses the card; an unsaved card only dismisses. Errors keep the card
-available for retry. Private History files and metadata remain untouched.
+then dissolves the card; an unsaved card's Delete only dissolves the preview.
+Errors keep the card available for retry. Private History files and metadata remain untouched.
 macOS uses Finder (which may request automation permission), Windows uses the
 Recycle Bin, and Linux uses its desktop trash specification. Actual Finder and
 Recycle Bin behavior still needs physical-host acceptance.
@@ -374,14 +374,31 @@ capture left it: chrome waits until it moves. Card icons and Clear all show
 instant glass tooltips instead of system hover text.
 Dismiss closes only the targeted card. Clear all dismisses a snapshot of the stack, preserving history,
 exports and any later capture. There is no automatic dismissal timer or count cap.
+A failed copy shows the shipping "Clipboard unavailable" warning beside the
+metadata until a copy of that capture works.
+
+Stack motion follows shipping and the shared `captures-app::preview_motion`
+data. Close streaks the card toward the pile's screen edge; Delete dissolves it
+into dust from the trash control (AppKit filters chips with Core Image, wgpu
+paints them as a textured egui mesh; AppKit falls back to the shipping
+scale-and-fade when Metal is unavailable). The exiting card keeps its slot while
+older cards slide into it after the shipping delay, then the window resizes.
+Clear all streaks every card out, bottom first. Show less and expand fly the
+cards between the list and the compact pile, and the stack toolbar enters, leaves
+and clears with its shipping keyframes; the Show less pill morphs over 240 ms.
+New cards fade an accent capture highlight, main-action glyphs pop when they
+change, the clipboard chip arrives with its bounce and a hovered pile sparkles.
+Reduce Motion skips every exit, flight, highlight and sparkle. Blur-based
+filters are approximated: wgpu draws the dismiss streak as averaged offset copies
+and omits the dust blur beyond its pre-blurred media.
 
 Stacks start expanded, with newest cards nearest the configured top/bottom edge.
 Overflow scrolls without dropping captures; chevron cues at the stack edges
 scroll one card at a time. Show less parks a compact pile with
 the newest card in front; clicking it expands the stack. Incoming captures and
 capture cancellation preserve the parked state. Collapsed piles drag within
-their capture display and fan on hover, respecting reduced motion. Native file
-drag, the remaining 3D/exit effects and dust are not connected.
+their capture display and fan on hover, respecting reduced motion. The shipping
+3D pile transforms (rotation, depth blur) are not connected.
 
 Show mini previews, all four placement corners and Include mini previews in
 captures use the shared settings. Turning previews off hides retained cards and

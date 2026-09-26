@@ -41,6 +41,8 @@ after a nonzero countdown. A successful screenshot can join a fixed-glass native
 preview stack in any preference-selected corner, with per-card full-resolution Copy,
 Save, history selection and nondestructive Dismiss actions. Expanded overflow scrolls
 without dropping cards; the stack can collapse or be cleared without deleting captures.
+Close streaks a card out and Delete dissolves it into dust while survivors settle
+into its slot; collapse and expand fly the cards, following shipping motion.
 It is excluded from captures by default and retained when the include-in-captures
 preference is enabled.
 Cards follow the shipping hover chrome: an "In editor" pill and accent ring while
