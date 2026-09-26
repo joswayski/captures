@@ -5201,6 +5201,10 @@ impl Live {
                         ui.scope_builder(egui::UiBuilder::new().max_rect(card_area), |ui| {
                             egui::ScrollArea::vertical()
                                 .id_salt("preview-stack-scroll")
+                                // Shipping `.thumbnail-stack` hides its scroll bar.
+                                .scroll_bar_visibility(
+                                    egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                )
                                 .auto_shrink([false, false])
                                 .stick_to_bottom(!top_anchor)
                                 .show(ui, |ui| {
@@ -6185,7 +6189,7 @@ impl Live {
             ui.add_space(t.number("s-5"));
             let can_start_capture = self.can_start_capture();
             let (action, _) =
-                capture_actions(ui, &self.displays, &mut self.display_id, can_start_capture);
+                capture_actions(ui, t, &self.displays, &mut self.display_id, can_start_capture);
             match action {
                 Some(CaptureAction::RefreshDisplays) => self.send(Request::Displays),
                 Some(CaptureAction::Capture(request)) => {
@@ -7173,34 +7177,45 @@ enum CaptureAction {
 /// than the 1000px root window. Returns the clicked action and the row's rect.
 fn capture_actions(
     ui: &mut egui::Ui,
+    t: &Tokens,
     displays: &[DisplayDescriptor],
     display_id: &mut Option<String>,
     can_start_capture: bool,
 ) -> (Option<CaptureAction>, egui::Rect) {
     let mut action = None;
     let row = ui.horizontal_wrapped(|ui| {
-        egui::ComboBox::from_label("Display")
-            .selected_text(
-                displays
-                    .iter()
-                    .find(|d| Some(&d.id) == display_id.as_ref())
-                    .map_or("No display", |d| d.name.as_str()),
-            )
-            .show_ui(ui, |ui| {
-                for display in displays {
-                    ui.selectable_value(
-                        display_id,
-                        Some(display.id.clone()),
-                        format!(
-                            "{} — {}×{}{}",
-                            display.name,
-                            display.width,
-                            display.height,
-                            if display.is_primary { " (Primary)" } else { "" }
-                        ),
-                    );
-                }
-            });
+        let labels: Vec<String> = displays
+            .iter()
+            .map(|display| {
+                format!(
+                    "{} — {}×{}{}",
+                    display.name,
+                    display.width,
+                    display.height,
+                    if display.is_primary { " (Primary)" } else { "" }
+                )
+            })
+            .collect();
+        let choices: Vec<_> = displays
+            .iter()
+            .zip(&labels)
+            .map(|(display, label)| {
+                crate::primitives::SelectOption::new(Some(display.id.clone()), label.as_str())
+            })
+            .collect();
+        let trigger = displays
+            .iter()
+            .find(|d| Some(&d.id) == display_id.as_ref())
+            .map_or("No display", |d| d.name.as_str());
+        if let Some(chosen) =
+            crate::primitives::Select::new("history-display", "Display", ui.spacing().combo_width)
+                .trigger_text(trigger)
+                .show(ui, t, &choices, display_id)
+                .chosen
+        {
+            *display_id = chosen;
+        }
+        ui.label("Display");
         if ui.button("Refresh displays").clicked() {
             action = Some(CaptureAction::RefreshDisplays);
         }
@@ -7266,7 +7281,7 @@ mod tests {
                             .show(ui, |ui| {
                                 let available = ui.max_rect();
                                 let (_, row) =
-                                    capture_actions(ui, &displays, &mut display_id, true);
+                                    capture_actions(ui, &tokens, &displays, &mut display_id, true);
                                 layout = (available, row);
                             });
                     },

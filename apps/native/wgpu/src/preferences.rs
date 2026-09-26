@@ -800,10 +800,13 @@ impl Preferences {
             top: t.number("s-8") as i8,
             bottom: t.number("s-12") as i8,
         };
-        let output = egui::ScrollArea::vertical()
-            .id_salt("preferences-scroll")
-            .auto_shrink(false)
-            .show(ui, |ui| {
+        let output = crate::primitives::scroll_area(
+            ui,
+            t,
+            egui::ScrollArea::vertical()
+                .id_salt("preferences-scroll")
+                .auto_shrink(false),
+            |ui| {
                 egui::Frame::new().inner_margin(margin).show(ui, |ui| {
                     ui.set_max_width(720. - 2. * t.number("s-8"));
                     ui.spacing_mut().item_spacing.y = 0.;
@@ -818,7 +821,8 @@ impl Preferences {
                     self.about(ui, t);
                     self.paint_find(ui, t);
                 });
-            });
+            },
+        );
         let viewport = output.inner_rect;
         let at_end = output.state.offset.y + viewport.height() >= output.content_size.y - 1.;
         self.active_section = preferences::visible_section(
@@ -1294,18 +1298,19 @@ impl Preferences {
         options: &[(Value, String)],
     ) {
         let old = at(&self.value, path).cloned().unwrap_or(Value::Null);
-        let mut value = old.clone();
-        let selected = options
+        let key = path.join(".");
+        let fallback = old.to_string();
+        let trigger = (!options.iter().any(|(v, _)| v == &old)).then_some(fallback.as_str());
+        let choices: Vec<_> = options
             .iter()
-            .find(|(v, _)| v == &value)
-            .map(|(_, s)| s.clone())
-            .unwrap_or_else(|| value.to_string());
-        widgets::select(ui, t, path.join("."), width, &selected, |ui| {
-            for (v, label) in options {
-                ui.selectable_value(&mut value, v.clone(), label);
-            }
-        });
-        if value != old {
+            .map(|(v, label)| crate::primitives::SelectOption::new(v.clone(), label.as_str()))
+            .collect();
+        let mut select =
+            crate::primitives::Select::new(key.as_str(), preferences::row(&key).title, width);
+        if let Some(text) = trigger {
+            select = select.trigger_text(text);
+        }
+        if let Some(value) = select.show(ui, t, &choices, &old).chosen {
             self.set(path, value);
         }
     }
@@ -2018,11 +2023,26 @@ impl Preferences {
         let loading = self.microphones.is_none();
         let mut open_requested = false;
         let mut chosen = None;
-        let selected = options.iter().find(|(id, _)| *id == saved).map_or_else(
-            || preferences::MICROPHONE_OFF.to_owned(),
-            |(_, label)| label.clone(),
-        );
         let copy = preferences::row("recording.microphone_device_id");
+        // `(loading placeholder, device)`: the loading row is a disabled option.
+        let mut choices: Vec<_> = options
+            .iter()
+            .map(|(id, label)| crate::primitives::SelectOption::new((false, id.clone()), label))
+            .collect();
+        if loading {
+            choices.push(
+                crate::primitives::SelectOption::new(
+                    (true, None),
+                    preferences::MICROPHONES_LOADING,
+                )
+                .disabled(true),
+            );
+        }
+        let current = if options.iter().any(|(id, _)| *id == saved) {
+            (false, saved.clone())
+        } else {
+            (false, None)
+        };
         self.row(
             ui,
             t,
@@ -2031,17 +2051,10 @@ impl Preferences {
             None,
             egui::vec2(160., t.number("h-md")),
             |_, ui| {
-                widgets::select(ui, t, path.join("."), 160., &selected, |ui| {
-                    open_requested = true;
-                    for (id, label) in &options {
-                        if ui.selectable_label(*id == saved, label).clicked() {
-                            chosen = Some(id.clone());
-                        }
-                    }
-                    if loading {
-                        ui.add_enabled(false, egui::Label::new(preferences::MICROPHONES_LOADING));
-                    }
-                });
+                let output = crate::primitives::Select::new(path.join("."), copy.title, 160.)
+                    .show(ui, t, &choices, &current);
+                open_requested = output.open;
+                chosen = output.chosen.map(|(_, id)| id);
             },
         );
         if open_requested && loading && self.microphones_rx.is_none() {
@@ -2275,6 +2288,7 @@ fn shortcut_recorder(
         egui::StrokeKind::Inside,
     );
     if recording || response.has_focus() {
+        crate::primitives::focus_indicated(ui.ctx());
         painter.rect_stroke(
             rect.expand(2.),
             radius + 2.,

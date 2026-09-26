@@ -106,6 +106,7 @@ impl Tokens {
         style.spacing.item_spacing = egui::vec2(self.number("s-4"), self.number("s-5"));
         style.spacing.button_padding = egui::vec2(self.number("s-5"), self.number("s-4"));
         style.spacing.interact_size.y = self.number("h-md");
+        style.spacing.scroll = crate::primitives::scroll_style();
         style.text_styles.insert(
             TextStyle::Body,
             FontId::proportional(self.number("text-md")),

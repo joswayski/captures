@@ -1,11 +1,13 @@
 //! Shipping Preferences controls drawn from design tokens: the sidebar,
-//! switches, segmented control, selects, buttons, accent chips and the mini
-//! preview corner picker (`styles/windows.css`, `styles/primitives.css`).
+//! switches, segmented control, buttons, accent chips and the mini preview
+//! corner picker (`styles/windows.css`, `styles/primitives.css`). Selects, the
+//! focus ring and scroll bars live in `primitives`.
 
 use eframe::egui::{
     self, Color32, FontId, Rect, Response, Sense, Stroke, StrokeKind, Vec2, pos2, vec2,
 };
 
+use crate::primitives::focus_ring;
 use crate::tokens::Tokens;
 
 /// `--shadow-sm` for the current appearance.
@@ -42,16 +44,6 @@ fn shadow_xs(ui: &egui::Ui, rect: Rect, radius: f32) -> egui::Shape {
     }
     .as_shape(rect, radius)
     .into()
-}
-
-/// `--focus-ring-tight`: a 2 px accent ring just outside `rect`.
-pub fn focus_ring(ui: &egui::Ui, t: &Tokens, rect: Rect, radius: f32) {
-    ui.painter().rect_stroke(
-        rect.expand(1.),
-        radius + 1.,
-        Stroke::new(2., t.color("theme-accent").gamma_multiply(0.45)),
-        StrokeKind::Outside,
-    );
 }
 
 fn text(ui: &egui::Ui, value: &str, size: f32, color: Color32) -> std::sync::Arc<egui::Galley> {
@@ -355,58 +347,6 @@ pub fn icon_button(ui: &mut egui::Ui, t: &Tokens, glyph: &str, label: &str) -> R
     response
 }
 
-/// Shipping `.custom-select` trigger styling applied to an egui ComboBox.
-pub fn select<R>(
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    id: impl std::hash::Hash + std::fmt::Debug,
-    width: f32,
-    selected: &str,
-    add: impl FnOnce(&mut egui::Ui) -> R,
-) -> Option<R> {
-    ui.scope(|ui| {
-        let visuals = ui.visuals_mut();
-        let radius = (t.number("r-md") as u8).into();
-        for (widget, border) in [
-            (&mut visuals.widgets.inactive, "control-border"),
-            (&mut visuals.widgets.hovered, "border-strong"),
-            (&mut visuals.widgets.active, "theme-accent"),
-            (&mut visuals.widgets.open, "theme-accent"),
-        ] {
-            widget.bg_fill = t.color("surface-field");
-            widget.weak_bg_fill = t.color("surface-field");
-            widget.bg_stroke = Stroke::new(1., t.color(border));
-            widget.fg_stroke = Stroke::new(1.5, t.color("text-subtle"));
-            widget.corner_radius = radius;
-            widget.expansion = 0.;
-        }
-        visuals.window_fill = t.color("surface-overlay");
-        visuals.window_stroke = Stroke::new(1., t.color("border"));
-        ui.spacing_mut().button_padding.x = t.number("s-4");
-        egui::ComboBox::from_id_salt(id)
-            .width(width)
-            .height(260.)
-            .icon(|ui, rect, visuals, _open| {
-                // The shipping 16-unit chevron `m4 6 4 4 4-4` in `--text-subtle`.
-                let glyph = Rect::from_center_size(rect.center(), Vec2::splat(14.));
-                let s = glyph.width() / 16.;
-                let p = |x: f32, y: f32| glyph.min + vec2(x * s, y * s);
-                ui.painter().add(egui::Shape::line(
-                    vec![p(4., 6.), p(8., 10.), p(12., 6.)],
-                    Stroke::new(1.7 * s, visuals.fg_stroke.color),
-                ));
-            })
-            .selected_text(
-                egui::RichText::new(selected)
-                    .size(t.number("text-sm"))
-                    .color(t.color("text")),
-            )
-            .show_ui(ui, add)
-            .inner
-    })
-    .inner
-}
-
 /// One `.theme-option` chip. `palette` is (accent, signal); None paints the
 /// custom rainbow swatch.
 pub fn theme_chip(
@@ -590,6 +530,7 @@ pub fn corner_picker(
                 StrokeKind::Inside,
             );
             if response.has_focus() {
+                crate::primitives::focus_indicated(ui.ctx());
                 ui.painter().rect_stroke(
                     corner.expand(2.),
                     corner_radius + 2.,

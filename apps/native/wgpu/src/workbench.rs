@@ -116,6 +116,7 @@ impl Workbench {
         instance: Option<captures_app::instance::Instance>,
     ) -> Self {
         crate::ui_fonts::install(&cc.egui_ctx);
+        crate::primitives::install_focus_ring(&cc.egui_ctx);
         if let Some(instance) = &instance {
             let wake = cc.egui_ctx.clone();
             // The socket worker can wake while an editor owns the current
@@ -854,7 +855,7 @@ impl Workbench {
                 0.
             });
         }
-        scroll.show_rows(ui, row_height, rows.len(), |ui, range| {
+        crate::primitives::scroll_rows(ui, t, scroll, row_height, rows.len(), |ui, range| {
             for index in range {
                 let row = rows[index];
                 let kind = history_kind(row);

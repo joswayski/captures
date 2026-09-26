@@ -16,6 +16,7 @@ mod options;
 mod outbound_drag;
 mod preferences;
 mod preferences_widgets;
+mod primitives;
 mod recording;
 mod recording_editor;
 mod recording_hud;

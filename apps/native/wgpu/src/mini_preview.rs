@@ -978,6 +978,9 @@ fn editor_control(
         just_opened = false;
     }
     let focused = response.has_focus();
+    if focused {
+        crate::primitives::focus_indicated(ui.ctx());
+    }
     let visible = reveal || focused || phase.pinned();
     if visible {
         let action_hover = (hovered || focused) && enabled && phase.interactive();
@@ -1381,6 +1384,7 @@ fn stack_button_at(
         egui::StrokeKind::Inside,
     );
     if response.has_focus() {
+        crate::primitives::focus_indicated(ui.ctx());
         ui.painter().rect_stroke(
             paint.expand(2.),
             tokens.number("r-md"),
@@ -1474,6 +1478,7 @@ pub fn show_overflow_cues(
             Stroke::new(2., tokens.color("glass-text")),
         ));
         if response.has_focus() {
+            crate::primitives::focus_indicated(ui.ctx());
             ui.painter().rect_stroke(
                 rect.expand(2.),
                 corners,
@@ -1579,6 +1584,7 @@ fn control(
             );
         }
         if response.has_focus() {
+            crate::primitives::focus_indicated(ui.ctx());
             ui.painter().rect_stroke(
                 rect.expand(2.),
                 tokens.number("r-md"),

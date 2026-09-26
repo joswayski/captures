@@ -1674,9 +1674,13 @@ fn probe_env() -> bool {
 }
 
 fn probe(ui: &egui::Ui, name: &str, rect: egui::Rect) {
+    probe_clipped(name, rect, ui.clip_rect());
+}
+
+/// [`probe`] for a rect drawn in another layer, such as a select's listbox.
+fn probe_clipped(name: &str, rect: egui::Rect, clip: egui::Rect) {
     PROBE.with_borrow_mut(|controls| {
         if let Some(controls) = controls {
-            let clip = ui.clip_rect();
             controls.insert(
                 name.to_owned(),
                 [
@@ -1724,39 +1728,56 @@ fn field_label(ui: &mut egui::Ui, tokens: &Tokens, label: &str) {
     ui.label(text(tokens, label, "text-xs", "text-subtle"));
 }
 
-/// A shipping `CustomSelect` rendered as an egui combo box. Items carry their
-/// shipping descriptions as hover text and are probed as `name/label`.
+/// A shipping `CustomSelect` whose listbox shows each option's description.
+/// The trigger is probed as `name` and each row as `name/label`.
 fn select<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
+    tokens: &Tokens,
     name: &str,
     width: f32,
     value: &mut T,
     options: &[(T, String, &str)],
 ) -> bool {
-    let selected = options
+    select_styled(
+        ui,
+        tokens,
+        name,
+        width,
+        value,
+        options,
+        crate::primitives::SelectStyle::Field,
+    )
+}
+
+fn select_styled<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    name: &str,
+    width: f32,
+    value: &mut T,
+    options: &[(T, String, &str)],
+    style: crate::primitives::SelectStyle,
+) -> bool {
+    let choices: Vec<_> = options
         .iter()
-        .find(|(option, _, _)| option == value)
-        .map_or_else(String::new, |(_, label, _)| label.clone());
-    let mut changed = false;
-    let response = egui::ComboBox::from_id_salt(("recording-select", name))
-        .selected_text(selected)
-        .width(width)
-        .height(480.)
-        .truncate()
-        .show_ui(ui, |ui| {
-            for (option, label, description) in options {
-                let mut response = ui.selectable_value(value, *option, label.as_str());
-                if !description.is_empty() {
-                    response = response.on_hover_text(*description);
-                }
-                probe(ui, &format!("{name}/{label}"), response.rect);
-                changed |= response.changed();
-            }
+        .map(|(option, label, description)| {
+            crate::primitives::SelectOption::new(*option, label.as_str()).description(description)
         })
-        .response;
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, name));
-    probe(ui, name, response.rect);
-    changed
+        .collect();
+    let output = crate::primitives::Select::new(("recording-select", name), name, width)
+        .style(style)
+        .show(ui, tokens, &choices, value);
+    for ((_, label, _), row) in options.iter().zip(&output.rows) {
+        probe_clipped(&format!("{name}/{label}"), *row, output.list_clip);
+    }
+    probe(ui, name, output.response.rect);
+    match output.chosen {
+        Some(chosen) => {
+            *value = chosen;
+            true
+        }
+        None => false,
+    }
 }
 
 /// `.recording-preview-loop`-style quiet toggle for the preview toolbar.
@@ -1834,6 +1855,7 @@ fn loop_toggle(ui: &mut egui::Ui, tokens: &Tokens, on: bool, enabled: bool) -> e
         painter.rect_filled(rect, tokens.number("r-md"), tokens.color("surface-hover"));
     }
     if response.has_focus() {
+        crate::primitives::focus_indicated(ui.ctx());
         painter.rect_stroke(
             rect,
             tokens.number("r-md"),
@@ -1942,6 +1964,7 @@ fn preview_size_segmented(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             color,
         );
         if response.has_focus() {
+            crate::primitives::focus_indicated(ui.ctx());
             ui.painter().rect_stroke(
                 segment,
                 tokens.number("r-sm"),
@@ -2071,6 +2094,7 @@ fn show_overlay_play(
             ));
         }
         if response.has_focus() {
+            crate::primitives::focus_indicated(ui.ctx());
             painter.circle_stroke(
                 center,
                 size / 2. + 3.,
@@ -2412,6 +2436,7 @@ fn show_trim_timeline(
                     (gesture.edge == TimelineTrimEdge::Start) == (index == 0)
                 }));
         if response.has_focus() {
+            crate::primitives::focus_indicated(ui.ctx());
             painter.rect_stroke(
                 bar.expand(2.),
                 tokens.number("r-xs"),
@@ -2471,10 +2496,13 @@ fn show(
             if view.confirm_replace.is_some() || view.requires_reopen {
                 ui.disable();
             }
-            egui::ScrollArea::vertical()
-                .id_salt("recording-editor-page")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
+            crate::primitives::scroll_area(
+                ui,
+                tokens,
+                egui::ScrollArea::vertical()
+                    .id_salt("recording-editor-page")
+                    .auto_shrink([false, false]),
+                |ui| {
                     probe(ui, "Page", ui.clip_rect());
                     let pad = tokens.number("s-8");
                     let side = ((ui.available_width() - 1220.) / 2.).max(pad);
@@ -2486,7 +2514,8 @@ fn show(
                             bottom: pad as i8,
                         })
                         .show(ui, |ui| show_page(ui, tokens, view, tx));
-                });
+                },
+            );
         });
     if view.unapplied() {
         view.comparison = None;
@@ -2717,6 +2746,10 @@ fn show_filename(
         ),
         egui::StrokeKind::Inside,
     );
+    // Shipping `.recording-filename-input:focus-within` rings the whole field.
+    if response.has_focus() {
+        crate::primitives::focus_ring(ui, tokens, field, tokens.number("r-md"));
+    }
     ui.painter().vline(
         format_rect.left(),
         field.y_range().shrink(1.),
@@ -2724,29 +2757,19 @@ fn show_filename(
     );
     let mut format_ui = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(format_rect.shrink(2.))
+            .max_rect(format_rect.shrink2(egui::vec2(1., 1.)))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
-    {
-        let visuals = format_ui.visuals_mut();
-        for widget in [
-            &mut visuals.widgets.inactive,
-            &mut visuals.widgets.hovered,
-            &mut visuals.widgets.active,
-            &mut visuals.widgets.open,
-        ] {
-            widget.bg_stroke = egui::Stroke::NONE;
-        }
-        visuals.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-    }
     let old = view.gif;
     let mut gif = view.gif;
-    select(
+    select_styled(
         &mut format_ui,
+        tokens,
         "Format",
-        format_rect.width() - 12.,
+        format_rect.width() - 2.,
         &mut gif,
         &[(false, ".mp4".into(), "MP4"), (true, ".gif".into(), "GIF")],
+        crate::primitives::SelectStyle::Inline,
     );
     if gif != old {
         view.gif = gif;
@@ -3195,7 +3218,7 @@ fn show_preview_card(
             if scale_changed {
                 scroll = scroll.scroll_offset(egui::Vec2::ZERO);
             }
-            scroll.show(&mut viewport, |ui| {
+            crate::primitives::scroll_area(&mut viewport, tokens, scroll, |ui| {
                 let extent = (size + egui::Vec2::splat(margin * 2.)).max(ui.available_size());
                 let (content, _) = ui.allocate_exact_size(extent, egui::Sense::hover());
                 paint(ui, egui::Rect::from_center_size(content.center(), size));
@@ -3262,15 +3285,19 @@ fn show_preview_card(
     } else if let Some(comparison) = &view.comparison {
         caption.horizontal(|ui| {
             ui.label(text(tokens, "Before", "text-xs", "text-subtle"));
-            let split = ui.add(
-                egui::Slider::new(&mut view.comparison_split, 0.0..=1.0)
-                    .show_value(false)
-                    .text("Encoded split"),
-            );
-            probe(ui, "Encoded split", split.rect);
-            if split.is_pointer_button_down_on() {
-                split.request_focus();
+            let mut percent = (f64::from(view.comparison_split) * 100.).round();
+            let split = crate::primitives::RangeSlider::new(
+                "encoded-split",
+                "Encoded split",
+                160.,
+                0. ..=100.,
+                format!("{percent:.0}%"),
+            )
+            .show(ui, tokens, &mut percent);
+            if split.changed() {
+                view.comparison_split = (percent / 100.) as f32;
             }
+            probe(ui, "Encoded split", split.rect);
             ui.label(text(
                 tokens,
                 format!(
@@ -3390,10 +3417,14 @@ fn show_timeline_card(
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = tokens.number("s-3");
                 ui.label(text(tokens, "Start (ms)", "text-xs", "text-subtle"));
-                let start = ui.add(egui::DragValue::new(&mut view.start_ms).range(0..=duration));
+                let start = crate::primitives::NumberInput::new("trim-start", "Start (ms)", 104.)
+                    .range(0. ..=duration as f64)
+                    .show(ui, tokens, &mut view.start_ms);
                 probe(ui, "Start (ms)", start.rect);
                 ui.label(text(tokens, "End (ms)", "text-xs", "text-subtle"));
-                let end = ui.add(egui::DragValue::new(&mut view.end_ms).range(0..=duration));
+                let end = crate::primitives::NumberInput::new("trim-end", "End (ms)", 104.)
+                    .range(0. ..=duration as f64)
+                    .show(ui, tokens, &mut view.end_ms);
                 probe(ui, "End (ms)", end.rect);
                 let reset = ui.button(text(tokens, "Reset trim", "text-sm", "text"));
                 probe(ui, "Reset trim", reset.rect);
@@ -3410,10 +3441,10 @@ fn show_timeline_card(
                     ui.label(text(tokens, "Position (ms)", "text-xs", "text-subtle"));
                     // Numeric entry must not send its first digit to the
                     // worker and steal focus before the rest can be typed.
-                    let position = ui.add(
-                        egui::DragValue::new(&mut view.position_ms)
-                            .range(0..=duration.saturating_sub(1)),
-                    );
+                    let position =
+                        crate::primitives::NumberInput::new("position", "Position (ms)", 104.)
+                            .range(0. ..=duration.saturating_sub(1) as f64)
+                            .show(ui, tokens, &mut view.position_ms);
                     probe(ui, "Position (ms)", position.rect);
                     let seek = ui
                         .button(text(tokens, "Seek", "text-sm", "text"))
@@ -3443,6 +3474,7 @@ fn show_gif_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             let width = columns[0].available_width();
             if select(
                 &mut columns[0],
+                tokens,
                 "Frame rate",
                 width,
                 &mut fps,
@@ -3456,6 +3488,7 @@ fn show_gif_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             let width = columns[1].available_width();
             if select(
                 &mut columns[1],
+                tokens,
                 "Maximum width",
                 width,
                 &mut maximum,
@@ -3513,16 +3546,12 @@ fn show_crop_card(
                     field_label(column, tokens, label);
                     let width = column.available_width();
                     let response = match index {
-                        0 => column.add_sized(
-                            [width, tokens.number("h-md")],
-                            egui::DragValue::new(&mut preview.x)
-                                .range(0..=source_size.0.saturating_sub(2)),
-                        ),
-                        1 => column.add_sized(
-                            [width, tokens.number("h-md")],
-                            egui::DragValue::new(&mut preview.y)
-                                .range(0..=source_size.1.saturating_sub(2)),
-                        ),
+                        0 => crate::primitives::NumberInput::new(probe_name, probe_name, width)
+                            .range(0. ..=f64::from(source_size.0.saturating_sub(2)))
+                            .show(column, tokens, &mut preview.x),
+                        1 => crate::primitives::NumberInput::new(probe_name, probe_name, width)
+                            .range(0. ..=f64::from(source_size.1.saturating_sub(2)))
+                            .show(column, tokens, &mut preview.y),
                         _ => {
                             let horizontal = index == 2;
                             let mut value = if horizontal {
@@ -3530,18 +3559,16 @@ fn show_crop_card(
                             } else {
                                 preview.height
                             };
-                            let response = column.add_sized(
-                                [width, tokens.number("h-md")],
-                                egui::DragValue::new(&mut value)
-                                    .range(
-                                        2..=if horizontal {
-                                            source_size.0
-                                        } else {
-                                            source_size.1
-                                        },
-                                    )
-                                    .update_while_editing(false),
-                            );
+                            let maximum = if horizontal {
+                                source_size.0
+                            } else {
+                                source_size.1
+                            };
+                            let response =
+                                crate::primitives::NumberInput::new(probe_name, probe_name, width)
+                                    .range(2. ..=f64::from(maximum))
+                                    .commit_on_enter()
+                                    .show(column, tokens, &mut value);
                             if response.changed() {
                                 changed = Some((horizontal, value));
                             }
@@ -3616,7 +3643,15 @@ fn show_crop_card(
         let width = ui.available_width().min(430.);
         let options = ResolutionChoice::ALL
             .map(|choice| (choice, choice.label(base.0, base.1), choice.description()));
-        if select(ui, "Output resolution", width, &mut choice, &options) && choice != current {
+        if select(
+            ui,
+            tokens,
+            "Output resolution",
+            width,
+            &mut choice,
+            &options,
+        ) && choice != current
+        {
             match choice {
                 ResolutionChoice::Custom => {
                     view.output_size =
@@ -3646,15 +3681,11 @@ fn show_crop_card(
                     };
                     field_label(column, tokens, label);
                     let available = column.available_width();
-                    let response = column.add_sized(
-                        [available, tokens.number("h-md")],
-                        egui::DragValue::new(value).range(2..=u32::MAX),
-                    );
-                    probe(
-                        column,
-                        &format!("Output {}", label.to_lowercase()),
-                        response.rect,
-                    );
+                    let name = format!("Output {}", label.to_lowercase());
+                    let response = crate::primitives::NumberInput::new(&name, &name, available)
+                        .range(2. ..=f64::from(u32::MAX))
+                        .show(column, tokens, value);
+                    probe(column, &name, response.rect);
                 }
             });
         }
@@ -3686,7 +3717,7 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
                 (current, current.label().to_owned(), current.description()),
             );
         }
-        if select(ui, "Quality mode", width, &mut mode, &options) && mode != current {
+        if select(ui, tokens, "Quality mode", width, &mut mode, &options) && mode != current {
             match mode {
                 QualityMode::Preserve => {
                     view.maximum_size = false;
@@ -3715,7 +3746,7 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
                     recording_editor_ui::quality_description(preset),
                 )
             });
-            if select(ui, "Quality", width, &mut quality, &options) {
+            if select(ui, tokens, "Quality", width, &mut quality, &options) {
                 view.quality = quality;
                 view.compress_quality = Some(quality);
             }
@@ -3732,6 +3763,7 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
                 let mut unit = view.maximum_unit;
                 select(
                     ui,
+                    tokens,
                     "File size unit",
                     64.,
                     &mut unit,
@@ -3857,23 +3889,26 @@ fn show_audio_card(
                 if toggle.changed() {
                     *mute = !enabled;
                 }
-                ui.spacing_mut().slider_width = (ui.available_width() - 70.).max(100.);
-                let slider = ui.add_enabled(
-                    !*mute,
-                    egui::Slider::new(volume, 0.0..=2.0)
-                        .step_by(0.01)
-                        .custom_formatter(|value, _| format!("{:.0}%", value * 100.))
-                        .custom_parser(|input| {
-                            input
-                                .trim()
-                                .trim_end_matches('%')
-                                .trim()
-                                .parse::<f64>()
-                                .ok()
-                                .map(|value| value / 100.)
-                        }),
-                );
-                probe(ui, &format!("{label} volume"), slider.rect);
+                // Shipping `.editor-volume` RangeSlider: 0–200% in whole percents.
+                let mut percent = (f64::from(*volume) * 100.).round();
+                let name = format!("{label} volume");
+                let width = ui.available_width().max(100.);
+                let slider = ui
+                    .add_enabled_ui(!*mute, |ui| {
+                        crate::primitives::RangeSlider::new(
+                            &name,
+                            &name,
+                            width,
+                            0. ..=200.,
+                            format!("{percent:.0}%"),
+                        )
+                        .show(ui, tokens, &mut percent)
+                    })
+                    .inner;
+                if slider.changed() {
+                    *volume = (percent / 100.) as f32;
+                }
+                probe(ui, &name, slider.rect);
             });
         }
         let mono = ui.checkbox(&mut view.audio.mono_output, "Convert to mono");
@@ -4447,7 +4482,8 @@ mod tests {
                 "Fit",
                 "100%",
                 "Before",
-                "Encoded split",
+                // The split RangeSlider's readout.
+                "50%",
                 "Encoded · accepted 0:00.700 · 4 × 2",
                 "Save new copy",
             ] {
@@ -4491,7 +4527,9 @@ mod tests {
                 .unwrap();
             assert!((encoded_clip.left() - pointer.x).abs() < 0.1);
             assert!((encoded_clip.right() - bounds.right()).abs() < 0.1);
-            let slider = egui::pos2(rects[6].left() - 40., rects[6].center().y);
+            // The track runs under the right-aligned readout: 14 pt readout row,
+            // 2 pt gap, then the 20 pt track.
+            let slider = egui::pos2(rects[6].right() - 60., rects[6].center().y + 19.);
             render(&mut view, vec![egui::Event::PointerMoved(slider)]);
             render(&mut view, vec![trim_pointer(slider, true)]);
             render(&mut view, vec![trim_pointer(slider, false)]);
