@@ -175,15 +175,96 @@ final class LoginItemTests: XCTestCase {
         withExtendedLifetime(controller) {}
     }
 
-    private func preferencesFixture(service: LoginItemServicing?, appearance: String = "dark") throws
+    func testPreferencesUseSharedCopyWholeRowSwitchesAndSegmentedAppearance() throws {
+        var appearances: [String] = []
+        let (root, controller) = try preferencesFixture(service: nil) { appearance in
+            appearances.append(appearance)
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while find(root, identifier: "setting.freeze_screen") == nil, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        let text = labels(root)
+        for title in ["Interface theme", "Accent color", "Mini preview position", "Show what’s new on update notices",
+                      PreferencesPolicy.text("shortcuts.system_title"), PreferencesPolicy.text("updates.title")] {
+            XCTAssertTrue(text.contains(title), title)
+        }
+        XCTAssertEqual(PreferencesPolicy.text("shortcuts.system_title"), "macOS Screenshot shortcuts")
+
+        // Shipping option labels, not raw persisted values.
+        let menus = views(root, ClosurePopUpButton.self)
+        let format = try XCTUnwrap(menus.first { $0.accessibilityLabel() == "Screenshot format" })
+        XCTAssertEqual(format.itemTitles, ["PNG", "JPEG", "WebP"])
+        let countdown = try XCTUnwrap(menus.first { $0.accessibilityLabel() == "Screenshot countdown" })
+        XCTAssertEqual(countdown.itemTitles.prefix(3), ["Off", "1 second", "2 seconds"])
+        XCTAssertNotNil(menus.first { $0.accessibilityLabel() == "GIF palette colors" })
+
+        // The whole row is the switch; toggling rebuilds with the new state.
+        let freeze = try XCTUnwrap(find(root, identifier: "setting.freeze_screen") as? PreferenceSwitchButton)
+        XCTAssertFalse(freeze.isOn)
+        XCTAssertGreaterThan(freeze.frame.width, freeze.switchRect.width * 10, "the row, not just the knob")
+        freeze.performClick(nil)
+        let toggled = try XCTUnwrap(find(root, identifier: "setting.freeze_screen") as? PreferenceSwitchButton)
+        XCTAssertTrue(toggled.isOn)
+
+        // Mini preview corners follow the Show mini previews switch.
+        let corner = try XCTUnwrap(find(root, identifier: "mini-preview-placement.top_right") as? NSButton)
+        XCTAssertFalse(corner.isEnabled)
+
+        // System / Light / Dark segmented control in shipping order.
+        let segments = views(root, PreferenceSegmentButton.self)
+        XCTAssertEqual(segments.map(\.title), ["System", "Light", "Dark"])
+        XCTAssertEqual(segments.filter(\.active).map(\.title), ["Dark"])
+        segments[1].performClick(nil)
+        XCTAssertEqual(appearances.last, "light")
+
+        // Shared find policy: matches, count label and no results.
+        controller.showFind()
+        let field = try XCTUnwrap(find(root, identifier: "find") as? NSTextField)
+        field.stringValue = "freeze screen when"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        XCTAssertTrue(labels(root).contains("1 of 1"))
+        field.stringValue = "no such preference"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        XCTAssertTrue(labels(root).contains("No results"))
+        controller.closeFind()
+        XCTAssertNil(find(root, identifier: "find"))
+        withExtendedLifetime(controller) {}
+    }
+
+    func testRenderedPreferencesCardsLightAndDark() throws {
+        guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { return }
+        for appearance in ["light", "dark"] {
+            let (root, controller) = try preferencesFixture(service: FakeLoginItemService([.success(false)]),
+                appearance: appearance)
+            waitForTitle("Off", in: root)
+            for id in ["appearance", "capture", "shortcuts", "recording", "about"] {
+                let card = try XCTUnwrap(find(root, identifier: "preferences-card.\(id)"))
+                card.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(card.bitmapImageRepForCachingDisplay(in: card.bounds))
+                card.cacheDisplay(in: card.bounds, to: bitmap)
+                let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                let url = URL(fileURLWithPath: directory)
+                    .appendingPathComponent("preferences-\(id)-\(appearance).png")
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                try data.write(to: url)
+            }
+            withExtendedLifetime(controller) {}
+        }
+    }
+
+    private func preferencesFixture(service: LoginItemServicing?, appearance: String = "dark",
+                                    appearanceChanged: @escaping (String) -> Void = { _ in }) throws
         -> (Surface, PreferencesController) {
         _ = NSApplication.shared
-        let root = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 720))
+        let root = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 600))
         let tokens = Tokens.variants["\(appearance)-mustard"]!
         let store = try SettingsStore(path: "/fixture/settings.json",
             transport: LoginSettingsTransport(), debounceInterval: 0)
         let controller = PreferencesController(root: root, store: store, tokens: { tokens },
-            appearanceChanged: { _, _, _ in }, showHistory: {}, liveCaptureAvailable: true,
+            appearanceChanged: { value, _, _ in appearanceChanged(value) }, showHistory: {},
+            liveCaptureAvailable: true,
             loginItemService: service, initialAppearance: appearance)
         return (root, controller)
     }
@@ -206,6 +287,10 @@ final class LoginItemTests: XCTestCase {
     private func find(_ view: NSView, identifier: String) -> NSView? {
         if view.identifier?.rawValue == identifier { return view }
         return view.subviews.lazy.compactMap { self.find($0, identifier: identifier) }.first
+    }
+
+    private func views<T: NSView>(_ view: NSView, _ type: T.Type) -> [T] {
+        ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { views($0, type) }
     }
 
     private func labels(_ view: NSView) -> [String] {

@@ -258,7 +258,7 @@ final class ShortcutEditingTests: XCTestCase {
                          policy: PreferencesController.ShortcutPolicy? = nil)
         throws -> (PreferencesController, NSWindow) {
         _ = NSApplication.shared
-        let root = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 720))
+        let root = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 600))
         root.wantsLayer = true
         let window = NSWindow(contentRect: root.bounds, styleMask: [.titled, .closable],
             backing: .buffered, defer: false)

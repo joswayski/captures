@@ -52,6 +52,22 @@ the AppKit GIF export card (frames per second, maximum width, palette colors)
 and AppKit scroll-spy highlighting of the section in view. The wgpu shortcut
 recorder shows `<kbd>`-style key chips and the "Press shortcut…" prompt.
 
+Both Preferences hosts now follow the shipping layout and controls, with copy,
+option labels, themes, mini-preview corners, shortcut rows and find matching from
+`captures-app::preferences` (AppKit through `captures_preferences_v1`): the
+sidebar brand mark with hover/active entries, the header rule and save-status
+pill, shadowed cards with row rules, whole-row 32×19 switches, the
+System/Light/Dark segmented control, accent chips (accent swatch with a signal
+wedge and a check), the custom colors editor, the mini preview corner picker,
+field-styled selects with shipping labels (PNG, Off, 1 second, 1080p…), the
+Recording and GIF select grids, `<kbd>` recorder chips on both hosts, and find
+washes with a ringed current match. Rows that cannot work in a native build say
+why: Check Now stays disabled (signed updates are not connected), the system
+screenshot-shortcut row explains that native builds do not unbind the system keys
+yet and opens keyboard settings in live mode, and fixtures show the login item as
+unavailable. Rendering was checked on X11 only; AppKit is covered by XCTest, and
+Windows, Wayland and screen-reader acceptance remain open.
+
 Direct region and window overlays (shortcut, tray and screenshot-during-recording)
 now follow the shipping `CaptureOverlay`: no toolbar, a completed region drag
 commits on release, a window/desktop click commits that window or the display,

@@ -4,6 +4,7 @@ mod editor_export;
 mod feedback;
 mod icons;
 mod instance;
+mod preferences;
 mod preview;
 mod recording;
 mod recording_editor;

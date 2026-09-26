@@ -43,6 +43,10 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
             "m18.3 15.3 2.2 2.2",
         ],
         "edit" => &["m4 16-1 5 5-1L19 9l-4-4ZM13.5 6.5l4 4M4 16l4 4"],
+        // Preferences find steps and select triggers (16-unit `m4 10 4-4 4 4`
+        // and `m4 6 4 4 4-4`, scaled to the 24-unit grid).
+        "chevron-up" => &["m6 15 6-6 6 6"],
+        "chevron-down" => &["m6 9 6 6 6-6"],
         _ => return None,
     })
 }
@@ -415,6 +419,8 @@ mod tests {
             "save",
             "folder",
             "edit",
+            "chevron-up",
+            "chevron-down",
         ] {
             let lines = polylines(name).unwrap();
             assert!(!lines.is_empty(), "{name}");
