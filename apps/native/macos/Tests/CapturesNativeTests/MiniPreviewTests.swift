@@ -28,7 +28,8 @@ final class MiniPreviewTests: XCTestCase {
             dismiss: { _ in actions.append("dismiss") })
         defer { panel.close() }
 
-        XCTAssertFalse(panel.canBecomeKey); XCTAssertFalse(panel.canBecomeMain)
+        XCTAssertEqual(panel.canBecomeKey, NSApp.isActive, "Keyboard focus only while Captures is active")
+        XCTAssertTrue(panel.becomesKeyOnlyIfNeeded, "Clicks never take keyboard focus"); XCTAssertFalse(panel.canBecomeMain)
         XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
         XCTAssertEqual(panel.previewView.artifactIDs, ["latest"])
         let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewButton }
@@ -140,7 +141,25 @@ final class MiniPreviewTests: XCTestCase {
         button.mouseExited(with: try event(.leftMouseDragged, point))
         try waitUntil { abs(rear.frame.minY - restY) < 0.001 }
         XCTAssertFalse(panel.previewView.pileHovered)
-        XCTAssertFalse(panel.canBecomeKey)
+        XCTAssertTrue(panel.becomesKeyOnlyIfNeeded)
+    }
+
+    func testCardControlsFollowShippingTabOrderAndFocusRevealsThem() throws {
+        _ = NSApplication.shared
+        let image = NSImage(cgImage: PreviewView.fixtureImage(scale: 1), size: NSSize(width: 284, height: 160))
+        let panel = fixturePanel(ids: ["latest"], images: ["latest": image])
+        defer { panel.close() }
+        let card = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewCardView }.first)
+        XCTAssertTrue(panel.initialFirstResponder === card)
+        XCTAssertEqual(KeyViewLoop.order(from: card).compactMap { ($0 as? MiniPreviewButton)?.title },
+                       ["Close", "Delete", "Edit", "Copy", "Save file"])
+        let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewButton }
+        XCTAssertTrue(buttons.allSatisfy(\.isHidden))
+        XCTAssertTrue(panel.makeFirstResponder(card))
+        XCTAssertFalse(try XCTUnwrap(buttons.first { $0.title == "Copy" }).isHidden,
+                       "Keyboard focus reveals the controls, like :focus-within")
+        XCTAssertTrue(panel.makeFirstResponder(nil))
+        try waitUntil { buttons.allSatisfy(\.isHidden) }
     }
 
     func testOutboundCardDragIsCopyOnlyAndCompactPileRemainsMoveOnly() throws {

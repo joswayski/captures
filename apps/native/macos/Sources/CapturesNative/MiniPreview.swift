@@ -65,12 +65,12 @@ final class MiniPreviewButton: NSButton {
     override func mouseExited(with event: NSEvent) { hovered = false; applyHoverShape(); needsDisplay = true }
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
-        if result { focused = true; applyHoverShape() }
+        if result { focused = true; applyHoverShape(); (superview as? MiniPreviewCardView)?.focusWithinChanged() }
         needsDisplay = true; return result
     }
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
-        if result { focused = false; applyHoverShape() }
+        if result { focused = false; applyHoverShape(); (superview as? MiniPreviewCardView)?.focusWithinChanged() }
         needsDisplay = true; return result
     }
     private func applyHoverShape() {
@@ -382,6 +382,24 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     }
     override var acceptsFirstResponder: Bool { !compact }
     override func becomeFirstResponder() -> Bool { let result = super.becomeFirstResponder(); if result { setChromeVisible(true) }; return result }
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result { focusWithinChanged() }
+        return result
+    }
+    /// Shipping `:focus-within`: keyboard focus on the card or one of its
+    /// controls keeps the chrome up. Once focus leaves, the chrome hides
+    /// unless the pointer is still over the card.
+    fileprivate func focusWithinChanged() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window else { return }
+            if let responder = window.firstResponder as? NSView, responder.isDescendant(of: self) {
+                self.setChromeVisible(true); return
+            }
+            let pointer = self.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+            if !self.bounds.contains(pointer) { self.setChromeVisible(false) }
+        }
+    }
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
         tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
@@ -727,6 +745,18 @@ final class MiniPreviewView: NSView {
         cards[artifactID]?.setStatus(value, detail: detail)
     }
 
+    /// Shipping DOM order: the collapsed pile's expand control, the stack
+    /// toolbar (Clear all, Minimize), the overflow cues, then each card and
+    /// its controls (Close, Delete, Edit, Copy, Save file or Show in Folder).
+    /// Focus starts on the first expanded card, else the expand control.
+    func installKeyViewLoop(in window: NSWindow) {
+        var order = ([pileExpandButton, clearButton, collapseButton] as [NSView?]).compactMap { $0 }
+        order += overflowCues.map { $0 as NSView }
+        order.append(scroll)
+        let card = KeyViewLoop.candidates(in: scroll).first { $0 is MiniPreviewCardView }
+        KeyViewLoop.install(order, window: window, initial: card)
+    }
+
     @objc private func scrollBoundsChanged(_ notification: Notification) { updateOverflowCues() }
 
     /// Show a cue only on an edge that hides cards (shared 1 px tolerance).
@@ -817,7 +847,11 @@ final class MiniPreviewView: NSView {
 
 final class MiniPreviewPanel: NSPanel {
     let previewView: MiniPreviewView
-    override var canBecomeKey: Bool { false }
+    /// Shipping's nonactivating panel is key-capable, so Tab reaches the card
+    /// controls. Here it takes keyboard focus only while Captures is already
+    /// active (Ctrl-F6, Cmd-`), never from a click over another app, and
+    /// `becomesKeyOnlyIfNeeded` keeps clicks from taking focus from an editor.
+    override var canBecomeKey: Bool { NSApp.isActive }
     override var canBecomeMain: Bool { false }
 
     init(frame: NSRect, geometry: CapturesPreviewGeometry, contentHeight: Double,
@@ -841,6 +875,8 @@ final class MiniPreviewPanel: NSPanel {
         hasShadow = true; level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         hidesOnDeactivate = false; isMovable = false; contentView = previewView
+        becomesKeyOnlyIfNeeded = true
+        previewView.installKeyViewLoop(in: self)
         registerForDraggedTypes([.fileURL])
         setAccessibilityLabel(ids.count == 1 ? "Screenshot mini preview" : "Screenshot mini previews")
     }
