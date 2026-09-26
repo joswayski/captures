@@ -217,6 +217,9 @@ final class LiveCaptureController: NSObject {
     private var confirmDeleteAll = false
     private var confirmDeleteAllTimer: Timer?
     private var cardBusy: (id: String, action: HistoryCardAction)?
+    /// Shipping "✓ Restored" on one card for `HistoryCopy.feedbackDuration`.
+    private var restoredCardID: String?
+    private var restoredCardReset: DispatchWorkItem?
     private var recoveryPanel: Surface!
     private var recoveryScroll: NSScrollView!
     private var recoveryStatus: NSTextField!
@@ -728,7 +731,8 @@ final class LiveCaptureController: NSObject {
             return HistoryGridItem(id: artifact.id, card: cards[artifact.id],
                                    image: thumbnailKeys[artifact.id] == key ? thumbnails[artifact.id] : nil,
                                    confirmingDelete: confirmDeleteID == artifact.id,
-                                   busy: cardBusy?.id == artifact.id ? cardBusy?.action : nil)
+                                   busy: cardBusy?.id == artifact.id ? cardBusy?.action : nil,
+                                   done: restoredCardID == artifact.id ? .restore : nil)
         })
         grid.setSelectedRow(selectedIndex.flatMap { historyRows.firstIndex(of: $0) } ?? -1, notify: false)
         let copy = historyCopy
@@ -805,6 +809,10 @@ final class LiveCaptureController: NSObject {
         case .edit:
             guard !historyRoot.isEmpty, cards[artifact.id]?.missing != true else { return }
             presentEditor(artifact, requiresCurrentSelection: false)
+        case .restore:
+            guard !artifact.isRecording, let miniPreviews else { return }
+            cardBusy = (artifact.id, action); setRestoredCard(nil); updateActions()
+            restore(artifact, with: miniPreviews)
         case .copy:
             guard !artifact.isRecording else { return }
             copyImage(at: artifact.imagePath, artifactID: artifact.id)
@@ -814,6 +822,49 @@ final class LiveCaptureController: NSObject {
         case .showInFolder:
             reveal(artifact)
         }
+    }
+
+    /// Shipping History Restore: reopen a screenshot through the mini-preview
+    /// stack, with no clipboard copy. An empty stack opens on the selected display.
+    private func restore(_ artifact: CaptureArtifact, with previews: MiniPreviewController) {
+        let index = displayMenu.indexOfSelectedItem
+        let screenID = displays.indices.contains(index)
+            ? displays[index].id : window.screen.flatMap(MiniPreviewController.displayID(for:))
+        run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self, weak previews] result in
+            guard let self else { return }
+            switch result {
+            case .success(let preferences):
+                guard let previews else { self.finishRestore(artifact.id, .cancelled); return }
+                previews.restore(artifact, on: screenID, settings: preferences.miniPreviewSettings) {
+                    [weak self] outcome in self?.finishRestore(artifact.id, outcome)
+                }
+            case .failure(let error):
+                self.finishRestore(artifact.id, .failed(error))
+            }
+        }
+    }
+
+    private func finishRestore(_ id: String, _ outcome: MiniPreviewRestoreOutcome) {
+        if cardBusy?.id == id, cardBusy?.action == .restore { cardBusy = nil }
+        switch outcome {
+        case .shown, .alreadyShowing: setRestoredCard(id)
+        case .cancelled: break
+        case .failed(let error): showError("Couldn’t restore screenshot", error)
+        }
+        updateActions()
+    }
+
+    /// Show "✓ Restored" on `id` (or clear it), reverting after the shipping 2.5 s.
+    private func setRestoredCard(_ id: String?) {
+        restoredCardReset?.cancel(); restoredCardReset = nil
+        restoredCardID = id
+        guard id != nil else { return }
+        let reset = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.restoredCardID = nil; self.restoredCardReset = nil; self.updateActions()
+        }
+        restoredCardReset = reset
+        DispatchQueue.main.asyncAfter(deadline: .now() + historyCopy.feedbackDuration, execute: reset)
     }
 
     /// Shipping card trash: the first click arms "Delete forever" for four

@@ -12,6 +12,12 @@ final class HistoryClearTests: XCTestCase {
         XCTAssertEqual(copy.label(.saveFile), "Save file")
         XCTAssertEqual(copy.busyLabel(.edit), "Opening…")
         XCTAssertEqual(copy.confirmTimeout, 4, accuracy: 0.001)
+        XCTAssertEqual(copy.label(.restore), "Restore")
+        XCTAssertEqual(copy.busyLabel(.restore), "Restoring…")
+        XCTAssertEqual(copy.doneLabel(.restore), "Restored")
+        XCTAssertEqual(copy.tooltip(.restore), "Bring this screenshot back as a floating preview")
+        XCTAssertNil(copy.doneLabel(.saveFile))
+        XCTAssertEqual(copy.feedbackDuration, 2.5, accuracy: 0.001)
         let entry: [String: Any] = ["id": "v", "kind": "video", "preview_url": "", "full_url": "",
             "width": 640, "height": 480, "size_bytes": 2_048, "created_at": "2026-09-26T15:04:05Z",
             "duration_ms": 65_000, "dropped_frames": 2]
@@ -88,7 +94,7 @@ final class HistoryClearTests: XCTestCase {
 
             try button("Screenshots 2").performClick(nil)
             try waitUntil { grid.numberOfRows == 2 }
-            XCTAssertEqual(actions(0), ["Edit", "Save image"])
+            XCTAssertEqual(actions(0), ["Edit", "Restore"], "shipping screenshot cards offer Restore")
             grid.selectRowIndexes([1], byExtendingSelection: false)
             XCTAssertEqual(grid.selectedRow, 1)
             XCTAssertTrue(try XCTUnwrap(grid.card(at: 1)).selected)
@@ -139,6 +145,68 @@ final class HistoryClearTests: XCTestCase {
             XCTAssertFalse(labels().contains("No captures match this filter."))
             XCTAssertEqual(transport.clearCount, 0, "filtering never deletes files")
         }
+    }
+
+    func testRestoreBringsAScreenshotBackAsAFloatingPreview() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = PreviewView.fixtureImage(scale: 1)
+        let path = directory.appendingPathComponent("fixture.png")
+        try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])).write(to: path)
+        let settingsPath = directory.appendingPathComponent("settings.json").path
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 600)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame); window.contentView = root
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
+            failPartway: false, kinds: ["screenshot", "video"])
+        let loader = RestoreImageLoader(NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height)))
+        let previews = MiniPreviewController(tokens: tokens, imageLoader: { try loader.load($0) })
+        defer { previews.close() }
+        let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
+            historyRoot: directory.path, settingsPath: settingsPath, transport: transport,
+            recoveryWorker: EmptyRecoveryWorker(), miniPreviews: previews, showPreferences: {})
+        defer { withExtendedLifetime(controller) {} }
+        window.makeKeyAndOrderFront(nil)
+        let grid = try historyGrid(root)
+        try waitUntil { grid.numberOfRows == 2 && grid.visibleCards.count == 2 }
+        func restoreTitle() -> String? { grid.card(at: 0)?.actionButtons[1].title }
+        func clickRestore() throws { try XCTUnwrap(grid.card(at: 0)).actionButtons[1].performClick(nil) }
+        XCTAssertEqual(grid.card(at: 0)?.artifactID, "item-0")
+        XCTAssertEqual(restoreTitle(), "Restore")
+        XCTAssertEqual(grid.card(at: 0)?.actionButtons[1].toolTip, "Bring this screenshot back as a floating preview")
+        XCTAssertEqual(grid.card(at: 1)?.actionButtons.filter { !$0.isHidden }.map(\.title) ?? [], ["Edit", "Save file"],
+                       "recordings never offer Restore")
+        XCTAssertTrue(previews.presentedArtifactIDs.isEmpty)
+
+        try clickRestore()
+        try waitUntil { previews.decodedArtifactIDs == ["item-0"] && restoreTitle() == "Restored" }
+        XCTAssertTrue(previews.isPanelVisible)
+        XCTAssertFalse(previews.isClipboardCurrent(for: "item-0"), "Restore never copies")
+        // "✓ Restored" reverts after the shipping 2.5 s.
+        try waitUntil { restoreTitle() == "Restore" }
+
+        // Already showing: no duplicate or reorder, but still confirmed.
+        try clickRestore()
+        try waitUntil { restoreTitle() == "Restored" }
+        XCTAssertEqual(previews.presentedArtifactIDs, ["item-0"])
+
+        // An unreadable preview reports the error and leaves no card.
+        previews.dismiss("item-0")
+        loader.setFailing(true)
+        try clickRestore()
+        try waitUntil {
+            restoreTitle() == "Restore" && root.subviews.contains {
+                ($0 as? NSTextField)?.stringValue.hasPrefix("Couldn’t restore screenshot") == true
+            }
+        }
+        XCTAssertTrue(previews.presentedArtifactIDs.isEmpty)
+        XCTAssertEqual(transport.saveCount, 0)
+        XCTAssertEqual(transport.deletedIDs, [], "Restore never changes History")
     }
 
     func testCardDeleteNeedsSecondClickExceptMissingRecordings() throws {
@@ -335,6 +403,21 @@ private final class EmptyRecoveryWorker: RecordingRecoveryWorking {
     func discard(historyRoot: String, draft: RecordingRecoveryDraft,
                  completion: @escaping (Result<Void, Error>) -> Void) {
         XCTFail("History-only fixture must not discard a recording")
+    }
+}
+
+/// Mini-preview image loading that can be switched to fail.
+private final class RestoreImageLoader {
+    private let lock = NSLock()
+    private let image: NSImage
+    private var failing = false
+
+    init(_ image: NSImage) { self.image = image }
+    func setFailing(_ value: Bool) { lock.lock(); failing = value; lock.unlock() }
+    func load(_ path: String) throws -> NSImage {
+        lock.lock(); defer { lock.unlock() }
+        if failing { throw AppBridgeError.invalidResponse }
+        return image
     }
 }
 
