@@ -1674,9 +1674,13 @@ fn probe_env() -> bool {
 }
 
 fn probe(ui: &egui::Ui, name: &str, rect: egui::Rect) {
+    probe_clipped(name, rect, ui.clip_rect());
+}
+
+/// [`probe`] for a rect drawn in another layer, such as a select's listbox.
+fn probe_clipped(name: &str, rect: egui::Rect, clip: egui::Rect) {
     PROBE.with_borrow_mut(|controls| {
         if let Some(controls) = controls {
-            let clip = ui.clip_rect();
             controls.insert(
                 name.to_owned(),
                 [
@@ -1764,7 +1768,7 @@ fn select_styled<T: PartialEq + Copy>(
         .style(style)
         .show(ui, tokens, &choices, value);
     for ((_, label, _), row) in options.iter().zip(&output.rows) {
-        probe(ui, &format!("{name}/{label}"), *row);
+        probe_clipped(&format!("{name}/{label}"), *row, output.list_clip);
     }
     probe(ui, name, output.response.rect);
     match output.chosen {

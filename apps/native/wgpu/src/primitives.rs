@@ -274,6 +274,8 @@ pub struct SelectOutput<T> {
     pub open: bool,
     pub chosen: Option<T>,
     pub rows: Vec<Rect>,
+    /// The listbox's visible area while open (the rows' clip rect).
+    pub list_clip: Rect,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -531,6 +533,7 @@ impl<'a> Select<'a> {
 
         // Listbox.
         let mut rows = Vec::new();
+        let mut list_clip = Rect::NOTHING;
         if open {
             let pad = t.number("s-2");
             let row_x = t.number("s-4");
@@ -615,6 +618,7 @@ impl<'a> Select<'a> {
                                 area.show(ui, |ui: &mut egui::Ui| {
                                     ui.visuals_mut().widgets = content.clone();
                                     ui.spacing_mut().item_spacing.y = 0.;
+                                    list_clip = ui.clip_rect();
                                     for (index, option) in options.iter().enumerate() {
                                         let is_selected = index == selected_index
                                             && options[index].value == *selected;
@@ -765,6 +769,7 @@ impl<'a> Select<'a> {
         SelectOutput {
             response,
             open: state.open,
+            list_clip,
             chosen: chosen.and_then(|index| {
                 let value = options[index].value.clone();
                 (value != *selected).then_some(value)

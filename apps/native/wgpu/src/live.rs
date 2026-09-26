@@ -6666,10 +6666,11 @@ fn capture_actions(
             .iter()
             .find(|d| Some(&d.id) == display_id.as_ref())
             .map_or("No display", |d| d.name.as_str());
-        if let Some(chosen) = crate::primitives::Select::new("history-display", "Display", 160.)
-            .trigger_text(trigger)
-            .show(ui, t, &choices, display_id)
-            .chosen
+        if let Some(chosen) =
+            crate::primitives::Select::new("history-display", "Display", ui.spacing().combo_width)
+                .trigger_text(trigger)
+                .show(ui, t, &choices, display_id)
+                .chosen
         {
             *display_id = chosen;
         }

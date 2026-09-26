@@ -271,12 +271,16 @@ def main():
 
     def volume(window, track, value):
         # Shipping RangeSlider (0-200%, whole percents): a press focuses the
-        # track, then Home and one Right per percent set the exact value.
+        # track, then Home or End, Page (10%) and arrow (1%) keys set the exact
+        # value. Paced keys keep every press under software-GL frame times.
         x0, y0, x1, y1 = visible_rect(window, f"{track} volume")
         click(window, (x0 + x1) // 2, (y0 + y1) // 2)
-        run("xdotool", "key", "Home")
-        if value:
-            run("xdotool", "key", "--delay", "8", "--repeat", str(value), "Right")
+        edge, base = ("End", 200) if value > 100 else ("Home", 0)
+        pages, units = divmod(abs(value - base), 10)
+        up = value >= base
+        keys = [edge] + [("Prior" if up else "Next")] * pages + [("Right" if up else "Left")] * units
+        for key in keys:
+            run("xdotool", "key", key, "sleep", ".12")
         run("xdotool", "sleep", ".3")
 
     def raw_press(window, name):
