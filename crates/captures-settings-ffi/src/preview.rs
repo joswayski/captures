@@ -2,6 +2,8 @@
 use captures_app::preview::{
     self, ThumbnailMonitorBounds, ThumbnailStackAnchor, ThumbnailStackOrigin, ThumbnailVisibility,
 };
+use captures_app::preview_chrome::{self, CardHoverLock, EditorPhase, EditorPresence};
+use captures_app::tray_notice::LogicalRect;
 use captures_settings::MiniPreviewPlacement;
 use std::ffi::{CStr, CString, c_char};
 
@@ -534,6 +536,226 @@ pub extern "C" fn captures_preview_overflow_label_v1(
     }
 }
 
+/// Editor presence phases (`captures_app::preview_chrome::EditorPhase`).
+pub const CAPTURES_EDITOR_PHASE_IDLE: u32 = 0;
+pub const CAPTURES_EDITOR_PHASE_PRESENT: u32 = 1;
+pub const CAPTURES_EDITOR_PHASE_LEAVING: u32 = 2;
+pub const CAPTURES_EDITOR_PHASE_LINGERING: u32 = 3;
+
+/// Plain-field editor presence a host stores per card.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesEditorPresence {
+    pub active: bool,
+    pub phase: u32,
+    pub since_ms: f64,
+}
+
+fn editor_phase(raw: u32) -> EditorPhase {
+    match raw {
+        CAPTURES_EDITOR_PHASE_PRESENT => EditorPhase::Present,
+        CAPTURES_EDITOR_PHASE_LEAVING => EditorPhase::Leaving,
+        CAPTURES_EDITOR_PHASE_LINGERING => EditorPhase::Lingering,
+        _ => EditorPhase::Idle,
+    }
+}
+
+fn raw_editor_phase(phase: EditorPhase) -> u32 {
+    match phase {
+        EditorPhase::Idle => CAPTURES_EDITOR_PHASE_IDLE,
+        EditorPhase::Present => CAPTURES_EDITOR_PHASE_PRESENT,
+        EditorPhase::Leaving => CAPTURES_EDITOR_PHASE_LEAVING,
+        EditorPhase::Lingering => CAPTURES_EDITOR_PHASE_LINGERING,
+    }
+}
+
+/// Report whether an editor window shows this card's capture at `now_ms`
+/// (any monotonic millisecond clock) and advance the leave/linger timers.
+/// Returns whether the phase changed. Null is ignored.
+///
+/// # Safety
+/// Non-null `presence` points to aligned, writable storage for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_editor_presence_update_v1(
+    presence: *mut CapturesEditorPresence,
+    active: bool,
+    now_ms: f64,
+    reduced_motion: bool,
+) -> bool {
+    // SAFETY: The caller guarantees a valid, exclusive pointer when non-null.
+    let Some(raw) = (unsafe { presence.as_mut() }) else {
+        return false;
+    };
+    let mut state = EditorPresence::from_parts(raw.active, editor_phase(raw.phase), raw.since_ms);
+    let changed = state.set_active(active, now_ms, reduced_motion);
+    *raw = CapturesEditorPresence {
+        active: state.active(),
+        phase: raw_editor_phase(state.phase()),
+        since_ms: state.since_ms(),
+    };
+    changed
+}
+
+/// Milliseconds until the presence phase next changes, or -1 when nothing is
+/// pending (idle or present).
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_editor_presence_next_v1(
+    presence: CapturesEditorPresence,
+    now_ms: f64,
+    reduced_motion: bool,
+) -> f64 {
+    EditorPresence::from_parts(
+        presence.active,
+        editor_phase(presence.phase),
+        presence.since_ms,
+    )
+    .next_change_in_ms(now_ms, reduced_motion)
+    .unwrap_or(-1.)
+}
+
+/// Editor control copy. A present control returns its pill label ("In editor",
+/// or "Show in editor" on hover/focus unless just opened); other phases return
+/// "Edit". Returns static UTF-8; never free it.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_editor_label_v1(
+    phase: u32,
+    hovered_or_focused: bool,
+    just_opened: bool,
+) -> *const c_char {
+    let label = if editor_phase(phase).present() {
+        preview_chrome::editor_pill_label(hovered_or_focused, just_opened)
+    } else {
+        preview_chrome::EDIT_LABEL
+    };
+    match label {
+        preview_chrome::EDITOR_PRESENT_LABEL => c"In editor".as_ptr(),
+        preview_chrome::EDITOR_SHOW_LABEL => c"Show in editor".as_ptr(),
+        _ => c"Edit".as_ptr(),
+    }
+}
+
+/// Width of the present pill for measured label widths (both labels share one
+/// cell, so it never jumps on hover).
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_editor_pill_width_v1(
+    rest_label_width: f64,
+    hover_label_width: f64,
+) -> f64 {
+    preview_chrome::editor_pill_width(rest_label_width, hover_label_width)
+}
+
+/// Stale-pointer hover lock a host stores for its stack.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesCardHoverLock {
+    pub locked: bool,
+    pub has_origin: bool,
+    pub origin_x: f64,
+    pub origin_y: f64,
+}
+
+fn hover_lock(raw: &CapturesCardHoverLock) -> CardHoverLock {
+    CardHoverLock::from_parts(
+        raw.locked,
+        raw.has_origin.then_some((raw.origin_x, raw.origin_y)),
+    )
+}
+
+fn store_hover_lock(raw: &mut CapturesCardHoverLock, lock: CardHoverLock) {
+    let origin = lock.origin();
+    *raw = CapturesCardHoverLock {
+        locked: lock.locked(),
+        has_origin: origin.is_some(),
+        origin_x: origin.map_or(0., |(x, _)| x),
+        origin_y: origin.map_or(0., |(_, y)| y),
+    };
+}
+
+/// Hover-lock commands for `captures_preview_hover_lock_v1`.
+pub const CAPTURES_HOVER_LOCK_LOCK: u32 = 0;
+pub const CAPTURES_HOVER_LOCK_POINTER: u32 = 1;
+pub const CAPTURES_HOVER_LOCK_POINTER_OUTSIDE: u32 = 2;
+pub const CAPTURES_HOVER_LOCK_RESAMPLE: u32 = 3;
+pub const CAPTURES_HOVER_LOCK_UNLOCK: u32 = 4;
+
+/// Apply one command to a stack's hover lock: lock after an expand or a new
+/// capture, feed a pointer sample at window point (`x`, `y`) or outside the
+/// window, re-sample after the window moved, or unlock. Returns whether hover
+/// stays locked. Null returns false.
+///
+/// # Safety
+/// Non-null `lock` points to aligned, writable storage for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_hover_lock_v1(
+    lock: *mut CapturesCardHoverLock,
+    command: u32,
+    x: f64,
+    y: f64,
+) -> bool {
+    // SAFETY: The caller guarantees a valid, exclusive pointer when non-null.
+    let Some(raw) = (unsafe { lock.as_mut() }) else {
+        return false;
+    };
+    let mut state = hover_lock(raw);
+    match command {
+        CAPTURES_HOVER_LOCK_LOCK => state.lock(),
+        CAPTURES_HOVER_LOCK_POINTER => {
+            state.pointer(Some((x, y)));
+        }
+        CAPTURES_HOVER_LOCK_POINTER_OUTSIDE => {
+            state.pointer(None);
+        }
+        CAPTURES_HOVER_LOCK_RESAMPLE => state.resample_origin(),
+        CAPTURES_HOVER_LOCK_UNLOCK => state.unlock(),
+        _ => {}
+    }
+    store_hover_lock(raw, state);
+    state.locked()
+}
+
+/// Card and stack icon tooltip frame (y-down): centered on `anchor`, opening
+/// above or below it and nudging while `progress` runs 0→1.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_icon_tooltip_frame_v1(
+    anchor: crate::tray_notice::CapturesTrayNoticeRect,
+    text_width: f64,
+    text_height: f64,
+    above: bool,
+    progress: f64,
+) -> crate::tray_notice::CapturesTrayNoticeRect {
+    let frame = preview_chrome::icon_tooltip_frame(
+        LogicalRect::new(anchor.x, anchor.y, anchor.width, anchor.height),
+        text_width,
+        text_height,
+        above,
+        progress,
+    );
+    crate::tray_notice::CapturesTrayNoticeRect {
+        x: frame.x,
+        y: frame.y,
+        width: frame.width,
+        height: frame.height,
+    }
+}
+
+/// Hover media treatment (`blur(2px) brightness(.5) scale(1.015)`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesPreviewHoverMedia {
+    pub blur: f64,
+    pub brightness: f64,
+    pub scale: f64,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_hover_media_v1() -> CapturesPreviewHoverMedia {
+    CapturesPreviewHoverMedia {
+        blur: preview_chrome::HOVER_MEDIA_BLUR,
+        brightness: preview_chrome::HOVER_MEDIA_BRIGHTNESS,
+        scale: preview_chrome::HOVER_MEDIA_SCALE,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,6 +788,126 @@ mod tests {
                 assert_eq!(CStr::from_ptr(label).to_str(), Ok(expected));
             }
         }
+    }
+
+    #[test]
+    fn editor_presence_and_copy_cross_the_abi() {
+        let mut presence = CapturesEditorPresence::default();
+        // SAFETY: A local, aligned, exclusive value; null is documented as ignored.
+        unsafe {
+            assert!(!captures_preview_editor_presence_update_v1(
+                std::ptr::null_mut(),
+                true,
+                0.,
+                false
+            ));
+            assert!(captures_preview_editor_presence_update_v1(
+                &mut presence,
+                true,
+                10.,
+                false
+            ));
+            assert_eq!(presence.phase, CAPTURES_EDITOR_PHASE_PRESENT);
+            assert_eq!(
+                captures_preview_editor_presence_next_v1(presence, 20., false),
+                -1.
+            );
+            assert!(captures_preview_editor_presence_update_v1(
+                &mut presence,
+                false,
+                100.,
+                false
+            ));
+            assert_eq!(presence.phase, CAPTURES_EDITOR_PHASE_LEAVING);
+            assert_eq!(
+                captures_preview_editor_presence_next_v1(presence, 200., false),
+                450.
+            );
+            assert!(captures_preview_editor_presence_update_v1(
+                &mut presence,
+                false,
+                650.,
+                false
+            ));
+            assert_eq!(presence.phase, CAPTURES_EDITOR_PHASE_LINGERING);
+            assert_eq!(presence.since_ms, 650.);
+        }
+        // SAFETY: The export returns static NUL-terminated UTF-8.
+        unsafe {
+            for (phase, hovered, just_opened, expected) in [
+                (CAPTURES_EDITOR_PHASE_IDLE, true, false, "Edit"),
+                (CAPTURES_EDITOR_PHASE_LINGERING, false, false, "Edit"),
+                (CAPTURES_EDITOR_PHASE_PRESENT, false, false, "In editor"),
+                (CAPTURES_EDITOR_PHASE_PRESENT, true, false, "Show in editor"),
+                (CAPTURES_EDITOR_PHASE_PRESENT, true, true, "In editor"),
+            ] {
+                let label = captures_preview_editor_label_v1(phase, hovered, just_opened);
+                assert_eq!(CStr::from_ptr(label).to_str(), Ok(expected));
+            }
+        }
+        assert_eq!(captures_preview_editor_pill_width_v1(40., 60.), 94.);
+    }
+
+    #[test]
+    fn hover_lock_tooltips_and_media_cross_the_abi() {
+        let mut lock = CapturesCardHoverLock::default();
+        // SAFETY: A local, aligned, exclusive value.
+        unsafe {
+            assert!(captures_preview_hover_lock_v1(
+                &mut lock,
+                CAPTURES_HOVER_LOCK_LOCK,
+                0.,
+                0.
+            ));
+            assert!(captures_preview_hover_lock_v1(
+                &mut lock,
+                CAPTURES_HOVER_LOCK_POINTER,
+                30.,
+                40.
+            ));
+            assert!(lock.has_origin && lock.origin_x == 30. && lock.origin_y == 40.);
+            assert!(captures_preview_hover_lock_v1(
+                &mut lock,
+                CAPTURES_HOVER_LOCK_POINTER,
+                32.,
+                40.
+            ));
+            assert!(!captures_preview_hover_lock_v1(
+                &mut lock,
+                CAPTURES_HOVER_LOCK_POINTER,
+                34.,
+                40.
+            ));
+            assert_eq!(lock, CapturesCardHoverLock::default());
+            captures_preview_hover_lock_v1(&mut lock, CAPTURES_HOVER_LOCK_LOCK, 0., 0.);
+            assert!(!captures_preview_hover_lock_v1(
+                &mut lock,
+                CAPTURES_HOVER_LOCK_POINTER_OUTSIDE,
+                0.,
+                0.
+            ));
+        }
+        let frame = captures_preview_icon_tooltip_frame_v1(
+            crate::tray_notice::CapturesTrayNoticeRect {
+                x: 8.,
+                y: 8.,
+                width: 28.,
+                height: 28.,
+            },
+            30.,
+            12.,
+            false,
+            1.,
+        );
+        assert_eq!(
+            (frame.x, frame.y, frame.width, frame.height),
+            (0., 42., 44., 20.)
+        );
+        let media = captures_preview_hover_media_v1();
+        assert_eq!(
+            (media.blur, media.brightness, media.scale),
+            (2., 0.5, 1.015)
+        );
     }
 
     #[test]

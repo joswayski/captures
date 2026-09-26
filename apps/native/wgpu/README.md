@@ -43,6 +43,10 @@ Save, history selection and nondestructive Dismiss actions. Expanded overflow sc
 without dropping cards; the stack can collapse or be cleared without deleting captures.
 It is excluded from captures by default and retained when the include-in-captures
 preference is enabled.
+Cards follow the shipping hover chrome: an "In editor" pill and accent ring while
+their screenshot editor is open, a pre-blurred darkened hover image, hover held
+off after an expand or a new card until the pointer moves, and instant glass
+icon tooltips.
 Record creates H.264 MP4 recordings with the stored FPS, maximum resolution,
 countdown, cursor, click-highlight, desktop-audio and microphone defaults where
 the current platform reports support. Pause/resume, confirmed Restart using the

@@ -16,9 +16,16 @@ final class NativeMotionTests: XCTestCase {
             XCTAssertEqual(spec.frames.first?.offset, 0, name)
             XCTAssertEqual(spec.frames.last?.offset, 1, name)
         }
-        for name in ["segmented_indicator", "history_card_hover", "tooltip"] {
+        for name in ["segmented_indicator", "history_card_hover", "tooltip",
+                     "preview_media_filter", "preview_media_scale", "preview_icon_tooltip",
+                     "preview_stack_tooltip", "preview_editor_ring", "preview_editor_ring_leave",
+                     "preview_editor_morph"] {
             XCTAssertNotNil(catalog.transitions[name], name)
         }
+        // Literal shipping timings cross as millis and bezier points.
+        let blur = try XCTUnwrap(catalog.transitions["preview_media_filter"])
+        XCTAssertEqual(blur.duration, .millis(180))
+        XCTAssertEqual(blur.easing, .bezier([0.25, 0.1, 0.25, 1]))
         let pop = try XCTUnwrap(catalog.keyframes["update_notice_in"])
         XCTAssertEqual(pop.duration, .token("dur-4"))
         XCTAssertEqual(pop.easing, .token("ease-out"))

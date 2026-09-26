@@ -357,6 +357,13 @@ Recycle Bin behavior still needs physical-host acceptance.
 Edit opens the exact screenshot in its native editor without showing a hidden
 workspace, switching Preferences, or changing the selected History row. Repeated
 Edit focuses the existing editor without resetting its pending edits.
+While that editor is open (or minimized) the card shows the shipping "In
+editor" pill and accent ring; the pill offers "Show in editor" on hover or
+focus and focuses the editor. Closing it eases the ring out and leaves the
+Edit icon visible for 3 seconds. Hover blurs, darkens and slightly enlarges the
+card media, but not while the pointer still rests where an expand or a new
+capture left it: chrome waits until it moves. Card icons and Clear all show
+instant glass tooltips instead of system hover text.
 Dismiss closes only the targeted card. Clear all dismisses a snapshot of the stack, preserving history,
 exports and any later capture. There is no automatic dismissal timer or count cap.
 

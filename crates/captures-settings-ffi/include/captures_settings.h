@@ -311,6 +311,55 @@ double captures_preview_scroll_target_v1(double scroll_top, double content_heigh
  * Top-anchored stacks show newest first. Returns static UTF-8; never free. */
 const char *captures_preview_overflow_label_v1(bool above, bool top_anchor);
 
+/* Mini-preview editor presence, stored by the host per card. Report whether an
+ * editor window shows the capture at now_ms (any monotonic millisecond clock);
+ * the shared rules run the shipping 550 ms leave then 3 s Edit linger (reduced
+ * motion skips the leave). Returns whether the phase changed; null is ignored.
+ * next returns milliseconds until the phase next changes, or -1 when idle or
+ * present. Present phases show the "In editor" pill and the card's accent ring;
+ * leaving ignores clicks; leaving and lingering keep the control visible. */
+#define CAPTURES_EDITOR_PHASE_IDLE 0u
+#define CAPTURES_EDITOR_PHASE_PRESENT 1u
+#define CAPTURES_EDITOR_PHASE_LEAVING 2u
+#define CAPTURES_EDITOR_PHASE_LINGERING 3u
+typedef struct { bool active; uint32_t phase; double since_ms; } CapturesEditorPresence;
+bool captures_preview_editor_presence_update_v1(CapturesEditorPresence *presence, bool active,
+    double now_ms, bool reduced_motion);
+double captures_preview_editor_presence_next_v1(CapturesEditorPresence presence, double now_ms,
+    bool reduced_motion);
+
+/* Editor control copy: a present control's pill label ("In editor", or
+ * "Show in editor" while hovered or focused unless just clicked open and the
+ * pointer has not left it); "Edit" otherwise. Static UTF-8; never free. */
+const char *captures_preview_editor_label_v1(uint32_t phase, bool hovered_or_focused,
+    bool just_opened);
+/* Present pill width for the measured widths of both labels. */
+double captures_preview_editor_pill_width_v1(double rest_label_width, double hover_label_width);
+
+/* Stale-pointer hover lock for a preview stack. Lock after an expand or a new
+ * capture; feed pointer samples (window point, or outside the window); hover
+ * stays locked until the pointer moves 4 pt from its first sample or leaves.
+ * Re-sample after the window moves under the pointer. Returns whether hover
+ * stays locked; null returns false. */
+#define CAPTURES_HOVER_LOCK_LOCK 0u
+#define CAPTURES_HOVER_LOCK_POINTER 1u
+#define CAPTURES_HOVER_LOCK_POINTER_OUTSIDE 2u
+#define CAPTURES_HOVER_LOCK_RESAMPLE 3u
+#define CAPTURES_HOVER_LOCK_UNLOCK 4u
+typedef struct { bool locked; bool has_origin; double origin_x, origin_y; } CapturesCardHoverLock;
+bool captures_preview_hover_lock_v1(CapturesCardHoverLock *lock, uint32_t command, double x,
+    double y);
+
+/* Card and stack-toolbar icon tooltip frame in y-down coordinates: centered on
+ * the icon, 6 pt away, above it when `above`, nudging 2 pt while progress runs
+ * 0 to 1. Bottom-anchored stacks open tips above; top-anchored below. */
+CapturesTrayNoticeRect captures_preview_icon_tooltip_frame_v1(CapturesTrayNoticeRect anchor,
+    double text_width, double text_height, bool above, double progress);
+
+/* Hover media treatment: blur radius (points), brightness multiplier, scale. */
+typedef struct { double blur, brightness, scale; } CapturesPreviewHoverMedia;
+CapturesPreviewHoverMedia captures_preview_hover_media_v1(void);
+
 /* Owned immutable region session. Prepare/capture may block; use a worker after
  * hiding capture windows. Begin/retain a capture-flow guard on the event-loop
  * thread first. Freeze and cursor settings are fixed at prepare. No pixel data

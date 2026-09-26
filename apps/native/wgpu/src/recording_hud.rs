@@ -376,22 +376,15 @@ fn paint_tooltip(
         egui::pos2(frame.x as f32, frame.y as f32),
         Vec2::new(frame.width as f32, frame.height as f32),
     );
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(
-        egui::Order::Tooltip,
+    crate::glass_tooltip::paint(
+        ui,
+        tokens,
         egui::Id::unique("recording-hud-tooltip"),
-    ));
-    painter.rect(
         rect,
-        tokens.number("r-sm") as u8,
-        tokens.color("glass-strong").gamma_multiply(progress),
-        Stroke::new(1., tokens.color("glass-border").gamma_multiply(progress)),
-        StrokeKind::Inside,
+        galley,
+        progress,
+        crate::glass_tooltip::Style::Hud,
     );
-    let text = egui::pos2(
-        rect.left() + (rect.width() - galley.size().x) / 2.,
-        rect.top() + (rect.height() - galley.size().y) / 2.,
-    );
-    painter.galley(text, galley, color);
 }
 
 fn remember_control(ui: &egui::Ui, rect: Rect) {

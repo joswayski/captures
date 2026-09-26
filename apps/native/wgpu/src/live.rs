@@ -227,6 +227,8 @@ enum Reply {
         generation: u64,
         artifact_id: String,
         result: Result<Decoded, String>,
+        /// Card-sized pre-blurred copy for the hover treatment.
+        blurred: Option<egui::ColorImage>,
     },
 }
 
@@ -542,6 +544,8 @@ struct PreviewCard {
     width: u32,
     height: u32,
     texture: Option<egui::TextureHandle>,
+    /// Pre-blurred copy for the shipping hover blur.
+    blurred: Option<egui::TextureHandle>,
     size_bytes: u64,
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
@@ -551,6 +555,8 @@ struct PreviewCard {
     rejected_at: Option<Instant>,
     /// When the decoded image first painted: shipping `thumbnail-arrive`.
     arrived_at: Option<Instant>,
+    /// Whether an editor window shows this capture ("In editor" pill, ring).
+    editor: captures_app::preview_chrome::EditorPresence,
 }
 
 #[derive(Clone)]
@@ -560,12 +566,16 @@ struct PreviewRenderCard {
     width: u32,
     height: u32,
     texture: egui::TextureHandle,
+    blurred: Option<egui::TextureHandle>,
     size_bytes: u64,
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
     saved_path: Option<PathBuf>,
     saved_at: Option<Instant>,
     clipboard_current: bool,
+    editor_phase: captures_app::preview_chrome::EditorPhase,
+    /// When `editor_phase` began.
+    editor_since: Instant,
     rejected_at: Option<Instant>,
     arrived_at: Option<Instant>,
     layout: captures_app::preview::PreviewCardLayout,
@@ -585,6 +595,11 @@ struct MiniPreviews {
     include_in_captures: bool,
     placement: captures_settings::MiniPreviewPlacement,
     omission_frame: Option<u64>,
+    /// Monotonic origin for the shared editor-presence clock.
+    epoch: Instant,
+    /// Bumped when an expand or a new card should hold card hover off until
+    /// the pointer moves (shipping stale-pointer suppression).
+    hover_lock_generation: u64,
 }
 
 impl Default for MiniPreviews {
@@ -602,6 +617,8 @@ impl Default for MiniPreviews {
             include_in_captures: false,
             placement: captures_settings::MiniPreviewPlacement::default(),
             omission_frame: None,
+            epoch: Instant::now(),
+            hover_lock_generation: 0,
         }
     }
 }
@@ -678,6 +695,7 @@ impl MiniPreviews {
                 width: artifact.entry.width,
                 height: artifact.entry.height,
                 texture: None,
+                blurred: None,
                 size_bytes: artifact.entry.size_bytes,
                 busy: None,
                 message: None,
@@ -685,6 +703,7 @@ impl MiniPreviews {
                 saved_at: None,
                 rejected_at: None,
                 arrived_at: None,
+                editor: captures_app::preview_chrome::EditorPresence::new(false, 0.),
             },
         );
         if target.is_some() {
@@ -1120,11 +1139,18 @@ impl Live {
                         generation,
                         artifact_id,
                         path,
-                    } => Reply::PreviewDecoded {
-                        generation,
-                        artifact_id,
-                        result: decode(&path),
-                    },
+                    } => {
+                        let result = decode(&path);
+                        let blurred = result.as_ref().ok().and_then(|decoded| {
+                            crate::mini_preview::hover_blur_image(&decoded.image)
+                        });
+                        Reply::PreviewDecoded {
+                            generation,
+                            artifact_id,
+                            result,
+                            blurred,
+                        }
+                    }
                     Job::Copy {
                         path,
                         preview,
@@ -2516,9 +2542,14 @@ impl Live {
                     }
                 }
                 PreviewMessage::ToggleCollapsed => {
-                    self.previews
-                        .stack
-                        .set_collapsed(!self.previews.stack.is_collapsed());
+                    let collapse = !self.previews.stack.is_collapsed();
+                    self.previews.stack.set_collapsed(collapse);
+                    if !collapse {
+                        // Expanding leaves the pointer over a card that was
+                        // never hovered; hold its chrome until it moves.
+                        self.previews.hover_lock_generation =
+                            self.previews.hover_lock_generation.wrapping_add(1);
+                    }
                     ctx.request_repaint();
                 }
                 PreviewMessage::MoveStack {
@@ -3791,6 +3822,7 @@ impl Live {
                     generation,
                     artifact_id,
                     result,
+                    blurred,
                 } if self.previews.accepts(&artifact_id, generation) => match result {
                     Ok(decoded) => {
                         self.previews.mark_ready(&artifact_id);
@@ -3804,7 +3836,18 @@ impl Live {
                             decoded.image,
                             egui::TextureOptions::LINEAR,
                         ));
+                        card.blurred = blurred.map(|image| {
+                            ctx.load_texture(
+                                format!("mini-preview-blur:{generation}:{artifact_id}"),
+                                image,
+                                egui::TextureOptions::LINEAR,
+                            )
+                        });
                         card.arrived_at = Some(Instant::now());
+                        // A card appearing under a resting pointer must not
+                        // open its hover chrome until the pointer moves.
+                        self.previews.hover_lock_generation =
+                            self.previews.hover_lock_generation.wrapping_add(1);
                         request_hidden_root_paint(ctx);
                         ctx.request_repaint();
                     }
@@ -4257,6 +4300,22 @@ impl Live {
             ctx.request_repaint_after(CLIPBOARD_CHECK_INTERVAL);
         }
         let now = Instant::now();
+        // Editor presence follows this host's open screenshot editors; the
+        // shared rules time the leave and linger, waking once per change.
+        let presence_now = crate::motion::elapsed_ms(self.previews.epoch, now);
+        for (artifact_id, card) in &mut self.previews.cards {
+            let active = self
+                .editors
+                .get(artifact_id)
+                .is_some_and(|editor| !editor.closed());
+            card.editor.set_active(active, presence_now, reduced_motion);
+            if let Some(wait) = card.editor.next_change_in_ms(presence_now, reduced_motion) {
+                request_hidden_root_paint(ctx);
+                ctx.request_repaint_after(Duration::from_secs_f64(wait / 1000.));
+            }
+        }
+        let epoch = self.previews.epoch;
+        let hover_lock_generation = self.previews.hover_lock_generation;
         let cards = self
             .previews
             .stack
@@ -4271,6 +4330,7 @@ impl Live {
                     width: card.width,
                     height: card.height,
                     texture: card.texture.clone()?,
+                    blurred: card.blurred.clone(),
                     size_bytes: card.size_bytes,
                     busy: card.busy,
                     message: card.message.clone(),
@@ -4279,6 +4339,9 @@ impl Live {
                         .saved_at
                         .filter(|at| now.saturating_duration_since(*at) < SAVED_FEEDBACK),
                     clipboard_current: clipboard_owner.as_deref() == Some(artifact_id.as_str()),
+                    editor_phase: card.editor.phase(),
+                    editor_since: epoch
+                        + Duration::from_secs_f64(card.editor.since_ms().max(0.) / 1000.),
                     rejected_at: card.rejected_at,
                     arrived_at: card.arrived_at,
                     layout: self.previews.stack.card_layout(index, top_anchor)?,
@@ -4366,6 +4429,35 @@ impl Live {
                     return;
                 }
                 let mut message = None;
+                // Shipping stale-pointer suppression: after an expand or a new
+                // card, card hover waits until the pointer really moves.
+                let lock_id = egui::Id::unique("mini-preview-hover-lock");
+                let geometry_key = [
+                    geometry.x.round() as i64,
+                    geometry.y.round() as i64,
+                    geometry.height.round() as i64,
+                ];
+                let (mut hover_lock, seen_generation, seen_geometry) = ui
+                    .data(|data| {
+                        data.get_temp::<(captures_app::preview_chrome::CardHoverLock, u64, [i64; 3])>(
+                            lock_id,
+                        )
+                    })
+                    .map_or((Default::default(), None, geometry_key), |(lock, generation, key)| {
+                        (lock, Some(generation), key)
+                    });
+                if seen_generation != Some(hover_lock_generation) {
+                    hover_lock.lock();
+                } else if seen_geometry != geometry_key {
+                    hover_lock.resample_origin();
+                }
+                let hover_locked = hover_lock.pointer(
+                    ui.input(|input| input.pointer.hover_pos())
+                        .map(|point| (f64::from(point.x), f64::from(point.y))),
+                );
+                ui.data_mut(|data| {
+                    data.insert_temp(lock_id, (hover_lock, hover_lock_generation, geometry_key))
+                });
                 // No idle polling. Only sample while a compact pile has an
                 // active pointer gesture; local winit positions can lag a move.
                 let desktop_pointer = if collapsed && ui.input(|input| input.pointer.primary_down())
@@ -4433,6 +4525,15 @@ impl Live {
                                 desktop_pointer,
                                 reject_offset,
                                 right_anchor: placement.is_right(),
+                                top_anchor,
+                                blurred: card.blurred.as_ref(),
+                                editor: card.editor_phase,
+                                editor_elapsed_ms: crate::motion::elapsed_ms(
+                                    card.editor_since,
+                                    Instant::now(),
+                                ),
+                                hover_locked,
+                                reduced_motion,
                             },
                         )
                     });
@@ -4696,6 +4797,8 @@ impl Live {
                             ui,
                             &tokens,
                             placement.is_right(),
+                            top_anchor,
+                            reduced_motion,
                         ) {
                             Some(crate::mini_preview::StackAction::ToggleCollapsed) => {
                                 message = Some(PreviewMessage::ToggleCollapsed);

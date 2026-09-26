@@ -512,10 +512,24 @@ def main():
                 idle_pixel = wait(settled, "settled idle preview pixel")
                 shot(preview, f"{prefix}-chrome-idle")
                 run("xdotool", "mousemove", "--sync", "--window", preview, "60", str(card_top + 72))
-                time.sleep(.25)
-                hover_pixel = run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-")
-                assert all(abs(b - a * .5) <= 2 for a, b in zip(idle_pixel, hover_pixel)), (
-                    "hover must dim only the media", list(idle_pixel), list(hover_pixel))
+                # Shipping hover eases `blur(2px) brightness(.5) scale(1.015)` in
+                # over 180-220 ms. This flat sample (no edge within the blur or
+                # scale reach) must land on exactly half its idle value.
+                wait(lambda: all(abs(b - a * .5) <= 2 for a, b in zip(idle_pixel, sample())),
+                     "hover dims only the media to brightness .5")
+                # The blur itself: the hard quadrant edge above the centered
+                # actions spreads across several pixels. The sharp idle media
+                # has at most one antialiased pixel there.
+                def edge_spread():
+                    raw = run("import", "-window", preview, "-crop", f"23x1+164+{card_top + 32}",
+                              "-depth", "8", "rgb:-")
+                    strip = [raw[i:i + 3] for i in range(0, len(raw), 3)]
+                    ends = (strip[0], strip[-1])
+                    assert max(abs(a - b) for a, b in zip(*ends)) > 40, ("no quadrant edge", ends)
+                    return sum(1 for pixel in strip if min(
+                        max(abs(a - b) for a, b in zip(pixel, end)) for end in ends) > 3)
+
+                wait(lambda: edge_spread() >= 4, "hover blurs the media edge")
                 shot(preview, f"{prefix}-chrome-hover")
                 run("xdotool", "mousemove", "--sync", "640", "440")
                 wait(lambda: sample() == idle_pixel, "preview media returns to idle after hover")
@@ -671,6 +685,25 @@ def main():
                     assert entries() == preserved and private_files(first) == preserved_private, (
                         "Edit changed the artifact or History")
                     shot("root", f"{prefix}-edit-with-preview")
+                    # Shipping editor presence: with the pointer away, the Edit
+                    # icon stays pinned as the "In editor" pill (glass fill over
+                    # the orange media quadrant) and the card gains the 2 px
+                    # accent ring just outside its left edge.
+                    def pixel(x, y):
+                        return run("import", "-window", preview, "-crop", f"1x1+{x}+{y}",
+                                   "-depth", "8", "rgb:-")
+
+                    def accent_ring():
+                        red, green, blue = pixel(27, 100)
+                        return red > 200 and green > 150 and blue < 80
+
+                    def glass_at(x, y):
+                        return max(pixel(x, y)) < 60
+
+                    run("xdotool", "mousemove", "--sync", "640", "440")
+                    wait(lambda: accent_ring() and glass_at(230, 42),
+                         "an open editor pins the In editor pill and accent ring")
+                    shot(preview, f"{prefix}-in-editor")
                     run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
                     assert active_window() == other
                     click(preview, 290, 50, activate=False)
@@ -688,6 +721,13 @@ def main():
                     assert draft_files() == preserved_drafts, "unmodified Edit changed saved drafts"
                     assert windows(PREVIEW) and not windows("Captures"), (
                         "closing Edit removed the preview or restored workspace")
+                    # The ring eases out, then the plain Edit icon lingers
+                    # without hover for 3 s before chrome returns to idle.
+                    run("xdotool", "mousemove", "--sync", "640", "440")
+                    wait(lambda: not accent_ring() and glass_at(280, 42) and not glass_at(230, 42),
+                         "closing the editor leaves a lingering Edit icon without the ring")
+                    shot(preview, f"{prefix}-editor-linger")
+                    wait(lambda: not glass_at(280, 42), "the Edit linger ends")
                     click(preview, 50, 50, activate=False)  # Saved card Close (top-left).
                     wait(lambda: not windows(PREVIEW), "Dismiss closes only the card")
                     time.sleep(.3)
