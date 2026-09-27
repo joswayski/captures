@@ -3593,9 +3593,16 @@ final class ScreenshotEditorTests: XCTestCase {
                               "\(row.fieldLabel) tiles stay inside their row")
             }
             try render(controller.root, name: "screenshot-editor-style-\(appearance)")
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: document.bounds.height - scroll.contentView.bounds.height))
+            // At 600pt with the restored-draft notice, Properties is ~100pt tall,
+            // and the rotation-snap rows below the style form fill the scrolled
+            // end. Reaching the last field means scrolling can reveal it.
+            XCTAssertGreaterThan(document.bounds.height, scroll.contentView.bounds.height,
+                                 "the style form scrolls in the short window")
+            _ = shadowY.scrollToVisible(shadowY.bounds)
             scroll.reflectScrolledClipView(scroll.contentView)
-            XCTAssertTrue(scroll.contentView.bounds.contains(shadowY.convert(shadowY.bounds, to: scroll.contentView)),
+            let visible = scroll.contentView.bounds
+            let fieldRect = shadowY.convert(shadowY.bounds, to: scroll.contentView)
+            XCTAssertTrue(fieldRect.minY >= visible.minY - 0.5 && fieldRect.maxY <= visible.maxY + 0.5,
                           "the last style field remains reachable in the minimum window")
             worker.failLayerAction = "annotation_style"
             worker.failureMessage = "The annotation style could not be applied. The previous draft, layer selection, pixels and undo history remain recoverable."
@@ -5322,7 +5329,7 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
-    func testExternalArtifactSwitchRefusesStagedAndInlineTextWithoutDroppingEither() throws {
+    func testExternalArtifactSwitchRefusesPendingAndInlineTextAndAutosavesAcceptedEdits() throws {
         _ = NSApplication.shared
         let original = textLayer(id: "copy", text: "accepted")
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
@@ -5346,15 +5353,21 @@ final class ScreenshotEditorTests: XCTestCase {
         worker.completePending(with: snapshot(id: "shot", unsaved: true,
             layers: [textLayer(id: "copy", text: "pending, not in the document")]))
         worker.deferRequests = false
-        controller.present(artifact: artifact(id: "other"), historyRoot: "/native/History") {
-            accepted = $0
-        }
-        XCTAssertEqual(accepted, false, "the accepted but unsaved edit also refuses another capture")
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History") {
             accepted = $0
         }
         XCTAssertEqual(accepted, true, "same-ID focus keeps the edited text")
         XCTAssertEqual(staged.string, "pending, not in the document")
+        XCTAssertEqual(worker.openArtifactIDs, ["shot"], "same-ID focus does not reload")
+        XCTAssertEqual(worker.autosaves, 0)
+        // As in shipping, accepted edits autosave before another capture opens.
+        accepted = nil
+        controller.present(artifact: artifact(id: "other"), historyRoot: "/native/History") {
+            accepted = $0
+        }
+        XCTAssertEqual(accepted, true, "an accepted, unsaved edit no longer blocks another capture")
+        XCTAssertEqual(worker.autosaves, 1, "the replaced capture's edit is written to its draft first")
+        XCTAssertEqual(worker.openArtifactIDs, ["shot", "other"])
 
         let inlineWorker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
         let inline = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: inlineWorker)
