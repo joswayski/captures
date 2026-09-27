@@ -233,7 +233,7 @@ def main():
         wait(lambda: manifest() is None, "recovery source cleanup")
         # Disk cleanup precedes the worker reply. Only the event-thread finish
         # restores the previously visible root and releases the capture flow.
-        wait(lambda: windows("Captures"), "workspace restoration after worker completion")
+        wait(lambda: windows("Capture History"), "workspace restoration after worker completion")
         time.sleep(.3)
 
     try:
@@ -353,7 +353,7 @@ pcm.!pulse {
             env["CAPTURES_TEST_REVEAL"] = str(output / "revealed-path.txt")
         app = spawn("app", [str(binary), "--live", "--history-root", str(output / "history"),
                             "--settings-file", str(settings), "--quit-after", "120"])
-        root = wait(lambda: windows("Captures"), "capture workspace")[0]
+        root = wait(lambda: windows("Capture History"), "capture workspace")[0]
         time.sleep(1)
         run("xdotool", "key", "ctrl+alt+w")
         select_recording("recording-selector", shortcuts=not args.screenshot_only)
@@ -374,7 +374,7 @@ pcm.!pulse {
             session_id = manifest()["session_id"]
             assert not manifest()["segments"] and manifest()["last_error"]
             assert not windows("Captures Recording Region"), "failed takes remove the region guide"
-            assert not windows("Captures"), "the workspace stays hidden behind the failed HUD"
+            assert not windows("Capture History"), "the workspace stays hidden behind the failed HUD"
             time.sleep(.3)
             shot(hud, "hud-start-failed")
             # Stop, Pause and Screenshot are disabled on a failed take.
@@ -682,7 +682,7 @@ pcm.!pulse {
             def stop_with_notice(hud, count):
                 click(hud, 142, 54)
                 wait(lambda: len(history()) == count, "recording publication")
-                editor = wait(lambda: windows("Recording editor"), "recording editor after recording")[0]
+                editor = wait(lambda: windows("Captures Editor"), "recording editor after recording")[0]
                 assert not windows("Recording ready"), "notice must wait for the editor to close"
                 connection = display.Display(env["DISPLAY"])
                 try:
@@ -693,7 +693,7 @@ pcm.!pulse {
                     connection.sync()
                 finally:
                     connection.close()
-                wait(lambda: not windows("Recording editor"), "recording editor closed")
+                wait(lambda: not windows("Captures Editor"), "recording editor closed")
                 notice = wait(lambda: windows("Recording ready"), "recording-ready notice")[0]
                 wait(lambda: manifest() is None, "finalization cleanup")
                 assert not windows("Captures Recording Controls")
@@ -719,7 +719,7 @@ pcm.!pulse {
                 connection.sync()
             finally:
                 connection.close()
-            wait(lambda: not windows("Captures"), "root hidden in tray")
+            wait(lambda: not windows("Capture History"), "root hidden in tray")
             exports = output / "exports"
             exports.write_text("blocked output directory")
             notice_click(notice, 300, 89)
@@ -752,7 +752,7 @@ pcm.!pulse {
                 hud = running_hud()
                 time.sleep(.4)
                 notice = stop_with_notice(hud, count)
-                assert not windows("Captures"), "background completion must not show root"
+                assert not windows("Capture History"), "background completion must not show root"
                 if action == "expiry":
                     time.sleep(13)
                     assert windows("Recording ready"), "notice expired too early"
@@ -825,14 +825,14 @@ pcm.!pulse {
 
             click(hud, 398, 54)
             wait(lambda: not windows("Captures Recording Controls"), "HUD hidden before relaunch")
-            assert not windows("Captures")
+            assert not windows("Capture History")
             secondary = subprocess.run([str(binary), "--live", "--history-root", str(output / "history"),
                                         "--settings-file", str(settings)], env=env,
                                        capture_output=True, text=True, timeout=10)
             assert secondary.returncode == 0, secondary.stderr
             assert '"event":"forwarded"' in secondary.stdout
             hud = wait(lambda: windows("Captures Recording Controls"), "relaunch restores same paused HUD")[0]
-            assert not windows("Captures"), "relaunch must not open Preferences over the take"
+            assert not windows("Capture History"), "relaunch must not open Preferences over the take"
             assert (manifest()["state"] == "paused"
                     and manifest()["session_id"] == before["session_id"])
 
@@ -842,7 +842,7 @@ pcm.!pulse {
             panel.wait(timeout=10)
             hud = wait(lambda: windows("Captures Recording Controls"),
                        "tray-host loss restores controls")[0]
-            root = wait(lambda: windows("Captures"), "tray-host loss restores workspace")[0]
+            root = wait(lambda: windows("Capture History"), "tray-host loss restores workspace")[0]
             shot("root", "recording-controls-tray-loss-restored")
             assert (manifest()["state"] == "paused"
                     and manifest()["session_id"] == before["session_id"])
@@ -961,7 +961,7 @@ pcm.!pulse {
         metadata = wait(lambda: list(history()), "History publication")
         assert len(metadata) == 1
         time.sleep(.5)
-        assert not windows("Recording ready") and not windows("Recording editor"), (
+        assert not windows("Recording ready") and not windows("Captures Editor"), (
             "with the editor preference off, shipping shows neither the editor nor a notice")
         entry = json.loads(metadata[0].read_text())
         assert entry["kind"] == "video" and entry["mime_type"] == "video/mp4", entry
@@ -1070,7 +1070,7 @@ pcm.!pulse {
         closed_media = next(iter(closed)).parent / "media.mp4"
         run("ffmpeg", "-v", "error", "-i", str(closed_media), "-f", "null", "-")
         time.sleep(.3)
-        shot(wait(lambda: windows("Captures"), "recording History")[0], "recording-history")
+        shot(wait(lambda: windows("Capture History"), "recording History")[0], "recording-history")
 
         # A screenshot key must leave Record mode, not merely change its target.
         published = history()

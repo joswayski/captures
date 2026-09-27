@@ -13,6 +13,10 @@ use an explicit test file. Screenshots and scripted exercises without that flag
 use disposable settings. `--live` opts into the shared Rust New Capture controls
 plus direct full-display, region and window PNG, history, copy, export and delete
 flows; see the [live slice and limits](../README.md#live-display-capture-slice).
+Capture History (1020 × 720) and Preferences (880 × 660) are separate, resizable
+windows like the shipping app's, and first-run setup uses the History window's
+root retitled as the 620 × 560 **Captures** setup window until setup completes;
+`--live --open-preferences` also opens Preferences at launch.
 Live mode also provides a native tray menu with the shipping labels and order:
 New Capture…, Screenshot Region/Window/Display, Record Region/Window/Display,
 Capture History…, Open Save Location, Preferences, Send Feedback…, a disabled
@@ -271,6 +275,7 @@ supported production distro.
 ```sh
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene preferences
 apps/native/wgpu/target/release/captures-wgpu-workbench --live
+apps/native/wgpu/target/release/captures-wgpu-workbench --live --open-preferences
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene history --history-count 1000
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene hud --floating --appearance light
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene preview --floating

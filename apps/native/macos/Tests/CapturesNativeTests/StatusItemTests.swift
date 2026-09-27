@@ -104,9 +104,17 @@ final class StatusItemTests: XCTestCase {
             "finishing consumes the prior visibility state")
     }
 
-    func testReopenFocusesVisibleWorkspaceOtherwiseShowsPreferences() {
-        XCTAssertEqual(liveReopenAction(hasVisibleWindows: true), .focusExisting)
-        XCTAssertEqual(liveReopenAction(hasVisibleWindows: false), .showPreferences)
+    func testReopenFollowsShippingWindowPriorityOtherwiseShowsPreferences() {
+        XCTAssertEqual(appReactivation(onboardingComplete: false, restoreRecordingControls: true,
+                                       visible: [.history]), .showSetup)
+        XCTAssertEqual(appReactivation(onboardingComplete: true, restoreRecordingControls: true,
+                                       visible: [.history]), .restoreRecordingControls)
+        XCTAssertEqual(appReactivation(onboardingComplete: true, restoreRecordingControls: false,
+                                       visible: [.preferences, .history]), .focus(.history))
+        XCTAssertEqual(appReactivation(onboardingComplete: true, restoreRecordingControls: false,
+                                       visible: [.preferences]), .focus(.preferences))
+        XCTAssertEqual(appReactivation(onboardingComplete: true, restoreRecordingControls: false,
+                                       visible: []), .showPreferences)
     }
 
     func testShortcutHostPolicyUsesOnlyCaptureBindingsAndSuppressesBlockedScenes() {
@@ -152,16 +160,12 @@ final class StatusItemTests: XCTestCase {
             "hidden or unfocused Preferences must restore registered shortcuts")
         XCTAssertTrue(captureShortcutsSuspended(preferencesFocused: true),
             "focused Preferences releases OS grabs before recorder input")
-        XCTAssertTrue(preferencesWindowFocused(scene: "preferences", visible: true,
-            key: true, attachedSheetKey: false))
-        XCTAssertTrue(preferencesWindowFocused(scene: "preferences", visible: true,
-            key: false, attachedSheetKey: true))
-        XCTAssertFalse(preferencesWindowFocused(scene: "preferences", visible: true,
-            key: false, attachedSheetKey: false), "unfocused Preferences allows shortcuts")
-        XCTAssertFalse(preferencesWindowFocused(scene: "preferences", visible: false,
-            key: true, attachedSheetKey: false), "hidden Preferences allows shortcuts")
-        XCTAssertFalse(preferencesWindowFocused(scene: "live", visible: true,
-            key: true, attachedSheetKey: false))
+        XCTAssertTrue(preferencesWindowFocused(visible: true, key: true, attachedSheetKey: false))
+        XCTAssertTrue(preferencesWindowFocused(visible: true, key: false, attachedSheetKey: true))
+        XCTAssertFalse(preferencesWindowFocused(visible: true, key: false, attachedSheetKey: false),
+            "unfocused Preferences allows shortcuts")
+        XCTAssertFalse(preferencesWindowFocused(visible: false, key: true, attachedSheetKey: false),
+            "hidden Preferences allows shortcuts")
     }
 
     func testQuitFlushesCancelsClosesAndDrainsBeforeCleanup() {

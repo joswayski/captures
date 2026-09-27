@@ -1457,7 +1457,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         window = editorWindow
         super.init()
         editorWindow.editorShortcut = { [weak self] in self?.handleEditorShortcut($0) ?? false }
-        window.isReleasedWhenClosed = false; window.title = "Edit screenshot"
+        window.isReleasedWhenClosed = false; window.title = EditorWindowTitle.screenshot
         window.contentMinSize = NSSize(width: 760, height: 540)
         window.delegate = self
         window.contentView = root
@@ -1504,7 +1504,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputWidth.stringValue = ""; outputHeight.stringValue = ""
         resetExportState(originalBytes: artifact.sizeBytes)
         selectedLayerID = nil; selectedLayerIndex = 0; preferredLayerID = nil
-        editedImage = nil; invalidateOutput(); preview.image = nil; window.title = "Edit screenshot"
+        editedImage = nil; invalidateOutput(); preview.image = nil; window.title = EditorWindowTitle.screenshot
         status.stringValue = "Opening screenshot…"; updateControls()
         fitWindowToScreen()
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
@@ -5752,7 +5752,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publishCreateTextDefaults()
         reconcileLayerSelection(snapshot.layers)
         publishLayerCount(snapshot.layers.count)
-        window.title = snapshot.unsavedChanges ? "Edit screenshot — Unsaved" : "Edit screenshot"
+        window.title = snapshot.unsavedChanges
+            ? EditorWindowTitle.screenshot + " — Unsaved" : EditorWindowTitle.screenshot
         // New pixels or dimensions: refresh the summary, re-estimate the export
         // and re-encode the comparison's After side.
         refreshExportBar()

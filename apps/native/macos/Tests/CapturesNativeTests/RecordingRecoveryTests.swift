@@ -262,11 +262,11 @@ final class RecordingRecoveryTests: XCTestCase {
         XCTAssertEqual(worker.recoverCount, 1)
         worker.completeRecover(.success(RecordingRecoveryResult(artifactID: id, warning: nil)))
         try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
-        try waitUntil { NSApp.windows.contains { $0.title == "Recording editor" && $0.isVisible } }
-        let editor = try XCTUnwrap(NSApp.windows.first { $0.title == "Recording editor" && $0.isVisible })
+        try waitUntil { NSApp.windows.contains { $0.title == EditorWindowTitle.recording && $0.isVisible } }
+        let editor = try XCTUnwrap(NSApp.windows.first { $0.title == EditorWindowTitle.recording && $0.isVisible })
         try waitUntil { editor.contentView.map { descendants($0).compactMap { $0 as? NSImageView }
             .contains { $0.accessibilityLabel() == "Decoded recording frame" && $0.image != nil } } == true }
-        NSApp.windows.filter { $0.title == "Recording editor" }.forEach { $0.orderOut(nil) }
+        NSApp.windows.filter { $0.title == EditorWindowTitle.recording }.forEach { $0.orderOut(nil) }
     }
 
     func testRecoveryDoesNotStealSelectionChangedDuringWork() throws {

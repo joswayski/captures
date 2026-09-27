@@ -15,13 +15,17 @@ use std::{
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use serde_json::json;
 
-use captures_app::shortcuts::{CaptureShortcut, CaptureShortcuts};
+use captures_app::{
+    app_windows::{self, AppWindow},
+    shortcuts::{CaptureShortcut, CaptureShortcuts},
+};
 
 use crate::{
     emit,
     live::{CaptureRequest, HistoryFilter, Live},
     options::{HudState, Options, Scene},
     preferences::Preferences,
+    preferences_window::{PreferencesWindow, Shown},
     recording_hud, shortcut_input,
     tokens::{self, Tokens},
     tray::{self, Action as TrayAction, Tray},
@@ -77,11 +81,14 @@ pub struct Workbench {
     window_shell: Vec<captures_capture::WindowDescriptor>,
     _temporary_settings: Option<tempfile::TempDir>,
     live: Option<Live>,
-    live_preferences: bool,
+    /// The live root is the Capture History window, or the setup window
+    /// until first-run setup completes. Preferences is its own window.
+    root_window: AppWindow,
+    preferences: PreferencesWindow,
     root_hidden: bool,
     onboarding_presented: bool,
     permission_dialog_presented: bool,
-    root_was_focused: bool,
+    workspace_was_focused: bool,
     tray: Option<Tray>,
     /// Preferences generation last applied to tray accelerators.
     tray_shortcuts_generation: u64,
@@ -267,11 +274,12 @@ impl Workbench {
             _temporary_settings: temporary_settings,
             live,
             instance,
-            live_preferences: false,
+            root_window: AppWindow::History,
+            preferences: PreferencesWindow::default(),
             root_hidden,
             onboarding_presented: false,
             permission_dialog_presented: false,
-            root_was_focused: false,
+            workspace_was_focused: false,
             tray,
             tray_shortcuts_generation: u64::MAX,
             tray_error,
@@ -311,11 +319,59 @@ impl Workbench {
         }
     }
 
+    /// Show, restore and focus the root: the Capture History window, or the
+    /// setup window until first-run setup completes.
     fn show_root(&mut self, ctx: &egui::Context) {
         self.root_hidden = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    /// Retitle and resize the live root between setup and Capture History.
+    /// Shipping hides the setup window when setup completes; without a tray
+    /// History stays visible so Captures remains reachable.
+    fn set_root_window(&mut self, ctx: &egui::Context, window: AppWindow) {
+        let previous = std::mem::replace(&mut self.root_window, window);
+        let spec = window.spec();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(spec.title.into()));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(spec.min_size().into()));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(spec.size().into()));
+        if let Some(position) = centered_position(ctx, spec.size()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
+        }
+        if previous == AppWindow::Setup && self.tray.is_some() && !self.root_hidden {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.root_hidden = true;
+        }
+        emit("app-window", json!({"root": spec.title}));
+    }
+
+    /// Shipping `focus_primary_app_window`: an empty relaunch restores hidden
+    /// recording controls, else focuses the highest-priority open window,
+    /// else opens Preferences.
+    fn reactivate(&mut self, ctx: &egui::Context) {
+        let onboarding_complete = self.preferences_state.onboarding_complete();
+        if onboarding_complete
+            && self
+                .live
+                .as_mut()
+                .is_some_and(|live| live.show_recording_controls(ctx))
+        {
+            return;
+        }
+        let mut visible = Vec::new();
+        if !self.root_hidden {
+            visible.push(self.root_window);
+        }
+        if self.preferences.is_open() {
+            visible.push(AppWindow::Preferences);
+        }
+        match app_windows::reactivation(onboarding_complete, false, &visible) {
+            app_windows::Reactivation::Focus(AppWindow::Preferences)
+            | app_windows::Reactivation::ShowPreferences => self.preferences.open(ctx),
+            _ => self.show_root(ctx),
+        }
     }
 
     fn handle_tray_action(&mut self, action: TrayAction, ctx: &egui::Context) {
@@ -378,14 +434,8 @@ impl Workbench {
                 // window stays as it is (possibly hidden).
                 self.preferences_state.open_feedback(ctx);
             }
-            TrayAction::History => {
-                self.live_preferences = false;
-                self.show_root(ctx);
-            }
-            TrayAction::Preferences => {
-                self.live_preferences = true;
-                self.show_root(ctx);
-            }
+            TrayAction::History => self.show_root(ctx),
+            TrayAction::Preferences => self.preferences.open(ctx),
             TrayAction::OpenOutputFolder => match self.preferences_state.snapshot() {
                 Ok(settings) => {
                     let output = self.action_tx.clone();
@@ -624,14 +674,7 @@ impl Workbench {
             match instance.next_request() {
                 Ok(Some(request)) if request.paths.is_empty() => {
                     crate::diagnostics::event("instance-request", || json!({"paths":0}));
-                    let restored = self
-                        .live
-                        .as_mut()
-                        .is_some_and(|live| live.show_recording_controls(ctx));
-                    if !restored {
-                        self.live_preferences = true;
-                        self.show_root(ctx);
-                    }
+                    self.reactivate(ctx);
                     emit("instance-relaunch", json!({}));
                 }
                 Ok(Some(request)) => {
@@ -1154,10 +1197,13 @@ impl Workbench {
         let title = presentation
             .as_ref()
             .map_or(shared::copy().title, |p| p.title);
-        view::stage(ui, t, |ui| {
+        // Shipping `@media (max-height: 600px)`: the default 560 pt setup
+        // window drops the lede and tightens the stage.
+        let short = app_windows::short(ui.ctx().content_rect().height());
+        view::stage(ui, t, short, |ui| {
             ui.spacing_mut().item_spacing.y = t.number("s-3");
-            view::header(ui, t, title, shared::LEDE, true);
-            ui.add_space(t.number("s-7") - t.number("s-3"));
+            view::header(ui, t, title, (!short).then_some(shared::LEDE), true);
+            ui.add_space(t.number(if short { "s-5" } else { "s-7" }) - t.number("s-3"));
             ui.spacing_mut().item_spacing.y = t.number("s-5");
             match view::cards(ui, t, presentation.as_ref(), busy) {
                 Some(Target::Screen) => prefs.request_onboarding_screen(),
@@ -1231,7 +1277,13 @@ fn permission_recovery_ui(preferences: &mut Preferences, ctx: &egui::Context, t:
         .show(ctx, |ui| {
             ui.set_width(520.);
             ui.spacing_mut().item_spacing.y = t.number("s-3");
-            crate::onboarding::header(ui, t, shared::RECOVERY_TITLE, shared::RECOVERY_LEDE, false);
+            crate::onboarding::header(
+                ui,
+                t,
+                shared::RECOVERY_TITLE,
+                Some(shared::RECOVERY_LEDE),
+                false,
+            );
             ui.add_space(t.number("s-4"));
             let busy =
                 crate::onboarding::Busy::from_action(preferences.permission_recovery_busy_action());
@@ -1311,12 +1363,22 @@ impl eframe::App for Workbench {
             return;
         }
         self.preferences_state.set_presented(if self.options.live {
-            self.live_preferences && !self.root_hidden
+            self.preferences.presented()
         } else {
             self.options.scene == Scene::Preferences
         });
         self.preferences_state.receive(ctx);
         let onboarding_complete = self.preferences_state.onboarding_complete();
+        if self.options.live && !self.preferences_state.onboarding_pending() {
+            let window = if onboarding_complete {
+                AppWindow::History
+            } else {
+                AppWindow::Setup
+            };
+            if window != self.root_window {
+                self.set_root_window(ctx, window);
+            }
+        }
         if onboarding_complete
             && !self.permission_dialog_presented
             && let Some(fixture) = self.options.permission_dialog.as_deref()
@@ -1338,6 +1400,9 @@ impl eframe::App for Workbench {
             self.onboarding_presented = true;
             self.show_root(ctx);
         }
+        if onboarding_complete && std::mem::take(&mut self.options.open_preferences) {
+            self.preferences.open(ctx);
+        }
         self.update_startup_notice(ctx, frame, onboarding_complete);
         self.receive_instance(ctx);
         while let Ok(result) = self.action_rx.try_recv() {
@@ -1348,11 +1413,16 @@ impl eframe::App for Workbench {
                 self.show_root(ctx);
             }
         }
+        let mut recovery_requested = false;
         if let Some(live) = &mut self.live {
             if live.take_permission_recovery_requested() {
                 self.preferences_state.open_permission_recovery();
+                recovery_requested = true;
             }
             live.set_permission_recovery_visible(self.preferences_state.permission_recovery_open());
+            // A capture waits until the Preferences window is hidden too.
+            live.set_companion_visible(self.preferences.presented());
+            live.set_root_shown(!self.root_hidden);
             if onboarding_complete
                 && !self.options.open_media.is_empty()
                 && !self.preferences_state.is_loading()
@@ -1372,60 +1442,56 @@ impl eframe::App for Workbench {
                 if live.is_capturing() {
                     ctx.request_repaint_after(std::time::Duration::from_millis(16));
                 } else if let Some(target) = live.take_preference_target_requested() {
-                    self.live_preferences = true;
                     self.preferences_state.open_target(target);
-                    self.show_root(ctx);
+                    self.preferences.open(ctx);
                 }
             }
         }
+        if recovery_requested {
+            // The recovery dialog sits over Capture History.
+            self.show_root(ctx);
+        }
         self.sync_shortcuts(ctx);
         if self.options.live
-            && self.tray.is_some()
             && !self.quitting
             && ctx.input(|input| input.viewport().close_requested())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if onboarding_complete {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                self.root_hidden = true;
-            } else {
-                self.show_root(ctx);
+            match root_close(
+                onboarding_complete,
+                self.tray.is_some(),
+                self.preferences.is_open(),
+            ) {
+                RootClose::Hide => {
+                    // Closing History leaves Preferences and the editors open.
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    self.root_hidden = true;
+                }
+                RootClose::Keep => self.show_root(ctx),
+                // A tray-less close of the last window is a normal quit:
+                // flush editor drafts before eframe destroys windows, and
+                // keep them open on failure.
+                RootClose::Quit => self.quit(ctx),
             }
         }
-        if self.options.live
-            && self.tray.is_none()
-            && !self.quitting
-            && ctx.input(|input| input.viewport().close_requested())
-        {
-            // A tray-less root close is also a normal quit: flush editor drafts
-            // before eframe destroys windows, and keep them open on failure.
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.quit(ctx);
-        }
         let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(false));
-        if root_focused
-            && !self.root_was_focused
-            && self.options.live
-            && self.options.screenshot.is_none()
-        {
+        let workspace_focused = root_focused || self.preferences.focused();
+        let focus_gained = workspace_focused && !self.workspace_was_focused;
+        if focus_gained && self.options.live && self.options.screenshot.is_none() {
             self.preferences_state.refresh_motion_preference();
         }
-        if root_focused
-            && !self.root_was_focused
+        if focus_gained
             && self.preferences_state.permission_recovery_open()
             && self.options.permission_dialog.is_none()
         {
             self.preferences_state.open_permission_recovery();
         }
-        if root_focused
-            && !self.root_was_focused
-            && let Some(live) = &mut self.live
-        {
+        if focus_gained && let Some(live) = &mut self.live {
             live.show_recording_controls(ctx);
         }
-        self.root_was_focused = root_focused;
+        self.workspace_was_focused = workspace_focused;
         let shortcuts_suspended =
-            shortcuts_should_be_suspended(self.live_preferences, !self.root_hidden, root_focused);
+            shortcuts_should_be_suspended(self.preferences.presented(), self.preferences.focused());
         self.sync_shortcut_suspension(shortcuts_suspended);
         self.sync_shortcut_routing();
         let shortcut_action = self
@@ -1483,7 +1549,12 @@ impl eframe::App for Workbench {
         if onboarding_complete && let Some(live) = &mut self.live {
             live.launch_requested_capture(ctx, frame, self.preferences_state.snapshot());
         }
-        let quit_key = !self.preferences_state.is_recording_shortcut()
+        // Live shortcut recording happens in the Preferences window. A key
+        // that reaches the focused root means the recorder lost focus; its
+        // blur is processed by the Preferences pass that follows.
+        let recording = self.preferences_state.is_recording_shortcut()
+            && !(self.options.live && ctx.input(|input| input.viewport().focused == Some(true)));
+        let quit_key = !recording
             && ctx.input_mut(|input| {
                 input.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)
                     || input.consume_key(egui::Modifiers::CTRL, egui::Key::Q)
@@ -1575,7 +1646,11 @@ impl eframe::App for Workbench {
             .feedback_viewport(&ctx, &t, self.live.is_some());
         if self.live.is_some() && !self.preferences_state.onboarding_complete() {
             egui::CentralPanel::default().show(ui, |ui| {
-                self.setup_ui(ui, &t);
+                // Until settings load the root keeps its History title and
+                // size; it becomes the setup window only once setup is due.
+                if self.root_window == AppWindow::Setup {
+                    self.setup_ui(ui, &t);
+                }
             });
             self.sync_shortcut_routing();
             if self.options.screenshot.is_some()
@@ -1603,6 +1678,10 @@ impl eframe::App for Workbench {
                 self.preferences_state
                     .reduced_motion(self.options.reduced_motion),
             );
+            let preferences_state = &mut self.preferences_state;
+            let preferences = self.preferences.show(&ctx, live.workspace_hidden(), |ui| {
+                preferences_window_ui(ui, &t, preferences_state)
+            });
             if self.preferences_state.permission_recovery_open() {
                 ui.disable();
             }
@@ -1626,50 +1705,44 @@ impl eframe::App for Workbench {
                     }
                 });
             }
-            egui::Panel::top("live-navigation").show(ui, |ui| {
-                if live.is_capturing() {
-                    ui.disable();
-                }
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.live_preferences, false, "Capture History");
-                    ui.selectable_value(&mut self.live_preferences, true, "Preferences");
-                });
-            });
-            if self.live_preferences {
-                egui::Panel::left("live-preferences-sidebar")
-                    .exact_size(196.)
-                    .resizable(false)
-                    .show_separator_line(false)
-                    .frame(Preferences::sidebar_frame(&t))
-                    .show(ui, |ui| {
-                        Preferences::sidebar_border(ui, &t);
-                        self.preferences_state.sidebar(ui, &t);
-                    });
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::new().fill(t.color("surface-canvas")))
-                    .show(ui, |ui| {
-                        if self.preferences_state.ui(ui, &t, true) {
-                            self.live_preferences = false;
-                        }
-                    });
-            } else {
-                live.ui(ui, &t, frame, || self.preferences_state.snapshot());
-            }
+            live.ui(ui, &t, frame, || self.preferences_state.snapshot());
+            let mut recovery_requested = false;
             if live.take_permission_recovery_requested() {
                 self.preferences_state.open_permission_recovery();
+                recovery_requested = true;
             }
             if self.preferences_state.permission_recovery_open() {
                 permission_recovery_ui(&mut self.preferences_state, &ctx, &t);
             }
             live.set_permission_recovery_visible(self.preferences_state.permission_recovery_open());
+            live.set_companion_visible(self.preferences.presented());
+            live.set_root_shown(!self.root_hidden);
+            if recovery_requested {
+                self.show_root(&ctx);
+            }
+            match preferences {
+                Some(Shown::Content(PreferencesOutcome { history, quit })) => {
+                    if history {
+                        // Shipping "Capture History…" opens or focuses History.
+                        self.show_root(&ctx);
+                    }
+                    if quit && self.options.live {
+                        self.quit(&ctx);
+                    }
+                }
+                Some(Shown::Closed) if self.tray.is_none() && self.root_hidden => {
+                    // No tray and no other Captures window: closing the last
+                    // one quits, like closing History.
+                    self.quit(&ctx);
+                }
+                Some(Shown::Closed) | None => {}
+            }
             // Navigation can change presentation after logic() has run. Apply
             // that event's focus boundary before returning to the native loop
             // so the next physical key sees the correct OS registration state.
-            let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(false));
             let shortcuts_suspended = shortcuts_should_be_suspended(
-                self.live_preferences,
-                !self.root_hidden,
-                root_focused,
+                self.preferences.presented(),
+                self.preferences.focused(),
             );
             self.sync_shortcut_suspension(shortcuts_suspended);
             // Child viewport actions can leave selector scope after logic() ran.
@@ -1912,6 +1985,75 @@ impl eframe::App for Workbench {
     }
 }
 
+struct PreferencesOutcome {
+    /// "Capture History…" was pressed.
+    history: bool,
+    quit: bool,
+}
+
+/// The live Preferences window's content: the shipping sidebar and pages.
+fn preferences_window_ui(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    preferences: &mut Preferences,
+) -> PreferencesOutcome {
+    ui.set_style(ui.ctx().style_of(ui.ctx().theme()));
+    // Shipping hides the section nav in a compact window.
+    if !app_windows::compact(ui.ctx().content_rect().width()) {
+        egui::Panel::left("live-preferences-sidebar")
+            .exact_size(196.)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(Preferences::sidebar_frame(t))
+            .show(ui, |ui| {
+                Preferences::sidebar_border(ui, t);
+                preferences.sidebar(ui, t);
+            });
+    }
+    let mut history = false;
+    egui::CentralPanel::default()
+        .frame(egui::Frame::new().fill(t.color("surface-canvas")))
+        .show(ui, |ui| history = preferences.ui(ui, t, true));
+    let quit = !preferences.is_recording_shortcut()
+        && ui.input_mut(|input| {
+            input.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)
+                || input.consume_key(egui::Modifiers::CTRL, egui::Key::Q)
+        });
+    PreferencesOutcome { history, quit }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RootClose {
+    Hide,
+    Keep,
+    Quit,
+}
+
+/// Closing the live root. With a tray (or another Captures window open) the
+/// History window hides; unfinished setup stays open with a tray and quits
+/// without one, as does closing the last window without a tray.
+fn root_close(onboarding_complete: bool, tray: bool, preferences_open: bool) -> RootClose {
+    if onboarding_complete && (tray || preferences_open) {
+        RootClose::Hide
+    } else if tray {
+        RootClose::Keep
+    } else {
+        RootClose::Quit
+    }
+}
+
+/// Top-left position that centers a window of logical `size` on the root's
+/// monitor, keeping the root's current frame decoration.
+fn centered_position(ctx: &egui::Context, size: [f32; 2]) -> Option<Pos2> {
+    ctx.input(|input| {
+        let viewport = input.viewport();
+        let monitor = viewport.monitor_size?;
+        let chrome = viewport.outer_rect?.size() - viewport.inner_rect?.size();
+        let outer = egui::vec2(size[0], size[1]) + chrome.max(Vec2::ZERO);
+        (monitor.x > outer.x && monitor.y > outer.y).then(|| ((monitor - outer) / 2.).to_pos2())
+    })
+}
+
 fn glass(t: &Tokens) -> egui::Frame {
     egui::Frame::new()
         .fill(t.color("glass-strong"))
@@ -2081,12 +2223,8 @@ fn wake_shortcut_host(ctx: &egui::Context) {
     ctx.request_repaint_of(egui::ViewportId::ROOT);
 }
 
-fn shortcuts_should_be_suspended(
-    preferences_selected: bool,
-    root_visible: bool,
-    root_focused: bool,
-) -> bool {
-    preferences_selected && root_visible && root_focused
+fn shortcuts_should_be_suspended(preferences_presented: bool, preferences_focused: bool) -> bool {
+    preferences_presented && preferences_focused
 }
 
 fn shortcut_routing_state(
@@ -2175,10 +2313,23 @@ mod tests {
 
     #[test]
     fn shortcuts_suspend_focused_preferences_but_not_hidden_or_unfocused_preferences() {
-        assert!(shortcuts_should_be_suspended(true, true, true));
-        assert!(!shortcuts_should_be_suspended(true, false, true));
-        assert!(!shortcuts_should_be_suspended(true, true, false));
-        assert!(!shortcuts_should_be_suspended(false, true, true));
+        assert!(shortcuts_should_be_suspended(true, true));
+        assert!(!shortcuts_should_be_suspended(true, false));
+        assert!(!shortcuts_should_be_suspended(false, true));
+        assert!(!shortcuts_should_be_suspended(false, false));
+    }
+
+    #[test]
+    fn closing_history_leaves_other_windows_and_quits_only_the_last_trayless_one() {
+        // With a tray, History hides; Preferences and editors stay open.
+        assert_eq!(root_close(true, true, false), RootClose::Hide);
+        assert_eq!(root_close(true, true, true), RootClose::Hide);
+        // Without a tray, another open window keeps Captures reachable.
+        assert_eq!(root_close(true, false, true), RootClose::Hide);
+        assert_eq!(root_close(true, false, false), RootClose::Quit);
+        // Unfinished setup is never hidden into an unreachable tray state.
+        assert_eq!(root_close(false, true, false), RootClose::Keep);
+        assert_eq!(root_close(false, false, false), RootClose::Quit);
     }
     #[test]
     fn shortcuts_enable_idle_launch_or_the_current_selector_only() {

@@ -41,8 +41,9 @@ const ACTIONS_WIDTH: f32 = 132.;
 
 /// Title and lede, left-aligned like `.onboarding-copy`. First-run setup
 /// (`welcome`) adds the app mark and the "Welcome to Captures" eyebrow;
-/// permission recovery uses the plain heading.
-pub fn header(ui: &mut egui::Ui, t: &Tokens, title: &str, lede: &str, welcome: bool) {
+/// permission recovery uses the plain heading. A short setup window omits
+/// the lede (`None`), as shipping's `@media (max-height: 600px)` does.
+pub fn header(ui: &mut egui::Ui, t: &Tokens, title: &str, lede: Option<&str>, welcome: bool) {
     // `<header aria-labelledby="onboarding-setup-title">`; the mark is
     // `aria-hidden` (it has no AccessKit node).
     ui.scope(|ui| {
@@ -51,7 +52,7 @@ pub fn header(ui: &mut egui::Ui, t: &Tokens, title: &str, lede: &str, welcome: b
     });
 }
 
-fn header_contents(ui: &mut egui::Ui, t: &Tokens, title: &str, lede: &str, welcome: bool) {
+fn header_contents(ui: &mut egui::Ui, t: &Tokens, title: &str, lede: Option<&str>, welcome: bool) {
     if welcome {
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(40.), egui::Sense::hover());
         app_mark(ui.painter(), t, rect);
@@ -72,12 +73,14 @@ fn header_contents(ui: &mut egui::Ui, t: &Tokens, title: &str, lede: &str, welco
             .strong(),
     );
     accessibility::heading(&heading, 1, title);
-    ui.add_space(-t.number("s-2"));
-    ui.label(
-        RichText::new(lede)
-            .size(t.number("text-md"))
-            .color(t.color("text-subtle")),
-    );
+    if let Some(lede) = lede {
+        ui.add_space(-t.number("s-2"));
+        ui.label(
+            RichText::new(lede)
+                .size(t.number("text-md"))
+                .color(t.color("text-subtle")),
+        );
+    }
 }
 
 /// Shared permission cards (`.onboarding-permissions`). `view` is `None`
@@ -366,10 +369,15 @@ pub fn wayland_session() -> bool {
 
 /// Centered stage of at most 620 px (`.onboarding-stage`), vertically
 /// centered using the previous frame's measured height.
-pub fn stage(ui: &mut egui::Ui, t: &Tokens, add: impl FnOnce(&mut egui::Ui)) {
+pub fn stage(ui: &mut egui::Ui, t: &Tokens, short: bool, add: impl FnOnce(&mut egui::Ui)) {
     let outer = ui.max_rect();
     let id = egui::Id::unique("onboarding-stage-height");
-    let padding = Vec2::new(t.number("s-8"), t.number("s-9"));
+    // `padding: var(--s-9) var(--s-8)`, or `var(--s-6) var(--s-7)` when short.
+    let padding = if short {
+        Vec2::new(t.number("s-7"), t.number("s-6"))
+    } else {
+        Vec2::new(t.number("s-8"), t.number("s-9"))
+    };
     let width = (outer.width() - 2. * padding.x).clamp(0., STAGE_WIDTH);
     let previous: f32 = ui.data(|data| data.get_temp(id)).unwrap_or(0.);
     let top = ((outer.height() - previous) / 2.).max(padding.y);
@@ -498,7 +506,7 @@ mod tests {
         let ctx = egui::Context::default();
         let t = crate::tokens::load().remove("light-mustard").unwrap();
         crate::accessibility::tests::tree(&ctx, Vec2::new(800., 600.), vec![], |ui| {
-            header(ui, &t, view.title, shared::LEDE, true);
+            header(ui, &t, view.title, Some(shared::LEDE), true);
             cards(ui, &t, Some(view), Busy::default());
             if error {
                 error_block(ui, &t, &["Setup could not continue: denied"]);

@@ -836,7 +836,7 @@ def main():
                         if not path.parent.name.startswith(".")]
 
         app = spawn("app", app_command + open_arguments)
-        root = wait(lambda: windows("Captures"), "History workspace")[0]
+        root = wait(lambda: windows("Capture History"), "History workspace")[0]
         run("xdotool", "windowmove", "--sync", root, "0", "0")
         time.sleep(1)
         if args.external_image_only:
@@ -845,14 +845,14 @@ def main():
             opened = next(value for value in entries if value["saved_path"] == str(source_png))
             artifact_id = opened["id"]
             artifact = history / artifact_id
-            wait(lambda: len(windows("Screenshot editor")) == 3, "three native image editors")
+            wait(lambda: len(windows("Captures Screenshot Editor")) == 3, "three native image editors")
             editor = wait(lambda: active if (active := active_window())
-                          in windows("Screenshot editor") else None, "last opened image focused")
+                          in windows("Captures Screenshot Editor") else None, "last opened image focused")
             shot(root, "history")
         else:
             shot(root, "history")
-            click(root, 105, 590)  # First History card: Edit, below the two-line action row.
-            editor = wait(lambda: windows("Screenshot editor"), "screenshot editor")[0]
+            click(root, 107, 554)  # First History card: Edit, below the two-line action row.
+            editor = wait(lambda: windows("Captures Screenshot Editor"), "screenshot editor")[0]
         run("xdotool", "windowmove", "--sync", editor, "100", "80")
         time.sleep(1)
         shot(editor, "editor-original")
@@ -900,23 +900,23 @@ def main():
             run("xdotool", "keydown", "Alt_L", "sleep", ".1", "key", "F4",
                 "sleep", ".1", "keyup", "Alt_L", "sleep", ".4")
 
-        def history_edit_point(edit_y=590):
-            # History cards are newest first in a three-column grid (1000 px root,
+        def history_edit_point(edit_y=554):
+            # History cards are newest first in a three-column grid (1020 px window,
             # 24 px padding, 16 px gaps). Edit is the left action of the card body.
             entries = sorted((json.loads(path.read_text()) for path in history.glob("*/metadata.json")
                               if not path.parent.name.startswith(".")),
                              key=lambda entry: entry["created_at"], reverse=True)
             index = [entry["id"] for entry in entries].index(artifact_id)
             assert index < 3, "the edited capture must be in the first History row"
-            card_width = (952 - 2 * 16) / 3
+            card_width = (972 - 2 * 16) / 3
             return round(24 + index * (card_width + 16) + 12 + (card_width - 24 - 6) / 4), edit_y
 
-        def reopen(edit_y=590):
+        def reopen(edit_y=554):
             export_bar["open"] = False  # Every editor window starts collapsed.
             tool_state["draw"] = "rectangle"  # Each editor starts with Rectangle.
             click(root, *history_edit_point(edit_y))  # The original capture's History card: Edit.
             restored = draft.exists()
-            window = wait(lambda: windows("Screenshot editor"), "reopened editor")[0]
+            window = wait(lambda: windows("Captures Screenshot Editor"), "reopened editor")[0]
             run("xdotool", "windowmove", "--sync", window, "100", "80")
             time.sleep(.6)
             if restored:
@@ -948,7 +948,7 @@ def main():
                 saved = history / item["id"] / "capture.png"
                 assert run("convert", str(saved), "-depth", "8", "rgba:-") == run(
                     "convert", item["saved_path"], "-depth", "8", "rgba:-"), "imported pixels match source decoding"
-            assert len(windows("Screenshot editor")) == 3
+            assert len(windows("Captures Screenshot Editor")) == 3
             shot(editor, "external-image-opened")
             document_pixel("external-image-opened", 130, 100, (229, 179, 68))
             document_pixel("external-image-opened", 500, 250, (46, 158, 113))
@@ -976,7 +976,7 @@ def main():
             assert not (output / "unused-secondary-settings.json").exists()
             wait(lambda: active_window() == editor,
                  "forwarded canonical alias focuses existing edited window")
-            assert len(windows("Screenshot editor")) == 3
+            assert len(windows("Captures Screenshot Editor")) == 3
             assert len(opened_entries()) == 3
             assert draft.read_bytes() == preserved_draft
             assert len(layers()) == 2
@@ -987,7 +987,7 @@ def main():
             assert relaunched.returncode == 0, relaunched.stderr
             assert '"event":"forwarded"' in relaunched.stdout
             wait(lambda: active_window() == root,
-                 "empty relaunch restores and focuses Preferences")
+                 "empty relaunch restores and focuses the open History window")
             assert app.poll() is None
             close(root)
             wait(lambda: app.poll() is not None, "external image batch quits")
@@ -995,13 +995,13 @@ def main():
 
             # A closed edited source must not silently discard its saved work.
             app = spawn("app-draft", app_command + ["--open-image", str(source_png)])
-            root = wait(lambda: windows("Captures"), "draft guard History")[0]
+            root = wait(lambda: windows("Capture History"), "draft guard History")[0]
             time.sleep(2)
-            assert not windows("Screenshot editor"), "saved draft blocks source reload"
+            assert not windows("Captures Screenshot Editor"), "saved draft blocks source reload"
             assert draft.read_bytes() == preserved_draft
             shot(root, "external-draft-blocked")
             # The open error banner above the grid moves the cards 60px lower.
-            editor = reopen(650)  # The existing History route still restores the saved edit.
+            editor = reopen(614)  # The existing History route still restores the saved edit.
             shot(editor, "external-draft-restored")
             assert len(layers()) == 2
             toolbar_click("discard")
@@ -1015,8 +1015,8 @@ def main():
                 "-strip", "PNG32:" + str(source_png))
             changed_source = source_png.read_bytes()
             app = spawn("app-reload", app_command + ["--open-image", str(source_png)])
-            root = wait(lambda: windows("Captures"), "reloaded source History")[0]
-            editor = wait(lambda: windows("Screenshot editor"), "reloaded external editor")[0]
+            root = wait(lambda: windows("Capture History"), "reloaded source History")[0]
+            editor = wait(lambda: windows("Captures Screenshot Editor"), "reloaded external editor")[0]
             run("xdotool", "windowmove", "--sync", editor, "100", "80")
             time.sleep(1)
             shot(editor, "external-source-reloaded")
@@ -1129,7 +1129,7 @@ def main():
             flattened = save_layers(lambda values: len(values) == 1, "redo flatten")
 
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "combined draft closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "combined draft closes")
             editor = reopen()
             reopened = layers()
             assert len(reopened) == 1 and reopened[0] == flattened[0]
@@ -1306,7 +1306,7 @@ def main():
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 3, "paste redo")[-1] == pasted_twice
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "copied editor closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "copied editor closes")
             editor = reopen()
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 3, "reopen has no layer clipboard")[-1] == pasted_twice
@@ -1419,7 +1419,7 @@ def main():
             properties_move("click", "--repeat", "25", "5")
             shot(editor, "overwrite-minimum")
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "overwritten editor closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "overwritten editor closes")
             editor = reopen()
             assert len(layers()) == 2
             shot(editor, "overwrite-draft-reopened")
@@ -1477,7 +1477,7 @@ def main():
             properties_move("click", "--repeat", "14", "5")
             shot(editor, "rotation-snap-minimum")
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "custom rotation closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "custom rotation closes")
             editor = reopen()
             resize_editor(1000, 1001)
             toolbar_click("layers")
@@ -1673,7 +1673,7 @@ def main():
             properties_move("click", "--repeat", "5", "5")
             shot(editor, "polygon-minimum-scrolled")
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "polygon draft closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "polygon draft closes")
             editor = reopen()
             resize_editor(942, 701)
             shot(editor, "polygon-reopened")
@@ -1811,7 +1811,7 @@ def main():
             toolbar_click("undo")
             save_until(lambda: len(document_json()["elements"]) == 3, "drop is one undo step")
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "canvas draft closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "canvas draft closes")
             editor = reopen()
             reopened = document_json()
             assert reopened["width"] == expanded["width"]
@@ -2176,7 +2176,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "text-defaults-minimum")
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "styled Text editor closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "styled Text editor closes")
             editor = reopen()
             resize_editor(1000, 1001)
             toolbar_click("draw")
@@ -2340,7 +2340,7 @@ def main():
             save_layers(lambda values: values[-1]["fontFamily"] == "serif" and values[-1]["outlined"],
                         "restore accepted style for reopen")
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "text editor closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "text editor closes")
             editor = reopen()
             toolbar_click("layers")  # Layers, with the restored text selected explicitly.
             layer_click(0)
@@ -2414,7 +2414,7 @@ def main():
             toolbar_click("undo")
             save_layers(lambda values: values[1].get("rotation", 0) == 0, "text rotation undone")
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "font-backed editor closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "font-backed editor closes")
             editor = reopen()
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             run("xdotool", "mousemove", "0", "0")
@@ -2510,7 +2510,7 @@ def main():
             toolbar_click("undo")
             save_layers(lambda values: values[0]["src"] == erased["src"], "undo restore")
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "brush draft closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "brush draft closes")
             editor = reopen()
             asset_pixel(layers()[0], 150, 120, (0, 0, 0, 0))
             resize_editor(942, 701)
@@ -2572,7 +2572,7 @@ def main():
             assert global_edit["originalSrc"] == source
             shot(editor, "wand-global")
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "wand draft closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "wand draft closes")
             editor = reopen()
             asset_pixel(layers()[0], 310, 60, (0, 0, 0, 0))
             resize_editor(942, 701)
@@ -2618,7 +2618,7 @@ def main():
             toolbar_click("redo")
             save(640, 360, 0, 0)
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "trim draft closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "trim draft closes")
             editor = reopen()
             save(640, 360, 0, 0)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
@@ -2689,7 +2689,7 @@ def main():
             toolbar_click("undo")
             save_until(lambda: background_is(None), "undo solid toggle")
             close(editor)
-            wait(lambda: not windows("Screenshot editor"), "background draft closes")
+            wait(lambda: not windows("Captures Screenshot Editor"), "background draft closes")
             editor = reopen()
             assert background_is(None)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
@@ -2931,7 +2931,7 @@ def main():
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "freehand-minimum")
         close(editor)
-        wait(lambda: not windows("Screenshot editor"), "freehand editor closes")
+        wait(lambda: not windows("Captures Screenshot Editor"), "freehand editor closes")
         editor = reopen()
         resize_editor(942, 701)
         shot(editor, "freehand-reopened")
@@ -2988,7 +2988,7 @@ def main():
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "open-shape-minimum")
         close(editor)
-        wait(lambda: not windows("Screenshot editor"), "open-shape editor closes")
+        wait(lambda: not windows("Captures Screenshot Editor"), "open-shape editor closes")
         editor = reopen()
         resize_editor(942, 701)
         shot(editor, "open-shape-reopened")
@@ -3089,7 +3089,7 @@ def main():
         properties_move("click", "--repeat", "25", "5")
         shot(editor, "annotation-minimum")
         close(editor)
-        wait(lambda: not windows("Screenshot editor"), "styled editor closes")
+        wait(lambda: not windows("Captures Screenshot Editor"), "styled editor closes")
         editor = reopen()
         resize_editor(942, 701)
         shot(editor, "annotation-reopened")
@@ -3198,7 +3198,7 @@ def main():
         save_layers(lambda values: math.isclose(values[-1]["width"], resized_width, abs_tol=1e-5),
                     "redo imported image resize")
         close(editor)
-        wait(lambda: not windows("Screenshot editor"), "resized imported draft closes")
+        wait(lambda: not windows("Captures Screenshot Editor"), "resized imported draft closes")
         editor = reopen()
         shot(editor, "layer-resize-reopened")
         reopened_resize = layers()[-1]
@@ -3251,7 +3251,7 @@ def main():
                                                 abs_tol=1e-12),
                     "redo imported image rotation")
         close(editor)
-        wait(lambda: not windows("Screenshot editor"), "imported draft closes")
+        wait(lambda: not windows("Captures Screenshot Editor"), "imported draft closes")
         editor = reopen()
         shot(editor, "layer-rotation-reopened")
         document_pixel("layer-rotation-reopened", *expected_document, (60, 179, 113))
@@ -3266,7 +3266,7 @@ def main():
         toolbar_click("import")
         wait(lambda: chooser.pending, "picker before close")
         close(editor)
-        wait(lambda: not windows("Screenshot editor"), "picker does not prevent closing")
+        wait(lambda: not windows("Captures Screenshot Editor"), "picker does not prevent closing")
         editor = reopen()
         GLib.idle_add(chooser.respond, False)  # Late result belongs to the old editor only.
         time.sleep(.5)
@@ -3397,7 +3397,7 @@ def main():
                                for axis, expected in zip(("x", "y"), expected_position)),
             "redo snapped canvas move")
         close(editor)
-        wait(lambda: not windows("Screenshot editor"), "snapped layer draft closes")
+        wait(lambda: not windows("Captures Screenshot Editor"), "snapped layer draft closes")
         editor = reopen()
         reopened_move = layers()[-1]
         assert reopened_move["id"] == copy_id
@@ -3451,7 +3451,7 @@ def main():
         toolbar_click("redo")
         save_layers(lambda values: len(values) == 2, "redo deletion")
         close(editor)
-        wait(lambda: not windows("Screenshot editor"), "saved layers close")
+        wait(lambda: not windows("Captures Screenshot Editor"), "saved layers close")
         editor = reopen()
         toolbar_click("layers")
         shot(editor, "layers-reopened")
@@ -3516,7 +3516,7 @@ def main():
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "shape-minimum")
         close(editor)
-        wait(lambda: not windows("Screenshot editor"), "saved shapes close")
+        wait(lambda: not windows("Captures Screenshot Editor"), "saved shapes close")
         editor = reopen()
         resize_editor(942, 701)
         shot(editor, "shape-reopened")
@@ -3635,7 +3635,7 @@ def main():
         shot(editor, "output-budget-error")
         export_click("save")  # The status explains the limit; Save stays disabled.
         time.sleep(.5)
-        assert app.poll() is None and windows("Screenshot editor")
+        assert app.poll() is None and windows("Captures Screenshot Editor")
         assert not (output / "exports").exists(), "an invalid limit never publishes"
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "output-budget-error-minimum")
@@ -3742,7 +3742,7 @@ def main():
         toolbar_click("geometry")  # Geometry restores its own scroll position.
 
         close(editor)
-        wait(lambda: not windows("Screenshot editor"), "saved editor closes")
+        wait(lambda: not windows("Captures Screenshot Editor"), "saved editor closes")
         assert run("xclip", "-selection", "clipboard", "-t", "image/png", "-o") == copied, "workspace retains clipboard after editor closes"
         editor = reopen()
         shot(editor, "editor-reopened")
@@ -3751,7 +3751,7 @@ def main():
         close(editor)
         shot(editor, "editor-unsaved-close")
         click(editor, editor_width() - 180, 20)  # Close without saving retains the previous draft.
-        wait(lambda: not windows("Screenshot editor"), "unsaved editor closes")
+        wait(lambda: not windows("Captures Screenshot Editor"), "unsaved editor closes")
         assert saved(480, 300, -40, -30)
         editor = reopen()
         toolbar_click("discard")
@@ -3767,9 +3767,9 @@ def main():
         canvas_field("width", 500)
         toolbar_click("save-draft")
         shot(editor, "editor-save-error")
-        assert app.poll() is None and windows("Screenshot editor")
+        assert app.poll() is None and windows("Captures Screenshot Editor")
         close(root)  # With no tray host, normal root close must flush or cancel.
-        assert app.poll() is None and windows("Screenshot editor"), "failed flush must cancel quit"
+        assert app.poll() is None and windows("Captures Screenshot Editor"), "failed flush must cancel quit"
         shot(editor, "editor-quit-error")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "editor-small-error")

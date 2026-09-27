@@ -677,6 +677,10 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private weak var highlightView: NSView?
 
     private static let sidebarWidth: CGFloat = 196
+    /// Shipping `@media (max-width: 720px)`: no section nav, stacked inline
+    /// rows and two-column grids.
+    private var compactLayout = false
+    private var navWidth: CGFloat { compactLayout ? 0 : Self.sidebarWidth }
     private static let headerHeight: CGFloat = 72
     private static let findHeight: CGFloat = 48
     private static let shortcutErrorHeight: CGFloat = 18
@@ -703,7 +707,11 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         self.liveCaptureAvailable = liveCaptureAvailable
         self.loginItemService = loginItemService
         super.init()
+        compactLayout = AppWindowLayout.compact(width: root.bounds.width)
         buildShell()
+        // The Preferences window is resizable: reflow the cards, and switch
+        // the compact layout at the shipping breakpoint.
+        root.sizeDidChange = { [weak self] size in self?.rootResized(size) }
         setStatus(PreferencesPolicy.text("loading"), kind: "saving")
         store.load { [weak self] result in
             guard let self else { return }
@@ -730,9 +738,31 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     // MARK: Shell
 
+    private func rootResized(_ size: NSSize) {
+        guard !rebuilding else { return }
+        let compact = AppWindowLayout.compact(width: size.width)
+        if compact != compactLayout {
+            compactLayout = compact
+            if settings.isEmpty {
+                let text = status.stringValue, kind = statusKind
+                root.subviews.forEach { $0.removeFromSuperview() }
+                findBar = nil; findField = nil; findCount = nil; findPrevious = nil; findNext = nil
+                buildShell()
+                setStatus(text, kind: kind)
+            } else {
+                restyle()
+            }
+            return
+        }
+        guard !settings.isEmpty, abs(document.frame.width - scroll.contentSize.width) > 0.5 else { return }
+        rebuildCards()
+    }
+
     private func buildShell() {
-        let width = Self.sidebarWidth
+        navButtons.removeAll()
+        let width = navWidth
         let nav = Surface(frame: NSRect(x: 0, y: 0, width: width, height: root.bounds.height))
+        nav.isHidden = compactLayout
         nav.autoresizingMask = [.height]
         nav.wantsLayer = true; nav.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         root.addSubview(nav)
@@ -748,7 +778,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         addLabel("Captures", frame: NSRect(x: mark.frame.maxX + tokens.number("s-4"), y: top + 4,
             width: 120, height: 18), size: tokens.number("text-md"), weight: .semibold, parent: nav)
         let itemHeight = tokens.number("h-md")
-        for (index, section) in sections.enumerated() {
+        for (index, section) in sections.enumerated() where !compactLayout {
             let y = top + 26 + tokens.number("s-6") + CGFloat(index) * (itemHeight + 1)
             let button = PreferenceNavButton(section.1,
                 frame: NSRect(x: padding, y: y, width: width - padding * 2, height: itemHeight),
@@ -996,10 +1026,13 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private func inlineRow(_ title: String, detail: String, emphasis: PreferencesPolicy.Emphasized? = nil,
                            control: NSSize, y: CGFloat, card: NSView, enabled: Bool = true,
                            highlight key: String? = nil) -> (row: NSRect, control: NSRect) {
-        let width = contentWidth - control.width - tokens.number("s-6")
+        // A compact window stacks the control under the copy
+        // (`.setting-row-inline { grid-template-columns: minmax(0, 1fr) }`).
+        let stacked = compactLayout
+        let width = stacked ? contentWidth : contentWidth - control.width - tokens.number("s-6")
         let text = emphasis?.text ?? detail
         let copy = copyHeight(title, detail: text, width: width)
-        let height = max(copy, control.height)
+        let height = stacked ? copy + tokens.number("s-3") + control.height : max(copy, control.height)
         let row = NSRect(x: inset, y: y, width: contentWidth, height: height)
         if let key, key == highlightedSetting {
             // Shipping `.preference-target-highlight`: selected wash and accent ring.
@@ -1014,10 +1047,13 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             card.addSubview(highlight); highlightView = highlight
         }
         searchable.append((findBackground(row, parent: card), "\(title) \(text)"))
-        addCopy(title, detail: detail, emphasis: emphasis, x: inset, y: y + (height - copy) / 2,
+        addCopy(title, detail: detail, emphasis: emphasis, x: inset, y: stacked ? y : y + (height - copy) / 2,
             width: width, parent: card, enabled: enabled)
-        let frame = NSRect(x: row.maxX - control.width, y: y + (height - control.height) / 2,
-            width: control.width, height: control.height)
+        let frame = stacked
+            ? NSRect(x: inset, y: y + copy + tokens.number("s-3"),
+                     width: min(control.width, contentWidth), height: control.height)
+            : NSRect(x: row.maxX - control.width, y: y + (height - control.height) / 2,
+                     width: control.width, height: control.height)
         return (row, frame)
     }
 
@@ -1094,20 +1130,25 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     /// Shipping `.setting-grid`: stacked title-over-select cells.
     private func selectGrid(_ keys: [String], y: CGFloat, card: NSView) -> CGFloat {
+        guard !keys.isEmpty else { return y }
         let gap = tokens.number("s-5")
-        let width = (contentWidth - gap * CGFloat(keys.count - 1)) / CGFloat(keys.count)
+        // Two cells per row in a compact window, like shipping `.setting-grid`.
+        let columns = compactLayout ? min(2, keys.count) : keys.count
+        let width = (contentWidth - gap * CGFloat(columns - 1)) / CGFloat(columns)
         let height = 17 + tokens.number("s-3") + tokens.number("h-md")
         for (index, key) in keys.enumerated() {
-            let x = inset + CGFloat(index) * (width + gap)
+            let x = inset + CGFloat(index % columns) * (width + gap)
+            let cellY = y + CGFloat(index / columns) * (height + gap)
             let copy = PreferencesPolicy.row(key)
-            searchable.append((findBackground(NSRect(x: x, y: y, width: width, height: height), parent: card),
+            searchable.append((findBackground(NSRect(x: x, y: cellY, width: width, height: height), parent: card),
                 copy.title))
-            addLabel(copy.title, frame: NSRect(x: x, y: y, width: width, height: 17),
+            addLabel(copy.title, frame: NSRect(x: x, y: cellY, width: width, height: 17),
                 size: tokens.number("text-md"), weight: .medium, parent: card)
-            select(key, frame: NSRect(x: x, y: y + 17 + tokens.number("s-3"), width: width,
+            select(key, frame: NSRect(x: x, y: cellY + 17 + tokens.number("s-3"), width: width,
                 height: tokens.number("h-md")), parent: card)
         }
-        return y + height
+        let rows = (keys.count + columns - 1) / columns
+        return y + CGFloat(rows) * height + CGFloat(rows - 1) * gap
     }
 
     /// Shipping `.settings-utility-row`: copy and one secondary action.
@@ -1195,7 +1236,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             parent: card), "\(accent.title) \(accent.detail)"))
         addCopy(accent.title, detail: accent.detail, x: inset, y: y, width: contentWidth, parent: card)
         y += accentHeight + tokens.number("s-4")
-        let columns = (PreferencesPolicy.copy["theme_columns"] as? NSNumber)?.intValue ?? 5
+        let columns = compactLayout
+            ? (PreferencesPolicy.copy["theme_columns_compact"] as? NSNumber)?.intValue ?? 2
+            : (PreferencesPolicy.copy["theme_columns"] as? NSNumber)?.intValue ?? 5
         let gap = tokens.number("s-2")
         let chipWidth = (contentWidth - gap * CGFloat(columns - 1)) / CGFloat(columns)
         let theme = settings.string("theme", "mustard")
@@ -1898,7 +1941,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     /// previous/next and close.
     func showFind() {
         if findBar != nil { windowFocusFind(); return }
-        let left = Self.sidebarWidth + tokens.number("s-8")
+        let left = navWidth + tokens.number("s-8")
         let side = tokens.number("h-md")
         let bar = Surface(frame: NSRect(x: left, y: Self.headerHeight, width: root.bounds.width - left - tokens.number("s-8"),
             height: side))
@@ -1935,7 +1978,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     private func setHeader(height: CGFloat) {
         headerRule.frame.origin.y = height
-        scroll.frame = NSRect(x: Self.sidebarWidth, y: height + 1, width: root.bounds.width - Self.sidebarWidth,
+        scroll.frame = NSRect(x: navWidth, y: height + 1, width: root.bounds.width - navWidth,
             height: root.bounds.height - height - 1)
     }
 

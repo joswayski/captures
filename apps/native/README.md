@@ -282,7 +282,10 @@ Launch with `--live [--history-root PATH]` on either native host. This is an
 explicit opt-in to real desktop capture, not a synthetic benchmark. The default
 history is beside the separate Captures Native settings file, never installed
 Preview history. Choose a display, request screen access if needed, and capture.
-The host hides its window before capture and restores its prior visibility afterward.
+The host hides its History and Preferences windows before capture and restores
+their prior visibility afterward. Capture History, Captures Preferences and first-run
+setup are separate, resizable windows, as in the shipping app; `--live
+--open-preferences` also opens Preferences at launch on Windows/Linux.
 Permission and locked/inactive session checks remain in force.
 
 Both hosts use `captures-app` for display enumeration, PNG/thumbnail persistence,

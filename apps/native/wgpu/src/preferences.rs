@@ -235,6 +235,8 @@ pub struct Preferences {
     find_rows: Vec<FindRow>,
     card_tops: Vec<f32>,
     live: bool,
+    /// Shipping `@media (max-width: 720px)`: stacked rows, two accent columns.
+    compact: bool,
     keyboard_settings_error: Option<String>,
     match_index: usize,
     find_jump: bool,
@@ -333,6 +335,7 @@ impl Preferences {
             find_rows: vec![],
             card_tops: vec![],
             live: false,
+            compact: false,
             keyboard_settings_error: None,
             match_index: 0,
             find_jump: false,
@@ -771,6 +774,7 @@ impl Preferences {
     /// Returns true when the user requests the history window.
     pub fn ui(&mut self, ui: &mut egui::Ui, t: &Tokens, live: bool) -> bool {
         self.live = live;
+        self.compact = captures_app::app_windows::compact(ui.ctx().content_rect().width());
         self.receive_shortcut_input();
         self.keyboard(ui);
         ui.spacing_mut().item_spacing.y = 0.;
@@ -808,7 +812,9 @@ impl Preferences {
                 .auto_shrink(false),
             |ui| {
                 egui::Frame::new().inner_margin(margin).show(ui, |ui| {
-                    ui.set_max_width(720. - 2. * t.number("s-8"));
+                    // `.settings-body { max-width: 720px }`, never wider
+                    // than the window leaves.
+                    ui.set_max_width(ui.available_width().min(720. - 2. * t.number("s-8")));
                     ui.spacing_mut().item_spacing.y = 0.;
                     self.find_rows.clear();
                     self.card_tops.clear();
@@ -1146,7 +1152,13 @@ impl Preferences {
     ) -> (egui::Rect, egui::layers::ShapeIdx) {
         let background = ui.painter().add(egui::Shape::Noop);
         let full = ui.available_width();
-        let copy_width = (full - control_size.x - t.number("s-6")).max(150.);
+        // Compact windows stack the control under the copy.
+        let stacked = self.compact;
+        let copy_width = if stacked {
+            full
+        } else {
+            (full - control_size.x - t.number("s-6")).max(150.)
+        };
         let title_galley = ui.painter().layout(
             title.to_owned(),
             egui::FontId::proportional(t.number("text-md")),
@@ -1162,9 +1174,18 @@ impl Preferences {
             + description_galley
                 .as_ref()
                 .map_or(0., |galley| 3. + galley.size().y);
-        let height = copy_height.max(control_size.y);
+        let gap = t.number("s-3");
+        let height = if stacked {
+            copy_height + gap + control_size.y
+        } else {
+            copy_height.max(control_size.y)
+        };
         let (rect, _) = ui.allocate_exact_size(egui::vec2(full, height), egui::Sense::hover());
-        let top = rect.top() + (height - copy_height) / 2.;
+        let top = if stacked {
+            rect.top()
+        } else {
+            rect.top() + (height - copy_height) / 2.
+        };
         let title_height = title_galley.size().y;
         ui.painter()
             .galley(egui::pos2(rect.left(), top), title_galley, t.color("text"));
@@ -1175,14 +1196,25 @@ impl Preferences {
                 t.color("text-subtle"),
             );
         }
-        let control_rect = egui::Rect::from_min_max(
-            egui::pos2(rect.right() - control_size.x, rect.top()),
-            rect.max,
-        );
+        let (control_rect, layout) = if stacked {
+            (
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.left(), rect.bottom() - control_size.y),
+                    egui::vec2(full, control_size.y),
+                ),
+                egui::Layout::left_to_right(egui::Align::Center),
+            )
+        } else {
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(rect.right() - control_size.x, rect.top()),
+                    rect.max,
+                ),
+                egui::Layout::right_to_left(egui::Align::Center),
+            )
+        };
         ui.scope_builder(
-            egui::UiBuilder::new()
-                .max_rect(control_rect)
-                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+            egui::UiBuilder::new().max_rect(control_rect).layout(layout),
             |ui| control(self, ui),
         );
         let text = emphasis.map_or_else(|| desc.to_owned(), |e| e.text());
@@ -1331,15 +1363,24 @@ impl Preferences {
         );
     }
 
-    /// Shipping `.setting-grid`: stacked title-over-select cells.
+    /// Shipping `.setting-grid`: stacked title-over-select cells, two per
+    /// row in a compact window.
     fn select_grid(&mut self, ui: &mut egui::Ui, t: &Tokens, cells: &[(&[&str], Options)]) {
         let gap = t.number("s-5");
-        let width = (ui.available_width() - gap * (cells.len() as f32 - 1.)) / cells.len() as f32;
-        let background = ui.painter().add(egui::Shape::Noop);
-        let response = ui
-            .with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+        let columns = if self.compact {
+            cells.len().min(2)
+        } else {
+            cells.len()
+        }
+        .max(1);
+        let width = (ui.available_width() - gap * (columns as f32 - 1.)) / columns as f32;
+        for (index, row) in cells.chunks(columns).enumerate() {
+            if index > 0 {
+                ui.add_space(gap);
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                 ui.spacing_mut().item_spacing.x = gap;
-                for (path, options) in cells {
+                for (path, options) in row {
                     let copy = preferences::row(&path.join("."));
                     let cell_background = ui.painter().add(egui::Shape::Noop);
                     let cell = ui
@@ -1357,9 +1398,8 @@ impl Preferences {
                         .response;
                     self.remember(copy.title.to_owned(), cell.rect, cell_background);
                 }
-            })
-            .response;
-        let _ = (background, response);
+            });
+        }
     }
 
     fn appearance(&mut self, ui: &mut egui::Ui, t: &Tokens) {
@@ -1404,7 +1444,7 @@ impl Preferences {
             );
             ui.add_space(t.number("s-4"));
             let gap = t.number("s-2");
-            let columns = preferences::THEME_COLUMNS;
+            let columns = preferences::theme_columns(this.compact);
             let width = (ui.available_width() - gap * (columns as f32 - 1.)) / columns as f32;
             let mode = if ui.visuals().dark_mode {
                 "dark"
@@ -1469,7 +1509,9 @@ impl Preferences {
                 ui.spacing_mut().item_spacing.y = 0.;
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.set_max_width(44. * t.number("text-sm") * 0.55);
+                        ui.set_max_width(
+                            ui.available_width().min(44. * t.number("text-sm") * 0.55),
+                        );
                         ui.label(RichText::new(copy.title).size(t.number("text-md")));
                         ui.add_space(3.);
                         description(ui, t, copy.description, None);

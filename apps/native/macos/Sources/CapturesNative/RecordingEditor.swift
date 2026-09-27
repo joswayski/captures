@@ -1014,7 +1014,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                           backing: .buffered, defer: false)
         super.init()
         window.isReleasedWhenClosed = false
-        window.title = "Recording editor"
+        window.title = EditorWindowTitle.recording
         window.minSize = NSSize(width: 760, height: 540)
         window.appearance = NSAppearance(named: tokens.color("text").brightnessComponent > 0.5
             ? .darkAqua : .aqua)

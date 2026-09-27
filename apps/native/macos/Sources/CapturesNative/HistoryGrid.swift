@@ -134,8 +134,12 @@ struct HistoryGridLayout: Equatable {
     let cardHeight: CGFloat
     let gap: CGFloat
 
-    static func make(width: CGFloat, transport: SettingsTransport = SettingsBridge()) -> HistoryGridLayout? {
-        guard let grid = try? transport.request(["operation": "history_grid", "width": Double(width)])["grid"]
+    /// `compact`: the window is at or below the shipping 720 pt breakpoint,
+    /// where the grid is one full-width column.
+    static func make(width: CGFloat, compact: Bool = false,
+                     transport: SettingsTransport = SettingsBridge()) -> HistoryGridLayout? {
+        guard let grid = try? transport.request(["operation": "history_grid", "width": Double(width),
+                                                 "compact": compact])["grid"]
                 as? [String: Any],
               let columns = grid["columns"] as? NSNumber, columns.intValue > 0,
               let cardWidth = grid["card_width"] as? NSNumber,
@@ -634,6 +638,10 @@ final class HistoryGridView: NSView {
     /// Escape: back out of an armed Delete / Delete all.
     var onCancel: () -> Void = {}
     private var layoutCache: (width: CGFloat, layout: HistoryGridLayout)?
+    /// One card column in a compact window (shipping `@media (max-width: 720px)`).
+    var compact = false {
+        didSet { if oldValue != compact { layoutCache = nil; tile(force: true) } }
+    }
     private var cards: [String: HistoryCardView] = [:]
     private var observing = false
 
@@ -684,7 +692,8 @@ final class HistoryGridView: NSView {
     private func currentLayout() -> HistoryGridLayout? {
         let width = enclosingScrollView?.contentSize.width ?? bounds.width
         if let cache = layoutCache, cache.width == width { return cache.layout }
-        guard let layout = HistoryGridLayout.make(width: width, transport: SettingsBridge()) else { return nil }
+        guard let layout = HistoryGridLayout.make(width: width, compact: compact,
+                                                  transport: SettingsBridge()) else { return nil }
         layoutCache = (width, layout)
         return layout
     }

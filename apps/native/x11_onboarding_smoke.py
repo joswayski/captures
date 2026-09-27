@@ -95,9 +95,12 @@ def main():
                 time.sleep(.4)
                 assert not published(history), "capture/forwarding bypassed setup"
                 assert len(windows(app.pid, ".*")) == 1, "capture selector/editor opened before setup"
-                click(window, 732, 476)  # Start capturing, right-aligned under the cards.
+                click(window, 514, 384)  # Start capturing, right-aligned under the cards.
                 wait(lambda: settings.exists() and json.loads(settings.read_text()).get("onboarding_completed"),
                      "setup completion persisted")
+                # Without a tray host, completing setup keeps Captures reachable:
+                # the setup window becomes the Capture History window.
+                wait(lambda: windows(app.pid, "^Capture History$") == [window], "History after setup")
                 wait(lambda: len(published(history)) == 2, "queued cold and forwarded media imported")
                 # Shipping launch notice: nonactivating, titled like the Tauri
                 # window, anchored top-right without an X11 tray rect, dismissible.
@@ -116,35 +119,37 @@ def main():
                 run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
                     "sleep", ".4", "key", "ctrl+q")
                 assert app.wait(timeout=20) == 0
-                again = spawn(common)
-                window = wait(lambda: windows(again.pid), "completed profile workspace")[0]
+                # Open Preferences beside History, as its own window.
+                again = spawn(common + ["--open-preferences"])
+                window = wait(lambda: windows(again.pid, "^Capture History$"), "completed profile History")[0]
+                preferences = wait(lambda: windows(again.pid, "^Captures Preferences$"), "Preferences window")[0]
                 time.sleep(1)
                 assert not windows(again.pid, "^Captures is running$"), "visible relaunch showed the launch notice"
                 run("import", "-window", window, str(output / f"completed-{appearance}.png"))
                 accepted_settings = settings.read_bytes()
                 recovery_media = root / "during permission recovery.png"
                 recovery_media.write_bytes(png(19, 9))
-                click(window, 109, 217)  # Capture permissions, wrapped to the History header's second action line, without an OS prompt.
+                click(window, 109, 181)  # Capture permissions, wrapped to the History header's second action line, without an OS prompt.
                 time.sleep(.5)
                 secondary = subprocess.run(common + ["--", str(recovery_media)], env=env,
                                            capture_output=True, timeout=15)
                 assert secondary.returncode == 0, secondary.stderr
-                click(window, 196, 18)  # Navigation behind the dialog stays disabled.
+                click(window, 380, 136)  # New Capture behind the dialog stays disabled.
                 run("xdotool", "key", "super+shift+s")
                 time.sleep(.5)
                 assert len(published(history)) == 2, "recovery imported queued media"
-                assert len(windows(again.pid, ".*")) == 1, "recovery launched capture/editor"
+                assert sorted(windows(again.pid, ".*")) == sorted([window, preferences]), "recovery launched capture/editor"
                 run("import", "-window", window, str(output / f"permission-recovery-{appearance}.png"))
-                click(window, 546, 449)  # Refresh status (secondary) is prompt-free and does not complete setup.
+                click(window, 556, 449)  # Refresh status (secondary) is prompt-free and does not complete setup.
                 time.sleep(.4)
                 assert settings.read_bytes() == accepted_settings, "recovery changed setup/settings"
-                click(window, 681, 449)  # Done (primary card action), including when no upfront permission is required.
+                click(window, 691, 449)  # Done (primary card action), including when no upfront permission is required.
                 wait(lambda: len(published(history)) == 3, "recovery releases queued media")
                 assert recovery_media.read_bytes() == png(19, 9), "recovery changed the input"
                 time.sleep(1)
-                click(window, 196, 18)  # Real Preferences navigation, absent on setup.
+                run("xdotool", "windowactivate", "--sync", preferences)
                 time.sleep(.4)
-                run("import", "-window", window, str(output / f"preferences-{appearance}.png"))
+                run("import", "-window", preferences, str(output / f"preferences-{appearance}.png"))
                 run("xdotool", "key", "ctrl+q")
                 assert again.wait(timeout=20) == 0
                 print(f"PASS {appearance}: first run, hidden={hidden}, capture gate, queued media, launch notice, persistence, relaunch and permission recovery", flush=True)
@@ -163,11 +168,11 @@ def main():
             time.sleep(.5)
             assert run("xdotool", "getwindowfocus").decode().strip() == probe, "setup stole focus"
             broken.unlink()  # User fixes the file; retry must reload and recheck.
-            click(window, 604, 500)  # Retry setup, beside the disabled primary.
+            click(window, 382, 401)  # Retry setup, beside the disabled primary.
             time.sleep(.5)
             run("import", "-window", window, str(output / "onboarding-retry.png"))
             assert not broken.exists(), "retry silently completed setup"
-            click(window, 732, 476)
+            click(window, 514, 384)
             wait(lambda: broken.exists() and json.loads(broken.read_text()).get("onboarding_completed"), "completion after retry")
             run("xdotool", "key", "ctrl+q")
             assert app.wait(timeout=20) == 0

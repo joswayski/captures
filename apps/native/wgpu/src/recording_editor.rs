@@ -1097,10 +1097,12 @@ impl View {
 
     fn title(&self) -> &'static str {
         // The automatic comparison's refresh delay leads straight into work.
+        // Shipping's title; the " — Working…" suffix is a native addition
+        // that the X11 exercises wait on.
         if self.busy || self.comparison_due.is_some() {
-            "Recording editor — Working…"
+            "Captures Editor — Working…"
         } else {
-            "Recording editor"
+            captures_app::app_windows::RECORDING_EDITOR_TITLE
         }
     }
 }

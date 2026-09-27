@@ -27,7 +27,7 @@ PREVIEW = "Captures Mini Preview"
 SELECTOR = "Captures Region Selection"
 CONTROLS = "Captures Capture Controls"
 # xdotool searches legacy WM_NAME, whose em dash is not decoded as UTF-8.
-EDITOR = "Screenshot editor.*"
+EDITOR = "Captures Screenshot Editor.*"
 # Where the direct region overlay's guidance chip settles (top edge at 16%).
 GUIDANCE_CROP = "600x80+340+140"
 
@@ -232,12 +232,21 @@ def main():
             portal_name = dbus.service.BusName("org.freedesktop.portal.Desktop", bus=bus, do_not_queue=True)
             portal = PortalSettings(portal_name, "/org/freedesktop/portal/desktop")
             settings = output / "motion-settings.json"
+            # A complete existing profile, so the live root is Capture History.
+            # (Missing required fields make the settings malformed, and the
+            # root stays the setup window with a load error.)
             settings.write_text(json.dumps({"settings_schema_version": 5, "onboarding_completed": True,
+                                            "output_directory": str(output / "exports"),
+                                            "launch_at_login": False,
+                                            "region_shortcut": "Ctrl+Shift+F7",
+                                            "window_shortcut": "Ctrl+Shift+F8",
+                                            "display_shortcut": "Ctrl+Shift+F9",
+                                            "new_capture_shortcut": "Ctrl+Shift+F10",
                                             "appearance": "dark", "theme": "mustard"}))
             original = settings.read_bytes()
             app = spawn("motion", [str(binary), "--live", "--settings-file", str(settings),
                                    "--history-root", str(output / "history"), "--quit-after", "60"])
-            root = wait(lambda: windows("Captures"), "motion workspace")[0]
+            root = wait(lambda: windows("Capture History"), "motion workspace")[0]
 
             def motion_events():
                 events = []
@@ -323,18 +332,17 @@ def main():
                     "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10"}))
                 common = [str(binary), "--live", "--history-root", str(history),
                           "--settings-file", str(settings)]
-                app = spawn(f"login-{appearance}", common)
-                root = wait(lambda: windows("Captures"), "login Preferences workspace")[0]
+                app = spawn(f"login-{appearance}", common + ["--open-preferences"])
+                prefs = wait(lambda: windows("Captures Preferences"), "login Preferences window")[0]
                 time.sleep(1)
-                click(root, 196, 18)
-                click(root, 75, 321)
+                click(prefs, 90, 285)  # About, in the Preferences window's section nav.
                 time.sleep(1)
-                shot(root, f"login-{appearance}-off")
+                shot(prefs, f"login-{appearance}-off")
                 assert not list(autostart.glob("*.desktop")), "saved setting must not register a login item"
-                click(root, 857, 607)
+                click(prefs, 822, 540)  # Launch at login.
                 entry = wait(lambda: next(autostart.glob("*.desktop"), None), "explicit login registration")
                 owned = entry.read_bytes()
-                shot(root, f"login-{appearance}-on")
+                shot(prefs, f"login-{appearance}-on")
                 # Exit normally, not close-to-background, then launch the real
                 # Desktop Entry through GIO to test its escaping and exact argv.
                 run("xdotool", "key", "ctrl+q")
@@ -347,22 +355,23 @@ def main():
                 # Use files rather than a stdout pipe inherited by the app.
                 launcher = spawn(f"gio-login-{appearance}", ["gio", "launch", str(entry)])
                 assert launcher.wait(timeout=10) == 0
-                hidden = wait(lambda: subprocess.run(["xdotool", "search", "--name", "^Captures$"],
+                hidden = wait(lambda: subprocess.run(["xdotool", "search", "--name", "^Capture History$"],
                     env=env, capture_output=True, text=True).stdout.split(), "hidden login window")[0]
                 pid = int(run("xdotool", "getwindowpid", hidden))
                 try:
                     time.sleep(1)
-                    assert not windows("Captures"), "login launch showed the root"
+                    assert not windows("Capture History"), "login launch showed the root"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "login launch stole focus"
                     assert str(history).encode() in Path(f"/proc/{pid}/cmdline").read_bytes()
                     assert str(settings).encode() in Path(f"/proc/{pid}/cmdline").read_bytes()
                     result = subprocess.run(common, env=env, capture_output=True, timeout=10)
                     assert result.returncode == 0, result.stderr
-                    root = wait(lambda: windows("Captures"), "relaunch restores live Preferences")[0]
-                    click(root, 75, 321)
+                    # No window is open, so the relaunch opens Preferences.
+                    prefs = wait(lambda: windows("Captures Preferences"), "relaunch opens Preferences")[0]
+                    click(prefs, 90, 285)
                     time.sleep(1)
-                    shot(root, f"login-{appearance}-restored")
-                    click(root, 857, 607)
+                    shot(prefs, f"login-{appearance}-restored")
+                    click(prefs, 822, 540)
                     wait(lambda: not entry.exists(), "explicit disable after hidden launch")
                     run("xdotool", "key", "ctrl+q")
                     wait(lambda: not Path(f"/proc/{pid}").exists(), "normal exit after login launch")
@@ -377,13 +386,12 @@ def main():
                 # untouched and surface a recoverable error, not a guessed Off.
                 conflict = b"[Desktop Entry]\nType=Application\nName=Another login item\n"
                 entry.write_bytes(conflict)
-                conflict_app = spawn(f"login-conflict-{appearance}", common)
-                root = wait(lambda: windows("Captures"), "conflicting login entry Preferences")[0]
+                conflict_app = spawn(f"login-conflict-{appearance}", common + ["--open-preferences"])
+                prefs = wait(lambda: windows("Captures Preferences"), "conflicting login entry Preferences")[0]
                 time.sleep(1)
-                click(root, 196, 18)
-                click(root, 75, 321)
+                click(prefs, 90, 285)
                 time.sleep(1)
-                shot(root, f"login-{appearance}-conflict")
+                shot(prefs, f"login-{appearance}-conflict")
                 assert entry.read_bytes() == conflict
                 run("xdotool", "key", "ctrl+q")
                 assert conflict_app.wait(timeout=10) == 0
@@ -394,10 +402,7 @@ def main():
             panel.wait(timeout=5)
             wait(lambda: not bus.name_has_owner("org.kde.StatusNotifierWatcher"), "tray host removed")
             recovery = spawn("login-without-tray", common + ["--scene", "idle"])
-            root = wait(lambda: windows("Captures"), "missing tray exposes login recovery window")[0]
-            time.sleep(1)
-            click(root, 196, 18)
-            click(root, 75, 321)
+            root = wait(lambda: windows("Capture History"), "missing tray exposes login recovery window")[0]
             time.sleep(1)
             shot(root, "login-without-tray")
             run("xdotool", "key", "ctrl+q")
@@ -435,7 +440,7 @@ def main():
             app = spawn(prefix, [str(binary), "--live", "--history-root", str(history),
                 "--settings-file", str(settings), "--quit-after", "300" if args.lifecycle else "180"]
                 + (["--reduced-motion"] if args.reduced_motion else []))
-            root = wait(lambda: windows("Captures"), "root workspace")[0]
+            root = wait(lambda: windows("Capture History"), "root workspace")[0]
             # Leave the left-hand preview/capture area unobstructed. Both root
             # capture buttons still fit on this desktop after moving the window.
             def move_root(x, y):
@@ -468,9 +473,9 @@ def main():
                 # the always-on-top preview windows at x=0..340 and 940..1280,
                 # including their transparent margins and expanded stacks.
                 run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
-                wait(lambda: windows("Captures"), "workspace restored before positioning")
+                wait(lambda: windows("Capture History"), "workspace restored before positioning")
                 move_root(300, 280)
-                click(root, 636, 171)  # Capture region in the token-font History header.
+                click(root, 636, 135)  # Capture region in the token-font History header.
                 selector = wait(lambda: windows(SELECTOR), "region selector")[0]
                 wait_guidance(selector, "painted region guidance")
                 return selector
@@ -480,7 +485,7 @@ def main():
                 selector = begin()
                 select_region(selector, rect)
                 entry = wait(lambda: entries() - previous, "new persisted capture").pop()
-                wait(lambda: windows("Captures") and not windows(SELECTOR), "restored root")
+                wait(lambda: windows("Capture History") and not windows(SELECTOR), "restored root")
                 # Openbox may reposition an off-screen workspace when remapping.
                 # Keep it out of the pixel oracle crop again before comparing a
                 # composited card with the following screenshot (which hides it).
@@ -597,7 +602,7 @@ def main():
                     return
                 if placement == "bottom_left" and not include:
                     run("xdotool", "windowminimize", root)
-                    wait(lambda: not windows("Captures"), "minimized workspace")
+                    wait(lambda: not windows("Capture History"), "minimized workspace")
                     other_app = spawn("preview-action-focus", ["xmessage", "-title", "Preview action focus fixture",
                         "-geometry", "220x70+900+20", "Keep this application focused"])
                     other = wait(lambda: windows("Preview action focus fixture"), "other app focus")[0]
@@ -622,7 +627,7 @@ def main():
                     export_bytes = exported.read_bytes()
                     shot("root", f"{prefix}-saved")
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Save activated Captures"
-                    assert not windows("Captures"), "Copy/Save unexpectedly restored workspace"
+                    assert not windows("Capture History"), "Copy/Save unexpectedly restored workspace"
 
                     def reveals():
                         return [json.loads(line) for line in reveal_log.read_text().splitlines()] if reveal_log.exists() else []
@@ -632,7 +637,7 @@ def main():
                     wait(lambda: reveals() == [[str(exported.parent)]], "Reveal receives exact Unicode export folder")
                     assert list(exported.parent.iterdir()) == [exported], "Reveal created another export"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Reveal activated Captures"
-                    assert not windows("Captures"), "Reveal restored workspace"
+                    assert not windows("Capture History"), "Reveal restored workspace"
                     shot(preview, f"{prefix}-reveal")
                     preserved = entries()
                     held = exported.with_suffix(".held")
@@ -688,9 +693,9 @@ def main():
                     wait(lambda: active_window() == editor,
                          "Edit focuses the screenshot editor")
                     wait(lambda: run("xprop", "-id", editor, "_NET_WM_NAME").decode().strip()
-                         == '_NET_WM_NAME(UTF8_STRING) = "Screenshot editor — Captures"',
+                         == '_NET_WM_NAME(UTF8_STRING) = "Captures Screenshot Editor"',
                          "preview editor finishes loading its screenshot")
-                    assert not windows("Captures"), "Edit restored minimized workspace"
+                    assert not windows("Capture History"), "Edit restored minimized workspace"
                     assert entries() == preserved and private_files(first) == preserved_private, (
                         "Edit changed the artifact or History")
                     shot("root", f"{prefix}-edit-with-preview")
@@ -720,7 +725,7 @@ def main():
                          "repeated Edit focuses the existing screenshot editor")
                     assert windows(EDITOR) == [editor], (
                         "repeated Edit opened a duplicate screenshot editor")
-                    assert not windows("Captures"), "repeated Edit restored minimized workspace"
+                    assert not windows("Capture History"), "repeated Edit restored minimized workspace"
                     assert entries() == preserved and private_files(first) == preserved_private, (
                         "repeated Edit changed the artifact or History")
                     run("xdotool", "keydown", "Alt_L", "sleep", ".1", "key", "F4",
@@ -728,7 +733,7 @@ def main():
                     wait(lambda: not windows(EDITOR),
                          "unmodified screenshot editor closes cleanly")
                     assert draft_files() == preserved_drafts, "unmodified Edit changed saved drafts"
-                    assert windows(PREVIEW) and not windows("Captures"), (
+                    assert windows(PREVIEW) and not windows("Capture History"), (
                         "closing Edit removed the preview or restored workspace")
                     # The ring eases out, then the plain Edit icon lingers
                     # without hover for 3 s before chrome returns to idle.
@@ -769,7 +774,7 @@ def main():
                     assert entries() == unsaved_entries, "unsaved Trash removed history"
                     assert private_files(unsaved) == unsaved_private, "unsaved Trash changed private files or metadata"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "unsaved Trash activated Captures"
-                    assert not windows("Captures"), "unsaved Trash restored workspace"
+                    assert not windows("Capture History"), "unsaved Trash restored workspace"
 
                     # A missing saved export must be retryable and must not
                     # create a replacement or mutate private history.
@@ -804,7 +809,7 @@ def main():
                     assert entries() == trash_entries and private_files(trashed) == trash_private, (
                         "failed Trash changed private files or metadata")
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "failed Trash activated Captures"
-                    assert not windows("Captures"), "failed Trash restored workspace"
+                    assert not windows("Capture History"), "failed Trash restored workspace"
 
                     held.rename(trash_export)
                     click(preview, 84, 50, activate=False)
@@ -822,7 +827,7 @@ def main():
                     encoded_path = next(line.removeprefix("Path=") for line in info_lines if line.startswith("Path="))
                     assert unquote(encoded_path) == str(trash_export), "trashinfo Path does not name original export"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Trash activated Captures"
-                    assert not windows("Captures"), "Trash restored workspace"
+                    assert not windows("Capture History"), "Trash restored workspace"
 
                     other_app.terminate()
                     other_app.wait(timeout=5)
@@ -861,12 +866,12 @@ def main():
                 begin()
                 assert bool(windows(PREVIEW)) == include, "capture UI suppression ignored setting"
                 run("xdotool", "key", "Escape")
-                wait(lambda: windows("Captures") and windows(PREVIEW) and not windows(SELECTOR), "cancel restores preview")
+                wait(lambda: windows("Capture History") and windows(PREVIEW) and not windows(SELECTOR), "cancel restores preview")
                 assert entries() == saved, "cancellation persisted an artifact"
                 begin()
                 queries = saver.queries
                 saver.locked = True
-                wait(lambda: saver.queries > queries and windows("Captures") and not windows(SELECTOR), "lock cancels capture")
+                wait(lambda: saver.queries > queries and windows("Capture History") and not windows(SELECTOR), "lock cancels capture")
                 saver.locked = False
                 wait(lambda: windows(PREVIEW), "unlock restores preview")
                 assert entries() == saved, "session cancellation persisted an artifact"
@@ -999,7 +1004,7 @@ def main():
                     time.sleep(.2)
                     assert int(window_geometry(preview)["HEIGHT"]) == 264, "drag expanded the pile"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "drag stole focus"
-                    assert not windows("Captures"), "drag restored hidden root"
+                    assert not windows("Capture History"), "drag restored hidden root"
                     shot("root", f"{prefix}-dragged")
                     other_app.terminate(); other_app.wait(timeout=5)
                     run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
@@ -1105,7 +1110,7 @@ def main():
                     # with another whole-tree query; callers verify the action.
 
                 run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
-                wait(lambda: not windows("Captures"), "close hides resident workspace")
+                wait(lambda: not windows("Capture History"), "close hides resident workspace")
                 assert app.poll() is None and windows(PREVIEW), "close terminated app or previews"
                 other_app = spawn("shortcut-focus", ["xmessage", "-title", "Shortcut focus fixture",
                     "-geometry", "220x70+850+250", "Other application remains focused"])
@@ -1120,26 +1125,28 @@ def main():
                 entry = wait(lambda: entries() - previous, "background region artifact").pop()
                 assert rgb(entry.parent / "capture.png") == wallpaper_crop(140, 180, 310, 170)
                 wait(lambda: not windows(SELECTOR) and windows(PREVIEW), "background preview restored")
-                assert not windows("Captures"), "background capture reopened workspace"
+                assert not windows("Capture History"), "background capture reopened workspace"
 
                 run("xdotool", "windowactivate", "--sync", other, "key", "ctrl+shift+F8")
                 selector = wait(lambda: windows("Captures Window Selection"), "hidden-root window shortcut")[0]
                 run("xdotool", "windowfocus", "--sync", other, "key", "Escape")
                 wait(lambda: not windows("Captures Window Selection") and windows(PREVIEW), "cross-app Escape restores background")
-                assert not windows("Captures") and entries() == previous | {entry}
+                assert not windows("Capture History") and entries() == previous | {entry}
 
                 previous = entries()
                 run("xdotool", "key", "ctrl+shift+F9")
                 wait(lambda: entries() - previous, "hidden-root display shortcut")
                 wait(lambda: windows(PREVIEW), "display preview")
-                assert not windows("Captures"), "display capture reopened workspace"
+                assert not windows("Capture History"), "display capture reopened workspace"
 
                 menu_action("Capture History…", screenshot=True)  # Real GTK/DBusMenu item.
-                wait(lambda: windows("Captures"), "tray History reopens workspace")
+                wait(lambda: windows("Capture History"), "tray History reopens workspace")
                 menu_action("Preferences")
+                prefs = wait(lambda: windows("Captures Preferences"), "tray Preferences opens its own window")[0]
+                assert windows("Capture History"), "opening Preferences leaves History open"
                 time.sleep(.3)
                 shot("root", "lifecycle-preferences")
-                run("xdotool", "windowactivate", "--sync", root, "key", "ctrl+shift+F7")
+                run("xdotool", "windowactivate", "--sync", prefs, "key", "ctrl+shift+F7")
                 time.sleep(.5)
                 assert not windows(SELECTOR), "focused Preferences did not suppress shortcut"
                 run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
@@ -1150,10 +1157,15 @@ def main():
                 run("xdotool", "key", "ctrl+shift+F7")
                 wait(lambda: windows(SELECTOR), "unfocused Preferences permits background shortcut")
                 run("xdotool", "key", "Escape")
-                wait(lambda: not windows(SELECTOR) and windows("Captures"),
-                     "cancel restores previously visible Preferences")
+                wait(lambda: not windows(SELECTOR) and windows("Captures Preferences")
+                     and windows("Capture History"), "cancel restores previously visible Preferences")
+                # A capture recreates the hidden Preferences window in place.
+                prefs = windows("Captures Preferences")[0]
+                run("xdotool", "windowactivate", "--sync", prefs, "key", "alt+F4")
+                wait(lambda: not windows("Captures Preferences"), "close Preferences")
+                assert windows("Capture History"), "closing Preferences leaves History open"
                 run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
-                wait(lambda: not windows("Captures"), "hide Preferences")
+                wait(lambda: not windows("Capture History"), "hide History")
                 run("xdotool", "windowactivate", "--sync", other, "key", "ctrl+shift+F7")
                 selector = wait(lambda: windows(SELECTOR), "hidden Preferences does not block background shortcut")[0]
                 previous = entries()
@@ -1164,14 +1176,14 @@ def main():
                 run("xdotool", "key", "Escape")
                 wait(lambda: not windows(SELECTOR) and not windows("Captures Screenshot Countdown"),
                      "cancel hidden Preferences countdown")
-                assert not windows("Captures") and entries() == previous
+                assert not windows("Capture History") and entries() == previous
                 for label, title in [("Screenshot Region", SELECTOR), ("Screenshot Window", "Captures Window Selection")]:
                     menu_action(label)
                     selector = wait(lambda: windows(title), f"tray {label} launches from hidden Preferences")[0]
                     shot(selector, "lifecycle-selector-" + label.lower().replace(" ", "-"))
                     run("xdotool", "key", "Escape")
                     wait(lambda: not windows(title), f"cancel tray {label}")
-                    assert not windows("Captures")
+                    assert not windows("Capture History")
                 menu_action("New Capture…")
                 controls = wait(lambda: windows(CONTROLS), "tray New Capture opens unified controls")[0]
                 shot(controls, "controls-tray-empty")
@@ -1179,7 +1191,7 @@ def main():
                 assert windows(CONTROLS) and entries() == previous, "empty Region captured"
                 run("xdotool", "windowactivate", "--sync", other, "key", "Escape")
                 wait(lambda: not windows(CONTROLS), "cross-app Escape cancels New Capture")
-                assert not windows("Captures"), "New Capture cancel reopened hidden Preferences"
+                assert not windows("Capture History"), "New Capture cancel reopened hidden Preferences"
                 menu_action("Quit Captures")
                 other_app.terminate()
                 other_app.wait(timeout=5)
@@ -1211,22 +1223,26 @@ def main():
                 run("openbox", "--reconfigure")
                 edit_settings = output / "shortcut-settings.json"
                 edit_settings.write_text(settings.read_text())
-                edit_args = [str(binary), "--live", "--history-root", str(history),
+                edit_args = [str(binary), "--live", "--open-preferences", "--history-root", str(history),
                              "--settings-file", str(edit_settings), "--quit-after", "180"]
                 editor = spawn("shortcut-editor", edit_args)
-                root = wait(lambda: windows("Captures"), "shortcut editor workspace")[0]
+                # The shortcut recorders live in the separate Preferences window.
+                root = wait(lambda: windows("Captures Preferences"), "shortcut editor Preferences")[0]
                 run("xdotool", "windowmove", "--sync", root, "20", "60")
                 time.sleep(1)
 
                 def open_shortcuts():
-                    click(root, 196, 18)
-                    click(root, 98, 189)
+                    # A capture recreates the hidden Preferences window, so look
+                    # it up again rather than reuse an earlier window id.
+                    nonlocal root
+                    root = wait(lambda: windows("Captures Preferences"), "Preferences window")[0]
+                    click(root, 98, 153)
                     time.sleep(.4)
 
-                # Measured live root-client positions, not fixture coordinates.
-                # Both normal and focused states retain the same row geometry.
-                rows = [317, 353, 389, 425, 461, 497, 533]
-                recorder_x = 745  # Recorders are right-aligned, as in shipping.
+                # Measured Preferences-window client positions, not fixture
+                # coordinates. Normal and focused states share the row geometry.
+                rows = [294, 330, 366, 402, 438, 474, 510]
+                recorder_x = 709  # Recorders are right-aligned, as in shipping.
                 paths = [("new_capture_shortcut",), ("region_shortcut",),
                          ("window_shortcut",), ("display_shortcut",),
                          ("recording", "video_shortcut"), ("recording", "window_shortcut"),
@@ -1308,21 +1324,25 @@ def main():
                 record(0, "ctrl+alt+n", "Control+Alt+KeyN")
                 expected = stored_keys()
                 shot(root, "shortcuts-all-seven-edited")
-                click(root, 80, 18)
+                # Leave Preferences for History. Its Capture History… button moves
+                # while the save status shows, so activate the window directly.
+                history_window = windows("Capture History")[0]
+                run("xdotool", "windowactivate", "--sync", history_window)
                 time.sleep(.3)  # Settle navigation without injecting another event.
                 run("xdotool", "key", "ctrl+alt+r")
                 wait(lambda: windows(SELECTOR), "first global chord after leaving Preferences")
                 run("xdotool", "key", "Escape")
-                wait(lambda: not windows(SELECTOR) and windows("Captures"), "navigation shortcut cancel")
+                wait(lambda: not windows(SELECTOR) and windows("Capture History"), "navigation shortcut cancel")
                 open_shortcuts()
                 click(root, recorder_x, rows[0])
-                click(root, 80, 18)  # Leaving Preferences must cancel the recorder.
+                # Leaving Preferences must cancel the recorder.
+                run("xdotool", "windowactivate", "--sync", history_window)
                 run("xdotool", "key", "ctrl+q")
                 assert editor.wait(timeout=10) == 0, "stale recorder swallowed workspace Quit"
                 assert stored_keys() == expected
 
                 editor = spawn("shortcut-editor-restart", edit_args)
-                root = wait(lambda: windows("Captures"), "restart with saved shortcuts")[0]
+                root = wait(lambda: windows("Captures Preferences"), "restart with saved shortcuts")[0]
                 run("xdotool", "windowmove", "--sync", root, "20", "60")
                 time.sleep(1)
                 assert stored_keys() == expected, "restart changed stored bindings"
@@ -1333,19 +1353,24 @@ def main():
                 run("xdotool", "key", "ctrl+alt+r")
                 wait(lambda: windows(SELECTOR), "edited Region chord restored after Preferences blur")
                 run("xdotool", "key", "Escape")
-                wait(lambda: not windows(SELECTOR) and windows("Captures"), "edited shortcut cancellation")
+                wait(lambda: not windows(SELECTOR) and windows("Capture History"), "edited shortcut cancellation")
                 run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
                 time.sleep(.3)
                 run("xdotool", "key", "ctrl+alt+n")
                 controls = wait(lambda: windows(CONTROLS), "edited New Capture chord after restart and blur")[0]
                 shot(controls, "controls-edited-shortcut")
                 run("xdotool", "key", "Escape")
-                wait(lambda: not windows(CONTROLS) and windows("Captures"), "New Capture restores visible Preferences")
+                wait(lambda: not windows(CONTROLS) and windows("Captures Preferences")
+                     and windows("Capture History"), "New Capture restores visible Preferences and History")
                 # No retained child viewport may bootstrap the hidden root's
                 # UI incidentally. This is the first preview after restart.
                 assert not windows(PREVIEW)
+                root = windows("Captures Preferences")[0]  # Recreated by New Capture.
                 run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
-                wait(lambda: not windows("Captures"), "hide empty-preview Preferences")
+                wait(lambda: not windows("Captures Preferences"), "close empty-preview Preferences")
+                history_window = wait(lambda: windows("Capture History"), "History stays open")[0]
+                run("xdotool", "windowactivate", "--sync", history_window, "key", "alt+F4")
+                wait(lambda: not windows("Capture History"), "hide empty-preview History")
                 run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
                 time.sleep(.3)
                 previous = entries()
@@ -1354,7 +1379,7 @@ def main():
                 select_region(selector, (140, 180, 310, 170))
                 entry = wait(lambda: entries() - previous, "first background capture after restart").pop()
                 preview = wait(lambda: windows(PREVIEW), "hidden root creates first mini preview")[0]
-                assert not windows("Captures"), "first preview reopened hidden Preferences"
+                assert not windows("Capture History"), "first preview reopened hidden Preferences"
                 assert rgb(entry.parent / "capture.png") == wallpaper_crop(140, 180, 310, 170)
                 shot(preview, "shortcuts-first-background-preview")
                 menu_action("Quit Captures")
@@ -1376,19 +1401,19 @@ def main():
                 assert probe.wait(timeout=10) == 0, f"{label} completion hid instead of quitting"
                 wait(lambda: not watcher.Get("org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"),
                      f"{label} quit unregisters tray")
-                assert not windows("Captures") and not windows(PREVIEW)
+                assert not windows("Capture History") and not windows(PREVIEW)
             assert (output / "lifecycle-framebuffer.png").is_file()
 
             probe = spawn("lifecycle-tray-loss", live_args)
-            root = wait(lambda: windows("Captures"), "tray-loss workspace")[0]
+            root = wait(lambda: windows("Capture History"), "tray-loss workspace")[0]
             wait(lambda: watcher.Get("org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"),
                  "tray-loss registration")
             run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
-            wait(lambda: not windows("Captures"), "hide before tray host loss")
+            wait(lambda: not windows("Capture History"), "hide before tray host loss")
             assert probe.poll() is None
             run("xfce4-panel", "--quit")
             panel.wait(timeout=10)
-            root = wait(lambda: windows("Captures"), "tray loss restores hidden root")[0]
+            root = wait(lambda: windows("Capture History"), "tray loss restores hidden root")[0]
             wait(lambda: active_window() == root,
                  "tray loss focuses recovered root")
             time.sleep(.3)

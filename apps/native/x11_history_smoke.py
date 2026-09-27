@@ -76,7 +76,7 @@ def main():
                     write_completed_settings(root / "settings.json")
                     app = spawn([str(binary), "--live", "--history-root", str(history),
                         "--settings-file", str(root / "settings.json"), "--appearance", appearance])
-                    window = run("xdotool", "search", "--sync", "--onlyvisible", "--pid", str(app.pid), "--name", "^Captures$").decode().splitlines()[0]
+                    window = run("xdotool", "search", "--all", "--sync", "--onlyvisible", "--pid", str(app.pid), "--name", "^Capture History$").decode().splitlines()[0]
                     time.sleep(1)  # Font upload and asynchronous fixture decode.
 
                     def click(x, y):
@@ -90,29 +90,29 @@ def main():
 
                     screenshot("populated")
                     assert not previews(), "a preview opened before Restore"
-                    click(249, 591)  # First card's Restore brings back a floating preview.
+                    click(254, 555)  # First card's Restore brings back a floating preview.
                     preview = wait(previews)[0]
                     time.sleep(.5)  # Arrival motion.
                     screenshot("restored")
                     run("import", "-window", preview, str(output / f"{prefix}-restored-preview.png"))
-                    click(249, 591)  # Already showing: no duplicate window, still confirms.
+                    click(254, 555)  # Already showing: no duplicate window, still confirms.
                     time.sleep(.3)
                     assert len(previews()) == 1, "Restore duplicated the preview window"
                     assert len(list(history.glob("*/metadata.json"))) == 2, "Restore changed History"
-                    click(928, 115)  # Delete all arms "Delete all forever" in place.
+                    click(948, 79)  # Delete all arms "Delete all forever" in place.
                     screenshot("confirmation")
                     assert len(list(history.glob("*/metadata.json"))) == 2, "arming confirmation deleted files"
                     run("xdotool", "key", "Escape")
                     time.sleep(.2)
                     assert len(list(history.glob("*/metadata.json"))) == 2, "Escape deleted files"
-                    click(928, 115)
-                    click(800, 115)  # Explicit Cancel.
+                    click(948, 79)
+                    click(820, 79)  # Explicit Cancel.
                     assert len(list(history.glob("*/metadata.json"))) == 2, "Cancel deleted files"
                     screenshot("cancelled")
                     if fail_partway:
                         protected.chmod(0o555)
-                    click(928, 115)
-                    click(928, 115)  # Explicit Delete all forever.
+                    click(948, 79)
+                    click(948, 79)  # Explicit Delete all forever.
                     if fail_partway:
                         try:
                             wait(lambda: len(list(history.glob("*/metadata.json"))) == 1)
@@ -121,8 +121,8 @@ def main():
                             assert (protected / "capture.png").is_file(), "failed item disappeared"
                         finally:
                             protected.chmod(0o755)
-                        click(928, 115)
-                        click(928, 115)  # Retry after restoring write access.
+                        click(948, 79)
+                        click(948, 79)  # Retry after restoring write access.
                     wait(lambda: not list(history.glob("*/metadata.json")))
                     wait(lambda: not previews())  # Clearing History drops restored previews.
                     time.sleep(.3)

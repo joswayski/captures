@@ -19,6 +19,15 @@ enum Metrics {
 
 final class Surface: NSView {
     override var isFlipped: Bool { true }
+    /// Called after the view's size changes, for example when its window is
+    /// resized, so fixed-frame content can lay itself out again.
+    var sizeDidChange: ((NSSize) -> Void)?
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = newSize != frame.size
+        super.setFrameSize(newSize)
+        if changed { sizeDidChange?(newSize) }
+    }
 }
 
 enum CaptureButtonIcon {
@@ -584,15 +593,6 @@ func menuKeyEquivalent(_ shortcut: String) -> (character: String, modifiers: NSE
     return (character, modifiers)
 }
 
-enum LiveReopenAction: Equatable {
-    case focusExisting
-    case showPreferences
-}
-
-func liveReopenAction(hasVisibleWindows: Bool) -> LiveReopenAction {
-    hasVisibleWindows ? .focusExisting : .showPreferences
-}
-
 struct StartupDecision: Equatable {
     let scene: String
     let showsWindow: Bool
@@ -619,9 +619,8 @@ func captureShortcutsEnabled(captureBusy: Bool, selectorGeneration: UInt64? = ni
 
 func captureShortcutsSuspended(preferencesFocused: Bool) -> Bool { preferencesFocused }
 
-func preferencesWindowFocused(scene: String, visible: Bool, key: Bool,
-                              attachedSheetKey: Bool) -> Bool {
-    scene == "preferences" && visible && (key || attachedSheetKey)
+func preferencesWindowFocused(visible: Bool, key: Bool, attachedSheetKey: Bool) -> Bool {
+    visible && (key || attachedSheetKey)
 }
 
 func stillCaptureKind(for shortcut: CaptureShortcut) -> StillCaptureKind? {
@@ -670,6 +669,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var miniPreviews: MiniPreviewController?
     private var miniPreviewActions: MiniPreviewActions?
     private var rootWindowCloseHandler: RootWindowCloseHandler?
+    /// Preferences and setup open in their own windows beside History.
+    private let appWindows = AppWindows()
+    /// Windows a capture hid alongside History, restored when it ends.
+    private var hiddenForCapture: [NSWindow] = []
     private var statusItem: NSStatusItem?
     private var statusActions: LiveStatusActions?
     private var startupNotice: StartupNoticeController?
@@ -753,11 +756,17 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         previous.target = self
         editItem.submenu = editMenu
         NSApp.mainMenu = menu
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 720),
-            styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = options.live ? "Captures Native — capture workspace" : "Captures Native — development fixtures"
-        window.isReleasedWhenClosed = false
-        window.center()
+        if options.live {
+            // The shipping Capture History window; Preferences and setup open
+            // in their own windows (`AppWindows`).
+            window = AppWindows.makeWindow(.history)
+        } else {
+            window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 720),
+                styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+            window.title = "Captures Native — development fixtures"
+            window.isReleasedWhenClosed = false
+            window.center()
+        }
         let miniPreviews = MiniPreviewController(tokens: tokens)
         let miniPreviewActions = MiniPreviewActions(settingsPath: options.settingsFile)
         miniPreviewActions.bind(previews: miniPreviews)
@@ -775,6 +784,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             terminate: { NSApp.terminate(nil) }, hidesRootWindow: options.live)
         self.rootWindowCloseHandler = rootWindowCloseHandler
         window.delegate = rootWindowCloseHandler
+        if options.live {
+            appWindows.adopt(window, as: .history)
+            appWindows.shouldClose = { [weak self] kind in
+                // Unfinished setup stays open; the menu bar item reopens the rest.
+                kind != .setup || self?.onboardingReady == true
+            }
+            appWindows.didClose = { [weak self] kind in self?.appWindowClosed(kind) }
+        }
         if options.live { scene = "onboarding" }
         render()
         if options.live {
@@ -892,25 +909,29 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard options.live else { return true }
-        guard onboardingReady else {
-            window.makeKeyAndOrderFront(nil)
-            sender.activate(ignoringOtherApps: true)
-            return true
-        }
-        if liveController?.showRecordingControls() == true { return true }
-        switch liveReopenAction(hasVisibleWindows: flag) {
-        case .focusExisting:
-            window.makeKeyAndOrderFront(nil)
-            sender.activate(ignoringOtherApps: true)
-        case .showPreferences:
+        // Shipping `focus_primary_app_window`.
+        if onboardingReady, liveController?.showRecordingControls() == true { return true }
+        switch appReactivation(onboardingComplete: onboardingReady, restoreRecordingControls: false,
+                               visible: appWindows.visibleKinds) {
+        case .showSetup, .focus(.setup):
+            showOnboarding()
+        case .focus(.history):
+            showHistory()
+        case .focus(.preferences), .showPreferences:
             showPreferences()
+        case .restoreRecordingControls:
+            _ = liveController?.showRecordingControls()
         }
         return true
     }
 
     @objc private func quitApplication() { NSApp.terminate(nil) }
 
-    @objc private func showFind() { if scene == "preferences" { preferencesController?.showFind() } }
+    @objc private func showFind() {
+        if scene == "preferences" || appWindows.window(.preferences)?.isKeyWindow == true {
+            preferencesController?.showFind()
+        }
+    }
     @objc private func findNext() { preferencesController?.stepFind(1) }
     @objc private func findPrevious() { preferencesController?.stepFind(-1) }
     @objc private func systemAppearanceChanged() {
@@ -938,6 +959,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             permissionSheet = sheet
             renderPermissionSheet()
             liveController?.setPermissionsVisible(true)
+            // The permissions sheet sits over Capture History.
+            if !window.isVisible || window.isMiniaturized { showHistory() }
             window.beginSheet(sheet)
             permissionController?.check()
         } catch {
@@ -996,8 +1019,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         onboardingWasPresented = true
         scene = "onboarding"
         render()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        appWindows.show(.setup)
     }
 
     private func finishOnboarding() {
@@ -1015,7 +1037,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                hiddenLaunch: !startup.showsWindow, openingMedia: !pendingOpenImages.isEmpty) {
             showStartupNotice(trigger)
         }
-        if retry == nil, startup.showsWindow || onboardingWasPresented || !pendingOpenImages.isEmpty {
+        // Shipping hides the setup window when setup completes and shows only
+        // the launch notice. A visible launch of a finished profile opens History;
+        // a scheduled Restart & Retry capture runs without showing it.
+        appWindows.close(.setup)
+        if retry == nil, !onboardingWasPresented && (startup.showsWindow || !pendingOpenImages.isEmpty) {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         } else {
@@ -1202,70 +1228,26 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
             return
         }
-        content = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 720))
-        content.wantsLayer = true
-        content.layer!.backgroundColor = tokens.color("surface-canvas").cgColor
-        window.appearance = NSAppearance(named: tokens.color("text").brightnessComponent > 0.5 ? .darkAqua : .aqua)
-        window.contentView = content
-        if scene == "onboarding" {
-            if let onboardingController {
-                let view = OnboardingView(frame: content.bounds, tokens: tokens, controller: onboardingController)
-                view.autoresizingMask = [.width, .height]
-                view.restartRequested = { [weak self] in self?.restartAfterPermissionRequest() }
-                content.addSubview(view)
-                onboardingView = view
-            } else {
-                label("Setup is unavailable. Retry to continue.", x: 48, y: 80, width: 800)
-                content.addSubview(CaptureButton("Retry setup", frame: NSRect(x: 48, y: 130, width: 150, height: 34), tokens: tokens) {
-                    [weak self] in self?.startOnboarding()
-                })
-            }
+        if options.live, scene == "onboarding" {
+            // First-run setup has its own window; History stays untouched.
+            renderSetup()
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000,
                 detail: scene)
             return
         }
+        content = Surface(frame: NSRect(origin: .zero,
+            size: options.live ? window.contentLayoutRect.size : NSSize(width: 1000, height: 720)))
+        content.wantsLayer = true
+        content.layer!.backgroundColor = tokens.color("surface-canvas").cgColor
+        window.appearance = NSAppearance(named: tokens.color("text").brightnessComponent > 0.5 ? .darkAqua : .aqua)
+        window.contentView = content
         if scene == "preferences" {
-            do {
-                let path = options.exercise
-                    ? exerciseSettingsPath()
-                    : options.settingsFile
-                let store = try SettingsStore(path: path)
-                preferencesController = PreferencesController(root: content, store: store, tokens: { [weak self] in self?.tokens ?? Tokens.variants["dark-mustard"]! }, appearanceChanged: { [weak self] appearance, theme, customTheme in
-                    guard let self else { return }
-                    let changed = self.appearance != appearance || self.theme != theme || !NSDictionary(dictionary: self.customTheme).isEqual(to: customTheme)
-                    self.appearance = appearance
-                    self.theme = theme
-                    self.customTheme = customTheme
-                    if changed {
-                        self.resolvedTokens = self.makeTokens()
-                        self.liveStyleRevision += 1
-                        self.feedbackController?.restyle(self.tokens)
-                    }
-                    self.window.appearance = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
-                }, settingsChanged: { [weak self] settings in
-                    guard let enabled = settings["show_mini_previews"] as? Bool,
-                          let placement = settings["mini_preview_placement"] as? String,
-                          let include = settings["include_mini_previews_in_captures"] as? Bool
-                    else { return }
-                    self?.miniPreviews?.updateSettings(MiniPreviewSettings(enabled: enabled,
-                        placement: placement, includeInCaptures: include))
-                }, settingsPersisted: { [weak self] settings in
-                    self?.updateCaptureShortcuts(settings: settings)
-                }, showHistory: { [weak self] in self?.showHistory() },
-                   liveCaptureAvailable: options.live,
-                   showFeedback: { [weak self] in self?.showFeedback() },
-                   loginItemService: options.live && !options.exercise
-                    ? NativeLoginItemService(historyRoot: options.historyRoot,
-                                             settingsFile: options.settingsFile) : nil,
-                   initialAppearance: options.appearanceOverride ? options.appearance : nil,
-                   initialTheme: options.themeOverride ? options.theme : nil)
-            } catch {
-                label("Preferences unavailable: \(error.localizedDescription)", x: 32, y: 32, width: 900)
-            }
+            preferencesController = makePreferencesController(root: content)
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
             return
         }
-        preferencesController = nil
+        // Live Preferences lives in its own window, independent of History.
+        if !options.live { preferencesController = nil }
         if scene == "region" {
             let selector = RegionSelectionView(frame: content.bounds, image: PreviewView.fixtureImage(scale: 2048.0 / 284.0),
                 tokens: tokens, autoStart: false, confirm: { rect in
@@ -1323,6 +1305,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 }) { [weak self] in
                     self?.showPreferences()
                 }
+            liveController?.workspaceHidden = { [weak self] hidden in
+                self?.setCompanionWindowsHidden(hidden)
+            }
             renderedLiveStyleRevision = liveStyleRevision
             drainOpenImages()
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
@@ -1363,6 +1348,125 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         default: break
         }
         Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+    }
+
+    /// Preferences in `root`: the fixture scene, or the live Preferences window.
+    private func makePreferencesController(root: Surface) -> PreferencesController? {
+        do {
+            let path = options.exercise
+                ? exerciseSettingsPath()
+                : options.settingsFile
+            let store = try SettingsStore(path: path)
+            return PreferencesController(root: root, store: store, tokens: { [weak self] in self?.tokens ?? Tokens.variants["dark-mustard"]! }, appearanceChanged: { [weak self] appearance, theme, customTheme in
+                guard let self else { return }
+                let changed = self.appearance != appearance || self.theme != theme || !NSDictionary(dictionary: self.customTheme).isEqual(to: customTheme)
+                self.appearance = appearance
+                self.theme = theme
+                self.customTheme = customTheme
+                if changed {
+                    self.resolvedTokens = self.makeTokens()
+                    self.liveStyleRevision += 1
+                    self.feedbackController?.restyle(self.tokens)
+                }
+                let chosen = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+                self.window.appearance = chosen
+                self.appWindows.window(.preferences)?.appearance = chosen
+            }, settingsChanged: { [weak self] settings in
+                guard let enabled = settings["show_mini_previews"] as? Bool,
+                      let placement = settings["mini_preview_placement"] as? String,
+                      let include = settings["include_mini_previews_in_captures"] as? Bool
+                else { return }
+                self?.miniPreviews?.updateSettings(MiniPreviewSettings(enabled: enabled,
+                    placement: placement, includeInCaptures: include))
+            }, settingsPersisted: { [weak self] settings in
+                self?.updateCaptureShortcuts(settings: settings)
+            }, showHistory: { [weak self] in self?.showHistory() },
+               liveCaptureAvailable: options.live,
+               showFeedback: { [weak self] in self?.showFeedback() },
+               loginItemService: options.live && !options.exercise
+                ? NativeLoginItemService(historyRoot: options.historyRoot,
+                                         settingsFile: options.settingsFile) : nil,
+               initialAppearance: options.appearanceOverride ? options.appearance : nil,
+               initialTheme: options.themeOverride ? options.theme : nil)
+        } catch {
+            label("Preferences unavailable: \(error.localizedDescription)", x: 32, y: 32, width: 900, parent: root)
+            return nil
+        }
+    }
+
+    /// Build the live Preferences window's content once, when it opens.
+    private func buildPreferencesWindow(_ preferencesWindow: NSWindow) {
+        let root = Surface(frame: NSRect(origin: .zero, size: preferencesWindow.contentLayoutRect.size))
+        root.wantsLayer = true
+        root.layer!.backgroundColor = tokens.color("surface-canvas").cgColor
+        root.autoresizingMask = [.width, .height]
+        preferencesWindow.appearance = NSAppearance(named: tokens.color("text").brightnessComponent > 0.5 ? .darkAqua : .aqua)
+        preferencesWindow.contentView = root
+        preferencesController = makePreferencesController(root: root)
+    }
+
+    /// First-run setup in its own window (shipping `show_onboarding`).
+    private func renderSetup() {
+        let setup = appWindows.prepare(.setup) { _ in }
+        let root = Surface(frame: NSRect(origin: .zero, size: setup.contentLayoutRect.size))
+        root.wantsLayer = true
+        root.layer!.backgroundColor = tokens.color("surface-canvas").cgColor
+        root.autoresizingMask = [.width, .height]
+        setup.appearance = NSAppearance(named: tokens.color("text").brightnessComponent > 0.5 ? .darkAqua : .aqua)
+        setup.contentView = root
+        if let onboardingController {
+            let view = OnboardingView(frame: root.bounds, tokens: tokens, controller: onboardingController)
+            view.autoresizingMask = [.width, .height]
+            view.restartRequested = { [weak self] in self?.restartAfterPermissionRequest() }
+            root.addSubview(view)
+            onboardingView = view
+        } else {
+            label("Setup is unavailable. Retry to continue.", x: 48, y: 80, width: 400, parent: root)
+            root.addSubview(CaptureButton("Retry setup", frame: NSRect(x: 48, y: 130, width: 150, height: 34), tokens: tokens) {
+                [weak self] in self?.startOnboarding()
+            })
+        }
+    }
+
+    /// A separate window closed. Preferences flushes and releases its editor;
+    /// the next open builds a fresh window, like the shipping app.
+    private func appWindowClosed(_ kind: AppWindowKind) {
+        switch kind {
+        case .preferences:
+            preferencesController?.flush()
+            preferencesController = nil
+            hiddenForCapture.removeAll { appWindows.kind(of: $0) == nil }
+            updateShortcutState()
+        case .setup:
+            onboardingView = nil
+        case .history:
+            break
+        }
+    }
+
+    /// A capture hides History; hide Preferences with it so neither shows in
+    /// the capture, and restore both when the capture ends.
+    private func setCompanionWindowsHidden(_ hidden: Bool) {
+        if hidden {
+            for kind in [AppWindowKind.preferences, .setup] {
+                guard let companion = appWindows.window(kind), companion.isVisible,
+                      !hiddenForCapture.contains(where: { $0 === companion }) else { continue }
+                companion.orderOut(nil)
+                hiddenForCapture.append(companion)
+            }
+        } else {
+            let restoring = hiddenForCapture
+            hiddenForCapture.removeAll()
+            for companion in restoring where appWindows.kind(of: companion) != nil {
+                companion.orderFront(nil)
+            }
+        }
+    }
+
+    /// The live document windows (and their sheets) whose key state matters
+    /// to capture shortcuts.
+    private func isDocumentWindow(_ candidate: NSWindow) -> Bool {
+        candidate === window || candidate.sheetParent === window || appWindows.kind(of: candidate) != nil
     }
 
     static func sceneTitle(_ name: String) -> String {
@@ -1453,7 +1557,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 forName: name, object: nil, queue: .main
             ) { [weak self] notification in
                 guard let self, let changed = notification.object as? NSWindow,
-                      changed === self.window || changed.sheetParent === self.window else { return }
+                      self.isDocumentWindow(changed) else { return }
                 self.updateShortcutState()
             })
         }
@@ -1582,6 +1686,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }
     }
 
+    /// Shipping `show_capture_history`: show, restore and focus the History
+    /// window. Preferences stays open beside it.
     private func showHistory() {
         guard permissionSheet == nil else { window.makeKeyAndOrderFront(nil); return }
         guard options.live else {
@@ -1594,6 +1700,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         render()
         updateShortcutState()
         liveController?.refreshHistory()
+        if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -1603,12 +1710,19 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func showPreferences(revealing setting: String? = nil) {
         guard permissionSheet == nil else { window.makeKeyAndOrderFront(nil); return }
         guard !options.live || onboardingReady else { showOnboarding(); return }
-        preferencesController?.flush()
-        scene = "preferences"
-        render()
+        guard options.live else {
+            preferencesController?.flush()
+            scene = "preferences"
+            render()
+            if let setting { preferencesController?.revealSetting(setting) }
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        // Shipping `show_preferences`: its own window, created once and then
+        // shown, restored and focused. History is left as it is.
+        appWindows.show(.preferences) { [weak self] created in self?.buildPreferencesWindow(created) }
         if let setting { preferencesController?.revealSetting(setting) }
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         updateShortcutState()
     }
 
@@ -1662,7 +1776,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func presentHostError(title: String, message: String) {
-        guard window.attachedSheet == nil else {
+        // Before setup completes the alert belongs to the setup window, not
+        // the (still empty) History window.
+        let host: NSWindow = options.live && !onboardingReady
+            ? appWindows.prepare(.setup, build: { [weak self] _ in self?.renderSetup() }) : window
+        guard host.attachedSheet == nil else {
             Metrics.write(["event": "host-error", "detail": "\(title): \(message)"])
             return
         }
@@ -1671,16 +1789,18 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         alert.messageText = title
         alert.informativeText = message
         alert.addButton(withTitle: "OK")
-        if !window.isVisible {
-            window.makeKeyAndOrderFront(nil)
+        if !host.isVisible {
+            host.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
-        alert.beginSheetModal(for: window)
+        alert.beginSheetModal(for: host)
     }
 
     private var preferencesFocused: Bool {
-        preferencesWindowFocused(scene: scene, visible: window.isVisible,
-            key: window.isKeyWindow, attachedSheetKey: window.attachedSheet?.isKeyWindow == true)
+        guard options.live, let preferencesWindow = appWindows.window(.preferences) else { return false }
+        return preferencesWindowFocused(visible: preferencesWindow.isVisible,
+            key: preferencesWindow.isKeyWindow,
+            attachedSheetKey: preferencesWindow.attachedSheet?.isKeyWindow == true)
     }
 
     private func exerciseSettingsPath() -> String {

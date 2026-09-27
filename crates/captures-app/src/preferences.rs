@@ -314,6 +314,17 @@ pub const THEMES: [Theme; 10] = [
 
 /// Accent chips per row in the shipping `.theme-options` grid.
 pub const THEME_COLUMNS: usize = 5;
+/// `.theme-options` columns in a compact window (`@media (max-width: 720px)`).
+pub const THEME_COLUMNS_COMPACT: usize = 2;
+
+/// Accent chip columns for a window that is (or is not) compact.
+pub fn theme_columns(compact: bool) -> usize {
+    if compact {
+        THEME_COLUMNS_COMPACT
+    } else {
+        THEME_COLUMNS
+    }
+}
 
 /// Shipping accessible name for a theme chip, `"{name}: {description}"`.
 pub fn theme_accessibility_label(theme: &Theme) -> String {
