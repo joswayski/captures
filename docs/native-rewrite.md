@@ -201,8 +201,9 @@ permission cards with icon, description and either an action or a status
 ("Granted ✓", "Ready ✓", "Restart required", "Still off"). The macOS-only
 microphone card carries "Optional" and offers Open Settings only after it was
 asked once this launch. The primary action is Start capturing, or Restart Captures
-when macOS needs a relaunch; a static halo stands in for the CTA pulse, so there
-is no motion to reduce. First-run setup has no Refresh button, like shipping;
+when macOS needs a relaunch; its halo pulses like shipping's CTA
+(`captures_app::motion::OnboardingCtaPulse`, 2.6 s) and rests under reduced
+motion. First-run setup has no Refresh button, like shipping;
 permission recovery keeps Refresh status in both hosts.
 `captures_app::onboarding` derives the copy and per-state decisions once
 (`State::presentation`, `copy()`), exposed to AppKit through the settings JSON ABI
@@ -551,12 +552,12 @@ host tests cover controls, undo/redo, output invalidation, drafts and clipboard.
 Trim hover-margin feedback and the shipping toolbar layout remain unimplemented.
 Windows/Wayland presentation and physical macOS input remain unverified.
 Both hosts connect the shipping Compress presets: Tiny (55), Smaller (70), Balanced
-(85), High (92) and Highest (98). Presets clear explicit PNG palette overrides and
-reuse shared encoding: Tiny–High try 32/64/128/256 colors (retaining lossless pixels
+(85), High (92) and Highest (98). Presets derive the PNG palette (there is no
+separate PNG colors control, as in shipping) and reuse shared encoding: Tiny–High try 32/64/128/256 colors (retaining lossless pixels
 when that is smaller), Highest keeps exact pixels with lossless packing.
 JPEG/WebP retain their lossy quality mapping. Custom
-numeric values/palettes remain available and labeled Custom when active. Preset
-changes invalidate encoded previews without editing documents, drafts or undo.
+numeric quality remains available and labeled Custom when active. Preset changes
+refresh the automatic comparison without editing documents, drafts or undo.
 Both hosts connect Original/75%/50%/Custom output dimensions and custom aspect lock.
 Shared Rust resolves percentage dimensions by rounding width first, then preserving
 the document ratio. Requested resized output is limited to 16,384 pixels per axis
@@ -916,10 +917,15 @@ estimate to History. AppKit CI covers exact/approximate light/dark normal/minimu
 labels and the same lifecycle. Physical macOS/Windows/Wayland acceptance remains
 open. Close/quit waits for accepted work, as with export.
 The shared recording comparison ABI retains independent before/after frames from
-a read-only encoding sample at the accepted source-relative position. Both native
-editors expose explicit Compare, split and Hide, cancellation and retry on their
-serialized workers. They restore the accepted still/time from paused playback;
-paused playback time never selects the comparison frame. Generation, cancellation,
+a read-only encoding sample at the accepted source-relative position. As in
+shipping, both native editors show the comparison automatically while Compress or
+Maximum is accepted and playback is paused on the accepted still: 350 ms after the
+accepted identity settles they encode a sample on their serialized workers and
+draw `captures_app::compression_compare`'s split (Before/After size badges with
+"% smaller", a draggable handle and **Hide**; **Show before / after** in Save quality
+brings it back). Cancellation and failures stay in the comparison frame and are not
+retried until Hide/Show or a new accepted identity. A paused transient playback
+frame never selects the comparison frame. Generation, cancellation,
 accepted revision, position and preview export guard delivery. Staging, playback,
 crop, seek, new item and close discard comparison without changing accepted edits,
 dirty state or History. The wgpu split also supports pointer dragging and keyboard
@@ -928,7 +934,7 @@ capped-save pixels can differ. Requested/fallback seek positions are not decoded
 PTS; output cadence can select neighboring frames. Physical macOS, Windows and
 Wayland input, accessibility and mixed-DPI acceptance remain open.
 Both hosts now render the shipping editor's page: an **Edit recording** (or **Edit
-GIF**) header with the dropped-frames caution when the source lost frames, a Preview card whose toolbar holds Sound, Compare, **Loop preview** and a
+GIF**) header with the dropped-frames caution when the source lost frames, a Preview card whose toolbar holds Sound, **Loop preview** and a
 Fit | 100% segment above a sunken viewport with an accent overlay Play/Pause circle,
 then a timeline card (range summary, "… selected", filmstrip with dimmed exclusions,
 accent grips and a playhead; clicking the track seeks; Start/End fields, **Reset trim**
@@ -941,8 +947,10 @@ checkboxes that include a track, 0–200% volume, Convert to mono; GIF output sh
 "GIFs do not include recorded audio."). The fixed save footer has Filename, "Saving to
 <folder>" with **Change…** (a folder picker), the filename field with its attached
 .mp4/.gif format, the status line, a thin progress bar, a Cancel named for the running
-operation, **Show in Folder** after a successful copy, **Replace original…**, **Apply
-edits** and **Save new copy**. Shipping copy and formatting come from
+operation, **Show in Folder** after a successful copy, a **Save as new file** switch,
+**Apply edits** and **Save** (a new copy, or the confirmed replacement of the original
+when the switch is off; it is locked on when the format changes or the source has no
+eligible original). Shipping copy and formatting come from
 `captures_app::recording_editor_ui` (AppKit: `captures_recording_editor_ui_v1`): titles,
 `formatEditorTime`, trim summary, `formatFileSize`, the Est. size states and delta,
 the dropped-frames warning (from the snapshot's additive `dropped_frames`),
@@ -951,8 +959,7 @@ descriptions. As in shipping, Preserve quality is offered only for MP4: choosing
 moves Preserve to Compress at the remembered preset (Highest by default), while an
 accepted Preserve GIF keeps showing its mode. Deliberate native differences remain:
 edits are staged and accepted with **Apply edits**, Est. size is explicit (**Estimate
-size**), saves never overwrite (no "Save as new file" switch; replacement is the
-separate confirmed action), WebM output is not offered, and AppKit keeps a Position
+size**), replacing the original always asks for confirmation, WebM output is not offered, and AppKit keeps a Position
 slider where wgpu has a Position (ms) field with Seek. Physical audio playback
 acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted
@@ -961,7 +968,7 @@ the staged values available for correction. MP4/GIF Save new copy uses
 shared encoding, reports progress and accepts independent cancellation. It never
 replaces an existing file or the original History artifact. Post-publication
 History failure reports the successfully saved path rather than inviting re-export.
-Both native editors confirm **Replace original…** with the opened session's exact
+Both native editors confirm replacement (**Save** with **Save as new file** off) with the opened session's exact
 permanent MP4/GIF path. Saved-path/format UI hints are not eligibility proofs:
 shared Rust verifies matching regular permanent and private recovery files and
 source identity. Serialized work reports progress and accepts cancellation during
@@ -974,7 +981,9 @@ Close blocks accepted work; unsaved edits require explicit discard, and normal q
 is refused until they are saved or closed. Recording-editor edit drafts are not implemented.
 Both native workbenches list interrupted native capture bundles in a bounded History
 section separate from artifact rows. Recover/Discard use the shared per-root lease,
-expected identity, serialized worker, and explicit permanent-discard confirmation.
+expected identity, serialized worker, and an inline **Discard permanently?**
+confirmation on the row (the second press discards; Escape disarms), replacing the
+earlier modal.
 Unavailable or corrupt entries are read-only; cancellable preparation leaves the
 bundle intact and late cancellation cannot hide committed success. Recovery refreshes
 History and opens the recovered recording only if selection is still current. Terminal
@@ -1966,19 +1975,19 @@ validates a decoded editor frame and poster before History publication, and keep
 the same ID on closed reopen. FFprobe's combined MOV/MP4 and Matroska/WebM
 demuxers are disambiguated with bounded container headers; MOV and MKV are not
 silently labeled as supported formats. WebM Preserve-to-MP4 transcodes instead of
-copying source bytes. Reference-backed recordings suppress the Replace original
-hint; the existing private-recovery and permanent-save identity checks still guard
+copying source bytes. Reference-backed recordings keep **Save as new file** locked
+on; the existing private-recovery and permanent-save identity checks still guard
 the backend operation. The private-X11 external-media fixture exercises a mixed
 batch, staged GIF trim through alias focus, real container metadata despite a
 misleading suffix, same-ID closed WebM reopen, H.264 MP4 export with decoded output
 pixels, source-byte identity and normal/minimum recording and error states.
 These checks do not close Windows, Wayland or physical-host acceptance gates.
 
-The wgpu export settings now preview shared PNG/JPEG/WebP encoding with the shipping
-quality modes, palette controls and hard byte budget. Encoding and decoding run
-on the editor worker; the UI reports actual encoded bytes and switches between
-the edited canvas and decoded output. Edits and option changes invalidate the
-previous comparison; encoding failures retain recoverable edits and allow retry.
+The wgpu export settings encode shared PNG/JPEG/WebP output with the shipping
+quality modes, Compress presets and maximum file size. Encoding and decoding run
+off the editor worker; the canvas shows decoded output in the automatic comparison
+split. Edits and option changes refresh the comparison; encoding failures appear in
+the comparison frame and retain recoverable edits.
 Preview never writes files or saves a draft. The same Windows/X11/Wayland host
 code is implemented; private-X11 and unit checks do not establish physical-host
 acceptance. Save runs shared publication on the same worker; new files never
@@ -2120,9 +2129,14 @@ canvas area, shrinking to fit shorter displays' visible frames). The collapsed b
 `PNG · 1920 × 1080 · ≈ 240 KB` summary, **Saving to** with **Change…**, the filename
 with a format-suffix menu, **Copy image** (four-second **Copied** confirmation),
 a **Save as new file** switch, primary **Save**, **Show in Folder** after a save and a
-hint/status line. Expanding it reveals size, quality, palette, maximum file size,
-**Est. size** with the % change from the original, and edited/encoded canvas
-selection. The estimate re-encodes 220 ms after the last edit or option change,
+hint/status line. Expanding it reveals size, the quality mode and Compress preset
+(each menu item carries its shipping description), **Maximum file size** as a value
+with a KB/MB/GB unit, and **Est. size** with the % change from the original. The
+native-only PNG colors and canvas preview groups are gone: while Compress or Maximum
+is chosen and the settings are open, the canvas shows shipping's automatic
+before/after comparison (`captures_app::compression_compare`; AppKit encodes through
+`captures_editor_frame_encode_v1`) 280 ms after the last change, with size badges,
+"% smaller", a draggable handle and **Hide** (**Show before / after** restores it). The estimate re-encodes 220 ms after the last edit or option change,
 off the session worker, replacing the explicit preview requirement.
 
 `captures_app::editor_export` owns the save model for both hosts (AppKit reaches it

@@ -376,20 +376,22 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(slider.doubleValue, 0.5902718572045537, accuracy: 1e-12,
                            "Fit uses the small image's actual 100%, not the zero sentinel")
             XCTAssertTrue(slider.isContinuous)
-            try showOutput(in: controller.root)
-            try button("Preview output", in: controller.root).performClick(nil)
-            let mode = try segmented("Output preview image", in: controller.root)
+            try showComparison(controller, worker)
             for (position, percent) in [(0.0, 5.0), (0.5, 63.2), (0.75, 224.9), (1.0, 800.0)] {
                 slider.doubleValue = position
                 _ = slider.sendAction(slider.action, to: slider.target)
                 XCTAssertEqual(controller.viewport.zoomPercent, percent)
                 XCTAssertEqual(controller.state.snapshot, original)
-                XCTAssertEqual(mode.selectedSegment, 1)
-                XCTAssertTrue(mode.isEnabled)
+                // Zoom moves the comparison with the canvas without re-encoding.
+                XCTAssertNotNil(controller.compareView.afterImage)
+                XCTAssertEqual(controller.compareView.mediaRect,
+                               controller.compareView.convert(controller.presentedImageRect,
+                                                              from: controller.compareView.superview))
                 XCTAssertEqual(slider.accessibilityValueDescription(), "\(percent == floor(percent) ? String(Int(percent)) : String(percent))%")
             }
             XCTAssertTrue(worker.requests.isEmpty)
-            XCTAssertEqual(worker.encodes.count, 1)
+            XCTAssertEqual(worker.compares.count, 1)
+            XCTAssertTrue(worker.encodes.isEmpty, "the comparison never occupies the session queue")
             try render(controller.root, name: "screenshot-editor-zoom-slider-maximum-\(appearance)")
             try press("Fit canvas", in: controller.root)
             XCTAssertEqual(controller.viewport, NativeEditorViewport())
@@ -1290,8 +1292,7 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showOutput(in: controller.root)
-        try button("Preview output", in: controller.root).performClick(nil)
+        try showComparison(controller, worker)
         let sections = try segmented("Editor section", in: controller.root)
         sections.selectedSegment = 0; _ = sections.sendAction(sections.action, to: sections.target)
         let fields = try ["Crop X", "Crop Y", "Crop width", "Crop height"].map { try field($0, in: controller.root) }
@@ -1307,7 +1308,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(fields.map(\.stringValue), ["160", "108", "320", "180"])
         XCTAssertTrue(worker.requests.isEmpty)
         XCTAssertFalse(controller.state.snapshot?.unsavedChanges ?? true)
-        XCTAssertTrue(try segmented("Output preview image", in: controller.root).isEnabled)
+        XCTAssertNotNil(controller.compareView.afterImage, "a crop candidate keeps the comparison")
         controller.cropOverlay.keyDown(with: try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}"))
         XCTAssertEqual(fields.map(\.stringValue), previous)
         XCTAssertFalse(controller.cropOverlay.croppingEnabled)
@@ -1316,7 +1317,7 @@ final class ScreenshotEditorTests: XCTestCase {
         fields[0].selectText(nil)
         controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}"))
         XCTAssertEqual(fields.map(\.stringValue), previous, "Escape works with a numeric field focused")
-        XCTAssertTrue(try segmented("Output preview image", in: controller.root).isEnabled)
+        XCTAssertNotNil(controller.compareView.afterImage)
         try button("Draw crop", in: controller.root).performClick(nil)
         drag()
         worker.failOperation = "crop"
@@ -1397,7 +1398,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(rect, ["x": 1.5, "y": 2.25, "width": 300.75, "height": 150.5])
     }
 
-    func testOutputPreviewUsesShippingOptionsAndInvalidatesAfterEditsAndOptions() throws {
+    func testComparisonUsesShippingOptionsAndReencodesAfterEditsAndOptions() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
@@ -1408,43 +1409,92 @@ final class ScreenshotEditorTests: XCTestCase {
         let format = try popup("Format", in: controller.root)
         let quality = try popup("Save quality", in: controller.root)
         let qualityValue = try field("Output quality value", in: controller.root)
-        let palette = try field("PNG maximum colors", in: controller.root)
-        let budget = try field("Output byte budget", in: controller.root)
-        XCTAssertTrue(qualityValue.isHidden); XCTAssertTrue(palette.isHidden)
-        XCTAssertTrue(budget.isHidden)
+        let maximum = try field("Maximum file size", in: controller.root)
+        let unit = try popup("Screenshot file size unit", in: controller.root)
+        XCTAssertTrue(qualityValue.isHidden); XCTAssertTrue(maximum.isHidden); XCTAssertTrue(unit.isHidden)
+        XCTAssertFalse(labels(in: controller.root).contains("PNG colors"),
+                       "shipping derives the PNG palette from the Compress preset")
+        XCTAssertNil(descendants(in: controller.root).compactMap { $0 as? NSSegmentedControl }
+            .first { $0.accessibilityLabel() == "Output preview image" }, "no Edited/Encoded toggle")
+        XCTAssertNil(descendants(in: controller.root).compactMap { $0 as? CaptureButton }
+            .first { $0.title == "Preview output" })
+        // Shipping `CustomSelect` descriptions for the current format.
+        XCTAssertEqual(quality.item(at: 1)?.toolTip, "Smaller PNG with Tiny through Highest quality presets.")
+        XCTAssertEqual(quality.item(at: 2)?.toolTip, "Set a hard size limit for the saved file.")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        XCTAssertFalse(controller.comparisonVisible, "Preserve never compares")
+        XCTAssertTrue(worker.compares.isEmpty)
+        XCTAssertTrue(controller.compareView.isHidden)
 
         quality.selectItem(withTitle: "Compress"); _ = quality.sendAction(quality.action, to: quality.target)
         format.selectItem(withTitle: ".webp"); _ = format.sendAction(format.action, to: format.target)
         qualityValue.stringValue = "1"
         format.selectItem(withTitle: ".jpg"); _ = format.sendAction(format.action, to: format.target)
         XCTAssertEqual(qualityValue.stringValue, "40", "JPEG UI clamps to the encoder's minimum")
+        XCTAssertEqual(quality.item(at: 1)?.toolTip, "Smaller JPEG with Tiny through Highest quality presets.")
         qualityValue.stringValue = "73"
-        try button("Preview output", in: controller.root).performClick(nil)
-        XCTAssertEqual(worker.encodes.count, 1)
-        XCTAssertEqual(worker.encodes[0]["format"] as? String, "jpeg")
-        XCTAssertEqual(worker.encodes[0]["quality"] as? String, "compress")
-        XCTAssertEqual(worker.encodes[0]["quality_value"] as? UInt64, 73)
-        XCTAssertNil(worker.encodes[0]["max_size_bytes"])
-        XCTAssertTrue((worker.encodes[0]["png"] as? [String: Any])?.isEmpty == true)
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
+                                                      object: qualityValue))
+        XCTAssertTrue(controller.comparisonPending, "the After side waits for the 280 ms refresh")
+        waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
+        XCTAssertEqual(worker.compares.count, 1, "the refresh coalesces option changes")
+        let options = try XCTUnwrap(worker.compares.last)
+        XCTAssertEqual(options["format"] as? String, "jpeg")
+        XCTAssertEqual(options["quality"] as? String, "compress")
+        XCTAssertEqual(options["quality_value"] as? UInt64, 73)
+        XCTAssertNil(options["max_size_bytes"])
+        XCTAssertTrue((options["png"] as? [String: Any])?.isEmpty == true)
+        XCTAssertTrue(worker.encodes.isEmpty, "the comparison never occupies the session queue")
         XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true,
                       "encoding does not mutate draft state")
-        let previewMode = try segmented("Output preview image", in: controller.root)
-        XCTAssertEqual(previewMode.selectedSegment, 1)
-        XCTAssertTrue(controller.exportSettingsOpen, "encoded previews live in the export settings")
+        XCTAssertFalse(controller.compareView.isHidden)
+        XCTAssertEqual(controller.compareView.badges.after, "After · 12.3 KB")
+        XCTAssertTrue(controller.exportSettingsOpen, "the comparison lives with the export settings")
 
         (try field("Crop X", in: controller.root)).stringValue = "3"
         (try field("Crop Y", in: controller.root)).stringValue = "5"
         (try field("Crop width", in: controller.root)).stringValue = "300"
         (try field("Crop height", in: controller.root)).stringValue = "200"
         try button("Apply crop", in: controller.root).performClick(nil)
-        XCTAssertEqual(previewMode.selectedSegment, 0)
-        XCTAssertFalse(previewMode.isEnabled, "an accepted document edit invalidates encoded output")
-
-        try button("Preview output", in: controller.root).performClick(nil)
-        XCTAssertEqual(previewMode.selectedSegment, 1)
+        XCTAssertNil(controller.compareView.afterImage, "an accepted edit drops the stale After side")
+        XCTAssertEqual(controller.compareView.badges.after, "After · Processing…")
+        waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
+        XCTAssertEqual(worker.compares.count, 2)
         format.selectItem(withTitle: ".webp"); _ = format.sendAction(format.action, to: format.target)
-        XCTAssertEqual(previewMode.selectedSegment, 0)
-        XCTAssertFalse(previewMode.isEnabled, "changed options cannot leave stale output current")
+        XCTAssertNil(controller.compareView.afterImage, "changed options cannot leave stale output current")
+        waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
+        XCTAssertEqual(worker.compares.last?["format"] as? String, "webp")
+
+        // Hide keeps it away until Show before / after or a new quality mode.
+        controller.compareView.onDismiss?()
+        XCTAssertTrue(controller.comparisonDismissed); XCTAssertTrue(controller.compareView.isHidden)
+        let show = try button("Show before / after", in: controller.root)
+        XCTAssertFalse(show.isHiddenOrHasHiddenAncestor)
+        show.performClick(nil)
+        XCTAssertFalse(controller.comparisonDismissed)
+        waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
+        XCTAssertEqual(worker.compares.count, 4)
+        controller.compareView.onDismiss?()
+        quality.selectItem(withTitle: "Maximum file size"); _ = quality.sendAction(quality.action, to: quality.target)
+        XCTAssertFalse(controller.comparisonDismissed, "a new quality mode shows it again")
+        XCTAssertFalse(maximum.isHidden)
+        XCTAssertEqual(maximum.stringValue, "10"); XCTAssertEqual(unit.titleOfSelectedItem, "MB")
+        waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
+        XCTAssertEqual(worker.compares.last?["max_size_bytes"] as? UInt64, 10_000_000)
+        unit.selectItem(withTitle: "KB"); _ = unit.sendAction(unit.action, to: unit.target)
+        XCTAssertEqual(maximum.stringValue, "10000", "switching units converts the value")
+        waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
+        XCTAssertEqual(worker.compares.last?["max_size_bytes"] as? UInt64, 10_000_000)
+        let encodedCount = worker.compares.count
+        maximum.stringValue = "9"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: maximum))
+        waitUntil(timeout: 3) { !controller.comparisonPending }
+        XCTAssertEqual(worker.compares.count, encodedCount, "an invalid cap never encodes")
+        XCTAssertTrue(controller.compareView.failureMessage?.contains("10 KB") == true)
+        XCTAssertFalse(try button("Save", in: controller.root).isEnabled)
+        quality.selectItem(withTitle: "Preserve quality"); _ = quality.sendAction(quality.action, to: quality.target)
+        XCTAssertFalse(controller.comparisonVisible)
+        XCTAssertTrue(controller.compareView.isHidden)
     }
 
     func testOutputSizingControlsSendOptionsLockAspectAndRetainDocument() throws {
@@ -1454,25 +1504,26 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showOutput(in: controller.root)
+        try showComparison(controller, worker)
         let size = try popup("Output size", in: controller.root)
         let width = try field("Custom output width", in: controller.root)
         let height = try field("Custom output height", in: controller.root)
         let lock = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
             .first { $0.accessibilityLabel() == "Lock output aspect ratio" })
-        let previewMode = try segmented("Output preview image", in: controller.root)
+        func settled() {
+            waitUntil(timeout: 3) { !controller.comparisonPending }
+        }
 
         size.selectItem(withTitle: "75%"); _ = size.sendAction(size.action, to: size.target)
         XCTAssertTrue(labels(in: controller.root).contains("481 × 269"))
-        try button("Preview output", in: controller.root).performClick(nil)
-        XCTAssertEqual((worker.encodes.last?["size"] as? [String: Any])?["mode"] as? String, "percent")
-        XCTAssertEqual((worker.encodes.last?["size"] as? [String: Any])?["percent"] as? Int, 75)
-        XCTAssertEqual(previewMode.selectedSegment, 1)
+        settled()
+        XCTAssertEqual((worker.compares.last?["size"] as? [String: Any])?["mode"] as? String, "percent")
+        XCTAssertEqual((worker.compares.last?["size"] as? [String: Any])?["percent"] as? Int, 75)
+        XCTAssertNotNil(controller.compareView.afterImage)
 
         size.selectItem(withTitle: "Custom"); _ = size.sendAction(size.action, to: size.target)
         XCTAssertEqual(width.stringValue, "641"); XCTAssertEqual(height.stringValue, "359")
-        XCTAssertFalse(previewMode.isEnabled, "size changes invalidate an encoded preview without encoding")
-        XCTAssertEqual(worker.encodes.count, 1)
+        XCTAssertNil(controller.compareView.afterImage, "size changes drop the stale After side")
         width.stringValue = "320"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: width))
         XCTAssertEqual(height.stringValue, "179", "locked output dimensions use the document ratio")
@@ -1480,28 +1531,31 @@ final class ScreenshotEditorTests: XCTestCase {
         height.stringValue = "123"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: height))
         XCTAssertEqual(width.stringValue, "320", "unlocked axes change independently")
-        try button("Preview output", in: controller.root).performClick(nil)
-        let custom = try XCTUnwrap(worker.encodes.last?["size"] as? [String: Any])
+        settled()
+        let custom = try XCTUnwrap(worker.compares.last?["size"] as? [String: Any])
         XCTAssertEqual(custom["mode"] as? String, "custom")
         XCTAssertEqual(custom["width"] as? UInt64, 320); XCTAssertEqual(custom["height"] as? UInt64, 123)
         XCTAssertEqual(controller.state.snapshot, original)
         XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertTrue(worker.encodes.isEmpty)
 
         width.stringValue = "16385"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: width))
-        let count = worker.encodes.count
-        try button("Preview output", in: controller.root).performClick(nil)
-        XCTAssertEqual(worker.encodes.count, count)
+        let count = worker.compares.count
+        settled()
+        XCTAssertEqual(worker.compares.count, count)
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("100 million pixels") })
+        XCTAssertTrue(controller.compareView.failureMessage?.contains("100 million pixels") == true)
         XCTAssertEqual(controller.state.snapshot, original)
         lock.performClick(nil)
         width.stringValue = String(UInt64.max)
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: width))
         XCTAssertTrue(labels(in: controller.root).contains("Invalid size"))
-        XCTAssertEqual(worker.encodes.count, count, "invalid text must not overflow or encode")
+        settled()
+        XCTAssertEqual(worker.compares.count, count, "invalid text must not overflow or encode")
     }
 
-    func testOutputCompressionPresetsMapExactValuesClearPngOverrideAndTrackCustomEdits() throws {
+    func testOutputCompressionPresetsMapExactValuesAndTrackCustomEdits() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
@@ -1511,35 +1565,29 @@ final class ScreenshotEditorTests: XCTestCase {
         let mode = try popup("Save quality", in: controller.root)
         let preset = try popup("Output compression preset", in: controller.root)
         let quality = try field("Output quality value", in: controller.root)
-        let palette = try field("PNG maximum colors", in: controller.root)
         XCTAssertTrue(preset.isHidden)
         mode.selectItem(withTitle: "Compress"); _ = mode.sendAction(mode.action, to: mode.target)
         XCTAssertEqual(preset.itemTitles, ["Tiny", "Smaller", "Balanced", "High", "Highest"])
         XCTAssertEqual(preset.titleOfSelectedItem, "Highest")
+        // Shipping `SCREENSHOT_QUALITY_OPTIONS` describe each preset per format.
+        XCTAssertEqual(preset.item(withTitle: "Tiny")?.toolTip, "Smallest PNG with the most visible dithering.")
+        XCTAssertEqual(preset.item(withTitle: "Highest")?.toolTip, "Same pixels, tighter packing. No color reduction.")
 
         preset.selectItem(withTitle: "Tiny"); _ = preset.sendAction(preset.action, to: preset.target)
         XCTAssertEqual(quality.stringValue, "55")
-        try button("Preview output", in: controller.root).performClick(nil)
-        XCTAssertEqual(worker.encodes.last?["quality_value"] as? UInt64, 55)
+        waitUntil(timeout: 3) { !controller.comparisonPending && !worker.compares.isEmpty }
+        XCTAssertEqual(worker.compares.last?["quality_value"] as? UInt64, 55)
 
-        palette.stringValue = "64"
-        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
-                                                      object: palette))
-        XCTAssertEqual(preset.titleOfSelectedItem, "Custom")
-        XCTAssertFalse((try segmented("Output preview image", in: controller.root)).isEnabled,
-                       "manual palette edits invalidate a stale encoded preview")
         let format = try popup("Format", in: controller.root)
         format.selectItem(withTitle: ".jpg"); _ = format.sendAction(format.action, to: format.target)
-        XCTAssertEqual(preset.titleOfSelectedItem, "Tiny", "inactive PNG overrides do not change JPEG quality")
-        XCTAssertEqual(palette.stringValue, "64")
+        XCTAssertEqual(preset.titleOfSelectedItem, "Tiny")
+        XCTAssertEqual(preset.item(withTitle: "Tiny")?.toolTip, "Smallest file with the most visible compression.")
         format.selectItem(withTitle: ".png"); _ = format.sendAction(format.action, to: format.target)
-        XCTAssertEqual(preset.titleOfSelectedItem, "Custom")
         preset.selectItem(withTitle: "Highest"); _ = preset.sendAction(preset.action, to: preset.target)
         XCTAssertEqual(quality.stringValue, "98")
-        XCTAssertEqual(palette.stringValue, "", "a preset must clear explicit PNG quantization")
-        try button("Preview output", in: controller.root).performClick(nil)
-        XCTAssertEqual(worker.encodes.last?["quality_value"] as? UInt64, 98)
-        XCTAssertTrue((worker.encodes.last?["png"] as? [String: Any])?.isEmpty == true)
+        waitUntil(timeout: 3) { !controller.comparisonPending }
+        XCTAssertEqual(worker.compares.last?["quality_value"] as? UInt64, 98)
+        XCTAssertTrue((worker.compares.last?["png"] as? [String: Any])?.isEmpty == true)
 
         quality.stringValue = "73"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
@@ -1567,11 +1615,8 @@ final class ScreenshotEditorTests: XCTestCase {
             let initial = try XCTUnwrap(controller.state.snapshot)
             try commitCanvasSize("10", "5", in: controller.root)
             waitUntil { controller.state.snapshot?.width == 10 && !controller.state.busy }
-            try showOutput(in: controller.root)
-            try button("Preview output", in: controller.root).performClick(nil)
-            waitUntil { !controller.state.busy }
-            let output = try segmented("Output preview image", in: controller.root)
-            XCTAssertTrue(output.isEnabled)
+            try showComparison(controller)
+            let encoded = try XCTUnwrap(controller.compareView.afterImage)
             // Trim edges lives in the header Canvas toolbar, as in shipping.
             let trim = try button("Trim edges", in: controller.root)
             XCTAssertNil(trim.enclosingScrollView)
@@ -1583,7 +1628,11 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(controller.state.snapshot?.width, initial.width)
             XCTAssertEqual(controller.state.snapshot?.height, initial.height)
             XCTAssertEqual(controller.state.snapshot?.layers, initial.layers)
-            XCTAssertFalse(output.isEnabled, "trim invalidates encoded output")
+            waitUntil(timeout: 5) {
+                controller.compareView.afterImage.map { $0 !== encoded } == true && !controller.comparisonPending
+            }
+            XCTAssertEqual(controller.compareView.afterImage?.width, Int(initial.width),
+                           "trim re-encodes the After side from the new pixels")
             try render(controller.root, name: "screenshot-editor-trim-applied-\(appearance)")
             try press("Undo", in: controller.root)
             waitUntil { !controller.state.busy }
@@ -1631,11 +1680,8 @@ final class ScreenshotEditorTests: XCTestCase {
             try commitCanvasSize("10", "5", in: controller.root)
             waitUntil { controller.state.snapshot?.width == 10 && !controller.state.busy }
             let layers = controller.state.snapshot?.layers
-            try showOutput(in: controller.root)
-            try button("Preview output", in: controller.root).performClick(nil)
-            waitUntil { !controller.state.busy }
-            let output = try segmented("Output preview image", in: controller.root)
-            XCTAssertTrue(output.isEnabled)
+            try showComparison(controller)
+            let encoded = try XCTUnwrap(controller.compareView.afterImage)
             // Shipping's header Background color trigger opens the canvas background card.
             try showBackgroundCard(in: controller.root)
             let solid = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
@@ -1652,7 +1698,9 @@ final class ScreenshotEditorTests: XCTestCase {
             waitUntil { !controller.state.busy }
             XCTAssertEqual(controller.state.snapshot?.background, "#2d9cff")
             XCTAssertTrue(blue.active); XCTAssertFalse(red.active)
-            XCTAssertFalse(output.isEnabled, "background commits invalidate encoded output")
+            waitUntil(timeout: 5) {
+                controller.compareView.afterImage.map { $0 !== encoded } == true && !controller.comparisonPending
+            }
             XCTAssertEqual(controller.state.snapshot?.layers, layers)
             try render(controller.root, name: "screenshot-editor-background-solid-\(appearance)")
 
@@ -1720,14 +1768,14 @@ final class ScreenshotEditorTests: XCTestCase {
                 worker: worker, writeClipboard: { png in writes.append(png); return clipboardAvailable })
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-            try showOutput(in: controller.root)
-            try button("Preview output", in: controller.root).performClick(nil)
-            let mode = try segmented("Output preview image", in: controller.root)
+            try showComparison(controller, worker)
+            let encoded = try XCTUnwrap(controller.compareView.afterImage)
+            let compared = worker.compares.count
             let copy = try copyButton(in: controller.root)
             XCTAssertEqual(copy.accessibilityLabel(), "Copy image")
             copy.performClick(nil)
-            XCTAssertEqual(mode.selectedSegment, 1, "Copy must not replace the encoded preview")
-            XCTAssertTrue(mode.isEnabled)
+            XCTAssertTrue(controller.compareView.afterImage === encoded, "Copy must not replace the comparison")
+            XCTAssertEqual(worker.compares.count, compared)
             XCTAssertEqual(writes.count, 1)
             XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Edited image copied") })
             try render(controller.root, name: "screenshot-editor-clipboard-success-\(appearance)")
@@ -1736,7 +1784,7 @@ final class ScreenshotEditorTests: XCTestCase {
             format.selectItem(withTitle: ".jpg"); _ = format.sendAction(format.action, to: format.target)
             let quality = try popup("Save quality", in: controller.root)
             quality.selectItem(withTitle: "Maximum file size"); _ = quality.sendAction(quality.action, to: quality.target)
-            (try field("Output byte budget", in: controller.root)).stringValue = "invalid"
+            (try field("Maximum file size", in: controller.root)).stringValue = "invalid"
             clipboardAvailable = false
             copy.performClick(nil)
             let options = try XCTUnwrap(worker.encodes.last)
@@ -1819,7 +1867,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(pasteboard.data(forType: .png), png, "pasteboard owns bytes after the editor worker closes")
     }
 
-    func testMaximumOutputRequiresLocaleParsedDefaultCapAndFailuresRemainRecoverable() throws {
+    func testMaximumFileSizeTakesAValueAndUnitAndFailuresStayInTheComparison() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!,
@@ -1830,44 +1878,63 @@ final class ScreenshotEditorTests: XCTestCase {
         let quality = try popup("Save quality", in: controller.root)
         quality.selectItem(withTitle: "Maximum file size")
         _ = quality.sendAction(quality.action, to: quality.target)
-        let budget = try field("Output byte budget", in: controller.root)
-        XCTAssertFalse(budget.isHidden); XCTAssertEqual(budget.stringValue, "10000000")
+        let maximum = try field("Maximum file size", in: controller.root)
+        let unit = try popup("Screenshot file size unit", in: controller.root)
+        XCTAssertFalse(maximum.isHidden); XCTAssertFalse(unit.isHidden)
+        XCTAssertEqual(maximum.stringValue, "10", "shipping's default: 10 MB")
+        XCTAssertEqual(unit.itemTitles, ["KB", "MB", "GB"]); XCTAssertEqual(unit.titleOfSelectedItem, "MB")
+        XCTAssertTrue(maximum.toolTip?.hasPrefix("Uses stronger PNG compression") == true)
         XCTAssertTrue((try field("Output quality value", in: controller.root)).isHidden)
-        try button("Preview output", in: controller.root).performClick(nil)
-        XCTAssertEqual(worker.encodes.last?["max_size_bytes"] as? UInt64, 10_000_000)
-        XCTAssertEqual(worker.encodes.last?["quality"] as? String, "maximum")
+        XCTAssertFalse(labels(in: controller.root).contains { $0.contains("(bytes)") })
+        waitUntil(timeout: 3) { !controller.comparisonPending && !worker.compares.isEmpty }
+        XCTAssertEqual(worker.compares.last?["max_size_bytes"] as? UInt64, 10_000_000)
+        XCTAssertEqual(worker.compares.last?["quality"] as? String, "maximum")
 
-        budget.stringValue = "9 999"
-        try button("Preview output", in: controller.root).performClick(nil)
+        func type(_ text: String) {
+            maximum.stringValue = text
+            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
+                                                          object: maximum))
+            waitUntil(timeout: 3) { !controller.comparisonPending }
+        }
+        // Decimal units, floored to whole bytes: 0.0099 MB is 9,900 bytes.
+        type("0.0099")
+        XCTAssertEqual(worker.compares.count, 1)
         XCTAssertFalse(controller.state.busy)
-        XCTAssertEqual(worker.encodes.count, 1)
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("at least 10 KB") })
+        XCTAssertTrue(controller.compareView.failureMessage?.contains("at least 10 KB") == true)
+        type("0.01")
+        XCTAssertEqual(worker.compares.last?["max_size_bytes"] as? UInt64, 10_000)
+        unit.selectItem(withTitle: "GB"); _ = unit.sendAction(unit.action, to: unit.target)
+        XCTAssertEqual(maximum.stringValue, "0.00001")
 
-        budget.stringValue = "10000"
-        worker.failEncode = true
+        worker.failCompare = true
         worker.failureMessage = "fixture encode failed"
-        try button("Preview output", in: controller.root).performClick(nil)
+        type("0.00002")
         XCTAssertFalse(controller.state.busy)
         XCTAssertNotNil(controller.state.snapshot)
         XCTAssertTrue(controller.window.isVisible)
-        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("fixture encode failed") })
+        XCTAssertEqual(controller.compareView.failureMessage, "fixture encode failed")
+        XCTAssertNil(controller.compareView.afterImage)
     }
 
-    func testStaleOutputCompletionCannotReopenClosedEditor() throws {
+    func testStaleComparisonCompletionCannotReopenClosedEditor() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
-        worker.deferEncodes = true
+        worker.deferCompares = true
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
                                                      worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showOutput(in: controller.root)
-        try button("Preview output", in: controller.root).performClick(nil)
-        XCTAssertTrue(controller.state.busy)
+        let quality = try popup("Save quality", in: controller.root)
+        quality.selectItem(withTitle: "Compress"); _ = quality.sendAction(quality.action, to: quality.target)
+        waitUntil(timeout: 3) { !worker.compares.isEmpty }
+        XCTAssertFalse(controller.state.busy, "the comparison never blocks editing")
         XCTAssertTrue(controller.prepareForTermination())
-        worker.completePendingEncode()
+        worker.completePendingCompare()
         XCTAssertNil(controller.state.artifactID)
         XCTAssertFalse(controller.window.isVisible)
+        XCTAssertNil(controller.compareView.afterImage)
     }
 
     func testFirstSaveWritesNewFileInOutputFolderWithSharedOptionsWithoutChangingDraft() throws {
@@ -2183,11 +2250,11 @@ final class ScreenshotEditorTests: XCTestCase {
                                                      worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showOutput(in: controller.root)
-        try button("Preview output", in: controller.root).performClick(nil)
-        let previewMode = try segmented("Output preview image", in: controller.root)
-        XCTAssertEqual(previewMode.selectedSegment, 1)
-        try showLayers(in: controller.root)
+        try showComparison(controller, worker)
+        // Layers with the export settings (and so the comparison) still open.
+        let sections = try segmented("Editor section", in: controller.root)
+        sections.selectedSegment = 1; _ = sections.sendAction(sections.action, to: sections.target)
+        XCTAssertEqual(worker.compares.count, 1)
 
         for title in ["Rotate left", "Rotate right", "Flip horizontal", "Flip vertical"] {
             XCTAssertTrue(try button(title, in: controller.root).isEnabled,
@@ -2205,9 +2272,10 @@ final class ScreenshotEditorTests: XCTestCase {
         }
         XCTAssertEqual(transforms, ["rotate-counterclockwise", "rotate-clockwise",
                                     "flip-horizontal", "flip-vertical"])
-        XCTAssertEqual(previewMode.selectedSegment, 0)
-        XCTAssertFalse(previewMode.isEnabled,
-                       "an accepted image transform invalidates stale encoded output")
+        XCTAssertNil(controller.compareView.afterImage,
+                     "an accepted image transform drops the stale After side")
+        waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
+        XCTAssertEqual(worker.compares.count, 2, "the refresh coalesces the four transforms")
         XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
     }
 
@@ -2229,10 +2297,6 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         controller.window.setContentSize(NSSize(width: 1000, height: 600))
         XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1000, height: 600))
-        try showOutput(in: controller.root)
-        try button("Preview output", in: controller.root).performClick(nil)
-        let outputMode = try segmented("Output preview image", in: controller.root)
-        XCTAssertEqual(outputMode.selectedSegment, 1)
         try showDraw(in: controller.root)
 
         let tool = try popup("Drawing tool", in: controller.root)
@@ -2259,8 +2323,8 @@ final class ScreenshotEditorTests: XCTestCase {
                        "preview whitespace maps to off-canvas document coordinates")
         XCTAssertEqual((request["style"] as? [String: Any])?["color"] as? String, "#FF3B5C")
         XCTAssertEqual(request["opacity"] as? Double, 100)
-        XCTAssertEqual(outputMode.selectedSegment, 0)
-        XCTAssertFalse(outputMode.isEnabled, "accepted creation invalidates encoded output")
+        XCTAssertTrue(controller.compareView.isHidden, "Preserve with settings closed never compares")
+        XCTAssertTrue(worker.compares.isEmpty)
         try showLayers(in: controller.root)
         XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue, "Shape")
         XCTAssertEqual(try table("Screenshot layers", in: controller.root).selectedRow, 0,
@@ -2559,20 +2623,26 @@ final class ScreenshotEditorTests: XCTestCase {
             _ = quality.sendAction(quality.action, to: quality.target)
             XCTAssertFalse(preset.isHidden)
             XCTAssertTrue(controller.root.bounds.contains(preset.convert(preset.bounds, to: controller.root)))
-            try button("Preview output", in: controller.root).performClick(nil)
-            try render(controller.root, name: "screenshot-editor-output-preview-\(appearance)")
+            waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
+            let compare = controller.compareView!
+            XCTAssertTrue(controller.root.bounds.contains(compare.convert(compare.dismissRect, to: controller.root)))
+            try render(controller.root, name: "screenshot-editor-output-comparison-\(appearance)")
 
             quality.selectItem(withTitle: "Maximum file size")
             _ = quality.sendAction(quality.action, to: quality.target)
             XCTAssertTrue(preset.isHidden)
-            (try field("Output byte budget", in: controller.root)).stringValue = "99"
-            try button("Preview output", in: controller.root).performClick(nil)
+            let maximum = try field("Maximum file size", in: controller.root)
+            maximum.stringValue = "0.000099"
+            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: maximum))
+            waitUntil(timeout: 3) { !controller.comparisonPending }
             try render(controller.root, name: "screenshot-editor-output-error-\(appearance)")
 
-            (try field("Output byte budget", in: controller.root)).stringValue = "10000"
-            worker.failEncode = true
+            maximum.stringValue = "0.01"
+            worker.failCompare = true
             worker.failureMessage = "The encoded screenshot cannot meet this byte budget without exceeding the supported quality limits. The current draft and undo history remain unchanged and recoverable."
-            try button("Preview output", in: controller.root).performClick(nil)
+            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: maximum))
+            waitUntil(timeout: 3) { !controller.comparisonPending }
+            XCTAssertEqual(controller.compareView.failureMessage, worker.failureMessage)
             try render(controller.root, name: "screenshot-editor-output-error-minimum-\(appearance)")
         }
     }
@@ -3313,20 +3383,20 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showOutput(in: controller.root)
-        try button("Preview output", in: controller.root).performClick(nil)
-        let preview = try segmented("Output preview image", in: controller.root)
-        XCTAssertTrue(preview.isEnabled)
-        try showLayers(in: controller.root)
+        try showComparison(controller, worker)
+        let sections = try segmented("Editor section", in: controller.root)
+        sections.selectedSegment = 1; _ = sections.sendAction(sections.action, to: sections.target)
         try button("Apply style", in: controller.root).performClick(nil)
-        XCTAssertTrue(worker.requests.isEmpty); XCTAssertTrue(preview.isEnabled)
+        XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertNotNil(controller.compareView.afterImage, "an unchanged style keeps the comparison")
         worker.deferRequests = true
         try swatchButton("Fill color: #36c96b", in: controller.root).performClick(nil)
         try button("Apply style", in: controller.root).performClick(nil)
         XCTAssertEqual(worker.requests.last?["id"] as? String, "shape")
         let edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual(edit as NSDictionary, ["action": "annotation_style", "patch": ["fill": "#36c96b"]] as NSDictionary)
-        XCTAssertTrue(controller.state.busy); XCTAssertFalse(preview.isEnabled)
+        XCTAssertTrue(controller.state.busy)
+        XCTAssertEqual(worker.compares.count, 1, "a pending edit does not encode")
         XCTAssertFalse(try swatchRow("Fill color", in: controller.root).isEnabled)
         XCTAssertFalse(try swatchButton("Fill color: #36c96b", in: controller.root).isEnabled)
         XCTAssertFalse(try table("Screenshot layers", in: controller.root).isEnabled)
@@ -3824,11 +3894,10 @@ final class ScreenshotEditorTests: XCTestCase {
                 worker: worker, numberLocale: Locale(identifier: "fr_FR"))
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-            try showOutput(in: controller.root)
-            try button("Preview output", in: controller.root).performClick(nil)
-            let outputMode = try segmented("Output preview image", in: controller.root)
+            try showComparison(controller, worker)
             let snapshot = controller.state.snapshot
-            try showLayers(in: controller.root)
+            let sections = try segmented("Editor section", in: controller.root)
+            sections.selectedSegment = 1; _ = sections.sendAction(sections.action, to: sections.target)
             let field = try field("Shift rotation snap", in: controller.root)
             XCTAssertEqual(field.stringValue, "15")
             for (input, expected) in [("0", 1.0), ("181", 180.0), ("37,5", 38.0), ("invalid", 38.0)] {
@@ -3841,8 +3910,9 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(controller.selectionOverlay.rotationSnapDegrees, 37)
             XCTAssertTrue(worker.requests.isEmpty)
             XCTAssertEqual(controller.state.snapshot, snapshot)
-            XCTAssertEqual(outputMode.selectedSegment, 1)
-            XCTAssertTrue(outputMode.isEnabled)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            XCTAssertNotNil(controller.compareView.afterImage)
+            XCTAssertEqual(worker.compares.count, 1, "rotation snap is not an edit")
             field.scrollToVisible(field.bounds)
             try render(controller.root, name: "screenshot-editor-rotation-snap-\(appearance)")
         }
@@ -4034,9 +4104,7 @@ final class ScreenshotEditorTests: XCTestCase {
         layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         controller.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification,
                                                               object: layers))
-        try showOutput(in: controller.root); try button("Preview output", in: controller.root).performClick(nil)
-        let output = try segmented("Output preview image", in: controller.root)
-        XCTAssertEqual(output.selectedSegment, 1)
+        try showComparison(controller, worker)
 
         _ = controller.window.performKeyEquivalent(with: try keyEvent(
             window: controller.window, keyCode: 9, characters: "v", modifiers: .command))
@@ -4051,10 +4119,12 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.requests.last?["operation"] as? String, "copy_layer")
         XCTAssertEqual(worker.requests.last?["id"] as? String, "source")
         XCTAssertTrue(controller.state.snapshot?.canPasteLayer == true)
-        XCTAssertEqual(output.selectedSegment, 1); XCTAssertTrue(output.isEnabled,
-            "copy changes capability only and keeps encoded pixels available")
+        XCTAssertNotNil(controller.compareView.afterImage,
+                        "copy changes capability only and keeps the encoded After side")
 
-        try showDraw(in: controller.root)
+        // Draw with the export settings (and so the comparison) still open.
+        let sections = try segmented("Editor section", in: controller.root)
+        sections.selectedSegment = 2; _ = sections.sendAction(sections.action, to: sections.target)
         worker.response = { request in
             guard request["operation"] as? String == "paste_layer",
                   let id = request["new_id"] as? String else { return nil }
@@ -4072,7 +4142,9 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(controller.state.snapshot?.layers.first?.id, newID)
         XCTAssertEqual(try segmented("Editor section", in: controller.root).selectedSegment, 1,
                        "accepted paste returns to Select & move")
-        XCTAssertFalse(output.isEnabled, "paste invalidates stale encoded output")
+        XCTAssertNil(controller.compareView.afterImage, "paste drops the stale After side")
+        waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
+        XCTAssertEqual(worker.compares.count, 2)
     }
 
     func testLayerShortcutsRespectFocusedControlPendingRejectedAndClosedStates() throws {
@@ -4115,7 +4187,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.requests.count, count, "closed sessions reject shortcuts")
     }
 
-    func testCanvasSelectionControllerKeepsOutputUntilMoveAndPreservesSelectionOnFailure() throws {
+    func testCanvasSelectionControllerMovesOnlyOnDragAndPreservesSelectionOnFailure() throws {
         _ = NSApplication.shared
         func shape(_ id: String, x: Double, locked: Bool = false, visible: Bool = true) -> [String: Any] {
             ["kind": "shape", "id": id, "shape": "rectangle", "x": x, "y": 40.0,
@@ -4130,9 +4202,6 @@ final class ScreenshotEditorTests: XCTestCase {
             let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-            try showOutput(in: controller.root)
-            try button("Preview output", in: controller.root).performClick(nil)
-            let output = try segmented("Output preview image", in: controller.root)
             try showLayers(in: controller.root)
             controller.root.layoutSubtreeIfNeeded()
             let overlay = controller.selectionOverlay
@@ -4140,10 +4209,10 @@ final class ScreenshotEditorTests: XCTestCase {
             func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: rect.minX + x * scale, y: rect.minY + y * scale) }
             overlay.begin(at: point(70, 70)); overlay.end(at: point(70, 70))
             XCTAssertEqual(try field("Layer X", in: controller.root).stringValue, "40")
-            XCTAssertTrue(output.isEnabled); XCTAssertTrue(worker.requests.isEmpty)
+            XCTAssertTrue(worker.requests.isEmpty)
             overlay.begin(at: point(550, 250)); overlay.end(at: point(550, 250))
             XCTAssertEqual(try table("Screenshot layers", in: controller.root).selectedRow, -1)
-            XCTAssertTrue(output.isEnabled)
+            XCTAssertTrue(worker.requests.isEmpty)
             XCTAssertEqual(try field("Layer X", in: controller.root).stringValue, "")
             XCTAssertFalse(try button("Move", in: controller.root).isEnabled)
             try render(controller.root, name: "screenshot-editor-canvas-empty-selection-\(appearance)")
@@ -4165,7 +4234,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(try XCTUnwrap(edit["delta_x"] as? Double), 20, accuracy: 1e-7)
             XCTAssertEqual(try XCTUnwrap(edit["delta_y"] as? Double), 30, accuracy: 1e-7)
             XCTAssertEqual(try XCTUnwrap(edit["display_scale"] as? Double), scale, accuracy: 1e-7)
-            XCTAssertFalse(output.isEnabled); XCTAssertTrue(controller.state.busy)
+            XCTAssertTrue(controller.state.busy)
             XCTAssertFalse(overlay.selectionEnabled)
             XCTAssertEqual(try field("Layer X", in: controller.root).stringValue, "40")
             worker.completePending(with: published)
@@ -4324,9 +4393,6 @@ final class ScreenshotEditorTests: XCTestCase {
             let failure = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: failureWorker)
             defer { failure.window.orderOut(nil) }
             failure.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
-            try showOutput(in: failure.root)
-            try button("Preview output", in: failure.root).performClick(nil)
-            let output = try segmented("Output preview image", in: failure.root)
             try showLayers(in: failure.root); failure.root.layoutSubtreeIfNeeded()
             let surface = failure.selectionOverlay
             let image = surface.presentedImageRect, displayScale = image.width / 640
@@ -4335,14 +4401,14 @@ final class ScreenshotEditorTests: XCTestCase {
             let press = CGPoint(x: image.minX + grip.handle.x * displayScale, y: image.minY + grip.handle.y * displayScale)
             let release = CGPoint(x: press.x + 20, y: press.y + 30)
             surface.begin(at: press); surface.end(at: press)
-            XCTAssertTrue(failureWorker.requests.isEmpty); XCTAssertTrue(output.isEnabled)
+            XCTAssertTrue(failureWorker.requests.isEmpty)
             surface.begin(at: press); surface.drag(to: release)
             failure.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
             surface.end(at: release); XCTAssertTrue(failureWorker.requests.isEmpty)
             failureWorker.deferRequests = true
             surface.begin(at: press); surface.end(at: release)
             XCTAssertEqual(failureWorker.requests.count, 1); XCTAssertTrue(failure.state.busy)
-            XCTAssertFalse(output.isEnabled); XCTAssertFalse(surface.selectionEnabled)
+            XCTAssertFalse(surface.selectionEnabled)
             XCTAssertEqual(failureWorker.requests[0]["id"] as? String, id)
             XCTAssertEqual((failureWorker.requests[0]["edit"] as? [String: Any])?["action"] as? String, "rotate")
             failureWorker.completePending(with: rotated.snapshot)
@@ -4423,8 +4489,6 @@ final class ScreenshotEditorTests: XCTestCase {
             let failure = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: failingWorker)
             defer { failure.window.orderOut(nil) }
             failure.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
-            try showOutput(in: failure.root); try button("Preview output", in: failure.root).performClick(nil)
-            let output = try segmented("Output preview image", in: failure.root)
             try showLayers(in: failure.root); failure.root.layoutSubtreeIfNeeded()
             let surface = failure.selectionOverlay, fitted = surface.presentedImageRect
             XCTAssertEqual(surface.resizeHandlePoints.count, 8)
@@ -4433,7 +4497,7 @@ final class ScreenshotEditorTests: XCTestCase {
                                 y: fitted.minY + grip.y * fitted.width / 640)
             failingWorker.deferRequests = true
             surface.begin(at: start); surface.end(at: CGPoint(x: start.x + 20, y: start.y + 20))
-            XCTAssertTrue(failure.state.busy); XCTAssertFalse(output.isEnabled)
+            XCTAssertTrue(failure.state.busy)
             XCTAssertEqual((failingWorker.requests.last?["edit"] as? [String: Any])?["action"] as? String, "resize")
             failingWorker.completePending(with: resized.snapshot)
             XCTAssertEqual(surface.selectedLayerID, id)
@@ -4460,8 +4524,6 @@ final class ScreenshotEditorTests: XCTestCase {
         let tool = try popup("Drawing tool", in: controller.root)
         let overlay = controller.drawOverlay
         for (index, operation) in [(2, "create_open_shape"), (3, "create_open_shape"), (4, "create_freehand_path")] {
-            try showOutput(in: controller.root)
-            try button("Preview output", in: controller.root).performClick(nil)
             try showDraw(in: controller.root)
             tool.selectItem(at: index); _ = tool.sendAction(tool.action, to: tool.target)
             overlay.begin(at: NSPoint(x: 350, y: 300)); overlay.drag(to: NSPoint(x: 80, y: 130))
@@ -4470,7 +4532,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(worker.requests.count, count + 1)
             XCTAssertEqual(worker.requests.last?["operation"] as? String, operation)
             XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "new-\(count + 1)")
-            XCTAssertFalse(try segmented("Output preview image", in: controller.root).isEnabled)
+            XCTAssertTrue(controller.compareView.isHidden && worker.compares.isEmpty)
             if index == 4 {
                 XCTAssertEqual((worker.requests.last?["points"] as? [[String: CGFloat]])?.count, 2)
             } else { XCTAssertEqual(worker.requests.last?["shape"] as? String, index == 2 ? "line" : "arrow") }
@@ -4505,10 +4567,14 @@ final class ScreenshotEditorTests: XCTestCase {
             return self.snapshot(id: "shot", layers: [self.textLayer(id: "fresh-text", text: "")],
                 activeTextInput: ["input_id": inputID, "layer_id": "fresh-text", "is_new": true])
         }
-        try showOutput(in: controller.root); try button("Preview output", in: controller.root).performClick(nil)
-        try showDraw(in: controller.root)
+        try showComparison(controller, worker)
+        let sections = try segmented("Editor section", in: controller.root)
+        sections.selectedSegment = 2; _ = sections.sendAction(sections.action, to: sections.target)
         let tool = try popup("Drawing tool", in: controller.root)
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        XCTAssertEqual(controller.compareView.afterHint,
+                       "Edits apply to the original. This side updates after you finish.")
+        XCTAssertFalse(controller.compareView.stripEnabled, "a drawing tool keeps the bottom strip")
         let image = controller.presentedImageRect
         let click = NSPoint(x: image.minX + image.width * 0.25, y: image.minY + image.height * 0.75)
         controller.drawOverlay.begin(at: click); controller.drawOverlay.end(at: click)
@@ -4526,8 +4592,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(create["color"] as? String, "#ff3b5c")
         XCTAssertNil(create["stylePreset"], "drafts without named presets keep the plain family request")
         XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "fresh-text")
-        XCTAssertFalse(try segmented("Output preview image", in: controller.root).isEnabled,
-                       "output controls stay blocked while composition is unresolved")
+        XCTAssertTrue(controller.compareView.isHidden, "inline text fades the comparison away")
         XCTAssertEqual(try textView("Inline screenshot text", in: controller.root).string, "")
         let inlineEditor = try textView("Inline screenshot text", in: controller.root)
         XCTAssertTrue(controller.window.firstResponder === inlineEditor)
@@ -4542,8 +4607,9 @@ final class ScreenshotEditorTests: XCTestCase {
                                                     numberLocale: Locale(identifier: "fr_FR"))
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showOutput(in: controller.root); try button("Preview output", in: controller.root).performClick(nil)
-        try showDraw(in: controller.root)
+        try showComparison(controller, worker)
+        let sections = try segmented("Editor section", in: controller.root)
+        sections.selectedSegment = 2; _ = sections.sendAction(sections.action, to: sections.target)
         let tool = try popup("Drawing tool", in: controller.root)
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
         let preset = try popup("New text style", in: controller.root)
@@ -4555,8 +4621,10 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(size.stringValue, "39", "use shared capture size, not the restored canvas")
         size.stringValue = "48,5"; color.stringValue = "#12abef"
         XCTAssertTrue(worker.requests.isEmpty)
-        XCTAssertTrue(try segmented("Output preview image", in: controller.root).isEnabled,
-                      "staging creation defaults must not invalidate encoded output")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        XCTAssertNotNil(controller.compareView.afterImage,
+                        "staging creation defaults must not drop the encoded After side")
+        XCTAssertEqual(worker.compares.count, 1)
 
         worker.failOperation = "begin_text_input"
         let click = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
@@ -4699,8 +4767,9 @@ final class ScreenshotEditorTests: XCTestCase {
             }
         }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showOutput(in: controller.root); try button("Preview output", in: controller.root).performClick(nil)
-        try showDraw(in: controller.root)
+        try showComparison(controller, worker)
+        let sections = try segmented("Editor section", in: controller.root)
+        sections.selectedSegment = 2; _ = sections.sendAction(sections.action, to: sections.target)
         let tool = try popup("Drawing tool", in: controller.root)
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
         let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
@@ -4749,8 +4818,9 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.text, "Ω\n漢字🙂")
         XCTAssertEqual(controller.state.snapshot?.canUndo, true,
                        "the shared finish publishes the grouped text transaction")
-        XCTAssertFalse(try segmented("Output preview image", in: controller.root).isEnabled,
-                       "only accepted commit invalidates encoded output")
+        XCTAssertNil(controller.compareView.afterImage, "the accepted commit drops the stale After side")
+        waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
+        XCTAssertFalse(controller.compareView.isHidden, "the comparison returns once text is resolved")
     }
 
     func testInlineTextDelayedBeginPreservesSelectionAndMarkedEscapeStaysNative() throws {
@@ -4918,8 +4988,9 @@ final class ScreenshotEditorTests: XCTestCase {
             }
         }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showOutput(in: controller.root); try button("Preview output", in: controller.root).performClick(nil)
-        try showDraw(in: controller.root)
+        try showComparison(controller, worker)
+        let sections = try segmented("Editor section", in: controller.root)
+        sections.selectedSegment = 2; _ = sections.sendAction(sections.action, to: sections.target)
         let tool = try popup("Drawing tool", in: controller.root)
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
         let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
@@ -4937,8 +5008,9 @@ final class ScreenshotEditorTests: XCTestCase {
         try button("Cancel", in: controller.root).performClick(nil)
         XCTAssertEqual(worker.requests.last?["operation"] as? String, "finish_text_input")
         XCTAssertEqual(worker.requests.last?["commit"] as? Bool, false)
-        XCTAssertTrue(try segmented("Output preview image", in: controller.root).isEnabled,
-                      "cancel restores committed pixels without discarding the encoded preview")
+        waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
+        XCTAssertFalse(controller.compareView.isHidden,
+                       "cancel restores committed pixels and the comparison comes back")
         XCTAssertFalse(controller.state.snapshot?.unsavedChanges ?? true,
                        "blank new composition never enters committed state")
     }
@@ -5758,10 +5830,9 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showOutput(in: controller.root)
-        try button("Preview output", in: controller.root).performClick(nil)
-        let output = try segmented("Output preview image", in: controller.root)
-        try showLayers(in: controller.root)
+        try showComparison(controller, worker)
+        let sections = try segmented("Editor section", in: controller.root)
+        sections.selectedSegment = 1; _ = sections.sendAction(sections.action, to: sections.target)
         let table = try table("Screenshot layers", in: controller.root)
         // The native table reverses the document's back-to-front order.
         table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
@@ -5774,7 +5845,7 @@ final class ScreenshotEditorTests: XCTestCase {
             context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
         let menu = try XCTUnwrap(table.menu(for: event))
         XCTAssertEqual(table.selectedRow, 1, "opening and cancelling a menu must not retarget selection")
-        XCTAssertEqual(output.selectedSegment, 1)
+        XCTAssertNotNil(controller.compareView.afterImage)
         XCTAssertTrue(worker.requests.isEmpty)
         XCTAssertEqual(menu.items.filter { !$0.isSeparatorItem }.map(\.title),
                        ["Copy layer", "Paste layer", "Duplicate", "Delete", "Merge down",
@@ -5788,7 +5859,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.requests.last?["operation"] as? String, "copy_layer")
         XCTAssertEqual(worker.requests.last?["id"] as? String, "locked")
         XCTAssertEqual(table.selectedRow, 1)
-        XCTAssertEqual(output.selectedSegment, 1, "copy preserves encoded output")
+        XCTAssertNotNil(controller.compareView.afterImage, "copy preserves the comparison")
         let pasteIndex = try XCTUnwrap(menu.items.firstIndex { $0.title == "Paste layer" })
         menu.performActionForItem(at: pasteIndex)
         XCTAssertEqual(worker.requests.last?["operation"] as? String, "paste_layer")
@@ -6686,6 +6757,21 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = control.sendAction(control.action, to: control.target)
     }
 
+    /// Compress with Export settings open: the automatic comparison encodes
+    /// its After side once the refresh delay passes.
+    private func showComparison(_ controller: ScreenshotEditorController, _ worker: FakeEditorWorker? = nil,
+                                file: StaticString = #filePath, line: UInt = #line) throws {
+        try showOutput(in: controller.root)
+        let quality = try popup("Save quality", in: controller.root)
+        if quality.indexOfSelectedItem != 1 {
+            quality.selectItem(at: 1)
+            _ = quality.sendAction(quality.action, to: quality.target)
+        }
+        waitUntil(timeout: 5) { !controller.comparisonPending && controller.compareView.afterImage != nil }
+        XCTAssertTrue(controller.comparisonVisible, file: file, line: line)
+        XCTAssertFalse(controller.compareView.isHidden, file: file, line: line)
+    }
+
     /// Open the export bar's settings disclosure (idempotent).
     private func showOutput(in view: NSView) throws {
         let panel = try exportSettingsPanel(in: view)
@@ -6870,6 +6956,10 @@ private final class FakeEditorWorker: EditorWorking {
         notice: "Saved /output/edited.png"))
     var estimates: [[String: Any]] = []
     var estimateResult: Result<EditorEstimate, Error> = .success(EditorEstimate(bytes: 12_345, baselineBytes: nil))
+    var compares: [[String: Any]] = []
+    var failCompare = false
+    var deferCompares = false
+    private var pendingCompareCompletion: ((Result<EditorOutputPresentation, Error>) -> Void)?
     var importLayerID = "imported-layer"
     var failImport = false
     var importedSnapshot: NativeEditorSnapshot?
@@ -6973,6 +7063,20 @@ private final class FakeEditorWorker: EditorWorking {
                   completion: @escaping (Result<EditorEstimate, Error>) -> Void) {
         estimates.append(request)
         completion(estimateResult)
+    }
+
+    func compare(_ options: [String: Any],
+                 completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void) {
+        compares.append(options)
+        if failCompare { completion(.failure(AppBridgeError.backend(failureMessage))); return }
+        if deferCompares { pendingCompareCompletion = completion; return }
+        completion(.success(output()))
+    }
+
+    func completePendingCompare() {
+        let completion = pendingCompareCompletion
+        pendingCompareCompletion = nil
+        completion?(.success(output()))
     }
 
     func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint?,

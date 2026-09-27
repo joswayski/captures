@@ -1102,9 +1102,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let layerX = NSTextField()
     private let layerY = NSTextField()
     private let outputQualityValue = NSTextField()
-    private let outputPngPalette = NSTextField()
-    private let outputByteBudget = NSTextField()
-    private let outputCompressionPreset = NSPopUpButton()
+    /// Maximum file size as a decimal value in `outputMaximumUnit` (KB/MB/GB).
+    private let outputMaximumSize = NSTextField()
+    private let outputMaximumUnit = ClosurePopUpButton()
+    private var maximumUnit = RecordingFileSizeUnit.megabytes
+    private var lastQualityIndex = 0
+    private let outputCompressionPreset = ClosurePopUpButton()
     private let outputWidth = NSTextField()
     private let outputHeight = NSTextField()
     private let outputAspectLock = NSButton(checkboxWithTitle: "Lock aspect ratio", target: nil, action: nil)
@@ -1229,9 +1232,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var inlineTextInput: InlineTextInput?
     private var closeAfterTextInput = false
     private var outputFormat: NSPopUpButton!
-    private var outputQuality: NSPopUpButton!
+    private var outputQuality: ClosurePopUpButton!
     private var outputSizeMode: NSPopUpButton!
-    private var outputPreviewMode: NSSegmentedControl!
     private var layerTable: EditorLayerTable!
     private var visibilityButton: CaptureButton!
     private var lockButton: CaptureButton!
@@ -1256,7 +1258,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var cropPrevious: [String]?
     private var trimButton: CaptureButton!
     private var exportDisclosure: CaptureButton!
-    private var previewOutputButton: CaptureButton!
+    private var showComparisonButton: CaptureButton!
     private var copyImageButton: CaptureButton!
     private var changeOutputDirectoryButton: CaptureButton!
     private var showInFolderButton: CaptureButton!
@@ -1289,7 +1291,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var drawingPreviewEpoch = 0
     private var drawingPreviewInFlight = false
     private var drawingPreviewPending: [String: Any]?
-    private var encodedOutput: EditorOutputPresentation?
+    /// The automatic before/after comparison: the encoded After side for the
+    /// current pixels and options, its pending encode and whether it is hidden.
+    private var comparisonOutput: EditorOutputPresentation?
+    private(set) var comparisonPending = false
+    private var comparisonGeneration = 0
+    private var comparisonWork: DispatchWorkItem?
+    private var comparisonFailure: String?
+    private(set) var comparisonDismissed = false
+    private(set) var compareView: CompressionCompareView!
     private var historyRoot = ""
     private var captureMode = "region"
     private var outputDirectory = ""
@@ -1479,6 +1489,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             backgroundSwatches?.deactivate(); queuedBackground = nil
             state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
             estimateWork?.cancel(); estimateWork = nil; estimateGeneration += 1
+            comparisonWork?.cancel(); comparisonWork = nil; comparisonGeneration += 1
             window.orderOut(nil); publishPresence(); return true
         case .failure(let error):
             if let failure = error as? EditorTerminationFailure,
@@ -1802,9 +1813,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             + (outputSizeMode?.indexOfSelectedItem == 3 ? ["custom"] : [])
             + ["quality"]
             + (compress ? ["preset"] : [])
-            + (compress && outputFormat?.indexOfSelectedItem == 0 ? ["palette"] : [])
             + (outputQuality?.indexOfSelectedItem == 2 ? ["maximum"] : [])
-            + ["estimate", "preview"]
+            + ["estimate"]
+            + (outputQuality?.indexOfSelectedItem != 0 && comparisonDismissed ? ["comparison"] : [])
         let available = exportSettingsPanel.bounds.width - 24
         var x: CGFloat = 12, row: CGFloat = 0
         for (key, group) in exportGroups {
@@ -1920,6 +1931,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cropOverlay.onChange = { [weak self] rect in self?.setCropFields(rect) }
         cropOverlay.onCancel = { [weak self] in self?.cancelCrop() }
         viewportInput.addSubview(cropOverlay)
+        // Above the canvas overlays: only its handle, bottom strip and Hide
+        // take the pointer; every other press reaches the canvas below.
+        compareView = CompressionCompareView(tokens: tokens)
+        compareView.frame = viewportInput.bounds
+        compareView.autoresizingMask = [.width, .height]
+        compareView.isHidden = true
+        compareView.onDismiss = { [weak self] in self?.dismissComparison() }
+        viewportInput.addSubview(compareView)
         dropGuideView.frame = viewportInput.bounds
         dropGuideView.autoresizingMask = [.width, .height]
         dropGuideView.isHidden = true
@@ -2611,26 +2630,32 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputAspectLock.target = self; outputAspectLock.action = #selector(outputAspectLockChanged)
         add(outputAspectLock)
 
-        outputQuality = NSPopUpButton()
+        outputQuality = ClosurePopUpButton()
+        outputQuality.tokens = tokens
         outputQuality.addItems(withTitles: ["Preserve quality", "Compress", "Maximum file size"])
         outputQuality.setAccessibilityLabel("Save quality")
         outputQuality.target = self; outputQuality.action = #selector(outputOptionsChanged)
         add(outputQuality)
+        outputCompressionPreset.tokens = tokens
         outputCompressionPreset.addItems(withTitles: Self.outputCompressionPresets.map { $0.name })
         outputCompressionPreset.setAccessibilityLabel("Output compression preset")
         outputCompressionPreset.target = self
         outputCompressionPreset.action = #selector(outputCompressionPresetChanged)
         add(outputCompressionPreset)
         configure(outputQualityValue, frame: .zero, label: "Output quality value", parent: exportSettingsPanel)
-        configure(outputPngPalette, frame: .zero, label: "PNG maximum colors", parent: exportSettingsPanel)
-        configure(outputByteBudget, frame: .zero, label: "Output byte budget", parent: exportSettingsPanel)
+        configure(outputMaximumSize, frame: .zero, label: "Maximum file size", parent: exportSettingsPanel)
         outputQualityValue.stringValue = "98"
-        outputPngPalette.placeholderString = "Optional"
-        outputByteBudget.placeholderString = "Required"
-        outputByteBudget.stringValue = "10000000"
-        [outputQualityValue, outputPngPalette, outputByteBudget].forEach {
-            $0.formatter = outputIntegerFormatter; $0.delegate = self
-        }
+        outputQualityValue.formatter = outputIntegerFormatter; outputQualityValue.delegate = self
+        // Shipping's screenshot default: 10 MB, decimal units.
+        outputMaximumSize.placeholderString = "Required"
+        outputMaximumSize.stringValue = maximumUnit.value(10_000_000)
+        outputMaximumSize.delegate = self
+        outputMaximumUnit.tokens = tokens
+        outputMaximumUnit.addItems(withTitles: RecordingFileSizeUnit.allCases.map { $0.label })
+        outputMaximumUnit.selectItem(at: maximumUnit.rawValue)
+        outputMaximumUnit.setAccessibilityLabel("Screenshot file size unit")
+        outputMaximumUnit.target = self; outputMaximumUnit.action = #selector(outputMaximumUnitChanged)
+        add(outputMaximumUnit)
         exportEstimateValue.setAccessibilityLabel("Estimated size")
         exportEstimateValue.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .semibold)
         exportEstimateValue.toolTip = "Estimated export file size for the current format, quality, and output size"
@@ -2639,16 +2664,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportEstimateDelta.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
         exportEstimateDelta.toolTip = "Change versus the original image, before this export"
         add(exportEstimateDelta)
-        outputPreviewMode = NSSegmentedControl(labels: ["Edited canvas", "Encoded output"],
-                                               trackingMode: .selectOne, target: self,
-                                               action: #selector(changeOutputPreview))
-        outputPreviewMode.selectedSegment = 0
-        outputPreviewMode.setAccessibilityLabel("Output preview image")
-        add(outputPreviewMode)
-        previewOutputButton = button("Preview output", frame: .zero, parent: exportSettingsPanel) {
-            [weak self] in self?.previewOutput()
-        }
-        previewOutputButton.toolTip = "Encode the output into the canvas without saving a file or draft"
+        // Shipping `.screenshot-show-comparison`, while a hidden comparison applies.
+        showComparisonButton = button(CompressionCompareCopy.copy.show, frame: .zero,
+                                      parent: exportSettingsPanel) { [weak self] in self?.showComparison() }
         func group(_ key: String, _ text: String, _ views: [(NSView, CGFloat, CGFloat)], _ width: CGFloat) {
             exportGroups[key] = (caption(text), views, width)
         }
@@ -2658,12 +2676,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         group("quality", "Save quality", [(outputQuality as NSView, 0, 150)], 150)
         group("preset", "Quality", [(outputCompressionPreset as NSView, 0, 100),
                                     (outputQualityValue as NSView, 108, 56)], 164)
-        group("palette", "PNG colors", [(outputPngPalette as NSView, 0, 90)], 90)
-        group("maximum", "Maximum file size (bytes)", [(outputByteBudget as NSView, 0, 150)], 160)
+        group("maximum", "Maximum file size", [(outputMaximumSize as NSView, 0, 96),
+                                               (outputMaximumUnit as NSView, 104, 72)], 176)
         group("estimate", "Est. size", [(exportEstimateValue as NSView, 0, 92),
                                         (exportEstimateDelta as NSView, 96, 56)], 152)
-        group("preview", "Canvas", [(outputPreviewMode as NSView, 0, 200),
-                                    (previewOutputButton as NSView, 208, 120)], 328)
+        group("comparison", CompressionCompareCopy.copy.showCaption,
+              [(showComparisonButton as NSView, 0, 150)], 150)
 
         exportDisclosure = button("", frame: .zero, parent: exportBar) { [weak self] in
             self?.toggleExportSettings()
@@ -3039,12 +3057,30 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     @objc private func outputOptionsChanged() {
+        if outputQuality.indexOfSelectedItem != lastQualityIndex {
+            // Shipping `applyQualityMode`: a new mode shows the comparison again.
+            lastQualityIndex = outputQuality.indexOfSelectedItem
+            comparisonDismissed = false
+        }
         normalizeOutputQuality()
         synchronizeOutputCompressionPreset()
         invalidateOutput()
         updateOutputOptionControls()
         // A different encoding is no longer the file that was just saved.
         exportInputsChanged(clearsSaved: true)
+        updateControls()
+    }
+
+    /// Switching units converts the typed value, as shipping does.
+    @objc private func outputMaximumUnitChanged() {
+        guard let unit = RecordingFileSizeUnit(rawValue: outputMaximumUnit.indexOfSelectedItem),
+              unit != maximumUnit else { return }
+        if let bytes = maximumUnit.bytes(outputMaximumSize.stringValue) {
+            outputMaximumSize.stringValue = unit.value(bytes)
+        }
+        maximumUnit = unit
+        invalidateOutput()
+        exportInputsChanged(clearsSaved: false)
         updateControls()
     }
 
@@ -3120,7 +3156,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             updateControls()
             return
         }
-        guard [outputQualityValue, outputPngPalette, outputByteBudget].contains(where: { $0 === field }) else { return }
+        guard [outputQualityValue, outputMaximumSize].contains(where: { $0 === field }) else { return }
         synchronizeOutputCompressionPreset()
         invalidateOutput()
         exportInputsChanged(clearsSaved: false)
@@ -3134,51 +3170,93 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             synchronizeOutputCompressionPreset(); return
         }
         outputQualityValue.stringValue = String(preset.value)
-        outputPngPalette.stringValue = ""
         outputOptionsChanged()
     }
 
+    /// The canvas always shows the edited frame; the comparison covers it
+    /// with the encoded After side while it applies.
     @objc private func changeOutputPreview() {
-        // Like the shipping comparison, the encoded image shows only while the
-        // export settings are open.
-        if exportSettingsOpen, outputPreviewMode.selectedSegment == 1, let encodedOutput {
-            preview.image = NSImage(cgImage: encodedOutput.image,
-                                    size: NSSize(width: encodedOutput.image.width,
-                                                 height: encodedOutput.image.height))
-            viewportCanvasSize = NSSize(width: encodedOutput.image.width,
-                                        height: encodedOutput.image.height)
-        } else {
-            if encodedOutput == nil { outputPreviewMode.selectedSegment = 0 }
-            preview.image = editedImage
-            if let editedImage { viewportCanvasSize = editedImage.size }
-        }
+        preview.image = editedImage
+        if let editedImage { viewportCanvasSize = editedImage.size }
         updateViewportGeometry()
+        publishComparison()
     }
 
-    private func previewOutput() {
-        guard let artifactID = state.artifactID,
-              let options = outputOptions(),
-              let generation = state.beginCommand() else { return }
-        invalidateOutput()
-        status.stringValue = "Encoding output preview…"; updateControls()
-        worker.encode(options) { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let output):
-                guard self.state.completeOutput(generation: generation, artifactID: artifactID) else { return }
-                self.encodedOutput = output
-                self.outputPreviewMode.selectedSegment = 1
-                self.changeOutputPreview()
-                self.status.textColor = self.tokens.color("text-muted")
-                self.status.stringValue = "Output preview encoded. No file was saved."
-            case .failure(let error):
-                guard self.state.fail(generation: generation) else { return }
-                self.invalidateOutput()
-                self.showError("Output preview failed: \(error.localizedDescription)")
-            }
-            self.updateControls()
-            self.submitPendingImportIfReady()
+    /// Shipping's automatic comparison: Compress or Maximum with Export
+    /// settings open, until Hide.
+    var comparisonVisible: Bool {
+        state.snapshot != nil && (outputQuality?.indexOfSelectedItem ?? 0) != 0
+            && exportSettingsOpen && !comparisonDismissed
+    }
+
+    /// Encode the After side once edits or options settle (shipping's 280 ms
+    /// refresh), off the session queue, exactly as Save would.
+    private func scheduleComparison() {
+        comparisonWork?.cancel(); comparisonWork = nil
+        comparisonGeneration += 1
+        comparisonOutput = nil; comparisonFailure = nil
+        guard comparisonVisible else {
+            comparisonPending = false; publishComparison(); return
         }
+        comparisonPending = true
+        let generation = comparisonGeneration
+        let work = DispatchWorkItem { [weak self] in self?.runComparison(generation: generation) }
+        comparisonWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + CompressionCompareCopy.screenshotRefreshDelay,
+                                      execute: work)
+        publishComparison()
+    }
+
+    private func runComparison(generation: Int) {
+        guard generation == comparisonGeneration, comparisonVisible else { return }
+        let result = outputOptionsResult()
+        guard let options = result.options, result.error == nil else {
+            comparisonPending = false
+            comparisonFailure = result.error ?? exportBarState?.error
+            publishComparison(); return
+        }
+        worker.compare(options) { [weak self] result in
+            guard let self, generation == self.comparisonGeneration else { return }
+            self.comparisonPending = false
+            switch result {
+            case .success(let output): self.comparisonOutput = output; self.comparisonFailure = nil
+            case .failure(let error): self.comparisonOutput = nil; self.comparisonFailure = error.localizedDescription
+            }
+            self.publishComparison()
+        }
+    }
+
+    private func showComparison() {
+        comparisonDismissed = false
+        layoutExportSettings()
+        scheduleComparison()
+    }
+
+    private func dismissComparison() {
+        comparisonDismissed = true
+        comparisonWork?.cancel(); comparisonWork = nil
+        comparisonGeneration += 1; comparisonPending = false
+        layoutExportSettings()
+        publishComparison()
+    }
+
+    /// Before is the lossless flattened edit (the estimate's baseline while
+    /// compressing), After the encoded file.
+    private func publishComparison() {
+        guard let compareView else { return }
+        let suppressed = inlineTextInput != nil || drawingPreviewInFlight || drawingPreviewPending != nil
+        compareView.isHidden = !comparisonVisible || suppressed || editedImage == nil
+        guard !compareView.isHidden else { return }
+        compareView.mediaRect = compareView.convert(presentedImageRect, from: viewportInput)
+        compareView.afterImage = comparisonOutput?.image
+        compareView.processing = comparisonPending
+        compareView.failureMessage = comparisonFailure
+        compareView.badges = CompressionCompareCopy.badges(
+            before: estimate?.baselineBytes, after: comparisonOutput.map { UInt64($0.length) },
+            processing: comparisonPending)
+        let drawing = sectionControl?.selectedSegment == Section.draw
+        compareView.stripEnabled = !drawing && cropPrevious == nil
+        compareView.afterHint = drawing ? CompressionCompareCopy.copy.afterHint : nil
     }
 
     private func copyEditedImage() {
@@ -3267,6 +3345,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         lastSavedPath = nil
         estimate = nil; estimatePending = false; estimateGeneration += 1
         estimateWork?.cancel(); estimateWork = nil
+        comparisonWork?.cancel(); comparisonWork = nil; comparisonGeneration += 1
+        comparisonOutput = nil; comparisonPending = false; comparisonFailure = nil
         self.originalBytes = originalBytes > 0 ? originalBytes : nil
         outputFilename.stringValue = ""
         outputLocation.stringValue = outputDirectory; outputLocation.toolTip = outputDirectory
@@ -3341,6 +3421,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         saveAsNewSwitch.isHidden = bar?.formatRequiresCopy ?? true
         saveAsNewLabel.isHidden = saveAsNewSwitch.isHidden
         saveAsNewSwitch.state = bar?.savingCopy == false ? .off : .on
+        if let bar {
+            // Shipping `CustomSelect` descriptions for the current format.
+            for (index, mode) in bar.qualityModes.enumerated() {
+                outputQuality.item(at: index)?.toolTip = mode.description
+            }
+            for preset in bar.qualityPresets {
+                outputCompressionPreset.item(withTitle: preset.label)?.toolTip = preset.description
+            }
+            exportGroups["maximum"]?.caption.toolTip = bar.maximumHelp
+            outputMaximumSize.toolTip = bar.maximumHelp
+        }
         exportEstimateValue.stringValue = bar?.estimateLabel ?? "—"
         exportEstimateValue.textColor = tokens.color(estimatePending ? "text-subtle" : "text")
         exportEstimateDelta.stringValue = bar?.deltaLabel ?? ""
@@ -3366,6 +3457,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportStatus.toolTip = message.0
         exportStatus.textColor = tokens.color(message.1)
         layoutExportBar()
+        publishComparison()
     }
 
     /// Output option or pixel changes: refresh the summary and re-estimate.
@@ -3374,6 +3466,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportError = nil
         refreshExportBar()
         scheduleEstimate()
+        scheduleComparison()
     }
 
     /// A different file, folder or encoding is no longer the saved result.
@@ -3395,6 +3488,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportDisclosure.setAccessibilityExpanded(exportSettingsOpen)
         layoutEditor()
         changeOutputPreview()
+        scheduleComparison()
     }
 
     @objc private func saveAsNewChanged() {
@@ -3543,13 +3637,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         } else {
             qualityValue = 100
         }
-        var png: [String: Any] = [:]
-        if format == "png", quality == "compress", !outputPngPalette.stringValue.isEmpty {
-            guard let colors = outputInteger(outputPngPalette), (1...256).contains(colors) else {
-                return (nil, "PNG palette size must be a whole number from 1 through 256.")
-            }
-            png["max_colors"] = colors
-        }
+        // Shared encoding derives the PNG palette from the Compress preset.
+        let png: [String: Any] = [:]
         var options: [String: Any] = [
             "format": format, "quality": quality, "quality_value": qualityValue, "png": png,
         ]
@@ -3567,7 +3656,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         default: return (nil, nil)
         }
         if quality == "maximum" {
-            guard let budget = outputInteger(outputByteBudget), budget >= 10_000 else {
+            guard let budget = maximumUnit.bytes(outputMaximumSize.stringValue), budget >= 10_000 else {
                 return (nil, "Enter a maximum file size of at least 10 KB.")
             }
             options["max_size_bytes"] = budget
@@ -3575,12 +3664,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         return (options, nil)
     }
 
-    /// Drop the encoded preview; Est. size re-encodes on its own schedule.
+    /// Drop the comparison's After side; it and Est. size re-encode on their
+    /// own schedules once the change is accepted.
     private func invalidateOutput() {
-        encodedOutput = nil
-        outputPreviewMode?.selectedSegment = 0
+        comparisonOutput = nil
         preview.image = editedImage
         if let editedImage { viewportCanvasSize = editedImage.size; updateViewportGeometry() }
+        publishComparison()
     }
 
     private func updateOutputOptionControls() {
@@ -3588,10 +3678,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let ready = state.snapshot != nil && !state.busy
         let compress = outputQuality.indexOfSelectedItem == 1
         let maximum = outputQuality.indexOfSelectedItem == 2
-        let pngPalette = compress && outputFormat.indexOfSelectedItem == 0
         outputQualityValue.isEnabled = ready && compress
-        outputPngPalette.isEnabled = ready && pngPalette
-        outputByteBudget.isEnabled = ready && maximum
+        outputMaximumSize.isEnabled = ready && maximum
+        outputMaximumUnit.isEnabled = ready && maximum
+        showComparisonButton?.isEnabled = state.snapshot != nil
         outputCompressionPreset.isEnabled = ready && compress
         outputSizeMode?.isEnabled = ready
         let custom = outputSizeMode?.indexOfSelectedItem == 3
@@ -3630,8 +3720,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func synchronizeOutputCompressionPreset() {
         guard outputCompressionPreset.superview != nil else { return }
         let value = outputInteger(outputQualityValue)
-        let preset = (outputFormat.indexOfSelectedItem != 0 || outputPngPalette.stringValue.isEmpty)
-            ? Self.outputCompressionPresets.first(where: { $0.value == value }) : nil
+        let preset = Self.outputCompressionPresets.first(where: { $0.value == value })
         if let preset {
             if outputCompressionPreset.item(withTitle: "Custom") != nil {
                 outputCompressionPreset.removeItem(withTitle: "Custom")
@@ -4433,11 +4522,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publishZoomPreset()
         drawOverlay.needsDisplay = true; selectionOverlay.needsDisplay = true
         cropOverlay.needsDisplay = true
+        publishComparison()
         selectionOverlay.layoutExpandButton(); dropGuideView.needsDisplay = true
     }
 
     private func publishTextInputPresentation(_ presentation: EditorPresentation) {
-        outputPreviewMode?.selectedSegment = 0
         publish(presentation, resetCrop: false)
     }
 
@@ -4457,6 +4546,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineTextScroll.isHidden = false
         inlineTextDoneButton.isHidden = false; inlineTextCancelButton.isHidden = false
         updateInlineTextFrame()
+        publishComparison() // Inline text fades the comparison away.
         window.makeFirstResponder(inlineTextEditor)
         if selectAtEnd {
             inlineTextEditor.setSelectedRange(NSRange(location: inlineTextEditor.string.utf16.count, length: 0))
@@ -4464,6 +4554,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func hideInlineTextEditor() {
+        defer { publishComparison() }
         inlineTextScroll.isHidden = true
         inlineTextDoneButton.isHidden = true
         inlineTextCancelButton.isHidden = true
@@ -5187,9 +5278,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         reconcileLayerSelection(snapshot.layers)
         publishLayerCount(snapshot.layers.count)
         window.title = snapshot.unsavedChanges ? "Edit screenshot — Unsaved" : "Edit screenshot"
-        // New pixels or dimensions: refresh the summary and re-estimate the export.
+        // New pixels or dimensions: refresh the summary, re-estimate the export
+        // and re-encode the comparison's After side.
         refreshExportBar()
         scheduleEstimate()
+        scheduleComparison()
     }
 
     private func closeNow() {
@@ -5202,6 +5295,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         backgroundSwatches?.deactivate(); queuedBackground = nil
         state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
         estimateWork?.cancel(); estimateWork = nil; estimateGeneration += 1
+        comparisonWork?.cancel(); comparisonWork = nil; comparisonGeneration += 1
         cancelViewportPan()
         viewport = NativeEditorViewport(); viewportCanvasSize = .zero
         worker.close(); window.orderOut(nil); updateControls()
@@ -5241,8 +5335,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             && exportOptionsError == nil
         exportSaveButton?.isEnabled = ready && exportReady
         exportSaveButton?.title = saveInFlight ? "Saving…" : "Save"
-        previewOutputButton?.isEnabled = ready
-        outputPreviewMode?.isEnabled = ready && encodedOutput != nil
         fitButton?.isEnabled = ready
         publishZoomLimits(ready: ready)
         zoomPreset.isEnabled = ready

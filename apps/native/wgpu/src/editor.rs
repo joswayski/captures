@@ -12,6 +12,7 @@ use std::{
 };
 
 use captures_app::{
+    compression_compare as compare,
     editor::{
         ARROW_MIN_DRAW_LENGTH, AlignmentGuide, AnnotationStylePatch, ClosedShapeCreate,
         ClosedShapeKind, CropDrag, DEFAULT_ROTATION_SNAP_DEGREES, Document, DropShadowStyle,
@@ -24,7 +25,7 @@ use captures_app::{
     editor_chrome::colors,
     editor_export::{
         self as export, EstimateState, ExportBarView, ExportEstimate, ExportSource, ExportTarget,
-        SavePlan,
+        FileSizeUnit, SavePlan,
     },
     editor_image_background::BrushMode,
     editor_output::SavedExport,
@@ -54,6 +55,8 @@ mod drawing_preview;
 mod pickers;
 mod text_input;
 
+type CompareReply = (u64, Result<(RgbaImage, u64), String>);
+
 enum Job {
     Apply(Request),
     DrawingPreview {
@@ -67,7 +70,6 @@ enum Job {
         /// Document-space drop sample; `None` uses the default placement.
         point: Option<Point>,
     },
-    Preview(ExportOptions),
     Copy,
     Save {
         plan: SavePlan,
@@ -87,7 +89,6 @@ struct Presented {
     initial_text_size: f64,
     font_families: BTreeMap<String, String>,
     text_style_presets: Vec<TextStylePreset>,
-    output: Option<(RgbaImage, usize)>,
     saved: Option<(SavePlan, SavedExport)>,
     copied: bool,
     copied_layer: bool,
@@ -114,7 +115,6 @@ impl Presented {
             initial_text_size: snapshot.initial_text_size,
             font_families: snapshot.font_families.cloned().unwrap_or_default(),
             text_style_presets: snapshot.text_style_presets,
-            output: None,
             saved: None,
             copied: false,
             copied_layer: false,
@@ -238,22 +238,11 @@ const CROP_ASPECTS: [(&str, Option<f64>); 5] = [
     ("16:9", Some(16. / 9.)),
 ];
 
-const OUTPUT_PRESETS: [(&str, u8); 5] = [
-    ("Tiny", 55),
-    ("Smaller", 70),
-    ("Balanced", 85),
-    ("High", 92),
-    ("Highest", 98),
-];
-
 fn output_preset(options: &ExportOptions) -> Option<&'static str> {
     if options.format == ExportFormat::Png && options.png.max_colors.is_some() {
         return None;
     }
-    OUTPUT_PRESETS
-        .iter()
-        .find(|(_, quality)| *quality == options.quality_value)
-        .map(|(label, _)| *label)
+    export::quality_preset(options.quality_value).map(|preset| preset.label)
 }
 
 struct AnnotationFields {
@@ -434,8 +423,21 @@ struct View {
     export_options: ExportOptions,
     custom_export_size: [u32; 2],
     export_aspect_locked: bool,
-    output: Option<(egui::TextureHandle, usize)>,
-    show_output: bool,
+    /// The automatic before/after comparison's encoded After side and its
+    /// byte length, for the current pixels and export options.
+    output: Option<(egui::TextureHandle, u64)>,
+    compare_key: Option<(u64, ExportOptions)>,
+    compare_due: Option<Instant>,
+    compare_generation: u64,
+    compare_rx: Option<Receiver<CompareReply>>,
+    compare_pending: bool,
+    compare_error: Option<String>,
+    /// Hide was chosen; Show before / after or a new quality mode returns it.
+    compare_dismissed: bool,
+    compare_split: f64,
+    /// Maximum file size as typed, in `max_size_unit` (shipping's value + unit).
+    max_size_text: String,
+    max_size_unit: FileSizeUnit,
     artifact_id: String,
     default_directory: PathBuf,
     default_stem: String,
@@ -531,7 +533,16 @@ impl Default for View {
             custom_export_size: [1, 1],
             export_aspect_locked: true,
             output: None,
-            show_output: false,
+            compare_key: None,
+            compare_due: None,
+            compare_generation: 0,
+            compare_rx: None,
+            compare_pending: false,
+            compare_error: None,
+            compare_dismissed: false,
+            compare_split: compare::DEFAULT_SPLIT,
+            max_size_text: FileSizeUnit::Mb.value(export::DEFAULT_MAX_SIZE_BYTES),
+            max_size_unit: FileSizeUnit::Mb,
             artifact_id: String::new(),
             default_directory: PathBuf::new(),
             default_stem: String::new(),
@@ -722,20 +733,6 @@ impl View {
                     self.canvas = [f64::from(image.width()), f64::from(image.height())];
                     self.crop = [0., 0., self.canvas[0], self.canvas[1]];
                 }
-                if let Some((image, length)) = presented.output.take() {
-                    self.output = Some((
-                        ctx.load_texture(
-                            "encoded-screenshot",
-                            egui::ColorImage::from_rgba_unmultiplied(
-                                [image.width() as usize, image.height() as usize],
-                                image.as_raw(),
-                            ),
-                            egui::TextureOptions::LINEAR,
-                        ),
-                        length,
-                    ));
-                    self.show_output = true;
-                }
                 if let Some((plan, saved)) = presented.saved.take() {
                     self.output_notice = Some(export::saved_notice(&plan, &saved));
                     self.notice_until = Some(Instant::now() + EXPORT_CONFIRMATION);
@@ -881,9 +878,10 @@ impl View {
         }
     }
 
+    /// The After side no longer matches the pixels or options; the
+    /// comparison re-encodes on its own schedule while it is shown.
     fn invalidate_output(&mut self) {
         self.output = None;
-        self.show_output = false;
     }
 
     /// Build the export target once the session reports its saved original.
@@ -933,11 +931,6 @@ impl View {
             self.filename.clone_from(&target.stem);
         }
         self.export_target_changed();
-    }
-
-    fn preview(&mut self, tx: &Sender<Job>) {
-        self.invalidate_output();
-        self.submit_job(tx, Job::Preview(self.export_options));
     }
 
     fn save(&mut self, tx: &Sender<Job>) {
@@ -1055,6 +1048,133 @@ impl View {
             ));
             ctx.request_repaint_of(viewport);
         });
+    }
+
+    /// Shipping's automatic comparison: Compress or Maximum with Export
+    /// settings open, until Hide.
+    fn compare_visible(&self) -> bool {
+        self.presented.is_some()
+            && compare::screenshot_visible(
+                self.export_options.quality != ExportQuality::Preserve,
+                self.export_settings_open,
+                self.compare_dismissed,
+            )
+    }
+
+    /// A canvas gesture or inline text fades the comparison away so the live
+    /// canvas can be edited underneath (shipping `suppressed`).
+    fn compare_suppressed(&self) -> bool {
+        self.inline.is_some()
+            || self.layer_gesture.is_some()
+            || self.shape_drag.is_some()
+            || !self.freehand_points.is_empty()
+            || !self.brush_points.is_empty()
+            || self.crop_drag.is_some()
+    }
+
+    /// Encode the After side off the session worker once edits or options
+    /// settle (shipping's 280 ms refresh), exactly as Save would.
+    fn drive_compare(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.compare_rx {
+            match rx.try_recv() {
+                Ok((generation, result)) => {
+                    self.compare_rx = None;
+                    if generation == self.compare_generation {
+                        self.compare_pending = false;
+                        match result {
+                            Ok((image, bytes)) => {
+                                self.output = Some((
+                                    ctx.load_texture(
+                                        "encoded-screenshot",
+                                        egui::ColorImage::from_rgba_unmultiplied(
+                                            [image.width() as usize, image.height() as usize],
+                                            image.as_raw(),
+                                        ),
+                                        egui::TextureOptions::LINEAR,
+                                    ),
+                                    bytes,
+                                ));
+                                self.compare_error = None;
+                            }
+                            Err(error) => {
+                                self.output = None;
+                                self.compare_error = Some(error);
+                            }
+                        }
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.compare_rx = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if !self.compare_visible() {
+            return;
+        }
+        let Some(presented) = &self.presented else {
+            return;
+        };
+        let pixels = presented.pixels.clone();
+        let key = (self.pixels_revision, self.export_options);
+        let now = Instant::now();
+        if self.compare_key != Some(key) {
+            self.compare_key = Some(key);
+            self.compare_generation += 1;
+            self.compare_pending = true;
+            self.compare_error = None;
+            self.compare_due =
+                Some(now + Duration::from_millis(compare::SCREENSHOT_REFRESH_DELAY_MS));
+        }
+        let Some(due) = self.compare_due else {
+            return;
+        };
+        if now < due {
+            ctx.request_repaint_after(due - now);
+            return;
+        }
+        if self.compare_rx.is_some() {
+            return; // A superseded encode finishes first; its result is dropped.
+        }
+        self.compare_due = None;
+        let options = self.export_options;
+        let (width, height) = pixels.dimensions();
+        if let Err(error) = export::validate_options(options, width, height) {
+            self.compare_pending = false;
+            self.output = None;
+            self.compare_error = Some(error);
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.compare_rx = Some(rx);
+        let generation = self.compare_generation;
+        let ctx = ctx.clone();
+        let viewport = ctx.viewport_id();
+        thread::spawn(move || {
+            let _ = tx.send((generation, compare::encode_after(&pixels, options)));
+            ctx.request_repaint_of(viewport);
+        });
+    }
+
+    /// Before is the lossless flattened edit (the estimate's baseline while
+    /// compressing), After the encoded file.
+    fn compare_badges(&self) -> compare::Badges {
+        compare::badges(
+            self.estimate.baseline_bytes,
+            self.output.as_ref().map(|(_, bytes)| *bytes),
+            self.compare_pending,
+        )
+    }
+
+    /// The Maximum file size field in bytes; unparseable text is an invalid
+    /// cap that the export bar explains, never an unbounded export.
+    fn max_size_bytes(&self) -> u64 {
+        self.max_size_unit.bytes(&self.max_size_text).unwrap_or(0)
+    }
+
+    fn set_max_size_unit(&mut self, unit: FileSizeUnit) {
+        if let Some(bytes) = self.max_size_unit.bytes(&self.max_size_text) {
+            self.max_size_text = unit.value(bytes);
+        }
+        self.max_size_unit = unit;
     }
 
     fn choose_folder(&mut self, ctx: &egui::Context) {
@@ -1434,18 +1554,6 @@ impl Editor {
                             presented.created_layer = Some(id);
                             Ok(presented)
                         }),
-                    Job::Preview(options) => session
-                        .as_ref()
-                        .ok_or_else(|| "Editor is unavailable.".to_owned())
-                        .and_then(|session| {
-                            let bytes = session.encode_export(options)?;
-                            let image = image::load_from_memory(&bytes)
-                                .map_err(|error| error.to_string())?
-                                .into_rgba8();
-                            let mut presented = Presented::from_session(session);
-                            presented.output = Some((image, bytes.len()));
-                            Ok(presented)
-                        }),
                     Job::Copy => session
                         .as_ref()
                         .ok_or_else(|| "Editor is unavailable.".to_owned())
@@ -1694,6 +1802,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         view.cancel_layer_gesture();
     }
     view.drive_estimate(ui.ctx());
+    view.drive_compare(ui.ctx());
     show_export_bar(ui, tokens, view, tx);
     egui::Panel::right("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
         crate::primitives::scroll_area(ui, tokens, egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]), |ui| {
@@ -1866,14 +1975,11 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     });
     chrome::show_tool_rail(ui, tokens, view);
     egui::CentralPanel::default().show(ui, |ui| {
-        let texture = if view.show_output && view.export_settings_open {
-            view.output.as_ref().map(|(texture, _)| texture)
-        } else {
-            view.drawing_preview
-                .as_ref()
-                .and_then(|preview| preview.texture.as_ref())
-                .or(view.texture.as_ref())
-        };
+        let texture = view
+            .drawing_preview
+            .as_ref()
+            .and_then(|preview| preview.texture.as_ref())
+            .or(view.texture.as_ref());
         if let Some(texture) = texture {
             let texture = texture.clone();
             let available = ui.available_rect_before_wrap();
@@ -1897,6 +2003,17 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
                     egui::Color32::WHITE,
                 );
+            let clip = available.intersect(ui.clip_rect());
+            let comparing = view.compare_visible() && !view.compare_suppressed();
+            if comparing {
+                crate::compare_overlay::paint_after(
+                    ui,
+                    preview,
+                    clip,
+                    view.output.as_ref().map(|(texture, _)| texture),
+                    view.compare_split,
+                );
+            }
             if view.crop_previous.is_some() && !view.pending && view.inline.is_none() {
                 show_crop(ui, tokens, view, available, preview, intercepted);
             }
@@ -1926,6 +2043,32 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             }
             canvas::paint_drop_guide(ui, tokens, view, available, preview);
             text_input::show(ui, tokens, view, available, preview);
+            if comparing && view.compare_visible() {
+                let badges = view.compare_badges();
+                let drawing = view.section == Section::Draw;
+                let error = view.compare_error.clone();
+                let mut split = view.compare_split;
+                let shown = crate::compare_overlay::show_chrome(
+                    ui,
+                    tokens,
+                    crate::compare_overlay::Overlay {
+                        id: egui::Id::unique("screenshot-compression-comparison"),
+                        frame: preview,
+                        clip,
+                        after: view.output.as_ref().map(|(texture, _)| texture),
+                        badges,
+                        processing: view.compare_pending,
+                        error: error.as_deref(),
+                        range_enabled: !drawing && view.crop_previous.is_none(),
+                        after_hint: drawing.then_some(compare::AFTER_HINT),
+                    },
+                    &mut split,
+                );
+                view.compare_split = split;
+                if shown.dismissed {
+                    view.compare_dismissed = true;
+                }
+            }
             chrome::recenter(ui, tokens, view, available, preview);
         } else if view.pending {
             canvas::receive_drops(ui.ctx(), view, None);
@@ -3744,7 +3887,7 @@ fn show_export_bar(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sen
                                 .auto_shrink([false, false]),
                             |ui| {
                                 ui.add_enabled_ui(ready, |ui| {
-                                    show_export_settings(ui, tokens, view, tx)
+                                    show_export_settings(ui, tokens, view)
                                 });
                             },
                         );
@@ -4163,7 +4306,7 @@ fn export_disclosure(
 
 /// Shipping labelled pill switch: the whole label toggles it, accent when on,
 /// focusable and announced as a checkbox.
-fn export_switch(
+pub(crate) fn export_switch(
     ui: &mut egui::Ui,
     tokens: &Tokens,
     value: &mut bool,
@@ -4247,16 +4390,16 @@ enum ExportGroup {
     Custom,
     Quality,
     Preset,
-    Palette,
     Maximum,
     Estimate,
-    Canvas,
+    /// Shipping `.screenshot-show-comparison`, while a hidden comparison applies.
+    Comparison,
 }
 
 /// Export settings behind the disclosure: output size, save quality and the
 /// live size estimate. The format lives in the filename suffix menu. Groups
 /// wrap into rows explicitly; egui cannot measure nested groups before placing.
-fn show_export_settings(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
+fn show_export_settings(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
     let previous = view.export_options;
     let mut groups = vec![(ExportGroup::Size, 200.)];
     if matches!(view.export_options.size, ExportSize::Custom { .. }) {
@@ -4264,17 +4407,14 @@ fn show_export_settings(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx:
     }
     groups.push((ExportGroup::Quality, 150.));
     match view.export_options.quality {
-        ExportQuality::Compress => {
-            groups.push((ExportGroup::Preset, 160.));
-            if view.export_options.format == ExportFormat::Png {
-                groups.push((ExportGroup::Palette, 150.));
-            }
-        }
-        ExportQuality::Maximum => groups.push((ExportGroup::Maximum, 170.)),
+        ExportQuality::Compress => groups.push((ExportGroup::Preset, 160.)),
+        ExportQuality::Maximum => groups.push((ExportGroup::Maximum, 190.)),
         ExportQuality::Preserve => {}
     }
     groups.push((ExportGroup::Estimate, 150.));
-    groups.push((ExportGroup::Canvas, 160.));
+    if view.export_options.quality != ExportQuality::Preserve && view.compare_dismissed {
+        groups.push((ExportGroup::Comparison, 160.));
+    }
     let spacing = tokens.number("s-5");
     let available = ui.available_width();
     let mut rows: Vec<Vec<(ExportGroup, f32)>> = vec![Vec::new()];
@@ -4303,7 +4443,7 @@ fn show_export_settings(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx:
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.set_min_size(egui::vec2(width, height));
-                        show_export_group(ui, tokens, view, tx, group);
+                        show_export_group(ui, tokens, view, group);
                     },
                 );
             }
@@ -4316,16 +4456,19 @@ fn show_export_settings(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx:
         {
             view.export_target_changed();
         }
+        if view.export_options.quality != previous.quality {
+            // Shipping `applyQualityMode`: a new mode shows the comparison
+            // again; Preserve also recentres its split.
+            view.compare_dismissed = false;
+            if view.export_options.quality == ExportQuality::Preserve {
+                view.compare_split = compare::DEFAULT_SPLIT;
+                view.compare_error = None;
+            }
+        }
     }
 }
 
-fn show_export_group(
-    ui: &mut egui::Ui,
-    tokens: &Tokens,
-    view: &mut View,
-    tx: &Sender<Job>,
-    group: ExportGroup,
-) {
+fn show_export_group(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, group: ExportGroup) {
     let source_size = view
         .presented
         .as_ref()
@@ -4425,63 +4568,54 @@ fn show_export_group(
         }
         ExportGroup::Quality => {
             caption(ui, "Save quality");
-            let options = &mut view.export_options;
-            egui::ComboBox::from_id_salt("output-quality-mode")
-                .selected_text(match options.quality {
-                    ExportQuality::Preserve => "Preserve quality",
-                    ExportQuality::Compress => "Compress",
-                    ExportQuality::Maximum => "Maximum file size",
+            let format = view.export_options.format;
+            let choices: Vec<_> = export::SAVE_QUALITY_MODES
+                .iter()
+                .map(|mode| {
+                    crate::primitives::SelectOption::new(*mode, export::quality_mode_label(*mode))
+                        .description(export::quality_mode_description(*mode, format))
                 })
-                .width(140.)
-                .show_ui(ui, |ui| {
-                    for (value, label, description) in [
-                        (
-                            ExportQuality::Preserve,
-                            "Preserve quality",
-                            "Original quality with no extra compression unless an edit requires it.",
-                        ),
-                        (
-                            ExportQuality::Compress,
-                            "Compress",
-                            "Smaller file with Tiny through Highest quality presets.",
-                        ),
-                        (
-                            ExportQuality::Maximum,
-                            "Maximum file size",
-                            "Set a hard size limit for the saved file.",
-                        ),
-                    ] {
-                        if ui
-                            .selectable_value(&mut options.quality, value, label)
-                            .on_hover_text(description)
-                            .changed()
-                        {
-                            options.max_size_bytes =
-                                (value == ExportQuality::Maximum).then_some(1_000_000);
-                        }
-                    }
-                });
+                .collect();
+            let current = view.export_options.quality;
+            if let Some(mode) =
+                crate::primitives::Select::new("output-quality-mode", "Save quality", 150.)
+                    .show(ui, tokens, &choices, &current)
+                    .chosen
+                && mode != current
+            {
+                let options = &mut view.export_options;
+                options.quality = mode;
+                options.max_size_bytes = (mode == ExportQuality::Maximum)
+                    .then(|| view.max_size_unit.bytes(&view.max_size_text).unwrap_or(0));
+            }
         }
         ExportGroup::Preset => {
             caption(ui, "Quality");
             ui.horizontal(|ui| {
                 let options = &mut view.export_options;
+                let format = options.format;
                 let selected = output_preset(options);
-                egui::ComboBox::from_id_salt("output-quality-preset")
-                    .selected_text(selected.unwrap_or("Custom"))
-                    .width(96.)
-                    .show_ui(ui, |ui| {
-                        for (label, quality) in OUTPUT_PRESETS {
-                            if ui
-                                .selectable_label(selected == Some(label), label)
-                                .clicked()
-                            {
-                                options.quality_value = quality;
-                                // Shared encoding owns PNG palette selection.
-                                options.png.max_colors = None;
-                            }
-                        }
-                    });
+                let choices: Vec<_> = export::QUALITY_PRESETS
+                    .iter()
+                    .map(|preset| {
+                        crate::primitives::SelectOption::new(Some(preset.quality), preset.label)
+                            .description(preset.description(format))
+                    })
+                    .collect();
+                let current = selected.map(|_| options.quality_value);
+                if let Some(Some(quality)) = crate::primitives::Select::new(
+                    "output-quality-preset",
+                    "Compression quality",
+                    104.,
+                )
+                .trigger_text(selected.unwrap_or("Custom"))
+                .show(ui, tokens, &choices, &current)
+                .chosen
+                {
+                    options.quality_value = quality;
+                    // Shared encoding owns PNG palette selection.
+                    options.png.max_colors = None;
+                }
                 let minimum = if options.format == ExportFormat::Jpeg {
                     40
                 } else {
@@ -4492,32 +4626,42 @@ fn show_export_group(
                     .on_hover_text("Compression quality value");
             });
         }
-        ExportGroup::Palette => {
-            caption(ui, "PNG colors");
-            ui.horizontal(|ui| {
-                let options = &mut view.export_options;
-                let mut palette = options.png.max_colors.is_some();
-                if ui.checkbox(&mut palette, "Limit").changed() {
-                    options.png.max_colors = palette.then_some(128);
-                }
-                if let Some(colors) = &mut options.png.max_colors {
-                    ui.add(
-                        egui::DragValue::new(colors)
-                            .range(2..=256)
-                            .suffix(" colors"),
-                    );
-                }
-            });
-        }
         ExportGroup::Maximum => {
             caption(ui, "Maximum file size");
-            if let Some(bytes) = &mut view.export_options.max_size_bytes {
-                ui.add(
-                    egui::DragValue::new(bytes)
-                        .range(0..=u64::MAX)
-                        .suffix(" bytes"),
+            let help = export::maximum_size_help(view.export_options.format);
+            ui.horizontal(|ui| {
+                let value = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut view.max_size_text)
+                            .desired_width(88.)
+                            .font(egui::TextStyle::Monospace),
+                    )
+                    .on_hover_text(help.as_str());
+                value.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Maximum file size")
+                });
+                let mut unit = view.max_size_unit;
+                let units: Vec<_> = FileSizeUnit::ALL
+                    .iter()
+                    .map(|unit| crate::primitives::SelectOption::new(*unit, unit.label()))
+                    .collect();
+                if let Some(chosen) = crate::primitives::Select::new(
+                    "output-maximum-unit",
+                    "Screenshot file size unit",
+                    72.,
                 )
-                .on_hover_text("Hard size limit for the saved file (at least 10 KB)");
+                .show(ui, tokens, &units, &unit)
+                .chosen
+                {
+                    unit = chosen;
+                }
+                if unit != view.max_size_unit {
+                    view.set_max_size_unit(unit);
+                }
+            });
+            // The group was laid out before a same-frame mode change.
+            if view.export_options.quality == ExportQuality::Maximum {
+                view.export_options.max_size_bytes = Some(view.max_size_bytes());
             }
         }
         ExportGroup::Estimate => {
@@ -4548,29 +4692,17 @@ fn show_export_group(
                 }
             });
         }
-        ExportGroup::Canvas => {
-            caption(ui, "Canvas");
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(!view.show_output, "Edited")
-                    .on_hover_text("Show the edited canvas")
-                    .clicked()
-                {
-                    view.show_output = false;
-                }
-                let valid = view.export_view().is_some_and(|bar| bar.error.is_none());
-                if ui
-                    .add_enabled(valid, egui::Button::selectable(view.show_output, "Encoded"))
-                    .on_hover_text("Preview the encoded output without saving a file or draft")
-                    .clicked()
-                {
-                    if view.output.is_some() {
-                        view.show_output = true;
-                    } else {
-                        view.preview(tx);
-                    }
-                }
-            });
+        ExportGroup::Comparison => {
+            caption(ui, compare::SHOW_CAPTION);
+            if ui
+                .add(
+                    egui::Button::new(compare::SHOW)
+                        .min_size(egui::vec2(0., tokens.number("h-md"))),
+                )
+                .clicked()
+            {
+                view.compare_dismissed = false;
+            }
         }
     }
 }
@@ -5365,7 +5497,6 @@ mod tests {
         let pixels = initial.pixels.clone();
         view.receive(&ctx, Ok(initial));
         view.output = Some((view.texture.as_ref().unwrap().clone(), 101));
-        view.show_output = true;
         let (tx, rx) = mpsc::channel();
         let frame = |view: &mut View, events| {
             let mut output = ctx.run_ui(
@@ -5421,7 +5552,7 @@ mod tests {
         click(&mut view, row, egui::PointerButton::Secondary);
         assert!(egui::Popup::is_any_open(&ctx));
         assert_eq!(view.selected_layer.as_deref(), Some("other"));
-        assert!(view.output.is_some() && view.show_output && rx.try_recv().is_err());
+        assert!(view.output.is_some() && rx.try_recv().is_err());
         frame(
             &mut view,
             vec![egui::Event::Key {
@@ -6223,7 +6354,7 @@ mod tests {
         view.export_options.quality = ExportQuality::Compress;
         let original = view.presented.as_ref().unwrap().document.clone();
         let tokens = crate::tokens::load().remove("light-mustard").unwrap();
-        let (tx, rx) = mpsc::channel();
+        let (_tx, rx) = mpsc::channel::<Job>();
         let frame = |view: &mut View, events| {
             let mut output = ctx.run_ui(
                 egui::RawInput {
@@ -6234,7 +6365,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| show_export_settings(ui, &tokens, view, &tx),
+                |ui| show_export_settings(ui, &tokens, view),
             );
             output.textures_delta.clear();
             output
@@ -6271,14 +6402,13 @@ mod tests {
         for (label, expected) in [("Tiny", 55), ("Highest", 98)] {
             view.export_options.png.max_colors = Some(17);
             view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
-            view.show_output = true;
             let output = frame(&mut view, vec![]);
             let popup = click(&mut view, position(&output, "Custom"));
             click(&mut view, position(&popup, label));
             assert_eq!(view.export_options.quality_value, expected);
             assert_eq!(view.export_options.png.max_colors, None);
             assert_eq!(output_preset(&view.export_options), Some(label));
-            assert!(view.output.is_none() && !view.show_output);
+            assert!(view.output.is_none());
             assert_eq!(view.presented.as_ref().unwrap().document, original);
             assert!(
                 !view.pending && rx.try_recv().is_err(),
@@ -6288,13 +6418,147 @@ mod tests {
     }
 
     #[test]
+    fn comparison_hide_show_and_quality_modes_follow_the_shipping_export_bar() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(false)));
+        view.export_settings_open = true;
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900., 400.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| show_export_settings(ui, &tokens, view),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let find = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .rev()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+        };
+        let click = |view: &mut View, pos| {
+            frame(view, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    view,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        pressed,
+                        button: egui::PointerButton::Primary,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            frame(view, vec![])
+        };
+        let output = frame(&mut view, vec![]);
+        assert!(!view.compare_visible() && find(&output, compare::SHOW).is_none());
+        // Save quality lists the per-format shipping descriptions.
+        let popup = click(&mut view, find(&output, "Preserve quality").unwrap());
+        assert!(
+            find(
+                &popup,
+                "Smaller PNG with Tiny through Highest quality presets."
+            )
+            .is_some()
+        );
+        let output = click(&mut view, find(&popup, "Compress").unwrap());
+        assert_eq!(view.export_options.quality, ExportQuality::Compress);
+        assert!(view.compare_visible());
+        let popup = click(&mut view, find(&output, "Custom").unwrap());
+        assert!(find(&popup, "Smallest PNG with the most visible dithering.").is_some());
+        run_escape(&ctx, &mut view, &frame);
+
+        view.compare_dismissed = true;
+        view.compare_split = 0.3;
+        assert!(!view.compare_visible());
+        let output = frame(&mut view, vec![]);
+        assert!(find(&output, compare::SHOW_CAPTION).is_some());
+        click(&mut view, find(&output, compare::SHOW).unwrap());
+        assert!(view.compare_visible());
+
+        // A new quality mode shows it again; Preserve also recentres it.
+        view.compare_dismissed = true;
+        let output = frame(&mut view, vec![]);
+        let popup = click(&mut view, find(&output, "Compress").unwrap());
+        let output = click(&mut view, find(&popup, "Maximum file size").unwrap());
+        assert!(!view.compare_dismissed && view.compare_visible());
+        assert_eq!(view.export_options.max_size_bytes, Some(10_000_000));
+        assert!(find(&output, "MB").is_some() && find(&output, "10").is_some());
+        let popup = click(&mut view, find(&output, "MB").unwrap());
+        click(&mut view, find(&popup, "KB").unwrap());
+        assert_eq!(
+            (view.max_size_text.as_str(), view.max_size_unit),
+            ("10000", FileSizeUnit::Kb)
+        );
+        assert_eq!(view.export_options.max_size_bytes, Some(10_000_000));
+        view.max_size_text = "9.5".into();
+        frame(&mut view, vec![]);
+        assert_eq!(view.export_options.max_size_bytes, Some(9_500));
+        assert!(view.export_view().unwrap().error.unwrap().contains("10 KB"));
+        view.max_size_text = "ten".into();
+        frame(&mut view, vec![]);
+        assert_eq!(view.export_options.max_size_bytes, Some(0));
+        let output = frame(&mut view, vec![]);
+        // The Save quality trigger, not the Maximum file size caption after it.
+        let trigger = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "Maximum file size" => {
+                Some(text.pos + text.galley.rect.center().to_vec2())
+            }
+            _ => None,
+        });
+        let popup = click(&mut view, trigger.unwrap());
+        click(&mut view, find(&popup, "Preserve quality").unwrap());
+        assert_eq!(view.export_options.max_size_bytes, None);
+        assert_eq!(view.compare_split, compare::DEFAULT_SPLIT);
+        let output = frame(&mut view, vec![]);
+        for removed in ["PNG colors", "Canvas", "Encoded", "Edited"] {
+            assert!(find(&output, removed).is_none(), "{removed}");
+        }
+    }
+
+    fn run_escape(
+        ctx: &egui::Context,
+        view: &mut View,
+        frame: &dyn Fn(&mut View, Vec<egui::Event>) -> egui::FullOutput,
+    ) {
+        let _ = ctx;
+        frame(
+            view,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        frame(view, vec![]);
+    }
+
+    #[test]
     fn output_size_controls_use_document_dimensions_without_encoding_or_editing() {
         let ctx = egui::Context::default();
         let mut view = View::default();
         view.receive(&ctx, Ok(presented(false)));
         let document = view.presented.as_ref().unwrap().document.clone();
         let tokens = crate::tokens::load().remove("light-mustard").unwrap();
-        let (tx, rx) = mpsc::channel();
+        let (_tx, rx) = mpsc::channel::<Job>();
         let frame = |view: &mut View, events| {
             let mut output = ctx.run_ui(
                 egui::RawInput {
@@ -6305,7 +6569,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| show_export_settings(ui, &tokens, view, &tx),
+                |ui| show_export_settings(ui, &tokens, view),
             );
             output.textures_delta.clear();
             output
@@ -6339,7 +6603,6 @@ mod tests {
         };
 
         view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
-        view.show_output = true;
         let output = frame(&mut view, vec![]);
         let popup = click(&mut view, position(&output, "Original"));
         click(&mut view, position(&popup, "75%"));
@@ -6348,7 +6611,7 @@ mod tests {
             ExportSize::Percent { percent: 75 }
         );
         assert_eq!(view.export_options.size.dimensions(7, 3), Ok((5, 2)));
-        assert!(view.output.is_none() && !view.show_output);
+        assert!(view.output.is_none());
 
         let output = frame(&mut view, vec![]);
         let popup = click(&mut view, position(&output, "75%"));
@@ -6446,7 +6709,6 @@ mod tests {
         view.receive(&ctx, Ok(presented(false)));
         let document = view.presented.as_ref().unwrap().document.clone();
         view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
-        view.show_output = true;
         view.viewport_area = Some(egui::Rect::from_min_size(
             egui::pos2(31., 47.),
             egui::vec2(400., 200.),
@@ -6457,7 +6719,7 @@ mod tests {
         set_viewport_zoom(&mut view, zoom_from_slider(0.75).unwrap(), None);
         assert_eq!(displayed_zoom(&view), Some(224.9));
         assert!(view.shape_drag.is_none());
-        assert!(view.output.is_some() && view.show_output && !view.pending);
+        assert!(view.output.is_some() && !view.pending);
         assert!(Arc::ptr_eq(
             &document,
             &view.presented.as_ref().unwrap().document
@@ -6473,7 +6735,6 @@ mod tests {
         view.receive(&ctx, Ok(presented(false)));
         view.section = Section::Draw;
         view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
-        view.show_output = true;
         view.last_solid_background = "#123456".into();
         let original_id = view.selected_layer.clone().unwrap();
         let (tx, rx) = mpsc::channel();
@@ -6504,7 +6765,7 @@ mod tests {
         assert!(
             matches!(rx.try_recv(), Ok(Job::Apply(Request::CopyLayer { id })) if id == original_id)
         );
-        assert!(rx.try_recv().is_err() && view.output.is_some() && view.show_output);
+        assert!(rx.try_recv().is_err() && view.output.is_some());
         let mut copied = presented(false);
         copied.pixels = view.presented.as_ref().unwrap().pixels.clone();
         copied.copied_layer = true;
@@ -6512,7 +6773,7 @@ mod tests {
         view.receive(&ctx, Ok(copied));
         assert_eq!(view.section, Section::Draw);
         assert_eq!(view.selected_layer.as_ref(), Some(&original_id));
-        assert!(view.output.is_some() && view.show_output);
+        assert!(view.output.is_some());
         assert_eq!(
             view.last_solid_background, "#123456",
             "copy preserves remembered fields"
@@ -6563,7 +6824,7 @@ mod tests {
         view.receive(&ctx, Ok(pasted));
         assert_eq!(view.section, Section::Layers);
         assert_eq!(view.selected_layer.as_ref(), Some(&new_id));
-        assert!(view.output.is_none() && !view.show_output);
+        assert!(view.output.is_none());
         let mut output = ctx.run_ui(Default::default(), |ui| {
             ui.text_edit_singleline(&mut "field".to_owned())
                 .request_focus();
@@ -7181,7 +7442,6 @@ mod tests {
             initial_text_size: 24.,
             font_families: captures_app::editor_fonts::bundled().families,
             text_style_presets: captures_app::editor_text::TEXT_STYLE_PRESETS.into(),
-            output: None,
             saved: None,
             copied: false,
             copied_layer: false,
@@ -7292,12 +7552,11 @@ mod tests {
         view.text.as_mut().unwrap().staged.text = "applied".into();
         view.text_apply_pending = true;
         view.output = Some((view.texture.as_ref().unwrap().clone(), 9));
-        view.show_output = true;
         view.receive(&ctx, Ok(presented_text("fresh", "applied")));
         let fields = view.text.as_ref().unwrap();
         assert_eq!(fields.staged, fields.accepted);
         assert_eq!(fields.accepted.text, "applied");
-        assert!(view.output.is_none() && !view.show_output);
+        assert!(view.output.is_none());
     }
 
     #[test]
@@ -8677,7 +8936,6 @@ mod tests {
             egui::TextureOptions::default(),
         );
         view.output = Some((texture, 4));
-        view.show_output = true;
         let (tx, rx) = mpsc::channel::<Job>();
 
         view.new_annotation_style = ElementStyle {
@@ -8698,7 +8956,7 @@ mod tests {
         };
         view.new_annotation_opacity = 37.;
         assert!(rx.try_recv().is_err());
-        assert!(view.show_output && view.output.is_some() && !view.unsaved());
+        assert!(view.output.is_some() && !view.unsaved());
         assert!(Arc::ptr_eq(
             &pixels,
             &view.presented.as_ref().unwrap().pixels
@@ -9319,15 +9577,13 @@ mod tests {
             },
         ] {
             let thin_arrow = matches!(&request, Request::CreateOpenShape { create } if create.shape == OpenShapeKind::Arrow);
-            editor.view.lock().unwrap().preview(&editor.tx);
-            receive(&editor, &ctx);
-            assert!(editor.view.lock().unwrap().show_output);
+            fake_output(&editor);
             editor.view.lock().unwrap().submit(&editor.tx, request);
             receive(&editor, &ctx);
             {
                 let view = editor.view.lock().unwrap();
                 assert!(view.error.is_none() && view.unsaved());
-                assert!(!view.show_output && view.output.is_none());
+                assert!(view.output.is_none());
                 let frame = view.presented.as_ref().unwrap();
                 assert_eq!(frame.document.elements.len(), 2);
                 let created = frame.document.elements.last().unwrap();
@@ -9360,9 +9616,7 @@ mod tests {
                 1
             );
         }
-        editor.view.lock().unwrap().preview(&editor.tx);
-        receive(&editor, &ctx);
-        assert!(editor.view.lock().unwrap().show_output);
+        fake_output(&editor);
         editor.view.lock().unwrap().submit(
             &editor.tx,
             Request::CreateClosedShape {
@@ -9382,7 +9636,7 @@ mod tests {
         let (layer, pixels) = {
             let view = editor.view.lock().unwrap();
             assert!(view.error.is_none() && view.unsaved());
-            assert!(!view.show_output && view.output.is_none());
+            assert!(view.output.is_none());
             let frame = view.presented.as_ref().unwrap();
             assert_eq!(frame.document.elements.len(), 2);
             let layer = frame.document.elements.last().unwrap().base().id.clone();
@@ -10437,6 +10691,33 @@ mod tests {
         (data, artifact.entry.id)
     }
 
+    /// Stand in for an encoded comparison without running an encode.
+    fn fake_output(editor: &Editor) {
+        let mut view = editor.view.lock().unwrap();
+        let texture = view.texture.clone().unwrap();
+        view.output = Some((texture, 1));
+    }
+
+    /// Drive the automatic comparison (skipping its refresh delay) until its
+    /// off-worker encode settles.
+    fn settle_compare(editor: &Editor, ctx: &egui::Context) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            {
+                let mut view = editor.view.lock().unwrap();
+                if view.compare_due.is_some() {
+                    view.compare_due = Some(Instant::now());
+                }
+                view.drive_compare(ctx);
+                if !view.compare_pending && view.compare_rx.is_none() {
+                    return;
+                }
+            }
+            assert!(Instant::now() < deadline, "comparison encode timed out");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn receive(editor: &Editor, ctx: &egui::Context) {
         let reply = editor
             .rx
@@ -10457,7 +10738,7 @@ mod tests {
     }
 
     #[test]
-    fn output_worker_decodes_formats_and_preserves_dirty_state_on_failure_and_retry() {
+    fn comparison_encodes_each_format_off_the_worker_and_reports_failures_in_the_frame() {
         let (data, id) = fixture();
         let ctx = egui::Context::default();
         let editor = Editor::open(
@@ -10480,48 +10761,60 @@ mod tests {
             .unwrap()
             .pixels
             .clone();
+        {
+            // Preserve and closed settings never encode a comparison.
+            let mut view = editor.view.lock().unwrap();
+            view.export_settings_open = true;
+            assert!(!view.compare_visible());
+            view.export_options.quality = ExportQuality::Compress;
+            view.export_settings_open = false;
+            assert!(!view.compare_visible());
+            view.export_settings_open = true;
+            assert!(view.compare_visible());
+        }
         for format in [ExportFormat::Png, ExportFormat::Jpeg, ExportFormat::Webp] {
             {
                 let mut view = editor.view.lock().unwrap();
                 view.export_options.format = format;
-                view.export_options.quality = if format == ExportFormat::Jpeg {
-                    ExportQuality::Compress
-                } else {
-                    ExportQuality::Preserve
-                };
-                view.preview(&editor.tx);
-                assert!(view.pending && view.output.is_none() && !view.show_output);
+                view.export_options.quality_value = 98;
+                view.invalidate_output();
             }
-            let result = editor
-                .rx
-                .recv_timeout(Duration::from_secs(10))
-                .unwrap()
-                .unwrap();
-            let (image, length) = result.output.as_ref().unwrap();
-            assert_eq!(image.dimensions(), (4, 2));
-            assert!(*length > 0 && result.unsaved && result.can_undo && !result.has_draft);
-            if format != ExportFormat::Jpeg {
-                assert_eq!(image.get_pixel(0, 0).0, [62, 71, 9, 255]);
-                assert_eq!(image.get_pixel(3, 1).0, [155, 142, 9, 255]);
-            }
-            assert!(Arc::ptr_eq(&pixels, &result.pixels));
-            editor.view.lock().unwrap().receive(&ctx, Ok(result));
-            assert!(editor.view.lock().unwrap().show_output);
-        }
-        {
-            let mut view = editor.view.lock().unwrap();
-            view.export_options.max_size_bytes = Some(0);
-            view.preview(&editor.tx);
-        }
-        receive(&editor, &ctx);
-        {
-            let mut view = editor.view.lock().unwrap();
-            assert!(view.error.is_some() && view.output.is_none() && !view.show_output);
+            settle_compare(&editor, &ctx);
+            let view = editor.view.lock().unwrap();
+            let (texture, length) = view.output.as_ref().unwrap();
+            assert_eq!(texture.size(), [4, 2]);
+            assert!(*length > 0 && view.compare_error.is_none());
+            let badges = view.compare_badges();
+            assert!(badges.after.starts_with("After · "), "{badges:?}");
             assert!(view.unsaved() && !view.pending && !view.closed);
-            view.export_options.max_size_bytes = None;
-            view.preview(&editor.tx);
+            assert!(Arc::ptr_eq(
+                &pixels,
+                &view.presented.as_ref().unwrap().pixels
+            ));
+            assert!(
+                editor.rx.try_recv().is_err(),
+                "the session worker never encodes it"
+            );
         }
-        receive(&editor, &ctx);
+        {
+            let mut view = editor.view.lock().unwrap();
+            view.export_options.quality = ExportQuality::Maximum;
+            view.export_options.max_size_bytes = Some(0);
+            view.invalidate_output();
+        }
+        settle_compare(&editor, &ctx);
+        {
+            let mut view = editor.view.lock().unwrap();
+            assert!(
+                view.compare_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("10 KB"))
+            );
+            assert!(view.output.is_none() && view.error.is_none());
+            assert!(view.unsaved() && !view.pending && !view.closed);
+            view.export_options.max_size_bytes = Some(export::DEFAULT_MAX_SIZE_BYTES);
+        }
+        settle_compare(&editor, &ctx);
         assert!(editor.view.lock().unwrap().output.is_some());
         editor
             .view
@@ -10530,7 +10823,7 @@ mod tests {
             .submit(&editor.tx, Request::Undo);
         receive(&editor, &ctx);
         let view = editor.view.lock().unwrap();
-        assert!(view.output.is_none() && !view.show_output);
+        assert!(view.output.is_none());
         assert!(view.presented.as_ref().unwrap().can_redo);
         assert!(!data.path().join("editor-drafts").exists());
     }
@@ -10565,17 +10858,18 @@ mod tests {
                 width: 3,
                 height: 1,
             };
-            view.preview(&editor.tx);
+            view.export_options.quality = ExportQuality::Compress;
+            view.export_options.quality_value = 98;
+            view.export_settings_open = true;
         }
-        let preview = editor
-            .rx
-            .recv_timeout(Duration::from_secs(10))
-            .unwrap()
-            .unwrap();
-        assert_eq!(preview.output.as_ref().unwrap().0.dimensions(), (3, 1));
-        assert_eq!(preview.pixels.dimensions(), (4, 2));
-        assert!(Arc::ptr_eq(&session_pixels, &preview.pixels));
-        editor.view.lock().unwrap().receive(&ctx, Ok(preview));
+        settle_compare(&editor, &ctx);
+        {
+            let view = editor.view.lock().unwrap();
+            assert_eq!(view.output.as_ref().unwrap().0.size(), [3, 1]);
+            let pixels = &view.presented.as_ref().unwrap().pixels;
+            assert_eq!(pixels.dimensions(), (4, 2));
+            assert!(Arc::ptr_eq(&session_pixels, pixels));
+        }
 
         let destination = data.path().join("exports").join("asymmetric.png");
         {
@@ -10701,8 +10995,7 @@ mod tests {
             .unwrap()
             .submit(&editor.tx, Request::SaveDraft { updated_at_ms: 44 });
         receive(&editor, &ctx);
-        editor.view.lock().unwrap().preview(&editor.tx);
-        receive(&editor, &ctx);
+        fake_output(&editor);
         let draft_path = data
             .path()
             .join("editor-drafts")

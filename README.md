@@ -269,7 +269,7 @@ discarded; failed finalization retains recovery data. Linux cannot exclude the
 controls from captured pixels, so Hide is the native workaround on X11. Shared
 native recovery can identify, assemble, or explicitly discard interrupted takes
 in isolated development History. Both native workbenches list interrupted recordings
-separately in History, with cancellable recovery and confirmed permanent discard.
+separately in History, with cancellable recovery and an inline **Discard permanently?** confirmation.
 Unavailable bundles remain read-only for manual inspection; failures allow retry,
 and cancellation cannot undo a recording already published to History. This is
 interrupted capture recovery, not persistent recording-editor drafts or an
@@ -295,14 +295,14 @@ footer names the file, shows its folder with **Change…** and the .mp4/.gif for
 after a successful copy, **Show in Folder** reveals it.
 The shared recording editor now also supports same-format replacement of an
 existing permanent MP4/GIF when History retains identical recovery media.
-Both native editors expose **Replace original…** with confirmation of the opened
-session's exact saved path. The action is unavailable for recovery-only or
+Both native editors replace it when **Save** runs with **Save as new file** off,
+after confirming the opened session's exact saved path. Replacement is unavailable for recovery-only or
 reference-only recordings, staged edits or a different output format; the backend
 also rejects missing or divergent recovery files. Success rebases the editor and
 updates the existing History item. Cancellation stops preparation but cannot undo
 publication once it begins. Ordinary failure keeps accepted edits; an uncertain
 result requires closing and reopening. This is not crash-atomic across the saved
-file and History. **Save new copy** remains non-destructive.
+file and History. Saving with **Save as new file** on remains non-destructive.
 Trim handles stage changes without decoding on each pointer move; Apply updates
 the preview. Focused trim handles also accept arrow keys and Page Up/Page Down.
 Clicking the trim track seeks the accepted preview; **Reset trim** restores the full range.
@@ -338,10 +338,12 @@ Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
 audio-only Preserve changes show approximate sizes. Estimation can be canceled.
 Both native recording editors show nonzero percentage changes versus the original
 recording beside accepted estimates; staged edits and Maximum mode hide the delta.
-Both native recording editors' **Compare** action explicitly encodes a read-only
-before/after sample at the accepted frame, with a split slider, Hide, cancellation
-and retry. It does not follow paused playback time or publish a file or History
-entry; staged edits hide it. Maximum mode shows the first encoded attempt, not
+Both native recording editors, like shipping, automatically encode a read-only
+before/after sample at the accepted frame while Compress or Maximum is accepted and
+playback is paused, drawn as a split with size badges, "% smaller" and Hide (**Show
+before / after** restores it). It does not follow paused playback time or publish a
+file or History entry; staged edits hide it. The screenshot editor shows the same
+comparison while Compress or Maximum is chosen and Export settings are open. Maximum mode shows the first encoded attempt, not
 necessarily the final capped save; output cadence may select neighboring frames.
 Both native recording editors offer **Maximum file size** for MP4/GIF, using
 decimal KB/MB/GB with a 100 KB minimum. Apply accepts the limit; the size label then
@@ -427,8 +429,8 @@ dropping pending text or unsaved edits; a refused source remains in History.
 The shared backend validates the actual recording container, editor preview and
 poster before publication. WebM is an input format, not a WebM export;
 Preserve-to-MP4 transcodes it rather than copying WebM bytes into an MP4 file.
-External recording references cannot use Replace original; that action requires
-a private recovery copy and a separate permanent save. Save new copy remains available.
+External recording references cannot replace an original; that requires a private
+recovery copy and a separate permanent save. **Save as new file** stays locked on.
 Live development hosts now forward subsequent launches to the process using the
 same History directory, preserving file order and sender-relative paths; a launch
 without files restores the native workspace/Preferences or recording controls.

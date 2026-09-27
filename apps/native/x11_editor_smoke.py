@@ -340,11 +340,11 @@ def main():
         click(editor, *setting_point(x, row))
 
     def preview_encoded():
-        # Encode the current output into the canvas without saving anything.
+        # Show the automatic before/after comparison (Compress) without
+        # saving anything; Copy must still copy the edited frame.
         export_settings(True)
-        setting_click(647)  # Canvas: Encoded (Preserve layout).
-        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
-             "encoded output preview")
+        quality_mode(1)
+        compare_settled("comparison-before-copy")
 
     def setting_menu(x, index, count, row=0):
         # Menus of up to three items open below the control; longer menus open
@@ -354,11 +354,50 @@ def main():
         first = py + 39 if count <= 3 else py - 44 * count + 6
         click(editor, px, first + 44 * index)
 
+    def quality_mode(index):
+        # The Save quality listbox opens below with little room and scrolls,
+        # so its clipped last row is chosen with End (egui's focus navigation
+        # takes the arrow keys, but Home/End reach the open listbox).
+        if index == 1:
+            setting_menu(282, 1, 3)
+            return
+        setting_click(282)
+        for key in ("Home" if index == 0 else "End", "Return"):
+            run("xdotool", "key", key, "sleep", ".2")
+
     def setting_field(x, value, row=0):
         setting_click(x, row)
         run("xdotool", "key", "ctrl+a")
         type_text(value, 60)
         run("xdotool", "key", "Return", "sleep", ".3")
+
+    # `--glass-text` on the comparison divider (the fixed media palette).
+    GLASS_TEXT = (246, 246, 248)
+
+    def divider_shown(name):
+        """The centred divider paints a glass-text column over the canvas."""
+        window, size = shot_layouts[name]
+        left, top, scale = fit_geometry(size, window)
+        x = round(left + size[0] / 2 * scale)
+        for y in (30, 50, 70, 90):  # Clear of the centred handle.
+            actual = run("convert", str(output / f"{name}.png"), "-crop",
+                         f"1x1+{x}+{round(top + y * scale)}", "-depth", "8", "rgb:-")
+            if any(abs(a - b) > 24 for a, b in zip(actual, GLASS_TEXT)):
+                return False
+        return True
+
+    def compare_settled(name):
+        """Wait out the comparison's refresh delay and encode, then capture."""
+        time.sleep(.6)
+        previous = None
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            shot(editor, name)
+            current = run("convert", str(output / f"{name}.png"), "-depth", "8", "rgb:-")
+            if current == previous:
+                return
+            previous = current
+        raise AssertionError(f"comparison never settled: {name}")
 
     def export_filename(stem):
         export_click("filename")
@@ -1770,17 +1809,20 @@ def main():
         if args.output_presets_only:
             run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
             export_settings(True)
-            setting_menu(282, 1, 3)  # Save quality: Compress.
-            # Compress rows: size, quality, preset (374), PNG colors (546), estimate;
-            # the Canvas preview toggle wraps to the second row.
-            setting_click(422)
-            shot(editor, "output-preset-menu")
+            setting_click(282)
+            shot(editor, "output-quality-menu")  # Per-format Save quality descriptions.
             run("xdotool", "key", "Escape", "sleep", ".2")
-            setting_menu(422, 0, 5)  # Tiny.
-            setting_click(111, row=1)  # Preview PNG with automatic palette selection.
-            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
-                 "Tiny preview encoded")
-            shot(editor, "output-preset-tiny-preview")
+            quality_mode(1)  # Save quality: Compress.
+            # Compress rows: size, quality, preset (426), estimate. The
+            # before/after comparison covers the canvas on its own.
+            compare_settled("output-compare-default")
+            assert divider_shown("output-compare-default")
+            setting_click(426)
+            shot(editor, "output-preset-menu")  # Per-format preset descriptions.
+            run("xdotool", "key", "Escape", "sleep", ".2")
+            setting_menu(426, 0, 5)  # Tiny.
+            compare_settled("output-preset-tiny-preview")
+            assert divider_shown("output-preset-tiny-preview")
             exports = output / "exports"
             exports.mkdir()
             tiny = exports / "tiny.png"
@@ -1793,14 +1835,15 @@ def main():
             shot(editor, "output-preset-tiny")
             assert int(run("identify", "-format", "%k", str(artifact / "capture.png"))) > 256
             assert int(run("identify", "-format", "%k", str(tiny))) <= 32
-            setting_click(571)  # Explicit PNG color limit; Highest must clear it.
-            setting_field(655, 2)
-            shot(editor, "output-preset-custom-palette")
-            setting_menu(422, 4, 5)  # Highest, not an arbitrary high numeric value.
-            setting_click(111, row=1)
-            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
-                 "Highest preview encoded")
-            shot(editor, "output-preset-highest-preview")
+            # Hide dismisses the comparison; Show before / after returns it.
+            click(editor, *document_point((604, 24)))
+            compare_settled("output-compare-hidden")
+            assert not divider_shown("output-compare-hidden")
+            setting_click(770)
+            compare_settled("output-compare-shown")
+            assert divider_shown("output-compare-shown")
+            setting_menu(426, 4, 5)  # Highest, not an arbitrary high numeric value.
+            compare_settled("output-preset-highest-preview")
             highest = exports / "highest.png"
             export_filename("highest")
             export_click("save")
@@ -1809,11 +1852,21 @@ def main():
             assert tiny.exists(), "a new filename never replaces the previous save"
             assert run("convert", str(highest), "-depth", "8", "rgba:-") == run(
                 "convert", str(artifact / "capture.png"), "-depth", "8", "rgba:-")
+            quality_mode(2)  # Maximum file size: 10 MB by default.
+            compare_settled("output-maximum-default")
+            setting_field(418, "9")  # 9 MB still encodes.
+            setting_menu(506, 0, 3)  # KB converts the typed value.
+            compare_settled("output-maximum-kb")
+            setting_field(418, "9")  # 9 KB is below the 10 KB floor.
+            shot(editor, "output-maximum-error")
+            export_click("save")  # The status explains the limit; Save stays disabled.
+            time.sleep(.5)
+            assert len(list(exports.iterdir())) == 2
             assert not draft.exists(), "output controls and exports never save a draft"
             assert (artifact / "capture.png").read_bytes() == original
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "output-preset-minimum")
-            setting_click(422)
+            setting_click(282)
             shot(editor, "output-preset-minimum-menu")
             run("xdotool", "key", "Escape")
             close(root)
@@ -1821,11 +1874,13 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["preset-menu", "tiny-saved-png-32-colors", "highest-clears-custom-palette",
-                           "highest-saved-png-exact-pixels", "no-draft-or-original-write",
+                "checks": ["quality-and-preset-descriptions", "automatic-compare",
+                           "tiny-saved-png-32-colors", "compare-hide-and-show",
+                           "highest-saved-png-exact-pixels", "maximum-size-units",
+                           "maximum-size-floor-disables-save", "no-draft-or-original-write",
                            "minimum-controls-and-menu"],
             }, indent=2) + "\n")
-            print("PASS native output presets: Tiny palette, Highest exact pixels, no edits, minimum")
+            print("PASS native output presets: descriptions, automatic comparison, Tiny palette, Highest exact pixels, size units")
             return
 
 
@@ -3478,41 +3533,30 @@ def main():
         saved_draft = draft.read_bytes()
         resize_editor(1000, 901)
         export_settings(True)
-        setting_click(647)  # Canvas: Encoded. Encode the edited frame, not History PNG.
-        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
-             "PNG output encoded")
-        shot(editor, "output-png")
+        # Compress shows the before/after comparison on its own: the edited
+        # frame on the left, its encoded file on the right of the divider.
+        quality_mode(1)  # PNG Compress.
+        compare_settled("output-png")
+        assert divider_shown("output-png")
         fixture_pixel("output-png", 120, 200, (229, 179, 68))
         fixture_pixel("output-png", 428, 289, (46, 158, 113))
-        setting_menu(282, 1, 3)  # PNG Compress with an explicit palette.
-        setting_click(571)
-        setting_field(655, 4)
-        setting_click(111, row=1)  # Compress wraps the Canvas toggle to the second row.
-        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
-             "palette output encoded")
-        shot(editor, "output-png-palette")
-        fixture_pixel("output-png-palette", 428, 289, (46, 158, 113))
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
-        shot(editor, "output-palette-minimum")
+        compare_settled("output-compare-minimum")
         resize_editor(1000, 901)
-        export_format("JPEG")  # JPEG invalidates the PNG comparison; Compress stays.
-        setting_click(819)  # JPEG Compress fits one row: Canvas Encoded.
-        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
-             "JPEG output encoded")
-        shot(editor, "output-jpeg")
+        export_format("JPEG")  # JPEG re-encodes the After side; Compress stays.
+        compare_settled("output-jpeg")
         fixture_pixel("output-jpeg", 428, 289, (46, 158, 113), tolerance=4)
-        setting_click(739)  # Edited canvas comparison.
-        shot(editor, "output-edited-canvas")
+        click(editor, *document_point((448, 23)))  # Hide: the edited canvas alone.
+        compare_settled("output-edited-canvas")
+        assert not divider_shown("output-edited-canvas")
         fixture_pixel("output-edited-canvas", 428, 289, (46, 158, 113))
-        setting_click(819)  # Encoded output comparison.
+        setting_click(770)  # Show before / after.
         export_format("WebP")  # WebP, still Compress.
-        setting_click(819)
-        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
-             "WebP output encoded")
-        shot(editor, "output-webp")
+        compare_settled("output-webp")
+        assert divider_shown("output-webp")
         fixture_pixel("output-webp", 428, 289, (46, 158, 113), tolerance=4)
-        setting_menu(282, 2, 3)  # Maximum file size enables the hard cap.
-        setting_field(424, 0)
+        quality_mode(2)  # Maximum file size: 10 MB until edited.
+        setting_field(418, 0)
         shot(editor, "output-budget-error")
         export_click("save")  # The status explains the limit; Save stays disabled.
         time.sleep(.5)
@@ -3521,11 +3565,9 @@ def main():
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "output-budget-error-minimum")
         resize_editor(1000, 901)
-        setting_menu(282, 0, 3)  # Preserve clears the failed budget.
-        setting_click(647)  # Retry the encoded preview without persisting a draft.
-        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
-             "retried output encoded")
-        shot(editor, "output-retry")
+        quality_mode(0)  # Preserve clears the failed budget and the comparison.
+        compare_settled("output-retry")
+        assert not divider_shown("output-retry")
         fixture_pixel("output-retry", 428, 289, (46, 158, 113))
         assert draft.read_bytes() == saved_draft, "preview must not write a draft"
         assert not (output / "exports").exists(), "preview must not publish files"

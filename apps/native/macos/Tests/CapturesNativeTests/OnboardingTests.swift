@@ -394,6 +394,36 @@ final class OnboardingTests: XCTestCase {
         guard condition() else { throw SettingsStoreError.invalidResponse }
     }
 
+    func testReadyStartPulsesItsHaloAndRestsWithoutItUnderReducedMotion() throws {
+        _ = NSApplication.shared
+        let transport = OnboardingTransport()
+        let controller = OnboardingController(store: try SettingsStore(path: "/fixture.json", transport: transport))
+        let view = OnboardingView(frame: NSRect(x: 0, y: 0, width: 700, height: 560),
+            tokens: Tokens.variants["light-mustard"]!, controller: controller)
+        let checked = expectation(description: "checked")
+        controller.requiresAttention = { checked.fulfill() }
+        controller.check()
+        wait(for: [checked], timeout: 2)
+        XCTAssertFalse(view.ctaPulsing, "no halo until Screen Recording is ready")
+        XCTAssertEqual(view.ctaHalo(at: 1.3, reduced: false).spread, 0)
+        transport.granted = true
+        let granted = expectation(description: "granted")
+        controller.requiresAttention = { granted.fulfill() }
+        controller.check()
+        wait(for: [granted], timeout: 2)
+        XCTAssertTrue(view.ctaPulsing)
+        // `onboarding-cta-pulse 2.6s`: nothing at the start, 5 pt at the middle.
+        let start = view.ctaHalo(at: 0, reduced: false)
+        XCTAssertEqual(start.spread, 0, accuracy: 0.01)
+        let peak = view.ctaHalo(at: 1.3, reduced: false)
+        XCTAssertEqual(peak.spread, OnboardingView.ctaSpread, accuracy: 0.05)
+        XCTAssertEqual(peak.opacity, 1, accuracy: 0.01)
+        let repeated = view.ctaHalo(at: 1.3 + 2.6 * 2, reduced: false)
+        XCTAssertEqual(repeated.spread, peak.spread, accuracy: 0.05, "the pulse repeats")
+        XCTAssertEqual(view.ctaHalo(at: 1.3, reduced: true).spread, 0,
+                       "reduced motion rests on the transparent final keyframe")
+    }
+
     func testFirstRunRequestsScreenAndCompletesWithoutMicrophone() throws {
         let transport = OnboardingTransport()
         let store = try SettingsStore(path: "/fixture.json", transport: transport,

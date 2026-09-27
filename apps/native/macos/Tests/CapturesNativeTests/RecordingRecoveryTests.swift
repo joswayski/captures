@@ -30,18 +30,24 @@ final class RecordingRecoveryTests: XCTestCase {
         let content = try XCTUnwrap(scroll.documentView)
         XCTAssertEqual(buttons(content, title: "Recover").count, 1,
                        "unavailable rows have no destructive actions")
-        XCTAssertEqual(buttons(content, title: "Discard…").count, 1)
+        XCTAssertEqual(buttons(content, title: "Discard").count, 1)
         XCTAssertFalse(try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first)
             .isHidden, "History remains independent")
 
-        buttons(content, title: "Discard…")[0].performClick(nil)
-        try waitUntil { window.attachedSheet != nil }
+        // Shipping's inline confirmation: the first press arms the row's
+        // Discard as "Discard permanently?" instead of opening a sheet.
+        buttons(content, title: "Discard")[0].performClick(nil)
+        let armed = try XCTUnwrap(buttons(try XCTUnwrap(scroll.documentView),
+                                          title: "Discard permanently?").first)
+        XCTAssertTrue(armed.signal, "the armed press reads as destructive")
+        XCTAssertNil(window.attachedSheet)
         XCTAssertEqual(worker.discardCount, 0)
+        // An armed Discard is a pending press, not a modal: queued images continue.
         controller.openImages(["/unsupported-image.tiff"])
-        XCTAssertEqual(transport.openImageCount, 0, "confirmation must keep the image queue parked")
-        window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertSecondButtonReturn)
-        try waitUntil { window.attachedSheet == nil }
         try waitUntil { transport.openImageCount == 1 && !controller.externalOpenPending }
+        controller.disarmRecoveryDiscard() // Escape.
+        XCTAssertNil(controller.recoveryDiscardArmedID)
+        XCTAssertEqual(buttons(try XCTUnwrap(scroll.documentView), title: "Discard").count, 1)
         XCTAssertEqual(worker.discardCount, 0)
         buttons(try XCTUnwrap(scroll.documentView), title: "Recover")[0].performClick(nil)
         XCTAssertEqual(worker.recoverCount, 1)
@@ -64,10 +70,11 @@ final class RecordingRecoveryTests: XCTestCase {
         try waitUntil { controller.prepareEditorForTermination() }
         try waitUntil { worker.listCount > listsBeforeSuccess }
         XCTAssertEqual(worker.recoveredIdentity, "original-identity")
-        buttons(try XCTUnwrap(scroll.documentView), title: "Discard…")[0].performClick(nil)
-        try waitUntil { window.attachedSheet != nil }
-        window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertFirstButtonReturn)
-        try waitUntil { worker.discardCount == 1 && window.attachedSheet == nil }
+        buttons(try XCTUnwrap(scroll.documentView), title: "Discard")[0].performClick(nil)
+        XCTAssertEqual(worker.discardCount, 0, "the first press only arms the row")
+        buttons(try XCTUnwrap(scroll.documentView), title: "Discard permanently?")[0].performClick(nil)
+        try waitUntil { worker.discardCount == 1 }
+        XCTAssertNil(window.attachedSheet)
         XCTAssertEqual(worker.discardedIdentity, "original-identity")
     }
 

@@ -612,6 +612,8 @@ final class OnboardingView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         KeyViewLoop.install(keyViewOrder, window: window, initial: firstControl)
+        // The CTA pulse stops off-window and restarts from its first draw.
+        if window == nil { stopPulse() } else { needsDisplay = true }
     }
     required init?(coder: NSCoder) { nil }
 
@@ -727,16 +729,57 @@ final class OnboardingView: NSView {
                                      width: refreshWidth, height: actionsHeight)
     }
 
-    /// A static `--surface-active` halo marks the ready primary action in
-    /// place of the shipping CTA pulse, so there is no motion to reduce.
+    /// Shipping `.onboarding-primary-button.cta-pulse`: the ready Start
+    /// button's `--surface-active` halo swells to 5 pt and fades every 2.6 s.
+    var ctaPulsing: Bool {
+        done == nil && primaryButton.isEnabled && controller.state?.presentation.screenReady == true
+    }
+    private var pulseStarted: CFTimeInterval?
+    private var pulseTimer: Timer?
+    /// Box-shadow spread at full strength (`captures_app::motion::ONBOARDING_CTA_SPREAD`).
+    static let ctaSpread: CGFloat = 5
+
+    /// The halo's current spread and strength; both rest at zero under
+    /// reduced motion, whose 0.01 ms iteration lands on the transparent frame.
+    func ctaHalo(at time: CFTimeInterval = CACurrentMediaTime(),
+                 reduced: Bool = NativeMotion.reduceMotion) -> (spread: CGFloat, opacity: CGFloat) {
+        guard ctaPulsing else { return (0, 0) }
+        // Drawing starts the clock; before then `time` is the elapsed time.
+        let started = pulseStarted ?? 0
+        let pose = NativeMotion.poseRepeating("onboarding_cta_pulse", at: time - started,
+                                              tokens: tokens, reduced: reduced)
+        let opacity = CGFloat(pose?.opacity ?? 0)
+        return (Self.ctaSpread * opacity, opacity)
+    }
+
+    private func stopPulse() {
+        pulseTimer?.invalidate(); pulseTimer = nil; pulseStarted = nil
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard done == nil, primaryButton.isEnabled, controller.state?.presentation.screenReady == true
-        else { return }
-        let radius = tokens.number("r-md") + 3
-        let halo = NSBezierPath(roundedRect: primaryButton.frame.insetBy(dx: -2, dy: -2),
-                                xRadius: radius, yRadius: radius)
-        halo.lineWidth = 3
-        tokens.color("surface-active").setStroke(); halo.stroke()
+        guard ctaPulsing else { stopPulse(); return }
+        if pulseStarted == nil { pulseStarted = CACurrentMediaTime() }
+        let halo = ctaHalo()
+        if halo.spread > 0.01 {
+            // `box-shadow: 0 0 0 <spread> <colour>` sits flush outside the button.
+            let ring = primaryButton.frame.insetBy(dx: -halo.spread / 2, dy: -halo.spread / 2)
+            let radius = tokens.number("r-md") + halo.spread / 2
+            let path = NSBezierPath(roundedRect: ring, xRadius: radius, yRadius: radius)
+            path.lineWidth = halo.spread
+            let colour = tokens.color("surface-active")
+            colour.withAlphaComponent(colour.alphaComponent * halo.opacity).setStroke()
+            path.stroke()
+        }
+        guard !NativeMotion.reduceMotion else { stopPulse(); return }
+        if pulseTimer == nil {
+            let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+                guard let self, self.ctaPulsing else { self?.stopPulse(); return }
+                self.setNeedsDisplay(self.primaryButton.frame.insetBy(dx: -Self.ctaSpread - 1,
+                                                                      dy: -Self.ctaSpread - 1))
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            pulseTimer = timer
+        }
     }
 }

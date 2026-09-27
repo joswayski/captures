@@ -314,6 +314,19 @@ final class CaptureControlsTests: XCTestCase {
         })
         XCTAssertFalse(start.isHidden)
         XCTAssertEqual(start.title, "Start recording")
+        // Shipping `.capture-record-dot`: its copy pings while Start is ready.
+        XCTAssertTrue(start.readyPing)
+        let begin = try XCTUnwrap(start.readyPingPose(at: 0, reduced: false))
+        XCTAssertEqual(begin.scale, 1, accuracy: 0.01)
+        XCTAssertEqual(begin.opacity, 0.7, accuracy: 0.01)
+        let growing = try XCTUnwrap(start.readyPingPose(at: 1.1 + 0.2, reduced: false),
+                                    "the ping repeats every 1.1 s")
+        XCTAssertGreaterThan(growing.scale, 1); XCTAssertLessThan(growing.opacity, 0.7)
+        XCTAssertNil(start.readyPingPose(at: 1.0, reduced: false), "75–100 % rests invisible")
+        XCTAssertNil(start.readyPingPose(at: 0.2, reduced: true), "reduced motion shows no ping")
+        start.isEnabled = false
+        XCTAssertNil(start.readyPingPose(at: 0, reduced: false), "no ping while disabled")
+        start.isEnabled = true
         view.confirmSelection()
         XCTAssertEqual(confirmed.count, 1)
 
