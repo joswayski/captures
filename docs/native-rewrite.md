@@ -46,7 +46,34 @@ fontconfig match for Inter, Roboto, Helvetica Neue, Arial, then `sans-serif` (as
 WebKitGTK resolves it). A named `semibold` family backs `--weight-semibold`; egui's
 faces remain glyph fallbacks. Under these wider faces the screenshot editor's header
 Canvas toolbar compacts before its zoom controls at the 760px minimum, and the History
-capture actions wrap inside the 1000px root window instead of running past its edge.
+capture actions wrap inside the History window instead of running past its edge.
+
+Both hosts now follow the shipping window model. **Capture History** (1020 × 720,
+minimum 640 × 440), **Captures Preferences** (880 × 660, minimum 560 × 440) and the
+first-run setup window (**Captures**, 620 × 560, minimum 480 × 440) are separate,
+resizable top-level windows that can be open side by side; the old single fixed
+workbench window and the wgpu "Capture History | Preferences" tab strip are gone.
+Opening a window that is already open shows, restores and focuses it; closing one
+leaves the others. Tray/menu-bar items, capture-menu setting links, Preferences'
+**Capture History…** button and empty relaunches route to the matching window;
+reopen follows shipping's priority (setup, then History, then Preferences, else
+open Preferences). Setup completion hides the setup window, as shipping does;
+wgpu keeps History open instead when no tray host exists, so Captures stays
+reachable, and without a tray closing the last open window quits. Captures hide
+Preferences along with History. Titles, sizes and breakpoints live in
+`captures_app::app_windows` (AppKit mirrors them in `AppWindows.swift`). The editor
+windows use the shipping titles **Captures Screenshot Editor** and **Captures
+Editor**; the wgpu editors add a " — Working…" suffix while a job runs, and the
+AppKit screenshot editor a " — Unsaved" suffix, because the automated exercises
+wait on them. Layouts reflow down to each minimum: at shipping's 720px breakpoint
+History stacks Delete all under its heading and uses one card column, Preferences
+hides its section nav, stacks inline rows and uses two-column grids, and the
+560px-tall setup window drops its lede (`max-height: 600px`). wgpu keeps setup and
+History in the one root window (setup is retitled and resized into History when it
+completes; the two never coexist) and opens Preferences as a child window. The wgpu
+visible launch still opens History rather than shipping's Preferences, and reopen
+does not yet focus an open editor window. Private X11 exercises cover the wgpu
+windows; the AppKit windows, reflow and focus are verified only by XCTest.
 
 Preferences now offer the shipping Default microphone select (Off plus enumerated
 inputs; wgpu enumerates when the menu first opens, AppKit off the main thread),
