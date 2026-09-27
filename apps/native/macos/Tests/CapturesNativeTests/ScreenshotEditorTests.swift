@@ -1373,6 +1373,10 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 1000, height: 780))
             let apply = try button("Apply crop", in: controller.root)
             let scroll = try XCTUnwrap(apply.enclosingScrollView)
+            // Layers sits above Properties, and short CI screens clamp this
+            // height, so Crop scrolls like shipping's 1fr Properties row.
+            apply.scrollToVisible(apply.bounds)
+            controller.root.layoutSubtreeIfNeeded()
             XCTAssertTrue(scroll.contentView.bounds.contains(apply.convert(apply.bounds, to: scroll.contentView)))
             try render(controller.root, name: "screenshot-editor-crop-minimum-\(appearance)")
             controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: controller.window))
@@ -2201,10 +2205,10 @@ final class ScreenshotEditorTests: XCTestCase {
         // Shipping shows whole-pixel Width/Height/X/Y for the selected image.
         XCTAssertEqual((try field("Layer X", in: controller.root)).stringValue, "14")
         XCTAssertEqual((try field("Layer Y", in: controller.root)).stringValue, "-7")
-        XCTAssertTrue(try button("Show A very long foreground image layer name", in: controller.root).isEnabled,
+        XCTAssertTrue(try layerRowButton("Show A very long foreground image layer name", in: controller).isEnabled,
                       "hidden layers remain editable")
 
-        try button("Show A very long foreground image layer name", in: controller.root).performClick(nil)
+        try layerRowButton("Show A very long foreground image layer name", in: controller).performClick(nil)
         let visibility = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual(visibility["action"] as? String, "visibility")
         XCTAssertEqual(visibility["visible"] as? Bool, true)
@@ -2248,7 +2252,9 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = opacity.sendAction(opacity.action, to: opacity.target)
         XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["opacity"] as? Double, 73)
         XCTAssertEqual(worker.liveKeys.last, "opacity:foreground")
-        try press("Lock A very long foreground image layer name", in: controller.root)
+        let lock = try layerRowButton("Lock A very long foreground image layer name", in: controller)
+        XCTAssertTrue(lock.isEnabled)
+        _ = lock.sendAction(lock.action, to: lock.target)
         XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["locked"] as? Bool, true)
 
         worker.response = { request in
@@ -4790,10 +4796,12 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-text-default-rounded-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            color.scrollToVisible(color.bounds)
-            controller.root.layoutSubtreeIfNeeded()
             let scroll = try XCTUnwrap(color.enclosingScrollView)
-            for control in [preset, size, color] {
+            // Layers keeps its 188pt row, so the 82pt Properties area scrolls
+            // to each default in turn, like shipping's sidebar.
+            for control in [preset, size, color] as [NSView] {
+                control.scrollToVisible(control.bounds)
+                controller.root.layoutSubtreeIfNeeded()
                 XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)),
                               "New text defaults must be reachable at minimum size")
             }
@@ -5527,20 +5535,22 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-future-text-style-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            futureColor.scrollToVisible(futureColor.bounds)
-            controller.root.layoutSubtreeIfNeeded()
             let scroll = try XCTUnwrap(futureColor.enclosingScrollView)
+            // The 82pt Properties area below Layers scrolls to each carried value.
             for control in [future, futureSize, futureColor] as [NSView] {
                 XCTAssertFalse(control.isHiddenOrHasHiddenAncestor)
+                control.scrollToVisible(control.bounds)
+                controller.root.layoutSubtreeIfNeeded()
                 XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)),
-                              "carried style, size and color must all be visible at minimum size")
+                              "carried style, size and color must each be reachable at minimum size")
             }
             try render(controller.root, name: "screenshot-editor-future-text-style-minimum-\(appearance)")
 
             XCTAssertEqual(worker.requests.last?["operation"] as? String, "edit_text",
                            "choosing a selected-label style applies it live")
 
-            choose("Outlined")
+            // Style choices apply live, so the accepting fake must be in place
+            // before Outlined is chosen.
             worker.failOperation = nil
             worker.response = { request in
                 switch request["operation"] as? String {
@@ -5559,6 +5569,7 @@ final class ScreenshotEditorTests: XCTestCase {
                 default: return nil
                 }
             }
+            choose("Outlined")
             XCTAssertEqual((worker.requests.last?["patch"] as? [String: Any])?["outlined"] as? Bool, true,
                            "fake accepted Outlined style must match the requested edit")
             XCTAssertTrue(controller.state.snapshot?.layers.first?.textStyle?.outlined == true)
@@ -6780,6 +6791,18 @@ final class ScreenshotEditorTests: XCTestCase {
         let cell = try XCTUnwrap(layers.view(atColumn: 0, row: layers.selectedRow,
                                              makeIfNecessary: true) as? NSTableCellView)
         return cell.textField?.stringValue ?? ""
+    }
+
+    /// Row quick actions live in cells NSTableView creates lazily during
+    /// display, so ask the table for every row's cell instead of relying on
+    /// a display pass having inserted them.
+    private func layerRowButton(_ label: String, in controller: ScreenshotEditorController) throws -> CaptureButton {
+        let layers = try table("Screenshot layers", in: controller.root)
+        let cells = (0..<layers.numberOfRows).compactMap {
+            layers.view(atColumn: 0, row: $0, makeIfNecessary: true)
+        }
+        return try XCTUnwrap(cells.flatMap { descendants(in: $0) }.compactMap { $0 as? CaptureButton }
+            .first { $0.accessibilityLabel() == label })
     }
 
     private func field(_ label: String, in view: NSView) throws -> NSTextField {

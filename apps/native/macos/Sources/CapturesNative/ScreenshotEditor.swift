@@ -2861,7 +2861,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let scroll = NSScrollView(frame: NSRect(x: 0, y: listTop, width: 272,
                                                 height: max(0, layersPanel.bounds.height - listTop)))
         scroll.autoresizingMask = [.width, .height]
-        scroll.hasVerticalScroller = true; scroll.drawsBackground = false
+        // Overlay scrollers, as in Properties: a legacy scroller would narrow
+        // the clip below the 272pt rows and cover their lock/⋯ quick actions.
+        scroll.hasVerticalScroller = true; scroll.scrollerStyle = .overlay
+        scroll.drawsBackground = false
         scroll.useTokenScrollers(tokens)
         layerTable = EditorLayerTable(frame: scroll.bounds)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("editor-layer"))
