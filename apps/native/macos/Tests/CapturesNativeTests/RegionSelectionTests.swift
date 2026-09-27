@@ -76,6 +76,107 @@ final class RegionSelectionTests: XCTestCase {
         XCTAssertEqual(view.subviews.map(ObjectIdentifier.init), identities)
     }
 
+    func testDirectGuidanceChipSitsAtSixteenPercentHidesWhileDraggingDucksAndShowsFeedback() throws {
+        _ = NSApplication.shared
+        let frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let tokens = Tokens.variants["dark-mustard"]!
+        var confirmed = 0
+        let view = RegionSelectionView(frame: frame, image: nil, tokens: tokens, autoStart: true,
+            confirm: { _ in confirmed += 1 }, cancel: {})
+        window.contentView = view
+        func mouse(_ type: NSEvent.EventType, _ x: CGFloat, _ y: CGFloat) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 500 - y),
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 1, clickCount: 1, pressure: 1))
+        }
+        let chip = view.guidanceChip
+        XCTAssertTrue(view.isGuidanceVisible, "the chip mounts with the overlay")
+        XCTAssertEqual(chip.frame.minY, 80, accuracy: 0.5, "16% of the 500 pt overlay")
+        XCTAssertEqual(chip.frame.midX, 400, accuracy: 1, "centred")
+        XCTAssertGreaterThan(chip.hintFrame.minY, chip.titleFrame.maxY - 0.5, "hint row sits below the title")
+        XCTAssertEqual(chip.titleText, "Drag to select a region")
+        XCTAssertEqual(chip.hintText, "Shift for square · Esc to cancel")
+        XCTAssertFalse(chip.isFeedback)
+        XCTAssertEqual(chip.layer?.borderColor, tokens.color("glass-border-strong").cgColor)
+
+        // Shipping hides the chip while a region is being dragged out.
+        view.mouseDown(with: try mouse(.leftMouseDown, 100, 300))
+        view.mouseDragged(with: try mouse(.leftMouseDragged, 300, 420))
+        XCTAssertFalse(view.isGuidanceVisible, "hidden while dragging")
+        XCTAssertEqual(chip.alphaValue, 0, accuracy: 0.001)
+        view.mouseUp(with: try mouse(.leftMouseUp, 300, 420))
+        XCTAssertEqual(confirmed, 1)
+        XCTAssertTrue(view.isGuidanceVisible)
+
+        // Pointer ducking through real mouse-moved events.
+        let rest = chip.frame
+        view.mouseMoved(with: try mouse(.mouseMoved, rest.minX - 20, rest.midY))
+        XCTAssertTrue(chip.isDucked, "the chip fades within 28 points of the pointer")
+        XCTAssertFalse(view.isGuidanceVisible)
+        view.mouseMoved(with: try mouse(.mouseMoved, rest.minX - 35, rest.midY))
+        XCTAssertTrue(chip.isDucked, "the leave slack keeps a faded chip hidden")
+        view.mouseMoved(with: try mouse(.mouseMoved, rest.minX - 45, rest.midY))
+        XCTAssertFalse(chip.isDucked)
+        XCTAssertEqual(chip.frame, rest, "ducking never moves the model frame")
+
+        // A click without a drag: feedback copy and the accent border.
+        view.mouseDown(with: try mouse(.leftMouseDown, 100, 450))
+        view.mouseUp(with: try mouse(.leftMouseUp, 100, 450))
+        XCTAssertEqual(confirmed, 1, "a click is not a region")
+        XCTAssertTrue(chip.isFeedback)
+        XCTAssertEqual(chip.titleText, "Click and drag to select a region")
+        XCTAssertEqual(chip.layer?.borderColor,
+            tokens.color("theme-accent").withAlphaComponent(CaptureMenuPolicy.copy.chip.feedbackBorderAlpha).cgColor)
+        XCTAssertEqual(chip.frame.minY, 80, accuracy: 0.5)
+        XCTAssertEqual(chip.frame.midX, 400, accuracy: 1, "the longer copy stays centred")
+        XCTAssertEqual(CaptureMenuPolicy.copy.chip.feedbackSeconds, 1.8, accuracy: 0.001)
+        let deadline = Date().addingTimeInterval(4)
+        while chip.isFeedback && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertFalse(chip.isFeedback, "feedback ends after 1.8 seconds")
+        XCTAssertEqual(chip.titleText, "Drag to select a region")
+        XCTAssertEqual(chip.layer?.borderColor, tokens.color("glass-border-strong").cgColor)
+    }
+
+    func testGuidanceChipEntranceSlideAndNudgeRespectReducedMotion() {
+        _ = NSApplication.shared
+        let frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        for reduced in [false, true] {
+            let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let host = Surface(frame: frame)
+            window.contentView = host
+            let chip = CaptureGuidanceChip(tokens: Tokens.variants["light-mustard"]!, reducedMotion: { reduced })
+            host.addSubview(chip)
+            chip.setCopy(title: "Drag to select a region", hint: "Esc to cancel", in: host.bounds)
+            XCTAssertTrue(chip.isHidden, "unmounted until presented")
+            chip.setPresent(true)
+            XCTAssertTrue(chip.isShowing)
+            XCTAssertEqual(chip.alphaValue, 1, accuracy: 0.001, "the model settles at rest at once")
+            XCTAssertEqual(chip.frame.minY, 64, accuracy: 0.5, "16% of 400")
+            let layer = chip.layer
+            XCTAssertEqual(layer?.animation(forKey: CaptureGuidanceChip.fadeKey) != nil, !reduced,
+                "fades in unless motion is reduced")
+            XCTAssertEqual(layer?.animation(forKey: CaptureGuidanceChip.slideKey) != nil, !reduced,
+                "slides down from 6 points higher unless motion is reduced")
+            XCTAssertNil(layer?.animation(forKey: CaptureGuidanceChip.nudgeKey), "no nudge without feedback")
+            chip.mount(feedback: true)
+            XCTAssertEqual(layer?.animation(forKey: CaptureGuidanceChip.nudgeKey) != nil, !reduced,
+                "an empty click nudges the chip unless motion is reduced")
+            XCTAssertTrue(chip.isFeedback)
+            chip.setSuppressed(true)
+            XCTAssertFalse(chip.isShowing)
+            XCTAssertEqual(chip.alphaValue, 0, accuracy: 0.001)
+            chip.setSuppressed(false)
+            XCTAssertEqual(chip.alphaValue, 1, accuracy: 0.001)
+        }
+    }
+
     func testManualConfirmAndRenderRepresentativeStatesInBothAppearances() throws {
         _ = NSApplication.shared
         for appearance in ["dark", "light"] {

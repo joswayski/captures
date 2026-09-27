@@ -1,6 +1,4 @@
-use captures_app::capture_menu::{
-    self, Guidance, MenuMode, PreferenceTarget, PrimaryState, RecordingToggle,
-};
+use captures_app::capture_menu::{self, MenuMode, PreferenceTarget, PrimaryState, RecordingToggle};
 use captures_app::motion::{Motion, Transition};
 use captures_app::selection::{Bounds, Rect};
 use captures_app::shortcuts::CaptureShortcut;
@@ -1036,41 +1034,66 @@ impl NotePiece<'_> {
     }
 }
 
-/// Shipping `CaptureGuidance` chip, 16% from the top of the overlay. It hides
-/// while `hidden` (a region drag) and ducks out of the way when the pointer
-/// comes within 28 points, restoring only past a 12-point leave slack.
+/// Per-overlay state of the guidance chip: its motion and the pointer
+/// hysteresis. Owned by the selector, so a new overlay session (a reset
+/// selector) mounts a fresh chip and replays the entrance.
+#[derive(Default)]
+pub(crate) struct GuidanceState {
+    chip: Option<capture_menu::GuidanceChip>,
+    over: bool,
+    /// Shipping's feedback attempt (`selectionFeedback`); a change re-keys
+    /// the chip.
+    feedback: u32,
+}
+
+/// The chip's resting frame: centred, its top edge 16% down the overlay.
+pub(crate) fn guidance_rect(
+    surface: egui::Rect,
+    tokens: &Tokens,
+    title: egui::Vec2,
+    hint: egui::Vec2,
+) -> egui::Rect {
+    let padding = egui::vec2(tokens.number("s-6"), tokens.number("s-4"));
+    let size = egui::vec2(
+        title.x.max(hint.x),
+        title.y + capture_menu::GUIDANCE_ROW_GAP as f32 + hint.y,
+    ) + 2. * padding;
+    egui::Rect::from_min_size(
+        egui::pos2(
+            surface.center().x - size.x / 2.,
+            surface.top() + capture_menu::guidance_top(surface.height().into()) as f32,
+        ),
+        size,
+    )
+}
+
+/// Shipping `CaptureGuidance` chip, shared by New Capture and the direct
+/// Region/Window overlays: a two-row glass chip 16% from the top that fades
+/// and slides in, hides while `hidden` (a region drag), and ducks out of the
+/// way when the pointer comes within 28 points, restoring only past a
+/// 12-point leave slack. A `feedback` attempt (an empty click) re-keys it
+/// with the accent border and the sideways nudge.
 pub(crate) fn paint_guidance(
     ui: &egui::Ui,
     tokens: &Tokens,
     surface: egui::Rect,
-    guidance: Guidance,
+    state: &mut GuidanceState,
+    copy: (&str, &str),
     hidden: bool,
+    feedback: u32,
 ) {
     let painter = ui.painter();
     let title = painter.layout_no_wrap(
-        guidance.title.into(),
+        copy.0.into(),
         egui::FontId::proportional(tokens.number("text-md")),
         tokens.color("glass-text"),
     );
     let hint = painter.layout_no_wrap(
-        guidance.hint.into(),
+        copy.1.into(),
         egui::FontId::proportional(tokens.number("text-xs")),
         tokens.color("glass-text-muted"),
     );
-    let padding = egui::vec2(tokens.number("s-6"), tokens.number("s-4"));
-    let size = egui::vec2(
-        title.size().x.max(hint.size().x),
-        title.size().y + 2. + hint.size().y,
-    ) + 2. * padding;
-    let chip = egui::Rect::from_min_size(
-        egui::pos2(
-            surface.center().x - size.x / 2.,
-            surface.top() + surface.height() * 0.16,
-        ),
-        size,
-    );
-    let id = egui::Id::unique("capture-guidance-pointer");
-    let was_over = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
+    let chip = guidance_rect(surface, tokens, title.size(), hint.size());
     let over = ui
         .input(|input| input.pointer.latest_pos())
         .filter(|_| ui.input(|input| input.pointer.has_pointer()))
@@ -1082,33 +1105,53 @@ pub(crate) fn paint_guidance(
                 chip.top().into(),
                 chip.right().into(),
                 chip.bottom().into(),
-                was_over,
+                state.over,
             )
         });
-    if over != was_over {
-        ui.data_mut(|data| data.insert_temp(id, over));
+    state.over = over;
+    let shown = !hidden && !over;
+    let now = ui.input(|input| input.time) * 1000.;
+    let reduced = crate::motion::reduced(ui.ctx());
+    match state.chip.as_mut() {
+        Some(motion) if state.feedback == feedback => motion.set_shown(shown, now),
+        Some(motion) => motion.remount(now, shown, feedback > 0),
+        None => {
+            state.chip = capture_menu::GuidanceChip::new(tokens, reduced, now, shown, feedback > 0);
+        }
     }
-    let opacity = ui.ctx().animate_bool_with_time(
-        egui::Id::unique("capture-guidance-opacity"),
-        !hidden && !over,
-        tokens.number("dur-3") / 1000.,
-    );
-    if opacity <= 0. {
+    state.feedback = feedback;
+    let Some(motion) = state.chip else {
+        return;
+    };
+    if motion.animating(now) {
+        ui.ctx().request_repaint();
+    }
+    let pose = motion.pose(now);
+    if pose.opacity <= 0. {
         return;
     }
+    let chip = chip.translate(egui::vec2(pose.translate_x as f32, pose.translate_y as f32));
     let mut painter = painter.clone();
-    painter.multiply_opacity(opacity);
+    painter.multiply_opacity(pose.opacity as f32);
+    let border = if pose.accent {
+        tokens
+            .color("theme-accent")
+            .gamma_multiply(capture_menu::GUIDANCE_FEEDBACK_BORDER_ALPHA as f32)
+    } else {
+        tokens.color("glass-border-strong")
+    };
     painter.rect(
         chip,
         tokens.number("r-xl"),
         tokens.color("glass-strong"),
-        Stroke::new(1., tokens.color("glass-border-strong")),
+        Stroke::new(1., border),
         egui::StrokeKind::Inside,
     );
+    let padding_y = tokens.number("s-4");
     painter.galley(
         egui::pos2(
             chip.center().x - title.size().x / 2.,
-            chip.top() + padding.y,
+            chip.top() + padding_y,
         ),
         title,
         egui::Color32::WHITE,
@@ -1116,11 +1159,32 @@ pub(crate) fn paint_guidance(
     painter.galley(
         egui::pos2(
             chip.center().x - hint.size().x / 2.,
-            chip.bottom() - padding.y - hint.size().y,
+            chip.bottom() - padding_y - hint.size().y,
         ),
         hint,
         egui::Color32::WHITE,
     );
+}
+
+/// The painted guidance chip's glass body and border colour, if any.
+#[cfg(test)]
+pub(crate) fn painted_guidance_chip(
+    shapes: &[egui::Shape],
+    tokens: &Tokens,
+) -> Option<(egui::Rect, Color32)> {
+    let radius = tokens.number("r-xl").round() as u8;
+    let fill = tokens.color("glass-strong");
+    shapes.iter().find_map(|shape| match shape {
+        egui::Shape::Rect(rect)
+            if rect.corner_radius.nw == radius
+                && rect.stroke.width == 1.
+                && rect.fill.a() > 0
+                && rect.fill.r() <= fill.r() =>
+        {
+            Some((rect.rect, rect.stroke.color))
+        }
+        _ => None,
+    })
 }
 
 fn window_target(target: SelectionTarget) -> Target {

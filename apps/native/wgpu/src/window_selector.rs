@@ -31,6 +31,7 @@ pub struct WindowSelector {
     hovered: Option<SelectionTarget>,
     selected: Option<SelectionTarget>,
     scripted: bool,
+    guidance: crate::capture_controls::GuidanceState,
 }
 
 impl WindowSelector {
@@ -221,9 +222,10 @@ impl WindowSelector {
                 }
             } else {
                 SurfaceGuidance::Direct {
-                    has_selection: self.selected.is_some(),
+                    confirm: !view.auto_start,
                 }
             },
+            &mut self.guidance,
         );
 
         if response.clicked()
@@ -278,6 +280,7 @@ pub fn show_display_surface(
         coordinates,
         Some(SelectionTarget::Display),
         SurfaceGuidance::None,
+        &mut crate::capture_controls::GuidanceState::default(),
     );
     paint_display_identity(ui.painter(), tokens, surface, identity);
     response.clicked()
@@ -318,9 +321,10 @@ fn paint_display_identity(
 
 #[derive(Clone, Copy)]
 enum SurfaceGuidance {
-    /// Direct window overlay: persistent chip with its Enter hint.
+    /// Direct window overlay: the shipping chip stays up; the manual mode's
+    /// hint adds "Press Enter to confirm".
     Direct {
-        has_selection: bool,
+        confirm: bool,
     },
     /// New Capture: shipping chip, hidden once a window is selected.
     Menu {
@@ -388,6 +392,7 @@ fn paint_surface(
     coordinates: CoordinateMap,
     hovered: Option<SelectionTarget>,
     guidance: SurfaceGuidance,
+    chip: &mut crate::capture_controls::GuidanceState,
 ) {
     let surface = coordinates.surface;
     let painter = ui.painter();
@@ -468,67 +473,38 @@ fn paint_surface(
         painter.rect_filled(surface, 0., window_shade);
     }
 
-    let has_selection = match guidance {
-        SurfaceGuidance::Direct { has_selection } => has_selection,
-        SurfaceGuidance::Menu { hidden, display } => {
-            crate::capture_controls::paint_guidance(
-                ui,
-                tokens,
-                surface,
-                capture_menu::guidance(
-                    if display {
-                        GuidanceTarget::Display
-                    } else {
-                        GuidanceTarget::Window
-                    },
-                    false,
-                ),
-                hidden,
-            );
-            return;
-        }
+    // Shipping `CaptureGuidance`: shell/desktop hover switches to display copy.
+    let (target, hidden, confirm) = match guidance {
+        SurfaceGuidance::Direct { confirm } => (
+            if hovered == Some(SelectionTarget::Display) {
+                GuidanceTarget::Display
+            } else {
+                GuidanceTarget::Window
+            },
+            false,
+            confirm,
+        ),
+        SurfaceGuidance::Menu { hidden, display } => (
+            if display {
+                GuidanceTarget::Display
+            } else {
+                GuidanceTarget::Window
+            },
+            hidden,
+            false,
+        ),
         SurfaceGuidance::None => return,
     };
-    // Shipping CaptureGuidance: shell/desktop hover switches to display copy.
-    let guidance = if hovered == Some(SelectionTarget::Display) {
-        "Click to capture this display"
-    } else {
-        "Select a window to continue"
-    };
-    let title = painter.layout_no_wrap(
-        guidance.into(),
-        FontId::proportional(tokens.number("text-xl")),
-        tokens.color("glass-text"),
-    );
-    let hint = painter.layout_no_wrap(
-        if has_selection && !view.auto_start {
-            "Esc to cancel · Press Enter to confirm"
-        } else {
-            "Esc to cancel"
-        }
-        .into(),
-        FontId::proportional(tokens.number("text-sm")),
-        tokens.color("glass-text-muted"),
-    );
-    let center = surface.center_top() + egui::vec2(0., 56.);
-    let size = egui::vec2(
-        title.size().x.max(hint.size().x) + 28.,
-        title.size().y + hint.size().y + 20.,
-    );
-    painter.rect_filled(
-        egui::Rect::from_center_size(center, size),
-        tokens.number("r-xl"),
-        tokens.color("glass-strong"),
-    );
-    painter.galley(
-        center - egui::vec2(title.size().x / 2., title.size().y + 2.),
-        title,
-        Color32::WHITE,
-    );
-    painter.galley(
-        center + egui::vec2(-hint.size().x / 2., 4.),
-        hint,
-        Color32::WHITE,
+    let copy = capture_menu::guidance(target, false);
+    let hint = capture_menu::direct_hint(target, confirm);
+    crate::capture_controls::paint_guidance(
+        ui,
+        tokens,
+        surface,
+        chip,
+        (copy.title, &hint),
+        hidden,
+        0,
     );
 }
 
@@ -726,11 +702,24 @@ mod tests {
         events: Vec<egui::Event>,
         auto_start: bool,
     ) -> Option<Action> {
+        run_frame(ctx, selector, events, auto_start, None).0
+    }
+
+    fn run_frame(
+        ctx: &egui::Context,
+        selector: &mut WindowSelector,
+        events: Vec<egui::Event>,
+        auto_start: bool,
+        seconds: Option<f64>,
+    ) -> (Option<Action>, Vec<egui::Shape>) {
         let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 720.));
         let display = display();
         let (windows, shell) = targets();
         let tokens = crate::tokens::load()["dark-mustard"].clone();
-        ctx.begin_pass(raw(screen, events));
+        ctx.begin_pass(egui::RawInput {
+            time: seconds,
+            ..raw(screen, events)
+        });
         let mut ui = egui::Ui::new(
             ctx.clone(),
             egui::Id::unique("window-selector-input-test"),
@@ -760,7 +749,14 @@ mod tests {
         );
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
-        action
+        (
+            action,
+            output
+                .shapes
+                .into_iter()
+                .map(|clipped| clipped.shape)
+                .collect(),
+        )
     }
 
     fn painted(hovered: Option<SelectionTarget>, guidance: SurfaceGuidance) -> Vec<egui::Shape> {
@@ -788,6 +784,7 @@ mod tests {
             CoordinateMap::new(screen, &display),
             hovered,
             guidance,
+            &mut crate::capture_controls::GuidanceState::default(),
         );
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
@@ -823,9 +820,7 @@ mod tests {
         let tokens = crate::tokens::load()["dark-mustard"].clone();
         let window_shade = tokens.color("capture-shade-window");
         let region_shade = tokens.color("capture-shade");
-        let direct = SurfaceGuidance::Direct {
-            has_selection: false,
-        };
+        let direct = SurfaceGuidance::Direct { confirm: false };
 
         let idle = painted(None, direct);
         assert!(
@@ -866,6 +861,60 @@ mod tests {
         let full = painted(Some(SelectionTarget::Display), SurfaceGuidance::None);
         assert_eq!(fills(&full, region_shade).len(), 1);
         assert!(!texts(&full).iter().any(|text| text == "Entire display"));
+    }
+
+    #[test]
+    fn direct_overlay_guidance_chip_sits_at_sixteen_percent_switches_copy_and_ducks() {
+        use crate::capture_controls::painted_guidance_chip as chip_of;
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let ctx = egui::Context::default();
+        let mut selector = WindowSelector::default();
+        let frame = |selector: &mut WindowSelector, seconds: f64, events, auto_start| {
+            run_frame(&ctx, selector, events, auto_start, Some(seconds)).1
+        };
+        let window = egui::Event::PointerMoved(egui::pos2(500., 400.));
+        let first = frame(&mut selector, 1., vec![window.clone()], true);
+        assert!(chip_of(&first, &tokens).is_none(), "mounts transparent");
+        let settled = frame(&mut selector, 1.3, vec![], true);
+        let (chip, border) = chip_of(&settled, &tokens).expect("chip");
+        assert!((chip.top() - 115.2).abs() < 0.01, "16% of 720: {chip:?}");
+        assert!((chip.center().x - 500.).abs() < 0.01);
+        assert_eq!(border, tokens.color("glass-border-strong"));
+        let copy = texts(&settled);
+        assert!(
+            copy.contains(&"Select a window to continue".to_owned()),
+            "{copy:?}"
+        );
+        assert!(copy.contains(&"Esc to cancel".to_owned()));
+
+        let desktop = egui::Event::PointerMoved(egui::pos2(920., 680.));
+        let display = frame(&mut selector, 1.4, vec![desktop], true);
+        assert!(texts(&display).contains(&"Click to capture this display".to_owned()));
+
+        let near = egui::pos2(chip.center().x, chip.bottom() + 20.);
+        frame(
+            &mut selector,
+            2.,
+            vec![egui::Event::PointerMoved(near)],
+            true,
+        );
+        assert!(
+            chip_of(&frame(&mut selector, 2.3, vec![], true), &tokens).is_none(),
+            "ducks from the pointer"
+        );
+        frame(&mut selector, 3., vec![window], true);
+        let restored = frame(&mut selector, 3.3, vec![], true);
+        let (back, _) = chip_of(&restored, &tokens).expect("restores");
+        assert!((back.top() - 115.2).abs() < 0.01);
+
+        let mut manual = WindowSelector::default();
+        let far = egui::Event::PointerMoved(egui::pos2(920., 680.));
+        frame(&mut manual, 4., vec![far], false);
+        let hint = texts(&frame(&mut manual, 4.3, vec![], false));
+        assert!(
+            hint.contains(&"Esc to cancel · Press Enter to confirm".to_owned()),
+            "{hint:?}"
+        );
     }
 
     fn covered(mesh: &egui::Mesh, point: Pos2) -> bool {
