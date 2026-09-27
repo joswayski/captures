@@ -115,7 +115,7 @@ pub(super) fn drain_drops(view: &mut View, tx: &Sender<Job>) -> bool {
         view.drop.queue.clear();
         return false;
     }
-    if view.pending || view.inline.is_some() || view.confirm_discard {
+    if view.pending || view.inline.is_some() {
         return false;
     }
     let Some((path, point)) = view.drop.queue.pop_front() else {

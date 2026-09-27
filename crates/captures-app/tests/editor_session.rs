@@ -4674,3 +4674,108 @@ fn live_edits_with_one_key_fold_into_one_undo_step_until_another_edit() {
     );
     assert!(editor.layer_thumbnail(&layer).is_some());
 }
+
+#[test]
+fn draft_autosave_debounces_each_edit_and_flushes_on_close() {
+    use captures_app::editor_session::DraftAutosave;
+    use std::time::{Duration, Instant};
+
+    assert_eq!(DraftAutosave::DELAY, Duration::from_millis(700));
+    let start = Instant::now();
+    let mut autosave = DraftAutosave::default();
+    assert!(!autosave.take_due(start + Duration::from_secs(5)));
+    autosave.edited(start);
+    assert!(!autosave.take_due(start + Duration::from_millis(699)));
+    // Every edit restarts shipping's 700 ms timer.
+    autosave.edited(start + Duration::from_millis(500));
+    assert!(!autosave.take_due(start + Duration::from_millis(1100)));
+    assert_eq!(
+        autosave.deadline(),
+        Some(start + Duration::from_millis(1200))
+    );
+    assert!(autosave.take_due(start + Duration::from_millis(1200)));
+    assert!(
+        !autosave.take_due(start + Duration::from_millis(1300)),
+        "once"
+    );
+    // Close flushes a pending save or any unsaved change, without asking.
+    assert!(!autosave.take_flush(false));
+    assert!(autosave.take_flush(true));
+    autosave.edited(start);
+    assert!(autosave.take_flush(false));
+    assert_eq!(autosave.deadline(), None);
+    autosave.edited(start);
+    autosave.cancel();
+    assert!(!autosave.take_due(start + Duration::from_secs(5)));
+}
+
+#[test]
+fn autosave_writes_only_new_images_and_drops_a_draft_back_at_the_capture() {
+    let (data, id, original) = setup();
+    let folder = data.path().join("drafts").join(&id);
+    let mut editor = open(data.path(), &id).unwrap();
+    editor
+        .execute(Request::SetBackground {
+            color: Some("#123456".into()),
+        })
+        .unwrap();
+    editor
+        .execute(Request::AutosaveDraft { updated_at_ms: 1 })
+        .unwrap();
+    assert!(editor.snapshot().has_draft && !editor.snapshot().unsaved_changes);
+    let asset = fs::read_dir(folder.join("assets"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let written = fs::metadata(&asset).unwrap().modified().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    editor.execute(crop()).unwrap();
+    editor
+        .execute(Request::AutosaveDraft { updated_at_ms: 2 })
+        .unwrap();
+    // The capture's PNG is already in the draft; only the manifest changes.
+    assert_eq!(fs::metadata(&asset).unwrap().modified().unwrap(), written);
+    let cropped = editor.snapshot().document.clone();
+    assert_eq!(
+        open(data.path(), &id).unwrap().snapshot().document,
+        &cropped
+    );
+
+    // A missing image is resent in full rather than failing the autosave.
+    fs::remove_file(&asset).unwrap();
+    editor
+        .execute(Request::SetBackground { color: None })
+        .unwrap();
+    editor
+        .execute(Request::AutosaveDraft { updated_at_ms: 3 })
+        .unwrap();
+    assert!(asset.exists());
+
+    // Undoing back to the unedited capture removes the draft, as in shipping.
+    for _ in 0..3 {
+        editor.execute(Request::Undo).unwrap();
+    }
+    assert!(editor.snapshot().unsaved_changes);
+    editor
+        .execute(Request::AutosaveDraft { updated_at_ms: 4 })
+        .unwrap();
+    assert!(!folder.exists());
+    assert!(!editor.snapshot().has_draft && !editor.snapshot().unsaved_changes);
+    let reopened = open(data.path(), &id).unwrap();
+    assert!(!reopened.snapshot().has_draft);
+    assert_eq!(reopened.pixels().as_ref(), &original);
+
+    // A draft restored at open is kept even when autosaved unchanged.
+    editor.execute(crop()).unwrap();
+    editor
+        .execute(Request::AutosaveDraft { updated_at_ms: 5 })
+        .unwrap();
+    drop(editor);
+    let mut restored = open(data.path(), &id).unwrap();
+    restored
+        .execute(Request::AutosaveDraft { updated_at_ms: 6 })
+        .unwrap();
+    assert!(restored.snapshot().has_draft && folder.exists());
+}

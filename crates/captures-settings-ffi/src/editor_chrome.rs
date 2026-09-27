@@ -83,6 +83,7 @@ fn copy() -> Value {
             "shape_flyout_columns": chrome::SHAPE_FLYOUT_COLUMNS,
             "shape_flyout_button": chrome::SHAPE_FLYOUT_BUTTON,
             "compact_width": chrome::COMPACT_WIDTH,
+            "draft_autosave_ms": captures_app::editor_session::DRAFT_AUTOSAVE_MS,
         },
         "rail": chrome::RAIL_TOOLS.iter().map(tool).collect::<Vec<_>>(),
         "shapes": chrome::SHAPE_TOOLS.iter().map(tool).collect::<Vec<_>>(),
@@ -96,8 +97,7 @@ fn copy() -> Value {
             "zoom_preset": h::ZOOM_PRESET, "zoom_preset_tooltip": h::ZOOM_PRESET_TOOLTIP,
             "zoom_presets": h::ZOOM_PRESETS,
             "add_images": h::ADD_IMAGES, "recenter": h::RECENTER,
-            "draft_menu": h::DRAFT_MENU, "save_draft": h::SAVE_DRAFT,
-            "discard_edits": h::DISCARD_EDITS, "draft_restored": h::DRAFT_RESTORED,
+            "draft_restored": h::DRAFT_RESTORED,
             "draft_discard": h::DRAFT_DISCARD, "draft_dismiss": h::DRAFT_DISMISS,
             "draft_dismiss_label": h::DRAFT_DISMISS_LABEL,
         },
@@ -313,6 +313,9 @@ mod tests {
         assert_eq!(result["header"]["zoom_presets"], json!([50., 100., 200.]));
         assert_eq!(result["layers"]["menu"], "Layer settings and actions");
         assert_eq!(result["metrics"]["compact_width"], 1040.);
+        assert_eq!(result["metrics"]["draft_autosave_ms"], 700);
+        assert_eq!(result["header"]["draft_discard"], "Discard");
+        assert!(result["header"].get("save_draft").is_none());
         let colors = &result["colors"];
         assert_eq!(colors["swatches"], json!(chrome::colors::SWATCHES));
         assert_eq!(colors["swatches"][0], "#ff3b5c");
