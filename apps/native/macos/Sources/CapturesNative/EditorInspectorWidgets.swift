@@ -33,11 +33,12 @@ enum EditorInspectorCopy {
             (group["align"] as? [[String: Any]] ?? []).compactMap { item in
                 guard let value = item["value"] as? String, let label = item["label"] as? String,
                       let icon = item["icon"] as? String else { return nil }
-                return (value, label, icon)
+                return (value: value, label: label, icon: icon)
             }
-        return parsed.count == 3 ? parsed : [("left", "Align left", "align-left"),
-                                             ("center", "Align center", "align-center"),
-                                             ("right", "Align right", "align-right")]
+        if parsed.count == 3 { return parsed }
+        return [(value: "left", label: "Align left", icon: "align-left"),
+                (value: "center", label: "Align center", icon: "align-center"),
+                (value: "right", label: "Align right", icon: "align-right")]
     }
 }
 
