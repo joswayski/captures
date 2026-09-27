@@ -68,11 +68,14 @@ def main():
                     write_completed_settings(output / f"{appearance}.json")
                     layout_path = output / f"{appearance}-app.jsonl"
                     with layout_path.open("w") as layout_out:
-                        app = subprocess.Popen([str(binary), "--live", "--history-root", str(output / "history"),
+                        app = subprocess.Popen([str(binary), "--live", "--open-preferences",
+                            "--history-root", str(output / "history"),
                             "--settings-file", str(output / f"{appearance}.json"), "--appearance", appearance],
                             env={**env, "CAPTURES_NATIVE_LAYOUT_PROBE": "1"}, stdout=layout_out, stderr=log)
                     children.append(app)
-                    root = run("xdotool", "search", "--sync", "--onlyvisible", "--pid", str(app.pid), "--name", "^Captures$").decode().splitlines()[0]
+                    root = run("xdotool", "search", "--sync", "--onlyvisible", "--pid", str(app.pid), "--name", "^Capture History$").decode().splitlines()[0]
+                    preferences = run("xdotool", "search", "--sync", "--onlyvisible", "--pid", str(app.pid),
+                                      "--name", "^Captures Preferences$").decode().splitlines()[0]
                     time.sleep(1)
                     layout = {"offset": 0, "controls": {}}
 
@@ -98,12 +101,10 @@ def main():
                         time.sleep(.2)
 
                     def open_feedback():
-                        # Preferences > About > Send feedback "Open" (measured
-                        # from the X11 sandbox root with its lifecycle-error panel).
-                        click(root, 196, 14)
-                        click(root, 90, 321)
+                        # Preferences window > About > Send feedback "Open".
+                        click(preferences, 90, 285)
                         time.sleep(.5)
-                        click(root, 847, 501)
+                        click(preferences, 810, 476)
                         window = run("xdotool", "search", "--sync", "--onlyvisible", "--name", "^Send Feedback$").decode().splitlines()[-1]
                         # Shipping's 640×700 window; keep it fully on the 900 px screen.
                         run("xdotool", "windowmove", "--sync", window, "0", "0")
@@ -166,7 +167,9 @@ def main():
                     assert requests.get(timeout=5) == "CONNECT captur.es:443 HTTP/1.1"
                     time.sleep(.5)
                     screenshot(window, "retry")
-                    run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
+                    # Preferences is open beside History, so closing History alone
+                    # would only hide it; quit from History instead.
+                    run("xdotool", "windowactivate", "--sync", root, "key", "ctrl+q")
                     assert app.wait(timeout=10) == 0
                     assert not list((output / "history").glob("*/metadata.json")), "feedback created capture media"
                     print(f"PASS {appearance}: own window, no startup/empty send, explicit submission, busy gate, draft kept across close, offline retry, clean exit", flush=True)

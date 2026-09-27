@@ -487,10 +487,10 @@ def main():
                         if not path.parent.name.startswith(".")]
 
         app = spawn("app", app_command + open_arguments)
-        root = wait(lambda: windows("Captures"), "History")[0]
+        root = wait(lambda: windows("Capture History"), "History")[0]
         if args.external_media:
             wait(started.exists, "second external open blocked after first dispatch")
-            editor = wait(lambda: windows("Recording editor"), "external GIF editor")[0]
+            editor = wait(lambda: windows("Captures Editor"), "external GIF editor")[0]
             run("xdotool", "windowmove", "--sync", editor, "80", "60",
                 "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
             shot(editor, "external-gif-decoded")
@@ -502,7 +502,7 @@ def main():
             shot(editor, "external-gif-staged")
             allowed.touch()
             wait(webm_started.exists, "WebM held while checking MP4 reference controls")
-            mp4_editor = wait(lambda: next((window for window in windows("Recording editor") if window != editor), None),
+            mp4_editor = wait(lambda: next((window for window in windows("Captures Editor") if window != editor), None),
                               "external MP4 editor")
             run("xdotool", "windowmove", "--sync", mp4_editor, "80", "60",
                 "windowsize", "--sync", mp4_editor, "960", "900", "sleep", ".5")
@@ -516,7 +516,7 @@ def main():
             webm_allowed.touch()
             entries = wait(lambda: values if len(values := opened_entries()) == 4 else None,
                            "four imported artifacts without alias duplicate")
-            wait(lambda: len(windows("Recording editor")) == 3 and len(windows("Screenshot editor")) == 1,
+            wait(lambda: len(windows("Captures Editor")) == 3 and len(windows("Captures Screenshot Editor")) == 1,
                  "mixed recording and screenshot editor routing")
             wait(lambda: active_window() == editor,
                  "final canonical alias refocuses the original GIF editor")
@@ -540,9 +540,9 @@ def main():
             assert abs(float(probe["format"]["duration"]) - 1.9) <= .15, probe
             dominant(trimmed, 1, .2)
             shot(editor, "external-gif-saved")
-            for window in windows("Recording editor") + windows("Screenshot editor"):
+            for window in windows("Captures Editor") + windows("Captures Screenshot Editor"):
                 close(window)
-            wait(lambda: not windows("Recording editor") and not windows("Screenshot editor"), "clean editor close")
+            wait(lambda: not windows("Captures Editor") and not windows("Captures Screenshot Editor"), "clean editor close")
             run("xdotool", "windowsize", "--sync", root, "760", "540", "sleep", ".5")
             shot(root, "external-media-error-minimum")
             close(root)
@@ -554,8 +554,8 @@ def main():
             webm_id = next(value["id"] for value in entries if value["saved_path"] == str(webm))
             switch_layout_log("reopened")
             app = spawn("reopened", app_command + ["--open-media", str(webm)])
-            root = wait(lambda: windows("Captures"), "reopened History")[0]
-            editor = wait(lambda: windows("Recording editor"), "closed external WebM reopened")[0]
+            root = wait(lambda: windows("Capture History"), "reopened History")[0]
+            editor = wait(lambda: windows("Captures Editor"), "closed external WebM reopened")[0]
             run("xdotool", "windowmove", "--sync", editor, "80", "60",
                 "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
             shot(editor, "external-webm-decoded")
@@ -583,7 +583,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "external-webm-saved-minimum")
             close(editor)
-            wait(lambda: not windows("Recording editor"), "saved WebM clean close")
+            wait(lambda: not windows("Captures Editor"), "saved WebM clean close")
             close(root)
             wait(lambda: app.poll() is not None, "external-media quit")
             assert app.returncode == 0
@@ -599,8 +599,8 @@ def main():
             return
         time.sleep(1)
         shot(root, "history")
-        click(root, 105, 590)  # First History card: Edit, below the two-line action row.
-        editor = wait(lambda: windows("Recording editor"), "recording editor opens")[0]
+        click(root, 107, 554)  # First History card: Edit, below the two-line action row.
+        editor = wait(lambda: windows("Captures Editor"), "recording editor opens")[0]
         run("xdotool", "windowmove", "--sync", editor, "80", "60")
         run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
         if args.thumbnails:
@@ -718,7 +718,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "replace-saved-minimum")
             close(editor)
-            wait(lambda: not windows("Recording editor"), "rebased editor closes without dirty warning")
+            wait(lambda: not windows("Captures Editor"), "rebased editor closes without dirty warning")
             close(root)
             wait(lambda: app.poll() is not None, "replacement quit")
             assert app.returncode == 0
@@ -801,10 +801,10 @@ def main():
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
             close(editor)
-            assert windows("Recording editor"), "comparison must not mark accepted Maximum edits saved"
+            assert windows("Captures Editor"), "comparison must not mark accepted Maximum edits saved"
             shot(editor, "comparison-dirty-close")
             press(editor, "Discard edits and close")  # Explicitly discard the unsaved Maximum setting.
-            wait(lambda: not windows("Recording editor"), "explicit discard closes comparison editor")
+            wait(lambda: not windows("Captures Editor"), "explicit discard closes comparison editor")
             close(root)
             wait(lambda: app.poll() is not None, "comparison quit")
             assert app.returncode == 0
@@ -983,7 +983,7 @@ def main():
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             assert len(list(history.glob("*/metadata.json"))) == 6
             close(editor)
-            wait(lambda: not windows("Recording editor"), "saved GIF width closes cleanly")
+            wait(lambda: not windows("Captures Editor"), "saved GIF width closes cleanly")
             close(root)
             wait(lambda: app.poll() is not None, "GIF width quit")
             assert app.returncode == 0
@@ -1021,7 +1021,7 @@ def main():
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             assert len(list(history.glob("*/metadata.json"))) == 3
             close(editor)
-            wait(lambda: not windows("Recording editor"), "saved GIF quality closes cleanly")
+            wait(lambda: not windows("Captures Editor"), "saved GIF quality closes cleanly")
             close(root)
             wait(lambda: app.poll() is not None, "GIF quality quit")
             assert app.returncode == 0
@@ -1090,7 +1090,7 @@ def main():
             assert len(list(history.glob("*/metadata.json"))) == 3
             assert set(exports.iterdir()) == {eight, twenty_four}
             close(editor)
-            wait(lambda: not windows("Recording editor"), "restored saved GIF cadence closes cleanly")
+            wait(lambda: not windows("Captures Editor"), "restored saved GIF cadence closes cleanly")
             close(root)
             wait(lambda: app.poll() is not None, "GIF frame-rate quit")
             assert app.returncode == 0
@@ -1174,7 +1174,7 @@ def main():
             shot(editor, "maximum-minimum-units")
             run("xdotool", "key", "Escape")
             close(editor)
-            wait(lambda: not windows("Recording editor"), "restored saved limit closes cleanly")
+            wait(lambda: not windows("Captures Editor"), "restored saved limit closes cleanly")
             close(root)
             wait(lambda: app.poll() is not None, "maximum size quit")
             assert app.returncode == 0
@@ -1239,7 +1239,7 @@ def main():
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
             close(editor)
-            wait(lambda: not windows("Recording editor"), "display-only scaling closes without dirty prompt")
+            wait(lambda: not windows("Captures Editor"), "display-only scaling closes without dirty prompt")
             close(root)
             wait(lambda: app.poll() is not None, "preview scale quit")
             assert app.returncode == 0
@@ -1383,7 +1383,7 @@ def main():
             assert started.read_text().splitlines() == ["call"] * 4, "only cancel, failure, retry and changed-position loads"
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             close(editor)
-            wait(lambda: not windows("Recording editor"), "saved crop closes")
+            wait(lambda: not windows("Captures Editor"), "saved crop closes")
             close(root)
             wait(lambda: app.poll() is not None, "graphical crop quit")
             assert app.returncode == 0
@@ -1529,7 +1529,7 @@ def main():
             close(editor)
             idle(editor)
             shot(editor, "playback-close-confirmation")
-            assert windows("Recording editor"), "accepted unsaved edits still require discard"
+            assert windows("Captures Editor"), "accepted unsaved edits still require discard"
             # Keep editing, then save the accepted edit (not a playback range).
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
             press(editor, "Keep editing")
@@ -1544,7 +1544,7 @@ def main():
             motion_click()
             wait(playing, "saved replay")
             close(editor)
-            wait(lambda: not windows("Recording editor"), "clean close waits for decoder")
+            wait(lambda: not windows("Captures Editor"), "clean close waits for decoder")
             close(root)
             wait(lambda: app.poll() is not None, "playback quit")
             assert app.returncode == 0
@@ -1626,7 +1626,7 @@ def main():
             if args.thumbnails:
                 assert started.read_text().splitlines() == ["call"] * 3, "edits/seek/export never regenerate source thumbnails"
             close(editor)
-            wait(lambda: not windows("Recording editor"), "saved timeline editor closes")
+            wait(lambda: not windows("Captures Editor"), "saved timeline editor closes")
             close(root)
             wait(lambda: app.poll() is not None, "timeline quit")
             assert app.returncode == 0
@@ -1679,7 +1679,7 @@ def main():
             assert '%' in expected, "fixture must discriminate a nonzero delta"
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             close(editor)
-            wait(lambda: not windows("Recording editor"), "estimate and save retain clean close")
+            wait(lambda: not windows("Captures Editor"), "estimate and save retain clean close")
             close(root)
             wait(lambda: app.poll() is not None, "delta quit")
             assert app.returncode == 0
@@ -1750,7 +1750,7 @@ def main():
             shot(editor, "minimum-locked-crop")
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             close(editor)
-            wait(lambda: not windows("Recording editor"), "saved editor closes")
+            wait(lambda: not windows("Captures Editor"), "saved editor closes")
             close(root)
             wait(lambda: app.poll() is not None, "quit")
             assert app.returncode == 0
@@ -1785,10 +1785,10 @@ def main():
             shot(editor, "estimate-trimmed")
             assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
         close(root)
-        assert app.poll() is None and windows("Recording editor"), "dirty editor blocks quit"
+        assert app.poll() is None and windows("Captures Editor"), "dirty editor blocks quit"
         shot(editor, "quit-guard")
         close(editor)
-        assert windows("Recording editor"), "dirty editor requires confirmation"
+        assert windows("Captures Editor"), "dirty editor requires confirmation"
         shot(editor, "close-confirmation")
         press(editor, "Keep editing")  # Keep editing, immediately above the fixed destination row.
         run("xdotool", "windowminimize", root, "sleep", ".5")
@@ -2045,7 +2045,7 @@ def main():
             preset_checks = ["720p-preset", "1080p-preset", "original-preset", "preset-save-gate", "preset-export-pixels", "minimum-resolution-controls"]
         assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
         close(editor)
-        wait(lambda: not windows("Recording editor"), "saved editor closes")
+        wait(lambda: not windows("Captures Editor"), "saved editor closes")
         close(root)
         wait(lambda: app.poll() is not None, "quit")
         assert app.returncode == 0

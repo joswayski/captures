@@ -170,7 +170,7 @@ def main():
             if result:
                 return result
             time.sleep(.05)
-        for title in ("Captures", "Captures Region Selection", "Captures Window Selection",
+        for title in ("Capture History", "Captures Region Selection", "Captures Window Selection",
                       "Captures Capture Controls", "Captures Screenshot Countdown"):
             for window in windows(title):
                 screenshot(window, f"timeout-{title}")
@@ -263,7 +263,7 @@ def main():
             background(0)
             app = spawn(prefix, [str(binary), "--live", "--history-root", str(history),
                                  "--settings-file", str(settings), "--quit-after", "90"])
-            root = wait(lambda: windows("Captures"), "capture workspace")[0]
+            root = wait(lambda: windows("Capture History"), "capture workspace")[0]
             time.sleep(2)
             screenshot(root, f"{prefix}-workspace")
             checked_toolbar_drag = False
@@ -279,9 +279,9 @@ def main():
             def begin_selection(full_display=False, select=True):
                 nonlocal checked_toolbar_drag
                 # History header buttons under the token fonts: New Capture, Capture region, Capture window.
-                click(root, 380 if args.controls else (636 if mode == "region" else 769), 171)
+                click(root, 380 if args.controls else (636 if mode == "region" else 769), 135)
                 selector = wait(lambda: windows(title), f"{mode} selector")[0]
-                if windows("Captures"):
+                if windows("Capture History"):
                     raise RuntimeError("capture workspace was not hidden")
                 # Mapping precedes the first GL paint. Do not inject a complete
                 # drag into an unpainted window during cold texture preparation.
@@ -394,7 +394,7 @@ def main():
                         run("xdotool", "key", "ctrl+shift+F9", "ctrl+shift+F8")
 
                 new_entries = wait(lambda: entries() - captured, "persisted capture")
-                wait(lambda: windows("Captures"), "workspace restored")
+                wait(lambda: windows("Capture History"), "workspace restored")
                 assert len(new_entries) == 1 and len(entries()) == capture_index + 1
                 metadata = new_entries.pop()
                 entry = json.loads(metadata.read_text())
@@ -430,7 +430,7 @@ def main():
                 else:
                     click(selector, 660, 360)  # Empty desktop commits the display.
                 new_entries = wait(lambda: entries() - captured, "display capture from window picker")
-                wait(lambda: windows("Captures"), "display capture workspace restored")
+                wait(lambda: windows("Capture History"), "display capture workspace restored")
                 assert len(new_entries) == 1
                 metadata = new_entries.pop()
                 entry = json.loads(metadata.read_text())
@@ -452,7 +452,7 @@ def main():
                     click(selector, 660, 360)
                 wait(lambda: windows("Captures Screenshot Countdown"), "vanishing-target countdown")
                 fixture.hide()
-                wait(lambda: not windows("Captures Screenshot Countdown") and windows("Captures"),
+                wait(lambda: not windows("Captures Screenshot Countdown") and windows("Capture History"),
                      "vanished-target failure restores workspace")
                 assert len(entries()) == saved_count, "vanished target captured stale or replacement pixels"
                 screenshot(root, f"{prefix}-vanished-target")
@@ -465,7 +465,7 @@ def main():
             run("xdotool", "windowfocus", "--sync", other)
             assert run("xdotool", "getwindowfocus").decode().strip() == other
             run("xdotool", "key", "Escape")
-            wait(lambda: not windows(title) and windows("Captures"), "global Escape")
+            wait(lambda: not windows(title) and windows("Capture History"), "global Escape")
             assert len(entries()) == saved_count, "cancelled selection persisted a capture"
             focus.terminate()
             focus.wait(timeout=5)
@@ -474,7 +474,7 @@ def main():
             queries = saver.queries
             saver.locked = True
             wait(lambda: saver.queries > queries and not windows(title)
-                 and windows("Captures"), "session-lock cancellation")
+                 and windows("Capture History"), "session-lock cancellation")
             saver.locked = False
             time.sleep(.5)
             assert not windows(title), "unlock resumed a cancelled selector"
