@@ -110,7 +110,10 @@ fn copy() -> Value {
             "canvas_background": c::CANVAS_BACKGROUND, "solid_background": c::SOLID_BACKGROUND,
             "custom_color": c::CUSTOM_COLOR, "stroke_color": c::STROKE_COLOR,
             "fill_color": c::FILL_COLOR, "shadow_color": c::SHADOW_COLOR,
+            "text_color": c::TEXT_COLOR, "color": c::COLOR,
         },
+        "eraser": eraser(),
+        "text_format": text_format(),
         "layers": {
             "title": l::TITLE, "add": l::ADD, "hide": l::HIDE, "show": l::SHOW,
             "lock": l::LOCK, "unlock": l::UNLOCK, "menu": l::MENU, "drag": l::DRAG,
@@ -133,6 +136,45 @@ fn copy() -> Value {
             .iter()
             .map(|(value, label)| json!({"value": value, "label": label}))
             .collect::<Vec<_>>(),
+    })
+}
+
+/// Eraser slider ranges, marks and hints (`editor_chrome::eraser`).
+fn eraser() -> Value {
+    use chrome::eraser as e;
+    let marks = |marks: &[(f64, &str)]| {
+        marks
+            .iter()
+            .map(|(value, label)| json!({"value": value, "label": label}))
+            .collect::<Vec<_>>()
+    };
+    json!({
+        "intro": e::INTRO,
+        "tolerance": e::TOLERANCE, "tolerance_label": e::TOLERANCE_LABEL,
+        "tolerance_range": [e::TOLERANCE_RANGE.0, e::TOLERANCE_RANGE.1],
+        "tolerance_marks": marks(&e::TOLERANCE_MARKS),
+        "contiguous": e::CONTIGUOUS,
+        "wand_contiguous_hint": e::WAND_CONTIGUOUS_HINT,
+        "wand_everywhere_hint": e::WAND_EVERYWHERE_HINT,
+        "size": e::SIZE, "size_label": e::SIZE_LABEL,
+        "size_range": [e::SIZE_RANGE.0, e::SIZE_RANGE.1], "size_marks": marks(&e::SIZE_MARKS),
+        "softness": e::SOFTNESS, "softness_label": e::SOFTNESS_LABEL,
+        "softness_range": [e::SOFTNESS_RANGE.0, e::SOFTNESS_RANGE.1],
+        "softness_marks": marks(&e::SOFTNESS_MARKS),
+        "erase_hint": e::ERASE_HINT, "restore_hint": e::RESTORE_HINT,
+    })
+}
+
+/// Bold/Italic and alignment buttons (`editor_chrome::text_format`).
+fn text_format() -> Value {
+    use chrome::text_format as t;
+    json!({
+        "bold": t::BOLD, "italic": t::ITALIC,
+        "align": t::ALIGN
+            .iter()
+            .map(|(value, label, icon)| json!({"value": value, "label": label, "icon": icon}))
+            .collect::<Vec<_>>(),
+        "columns": t::COLUMNS, "button_height": t::BUTTON_HEIGHT, "icon": t::ICON,
     })
 }
 
@@ -324,6 +366,34 @@ mod tests {
         assert_eq!(colors["custom_color"], "Custom color");
         assert_eq!(colors["compact_cell"], 36.);
         assert_eq!(colors["menu_width"], 248.);
+        assert_eq!(colors["text_color"], "Text color");
+        assert_eq!(colors["color"], "Color");
+    }
+
+    #[test]
+    fn copy_carries_eraser_sliders_and_text_format_buttons() {
+        let result = &call(json!({"operation": "copy"}))["result"];
+        let eraser = &result["eraser"];
+        assert_eq!(eraser["tolerance_range"], json!([0., 120.]));
+        assert_eq!(
+            eraser["tolerance_marks"][1],
+            json!({"value": 36., "label": "36"})
+        );
+        assert_eq!(eraser["softness_marks"][0]["label"], "Hard");
+        assert_eq!(eraser["softness_marks"][2]["label"], "Soft");
+        assert_eq!(eraser["size_label"], "Brush size");
+        assert_eq!(
+            eraser["wand_everywhere_hint"],
+            "Click a color to remove it everywhere in the layer."
+        );
+        assert_eq!(eraser["restore_hint"], "Paint to put back what you erased.");
+        let format = &result["text_format"];
+        assert_eq!(format["bold"], "Bold");
+        assert_eq!(
+            format["align"][2],
+            json!({"value": "right", "label": "Align right", "icon": "align-right"})
+        );
+        assert_eq!(format["columns"], 5);
     }
 
     #[test]

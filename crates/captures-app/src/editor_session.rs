@@ -405,6 +405,10 @@ pub struct ActiveTextInput<'a> {
     pub input_id: &'a str,
     pub layer_id: &'a str,
     pub is_new: bool,
+    /// Where the host draws the layer it is typing (shipping inline editor).
+    /// The published preview omits this layer while the input is active, as
+    /// shipping's canvas hides the text under its textarea.
+    pub layout: Option<crate::editor_text::InlineEditorLayout>,
 }
 
 pub struct EditorSession {
@@ -442,6 +446,23 @@ struct TransientTextInput {
     is_new: bool,
     document: Document,
     original_pixels: Arc<RgbaImage>,
+}
+
+/// The text-input preview: `document` with the edited layer hidden, because
+/// the host draws that layer in its inline editor (shipping `hiddenElementId`).
+fn render_text_input_frame(
+    document: &Document,
+    layer_id: &str,
+    assets: &BTreeMap<String, Arc<RgbaImage>>,
+    fonts: Option<&mut SessionFonts>,
+) -> Result<RgbaImage, String> {
+    let mut hidden = document.clone();
+    for element in &mut hidden.elements {
+        if element.base().id == layer_id {
+            element.base_mut().visible = false;
+        }
+    }
+    render_frame(&hidden, assets, fonts)
 }
 
 struct SessionFonts {
@@ -603,6 +624,14 @@ impl EditorSession {
                 input_id: &input.input_id,
                 layer_id: &input.layer_id,
                 is_new: input.is_new,
+                layout: document
+                    .elements
+                    .iter()
+                    .find_map(|element| match element {
+                        Element::Text(text) if text.base.id == input.layer_id => Some(text),
+                        _ => None,
+                    })
+                    .and_then(|text| crate::editor_text::inline_editor_layout(text).ok()),
             }),
             document,
             font_families: self.fonts.as_ref().map(|fonts| &fonts.assets.families),
@@ -1199,7 +1228,7 @@ impl EditorSession {
 
         let original_pixels = self.pixels.clone();
         let mut document = self.history.current().clone();
-        let (layer_id, is_new, pixels) = match target {
+        let (layer_id, is_new) = match target {
             TextInputTarget::Existing { id } => {
                 let element = document
                     .elements
@@ -1212,14 +1241,19 @@ impl EditorSession {
                 if !text.base.visible || text.base.locked {
                     return Err("Inline text input requires a visible, unlocked text layer.".into());
                 }
-                (id, false, original_pixels.clone())
+                (id, false)
             }
             TextInputTarget::New { create } => {
                 let id = prepare_text_create(&mut document, create, self.fonts.as_mut())?;
-                let pixels = Arc::new(render_frame(&document, &self.assets, self.fonts.as_mut())?);
-                (id, true, pixels)
+                (id, true)
             }
         };
+        let pixels = Arc::new(render_text_input_frame(
+            &document,
+            &layer_id,
+            &self.assets,
+            self.fonts.as_mut(),
+        )?);
         self.text_input = Some(TransientTextInput {
             input_id,
             layer_id,
@@ -1253,7 +1287,8 @@ impl EditorSession {
             .as_mut()
             .ok_or("Text requires explicit font bytes.")?;
         *element = prepare_text_edit(element, true, &mut fonts.renderer, &fonts.assets.families)?;
-        let pixels = render_frame(&document, &self.assets, self.fonts.as_mut())?;
+        let pixels =
+            render_text_input_frame(&document, &layer_id, &self.assets, self.fonts.as_mut())?;
 
         self.text_input
             .as_mut()
@@ -1668,11 +1703,10 @@ impl EditorSession {
     }
 }
 
-fn prepare_text_create(
-    document: &mut Document,
-    create: TextCreate,
-    fonts: Option<&mut SessionFonts>,
-) -> Result<String, String> {
+/// The unfitted layer a Text click creates: the size/preset rules, eight-em
+/// composing width and centred Box placement. Hosts may use it to draw their
+/// inline editor before the session accepts the input.
+pub fn new_text_element(id: String, create: &TextCreate) -> Result<TextElement, String> {
     if !(8. ..=512.).contains(&create.font_size) {
         return Err("Text property size must be between 8 and 512.".into());
     }
@@ -1690,24 +1724,12 @@ fn prepare_text_create(
     let font_family = preset
         .map(|preset| preset.font_family)
         .unwrap_or(&create.font_family);
-    let fonts = fonts.ok_or("Text requires explicit font bytes.")?;
-    if preset.is_some() && !fonts.assets.families.contains_key(font_family) {
-        return Err(format!(
-            "Text style requires unavailable font family: {font_family}"
-        ));
-    }
-    let id = fresh_id(|id| {
-        document
-            .elements
-            .iter()
-            .any(|element| element.base().id == id)
-    });
     let width = (create.font_size * 8.).round();
     let centered =
         preset.is_some_and(|preset| matches!(preset.id, "box" | "mono-box" | "rounded-box"));
-    let element = TextElement {
+    Ok(TextElement {
         base: ElementBase {
-            id: id.clone(),
+            id,
             x: create.point.x - if centered { width / 2. } else { 0. },
             y: create.point.y,
             rotation: None,
@@ -1716,7 +1738,7 @@ fn prepare_text_create(
             opacity: 100.,
             blend_mode: "source-over".into(),
         },
-        text: create.text,
+        text: create.text.clone(),
         font_size: create.font_size,
         width,
         auto_width: Some(true),
@@ -1724,14 +1746,35 @@ fn prepare_text_create(
         bold: false,
         italic: false,
         align: if centered { "center" } else { "left" }.into(),
-        color: create.color,
+        color: create.color.clone(),
         background: preset.and_then(|preset| preset.background.map(str::to_owned)),
         outlined: preset.is_some_and(|preset| preset.outlined),
         rounded_background: preset.is_some_and(|preset| preset.rounded_background),
         drop_shadow: None,
         drop_shadow_style: None,
         extra: Default::default(),
-    };
+    })
+}
+
+fn prepare_text_create(
+    document: &mut Document,
+    create: TextCreate,
+    fonts: Option<&mut SessionFonts>,
+) -> Result<String, String> {
+    let id = fresh_id(|id| {
+        document
+            .elements
+            .iter()
+            .any(|element| element.base().id == id)
+    });
+    let element = new_text_element(id.clone(), &create)?;
+    let fonts = fonts.ok_or("Text requires explicit font bytes.")?;
+    if create.style_preset.is_some() && !fonts.assets.families.contains_key(&element.font_family) {
+        return Err(format!(
+            "Text style requires unavailable font family: {}",
+            element.font_family
+        ));
+    }
     let element = prepare_text_edit(&element, true, &mut fonts.renderer, &fonts.assets.families)?;
     document.elements.push(Element::Text(element));
     Ok(id)

@@ -3273,6 +3273,7 @@ fn transient_new_text_previews_commit_as_one_history_step() {
         .execute(Request::SaveDraft { updated_at_ms: 90 })
         .unwrap();
     let before = editor.snapshot().document.clone();
+    let before_pixels = editor.pixels();
     let can_undo = editor.snapshot().can_undo;
 
     editor
@@ -3295,10 +3296,23 @@ fn transient_new_text_previews_commit_as_one_history_step() {
         panic!()
     };
     assert_eq!(preview_text.text, "LL");
+    // The host draws the typed layer in its inline editor; the preview omits it.
+    assert_eq!(preview_pixels, before_pixels);
+    let layout = editor
+        .snapshot()
+        .active_text_input
+        .unwrap()
+        .layout
+        .expect("inline editor layout for the typed layer");
+    assert_eq!(
+        (layout.frame.x, layout.frame.y),
+        (preview_text.base.x, preview_text.base.y)
+    );
+    assert_eq!(layout.frame.width, preview_text.width);
     editor.execute(finish_text_input("typing-1", true)).unwrap();
     assert!(editor.snapshot().active_text_input.is_none());
     assert_eq!(editor.snapshot().document, &preview);
-    assert_eq!(editor.pixels(), preview_pixels);
+    assert_ne!(editor.pixels(), preview_pixels);
     assert!(editor.snapshot().unsaved_changes);
 
     editor.execute(Request::Undo).unwrap();
@@ -3478,6 +3492,10 @@ fn active_text_input_gates_persistence_exports_imports_and_other_commands() {
     editor
         .execute(begin_existing_text_input("gate", "label"))
         .unwrap();
+    // The preview omits the edited label (the host draws it); refused
+    // commands must leave that preview untouched.
+    let preview = editor.pixels();
+    assert_ne!(preview, pixels);
 
     for request in [
         Request::Undo,
@@ -3519,8 +3537,9 @@ fn active_text_input_gates_persistence_exports_imports_and_other_commands() {
     );
     editor.execute(Request::Snapshot).unwrap();
     assert_eq!(editor.snapshot().document, &document);
-    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    assert!(Arc::ptr_eq(&preview, &editor.pixels()));
     editor.execute(finish_text_input("gate", false)).unwrap();
+    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
 }
 
 #[test]

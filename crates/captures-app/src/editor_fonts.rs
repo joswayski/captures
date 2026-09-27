@@ -123,3 +123,44 @@ pub fn bundled() -> FontAssets {
         })
         .clone()
 }
+
+/// One bundled face for a document family key and trait pair, or `None` for a
+/// family this build does not bundle (such as a reopened draft's own font).
+/// Hosts use it to draw the inline text editor in the layer's face.
+#[must_use]
+pub fn bundled_face(family: &str, bold: bool, italic: bool) -> Option<Arc<[u8]>> {
+    let style = match (bold, italic) {
+        (false, false) => "regular",
+        (true, false) => "bold",
+        (false, true) => "italic",
+        (true, true) => "bold-italic",
+    };
+    let id = match family {
+        "rounded" => format!("nunito-rounded-3-601-{style}"),
+        "sans" | "serif" | "mono" => format!("liberation-{family}-2-1-5-{style}"),
+        _ => return None,
+    };
+    bundled().files.get(&id).cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_bundled_family_has_all_four_faces() {
+        for family in bundled().families.keys() {
+            for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+                assert!(
+                    bundled_face(family, bold, italic).is_some(),
+                    "{family} {bold} {italic}"
+                );
+            }
+        }
+        assert!(bundled_face("Captures Shaping Test", false, false).is_none());
+        assert_ne!(
+            bundled_face("sans", true, false),
+            bundled_face("sans", false, false)
+        );
+    }
+}

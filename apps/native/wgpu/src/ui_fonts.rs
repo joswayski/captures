@@ -55,7 +55,55 @@ pub fn install(ctx: &egui::Context) {
     fonts
         .families
         .insert(egui::FontFamily::Name(SEMIBOLD.into()), semibold_family);
+    // The screenshot editor's inline text box draws in the layer's own
+    // bundled face; UI fallbacks cover glyphs that face lacks.
+    for family in EDITOR_FAMILIES {
+        for (bold, italic) in EDITOR_TRAITS {
+            let Some(bytes) = captures_app::editor_fonts::bundled_face(family, bold, italic)
+            else {
+                continue;
+            };
+            let name = editor_face_name(family, bold, italic);
+            fonts.font_data.insert(
+                name.clone(),
+                egui::FontData::from_owned(bytes.to_vec()).into(),
+            );
+            let mut stack = vec![name.clone()];
+            stack.extend(fallbacks.iter().cloned());
+            fonts.families.insert(egui::FontFamily::Name(name.into()), stack);
+        }
+    }
     ctx.set_fonts(fonts);
+}
+
+const EDITOR_FAMILIES: [&str; 4] = ["sans", "serif", "mono", "rounded"];
+const EDITOR_TRAITS: [(bool, bool); 4] = [(false, false), (true, false), (false, true), (true, true)];
+
+fn editor_face_name(family: &str, bold: bool, italic: bool) -> String {
+    format!(
+        "editor-text:{family}:{}{}",
+        if bold { "bold" } else { "regular" },
+        if italic { "-italic" } else { "" }
+    )
+}
+
+/// The egui family for a text layer's document family key and traits: the
+/// bundled face this build embeds, or the UI face for a draft's own font (and
+/// in contexts that never installed the editor faces).
+pub fn editor_text_family(
+    ctx: &egui::Context,
+    family: &str,
+    bold: bool,
+    italic: bool,
+) -> egui::FontFamily {
+    let named = egui::FontFamily::Name(editor_face_name(family, bold, italic).into());
+    if EDITOR_FAMILIES.contains(&family)
+        && ctx.fonts(|fonts| fonts.definitions().families.contains_key(&named))
+    {
+        named
+    } else {
+        egui::FontFamily::Proportional
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -155,6 +203,37 @@ mod tests {
             )
         });
         assert!(galley.size().x > 0.);
+        ctx.end_pass().textures_delta.clear();
+    }
+
+    #[test]
+    fn editor_text_faces_are_installed_for_every_bundled_family_and_trait() {
+        let ctx = egui::Context::default();
+        assert_eq!(
+            editor_text_family(&ctx, "sans", false, false),
+            egui::FontFamily::Proportional,
+            "uninstalled contexts fall back to the UI face"
+        );
+        install(&ctx);
+        ctx.begin_pass(Default::default());
+        for family in EDITOR_FAMILIES {
+            for (bold, italic) in EDITOR_TRAITS {
+                let face = editor_text_family(&ctx, family, bold, italic);
+                assert_ne!(face, egui::FontFamily::Proportional);
+                let galley = ctx.fonts_mut(|fonts| {
+                    fonts.layout_no_wrap(
+                        "Label αβ".into(),
+                        egui::FontId::new(24., face),
+                        egui::Color32::WHITE,
+                    )
+                });
+                assert!(galley.size().x > 0.);
+            }
+        }
+        assert_eq!(
+            editor_text_family(&ctx, "Captures Shaping Test", false, false),
+            egui::FontFamily::Proportional
+        );
         ctx.end_pass().textures_delta.clear();
     }
 }

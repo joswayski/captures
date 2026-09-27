@@ -383,6 +383,10 @@ pub mod colors {
     pub const STROKE_COLOR: &str = "Stroke color";
     pub const FILL_COLOR: &str = "Fill color";
     pub const SHADOW_COLOR: &str = "Shadow color";
+    /// Text layer glyph colour (`ColorField label="Text color"`).
+    pub const TEXT_COLOR: &str = "Text color";
+    /// New text and open-stroke drawing defaults (`label="Color"`).
+    pub const COLOR: &str = "Color";
 
     /// A swatch's accessible name, e.g. "Stroke color: #ff3b5c".
     #[must_use]
@@ -462,6 +466,76 @@ pub mod colors {
             },
         }
     }
+}
+
+/// Shipping Eraser properties (`ScreenshotEditor.tsx`, the `remove-bg`
+/// section): Wand Tolerance, brush Size and Softness `RangeSlider`s with their
+/// marks, and the hint under each mode.
+pub mod eraser {
+    pub const INTRO: &str = "Remove a color, paint it out, or paint it back.";
+    pub const TOLERANCE: &str = "Tolerance";
+    pub const TOLERANCE_LABEL: &str = "Color tolerance";
+    /// Slider values are the wand's own 0–255 channel-distance tolerance,
+    /// unscaled; shipping simply stops the slider at 120.
+    pub const TOLERANCE_RANGE: (f64, f64) = (0., 120.);
+    pub const TOLERANCE_MARKS: [(f64, &str); 4] =
+        [(0., "0"), (36., "36"), (80., "80"), (120., "120")];
+    pub const CONTIGUOUS: &str = "Contiguous only";
+    pub const WAND_CONTIGUOUS_HINT: &str = "Click a color to remove that area.";
+    pub const WAND_EVERYWHERE_HINT: &str = "Click a color to remove it everywhere in the layer.";
+    pub const SIZE: &str = "Size";
+    pub const SIZE_LABEL: &str = "Brush size";
+    pub const SIZE_RANGE: (f64, f64) = (4., 120.);
+    pub const SIZE_MARKS: [(f64, &str); 4] = [(4., "4"), (28., "28"), (64., "64"), (120., "120")];
+    pub const SOFTNESS: &str = "Softness";
+    pub const SOFTNESS_LABEL: &str = "Brush softness";
+    pub const SOFTNESS_RANGE: (f64, f64) = (0., 100.);
+    pub const SOFTNESS_MARKS: [(f64, &str); 3] = [(0., "Hard"), (50., "50%"), (100., "Soft")];
+    pub const ERASE_HINT: &str = "Paint to erase.";
+    pub const RESTORE_HINT: &str = "Paint to put back what you erased.";
+
+    #[must_use]
+    pub fn wand_hint(contiguous: bool) -> &'static str {
+        if contiguous {
+            WAND_CONTIGUOUS_HINT
+        } else {
+            WAND_EVERYWHERE_HINT
+        }
+    }
+
+    /// Readouts: `${tolerance}`, `${size} px`, `${softness}%`.
+    #[must_use]
+    pub fn tolerance_text(value: f64) -> String {
+        format!("{}", value.round())
+    }
+
+    #[must_use]
+    pub fn size_text(value: f64) -> String {
+        format!("{} px", value.round())
+    }
+
+    #[must_use]
+    pub fn softness_text(value: f64) -> String {
+        format!("{}%", value.round())
+    }
+}
+
+/// Shipping text format buttons (`.screenshot-format-buttons`): B, I, then
+/// the three alignment icons, in one five-column row.
+pub mod text_format {
+    pub const BOLD: &str = "Bold";
+    pub const ITALIC: &str = "Italic";
+    /// `(value, accessible name, icon)`.
+    pub const ALIGN: [(&str, &str, &str); 3] = [
+        ("left", "Align left", "align-left"),
+        ("center", "Align center", "align-center"),
+        ("right", "Align right", "align-right"),
+    ];
+    /// Five equal columns separated by `--s-2`; buttons are 32 px tall.
+    pub const COLUMNS: usize = 5;
+    pub const BUTTON_HEIGHT: f64 = 32.;
+    /// Glyph and icon size (`svg { width: 14px }`, 1.8 stroke).
+    pub const ICON: f64 = 14.;
 }
 
 /// Shipping `DrawToolPreview`: the stroke or brush sample above the drawing
