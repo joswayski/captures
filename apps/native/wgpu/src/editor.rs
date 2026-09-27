@@ -5430,6 +5430,177 @@ mod tests {
     }
 
     #[test]
+    fn live_edits_queue_while_a_job_runs_and_fold_by_key() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(false)));
+        let (tx, rx) = mpsc::channel();
+        let x = |value: f64| Request::Layer {
+            id: "capture-background".into(),
+            edit: LayerEdit::Geometry {
+                x: Some(value),
+                y: None,
+                width: None,
+                height: None,
+            },
+        };
+        view.live_edit(&tx, "geometry:x".into(), x(1.));
+        assert!(
+            matches!(rx.try_recv(), Ok(Job::Apply(Request::Live { key, .. })) if key == "geometry:x")
+        );
+        assert!(view.pending);
+        for value in [12., 123.] {
+            view.live_edit(&tx, "geometry:x".into(), x(value));
+        }
+        view.live_edit(&tx, "opacity".into(), x(7.));
+        assert!(rx.try_recv().is_err(), "live edits wait for the running job");
+        assert_eq!(view.live_queue.len(), 2, "the newest edit per key waits, in order");
+        view.receive(&ctx, Ok(presented(false)));
+        view.flush_live(&tx);
+        let Ok(Job::Apply(Request::Live { key, request })) = rx.try_recv() else {
+            panic!("the queued edit applies once the worker is free");
+        };
+        assert_eq!(key, "geometry:x");
+        assert!(matches!(
+            *request,
+            Request::Layer { edit: LayerEdit::Geometry { x: Some(value), .. }, .. } if value == 123.
+        ));
+        view.flush_live(&tx);
+        assert!(rx.try_recv().is_err(), "one job at a time");
+        view.receive(&ctx, Err("rejected".into()));
+        assert!(view.live_queue.is_empty(), "a rejected edit drops the rest of its burst");
+    }
+
+    #[test]
+    fn layer_rows_rename_on_double_click_drag_to_reorder_and_open_the_layer_menu() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let mut view = View::default();
+        let mut initial = presented(false);
+        let mut second = initial.document.elements[0].clone();
+        let Element::Image(image) = &mut second else {
+            panic!()
+        };
+        image.base.id = "front".into();
+        image.base.locked = false;
+        image.name = "Front".into();
+        Arc::make_mut(&mut initial.document).elements.push(second);
+        view.receive(&ctx, Ok(initial));
+        view.section = Section::Layers;
+        let (tx, rx) = mpsc::channel();
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(500., 700.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        layers::show(ui, &tokens, view, &tx, 400.);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let position = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing text: {label}"))
+        };
+        let press = |view: &mut View, pos, pressed| {
+            frame(
+                view,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        };
+        let output = frame(&mut view, vec![]);
+        let front = position(&output, "Front");
+        let back = position(&output, "Original screenshot");
+        assert!(front.y < back.y, "rows list front to back");
+        frame(&mut view, vec![egui::Event::PointerMoved(front)]);
+        for _ in 0..2 {
+            press(&mut view, front, true);
+            press(&mut view, front, false);
+        }
+        assert_eq!(view.selected_layer.as_deref(), Some("front"));
+        assert!(
+            view.layers.rename.is_some(),
+            "double-clicking an image row renames it inline"
+        );
+        frame(&mut view, vec![]);
+        assert_eq!(view.layers.rename.as_ref().map(|rename| rename.value.as_str()), Some("Front"));
+        view.layers.rename.as_mut().unwrap().value = "Renamed".into();
+        // Leaving the field (a click elsewhere) commits, like shipping's blur.
+        press(&mut view, egui::pos2(250., 650.), true);
+        press(&mut view, egui::pos2(250., 650.), false);
+        frame(&mut view, vec![]);
+        assert!(view.layers.rename.is_none());
+        match rx.try_recv() {
+            Ok(Job::Apply(Request::Layer {
+                id,
+                edit: LayerEdit::Rename { name },
+            })) => {
+                assert_eq!(id, "front");
+                assert_eq!(name, "Renamed");
+            }
+            other => panic!("expected one rename, got {}", other.is_ok()),
+        }
+        view.pending = false;
+
+        // Drag the front row below the back row: one reorder request.
+        let target = back + egui::vec2(0., 20.);
+        frame(&mut view, vec![egui::Event::PointerMoved(front)]);
+        press(&mut view, front, true);
+        for step in 1..=4 {
+            let pos = front.lerp(target, step as f32 / 4.);
+            frame(&mut view, vec![egui::Event::PointerMoved(pos)]);
+        }
+        assert!(view.layers.dragging() == Some("front"));
+        press(&mut view, target, false);
+        frame(&mut view, vec![]);
+        match rx.try_recv() {
+            Ok(Job::Apply(Request::Layer {
+                id,
+                edit:
+                    LayerEdit::Reorder {
+                        target_id,
+                        placement: LayerPlacement::After,
+                    },
+            })) => {
+                assert_eq!((id.as_str(), target_id.as_str()), ("front", "capture-background"));
+            }
+            _ => panic!("expected one reorder below the back row"),
+        }
+        assert!(rx.try_recv().is_err(), "a drag is one undo step");
+        view.pending = false;
+
+        // The ⋯ button opens the layer settings popover for its row.
+        view.layers.menu = Some("front".into());
+        frame(&mut view, vec![]); // A new popover area measures itself first.
+        let output = frame(&mut view, vec![]);
+        for label in ["Blend mode", "Bring to front", "Send to back", "Merge visible", "Duplicate"] {
+            position(&output, label);
+        }
+    }
+
+    #[test]
     fn context_menu_targets_row_not_selection_and_keeps_output_until_acceptance() {
         let ctx = egui::Context::default();
         let tokens = crate::tokens::load().remove("light-mustard").unwrap();

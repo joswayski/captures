@@ -36,22 +36,36 @@ struct ScreenshotEditorState: Equatable {
     mutating func close() { generation += 1; artifactID = nil; snapshot = nil; busy = false }
 }
 
-/// Shipping `.screenshot-layer-list li` in the native 32pt row: kind icon,
-/// shipping layer name, muted kind label and eye/lock quick actions.
+/// Shipping `.screenshot-layer-list li`: a grip, a live preview over the
+/// transparency checkerboard, the layer name over its muted kind, and eye,
+/// lock and ⋯ quick actions. Hidden layers fade; locked rows dim the grip.
+/// The selected row takes the selected surface with an accent border.
 private final class EditorLayerCell: NSTableCellView {
     let titleLabel: NSTextField
     let detailLabel: NSTextField
+    /// Shipping `.screenshot-layer-copy input`, shown while renaming.
+    let renameField: NSTextField
     let iconName: String
+    let thumbnail: NSImage?
+    let coversPreview: Bool
+    let layerLocked: Bool
+    let layerVisible: Bool
+    var rowSelected = false { didSet { needsDisplay = true } }
     let visibilityButton: CaptureButton
     let lockButton: CaptureButton
+    let menuButton: CaptureButton
     private let tokens: Tokens
 
-    init(title: NSTextField, detail: NSTextField, iconName: String, tokens: Tokens,
-         visibility: CaptureButton, lock: CaptureButton) {
-        titleLabel = title; detailLabel = detail; self.iconName = iconName; self.tokens = tokens
-        visibilityButton = visibility; lockButton = lock
+    init(title: NSTextField, detail: NSTextField, rename: NSTextField, iconName: String,
+         thumbnail: NSImage?, coversPreview: Bool, locked: Bool, visible: Bool, tokens: Tokens,
+         visibility: CaptureButton, lock: CaptureButton, menu: CaptureButton) {
+        titleLabel = title; detailLabel = detail; renameField = rename
+        self.iconName = iconName; self.thumbnail = thumbnail; self.coversPreview = coversPreview
+        layerLocked = locked; layerVisible = visible; self.tokens = tokens
+        visibilityButton = visibility; lockButton = lock; menuButton = menu
         super.init(frame: .zero)
-        addSubview(title); addSubview(detail); addSubview(visibility); addSubview(lock)
+        let views: [NSView] = [title, detail, rename, visibility, lock, menu]
+        views.forEach { addSubview($0) }
         textField = title
     }
 
@@ -59,32 +73,89 @@ private final class EditorLayerCell: NSTableCellView {
 
     override var isFlipped: Bool { true }
 
+    /// `.screenshot-layer-preview`: 44×32 after the 12pt grip column.
+    var previewRect: NSRect {
+        NSRect(x: 6 + 12 + 8, y: floor((bounds.height - 32) / 2), width: 44, height: 32)
+    }
+
     override func layout() {
         super.layout()
-        let inset: CGFloat = 8
-        let gap: CGFloat = 8
-        let trailingEdge = min(bounds.maxX, visibleRect.maxX) - 4
-        lockButton.frame = NSRect(x: trailingEdge - 22, y: (bounds.height - 26) / 2, width: 22, height: 26)
-        visibilityButton.frame = NSRect(x: lockButton.frame.minX - 22, y: lockButton.frame.minY,
-                                        width: 22, height: 26)
-        let actionsLeft = visibilityButton.frame.minX - 4
-        let titleLeft = inset + 16 + gap
-        let titleWidth = titleLabel.intrinsicContentSize.width
-        let detailWidth = detailLabel.intrinsicContentSize.width
-        // The name has priority; the kind shows when both fit.
-        let showDetail = titleLeft + titleWidth + gap + detailWidth <= actionsLeft
-        detailLabel.isHidden = !showDetail
-        detailLabel.frame = NSRect(x: actionsLeft - detailWidth, y: (bounds.height - 16) / 2,
-                                   width: showDetail ? detailWidth : 0, height: 16)
-        let titleRight = showDetail ? detailLabel.frame.minX - gap : actionsLeft - gap
-        titleLabel.frame = NSRect(x: titleLeft, y: (bounds.height - 18) / 2,
-                                  width: max(0, titleRight - titleLeft), height: 18)
+        let trailingEdge = min(bounds.maxX, visibleRect.maxX) - 6
+        let action = NSSize(width: 25, height: 28)
+        let top = floor((bounds.height - action.height) / 2)
+        menuButton.frame = NSRect(x: trailingEdge - action.width, y: top,
+                                  width: action.width, height: action.height)
+        lockButton.frame = menuButton.frame.offsetBy(dx: -(action.width + 2), dy: 0)
+        visibilityButton.frame = lockButton.frame.offsetBy(dx: -(action.width + 2), dy: 0)
+        let copyLeft = previewRect.maxX + 8
+        let copyWidth = max(0, visibilityButton.frame.minX - 4 - copyLeft)
+        titleLabel.frame = NSRect(x: copyLeft, y: bounds.midY - 18, width: copyWidth, height: 17)
+        renameField.frame = NSRect(x: copyLeft, y: bounds.midY - 21, width: copyWidth, height: 22)
+        detailLabel.frame = NSRect(x: copyLeft, y: bounds.midY + 2, width: copyWidth, height: 15)
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        let radius = tokens.number("r-lg")
+        let row = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
+        if rowSelected {
+            tokens.color("surface-selected").setFill(); row.fill()
+            tokens.color("theme-accent").withAlphaComponent(0.4).setStroke(); row.lineWidth = 1; row.stroke()
+        }
         super.draw(dirtyRect)
-        tokens.color("text-muted").withAlphaComponent(titleLabel.alphaValue).setStroke()
-        ShippingIcons.stroke(iconName, in: NSRect(x: 8, y: (bounds.height - 16) / 2, width: 16, height: 16))
+        tokens.color("text-subtle").withAlphaComponent(layerLocked ? 0.35 : 0.5).setStroke()
+        ShippingIcons.stroke("grip", in: NSRect(x: 3, y: floor((bounds.height - 18) / 2), width: 18, height: 18))
+        let preview = previewRect
+        let fade: CGFloat = layerVisible ? 1 : 0.42
+        NSGraphicsContext.saveGraphicsState()
+        let frame = NSBezierPath(roundedRect: preview, xRadius: tokens.number("r-sm"), yRadius: tokens.number("r-sm"))
+        frame.addClip()
+        tokens.color("canvas-checker-b").setFill(); preview.fill()
+        tokens.color("canvas-checker-a").setFill()
+        let tile: CGFloat = 5
+        var tileY = preview.minY
+        var rowIndex = 0
+        while tileY < preview.maxY {
+            var tileX = preview.minX + (rowIndex % 2 == 0 ? 0 : tile)
+            while tileX < preview.maxX {
+                NSRect(x: tileX, y: tileY, width: tile, height: tile).fill()
+                tileX += 2 * tile
+            }
+            tileY += tile; rowIndex += 1
+        }
+        if let thumbnail, thumbnail.size.width > 0, thumbnail.size.height > 0 {
+            let widthScale = preview.width / thumbnail.size.width
+            let heightScale = preview.height / thumbnail.size.height
+            let scale = coversPreview ? max(widthScale, heightScale) : min(widthScale, heightScale)
+            let size = NSSize(width: thumbnail.size.width * scale, height: thumbnail.size.height * scale)
+            let target = NSRect(x: preview.midX - size.width / 2, y: preview.midY - size.height / 2,
+                                width: size.width, height: size.height)
+            thumbnail.draw(in: target, from: .zero, operation: .sourceOver, fraction: fade,
+                           respectFlipped: true, hints: nil)
+        } else {
+            tokens.color("text-muted").withAlphaComponent(fade).setStroke()
+            ShippingIcons.stroke(iconName, in: NSRect(x: preview.midX - 9, y: preview.midY - 9, width: 18, height: 18))
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        tokens.color("border").setStroke()
+        frame.lineWidth = 1; frame.stroke()
+    }
+}
+
+/// Decoded shared-session row previews, keyed by their data URL so an
+/// unchanged layer reuses its image across snapshots.
+enum EditorLayerThumbnails {
+    private static var cache: [String: NSImage] = [:]
+
+    static func image(_ dataURL: String?) -> NSImage? {
+        guard let dataURL else { return nil }
+        if let cached = cache[dataURL] { return cached }
+        let prefix = "data:image/png;base64,"
+        guard dataURL.hasPrefix(prefix),
+              let data = Data(base64Encoded: String(dataURL.dropFirst(prefix.count))),
+              let image = NSImage(data: data) else { return nil }
+        if cache.count > 256 { cache.removeAll() }
+        cache[dataURL] = image
+        return image
     }
 }
 
@@ -1097,10 +1168,40 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let inlineTextEditor = EditorInlineTextView()
     private var inlineTextDoneButton: CaptureButton!
     private var inlineTextCancelButton: CaptureButton!
-    private let layerName = NSTextField()
-    private let layerOpacity = NSTextField()
-    private let layerX = NSTextField()
-    private let layerY = NSTextField()
+    /// Shipping image Width/Height/X/Y: live number fields.
+    private let layerWidth = TokenNumberField()
+    private let layerHeight = TokenNumberField()
+    private let layerX = TokenNumberField()
+    private let layerY = TokenNumberField()
+    private var layerGeometryLabels: [NSTextField] = []
+    private var layerGeometryHint: NSTextField!
+    /// Properties for the selected layer, below the always-visible Layers list.
+    private let layerPropertiesPanel = Surface()
+    private let layerPropertiesHeading = NSTextField(labelWithString: "")
+    private let layerPropertiesRule = Surface()
+    private var layerListScroll: NSScrollView!
+    /// Shipping `.screenshot-layer-menu-panel`, opened from a row's ⋯ button.
+    private let layerMenuCard = Surface()
+    private(set) var layerMenuID: String?
+    private var layerMenuMonitor: Any?
+    private let layerBlendMode = ClosurePopUpButton(frame: .zero, pullsDown: false)
+    private let layerOpacity = TokenSlider(value: 100, minValue: 0, maxValue: 100, target: nil, action: nil)
+    private let layerOpacityValue = NSTextField(labelWithString: "100%")
+    private var layerMenuSections: [(title: NSTextField, views: [NSView])] = []
+    private var layerMenuRules: [Surface] = []
+    private let layerMenuFooter = Surface()
+    private var bringFrontButton: CaptureButton!
+    private var sendBackButton: CaptureButton!
+    private var mergeDownButton: CaptureButton!
+    private var mergeVisibleButton: CaptureButton!
+    private var flattenButton: CaptureButton!
+    /// The image layer whose name is being edited inline in its row.
+    private(set) var renamingLayerID: String?
+    /// Live inspector edits (typing, steppers, sliders, toggles) apply at once
+    /// like shipping. Edits sharing a key fold into one undo step in the
+    /// session; while another command runs, the newest per key waits here.
+    private var liveQueue: [(key: String, request: [String: Any])] = []
+    private var liveSerial = 0
     private let outputQualityValue = NSTextField()
     private let outputPngPalette = NSTextField()
     private let outputByteBudget = NSTextField()
@@ -1125,7 +1226,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// x offsets/widths inside the group, and the group width.
     private var exportGroups: [String: (caption: NSTextField, views: [(NSView, CGFloat, CGFloat)], width: CGFloat)] = [:]
     private var sectionControl: NSSegmentedControl!
-    private var drawTool: NSPopUpButton!
+    /// The drawing tool the rail (and its Shapes flyout or Eraser mode) chose.
+    private var drawShape: EditorDrawOverlay.Shape = .rectangle
+    /// Shipping `Eraser mode`: Wand, Erase or Restore under the Eraser tool.
+    private var eraserMode: NSSegmentedControl!
     private var lastBackgroundTool: EditorDrawOverlay.Shape = .wand
     private var lastGroupedShape: EditorDrawOverlay.Shape = .rectangle
     private var toolRailButtons: [(key: String, button: CaptureButton)] = []
@@ -1206,13 +1310,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let textShadowNumbers: [(String, KeyPath<NativeTextShadowStyle, Double>)] = [
         ("opacity", \.opacity), ("blur", \.blur), ("offsetX", \.offsetX), ("offsetY", \.offsetY)
     ]
-    private var textApplyButton: CaptureButton!
-    private var textCancelButton: CaptureButton!
     private var textControls: [NSView] = []
     private var textFieldsID: String?
     private var acceptedTextStyle: NativeTextStyle?
     private var textApplyPending = false
-    private var hasStagedText: Bool { acceptedTextStyle.map { !textFieldsMatch($0) } ?? false }
     private struct InlineTextInput {
         var inputID: String
         var layerID: String?
@@ -1233,21 +1334,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var outputSizeMode: NSPopUpButton!
     private var outputPreviewMode: NSSegmentedControl!
     private var layerTable: EditorLayerTable!
-    private var visibilityButton: CaptureButton!
-    private var lockButton: CaptureButton!
-    private var renameButton: CaptureButton!
-    private var opacityButton: CaptureButton!
-    private var moveButton: CaptureButton!
     private var duplicateButton: CaptureButton!
     private var deleteButton: CaptureButton!
-    private var moveUpButton: CaptureButton!
-    private var moveDownButton: CaptureButton!
-    private var combineLayers: NSPopUpButton!
     private var rotateLeftButton: CaptureButton!
     private var rotateRightButton: CaptureButton!
     private var flipHorizontalButton: CaptureButton!
     private var flipVerticalButton: CaptureButton!
-    private var importImageButton: CaptureButton!
     private var undoButton: CaptureButton!
     private var redoButton: CaptureButton!
     private var applyCropButton: CaptureButton!
@@ -1376,8 +1468,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             return
         }
         if state.artifactID != artifact.id,
-           state.snapshot?.unsavedChanges == true || hasStagedText || inlineTextInput != nil {
-            showError("Apply or cancel pending text and save or discard screenshot edits before opening another capture.")
+           state.snapshot?.unsavedChanges == true || !liveQueue.isEmpty || inlineTextInput != nil {
+            showError("Finish text input and save or discard screenshot edits before opening another capture.")
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             completion?(false)
             return
@@ -1460,11 +1552,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func prepareForTermination() -> Bool {
-        guard inlineTextInput != nil || !hasStagedText else {
-            showError("Apply or cancel pending text before quitting.")
-            window.makeKeyAndOrderFront(nil)
-            return false
-        }
         cancelDrawing()
         cancelPendingImport()
         let terminationInput = inlineTextInput.flatMap {
@@ -1505,10 +1592,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if inlineTextInput != nil {
             closeAfterTextInput = true
             finishInlineTextInput(commit: true)
-            return false
-        }
-        guard !hasStagedText else {
-            showError("Apply or cancel pending text before closing.")
             return false
         }
         guard !state.busy else {
@@ -1593,10 +1676,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let statusY = root.bounds.height - bar - 16 - 96
         sectionControl?.frame.origin.x = inspectorX
         status.frame = NSRect(x: inspectorX, y: statusY, width: 272, height: 96)
-        for panel in [geometryPanel, layersPanel, drawPanel] {
-            panel.frame = NSRect(x: inspectorX, y: top + gap, width: 272,
-                                 height: max(0, statusY - 14 - top - gap))
+        // Shipping `.screenshot-sidebar` rows: minmax(188px, 40%) for Layers,
+        // the rest for the tool's Properties.
+        let column = max(0, statusY - 14 - top - gap)
+        let layersHeight = min(column, max(188, (column * 0.4).rounded()))
+        layersPanel.frame = NSRect(x: inspectorX, y: top + gap, width: 272, height: layersHeight)
+        for panel in [geometryPanel, layerPropertiesPanel, drawPanel] {
+            panel.frame = NSRect(x: inspectorX, y: layersPanel.frame.maxY, width: 272,
+                                 height: max(0, column - layersHeight))
         }
+        if layerMenuID != nil { closeLayerMenu() }
         layoutExportBar()
         guard viewportBounds.size != viewportInput.bounds.size else { return }
         // A gesture cannot retain its old screen-to-document mapping while
@@ -1985,15 +2074,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         sectionControl.isHidden = true
         root.addSubview(sectionControl)
 
-        geometryPanel.frame = NSRect(x: 688, y: 66, width: 272, height: 346)
-        layersPanel.frame = geometryPanel.frame; layersPanel.isHidden = true
+        // Shipping sidebar: Layers always sits above the tool's Properties.
+        layersPanel.frame = NSRect(x: 688, y: 66, width: 272, height: 188)
+        geometryPanel.frame = NSRect(x: 688, y: 254, width: 272, height: 346)
+        layerPropertiesPanel.frame = geometryPanel.frame; layerPropertiesPanel.isHidden = true
         drawPanel.frame = geometryPanel.frame; drawPanel.isHidden = true
         geometryPanel.setAccessibilityLabel("Geometry controls")
         layersPanel.setAccessibilityLabel("Layer controls")
+        layerPropertiesPanel.setAccessibilityLabel("Layer properties")
         drawPanel.setAccessibilityLabel("Drawing controls")
         // layoutEditor() places the inspector above the export bar.
         root.addSubview(geometryPanel); root.addSubview(layersPanel)
-        root.addSubview(drawPanel)
+        root.addSubview(layerPropertiesPanel); root.addSubview(drawPanel)
 
         let geometryScroll = NSScrollView(frame: geometryPanel.bounds)
         geometryScroll.autoresizingMask = [.width, .height]
@@ -2044,6 +2136,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         buildExportBar()
         // Floating chrome stays above the canvas, inspector and export bar.
         root.addSubview(backgroundCard)
+        root.addSubview(layerMenuCard)
         root.addSubview(railTip)
         fields = [cropX, cropY, cropWidth, cropHeight, canvasWidth, canvasHeight]
         layoutEditor()
@@ -2324,15 +2417,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         panelLabel("Draw annotations, or click with Wand to remove pixels from an image.",
                    frame: NSRect(x: 0, y: 28, width: 252, height: 42), muted: true,
                    parent: content)
-        panelFieldLabel("Tool", x: 0, y: 78, parent: content)
-        drawTool = NSPopUpButton()
-        drawTool.addItems(withTitles: ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand",
-                                           "Erase", "Restore", "Text", "Triangle", "Diamond", "Star"])
-        drawTool.target = self; drawTool.action = #selector(changeDrawTool)
-        drawTool.frame = NSRect(x: 0, y: 100, width: 252, height: 30)
-        drawTool.selectItem(at: 0)
-        drawTool.setAccessibilityLabel("Drawing tool")
-        content.addSubview(drawTool)
+        // The rail alone picks the tool. Eraser adds shipping's mode group.
+        eraserMode = NSSegmentedControl(labels: ["Wand", "Erase", "Restore"], trackingMode: .selectOne,
+                                        target: self, action: #selector(changeEraserMode))
+        eraserMode.frame = NSRect(x: 0, y: 100, width: 252, height: 30)
+        eraserMode.segmentDistribution = .fillEqually
+        eraserMode.setAccessibilityLabel("Eraser mode")
+        eraserMode.isHidden = true
+        content.addSubview(eraserMode)
         wandToleranceLabel = panelFieldLabel("Tolerance", x: 0, y: 146, parent: content)
         configure(wandTolerance, frame: NSRect(x: 0, y: 168, width: 252, height: 30),
                   label: "Wand color tolerance", parent: content)
@@ -2360,7 +2452,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                 parent: content)
         buildDrawingDefaultControls(in: content)
         buildCreateTextControls(in: content)
-        buildTextControls(in: content)
         publishDrawToolControls()
     }
 
@@ -2494,17 +2585,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         createTextDefaultsPublished = true
     }
 
+    /// Selected text properties under Select (shipping `selected?.kind ===
+    /// "text"`). Every change applies live; typing in one field is one undo step.
     private func buildTextControls(in content: NSView) {
-        content.frame.size.height = 720
-        let heading = panelLabel("Text", frame: NSRect(x: 0, y: 326, width: 118, height: 24),
-                                 size: 16, weight: .semibold, parent: content)
-        textPreset.frame = NSRect(x: 126, y: 322, width: 126, height: 30)
+        textPreset.frame = NSRect(x: 0, y: 322, width: 252, height: 30)
         textPreset.setAccessibilityLabel("Text style preset")
         textPreset.target = self; textPreset.action = #selector(stageTextPreset)
         content.addSubview(textPreset)
         let familyLabel = panelFieldLabel("Font", x: 0, y: 356, parent: content)
         textFamily.frame = NSRect(x: 0, y: 378, width: 252, height: 30)
         textFamily.setAccessibilityLabel("Text font")
+        textFamily.target = self; textFamily.action = #selector(textControlToggled)
         content.addSubview(textFamily)
         let contentLabel = panelFieldLabel("Content", x: 0, y: 416, parent: content)
         let textScroll = NSScrollView(frame: NSRect(x: 0, y: 438, width: 252, height: 82))
@@ -2514,27 +2605,32 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textEditor.isRichText = false; textEditor.isVerticallyResizable = true
         textEditor.allowsUndo = true
         textEditor.isHorizontallyResizable = false; textEditor.textContainer?.widthTracksTextView = true
+        textEditor.delegate = self
         textEditor.setAccessibilityLabel("Text content"); textScroll.documentView = textEditor
         content.addSubview(textScroll)
         let sizeLabel = panelFieldLabel("Size (8–512)", x: 0, y: 528, parent: content)
         configure(textSize, frame: NSRect(x: 0, y: 550, width: 78, height: 30), label: "Text size", parent: content)
-        textSize.formatter = nil; textSize.stringValue = "32"
+        textSize.formatter = nil; textSize.stringValue = "32"; textSize.delegate = self
         textTraits.frame = NSRect(x: 86, y: 550, width: 166, height: 30)
+        textTraits.target = self; textTraits.action = #selector(textControlToggled)
         textTraits.setAccessibilityLabel("Text traits"); content.addSubview(textTraits)
         textAlignment.frame = NSRect(x: 0, y: 588, width: 252, height: 30)
+        textAlignment.target = self; textAlignment.action = #selector(textControlToggled)
         textAlignment.setAccessibilityLabel("Text alignment"); content.addSubview(textAlignment)
         let colorLabel = panelFieldLabel("Text color", x: 0, y: 626, parent: content)
         colorLabel.frame.size.width = 118
         textOutline.frame = NSRect(x: 126, y: 623, width: 126, height: 22)
+        textOutline.target = self; textOutline.action = #selector(textControlToggled)
         textOutline.setAccessibilityLabel("Text outline"); content.addSubview(textOutline)
         configure(textColor, frame: NSRect(x: 0, y: 648, width: 118, height: 30), label: "Text color", parent: content)
-        textColor.formatter = nil; textColor.stringValue = "#111111"
+        textColor.formatter = nil; textColor.stringValue = "#111111"; textColor.delegate = self
         textPlate.frame = NSRect(x: 126, y: 648, width: 126, height: 30)
         textPlate.addItems(withTitles: ["No plate", "Square plate", "Rounded plate"])
+        textPlate.target = self; textPlate.action = #selector(textControlToggled)
         textPlate.setAccessibilityLabel("Text plate"); content.addSubview(textPlate)
         configure(textPlateColor, frame: NSRect(x: 0, y: 686, width: 118, height: 30),
                   label: "Text plate color", parent: content)
-        textPlateColor.formatter = nil; textPlateColor.stringValue = "#ffffff"
+        textPlateColor.formatter = nil; textPlateColor.stringValue = "#ffffff"; textPlateColor.delegate = self
         textShadow.frame = NSRect(x: 126, y: 686, width: 126, height: 30)
         textShadow.setAccessibilityLabel("Text drop shadow"); content.addSubview(textShadow)
         textShadow.target = self; textShadow.action = #selector(textShadowChanged)
@@ -2549,22 +2645,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             let field = NSTextField()
             configure(field, frame: NSRect(x: 126, y: y, width: 126, height: 30),
                       label: "Text \(row.1.lowercased())", parent: textShadowPanel)
-            field.formatter = nil
+            field.formatter = nil; field.delegate = self
             textShadowFields[row.0] = field
         }
-        textApplyButton = button("Apply", frame: NSRect(x: 0, y: 724, width: 118, height: 30),
-                                 parent: content) { [weak self] in
-            if self?.inlineTextInput != nil { self?.finishInlineTextInput(commit: true) }
-            else { self?.applyTextEdits() }
-        }
-        textCancelButton = button("Cancel", frame: NSRect(x: 134, y: 724, width: 118, height: 30),
-                                  parent: content) { [weak self] in
-            if self?.inlineTextInput != nil { self?.finishInlineTextInput(commit: false) }
-            else { self?.publishTextFields() }
-        }
-        textControls = [heading, textPreset, familyLabel, textFamily, contentLabel, textScroll, sizeLabel, textSize,
+        textControls = [textPreset, familyLabel, textFamily, contentLabel, textScroll, sizeLabel, textSize,
                         textTraits, textAlignment, colorLabel, textColor, textPlate, textPlateColor,
-                        textShadow, textOutline, textShadowPanel, textApplyButton, textCancelButton]
+                        textShadow, textOutline, textShadowPanel]
     }
 
     /// Shipping bottom export bar: a settings disclosure with a live summary,
@@ -2721,9 +2807,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateOutputOptionControls()
     }
 
+    /// Shipping sidebar Layers section, shown above Properties whatever the
+    /// tool: the heading (title, count pill, Add image layer), then 54pt rows
+    /// with a grip, live preview, name and kind and eye/lock/⋯ quick actions.
+    /// Rows drag to reorder and image rows rename on double-click. The
+    /// selected layer's properties live in their own panel below.
     private func buildLayersPanel() {
-        // Shipping `.screenshot-layers-heading`: title, count pill and Add image layer.
-        let headingHeight: CGFloat = 30
+        let headingHeight = Self.layersHeadingHeight
         let title = NSTextField(labelWithString: EditorChrome.text("layers", "title"))
         title.font = .systemFont(ofSize: tokens.number("text-md"), weight: .semibold)
         title.frame = NSRect(x: 0, y: 6, width: 56, height: 18)
@@ -2738,7 +2828,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                   width: 19, height: 19)
         layerCount.setAccessibilityLabel("Layer count")
         layersPanel.addSubview(layerCount)
-        addLayerButton = button("", frame: NSRect(x: 272 - 30, y: 0, width: 30, height: 30),
+        addLayerButton = button("", frame: NSRect(x: 272 - 30, y: (headingHeight - 30) / 2, width: 30, height: 30),
                                 parent: layersPanel) { [weak self] in self?.chooseImage() }
         addLayerButton.quiet = true; addLayerButton.icon = .shipping("plus")
         addLayerButton.autoresizingMask = [.minXMargin]
@@ -2748,95 +2838,75 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         layerHeadingRule.frame = NSRect(x: 0, y: headingHeight - 1, width: 272, height: 1)
         layerHeadingRule.autoresizingMask = [.width]
         layersPanel.addSubview(layerHeadingRule)
-        let panelScroll = NSScrollView(frame: NSRect(x: 0, y: headingHeight, width: layersPanel.bounds.width,
-                                                     height: max(0, layersPanel.bounds.height - headingHeight)))
-        panelScroll.autoresizingMask = [.width, .height]
-        panelScroll.hasVerticalScroller = true; panelScroll.scrollerStyle = .overlay
-        panelScroll.useTokenScrollers(tokens)
-        panelScroll.drawsBackground = false
-        layerContent.frame = NSRect(x: 0, y: 0, width: 272, height: 550)
-        panelScroll.documentView = layerContent; layersPanel.addSubview(panelScroll)
 
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 272, height: 106))
+        let listTop = headingHeight + tokens.number("s-3")
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: listTop, width: 272,
+                                                height: max(0, layersPanel.bounds.height - listTop)))
+        scroll.autoresizingMask = [.width, .height]
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
         scroll.useTokenScrollers(tokens)
         layerTable = EditorLayerTable(frame: scroll.bounds)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("editor-layer"))
-        column.width = 252; layerTable.addTableColumn(column); layerTable.headerView = nil
-        layerTable.rowHeight = 32; layerTable.dataSource = self; layerTable.delegate = self
+        column.width = 272; layerTable.addTableColumn(column); layerTable.headerView = nil
+        // 54pt rows with shipping's 2pt margins (a 58pt pitch).
+        layerTable.rowHeight = 56; layerTable.intercellSpacing = NSSize(width: 0, height: 2)
+        layerTable.selectionHighlightStyle = .none
+        layerTable.backgroundColor = .clear
+        layerTable.dataSource = self; layerTable.delegate = self
         layerTable.allowsEmptySelection = true; layerTable.setAccessibilityLabel("Screenshot layers")
         layerTable.contextMenu = { [weak self] row in self?.layerContextMenu(row: row) }
-        scroll.documentView = layerTable; layerContent.addSubview(scroll)
+        layerTable.target = self; layerTable.doubleAction = #selector(layerRowDoubleClicked)
+        layerTable.registerForDraggedTypes([Self.layerDragType])
+        layerTable.setDraggingSourceOperationMask(.move, forLocal: true)
+        layerTable.draggingDestinationFeedbackStyle = .gap
+        scroll.documentView = layerTable; layersPanel.addSubview(scroll)
+        layerListScroll = scroll
 
-        panelFieldLabel("Name", x: 0, y: 112, parent: layerContent)
-        layerName.frame = NSRect(x: 0, y: 130, width: 190, height: 30)
-        layerName.setAccessibilityLabel("Layer name")
-        layerName.alignment = .left; layerName.placeholderString = "Layer name"
-        layerContent.addSubview(layerName)
-        renameButton = button("Rename", frame: NSRect(x: 196, y: 130, width: 76, height: 30),
-                              parent: layerContent) { [weak self] in self?.renameLayer() }
-        visibilityButton = button("Hide", frame: NSRect(x: 0, y: 168, width: 128, height: 30),
-                                  parent: layerContent) { [weak self] in self?.toggleVisibility() }
-        lockButton = button("Lock", frame: NSRect(x: 144, y: 168, width: 128, height: 30),
-                            parent: layerContent) { [weak self] in self?.toggleLock() }
+        let panelScroll = NSScrollView(frame: layerPropertiesPanel.bounds)
+        panelScroll.autoresizingMask = [.width, .height]
+        panelScroll.hasVerticalScroller = true; panelScroll.scrollerStyle = .overlay
+        panelScroll.useTokenScrollers(tokens)
+        panelScroll.drawsBackground = false
+        layerContent.frame = NSRect(x: 0, y: 0, width: 272, height: 400)
+        panelScroll.documentView = layerContent; layerPropertiesPanel.addSubview(panelScroll)
+        // Shipping `.screenshot-properties-heading`: the selected layer's label.
+        layerPropertiesHeading.font = .systemFont(ofSize: tokens.number("text-md"), weight: .semibold)
+        layerPropertiesHeading.lineBreakMode = .byTruncatingTail
+        layerPropertiesHeading.frame = NSRect(x: 0, y: 14, width: 252, height: 20)
+        layerPropertiesHeading.setAccessibilityLabel("Properties heading")
+        layerContent.addSubview(layerPropertiesHeading)
+        layerPropertiesRule.wantsLayer = true
+        layerPropertiesRule.frame = NSRect(x: 0, y: 47, width: 272, height: 1)
+        layerContent.addSubview(layerPropertiesRule)
 
-        panelFieldLabel("Opacity (0–100)", x: 0, y: 204, parent: layerContent)
-        configure(layerOpacity, frame: NSRect(x: 0, y: 222, width: 216, height: 30),
-                  label: "Layer opacity", parent: layerContent)
-        opacityButton = button("Set", frame: NSRect(x: 222, y: 222, width: 50, height: 30),
-                               parent: layerContent) { [weak self] in self?.setOpacity() }
-
-        panelFieldLabel("X", x: 0, y: 258, parent: layerContent)
-        panelFieldLabel("Y", x: 92, y: 258, parent: layerContent)
-        configure(layerX, frame: NSRect(x: 0, y: 276, width: 86, height: 30),
-                  label: "Layer X", parent: layerContent)
-        configure(layerY, frame: NSRect(x: 92, y: 276, width: 86, height: 30),
-                  label: "Layer Y", parent: layerContent)
-        moveButton = button("Move", frame: NSRect(x: 184, y: 276, width: 88, height: 30),
-                            parent: layerContent) { [weak self] in self?.moveLayer() }
-
-        panelFieldLabel("Transform", x: 0, y: 314, parent: layerContent)
-        rotateLeftButton = button("Rotate left", frame: NSRect(x: 0, y: 334, width: 128, height: 30),
-                                  parent: layerContent) {
-            [weak self] in
-            self?.transformLayer("rotate-counterclockwise", message: "Rotating layer left…")
+        // Shipping image `.screenshot-number-pair` rows: live Width/Height/X/Y.
+        let geometry: [(String, TokenNumberField, String)] = [
+            (EditorChrome.layerGeometry("width"), layerWidth, EditorChrome.layerGeometry("width_label")),
+            (EditorChrome.layerGeometry("height"), layerHeight, EditorChrome.layerGeometry("height_label")),
+            ("X", layerX, EditorChrome.layerGeometry("x_label")),
+            ("Y", layerY, EditorChrome.layerGeometry("y_label")),
+        ]
+        for (index, (text, field, label)) in geometry.enumerated() {
+            let x = CGFloat(index % 2) * 134
+            let y = 56 + CGFloat(index / 2) * 58
+            layerGeometryLabels.append(panelFieldLabel(text, x: x, y: y, parent: layerContent))
+            configure(field, frame: NSRect(x: x, y: y + 22, width: 118, height: 30), label: label,
+                      parent: layerContent)
+            field.tokens = tokens; field.delegate = self
+            if index < 2 {
+                field.minimum = { 1 }
+                field.maximum = { Self.maximumLayerSize }
+            }
+            field.stepped = { [weak self] changed in self?.layerGeometryChanged(changed) }
         }
-        rotateRightButton = button("Rotate right", frame: NSRect(x: 144, y: 334, width: 128, height: 30),
-                                   parent: layerContent) {
-            [weak self] in
-            self?.transformLayer("rotate-clockwise", message: "Rotating layer right…")
-        }
-        flipHorizontalButton = button("Flip horizontal", frame: NSRect(x: 0, y: 372, width: 128, height: 30),
-                                      parent: layerContent) {
-            [weak self] in
-            self?.transformLayer("flip-horizontal", message: "Flipping layer horizontally…")
-        }
-        flipVerticalButton = button("Flip vertical", frame: NSRect(x: 144, y: 372, width: 128, height: 30),
-                                    parent: layerContent) {
-            [weak self] in
-            self?.transformLayer("flip-vertical", message: "Flipping layer vertically…")
-        }
+        layerGeometryHint = panelLabel(EditorChrome.layerGeometry("proportional"),
+                                       frame: NSRect(x: 0, y: 172, width: 252, height: 34), muted: true,
+                                       parent: layerContent)
+        buildTextControls(in: layerContent)
 
-        duplicateButton = button("Duplicate", frame: NSRect(x: 0, y: 410, width: 128, height: 30),
-                                 parent: layerContent) { [weak self] in self?.duplicateLayer() }
-        deleteButton = button("Delete", frame: NSRect(x: 144, y: 410, width: 128, height: 30),
-                              parent: layerContent) { [weak self] in self?.deleteLayer() }
-        moveUpButton = button("Move up", frame: NSRect(x: 0, y: 448, width: 128, height: 30),
-                              parent: layerContent) { [weak self] in self?.reorderLayer(up: true) }
-        moveDownButton = button("Move down", frame: NSRect(x: 144, y: 448, width: 128, height: 30),
-                                parent: layerContent) { [weak self] in self?.reorderLayer(up: false) }
-        combineLayers = NSPopUpButton(frame: NSRect(x: 136, y: 494, width: 136, height: 34), pullsDown: true)
-        combineLayers.autoenablesItems = false
-        combineLayers.addItem(withTitle: "Combine layers")
-        for title in ["Merge down", "Merge visible", "Flatten image"] { combineLayers.addItem(withTitle: title) }
-        combineLayers.target = self; combineLayers.action = #selector(combineLayersSelected(_:))
-        combineLayers.setAccessibilityLabel("Combine layers")
-        layerContent.addSubview(combineLayers)
-        importImageButton = button("Add image…", frame: NSRect(x: 0, y: 494, width: 128, height: 34),
-                                   parent: layerContent) { [weak self] in self?.chooseImage() }
-        importImageButton.primary = true
         rotationSnapLabel = panelFieldLabel("Shift rotation snap (1–180°)", x: 0, y: 550, parent: layerContent)
-        configure(rotationSnap, frame: NSRect(x: 0, y: 574, width: 272, height: 30),
+        rotationSnapLabel.frame.size.width = 252
+        configure(rotationSnap, frame: NSRect(x: 0, y: 574, width: 252, height: 30),
                   label: "Shift rotation snap", parent: layerContent)
         rotationSnap.stringValue = "15"
         rotationSnap.toolTip = "Hold Shift while dragging the rotate handle. Does not edit the document."
@@ -2861,7 +2931,371 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         curveControls.resized = { [weak self] _ in self?.layoutLayerInspectorTail() }
         layerContent.addSubview(curveControls)
+        buildLayerMenu()
         layoutLayerInspectorTail()
+    }
+
+    static let layersHeadingHeight: CGFloat = 48
+    /// Shipping `MAX_SCREENSHOT_OUTPUT_DIMENSION` for layer Width/Height.
+    static let maximumLayerSize = 16_384.0
+    static let layerDragType = NSPasteboard.PasteboardType("es.captur.editor-layer")
+
+    /// Shipping `.screenshot-layer-menu-panel`: Appearance (blend mode and
+    /// opacity), image Transform tiles, Arrange, Combine, then Duplicate and
+    /// Delete. It floats beside the inspector at the row's ⋯ button.
+    private func buildLayerMenu() {
+        layerMenuCard.wantsLayer = true
+        layerMenuCard.layer?.cornerRadius = tokens.number("r-lg")
+        layerMenuCard.layer?.borderWidth = 1
+        layerMenuCard.isHidden = true
+        layerMenuCard.frame = NSRect(x: 0, y: 0, width: Self.layerMenuWidth, height: 400)
+        func sectionTitle(_ key: String) -> NSTextField {
+            let label = NSTextField(labelWithString: EditorChrome.layerMenu(key).uppercased())
+            label.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold)
+            label.textColor = tokens.color("text-subtle")
+            layerMenuCard.addSubview(label)
+            return label
+        }
+        func fieldLabel(_ key: String) -> NSTextField {
+            let label = NSTextField(labelWithString: EditorChrome.layerMenu(key))
+            label.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+            label.textColor = tokens.color("text-muted")
+            layerMenuCard.addSubview(label)
+            return label
+        }
+        func action(_ key: String, icon: String, parent: NSView? = nil,
+                    perform: @escaping () -> Void) -> CaptureButton {
+            let control = button(EditorChrome.layerMenu(key), frame: .zero, parent: parent ?? layerMenuCard,
+                                 action: perform)
+            control.icon = .shipping(icon)
+            control.toolTip = EditorChrome.layerMenu(key + "_tip")
+            control.setAccessibilityLabel(EditorChrome.layerMenu(key))
+            return control
+        }
+        let blendLabel = fieldLabel("blend_mode")
+        layerBlendMode.tokens = tokens
+        for mode in EditorChrome.blendModes {
+            layerBlendMode.addItem(withTitle: mode.label)
+            layerBlendMode.lastItem?.representedObject = mode.value
+        }
+        layerBlendMode.setAccessibilityLabel(EditorChrome.layerMenu("blend_mode"))
+        layerBlendMode.bindChange { [weak self] _ in self?.layerBlendModeChanged() }
+        layerMenuCard.addSubview(layerBlendMode)
+        let opacityLabel = fieldLabel("opacity")
+        layerOpacityValue.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-xs"), weight: .regular)
+        layerOpacityValue.alignment = .right
+        layerOpacityValue.textColor = tokens.color("text-muted")
+        layerMenuCard.addSubview(layerOpacityValue)
+        layerOpacity.tokens = tokens
+        layerOpacity.isContinuous = true
+        layerOpacity.target = self; layerOpacity.action = #selector(layerOpacityChanged)
+        layerOpacity.setAccessibilityLabel(EditorChrome.layerMenu("opacity_label"))
+        layerMenuCard.addSubview(layerOpacity)
+        rotateLeftButton = action("rotate_left", icon: "rotate-counterclockwise") { [weak self] in
+            self?.transformLayer("rotate-counterclockwise", message: "Rotating layer left…")
+        }
+        rotateRightButton = action("rotate_right", icon: "rotate-clockwise") { [weak self] in
+            self?.transformLayer("rotate-clockwise", message: "Rotating layer right…")
+        }
+        flipHorizontalButton = action("flip_horizontal", icon: "flip-horizontal") { [weak self] in
+            self?.transformLayer("flip-horizontal", message: "Flipping layer horizontally…")
+        }
+        flipVerticalButton = action("flip_vertical", icon: "flip-vertical") { [weak self] in
+            self?.transformLayer("flip-vertical", message: "Flipping layer vertically…")
+        }
+        bringFrontButton = action("bring_front", icon: "bring-front") { [weak self] in
+            self?.arrangeLayer(front: true)
+        }
+        sendBackButton = action("send_back", icon: "send-back") { [weak self] in
+            self?.arrangeLayer(front: false)
+        }
+        mergeDownButton = action("merge_down", icon: "merge-down") { [weak self] in
+            self?.closeLayerMenu(); self?.combine("merge_down", id: self?.selectedLayer?.id)
+        }
+        mergeVisibleButton = action("merge_visible", icon: "merge-visible") { [weak self] in
+            self?.closeLayerMenu(); self?.combine("merge_visible")
+        }
+        flattenButton = action("flatten", icon: "flatten") { [weak self] in
+            self?.closeLayerMenu(); self?.combine("flatten")
+        }
+        for control in [bringFrontButton, sendBackButton, mergeDownButton, mergeVisibleButton, flattenButton] {
+            control?.quiet = true
+        }
+        layerMenuFooter.wantsLayer = true
+        layerMenuCard.addSubview(layerMenuFooter)
+        duplicateButton = action("duplicate", icon: "duplicate", parent: layerMenuFooter) { [weak self] in
+            self?.closeLayerMenu(); self?.duplicateLayer()
+        }
+        deleteButton = action("delete", icon: "trash", parent: layerMenuFooter) { [weak self] in
+            self?.closeLayerMenu(); self?.deleteLayer()
+        }
+        deleteButton.signal = true
+        layerMenuSections = [
+            (sectionTitle("appearance"), [blendLabel, layerBlendMode, opacityLabel, layerOpacityValue, layerOpacity]),
+            (sectionTitle("transform"), [rotateLeftButton!, rotateRightButton!, flipHorizontalButton!,
+                                         flipVerticalButton!]),
+            (sectionTitle("arrange"), [bringFrontButton!, sendBackButton!]),
+            (sectionTitle("combine"), [mergeDownButton!, mergeVisibleButton!, flattenButton!]),
+        ]
+        for _ in layerMenuSections {
+            let rule = Surface(); rule.wantsLayer = true
+            layerMenuCard.addSubview(rule); layerMenuRules.append(rule)
+        }
+        layerMenuCard.setAccessibilityLabel("Layer settings")
+    }
+
+    static let layerMenuWidth: CGFloat = 280
+
+    /// Lay out the popover for `image` layers (Transform is image-only) and
+    /// return its height.
+    @discardableResult private func layoutLayerMenu(image: Bool) -> CGFloat {
+        let pad = tokens.number("s-5")
+        let inner = Self.layerMenuWidth - 2 * pad
+        let gap = tokens.number("s-4")
+        var y: CGFloat = 0
+        for (index, section) in layerMenuSections.enumerated() {
+            let visible = index != 1 || image
+            section.title.isHidden = !visible
+            section.views.forEach { $0.isHidden = !visible }
+            layerMenuRules[index].isHidden = !visible
+            guard visible else { continue }
+            y += pad
+            section.title.frame = NSRect(x: pad, y: y, width: inner, height: 12)
+            y += 12 + gap
+            switch index {
+            case 0:
+                let views = section.views
+                views[0].frame = NSRect(x: pad, y: y, width: inner, height: 16); y += 16 + tokens.number("s-3")
+                views[1].frame = NSRect(x: pad, y: y, width: inner, height: tokens.number("h-md"))
+                y += tokens.number("h-md") + gap
+                views[2].frame = NSRect(x: pad, y: y, width: inner / 2, height: 16)
+                views[3].frame = NSRect(x: pad + inner / 2, y: y, width: inner / 2, height: 16)
+                y += 16 + tokens.number("s-3")
+                views[4].frame = NSRect(x: pad, y: y, width: inner, height: 20); y += 20
+            case 1:
+                let tile = (inner - tokens.number("s-3")) / 2
+                for (tileIndex, view) in section.views.enumerated() {
+                    view.frame = NSRect(x: pad + CGFloat(tileIndex % 2) * (tile + tokens.number("s-3")),
+                                        y: y + CGFloat(tileIndex / 2) * (36 + tokens.number("s-3")),
+                                        width: tile, height: 36)
+                }
+                y += 2 * 36 + tokens.number("s-3")
+            default:
+                for (actionIndex, view) in section.views.enumerated() {
+                    view.frame = NSRect(x: pad, y: y + CGFloat(actionIndex) * 36, width: inner, height: 34)
+                }
+                y += CGFloat(section.views.count) * 36 - 2
+            }
+            y += pad
+            layerMenuRules[index].frame = NSRect(x: 0, y: y - 1, width: Self.layerMenuWidth, height: 1)
+        }
+        let footerPad = tokens.number("s-4")
+        duplicateButton.frame = NSRect(x: footerPad, y: footerPad, width: Self.layerMenuWidth - 2 * footerPad,
+                                       height: 34)
+        deleteButton.frame = duplicateButton.frame.offsetBy(dx: 0, dy: 34 + tokens.number("s-2"))
+        layerMenuFooter.frame = NSRect(x: 0, y: y, width: Self.layerMenuWidth,
+                                       height: deleteButton.frame.maxY + footerPad)
+        return layerMenuFooter.frame.maxY
+    }
+
+    /// Open (or, for the same layer, close) the ⋯ settings popover beside the
+    /// inspector, top-aligned with the row, like shipping.
+    func toggleLayerMenu(id: String) {
+        if layerMenuID == id { closeLayerMenu(); return }
+        guard let layers = state.snapshot?.layers, let row = layers.firstIndex(where: { $0.id == id }) else { return }
+        finishLayerRename(commit: true)
+        activateTool(section: Section.layers, shape: nil)
+        selectLayerRow(id: id)
+        layerMenuID = id
+        publishLayerMenu()
+        let height = layoutLayerMenu(image: layers[row].kind == .image)
+        let rowRect = root.convert(layerTable.rect(ofRow: row), from: layerTable)
+        let maximumTop = root.bounds.height - 8 - height
+        let top = max(chromeTop + 8, min(rowRect.minY, maximumTop))
+        let left = max(8, layersPanel.frame.minX - 8 - Self.layerMenuWidth)
+        layerMenuCard.frame = NSRect(x: left, y: top, width: Self.layerMenuWidth, height: height)
+        layerMenuCard.isHidden = false
+        layerTable.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
+        if layerMenuMonitor == nil {
+            layerMenuMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .keyDown]) {
+                [weak self] event in
+                guard let self, self.layerMenuID != nil, event.window === self.window else { return event }
+                if event.type == .keyDown {
+                    guard event.keyCode == 53 else { return event }
+                    self.closeLayerMenu(); return nil
+                }
+                let point = self.root.convert(event.locationInWindow, from: nil)
+                if !self.layerMenuCard.frame.contains(point) && !self.layerMenuTriggerContains(point) {
+                    self.closeLayerMenu()
+                }
+                return event
+            }
+        }
+    }
+
+    private func layerMenuTriggerContains(_ point: NSPoint) -> Bool {
+        guard let id = layerMenuID, let row = state.snapshot?.layers.firstIndex(where: { $0.id == id }),
+              let cell = layerTable.view(atColumn: 0, row: row, makeIfNecessary: false) as? EditorLayerCell else {
+            return false
+        }
+        return root.convert(cell.menuButton.bounds, from: cell.menuButton).contains(point)
+    }
+
+    func closeLayerMenu() {
+        guard layerMenuID != nil else { return }
+        let id = layerMenuID
+        layerMenuID = nil
+        layerMenuCard.isHidden = true
+        if let layerMenuMonitor { NSEvent.removeMonitor(layerMenuMonitor) }
+        layerMenuMonitor = nil
+        if let row = state.snapshot?.layers.firstIndex(where: { $0.id == id }) {
+            layerTable.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
+        }
+    }
+
+    /// Current values for the open popover.
+    private func publishLayerMenu() {
+        guard let id = layerMenuID, let layer = state.snapshot?.layers.first(where: { $0.id == id }) else {
+            closeLayerMenu(); return
+        }
+        if let item = layerBlendMode.itemArray.firstIndex(where: { $0.representedObject as? String == layer.blendMode }) {
+            layerBlendMode.selectItem(at: item)
+        }
+        if window.firstResponder !== layerOpacity { layerOpacity.doubleValue = layer.opacity }
+        layerOpacityValue.stringValue = "\(Int(layerOpacity.doubleValue.rounded()))%"
+        publishLayerMenuStates()
+    }
+
+    /// Enabled states for the popover's actions: its layer while open, else
+    /// the selection (Command-D and Delete use Duplicate and Delete).
+    private func publishLayerMenuStates() {
+        guard let duplicateButton else { return }
+        let snapshot = state.snapshot
+        let id = layerMenuID ?? selectedLayerID
+        let index = id.flatMap { id in snapshot?.layers.firstIndex { $0.id == id } }
+        let layer = index.flatMap { snapshot?.layers[$0] }
+        let ready = layerActionsReady
+        layerBlendMode.isEnabled = ready && layer != nil
+        layerOpacity.isEnabled = snapshot != nil && inlineTextInput == nil && layer != nil
+        for control in [rotateLeftButton, rotateRightButton, flipHorizontalButton, flipVerticalButton] {
+            control?.isEnabled = ready && layer?.kind == .image
+        }
+        // Shipping disables arrange for locked layers and the layer already there.
+        let count = snapshot?.layers.count ?? 0
+        bringFrontButton.isEnabled = ready && layer?.locked == false && (index ?? 0) > 0
+        sendBackButton.isEnabled = ready && layer?.locked == false && (index ?? count) < count - 1
+        mergeDownButton.isEnabled = ready && layer.map { snapshot?.mergeDownIDs.contains($0.id) == true } == true
+        mergeVisibleButton.isEnabled = ready && snapshot?.canMergeVisible == true
+        flattenButton.isEnabled = ready && snapshot?.canFlatten == true
+        duplicateButton.isEnabled = ready && layer != nil
+        deleteButton.isEnabled = ready && layer?.locked == false
+    }
+
+    @objc private func layerBlendModeChanged() {
+        guard let layer = selectedLayer, layerMenuID == layer.id,
+              let mode = layerBlendMode.selectedItem?.representedObject as? String,
+              mode != layer.blendMode, layerActionsReady else { return }
+        layerCommand(layer, edit: ["action": "blend_mode", "blend_mode": mode],
+                     message: "Changing blend mode…", preferredSelection: layer.id)
+    }
+
+    @objc private func layerOpacityChanged() {
+        guard let layer = selectedLayer, layerMenuID == layer.id else { return }
+        let opacity = layerOpacity.doubleValue.rounded()
+        layerOpacityValue.stringValue = "\(Int(opacity))%"
+        liveEdit(key: "opacity:\(layer.id)", request: ["operation": "layer", "id": layer.id,
+            "edit": ["action": "opacity", "opacity": opacity]])
+    }
+
+    private func arrangeLayer(front: Bool) {
+        guard layerActionsReady, let layer = selectedLayer, !layer.locked else { return }
+        layerCommand(layer, edit: ["action": "arrange", "front": front],
+                     message: front ? "Bringing layer to front…" : "Sending layer to back…",
+                     preferredSelection: layer.id)
+    }
+
+    /// Select a row as a click does: the Select tool and that layer.
+    private func selectLayerRow(id: String) {
+        guard let row = state.snapshot?.layers.firstIndex(where: { $0.id == id }) else { return }
+        if layerTable.selectedRow != row {
+            layerTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+    }
+
+    @objc private func layerRowDoubleClicked() {
+        guard let layers = state.snapshot?.layers, layers.indices.contains(layerTable.clickedRow) else { return }
+        beginLayerRename(id: layers[layerTable.clickedRow].id)
+    }
+
+    /// Shipping double-click rename: image layers only, in place in the row.
+    func beginLayerRename(id: String) {
+        guard layerActionsReady, let layers = state.snapshot?.layers,
+              let row = layers.firstIndex(where: { $0.id == id }), layers[row].kind == .image else { return }
+        closeLayerMenu()
+        activateTool(section: Section.layers, shape: nil)
+        selectLayerRow(id: id)
+        renamingLayerID = id
+        layerTable.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
+        if let cell = layerTable.view(atColumn: 0, row: row, makeIfNecessary: true) as? EditorLayerCell {
+            window.makeFirstResponder(cell.renameField)
+            cell.renameField.currentEditor()?.selectAll(nil)
+        }
+    }
+
+    /// Enter or leaving the field renames; Escape cancels.
+    func finishLayerRename(commit: Bool) {
+        guard let id = renamingLayerID else { return }
+        let row = state.snapshot?.layers.firstIndex(where: { $0.id == id })
+        let field = row.flatMap { layerTable.view(atColumn: 0, row: $0, makeIfNecessary: false) as? EditorLayerCell }?
+            .renameField
+        let name = (field?.currentEditor()?.string ?? field?.stringValue ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        renamingLayerID = nil
+        if let row {
+            layerTable.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
+        }
+        if field?.currentEditor() != nil { window.makeFirstResponder(layerTable) }
+        guard commit, !name.isEmpty, let layer = state.snapshot?.layers.first(where: { $0.id == id }),
+              name != layer.name else { return }
+        layerCommand(layer, edit: ["action": "rename", "name": name], message: "Renaming layer…",
+                     preferredSelection: id)
+    }
+
+    /// Shipping live Width/Height/X/Y: each field's burst is one undo step.
+    private func layerGeometryChanged(_ field: NSTextField) {
+        guard let layer = selectedLayer, layer.kind == .image, !layer.locked,
+              let value = number(field), value.isFinite else { return }
+        let name: String
+        if field === layerWidth { name = "width" } else if field === layerHeight { name = "height" }
+        else if field === layerX { name = "x" } else if field === layerY { name = "y" } else { return }
+        if name == "width" || name == "height" {
+            guard (1...Self.maximumLayerSize).contains(value) else { return }
+        }
+        liveEdit(key: "geometry:\(layer.id):\(name)", request: ["operation": "layer", "id": layer.id,
+            "edit": ["action": "geometry", name: value]])
+    }
+
+    private func liveEdit(key: String, request: [String: Any]) {
+        if let last = liveQueue.last, last.key == key {
+            liveQueue[liveQueue.count - 1].request = request
+        } else {
+            liveQueue.append((key, request))
+        }
+        flushLiveQueue()
+    }
+
+    /// A key for one discrete live change: its own undo step, in order.
+    private func liveOnceKey(_ kind: String) -> String {
+        liveSerial += 1
+        return "\(kind):once:\(liveSerial)"
+    }
+
+    private func flushLiveQueue() {
+        guard !liveQueue.isEmpty, state.snapshot != nil, !state.busy, inlineTextInput == nil else { return }
+        let next = liveQueue.removeFirst()
+        command(["operation": "live", "key": next.key, "request": next.request],
+                message: "Applying changes…", preferredSelection: selectedLayerID,
+                preserveStagedTextOnFailure: true)
     }
 
     @objc private func changeSection() {
@@ -2869,16 +3303,30 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelDrawing()
         cancelViewportPan()
         geometryPanel.isHidden = sectionControl.selectedSegment != Section.geometry
-        layersPanel.isHidden = sectionControl.selectedSegment != Section.layers
+        layerPropertiesPanel.isHidden = sectionControl.selectedSegment != Section.layers
         drawPanel.isHidden = sectionControl.selectedSegment != Section.draw
+        if sectionControl.selectedSegment != Section.layers { closeLayerMenu(); finishLayerRename(commit: true) }
+        layoutLayerInspectorTail()
         // The export bar and its encoded preview do not depend on the section.
         changeOutputPreview()
         updateDrawing()
     }
 
-    @objc private func changeDrawTool() {
+    @objc private func changeEraserMode() {
+        let modes: [EditorDrawOverlay.Shape] = [.wand, .erase, .restore]
+        guard modes.indices.contains(eraserMode.selectedSegment) else { return }
+        activateTool(section: Section.draw, shape: modes[eraserMode.selectedSegment])
+    }
+
+    /// Choose a drawing tool as the rail, its Shapes flyout or Eraser mode do.
+    func selectDrawTool(_ shape: EditorDrawOverlay.Shape) {
+        guard state.snapshot != nil else { return }
+        activateTool(section: Section.draw, shape: shape)
+    }
+
+    private func changeDrawTool() {
         cancelDrawing()
-        drawOverlay.shape = EditorDrawOverlay.Shape.allCases[drawTool.indexOfSelectedItem]
+        drawOverlay.shape = drawShape
         if drawOverlay.shape == .wand || drawOverlay.shape.isBackgroundBrush {
             lastBackgroundTool = drawOverlay.shape
         }
@@ -2980,7 +3428,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 && !importLoading
             button.selected = selected; button.primary = selected
             button.setAccessibilityValue(selected ? 1 : 0)
-            button.menu?.items.forEach { $0.state = $0.tag == drawTool?.indexOfSelectedItem ? .on : .off }
+            let shapeIndex = EditorDrawOverlay.Shape.allCases.firstIndex(of: drawShape)
+            button.menu?.items.forEach { $0.state = $0.tag == shapeIndex ? .on : .off }
             if key == "shapes" {
                 let names: [EditorDrawOverlay.Shape: String] = [
                     .rectangle: "rectangle", .ellipse: "ellipse", .line: "line",
@@ -2995,16 +3444,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func publishDrawToolControls() {
-        guard let drawTool, drawTool.indexOfSelectedItem >= 0 else { return }
-        let shape = EditorDrawOverlay.Shape.allCases[drawTool.indexOfSelectedItem]
+        guard let eraserMode else { return }
+        let shape = drawShape
         // Shipping's properties heading names the active tool.
         drawHeading?.stringValue = EditorChrome.toolLabel(
             shape == .text ? "t" : shape == .arrow ? "a" : shape.rawValue)
         let wand = shape == .wand
         let brush = shape.isBackgroundBrush
+        eraserMode.isHidden = !(wand || brush)
+        eraserMode.selectedSegment = wand ? 0 : shape == .erase ? 1 : shape == .restore ? 2 : -1
         let creatingText = shape == .text
-        let textSelected = selectedLayer?.kind == .text
-        let creatingDrawing = !wand && !brush && !creatingText && !textSelected
+        let creatingDrawing = !wand && !brush && !creatingText
         wandToleranceLabel?.isHidden = !wand
         wandTolerance.isHidden = !wand; wandContiguous.isHidden = !wand
         brushSizeLabel?.isHidden = !brush; brushSize.isHidden = !brush
@@ -3021,21 +3471,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             : brush
                 ? "Pixels preview while dragging. Release commits one undo step; Escape cancels."
                 : shape == .text
-                    ? "Click once to create empty auto-width text. Edit it below, then Apply."
+                    ? "Click once to create empty auto-width text, then type on the canvas."
                     : drawingShadowVisible ? "Drawing pixels update in the background while dragging."
                     : "This tool creates one annotation layer on release."
-        textControls.forEach { $0.isHidden = !textSelected }
-        // Other tools need no Wand/brush/text-default fields. Collapse their
-        // reserved space without overlapping Text's creation controls.
-        let compact = textSelected && !wand && !brush && !creatingText
-        drawHelper.frame.origin.y = compact ? 148 : drawingShadowVisible ? 526 : creatingDrawing ? 338 : 278
-        if let heading = textControls.first, let content = heading.superview {
-            let offset = (compact ? 196.0 : creatingDrawing ? 358.0 : 326.0) - heading.frame.minY
-            for control in textControls { control.frame.origin.y += offset }
-            updateTextShadowControls()
-            content.frame.size.height = textSelected
-                ? textCancelButton.frame.maxY + 8 : drawHelper.frame.maxY + 8
-        }
+        // Other tools need no Wand/brush/text-default fields; collapse their space.
+        drawHelper.frame.origin.y = drawingShadowVisible ? 526 : creatingDrawing ? 338 : 278
+        drawHelper.superview?.frame.size.height = drawHelper.frame.maxY + 8
     }
 
     @objc private func outputOptionsChanged() {
@@ -3074,10 +3515,38 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     func controlTextDidEndEditing(_ notification: Notification) {
         if notification.object as? NSTextField === rotationSnap { rotationSnapChanged() }
+        if let field = notification.object as? NSTextField,
+           field.identifier == Self.layerRenameIdentifier, renamingLayerID != nil {
+            finishLayerRename(commit: true)
+        }
+        // A field left mid-edit shows the accepted value again.
+        if let field = notification.object as? NSTextField,
+           [layerWidth, layerHeight, layerX, layerY].contains(where: { $0 === field }) {
+            publishLayerGeometry()
+        }
     }
+
+    /// Escape in the inline rename field cancels the rename.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control.identifier == Self.layerRenameIdentifier,
+              commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        finishLayerRename(commit: false)
+        return true
+    }
+
+    static let layerRenameIdentifier = NSUserInterfaceItemIdentifier("editor-layer-rename")
 
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSTextField else { return }
+        if [layerWidth, layerHeight, layerX, layerY].contains(where: { $0 === field }) {
+            layerGeometryChanged(field)
+            return
+        }
+        if [textSize, textColor, textPlateColor].contains(where: { $0 === field })
+            || textShadowFields.values.contains(where: { $0 === field }) {
+            textControlsChanged(field: field.accessibilityLabel() ?? "field")
+            return
+        }
         if drawingShadowFields.values.contains(where: { $0 === field }) {
             drawingShadowCustomized = true
             return
@@ -3806,8 +4275,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func beginTextInput(target: [String: Any], initialText: String,
                                 anchor: NSPoint, fontSize: Double) {
-        guard !hasStagedText else {
-            showError("Apply or cancel staged inspector changes before editing text inline.")
+        guard liveQueue.isEmpty else {
+            showError("Wait for property changes to apply before editing text inline.")
             return
         }
         guard inlineTextInput == nil else { return }
@@ -3877,6 +4346,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func textDidChange(_ notification: Notification) {
+        if notification.object as? NSTextView === textEditor {
+            textControlsChanged(field: "content")
+            return
+        }
         guard notification.object as? NSTextView === inlineTextEditor,
               var input = inlineTextInput, !input.finishInFlight else { return }
         input.bufferedText = inlineTextEditor.string
@@ -4036,12 +4509,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             && (textOutline.state == .on) == style.outlined
     }
 
-    @objc private func textShadowChanged() { updateTextShadowControls() }
+    @objc private func textShadowChanged() {
+        updateTextShadowControls()
+        layoutLayerInspectorTail()
+        textControlsChanged(field: nil)
+    }
+
+    /// Menus, segments and checkboxes: each change is its own undo step.
+    @objc private func textControlToggled() { textControlsChanged(field: nil) }
 
     @objc private func stageTextPreset() {
         let index = textPreset.indexOfSelectedItem - 1
         guard let presets = state.snapshot?.textStylePresets,
-              presets.indices.contains(index), !state.busy else { return }
+              presets.indices.contains(index) else { return }
         let preset = presets[index]
         guard let family = textFamily.itemArray.firstIndex(where: {
             $0.representedObject as? String == preset.fontFamily
@@ -4059,6 +4539,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             createTextPreset.selectItem(at: choice)
         }
         textPreset.selectItem(at: 0)
+        textControlsChanged(field: nil)
     }
 
     private func updateTextShadowControls() {
@@ -4066,11 +4547,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             && acceptedTextStyle?.shadowStyle != nil
         textShadowPanel.isHidden = !expanded
         textShadowPanel.frame.size.height = expanded ? 190 : 0
-        textApplyButton.frame.origin.y = textShadowPanel.frame.maxY
-        textCancelButton.frame.origin.y = textShadowPanel.frame.maxY
-        if selectedLayer?.kind == .text {
-            textShadowPanel.superview?.frame.size.height = textCancelButton.frame.maxY + 8
-        }
     }
 
     private func publishTextFields(preserveStaged: Bool = false) {
@@ -4091,17 +4567,25 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         if preserve { return }
         textPresetRounded = nil
-        textEditor.string = style.text; textSize.stringValue = format(style.fontSize)
-        textColor.stringValue = style.color; textPlateColor.stringValue = style.background ?? "#ffffff"
+        // Live edits republish the accepted values; never disturb a field
+        // the user is typing in (its caret and selection stay put).
+        func show(_ field: NSTextField, _ value: String) {
+            if field.currentEditor() == nil && field.stringValue != value { field.stringValue = value }
+        }
+        if textEditor.string != style.text && window.firstResponder !== textEditor { textEditor.string = style.text }
+        show(textSize, format(style.fontSize))
+        show(textColor, style.color); show(textPlateColor, style.background ?? "#ffffff")
         textTraits.setSelected(style.bold, forSegment: 0)
         textTraits.setSelected(style.italic, forSegment: 1)
         textAlignment.selectedSegment = ["left", "center", "right"].firstIndex(of: style.align) ?? 0
         textPlate.selectItem(at: style.background == nil ? 0 : style.roundedBackground ? 2 : 1)
         textShadow.state = style.dropShadow ? .on : .off
         textOutline.state = style.outlined ? .on : .off
-        textShadowFields["color"]?.stringValue = style.shadowStyle?.color ?? ""
+        if let field = textShadowFields["color"] { show(field, style.shadowStyle?.color ?? "") }
         for (key, path) in textShadowNumbers {
-            textShadowFields[key]?.stringValue = style.shadowStyle.map { format($0[keyPath: path]) } ?? ""
+            if let field = textShadowFields[key] {
+                show(field, style.shadowStyle.map { format($0[keyPath: path]) } ?? "")
+            }
         }
         updateTextShadowControls()
         textFamily.removeAllItems()
@@ -4119,13 +4603,23 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         } ?? 0)
     }
 
-    private func applyTextEdits() {
-        guard let layer = selectedLayer, let style = layer.textStyle, !state.busy else { return }
+    /// Shipping applies text properties as they change. A typing burst in one
+    /// field (`field`) is one undo step; other changes are each their own.
+    private func textControlsChanged(field: String?) {
+        guard let layer = selectedLayer, layer.kind == .text, inlineTextInput == nil,
+              let patch = stagedTextPatch(), !patch.isEmpty else { return }
+        let key = field.map { "text:\(layer.id):\($0)" } ?? liveOnceKey("text")
+        liveEdit(key: key, request: ["operation": "edit_text", "id": layer.id, "patch": patch])
+    }
+
+    /// The text fields' changes from the accepted style, or nil while a field
+    /// holds a value that cannot apply yet (an empty or partial color, say).
+    private func stagedTextPatch() -> [String: Any]? {
+        guard let style = selectedLayer?.textStyle else { return nil }
         guard let size = Double(textSize.stringValue), size.isFinite,
-              size == style.fontSize || (8...512).contains(size) else {
-            showError("Text size must be from 8 to 512."); return
-        }
-        guard !textColor.stringValue.isEmpty else { showError("Enter a text color."); return }
+              size == style.fontSize || (8...512).contains(size) else { return nil }
+        guard PreferencesController.normalizeHex(textColor.stringValue) != nil
+                || textColor.stringValue == style.color else { return nil }
         var patch: [String: Any] = [:]
         if textEditor.string != style.text { patch["text"] = textEditor.string }
         if size != style.fontSize { patch["fontSize"] = size }
@@ -4139,7 +4633,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if textColor.stringValue != style.color { patch["color"] = textColor.stringValue }
         let background = textPlate.indexOfSelectedItem == 0 ? nil : textPlateColor.stringValue
         if background != nil {
-            guard !textPlateColor.stringValue.isEmpty else { showError("Enter a plate color."); return }
+            guard PreferencesController.normalizeHex(textPlateColor.stringValue) != nil
+                    || textPlateColor.stringValue == style.background else { return nil }
         }
         if background != style.background {
             if let background { patch["background"] = background }
@@ -4152,28 +4647,20 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if textShadow.state == .on, let shadow = style.shadowStyle {
             var shadowPatch: [String: Any] = [:]
             if let color = textShadowFields["color"]?.stringValue, color != shadow.color {
-                guard let value = PreferencesController.normalizeHex(color) else {
-                    showError("Enter shadow color as #RGB or #RRGGBB."); return
-                }
+                guard let value = PreferencesController.normalizeHex(color) else { return nil }
                 shadowPatch["color"] = value
             }
             for (key, path) in textShadowNumbers {
                 guard let field = textShadowFields[key] else { continue }
                 // Formatting unchanged display values must not round authored precision.
                 if field.stringValue != format(shadow[keyPath: path]) {
-                    guard let value = number(field) else {
-                        showError("Enter a finite shadow \(key) value."); return
-                    }
+                    guard let value = number(field) else { return nil }
                     shadowPatch[key] = value
                 }
             }
             if !shadowPatch.isEmpty { patch["dropShadowStyle"] = shadowPatch }
         }
-        guard !patch.isEmpty else { return }
-        textApplyPending = true
-        command(["operation": "edit_text", "id": layer.id, "patch": patch],
-                message: "Applying text…", preferredSelection: layer.id,
-                preserveStagedTextOnFailure: true)
+        return patch
     }
 
     private func removeImageBackground(at point: NSPoint) {
@@ -4346,7 +4833,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             changeSection()
         }
         if let shape {
-            drawTool.selectItem(at: EditorDrawOverlay.Shape.allCases.firstIndex(of: shape)!)
+            drawShape = shape
             changeDrawTool()
         } else if section == Section.geometry {
             toggleCrop()
@@ -4530,12 +5017,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cropAspect.isEnabled = cropReady && cropPrevious != nil
         let active = sectionControl?.selectedSegment == Section.draw
             && state.snapshot != nil && !state.busy && inputResolved
-        drawTool?.isEnabled = state.snapshot != nil && !state.busy && inputResolved
+        eraserMode?.isEnabled = state.snapshot != nil && !state.busy && inputResolved
         wandTolerance.isEnabled = active; wandContiguous.isEnabled = active
         brushSize.isEnabled = active; brushSoftness.isEnabled = active
         createTextPreset.isEnabled = active && createTextPreset.numberOfItems > 1
         createTextSize.isEnabled = active; createTextColor.isEnabled = active
-        let textReady = active && selectedLayer?.kind == .text
+        // Selected text edits live under Select and stay editable while an
+        // edit applies; changes made meanwhile queue (see `liveEdit`).
+        let textReady = sectionControl?.selectedSegment == Section.layers && state.snapshot != nil
+            && inputResolved && selectedLayer?.kind == .text
         textEditor.isEditable = textReady
         textFamily.isEnabled = textReady && textFamily.numberOfItems > 1
         textPreset.isEnabled = textReady && textPreset.numberOfItems > 1
@@ -4549,23 +5039,63 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineTextEditor.isEditable = inlineTextInput?.finishInFlight != true
         inlineTextDoneButton?.isEnabled = inlineReady
         inlineTextCancelButton?.isEnabled = inlineReady
-        textApplyButton?.isEnabled = textReady || inlineReady
-        textCancelButton?.isEnabled = textReady || inlineReady
         drawOverlay.drawingEnabled = active
         selectionOverlay.selectionEnabled = sectionControl?.selectedSegment == Section.layers
             && state.snapshot != nil && !state.busy && inputResolved && !importLoading
     }
 
-    /// Annotation style, then Curve, then the rotation snap field.
+    /// Properties for the selected layer, top to bottom: the heading, then
+    /// image Width/Height/X/Y or the text fields, annotation style, Curve and
+    /// the Shift rotation snap. Hidden groups take no space.
     private func layoutLayerInspectorTail() {
-        guard let curveControls else { return }
-        curveControls.frame.origin = CGPoint(x: 0, y: 550 + annotationControlsHeight
-                                             + (annotationControlsHeight > 0 ? 8 : 0))
-        let curve = curveControls.isHidden ? 0 : curveControls.frame.height + 8
-        let tail = annotationControlsHeight + curve
-        rotationSnapLabel.frame.origin.y = 558 + tail
-        rotationSnap.frame.origin.y = 582 + tail
-        layerContent.frame.size.height = 620 + tail
+        guard let curveControls, let layerGeometryHint else { return }
+        let layer = selectedLayer
+        layerPropertiesHeading.stringValue = layer.map { $0.kind == .image ? $0.name : $0.rowKind } ?? ""
+        layerPropertiesHeading.isHidden = layer == nil
+        layerPropertiesRule.isHidden = layer == nil
+        var y: CGFloat = 56
+        let image = layer?.kind == .image
+        let geometryViews: [NSView] = layerGeometryLabels + [layerWidth, layerHeight, layerX, layerY, layerGeometryHint]
+        geometryViews.forEach { $0.isHidden = !image }
+        if image {
+            for (index, field) in [layerWidth, layerHeight, layerX, layerY].enumerated() {
+                let x = CGFloat(index % 2) * 134
+                let rowY = y + CGFloat(index / 2) * 58
+                layerGeometryLabels[index].frame.origin = NSPoint(x: x, y: rowY)
+                field.frame.origin = NSPoint(x: x, y: rowY + 22)
+            }
+            layerGeometryHint.stringValue = EditorChrome.layerGeometry(layer?.locked == true ? "locked" : "proportional")
+            layerGeometryHint.frame.origin.y = y + 116
+            y = layerGeometryHint.frame.maxY + 12
+        }
+        let text = layer?.kind == .text
+        for control in textControls where control !== textShadowPanel { control.isHidden = !text }
+        if text, let first = textControls.first {
+            let offset = y - first.frame.minY
+            for control in textControls { control.frame.origin.y += offset }
+            updateTextShadowControls()
+            y = max(textShadow.frame.maxY, textShadowPanel.frame.maxY) + 12
+        } else {
+            textShadowPanel.isHidden = true
+        }
+        annotationControls.frame.origin.y = y
+        if annotationControlsHeight > 0 { y += annotationControlsHeight + 8 }
+        curveControls.frame.origin = CGPoint(x: 0, y: y)
+        if !curveControls.isHidden { y += curveControls.frame.height + 8 }
+        rotationSnapLabel.isHidden = layer == nil; rotationSnap.isHidden = layer == nil
+        rotationSnapLabel.frame.origin.y = y + 8
+        rotationSnap.frame.origin.y = y + 30
+        layerContent.frame.size.height = layer == nil ? 0 : rotationSnap.frame.maxY + 16
+    }
+
+    /// Accepted Width/Height/X/Y for fields the user is not typing in.
+    private func publishLayerGeometry() {
+        let layer = selectedLayer
+        for (field, value) in [(layerWidth, layer?.width), (layerHeight, layer?.height),
+                               (layerX, layer?.x), (layerY, layer?.y)] {
+            guard field.currentEditor() == nil else { continue }
+            field.stringValue = value.map { format($0.rounded()) } ?? ""
+        }
     }
 
     private func curveCanvasLayer(_ id: String, edit: [String: Any]) {
@@ -4690,12 +5220,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 message: "Rotating layer…", preferredSelection: id)
     }
 
-    private func toggleVisibility() {
-        guard let layer = selectedLayer else { return }
-        layerCommand(layer, edit: ["action": "visibility", "visible": !layer.visible],
-                     message: layer.visible ? "Hiding layer…" : "Showing layer…")
-    }
-
     private func chooseImage() {
         guard let artifactID = state.artifactID, state.snapshot != nil, !state.busy,
               !importLoading else { return }
@@ -4810,39 +5334,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         pendingDropURLs = []
     }
 
-    private func toggleLock() {
-        guard let layer = selectedLayer else { return }
-        layerCommand(layer, edit: ["action": "lock", "locked": !layer.locked],
-                     message: layer.locked ? "Unlocking layer…" : "Locking layer…")
-    }
-
-    private func renameLayer() {
-        guard let layer = selectedLayer, layer.kind == .image,
-              !layerName.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            showError("Image layer names cannot be empty."); return
-        }
-        layerCommand(layer, edit: ["action": "rename", "name": layerName.stringValue],
-                     message: "Renaming layer…")
-    }
-
-    private func setOpacity() {
-        guard let layer = selectedLayer, let opacity = number(layerOpacity),
-              (0...100).contains(opacity) else {
-            showError("Layer opacity must be between 0 and 100."); return
-        }
-        layerCommand(layer, edit: ["action": "opacity", "opacity": opacity],
-                     message: "Updating layer opacity…")
-    }
-
-    private func moveLayer() {
-        guard let layer = selectedLayer, !layer.locked,
-              let x = number(layerX), let y = number(layerY) else {
-            showError("Unlocked layer coordinates must be finite numbers."); return
-        }
-        layerCommand(layer, edit: ["action": "translate", "delta_x": x - layer.x,
-                                   "delta_y": y - layer.y], message: "Moving layer…")
-    }
-
     private func transformLayer(_ transform: String, message: String) {
         guard let layer = selectedLayer, layer.kind == .image else { return }
         layerCommand(layer, edit: ["action": "image_transform", "transform": transform],
@@ -4917,16 +5408,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 selectToolOnSuccess: true)
     }
 
-    @objc private func combineLayersSelected(_ sender: NSPopUpButton) {
-        defer { sender.selectItem(at: 0) }
-        switch sender.indexOfSelectedItem {
-        case 1: combine("merge_down", id: selectedLayer?.id)
-        case 2: combine("merge_visible")
-        case 3: combine("flatten")
-        default: break
-        }
-    }
-
     func layerContextMenu(row: Int) -> NSMenu? {
         guard window.attachedSheet == nil,
               let snapshot = state.snapshot else { return nil }
@@ -4982,17 +5463,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     @objc private func mergeVisibleFromMenu(_ sender: NSMenuItem) { combine("merge_visible") }
     @objc private func flattenFromMenu(_ sender: NSMenuItem) { combine("flatten") }
-
-    private func reorderLayer(up: Bool) {
-        guard let snapshot = state.snapshot, let layer = selectedLayer,
-              !layer.locked, let index = snapshot.layers.firstIndex(where: { $0.id == layer.id }) else { return }
-        let targetIndex = up ? index - 1 : index + 1
-        guard snapshot.layers.indices.contains(targetIndex), !snapshot.layers[targetIndex].locked else { return }
-        layerCommand(layer, edit: ["action": "reorder",
-                                   "target_id": snapshot.layers[targetIndex].id,
-                                   "placement": up ? "before" : "after"],
-                     message: up ? "Moving layer up…" : "Moving layer down…")
-    }
 
     private func toggleCrop() {
         guard state.snapshot != nil, !state.busy else { return }
@@ -5151,6 +5621,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 guard self.state.fail(generation: generation) else { return }
                 self.preferredLayerID = nil
                 self.closeAfterCommand = false
+                // A rejected live edit ends its burst; queued edits built on it drop too.
+                self.liveQueue.removeAll()
                 self.showError("Editor action failed: \(error.localizedDescription)")
                 if !preserveStagedTextOnFailure { self.publishSelectedLayerFields() }
                 self.publishBackgroundFields()
@@ -5250,39 +5722,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateOutputOptionControls()
         updateDrawing()
         layerTable?.isEnabled = ready
-        importImageButton?.isEnabled = ready && !importLoading
-        let combineReady = layerActionsReady
-        combineLayers?.isEnabled = combineReady && (state.snapshot?.canMergeVisible == true
-            || state.snapshot?.canFlatten == true || !(state.snapshot?.mergeDownIDs.isEmpty ?? true))
-        combineLayers?.item(at: 1)?.isEnabled = combineReady && selectedLayer.map {
-            state.snapshot?.mergeDownIDs.contains($0.id) == true
-        } == true
-        combineLayers?.item(at: 2)?.isEnabled = combineReady && state.snapshot?.canMergeVisible == true
-        combineLayers?.item(at: 3)?.isEnabled = combineReady && state.snapshot?.canFlatten == true
+        if ready && !liveQueue.isEmpty {
+            DispatchQueue.main.async { [weak self] in self?.flushLiveQueue() }
+        }
         annotationControls?.setReady(ready)
         curveControls?.setReady(ready)
-        let layer = ready ? selectedLayer : nil
-        let image = layer?.kind == .image
+        // Live fields stay editable while an edit applies; their edits queue.
+        let live = state.snapshot != nil && inlineTextInput == nil
+        let layer = live ? selectedLayer : nil
         rotationSnap.isEnabled = layer != nil
-        layerName.isEnabled = image; renameButton?.isEnabled = image
-        rotateLeftButton?.isEnabled = image; rotateRightButton?.isEnabled = image
-        flipHorizontalButton?.isEnabled = image; flipVerticalButton?.isEnabled = image
-        layerOpacity.isEnabled = layer != nil; opacityButton?.isEnabled = layer != nil
-        visibilityButton?.isEnabled = layer != nil; lockButton?.isEnabled = layer != nil
-        duplicateButton?.isEnabled = layer != nil
-        let movable = layer != nil && layer?.locked == false
-        layerX.isEnabled = movable; layerY.isEnabled = movable; moveButton?.isEnabled = movable
-        deleteButton?.isEnabled = movable
-        if let snapshot = state.snapshot, let layer,
-           let index = snapshot.layers.firstIndex(where: { $0.id == layer.id }) {
-            moveUpButton?.isEnabled = movable && index > 0 && !snapshot.layers[index - 1].locked
-            moveDownButton?.isEnabled = movable && index + 1 < snapshot.layers.count
-                && !snapshot.layers[index + 1].locked
-        } else {
-            moveUpButton?.isEnabled = false; moveDownButton?.isEnabled = false
-        }
-        visibilityButton?.title = layer?.visible == false ? "Show" : "Hide"
-        lockButton?.title = layer?.locked == true ? "Unlock" : "Lock"
+        let resizable = layer?.kind == .image && layer?.locked == false
+        [layerWidth, layerHeight, layerX, layerY].forEach { $0.isEnabled = resizable }
+        if layerMenuID != nil { publishLayerMenu() } else { publishLayerMenuStates() }
     }
 
     private func reconcileLayerSelection(_ layers: [NativeEditorLayer], allowFallback: Bool = true) {
@@ -5326,17 +5777,54 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.curveHandles = selectionOverlay.resizeEnabled ? curve : nil
         selectionOverlay.expandPreview = selectedLayer.flatMap { state.snapshot?.canvasExpand[$0.id] }
         curveControls?.setHandles(selectedLayer?.locked == false ? curve : nil)
-        guard let layer = selectedLayer else {
-            [layerName, layerOpacity, layerX, layerY].forEach { $0.stringValue = "" }
-            updateControls(); return
-        }
-        layerName.stringValue = layer.name
-        layerOpacity.stringValue = format(layer.opacity)
-        layerX.stringValue = format(layer.x); layerY.stringValue = format(layer.y)
+        publishLayerGeometry()
+        if layerMenuID != nil && layerMenuID != selectedLayerID { closeLayerMenu() }
+        if renamingLayerID != nil && renamingLayerID != selectedLayerID { finishLayerRename(commit: true) }
+        layoutLayerInspectorTail()
         updateControls()
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { state.snapshot?.layers.count ?? 0 }
+
+    /// Shipping drag to reorder: unlocked rows drag; the drop is one undo step.
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        guard tableView === layerTable, renamingLayerID == nil, layerActionsReady,
+              let layers = state.snapshot?.layers, layers.indices.contains(row), !layers[row].locked else {
+            return nil
+        }
+        closeLayerMenu()
+        let item = NSPasteboardItem()
+        item.setString(layers[row].id, forType: Self.layerDragType)
+        return item
+    }
+
+    func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
+                   proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
+        guard tableView === layerTable,
+              info.draggingPasteboard.string(forType: Self.layerDragType) != nil else { return [] }
+        if dropOperation == .on { tableView.setDropRow(row, dropOperation: .above) }
+        return .move
+    }
+
+    func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int,
+                   dropOperation: NSTableView.DropOperation) -> Bool {
+        guard tableView === layerTable,
+              let id = info.draggingPasteboard.string(forType: Self.layerDragType) else { return false }
+        return dropLayer(id, aboveRow: row)
+    }
+
+    /// Drop a dragged layer between rows: `row` is the front-to-back display
+    /// index it lands above (the row count drops it at the back).
+    @discardableResult func dropLayer(_ id: String, aboveRow row: Int) -> Bool {
+        guard layerActionsReady, let layers = state.snapshot?.layers,
+              let index = layers.firstIndex(where: { $0.id == id }), !layers[index].locked,
+              row >= 0, row <= layers.count, row != index, row != index + 1 else { return false }
+        let target = row < layers.count ? (layers[row].id, "before") : (layers[layers.count - 1].id, "after")
+        cancelDrawing(); cancelViewportPan()
+        layerCommand(layers[index], edit: ["action": "reorder", "target_id": target.0, "placement": target.1],
+                     message: "Reordering layer…", preferredSelection: id)
+        return true
+    }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !reconcilingLayerSelection else { return }
@@ -5345,6 +5833,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         selectedLayerIndex = layerTable.selectedRow
         selectedLayerID = layers[selectedLayerIndex].id
+        refreshLayerRowSelection()
+        // Choosing a row chooses the Select tool, like shipping.
+        if !reconcilingLayerSelection { activateTool(section: Section.layers, shape: nil) }
         publishSelectedLayerFields()
     }
 
@@ -5352,14 +5843,23 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard let layers = state.snapshot?.layers, layers.indices.contains(row) else { return nil }
         let layer = layers[row]
         let title = NSTextField(labelWithString: layer.rowName)
-        title.lineBreakMode = .byTruncatingTail; title.toolTip = layer.rowName
+        title.lineBreakMode = .byTruncatingTail
+        title.toolTip = layer.kind == .image ? EditorChrome.text("layers", "rename") : layer.rowName
         title.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
         title.textColor = tokens.color("text")
         let detail = NSTextField(labelWithString: layer.rowKind)
-        detail.alignment = .right; detail.font = .systemFont(ofSize: tokens.number("text-xs"))
+        detail.lineBreakMode = .byTruncatingTail
+        detail.font = .systemFont(ofSize: tokens.number("text-xs"))
         detail.textColor = tokens.color("text-subtle"); detail.toolTip = layer.rowKind
         // Shipping fades hidden layers' name and preview.
         if !layer.visible { title.alphaValue = 0.42; detail.alphaValue = 0.42 }
+        let rename = NSTextField(string: layer.name)
+        rename.identifier = Self.layerRenameIdentifier
+        rename.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        rename.setAccessibilityLabel(EditorChrome.layerMenu("rename_label"))
+        rename.delegate = self
+        let renaming = renamingLayerID == layer.id
+        rename.isHidden = !renaming; title.isHidden = renaming
         let id = layer.id
         let visibility = CaptureButton("", frame: .zero, tokens: tokens) { [weak self] in
             self?.toggleVisibility(id: id)
@@ -5373,13 +5873,35 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         lock.icon = .shipping(layer.locked ? "lock" : "unlock")
         lock.setAccessibilityLabel("\(layer.locked ? "Unlock" : "Lock") \(layer.rowName)")
         lock.toolTip = EditorChrome.text("layers", layer.locked ? "unlock" : "lock")
-        for (control, on) in [(visibility, !layer.visible), (lock, layer.locked)] {
+        let menu = CaptureButton("", frame: .zero, tokens: tokens) { [weak self] in
+            self?.toggleLayerMenu(id: id)
+        }
+        menu.icon = .shipping("more")
+        menu.setAccessibilityLabel(String(format: "Layer settings for %@", layer.rowName))
+        menu.toolTip = EditorChrome.text("layers", "menu")
+        for (control, on) in [(visibility, !layer.visible), (lock, layer.locked), (menu, layerMenuID == id)] {
             control.quiet = true; control.iconSide = 14
             control.cornerRadius = tokens.number("r-sm"); control.selected = on
             control.isEnabled = state.snapshot != nil && !state.busy && inlineTextInput == nil
         }
-        return EditorLayerCell(title: title, detail: detail, iconName: layer.rowIcon, tokens: tokens,
-                               visibility: visibility, lock: lock)
+        let cell = EditorLayerCell(title: title, detail: detail, rename: rename, iconName: layer.rowIcon,
+                                   thumbnail: EditorLayerThumbnails.image(layer.thumbnail),
+                                   coversPreview: layer.kind == .image, locked: layer.locked,
+                                   visible: layer.visible, tokens: tokens,
+                                   visibility: visibility, lock: lock, menu: menu)
+        cell.rowSelected = layer.id == selectedLayerID
+        cell.toolTip = layer.locked ? EditorChrome.text("layers", "locked") : EditorChrome.text("layers", "drag")
+        return cell
+    }
+
+    /// Cells draw shipping's selected row; the table's own highlight is off.
+    private func refreshLayerRowSelection() {
+        guard let layerTable else { return }
+        for row in 0..<layerTable.numberOfRows {
+            (layerTable.view(atColumn: 0, row: row, makeIfNecessary: false) as? EditorLayerCell)?.rowSelected =
+                state.snapshot?.layers.indices.contains(row) == true
+                && state.snapshot?.layers[row].id == selectedLayerID
+        }
     }
 
     /// Row quick actions target their own layer; lock also selects it, like shipping.
@@ -5478,6 +6000,21 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         layerCount.textColor = tokens.color("text-subtle")
         layerCount.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         layerHeadingRule.layer?.backgroundColor = border
+        layerPropertiesRule.layer?.backgroundColor = border
+        layerPropertiesHeading.textColor = tokens.color("text")
+        layerMenuCard.layer?.backgroundColor = tokens.color("surface-overlay").cgColor
+        layerMenuCard.layer?.borderColor = tokens.color("border").cgColor
+        layerMenuFooter.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        layerMenuRules.forEach { $0.layer?.backgroundColor = border }
+        layerBlendMode.tokens = tokens; layerOpacity.tokens = tokens
+        for field in [layerWidth, layerHeight, layerX, layerY] { field.tokens = tokens }
+        for section in layerMenuSections { section.title.textColor = tokens.color("text-subtle") }
+        let menuControls: [CaptureButton?] = [rotateLeftButton, rotateRightButton, flipHorizontalButton,
+                                              flipVerticalButton, bringFrontButton, sendBackButton,
+                                              mergeDownButton, mergeVisibleButton, flattenButton,
+                                              duplicateButton, deleteButton]
+        for control in menuControls.compactMap({ $0 }) { control.tokens = tokens; control.needsDisplay = true }
+        layerTable?.reloadData()
         let controls: [CaptureButton?] = [trimButton, backgroundButton, undoButton, redoButton, fitButton,
                                           zoomOutButton, zoomInButton, addImagesButton, draftMenuButton,
                                           recenterButton, draftDiscardButton, draftDismissButton, addLayerButton]

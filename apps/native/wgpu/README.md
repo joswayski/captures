@@ -134,9 +134,14 @@ The Crop tool selects on the preview, including reverse and outside-image
 drags. Free, 1:1, 4:3, 3:2 and 16:9 presets use shared Rust geometry; hold Shift
 to lock the current ratio. Apply crop commits; Cancel, Escape or switching tools
 abandons the selection without editing or saving. Numeric crop fields remain usable.
-The Layers panel selects front-to-back layers and connects visibility, locking,
-image rename, opacity, X/Y movement, duplicate, delete and adjacent ordering.
-Shared Rust preserves locked boundaries and makes every accepted edit undoable.
+The sidebar always shows Layers above the tool's Properties. Rows list layers front
+to back with a grip, a live thumbnail, the name and kind, and eye, lock and ⋯
+actions; drag a row to reorder it and double-click an image row to rename it. The ⋯
+popover holds blend mode, opacity, image transforms, Bring to front/Send to back,
+Merge down/visible, Flatten image, Duplicate and Delete. Selected images show live
+Width/Height/X/Y fields and selected text edits live; a burst of changes in one
+field is one undo step. Shared Rust preserves locked boundaries and makes every
+accepted edit undoable.
 Draw adds filled rectangles/ellipses, straight lines, tapered arrows and freehand Pen strokes with the
 shipping default annotation color and rounded rectangle corners. Drag previews are
 transient; release creates one selected layer and undo step. Escape, focus loss,

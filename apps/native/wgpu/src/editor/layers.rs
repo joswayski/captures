@@ -40,7 +40,7 @@ pub(super) struct RowDrag {
 /// An inline rename field (image layers only, like shipping).
 pub(super) struct Rename {
     id: String,
-    value: String,
+    pub(super) value: String,
     focus: bool,
 }
 
@@ -646,14 +646,6 @@ fn rename_field(
     if rename.focus {
         response.request_focus();
         rename.focus = false;
-        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id) {
-            let all = egui::text::CCursorRange::two(
-                egui::text::CCursor::new(0),
-                egui::text::CCursor::new(rename.value.chars().count()),
-            );
-            state.cursor.set_char_range(Some(all));
-            state.store(ui.ctx(), response.id);
-        }
         return;
     }
     let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));

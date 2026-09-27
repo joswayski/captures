@@ -56,6 +56,19 @@ enum EditorChrome {
     static let rail = tools("rail")
     static let shapes = tools("shapes")
 
+    /// Shipping `LAYER_BLEND_MODE_OPTIONS` (`captures_app::editor_layers`).
+    static let blendModes: [(value: String, label: String)] =
+        (copy["blend_modes"] as? [[String: Any]] ?? []).compactMap { item in
+            guard let value = item["value"] as? String, let label = item["label"] as? String else { return nil }
+            return (value, label)
+        }
+
+    /// Shipping layer ⋯ popover copy, such as `layerMenu("bring_front")`.
+    static func layerMenu(_ key: String) -> String { text("layer_menu", key) }
+
+    /// Shipping inspector Width/Height/X/Y copy, such as `layerGeometry("x_label")`.
+    static func layerGeometry(_ key: String) -> String { text("layer_geometry", key) }
+
     static func headerLayout(width: CGFloat) -> HeaderLayout {
         let result = request(["operation": "header_layout", "width": Double(width)]) as? [String: Any]
         return HeaderLayout(

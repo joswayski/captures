@@ -312,7 +312,15 @@ struct NativeEditorLayer: Equatable {
     let opacity: Double
     let x: Double
     let y: Double
+    /// Image and text box width, image height; nil for other kinds.
+    let width: Double?
+    let height: Double?
     let rotation: Double
+    /// Shipping layer composite (`source-over`, `multiply`, …).
+    let blendMode: String
+    /// Live row preview as a `data:image/png;base64,…` URL from the shared
+    /// session (`layer_thumbnails`); nil shows the kind icon.
+    let thumbnail: String?
     let selectionOutline: [CGPoint]?
     let annotation: NativeAnnotationStyle?
     let textStyle: NativeTextStyle?
@@ -325,7 +333,8 @@ struct NativeEditorLayer: Equatable {
     init?(_ value: [String: Any], annotation: [String: Any]? = nil,
           textShadow: [String: Any]? = nil,
           selectionOutline: [[String: Any]]? = nil,
-          row: [String: Any]? = nil) {
+          row: [String: Any]? = nil,
+          thumbnail: String? = nil) {
         guard let id = value["id"] as? String, !id.isEmpty,
               let rawKind = value["kind"] as? String,
               let kind = Kind(rawValue: rawKind),
@@ -338,6 +347,10 @@ struct NativeEditorLayer: Equatable {
         self.visible = visible; self.locked = locked
         self.opacity = opacity.doubleValue; self.x = x.doubleValue; self.y = y.doubleValue
         rotation = (value["rotation"] as? NSNumber)?.doubleValue ?? 0
+        width = (value["width"] as? NSNumber)?.doubleValue
+        height = kind == .image ? (value["height"] as? NSNumber)?.doubleValue : nil
+        blendMode = value["blendMode"] as? String ?? "source-over"
+        self.thumbnail = thumbnail
         self.annotation = annotation.flatMap(NativeAnnotationStyle.init)
         if annotation != nil && self.annotation == nil { return nil }
         textStyle = kind == .text ? NativeTextStyle(value, shadow: textShadow) : nil
@@ -530,12 +543,14 @@ struct NativeEditorSnapshot: Equatable {
         let textShadows = value["text_shadow_styles"] as? [String: [String: Any]] ?? [:]
         let outlines = value["selection_outlines"] as? [String: [[String: Any]]] ?? [:]
         let rows = value["layer_rows"] as? [String: [String: Any]] ?? [:]
+        let thumbnails = value["layer_thumbnails"] as? [String: String] ?? [:]
         let layers = elements.compactMap { element in
             let id = element["id"] as? String
             return NativeEditorLayer(element, annotation: id.flatMap { annotations[$0] },
                                      textShadow: id.flatMap { textShadows[$0] },
                                      selectionOutline: id.flatMap { outlines[$0] },
-                                     row: id.flatMap { rows[$0] })
+                                     row: id.flatMap { rows[$0] },
+                                     thumbnail: id.flatMap { thumbnails[$0] })
         }
         guard layers.count == elements.count else { return nil }
         guard let documentData = try? JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]) else {
