@@ -4588,3 +4588,89 @@ fn drop_guides_place_imports_where_the_guide_shows() {
         Path::new("a.gif")
     ));
 }
+
+#[test]
+fn live_edits_with_one_key_fold_into_one_undo_step_until_another_edit() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let layer = editor.snapshot().document.elements[0].base().id.clone();
+    editor
+        .execute(Request::Layer {
+            id: layer.clone(),
+            edit: LayerEdit::Lock { locked: false },
+        })
+        .unwrap();
+    let live = |key: &str, edit: serde_json::Value| {
+        serde_json::from_value::<Request>(json!({
+            "operation": "live", "key": key,
+            "request": {"operation": "layer", "id": layer, "edit": edit},
+        }))
+        .unwrap()
+    };
+    let x = |editor: &EditorSession| editor.snapshot().document.elements[0].base().x;
+    for value in [1., 12., 123.] {
+        editor
+            .execute(live("x:1", json!({"action": "geometry", "x": value})))
+            .unwrap();
+    }
+    assert_eq!(x(&editor), 123.);
+    // A different field starts its own step.
+    editor
+        .execute(live("width:1", json!({"action": "geometry", "width": 14.})))
+        .unwrap();
+    let Element::Image(image) = &editor.snapshot().document.elements[0] else {
+        panic!("image layer");
+    };
+    assert_eq!((image.width, image.height), (14., 6.));
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(x(&editor), 123.);
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(x(&editor), 0., "the whole X burst is one undo step");
+    // Redo ends the burst: a later edit with the same key is a new step.
+    editor.execute(Request::Redo).unwrap();
+    editor
+        .execute(live("x:1", json!({"action": "geometry", "x": 5.})))
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(x(&editor), 123.);
+    // Blend and arrange are ordinary layer edits.
+    editor
+        .execute(
+            serde_json::from_value(json!({"operation": "layer", "id": layer,
+            "edit": {"action": "blend_mode", "blend_mode": "multiply"}}))
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        editor.snapshot().document.elements[0].base().blend_mode,
+        "multiply"
+    );
+    assert!(
+        editor
+            .execute(
+                serde_json::from_value(json!({"operation": "layer", "id": layer,
+                "edit": {"action": "blend_mode", "blend_mode": "hue"}}))
+                .unwrap()
+            )
+            .is_err()
+    );
+    assert!(
+        editor
+            .execute(
+                serde_json::from_value(json!({"operation": "live", "key": "k",
+                "request": {"operation": "undo"}}))
+                .unwrap()
+            )
+            .is_err(),
+        "only layer and text edits can be live"
+    );
+    editor.refresh_layer_thumbnails();
+    let snapshot = serde_json::to_value(editor.snapshot()).unwrap();
+    assert!(
+        snapshot["layer_thumbnails"][&layer]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,")
+    );
+    assert!(editor.layer_thumbnail(&layer).is_some());
+}

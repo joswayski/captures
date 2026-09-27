@@ -251,7 +251,7 @@ pub fn scroll_rows<R>(
 }
 
 /// `--shadow-lg` for the current appearance.
-fn shadow_lg(dark: bool) -> egui::Shadow {
+pub fn shadow_lg(dark: bool) -> egui::Shadow {
     if dark {
         egui::Shadow {
             offset: [0, 18],

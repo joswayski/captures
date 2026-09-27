@@ -1010,7 +1010,7 @@ impl Element {
         Ok(hit_test_resize_handle(bounds, local, radius))
     }
 
-    fn base_mut(&mut self) -> &mut ElementBase {
+    pub(crate) fn base_mut(&mut self) -> &mut ElementBase {
         match self {
             Self::Image(element) => &mut element.base,
             Self::Text(element) => &mut element.base,
@@ -1019,7 +1019,7 @@ impl Element {
         }
     }
 
-    fn translate_layer(&mut self, delta_x: f64, delta_y: f64) -> Result<(), String> {
+    pub(crate) fn translate_layer(&mut self, delta_x: f64, delta_y: f64) -> Result<(), String> {
         // Hidden layers also need serializable geometry: the renderer skips them,
         // but a saved draft must still be readable after any accepted movement.
         let finite = |x: f64, y: f64| (x + delta_x).is_finite() && (y + delta_y).is_finite();
@@ -1397,6 +1397,29 @@ pub enum LayerEdit {
     },
     /// Grow the canvas to fit this layer (shipping Expand canvas).
     ExpandCanvas,
+    /// Shipping layer menu Blend mode: one of [`crate::editor_layers::BLEND_MODES`].
+    BlendMode {
+        blend_mode: String,
+    },
+    /// Shipping live Width/Height/X/Y inspector fields. X and Y are absolute
+    /// document positions. Width and height apply to image layers only and keep
+    /// the oriented natural aspect (shipping `imageSizeAtWidth`/`AtHeight`);
+    /// width wins when both are given. Locked layers do not change.
+    Geometry {
+        #[serde(default)]
+        x: Option<f64>,
+        #[serde(default)]
+        y: Option<f64>,
+        #[serde(default)]
+        width: Option<f64>,
+        #[serde(default)]
+        height: Option<f64>,
+    },
+    /// Shipping Bring to front (`front`) or Send to back. Locked layers and
+    /// locked neighbours keep their places, like [`LayerEdit::Reorder`].
+    Arrange {
+        front: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -1923,6 +1946,77 @@ impl Document {
                 }
             }
             LayerEdit::ExpandCanvas => self.expand_canvas_to_fit(id)?,
+            LayerEdit::BlendMode { blend_mode } => {
+                if !crate::editor_layers::BLEND_MODES
+                    .iter()
+                    .any(|(value, _)| *value == blend_mode)
+                {
+                    return Err(format!("Unsupported blend mode {blend_mode}."));
+                }
+                self.elements[index].base_mut().blend_mode = blend_mode;
+            }
+            LayerEdit::Geometry {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                if [x, y, width, height]
+                    .into_iter()
+                    .flatten()
+                    .any(|value| !value.is_finite())
+                {
+                    return Err("Layer geometry must be finite.".into());
+                }
+                if locked {
+                    return Ok(());
+                }
+                if let Element::Image(image) = &mut self.elements[index] {
+                    let size = match (width, height) {
+                        (Some(width), _) => {
+                            Some(crate::editor_layers::image_size_at_width(image, width))
+                        }
+                        (None, Some(height)) => {
+                            Some(crate::editor_layers::image_size_at_height(image, height))
+                        }
+                        (None, None) => None,
+                    };
+                    if let Some((width, height)) = size {
+                        image.width = width;
+                        image.height = height;
+                    }
+                }
+                let base = self.elements[index].base();
+                let delta_x = x.map_or(0., |x| x - base.x);
+                let delta_y = y.map_or(0., |y| y - base.y);
+                if delta_x != 0. || delta_y != 0. {
+                    self.elements[index].translate_layer(delta_x, delta_y)?;
+                }
+            }
+            LayerEdit::Arrange { front } => {
+                if locked {
+                    return Ok(());
+                }
+                let target = if front {
+                    self.elements.last()
+                } else {
+                    self.elements.first()
+                };
+                let Some(target_id) = target.map(|element| element.base().id.clone()) else {
+                    return Ok(());
+                };
+                return self.edit_layer(
+                    id,
+                    LayerEdit::Reorder {
+                        target_id,
+                        placement: if front {
+                            LayerPlacement::Before
+                        } else {
+                            LayerPlacement::After
+                        },
+                    },
+                );
+            }
         }
         Ok(())
     }
@@ -2906,6 +3000,16 @@ impl DocumentHistory {
     #[must_use]
     pub fn redo_len(&self) -> usize {
         self.redo.len()
+    }
+
+    /// Replace the current document without adding an undo step: a live
+    /// inspector burst (see `Request::Live`) folds into the step it started.
+    /// Clears redo like [`DocumentHistory::commit`].
+    pub fn amend(&mut self, next: Document) {
+        if self.current != next {
+            self.redo.clear();
+            self.current = next;
+        }
     }
 
     /// Commit a document snapshot. Exact no-ops do not alter either stack.

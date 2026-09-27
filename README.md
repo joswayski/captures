@@ -471,8 +471,9 @@ when one is enabled. Editor workers can own explicit
 fonts and preserve their exact bytes in local draft sidecars, so text edits, undo,
 export and reopening use the same fonts. Typed commands create plain or preset text and edit
 content, type, alignment, color and plates transactionally. Both native hosts now
-connect a basic **Draw → Text** tool with staged Apply/Cancel controls, including
-outlines and shadow color, opacity, blur and offsets. Before placement, choose a
+connect a basic **Text** tool. Selected text's properties, including outlines and
+shadow color, opacity, blur and offsets, apply as you edit, as in the shipping
+editor; typing in one field is one undo step. Before placement, choose a
 named style, size and color; boxed styles center on the click. These defaults last
 only for that editor. Both hosts start at Rounded Box when its pinned font is
 offered, otherwise Standard, then Plain. New text starts in the annotation red,
@@ -487,7 +488,7 @@ Selected-text named styles use those pinned fonts; Rounded and Rounded Box are
 available in new sessions, but remain unavailable in older drafts without a
 saved rounded face.
 In both native editors, explicitly choosing a named style for selected text also makes that
-style the next new-text choice for this editor. Cancel or a failed Apply does not
+style the next new-text choice for this editor. Undo or a failed edit does not
 undo that future choice; size, color and manual font edits do not carry forward.
 The Windows/Linux candidate and AppKit host separately connect on-canvas native
 multiline composing fields to the same shared transaction. Typing previews text
@@ -514,16 +515,21 @@ locking; physical input acceptance remains separate work.
 The Windows/Linux candidate opens screenshots from History in a native crop,
 canvas-size and draft editor with undo/redo. Both native hosts place their scrolling
 inspector to the right of the canvas and center the image in Fit mode without
-upscaling small captures. Both use the shipping header and tool rail, while their
-inspector still differs from the shipping Tauri editor. Both editor windows resize
+upscaling small captures. Both use the shipping header and tool rail, and the
+shipping sidebar: Layers always sits above the current tool's properties, while
+the property controls themselves still differ from the shipping Tauri editor. Both editor windows resize
 down to 760×540, with scrollable inspector controls. A shipping-style export bar spans
 the bottom of both editors in every section: an **Export settings** disclosure whose
 summary reads like `PNG · 1920 × 1080 · ≈ 240 KB`, the filename with a format suffix
 menu, **Saving to** with **Change…**, **Copy image** (briefly **Copied**), a
 **Save as new file** switch and **Save**. **Draw crop** selects directly on the
 preview with free or preset aspect ratios and Shift ratio locking. Apply commits
-the selection; Cancel or Escape leaves the document unchanged. Its layer panel supports selection,
-visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
+the selection; Cancel or Escape leaves the document unchanged. Layer rows show a grip,
+a live preview, the name and kind, and eye, lock and ⋯ actions. Drag a row to
+reorder it (one undo step) and double-click an image row to rename it. The ⋯ menu
+holds blend mode, opacity, image transforms, Bring to front and Send to back, Merge
+down, Merge visible, Flatten image, Duplicate and Delete. Selected images show
+Width, Height, X and Y fields that apply as you type.
 **Draw** adds rectangles, ellipses, triangles, diamonds, stars, straight lines, tapered arrows and freehand Pen strokes in the default
 annotation color, one undoable layer per gesture. Escape cancels unfinished work;
 short arrow gestures are discarded and drafts retain completed shapes and strokes.

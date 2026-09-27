@@ -472,9 +472,22 @@ Shapes corner cue and a three-column icon flyout, AppKit a menu with the shape i
 Inspector sections open with the tool name (Crop, Freehand, Eraser…) or shipping's
 Layers heading with a count and Add image layer; layer rows show the shipping names
 and kinds with eye and lock quick actions (lock also selects its row). wgpu editor
-errors use the export status line, as in shipping. The inspector keeps its native
-controls, the Draw tool grid and 30/32-point rows without thumbnails; the layer ⋯
-settings popover and the section styling remain open.
+errors use the export status line, as in shipping.
+The inspector/Layers slice then removes the native Draw tool grid and AppKit's Tool
+menu, so the rail alone picks the tool (Eraser shows shipping's Wand/Erase/Restore
+mode group). Both hosts always show Layers above Properties in shipping's
+`minmax(188px, 40%)` split. Rows are 54 points with a grip, a live thumbnail rendered
+by shared Rust (`editor_layers::ThumbnailCache`, sent to AppKit as PNG data URLs in
+`layer_thumbnails`), the name over the kind, and eye/lock/⋯ quick actions. Dragging
+a row submits one `LayerEdit::Reorder`; double-clicking an image row renames it in
+place. The ⋯ popover holds Blend mode (`LayerEdit::BlendMode`, already honoured by the
+shared compositor for display, saves and exports), a live Opacity slider, image
+Transform tiles, Bring to front/Send to back (`LayerEdit::Arrange`), Merge down,
+Merge visible, Flatten image, Duplicate and Delete. Image Width/Height/X/Y
+(`LayerEdit::Geometry`, aspect-preserving like shipping) and selected text apply
+live; `Request::Live` folds each field's burst into one undo step, and edits made
+while a job runs queue on the host. Annotation style keeps its staged Apply style,
+and native controls keep their own styling.
 X11 smokes cover both appearances; AppKit is covered by XCTest only.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete
@@ -603,7 +616,7 @@ preserving shaped advances, baseline, explicit faces and fractional glyph placem
 This uses scalable glyph paths, not bitmap dilation; colored and bitmap glyphs return
 explicit outline errors. Filled and outlined masks cannot leak between operations
 or stroke widths, and the existing raster bounds/pixel budgets still apply.
-Both hosts now stage Outline with Text Apply/Cancel. Document rendering uses
+Both hosts now apply Outline live with the other text properties. Document rendering uses
 Tauri's max(1.5, font size × 0.08) stroke width, including plates, shadows and rotation.
 Outline-only edits preserve authored width/position, invalidate output transactionally,
 and participate in undo/redo and saved reopen. Unsupported glyphs reject property
@@ -636,11 +649,11 @@ canvas-space offsets, blur and blend mode. Shadow work is clipped to output plus
 blur support; existing vector shadow/crisp passes are unchanged. Font-backed text
 uses the shipping paragraph paint order: all glyph shadow/source passes precede
 all crisp glyph passes. With a plate, only the plate receives a shadow. Both hosts
-stage a Drop shadow toggle and custom color, opacity, blur and X/Y offsets with
-Apply/Cancel. Both hosts use Rust-resolved defaults and submit only changed enabled
+apply a Drop shadow toggle and custom color, opacity, blur and X/Y offsets live.
+Both hosts use Rust-resolved defaults and submit only changed enabled
 fields; saved precision and unknown style metadata survive toggling. Shadow-only
-edits do not refit text. Failed transactions retain staged input, and disabled
-shadow fields do not block Apply or closing. Legacy low-level `Shape::Text`
+edits do not refit text. Failed transactions retain typed input, and values that
+cannot apply yet (a partial color) are not sent. Legacy low-level `Shape::Text`
 shadows remain unsupported.
 Text and plate paints now share the
 shipping selection pivot for rotation, including when estimated wrapping differs
@@ -683,10 +696,10 @@ Nunito's regular cmap is narrower than Liberation Sans's (938 versus 2,327
 code points): é, Ω and Ж render, but Greek λ is absent in Nunito despite being
 present in Sans. A rounded host default can therefore reject previously
 accepted text; it must not silently substitute Sans.
-Both hosts stage family changes with the other Text Apply/Cancel fields. Their
+Both hosts apply family changes live with the other text fields. Their
 family picker reads the session's actual pinned map, not host defaults. Older
 Sans-only drafts remain Sans-only; explicit font migration is still unimplemented.
-Both selected-text inspectors offer a Style menu staged with Apply/Cancel.
+Both selected-text inspectors offer a Style menu whose choice applies at once.
 Rust supplies the shipping seven-style catalog filtered by the session's pinned
 font families: the bundle offers all seven styles, including Rounded and Rounded Box;
 Sans-only drafts offer Standard, Outlined and Box. Rounded/Rounded Box require an
@@ -694,9 +707,9 @@ actual pinned `rounded` face and are not substituted with Sans. Presets change o
 family, plate/outline flags and (when no plate existed) the default plate color.
 They preserve content, size, alignment, traits, text color, custom plate colors,
 shadows and unknown metadata; the usual worker edit/refit rules still apply.
-Shipping-TypeScript fixtures check the catalog; staged failure/cancellation and
+Shipping-TypeScript fixtures check the catalog; live failure handling and
 font filtering are covered separately in host/session tests. This is not the
-shipping style-picker layout, immediate editing or a new-text-default picker.
+shipping style-picker layout or a new-text-default picker.
 Reopening prefers the saved font set over host
 defaults; missing/corrupt fonts return errors without silently substituting or
 deleting the draft. Font cleanup follows successful manifest publication; the
