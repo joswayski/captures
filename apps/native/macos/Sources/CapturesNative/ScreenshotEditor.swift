@@ -5289,7 +5289,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         // A layer the shared layout cannot read still gets a usable box at
         // the click, in the default face.
-        return .resolve(create: [
+        return NativeInlineTextLayout.resolve(create: [
             "point": ["x": Double(input.anchor.x), "y": Double(input.anchor.y)], "text": "",
             "fontSize": min(512, max(8, input.fontSize)), "fontFamily": "sans", "color": "#111318",
         ])

@@ -953,7 +953,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-compact-fit-\(appearance)")
             let controls: [NSView] = [try button("Apply crop", in: controller.root),
                 try table("Screenshot layers", in: controller.root),
-                try field("New drawing stroke color", in: controller.root)]
+                try field("New drawing stroke width", in: controller.root)]
             for control in [try button("Change…", in: controller.root), try button("Save", in: controller.root),
                             try copyButton(in: controller.root)] as [NSView] {
                 XCTAssertNil(control.enclosingScrollView, "export actions are pinned, not scrolled")
@@ -3737,8 +3737,9 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.root.layoutSubtreeIfNeeded()
         try showDraw(in: controller.root)
 
-        (try field("New drawing stroke color", in: controller.root)).stringValue = "#123456"
-        (try field("New drawing fill color", in: controller.root)).stringValue = "#abcdef"
+        // Shipping ColorField swatch rows replace the hex fields.
+        try swatchButton("Stroke color: #111318", in: controller.root).performClick(nil)
+        try swatchButton("Fill color: #36c96b", in: controller.root).performClick(nil)
         (try field("New drawing stroke width", in: controller.root)).stringValue = "13"
         (try field("New drawing opacity", in: controller.root)).stringValue = "37"
         let toggles = descendants(in: controller.root).compactMap { $0 as? NSButton }
@@ -3770,8 +3771,8 @@ final class ScreenshotEditorTests: XCTestCase {
         var request = try XCTUnwrap(worker.requests.last)
         var style = try XCTUnwrap(request["style"] as? [String: Any])
         XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
-        XCTAssertEqual(style["color"] as? String, "#123456")
-        XCTAssertEqual(style["fill"] as? String, "#ABCDEF")
+        XCTAssertEqual(style["color"] as? String, "#111318")
+        XCTAssertEqual(style["fill"] as? String, "#36C96B")
         XCTAssertEqual(style["strokeWidth"] as? Double, 13)
         XCTAssertEqual(style["strokeEnabled"] as? Bool, true)
         XCTAssertEqual(style["dropShadow"] as? Bool, true)
@@ -3781,7 +3782,9 @@ final class ScreenshotEditorTests: XCTestCase {
         let tool = DrawToolChoice(controller)
         tool.selectItem(at: 2); _ = tool.sendAction(tool.action, to: tool.target)
         XCTAssertTrue(stroke.isHidden, "Line always strokes regardless of the closed-shape toggle")
-        (try field("New drawing fill color", in: controller.root)).stringValue = "unfinished"
+        XCTAssertEqual(try swatchRow("Color", in: controller.root).selectedHex, "#111318",
+                       "open tools name the stroke color Color, like shipping")
+        XCTAssertTrue(try swatchRow("Fill color", in: controller.root).isHiddenOrHasHiddenAncestor)
         overlay.begin(at: start); overlay.drag(to: end)
         try render(controller.root, name: "screenshot-editor-new-drawing-line-light")
         overlay.end(at: end)
@@ -3806,7 +3809,7 @@ final class ScreenshotEditorTests: XCTestCase {
         let fill = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing fill" })
         fill.state = .off; _ = fill.sendAction(fill.action, to: fill.target)
         fill.state = .on; _ = fill.sendAction(fill.action, to: fill.target)
-        XCTAssertEqual(try field("New drawing fill color", in: controller.root).stringValue, "#123456",
+        XCTAssertEqual(try swatchRow("Fill color", in: controller.root).selectedHex, "#111318",
                        "reenabling fill adopts current stroke color, matching shipping")
         XCTAssertEqual(worker.requests.count, count)
         shadow.state = .off; _ = shadow.sendAction(shadow.action, to: shadow.target)
@@ -4755,8 +4758,8 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(create["stylePreset"], "drafts without named presets keep the plain family request")
         XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "fresh-text")
         XCTAssertTrue(controller.compareView.isHidden, "inline text fades the comparison away")
-        XCTAssertEqual(try textView("Inline screenshot text", in: controller.root).string, "")
-        let inlineEditor = try textView("Inline screenshot text", in: controller.root)
+        XCTAssertEqual(try textView("Edit text on canvas", in: controller.root).string, "")
+        let inlineEditor = try textView("Edit text on canvas", in: controller.root)
         XCTAssertTrue(controller.window.firstResponder === inlineEditor)
     }
 
@@ -4779,9 +4782,10 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(preset.titleOfSelectedItem, "Standard")
         preset.selectItem(withTitle: "Mono Box")
         let size = try field("New text size", in: controller.root)
-        let color = try field("New text color", in: controller.root)
+        let color = try swatchRow("Color", in: controller.root)
         XCTAssertEqual(size.stringValue, "39", "use shared capture size, not the restored canvas")
-        size.stringValue = "48,5"; color.stringValue = "#12abef"
+        size.stringValue = "48,5"
+        try swatchButton("Color: #2d9cff", in: controller.root).performClick(nil)
         XCTAssertTrue(worker.requests.isEmpty)
         RunLoop.current.run(until: Date().addingTimeInterval(0.4))
         XCTAssertNotNil(controller.compareView.afterImage,
@@ -4794,9 +4798,9 @@ final class ScreenshotEditorTests: XCTestCase {
         var create = try XCTUnwrap((worker.requests.last?["target"] as? [String: Any])?["create"] as? [String: Any])
         XCTAssertEqual(create["stylePreset"] as? String, "mono-box")
         XCTAssertEqual(create["fontSize"] as? Double, 48.5)
-        XCTAssertEqual(create["color"] as? String, "#12abef")
+        XCTAssertEqual(create["color"] as? String, "#2d9cff")
         XCTAssertEqual(preset.titleOfSelectedItem, "Mono Box")
-        XCTAssertEqual(size.stringValue, "48,5"); XCTAssertEqual(color.stringValue, "#12abef")
+        XCTAssertEqual(size.stringValue, "48,5"); XCTAssertEqual(color.selectedHex, "#2d9cff")
 
         worker.failOperation = nil
         var inputID = ""
@@ -4807,19 +4811,25 @@ final class ScreenshotEditorTests: XCTestCase {
                 return self.snapshot(id: "shot",
                     layers: [self.textLayer(id: "fresh-default-text", text: "")], fonts: fonts,
                     activeTextInput: ["input_id": inputID, "layer_id": "fresh-default-text", "is_new": true])
+            case "update_text_input":
+                return self.snapshot(id: "shot",
+                    layers: [self.textLayer(id: "fresh-default-text", text: "Retry")], fonts: fonts,
+                    activeTextInput: ["input_id": inputID, "layer_id": "fresh-default-text", "is_new": true])
             case "finish_text_input":
                 return self.snapshot(id: "shot", unsaved: true,
-                    layers: [self.textLayer(id: "fresh-default-text", text: "")], fonts: fonts)
+                    layers: [self.textLayer(id: "fresh-default-text", text: "Retry")], fonts: fonts)
             default: return nil
             }
         }
-        try button("Done", in: controller.root).performClick(nil)
+        // Shipping has no Done: Escape retries Begin for the typed buffer.
+        try typeInline("Retry", in: controller)
+        try finishInlineText(in: controller)
         let retriedBegin = worker.requests.last { $0["operation"] as? String == "begin_text_input" }
         create = try XCTUnwrap((retriedBegin?["target"] as? [String: Any])?["create"] as? [String: Any])
         XCTAssertEqual(create["stylePreset"] as? String, "mono-box")
         XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "fresh-default-text")
         XCTAssertEqual(preset.titleOfSelectedItem, "Mono Box", "accepted snapshots must retain creation defaults")
-        XCTAssertEqual(size.stringValue, "48,5"); XCTAssertEqual(color.stringValue, "#12abef")
+        XCTAssertEqual(size.stringValue, "48,5"); XCTAssertEqual(color.selectedHex, "#2d9cff")
 
         let freshWorker = FakeEditorWorker(snapshot: snapshot(id: "fresh", fonts: fonts))
         let fresh = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: freshWorker)
@@ -4827,7 +4837,7 @@ final class ScreenshotEditorTests: XCTestCase {
         fresh.present(artifact: artifact(id: "fresh"), historyRoot: "/native/History")
         XCTAssertEqual(try popup("New text style", in: fresh.root).titleOfSelectedItem, "Standard")
         XCTAssertEqual(try field("New text size", in: fresh.root).stringValue, "24")
-        XCTAssertEqual(try field("New text color", in: fresh.root).stringValue, "#ff3b5c")
+        XCTAssertEqual(try swatchRow("Color", in: fresh.root).selectedHex, "#ff3b5c")
     }
 
     func testRoundedBoxCreationDefaultRequiresOfferedFontAndRetainsUserChoice() throws {
@@ -4845,9 +4855,9 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(preset.itemTitles, ["Plain", "Standard", "Rounded", "Outlined", "Box", "Rounded Box"])
             XCTAssertEqual(preset.titleOfSelectedItem, "Rounded Box")
             let size = try field("New text size", in: controller.root)
-            let color = try field("New text color", in: controller.root)
+            let color = try swatchRow("Color", in: controller.root)
             XCTAssertEqual(size.stringValue, "39")
-            XCTAssertEqual(color.stringValue, "#ff3b5c")
+            XCTAssertEqual(color.selectedHex, "#ff3b5c")
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-text-default-rounded-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
@@ -4872,7 +4882,8 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(preset.titleOfSelectedItem, "Rounded Box", "failure must retain the creation default")
 
             preset.selectItem(withTitle: "Standard")
-            size.stringValue = "52"; color.stringValue = "#12abef"
+            size.stringValue = "52"
+            try swatchButton("Color: #2d9cff", in: controller.root).performClick(nil)
             worker.failOperation = nil
             worker.response = { request in
                 switch request["operation"] as? String {
@@ -4881,12 +4892,18 @@ final class ScreenshotEditorTests: XCTestCase {
                         fonts: fonts,
                         activeTextInput: ["input_id": request["input_id"] as! String,
                                           "layer_id": "new", "is_new": true])
+                case "update_text_input":
+                    return self.snapshot(id: "shot", layers: [self.textLayer(id: "new", text: "Retry")],
+                        fonts: fonts,
+                        activeTextInput: ["input_id": request["input_id"] as! String,
+                                          "layer_id": "new", "is_new": true])
                 case "finish_text_input": return self.snapshot(id: "shot", unsaved: true,
-                    layers: [self.textLayer(id: "new", text: "")], fonts: fonts)
+                    layers: [self.textLayer(id: "new", text: "Retry")], fonts: fonts)
                 default: return nil
                 }
             }
-            try button("Done", in: controller.root).performClick(nil)
+            try typeInline("Retry", in: controller)
+            try finishInlineText(in: controller)
             let retry = try XCTUnwrap(worker.requests.last { $0["operation"] as? String == "begin_text_input" })
             let create = try XCTUnwrap((retry["target"] as? [String: Any])?["create"] as? [String: Any])
             XCTAssertEqual(create["stylePreset"] as? String, "rounded-box",
@@ -4895,7 +4912,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(create["color"] as? String, "#ff3b5c")
             XCTAssertEqual(preset.titleOfSelectedItem, "Standard", "accepted snapshot must not reset user choice")
             XCTAssertEqual(size.stringValue, "52")
-            XCTAssertEqual(color.stringValue, "#12abef")
+            XCTAssertEqual(color.selectedHex, "#2d9cff")
         }
 
         let sans = ["sans": "Liberation Sans"]
@@ -4938,7 +4955,7 @@ final class ScreenshotEditorTests: XCTestCase {
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
         let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
         controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
-        let editor = try textView("Inline screenshot text", in: controller.root)
+        let editor = try textView("Edit text on canvas", in: controller.root)
         XCTAssertTrue(controller.window.firstResponder === editor)
 
         worker.deferRequests = true
@@ -4969,14 +4986,15 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(finish["input_id"] as? String, inputID)
         XCTAssertEqual(finish["commit"] as? Bool, true)
         XCTAssertFalse(editor.isEditable)
-        XCTAssertFalse(try button("Done", in: controller.root).isEnabled)
-        XCTAssertFalse(try button("Cancel", in: controller.root).isEnabled)
+        XCTAssertFalse(descendants(in: controller.root).contains {
+            ($0 as? CaptureButton)?.title == "Done" || ($0 as? CaptureButton)?.title == "Cancel"
+        }, "shipping's inline editor has no Done or Cancel buttons")
         let requestCount = worker.requests.count
         editor.string = "typing after accepted Finish must not win"
         controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
-        try button("Cancel", in: controller.root).performClick(nil)
+        try finishInlineText(in: controller)
         XCTAssertEqual(worker.requests.count, requestCount,
-                       "typing and Cancel cannot race an accepted Finish request")
+                       "typing and another Escape cannot race an accepted Finish request")
         worker.completePending(with: snapshot(id: "shot", unsaved: true,
             layers: [textLayer(id: "fresh", text: "Ω\n漢字🙂")]))
         XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.text, "Ω\n漢字🙂")
@@ -4999,7 +5017,7 @@ final class ScreenshotEditorTests: XCTestCase {
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
         let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
         controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
-        let editor = try textView("Inline screenshot text", in: controller.root)
+        let editor = try textView("Edit text on canvas", in: controller.root)
         editor.string = "abcdef"
         controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
         editor.setSelectedRange(NSRange(location: 1, length: 3))
@@ -5023,7 +5041,7 @@ final class ScreenshotEditorTests: XCTestCase {
                        finishesBeforeMarkedEscape,
                        "Escape belongs to the native input context while marked text is active")
         editor.unmarkText()
-        try button("Cancel", in: controller.root).performClick(nil)
+        try finishInlineText(in: controller)
     }
 
     func testInlineTextQuitDrainsAcceptedFinishWithoutSendingAStaleToken() throws {
@@ -5051,11 +5069,11 @@ final class ScreenshotEditorTests: XCTestCase {
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
         let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
         controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
-        let editor = try textView("Inline screenshot text", in: controller.root)
+        let editor = try textView("Edit text on canvas", in: controller.root)
         editor.string = "accepted before quit"
         controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
         worker.deferRequests = true
-        try button("Done", in: controller.root).performClick(nil)
+        try finishInlineText(in: controller)
         XCTAssertEqual(worker.requests.last?["operation"] as? String, "finish_text_input")
 
         XCTAssertTrue(controller.prepareForTermination())
@@ -5066,41 +5084,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(controller.state.snapshot)
     }
 
-    func testInlineTextQuitPreservesCancelRequestedDuringUpdate() throws {
-        _ = NSApplication.shared
-        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
-        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
-        defer { controller.window.orderOut(nil) }
-        var inputID = ""
-        worker.response = { request in
-            guard request["operation"] as? String == "begin_text_input" else { return nil }
-            inputID = request["input_id"] as! String
-            return self.snapshot(id: "shot", layers: [self.textLayer(id: "fresh", text: "")],
-                activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true])
-        }
-        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showDraw(in: controller.root)
-        let tool = DrawToolChoice(controller)
-        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
-        let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
-        controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
-        let editor = try textView("Inline screenshot text", in: controller.root)
-        worker.deferRequests = true
-        editor.string = "preview that must be cancelled"
-        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
-        try button("Cancel", in: controller.root).performClick(nil)
-        XCTAssertEqual(worker.requests.last?["operation"] as? String, "update_text_input")
-
-        XCTAssertTrue(controller.prepareForTermination())
-        XCTAssertEqual(worker.terminationTextInputs.last!, EditorTerminationTextInput(
-            inputID: inputID, text: "preview that must be cancelled", commit: false))
-        worker.completePending(with: snapshot(id: "shot",
-            layers: [textLayer(id: "fresh", text: "preview that must be cancelled")],
-            activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true]))
-        XCTAssertNil(controller.state.snapshot)
-    }
-
-    func testInlineTextBeginFailureRetainsLocalBufferAndOffersRetryOrCancel() throws {
+    func testInlineTextBeginFailureRetainsLocalBufferRetriesAndDiscardsBlank() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
         worker.deferRequests = true
@@ -5112,7 +5096,7 @@ final class ScreenshotEditorTests: XCTestCase {
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
         let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
         controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
-        let editor = try textView("Inline screenshot text", in: controller.root)
+        let editor = try textView("Edit text on canvas", in: controller.root)
         editor.string = "typed while Begin renders\nΩ🙂"
         controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
         XCTAssertEqual(worker.requests.count, 1)
@@ -5121,17 +5105,22 @@ final class ScreenshotEditorTests: XCTestCase {
         worker.completePendingFailure("font preview unavailable")
         XCTAssertEqual(editor.string, "typed while Begin renders\nΩ🙂")
         XCTAssertFalse(editor.isHiddenOrHasHiddenAncestor)
-        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Retry or Cancel") })
-        let done = try button("Done", in: controller.root)
-        let cancel = try button("Cancel", in: controller.root)
-        XCTAssertTrue(done.isEnabled && cancel.isEnabled)
-        cancel.performClick(nil)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Press Escape to retry") })
+        // Shipping has no Cancel: Escape retries Begin for the typed buffer…
+        try finishInlineText(in: controller)
+        XCTAssertEqual(worker.requests.count, 2)
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "begin_text_input")
+        worker.completePendingFailure("font preview still unavailable")
+        XCTAssertFalse(editor.isHiddenOrHasHiddenAncestor)
+        // …and clearing the box then finishing discards it.
+        try typeInline("", in: controller)
+        try finishInlineText(in: controller)
         XCTAssertTrue(editor.isHiddenOrHasHiddenAncestor)
-        XCTAssertEqual(worker.requests.count, 1, "cancelling a rejected Begin needs no stale shared token")
+        XCTAssertEqual(worker.requests.count, 2, "discarding a rejected Begin needs no stale shared token")
         XCTAssertFalse(controller.state.snapshot?.unsavedChanges ?? true)
     }
 
-    func testInlineTextCancelPreservesOutputAndTerminationFailureRetainsLatestBuffer() throws {
+    func testInlineTextBlankFinishPreservesOutputAndTerminationFailureRetainsLatestBuffer() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
@@ -5159,7 +5148,7 @@ final class ScreenshotEditorTests: XCTestCase {
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
         let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
         controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
-        let editor = try textView("Inline screenshot text", in: controller.root)
+        let editor = try textView("Edit text on canvas", in: controller.root)
         editor.string = "latest\n🙂"
         controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
         worker.terminationResult = .failure(AppBridgeError.backend("disk unavailable"))
@@ -5169,12 +5158,14 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(editor.isHiddenOrHasHiddenAncestor)
         XCTAssertTrue(controller.window.firstResponder === editor)
 
-        try button("Cancel", in: controller.root).performClick(nil)
+        // Shipping discards a label cleared before it commits.
+        try typeInline("", in: controller)
+        try finishInlineText(in: controller)
         XCTAssertEqual(worker.requests.last?["operation"] as? String, "finish_text_input")
-        XCTAssertEqual(worker.requests.last?["commit"] as? Bool, false)
+        XCTAssertEqual(worker.requests.last?["commit"] as? Bool, true)
         waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
         XCTAssertFalse(controller.compareView.isHidden,
-                       "cancel restores committed pixels and the comparison comes back")
+                       "finishing restores committed pixels and the comparison comes back")
         XCTAssertFalse(controller.state.snapshot?.unsavedChanges ?? true,
                        "blank new composition never enters committed state")
     }
@@ -5197,7 +5188,7 @@ final class ScreenshotEditorTests: XCTestCase {
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
         let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
         controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
-        let editor = try textView("Inline screenshot text", in: controller.root)
+        let editor = try textView("Edit text on canvas", in: controller.root)
         editor.string = "accepted before disk failure"
         controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
 
@@ -5242,17 +5233,21 @@ final class ScreenshotEditorTests: XCTestCase {
             tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
             let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
             controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
-            let editor = try textView("Inline screenshot text", in: controller.root)
-            XCTAssertTrue(try button("Cancel", in: controller.root).glass,
-                          "the cancel action needs a media-safe surface over arbitrary pixels")
+            let editor = try textView("Edit text on canvas", in: controller.root)
+            let frame = try XCTUnwrap(editor.superview as? EditorInlineTextFrame,
+                                      "the text box sits on the canvas, not in a panel")
+            XCTAssertFalse(descendants(in: controller.root).contains {
+                ($0 as? CaptureButton)?.title == "Done" || ($0 as? CaptureButton)?.title == "Cancel"
+            }, "shipping commits on click-away and Escape; there are no Done/Cancel buttons")
             editor.string = "Native multiline\nΩ and 日本語"
             try render(controller.root, name: "screenshot-editor-inline-text-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            XCTAssertTrue(controller.presentedImageRect.intersects(editor.enclosingScrollView!.frame))
-            XCTAssertGreaterThanOrEqual(editor.enclosingScrollView!.frame.width, 220,
-                                        "the minimum composing field retains Unicode input")
-            XCTAssertGreaterThanOrEqual(editor.enclosingScrollView!.frame.height, 96,
-                                        "the minimum composing field retains multiline input")
+            controller.root.layoutSubtreeIfNeeded()
+            XCTAssertTrue(controller.presentedImageRect.intersects(frame.frame))
+            // Shipping's 48 × 28 minimum, plus the outline outset on each side.
+            XCTAssertGreaterThanOrEqual(frame.frame.width, 48 + 2 * frame.outset)
+            XCTAssertGreaterThanOrEqual(frame.frame.height, 28 + 2 * frame.outset)
+            XCTAssertEqual(frame.frameCenterRotation, 0)
             try render(controller.root, name: "screenshot-editor-inline-text-minimum-\(appearance)")
             worker.failOperation = "update_text_input"
             controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
@@ -5261,7 +5256,7 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
-    func testInlineTextFramesStayFiniteAndRecoverableWhenPreviewMovesOffscreen() throws {
+    func testInlineTextFramesStayFiniteAndFocusedWhenPreviewMovesOffscreen() throws {
         _ = NSApplication.shared
         for (width, height) in [(640.0, 360.0), (1.0, 2_000.0)] {
             let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: width, height: height))
@@ -5284,10 +5279,8 @@ final class ScreenshotEditorTests: XCTestCase {
             let point = NSPoint(x: controller.presentedImageRect.midX,
                                 y: controller.presentedImageRect.midY)
             controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
-            let editor = try textView("Inline screenshot text", in: controller.root)
-            let scroll = try XCTUnwrap(editor.enclosingScrollView)
-            let done = try button("Done", in: controller.root)
-            let cancel = try button("Cancel", in: controller.root)
+            let editor = try textView("Edit text on canvas", in: controller.root)
+            let frame = try XCTUnwrap(editor.superview as? EditorInlineTextFrame)
             let viewport = try XCTUnwrap(descendants(in: controller.root)
                 .compactMap { $0 as? EditorViewportGestureView }
                 .first { $0.accessibilityLabel() == "Screenshot viewport" })
@@ -5300,30 +5293,27 @@ final class ScreenshotEditorTests: XCTestCase {
                                             y: -viewport.bounds.height * 20))
             XCTAssertFalse(controller.presentedImageRect.intersects(viewport.bounds),
                            "the regression requires the shared preview to be wholly offscreen")
-            for view in [scroll, done, cancel] {
+            // Like shipping's textarea, the box moves with the canvas; its
+            // frames stay finite and it keeps focus while offscreen.
+            for view in [frame, editor] as [NSView] {
                 XCTAssertTrue(finite(view.frame))
                 XCTAssertFalse(view.frame.isNull)
-                XCTAssertTrue(viewport.bounds.contains(view.frame),
-                              "the native composing controls remain recoverable inside the viewport")
             }
-            XCTAssertGreaterThanOrEqual(scroll.frame.width, 220)
-            XCTAssertGreaterThanOrEqual(scroll.frame.height, 96)
+            XCTAssertGreaterThanOrEqual(editor.frame.width, 1)
             XCTAssertTrue(controller.window.firstResponder === editor)
 
             editor.string = "retained while preview is offscreen"
             worker.deferRequests = true
             controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
-            done.performClick(nil)
+            try finishInlineText(in: controller)
             worker.completePending(with: snapshot(id: "shot", width: width, height: height,
                 layers: [textLayer(id: "fresh", text: editor.string)],
                 activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true]))
             XCTAssertEqual(worker.requests.last?["operation"] as? String, "finish_text_input")
             viewport.onViewportPan?(NSPoint(x: -viewport.bounds.width * 40,
                                             y: viewport.bounds.height * 40))
-            for view in [scroll, done, cancel] {
-                XCTAssertTrue(finite(view.frame))
-                XCTAssertTrue(viewport.bounds.contains(view.frame),
-                              "accepted Finish retains finite UI until its callback resolves")
+            for view in [frame, editor] as [NSView] {
+                XCTAssertTrue(finite(view.frame), "accepted Finish retains finite UI until its callback resolves")
             }
             XCTAssertFalse(editor.isEditable)
         }
@@ -5386,7 +5376,7 @@ final class ScreenshotEditorTests: XCTestCase {
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
         let point = NSPoint(x: inline.presentedImageRect.midX, y: inline.presentedImageRect.midY)
         inline.drawOverlay.begin(at: point); inline.drawOverlay.end(at: point)
-        let input = try textView("Inline screenshot text", in: inline.root)
+        let input = try textView("Edit text on canvas", in: inline.root)
         input.string = "in-progress input"
         inline.present(artifact: artifact(id: "other"), historyRoot: "/native/History") {
             accepted = $0
@@ -5540,7 +5530,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.requests.last?["patch"] as? NSDictionary,
                        ["fontFamily": "mono", "roundedBackground": false] as NSDictionary,
                        "a named style applies at once and keeps the custom plate color")
-        XCTAssertEqual(try field("Text plate color", in: controller.root).stringValue, "#abcdef")
+        XCTAssertEqual(try swatchRow("Background color", in: controller.root).selectedHex, "#abcdef")
         XCTAssertEqual(try popup("Text font", in: controller.root).titleOfSelectedItem, "Liberation Mono",
                        "a rejected style keeps the chosen values")
         choose("Outlined")
@@ -5548,7 +5538,7 @@ final class ScreenshotEditorTests: XCTestCase {
                        ["fontFamily": "sans", "background": NSNull(), "outlined": true,
                         "roundedBackground": false] as NSDictionary)
         choose("Box")
-        XCTAssertEqual(try field("Text plate color", in: controller.root).stringValue, "#111318")
+        XCTAssertEqual(try swatchRow("Background color", in: controller.root).selectedHex, "#111318")
         XCTAssertEqual(worker.requests.count, 3, "each style choice is one live edit")
     }
 
@@ -5568,15 +5558,15 @@ final class ScreenshotEditorTests: XCTestCase {
             tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
             let future = try popup("New text style", in: controller.root)
             let futureSize = try field("New text size", in: controller.root)
-            let futureColor = try field("New text color", in: controller.root)
+            let futureColor = try swatchRow("Color", in: controller.root)
             let selected = try popup("Text style preset", in: controller.root)
             let selectedSize = try field("Text size", in: controller.root)
-            let selectedColor = try field("Text color", in: controller.root)
+            let selectedColor = try swatchRow("Text color", in: controller.root)
             let family = try popup("Text font", in: controller.root)
             XCTAssertEqual(future.titleOfSelectedItem, "Rounded Box",
                            "merely selecting a Standard-styled label must not carry its style")
             XCTAssertEqual(futureSize.stringValue, "39")
-            XCTAssertEqual(futureColor.stringValue, "#ff3b5c")
+            XCTAssertEqual(futureColor.selectedHex, "#ff3b5c")
             func choose(_ name: String) {
                 selected.selectItem(withTitle: name)
                 _ = selected.sendAction(selected.action, to: selected.target)
@@ -5586,15 +5576,15 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(future.titleOfSelectedItem, "Standard",
                            "an explicit same-label choice still changes the future style")
             XCTAssertTrue(worker.requests.isEmpty, "an unchanged label sends no edit")
-            selectedSize.stringValue = "71"; selectedColor.stringValue = "#21abcd"
+            selectedSize.stringValue = "71"; selectedColor.selectedHex = "#2d9cff"
             family.selectItem(withTitle: "Liberation Serif")
             XCTAssertEqual(future.titleOfSelectedItem, "Standard")
             XCTAssertEqual(futureSize.stringValue, "39")
-            XCTAssertEqual(futureColor.stringValue, "#ff3b5c")
+            XCTAssertEqual(futureColor.selectedHex, "#ff3b5c")
             choose("Box")
             XCTAssertEqual(future.titleOfSelectedItem, "Box")
             XCTAssertEqual(selectedSize.stringValue, "71")
-            XCTAssertEqual(selectedColor.stringValue, "#21abcd")
+            XCTAssertEqual(selectedColor.selectedHex, "#2d9cff")
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-future-text-style-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
@@ -5688,6 +5678,59 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { fresh.window.orderOut(nil) }
         fresh.present(artifact: artifact(id: "fresh"), historyRoot: "/native/History")
         XCTAssertEqual(try popup("New text style", in: fresh.root).titleOfSelectedItem, "Rounded Box")
+    }
+
+    func testTextFormatButtonsAndColorSwatchesApplyLive() throws {
+        _ = NSApplication.shared
+        var original = textLayer(id: "copy", text: "accepted")
+        original["background"] = "#111318"
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.window.setContentSize(NSSize(width: 1000, height: 600))
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showLayers(in: controller.root)
+        let format = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorTextFormatButtons }.first)
+        // Shipping `.screenshot-format-buttons`: B, I, then three alignment icons.
+        XCTAssertEqual([format.boldButton, format.italicButton].map { $0.accessibilityLabel() ?? "" }, ["Bold", "Italic"])
+        XCTAssertEqual(format.alignButtons.map { $0.button.accessibilityLabel() ?? "" },
+                       ["Align left", "Align center", "Align right"])
+        XCTAssertEqual(format.alignButtons.map { $0.button.glyph },
+                       [.icon("align-left"), .icon("align-center"), .icon("align-right")])
+        XCTAssertTrue(format.alignButtons[0].button.active)
+        XCTAssertFalse(format.boldButton.active)
+        let widths = ([format.boldButton, format.italicButton] + format.alignButtons.map(\.button)).map(\.frame.width)
+        XCTAssertEqual(Set(widths.map { Int($0.rounded()) }).count, 1, "five equal columns")
+        XCTAssertEqual(format.frame.height, 32)
+        worker.failOperation = "edit_text"
+        format.boldButton.performClick(nil)
+        XCTAssertEqual(worker.requests.last?["patch"] as? [String: Bool], ["bold": true])
+        XCTAssertTrue(format.boldButton.active, "a rejected edit keeps the staged trait")
+        format.alignButtons[2].button.performClick(nil)
+        XCTAssertEqual((worker.requests.last?["patch"] as? [String: Any])?["align"] as? String, "right")
+        XCTAssertTrue(format.alignButtons[2].button.active && !format.alignButtons[0].button.active)
+        try swatchButton("Text color: #2d9cff", in: controller.root).performClick(nil)
+        XCTAssertEqual((worker.requests.last?["patch"] as? [String: Any])?["color"] as? String, "#2d9cff")
+        XCTAssertEqual(worker.liveKeys.last, "text:copy:color", "swatch choices in one field are one undo step")
+        let plate = try swatchRow("Background color", in: controller.root)
+        XCTAssertFalse(plate.isHiddenOrHasHiddenAncestor, "a plated label shows its Background color swatches")
+        XCTAssertEqual(plate.selectedHex, "#111318")
+        try swatchButton("Background color: #ffd22e", in: controller.root).performClick(nil)
+        XCTAssertEqual((worker.requests.last?["patch"] as? [String: Any])?["background"] as? String, "#ffd22e")
+        try render(controller.root, name: "screenshot-editor-text-format-swatches")
+    }
+
+    func testInlineTextFrameTurnsClockwiseWithTheLayerInTheFlippedViewport() {
+        _ = NSApplication.shared
+        let viewport = EditorViewportGestureView(frame: NSRect(x: 0, y: 0, width: 400, height: 400))
+        let frame = EditorInlineTextFrame(tokens: Tokens.variants["light-mustard"]!)
+        viewport.addSubview(frame)
+        frame.frame = NSRect(x: 100, y: 100, width: 200, height: 100)
+        // Document rotation is clockwise in y-down space, like the viewport.
+        frame.frameCenterRotation = 30
+        let corner = frame.convert(NSPoint(x: frame.bounds.maxX, y: frame.bounds.minY), to: viewport)
+        XCTAssertEqual(corner.x, 200 + 100 * cos(.pi / 6) + 50 * sin(.pi / 6), accuracy: 0.5)
+        XCTAssertEqual(corner.y, 150 + 100 * sin(.pi / 6) - 50 * cos(.pi / 6), accuracy: 0.5)
     }
 
     func testTextShadowAppliesLiveAndOnlyPatchesTheEnabledFlag() throws {
@@ -5859,7 +5902,14 @@ final class ScreenshotEditorTests: XCTestCase {
         try showDraw(in: controller.root)
         let tool = DrawToolChoice(controller)
         tool.selectItem(at: 5); _ = tool.sendAction(tool.action, to: tool.target)
-        XCTAssertEqual(try field("Wand color tolerance", in: controller.root).stringValue, "36")
+        // Shipping Tolerance RangeSlider: the wand's 0–255 distance, stopped at 120.
+        let tolerance = try rangeSlider("Color tolerance", in: controller.root)
+        XCTAssertEqual(tolerance.value, 36)
+        XCTAssertEqual(tolerance.slider.maxValue, 120)
+        XCTAssertEqual(tolerance.readout.stringValue, "36")
+        XCTAssertEqual(tolerance.titleLabel.stringValue, "Tolerance")
+        XCTAssertEqual(tolerance.markLabels.map(\.stringValue), ["0", "36", "80", "120"])
+        XCTAssertTrue(labels(in: controller.root).contains("Click a color to remove that area."))
         let contiguous = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
             .first { $0.accessibilityLabel() == "Wand contiguous only" })
         XCTAssertEqual(contiguous.state, .on)
@@ -5950,8 +6000,15 @@ final class ScreenshotEditorTests: XCTestCase {
         try showDraw(in: controller.root)
         let tool = DrawToolChoice(controller)
         tool.selectItem(at: 6); _ = tool.sendAction(tool.action, to: tool.target)
-        XCTAssertEqual(try field("Brush diameter", in: controller.root).stringValue, "28")
-        XCTAssertEqual(try field("Brush softness", in: controller.root).stringValue, "18")
+        // Shipping Size and Softness RangeSliders replace the Diameter fields.
+        let size = try rangeSlider("Brush size", in: controller.root)
+        let softness = try rangeSlider("Brush softness", in: controller.root)
+        XCTAssertEqual(size.value, 28); XCTAssertEqual(size.readout.stringValue, "28 px")
+        XCTAssertEqual(size.titleLabel.stringValue, "Size")
+        XCTAssertEqual(size.markLabels.map(\.stringValue), ["4", "28", "64", "120"])
+        XCTAssertEqual(softness.value, 18); XCTAssertEqual(softness.readout.stringValue, "18%")
+        XCTAssertEqual(softness.markLabels.map(\.stringValue), ["Hard", "50%", "Soft"])
+        XCTAssertTrue(labels(in: controller.root).contains("Paint to erase."))
         let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
         worker.failOperation = "paint_image_background"
         let accepted = controller.state.snapshot
@@ -6209,7 +6266,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try showDraw(in: controller.root)
             let tool = DrawToolChoice(controller)
             tool.selectItem(withTitle: "Line"); _ = tool.sendAction(tool.action, to: tool.target)
-            (try field("New drawing stroke color", in: controller.root)).stringValue = "#123456"
+            try swatchButton("Color: #111318", in: controller.root).performClick(nil)
             let shadow = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
                 .first { $0.accessibilityLabel() == "New drawing drop shadow" })
             shadow.state = .on; _ = shadow.sendAction(shadow.action, to: shadow.target)
@@ -6831,6 +6888,13 @@ final class ScreenshotEditorTests: XCTestCase {
     }
 
     /// Types into a live field: sets its text and sends the change notification.
+    /// A shipping `RangeSlider` with marks, by its slider's accessible name.
+    private func rangeSlider(_ label: String, in view: NSView) throws -> EditorMarkedSlider {
+        let matches = descendants(in: view).compactMap { $0 as? EditorMarkedSlider }
+            .filter { $0.slider.accessibilityLabel() == label }
+        return try XCTUnwrap(matches.first { !$0.isHiddenOrHasHiddenAncestor } ?? matches.first)
+    }
+
     private func typeLive(_ text: String, into field: NSTextField, controller: ScreenshotEditorController) {
         field.stringValue = text
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
@@ -6859,6 +6923,19 @@ final class ScreenshotEditorTests: XCTestCase {
     private func field(_ label: String, in view: NSView) throws -> NSTextField {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSTextField }
             .first { $0.accessibilityLabel() == label })
+    }
+
+    /// Escape in the inline canvas editor: shipping commits (there is no Done).
+    private func finishInlineText(in controller: ScreenshotEditorController) throws {
+        let editor = try textView("Edit text on canvas", in: controller.root)
+        editor.keyDown(with: try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}"))
+    }
+
+    /// Types into the inline canvas editor the way AppKit reports it.
+    private func typeInline(_ text: String, in controller: ScreenshotEditorController) throws {
+        let editor = try textView("Edit text on canvas", in: controller.root)
+        editor.string = text
+        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
     }
 
     private func textView(_ label: String, in view: NSView) throws -> NSTextView {
@@ -7895,15 +7972,20 @@ extension ScreenshotEditorTests {
         XCTAssertFalse(preview.isHiddenOrHasHiddenAncestor)
         XCTAssertEqual(preview.sample?.label, "Brush preview")
         XCTAssertEqual(Double(preview.sample?.brush?.radius ?? 0), 8 + 24.0 / 116 * 22, accuracy: 0.001)
-        typeLive("120", into: try field("Brush diameter", in: controller.root), controller: controller)
-        typeLive("0", into: try field("Brush softness", in: controller.root), controller: controller)
+        let brushSize = try rangeSlider("Brush size", in: controller.root)
+        brushSize.slider.doubleValue = 120
+        _ = brushSize.slider.sendAction(brushSize.slider.action, to: brushSize.slider.target)
+        let brushSoftness = try rangeSlider("Brush softness", in: controller.root)
+        brushSoftness.slider.doubleValue = 0
+        _ = brushSoftness.slider.sendAction(brushSoftness.slider.action, to: brushSoftness.slider.target)
+        XCTAssertEqual(brushSize.readout.stringValue, "120 px")
         XCTAssertEqual(Double(preview.sample?.brush?.radius ?? 0), 30, accuracy: 0.001)
         XCTAssertEqual(Double(preview.sample?.brush?.hardStop ?? 0), 0.72, accuracy: 0.001)
         try render(controller.root, name: "screenshot-editor-draw-preview-brush")
 
         controller.selectDrawTool(.wand)
         XCTAssertTrue(preview.isHiddenOrHasHiddenAncestor, "the Wand has no stroke preview")
-        let tolerance = try field("Wand color tolerance", in: controller.root)
+        let tolerance = try rangeSlider("Color tolerance", in: controller.root)
         XCTAssertLessThan(tolerance.frame.minY, preview.frame.minY + preview.frame.height,
                           "Wand rows keep their place without the card")
     }
