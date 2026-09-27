@@ -1135,6 +1135,8 @@ final class MiniPreviewView: NSView {
     /// One card slot (card plus gap), for survivors settling into a hole.
     private let cardSlot: CGFloat
     private let stackCollapsed: Bool
+    /// Shipping pile gravity (-1 top … 1 bottom); spin fades in toward 0.
+    private(set) var pileGravity: Double
     /// Cards playing an exit in place, and their dust overlays.
     private(set) var exitingArtifactIDs: Set<String> = []
     private var dustOverlays: [PreviewMotionOverlay] = []
@@ -1179,7 +1181,8 @@ final class MiniPreviewView: NSView {
          resources: [String: MiniPreviewResource],
          ids: [String], layouts: [String: CapturesPreviewCardLayout],
          hoverLayouts: [String: CapturesPreviewCardLayout] = [:], collapsed: Bool,
-         topAnchor: Bool, rightAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
+         topAnchor: Bool, rightAnchor: Bool, tokens: Tokens, pileGravity: Double? = nil,
+         copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          trash: @escaping (String) -> Void, dismiss: @escaping (String) -> Void,
          discard: @escaping (String) -> Void = { _ in },
@@ -1188,6 +1191,7 @@ final class MiniPreviewView: NSView {
         self.geometry = geometry; self.tokens = tokens; self.restLayouts = layouts
         self.hoverLayouts = hoverLayouts; anchoredAtTop = topAnchor
         anchoredRight = rightAnchor; stackCollapsed = collapsed
+        self.pileGravity = pileGravity ?? (topAnchor ? -1 : 1)
         let slots = ids.compactMap { id in layouts[id].map { CGFloat($0.y) } }.sorted()
         cardSlot = slots.count >= 2 ? slots[1] - slots[0] : CGFloat(geometry.card_height)
         tooltipView = GlassTooltipView(tokens: tokens, style: .previewIcon)
@@ -1229,6 +1233,13 @@ final class MiniPreviewView: NSView {
                 }
             }
             document.addSubview(card); cards[id] = card
+        }
+        if collapsed {
+            for (id, card) in cards {
+                guard let layout = layouts[id] else { continue }
+                card.setFrameOrigin(pileOrigin(id, layout: layout, hovered: false))
+            }
+            applyPilePoses(hovered: false, duration: 0)
         }
 
         if collapsed, let front = ids.compactMap({ id in
@@ -1679,9 +1690,74 @@ final class MiniPreviewView: NSView {
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             for (id, card) in cards {
                 guard let layout = (hovered ? hoverLayouts[id] : restLayouts[id]) else { continue }
-                card.animator().setFrameOrigin(NSPoint(x: card.frame.origin.x,
-                    y: CGFloat(layout.y)))
+                card.animator().setFrameOrigin(pileOrigin(id, layout: layout, hovered: hovered))
             }
+        }
+        applyPilePoses(hovered: hovered, duration: duration)
+    }
+
+    /// Dragging the pile re-derives gravity (shipping updates it per move),
+    /// so the spin fades in toward the middle of the screen.
+    func updatePileGravity(_ gravity: Double) {
+        guard stackCollapsed, gravity != pileGravity else { return }
+        pileGravity = gravity
+        for (id, card) in cards {
+            guard let layout = (pileHovered ? hoverLayouts[id] : restLayouts[id]) else { continue }
+            card.setFrameOrigin(pileOrigin(id, layout: layout, hovered: pileHovered))
+        }
+        applyPilePoses(hovered: pileHovered, duration: 0)
+    }
+
+    /// Shipping rear-card pile pose (`captures_preview_pile_pose_v1`).
+    func pilePose(for id: String, depth: Int, hovered: Bool) -> CapturesPreviewPilePose? {
+        guard depth > 0 else { return nil }
+        var pose = CapturesPreviewPilePose()
+        let ok = id.withCString {
+            captures_preview_pile_pose_v1($0, depth, hovered, pileGravity, anchoredAtTop, &pose)
+        }
+        return ok ? pose : nil
+    }
+
+    /// The card origin: its slot plus the pose's recession, jitter and drift.
+    private func pileOrigin(_ id: String, layout: CapturesPreviewCardLayout, hovered: Bool) -> NSPoint {
+        let pose = pilePose(for: id, depth: layout.depth, hovered: hovered)
+        return NSPoint(x: CGFloat(geometry.padding) + CGFloat(pose?.dx ?? 0),
+                       y: CGFloat(layout.y) + CGFloat(pose?.slot_dy ?? 0))
+    }
+
+    /// Spin and depth scale about the card centre. The shipping `rotateX`
+    /// tilt has no 3D card transform here; the shared pose flattens it into
+    /// `scale_y` (vertical foreshortening).
+    static func pileTransform(_ pose: CapturesPreviewPilePose, size: CGSize, anchorPoint: CGPoint,
+                              flipped: Bool) -> CATransform3D {
+        let centre = CGPoint(x: (0.5 - anchorPoint.x) * size.width, y: (0.5 - anchorPoint.y) * size.height)
+        // Clockwise like CSS `rotateZ`: y grows downward in a flipped document.
+        let angle = CGFloat(pose.rotation_deg) * .pi / 180 * (flipped ? 1 : -1)
+        var transform = CATransform3DMakeTranslation(-centre.x, -centre.y, 0)
+        transform = CATransform3DConcat(transform,
+            CATransform3DMakeScale(CGFloat(pose.scale_x), CGFloat(pose.scale_y), 1))
+        transform = CATransform3DConcat(transform, CATransform3DMakeRotation(angle, 0, 0, 1))
+        return CATransform3DConcat(transform, CATransform3DMakeTranslation(centre.x, centre.y, 0))
+    }
+
+    private func applyPilePoses(hovered: Bool, duration: CFTimeInterval) {
+        guard stackCollapsed else { return }
+        for (id, card) in cards {
+            guard let layout = (hovered ? hoverLayouts[id] : restLayouts[id]),
+                  let layer = card.layer else { continue }
+            let target = pilePose(for: id, depth: layout.depth, hovered: hovered).map {
+                Self.pileTransform($0, size: card.bounds.size, anchorPoint: layer.anchorPoint,
+                                   flipped: document.isFlipped)
+            } ?? CATransform3DIdentity
+            if duration > 0 {
+                let animation = CABasicAnimation(keyPath: "transform")
+                animation.fromValue = NSValue(caTransform3D: layer.presentation()?.transform ?? layer.transform)
+                animation.toValue = NSValue(caTransform3D: target)
+                animation.duration = duration
+                animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                layer.add(animation, forKey: "pile-pose")
+            }
+            layer.transform = target
         }
     }
 }
@@ -1699,7 +1775,8 @@ final class MiniPreviewPanel: NSPanel {
          resources: [String: MiniPreviewResource], ids: [String],
          layouts: [String: CapturesPreviewCardLayout],
          hoverLayouts: [String: CapturesPreviewCardLayout] = [:], collapsed: Bool,
-         topAnchor: Bool, rightAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
+         topAnchor: Bool, rightAnchor: Bool, tokens: Tokens, pileGravity: Double? = nil,
+         copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          trash: @escaping (String) -> Void, dismiss: @escaping (String) -> Void,
          discard: @escaping (String) -> Void = { _ in },
@@ -1708,7 +1785,7 @@ final class MiniPreviewPanel: NSPanel {
         previewView = MiniPreviewView(geometry: geometry, contentHeight: contentHeight,
             resources: resources, ids: ids,
             layouts: layouts, hoverLayouts: hoverLayouts, collapsed: collapsed,
-            topAnchor: topAnchor, rightAnchor: rightAnchor, tokens: tokens,
+            topAnchor: topAnchor, rightAnchor: rightAnchor, tokens: tokens, pileGravity: pileGravity,
             copy: copy, save: save, open: open, trash: trash, dismiss: dismiss, discard: discard,
             setCollapsed: setCollapsed, clearAll: clearAll, move: move)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
@@ -2251,10 +2328,13 @@ final class MiniPreviewController {
         })
         let frame = Self.appKitFrame(geometry: geometry, monitor: monitor,
                                      screenFrame: screen.frame)
+        let gravity = NativePreviewLayout.gravity(monitor: monitor, count: ids.count,
+            origin: stackOrigin, placement: settings.placement)
         let next = MiniPreviewPanel(frame: frame, geometry: geometry,
             contentHeight: stack.contentHeight,
             resources: resources, ids: ids, layouts: layouts, hoverLayouts: hoverLayouts,
             collapsed: stack.isCollapsed, topAnchor: topAnchor, rightAnchor: rightAnchor, tokens: tokens,
+            pileGravity: gravity,
             copy: { [weak self] in self?.perform(\.copyArtifact, artifactID: $0) },
             save: { [weak self] in self?.perform(\.saveArtifact, artifactID: $0) },
             open: { [weak self] in self?.perform(\.openArtifact, artifactID: $0) },
@@ -2345,6 +2425,10 @@ final class MiniPreviewController {
         stackOrigin = NativePreviewLayout.movedOrigin(monitor: monitor, count: stack.ids.count,
             frameOrigin: logical, placement: settings.placement)
         self.position(panel: panel, on: screen)
+        if let gravity = NativePreviewLayout.gravity(monitor: monitor, count: stack.ids.count,
+                                                     origin: stackOrigin, placement: settings.placement) {
+            panel.previewView.updatePileGravity(gravity)
+        }
     }
 
     static func displayID(for screen: NSScreen) -> String? {

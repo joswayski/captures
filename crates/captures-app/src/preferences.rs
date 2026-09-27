@@ -487,26 +487,26 @@ pub struct ShortcutHelp {
     pub system_action: &'static str,
 }
 
-/// Shipping `platformShortcutHelp`. The shipping app unbinds overlapping
-/// system keys; native builds do not yet, so the body says how to free them.
+/// Shipping `platformShortcutHelp`. Live hosts unbind the overlapping system
+/// keys exactly like shipping (`crate::system_shortcuts`).
 pub fn shortcut_help(platform: ShortcutPlatform) -> ShortcutHelp {
     match platform {
         ShortcutPlatform::Macos => ShortcutHelp {
             intro: "Defaults match macOS Screenshot for full screen, region, and region recording. Captures-only actions keep their own shortcuts.",
             system_title: "macOS Screenshot shortcuts",
-            system_body: "This native build doesn’t unbind overlapping Screenshot app keys (⌘⇧3, ⌘⇧4, ⌘⇧5) yet. Turn them off in Keyboard Shortcuts so they reach Captures instead of the system overlay.",
+            system_body: "Captures unbinds overlapping Screenshot app keys (⌘⇧3, ⌘⇧4, ⌘⇧5) so they reach this app instead of the system overlay. Restore them in System Settings if you want both.",
             system_action: "Open",
         },
         ShortcutPlatform::Windows => ShortcutHelp {
             intro: "Defaults match Windows screenshot keys: Win+Shift+S region, PrtScn full screen, Alt+PrtScn window, and Win+Alt+R region recording.",
             system_title: "Windows screenshot shortcuts",
-            system_body: "This native build doesn’t unbind overlapping Snipping Tool keys yet. Turn off Print Screen for Snipping Tool in keyboard settings so it reaches Captures instead of the system overlay.",
+            system_body: "Captures unbinds overlapping Snipping Tool keys so Win+Shift+S and Print Screen reach this app instead of the system overlay. Restore them in Windows keyboard settings if you want both.",
             system_action: "Open",
         },
         ShortcutPlatform::Linux => ShortcutHelp {
             intro: "Defaults match GNOME/Ubuntu screenshot keys: PrtScn opens New Capture, Super+Shift+S region, Shift+PrtScn full screen, Alt+PrtScn window, and Ctrl+Shift+Alt+R region recording.",
             system_title: "GNOME screenshot shortcuts",
-            system_body: "This native build doesn’t turn off overlapping GNOME screenshot keys (or KDE Spectacle region capture) yet. Turn them off in Keyboard settings so they reach Captures.",
+            system_body: "Captures turns off overlapping GNOME screenshot keys (and KDE Spectacle region capture when those tools are installed) so they reach this app. Restore them in Keyboard settings if you want both.",
             system_action: "Open",
         },
     }
@@ -701,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_help_is_platform_specific_and_native_accurate() {
+    fn shortcut_help_matches_shipping_takeover_copy() {
         for platform in [
             ShortcutPlatform::Macos,
             ShortcutPlatform::Windows,
@@ -709,7 +709,9 @@ mod tests {
         ] {
             let help = shortcut_help(platform);
             assert!(help.intro.starts_with("Defaults match"));
-            assert!(help.system_body.contains("native build"));
+            assert!(help.system_body.starts_with("Captures "));
+            assert!(help.system_body.contains("if you want both."));
+            assert!(!help.system_body.contains("native build"));
             assert!(!keyboard_settings_targets(platform).is_empty());
         }
         assert_eq!(SHORTCUT_ROWS.len(), 7);

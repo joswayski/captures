@@ -1,5 +1,44 @@
 import Foundation
+import Darwin
 import CCapturesSettings
+
+/// Shipping `captures_macos_window::disable_symbolic_hotkeys`. Screenshot.app
+/// keeps listening after `com.apple.symbolichotkeys` is written (shared Rust
+/// does that write), so the overlapping ⌘⇧3 / ⌘⇧4 / ⌘⇧5 ids are also disabled
+/// in WindowServer for this login session before Captures claims them.
+enum SymbolicHotKeys {
+    private typealias SetEnabled = @convention(c) (Int32, Bool) -> Int32
+
+    private static let setEnabled: SetEnabled? = {
+        let symbol = "CGSSetSymbolicHotKeyEnabled"
+        // RTLD_DEFAULT is `(void *)-2` on Darwin; Swift cannot import that macro.
+        var pointer = dlsym(UnsafeMutableRawPointer(bitPattern: -2), symbol)
+        for framework in ["/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",
+                          "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"]
+        where pointer == nil {
+            // The handle is intentionally never closed, keeping the symbol valid.
+            if let handle = dlopen(framework, RTLD_NOW | RTLD_GLOBAL) { pointer = dlsym(handle, symbol) }
+        }
+        guard let pointer else { return nil }
+        return unsafeBitCast(pointer, to: SetEnabled.self)
+    }()
+
+    /// Ids the shared takeover asks the host to disable live.
+    static func ids(in configureResult: [String: Any]) -> [Int32] {
+        let raw = configureResult["disable_symbolic_hotkeys"] as? [Any] ?? []
+        return raw.compactMap { ($0 as? NSNumber)?.int32Value }
+    }
+
+    /// Returns failures to log; shipping keeps registering shortcuts anyway.
+    static func disable(_ ids: [Int32]) -> [String] {
+        guard !ids.isEmpty else { return [] }
+        guard let setEnabled else { return ["CGSSetSymbolicHotKeyEnabled is unavailable"] }
+        return ids.compactMap { id in
+            let status = setEnabled(id, false)
+            return status == 0 ? nil : "CGSSetSymbolicHotKeyEnabled(\(id)) returned \(status)"
+        }
+    }
+}
 
 enum CaptureShortcut: String {
     case newCapture = "new_capture"
@@ -53,16 +92,32 @@ final class NativeCaptureShortcuts {
         return keys
     }
 
-    init(settings: [String: Any]) throws {
+    /// Live WindowServer disable for the shared takeover's macOS ids.
+    /// Tests replace it so they never change the login session's hotkeys.
+    private let disableSymbolicHotKeys: ([Int32]) -> [String]
+
+    init(settings: [String: Any],
+         disableSymbolicHotKeys: @escaping ([Int32]) -> [String] = SymbolicHotKeys.disable) throws {
         precondition(Thread.isMainThread)
-        _ = try Self.request(["operation": "configure", "settings": settings])
+        self.disableSymbolicHotKeys = disableSymbolicHotKeys
+        let result = try Self.request(["operation": "configure", "settings": settings])
         closed = false
+        applyTakeover(result)
     }
     deinit { close() }
 
     func update(settings: [String: Any]) throws {
         precondition(!closed)
-        _ = try Self.request(["operation": "configure", "settings": settings])
+        applyTakeover(try Self.request(["operation": "configure", "settings": settings]))
+    }
+
+    /// Shipping disables the overlapping system keys, then registers its own;
+    /// the OS-registered Captures chords already exist here and only receive
+    /// the keys once WindowServer stops consuming them.
+    private func applyTakeover(_ result: [String: Any]) {
+        let errors = (result["takeover_errors"] as? [String] ?? [])
+            + disableSymbolicHotKeys(SymbolicHotKeys.ids(in: result))
+        for error in errors { Metrics.write(["event": "system-shortcut-takeover", "detail": error]) }
     }
 
     func setEnabled(_ enabled: Bool) {

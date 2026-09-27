@@ -611,6 +611,9 @@ struct PreviewRenderCard {
     hover_y: f64,
     /// Collapsed pile position, for the list ↔ pile fly.
     pile_y: f64,
+    /// Shipping pile depth poses (spin, recession, jitter) at rest and fanned.
+    pile_rest: captures_app::preview::CollapsedCardPose,
+    pile_hover: captures_app::preview::CollapsedCardPose,
     /// Survivor settle toward the stack anchor, points.
     shift_y: f32,
     copy_failed: bool,
@@ -4681,12 +4684,30 @@ impl Live {
         let epoch = self.previews.epoch;
         let hover_lock_generation = self.previews.hover_lock_generation;
         let live_ids = self.previews.stack.ids().to_vec();
+        // Corner piles sit at full gravity; a dragged pile derives it from
+        // its position, fading the paper spin in toward the screen middle.
+        let pile_gravity = captures_app::preview::collapsed_stack_gravity(
+            preview_bounds,
+            count.max(1),
+            self.previews.visibility.stack_origin(),
+            placement,
+        );
         let cards = display
             .iter()
             .enumerate()
             .filter_map(|(index, artifact_id)| {
                 let card = self.previews.cards.get(artifact_id)?;
                 let live_index = live_ids.iter().position(|id| id == artifact_id)?;
+                let pile_depth = count.checked_sub(live_index + 1)?;
+                let pile_pose = |hovered: bool| {
+                    captures_app::preview::collapsed_card_pose(
+                        artifact_id,
+                        pile_depth,
+                        hovered,
+                        pile_gravity,
+                        top_anchor,
+                    )
+                };
                 let layout = |collapsed: bool, hovered: bool| {
                     captures_app::preview::card_layout_in(
                         display_count,
@@ -4722,6 +4743,8 @@ impl Live {
                         count, live_index, true, top_anchor, false,
                     )?
                     .y,
+                    pile_rest: pile_pose(false),
+                    pile_hover: pile_pose(true),
                     shift_y: self.previews.exits.shift_px(
                         artifact_id,
                         exits_now,
@@ -4906,7 +4929,8 @@ impl Live {
                                      card: &PreviewRenderCard,
                                      compact: bool,
                                      interactive: bool,
-                                     depth_shade: f32| {
+                                     depth_shade: f32,
+                                     pile: crate::mini_preview::PileTransform| {
                     // Shipping `thumbnail-arrive`: the card rises and fades in.
                     let arrival = card
                         .arrived_at
@@ -4988,6 +5012,7 @@ impl Live {
                                 highlight: outline,
                                 warning,
                                 depth_shade,
+                                pile,
                             },
                         )
                     });
@@ -5124,9 +5149,14 @@ impl Live {
                         },
                     );
                     for card in &cards {
+                        let (offset, pile) = crate::mini_preview::pile_pose_between(
+                            &card.pile_rest,
+                            &card.pile_hover,
+                            fan,
+                        );
                         let y = egui::lerp(card.layout.y as f32..=card.hover_y as f32, fan);
                         let rect = egui::Rect::from_min_size(
-                            egui::pos2(captures_app::preview::THUMBNAIL_PADDING as f32, y),
+                            egui::pos2(captures_app::preview::THUMBNAIL_PADDING as f32, y) + offset,
                             egui::vec2(
                                 (captures_app::preview::THUMBNAIL_WIDTH
                                     - captures_app::preview::THUMBNAIL_PADDING * 2.)
@@ -5135,7 +5165,7 @@ impl Live {
                             ),
                         );
                         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                            show_card(ui, card, true, true, 1.);
+                            show_card(ui, card, true, true, 1., pile);
                         });
                     }
                     // Shipping sparkles drift over the hovered pile until the
@@ -5187,11 +5217,18 @@ impl Live {
                     );
                     let toward_pile = if collapsing { progress } else { 1. - progress };
                     for card in &cards {
+                        // The pile end carries its depth pose; the list end is flat.
+                        let (pose_offset, pose) = crate::mini_preview::pile_pose_between(
+                            &card.pile_rest,
+                            &card.pile_rest,
+                            0.,
+                        );
                         let list = egui::pos2(padding, card.layout.y as f32 - scroll);
-                        let pile = egui::pos2(padding, card.pile_y as f32) + pile_offset;
+                        let pile = egui::pos2(padding, card.pile_y as f32) + pile_offset + pose_offset;
                         let rect = egui::Rect::from_min_size(list.lerp(pile, toward_pile), size);
+                        let flight = crate::mini_preview::PileTransform::IDENTITY.lerp(pose, toward_pile);
                         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                            show_card(ui, card, true, false, toward_pile);
+                            show_card(ui, card, true, false, toward_pile, flight);
                         });
                     }
                 } else {
@@ -5255,7 +5292,16 @@ impl Live {
                                         );
                                         ui.scope_builder(
                                             egui::UiBuilder::new().max_rect(rect),
-                                            |ui| show_card(ui, card, false, true, 1.),
+                                            |ui| {
+                                                show_card(
+                                                    ui,
+                                                    card,
+                                                    false,
+                                                    true,
+                                                    1.,
+                                                    crate::mini_preview::PileTransform::IDENTITY,
+                                                )
+                                            },
                                         );
                                     }
                                     // Exiting cards hold their slots and paint

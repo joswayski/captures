@@ -46,6 +46,8 @@ def main():
         proxy_url = f"http://127.0.0.1:{proxy.server_address[1]}"
         env = {**os.environ, "WGPU_BACKEND": "gl", "WINIT_X11_SCALE_FACTOR": "1",
                "HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""}
+        # Live hosts must never unbind the developer's real OS screenshot keys.
+        env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
         for variable in ("WAYLAND_DISPLAY", "ALL_PROXY", "all_proxy"):
             env.pop(variable, None)
         children = []

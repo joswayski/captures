@@ -17,6 +17,7 @@ final class HistoryClearTests: XCTestCase {
         XCTAssertEqual(copy.doneLabel(.restore), "Restored")
         XCTAssertEqual(copy.tooltip(.restore), "Bring this screenshot back as a floating preview")
         XCTAssertNil(copy.doneLabel(.saveFile))
+        XCTAssertEqual(copy.tooltip(.saveFile), "Save a permanent copy to your Captures folder")
         XCTAssertEqual(copy.feedbackDuration, 2.5, accuracy: 0.001)
         let entry: [String: Any] = ["id": "v", "kind": "video", "preview_url": "", "full_url": "",
             "width": 640, "height": 480, "size_bytes": 2_048, "created_at": "2026-09-26T15:04:05Z",

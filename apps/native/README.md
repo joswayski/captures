@@ -143,8 +143,31 @@ temporary Escape cancellation without competing process-wide handlers. Native
 event loops drain actions on their UI thread. Active capture/preparation and
 focused Preferences suppress screenshot shortcuts; hidden or unfocused
 Preferences does not. Invalid/colliding shortcuts report errors. This does not
-implement OS shortcut takeover or recording actions,
-launch at login, or complete lifecycle parity.
+implement recording actions, launch at login, or complete lifecycle parity.
+
+Like shipping, the live shortcut owner unbinds overlapping system screenshot keys
+when it starts and whenever a binding changes, with no prompt and no automatic
+restore (`captures-app::system_shortcuts`). macOS writes the disabled ⌘⇧3 / ⌘⇧4 /
+⌘⇧5 Screenshot hotkeys through `defaults` and AppKit also disables them live in
+WindowServer; the wgpu host has no live WindowServer call, so on macOS it relies on
+the persisted setting. Linux clears the overlapping GNOME `gsettings` keys and, for
+Super+Shift+S, KDE Spectacle's region key. Windows turns off Print Screen for
+Snipping Tool and intercepts Win+Shift+S with a keyboard hook instead of
+registering it. Only the seven native bindings count (the GIF shortcut is not a
+native binding). Preferences shows the shipping copy and opens keyboard settings,
+where users restore the keys. Smokes set
+`CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER=1` so they never change the real OS
+configuration; unit tests use a fake command runner. Verified by unit tests only:
+no physical macOS, Windows, GNOME or KDE session was checked.
+
+On macOS, a capture denied Screen Recording access offers the shipping
+**Restart & Retry** dialog (access was requested this launch) or **Reset, Restart
+& Retry** (`tccutil reset ScreenCapture` for this bundle only, then the saved
+prompt identity is cleared). The capture mode is saved as
+`pending_capture_after_restart`, the host relaunches, and the next launch takes
+the retry once and runs that capture instead of the startup notice. New Capture
+and recordings retry as Region, like shipping. The wgpu host does not offer the
+dialog: shipping shows it only on macOS, where AppKit is the native host.
 
 Live hosts now elect one process per canonical History root. Subsequent launches
 forward media paths or request native reactivation without creating UI or capture
@@ -400,8 +423,13 @@ Overflow scrolls without dropping captures; chevron cues at the stack edges
 scroll one card at a time. Show less parks a compact pile with
 the newest card in front; clicking it expands the stack. Incoming captures and
 capture cancellation preserve the parked state. Collapsed piles drag within
-their capture display and fan on hover, respecting reduced motion. The shipping
-3D pile transforms (rotation, depth blur) are not connected.
+their capture display and fan on hover, respecting reduced motion. Rear cards take
+the shipping pile pose from `captures-app::preview::collapsed_card_pose`: the
+per-capture 2.7–3° spin (faded in as a dragged pile nears the vertical middle),
+depth recession through the 900 px perspective, depth scale and peek jitter.
+Neither host has a 3D card transform, so the backward `rotateX` tilt is
+approximated as vertical foreshortening (a y scale). The depth blur is not
+connected.
 
 Show mini previews, all four placement corners and Include mini previews in
 captures use the shared settings. Turning previews off hides retained cards and
@@ -453,7 +481,9 @@ apps/native/macos/.build/release/CapturesNative --scene update --update-state er
 ```
 
 Close each instance before starting another. Cmd+Q quits. Nothing installs into
-Applications or changes the installed app's data, shortcuts, or updater.
+Applications or changes the installed app's data, shortcuts, or updater. `--live`
+does unbind overlapping system screenshot keys like shipping (see above); set
+`CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER=1` to keep them.
 Only the explicit live screen-access action requests capture permission.
 The executable needs its SwiftPM resource bundle; run it from the build directory.
 

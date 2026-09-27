@@ -55,7 +55,16 @@ fn response(request: Request, wake: Option<extern "C" fn()>) -> Result<Value, St
                     let wake = wake.ok_or("A shortcut wake callback is required")?;
                     *slot = Some(CaptureShortcuts::new(&settings, move || wake())?);
                 }
-                Ok(json!({}))
+                // AppKit disables these live in WindowServer (shipping
+                // `disable_symbolic_hotkeys`); errors are only logged.
+                let takeover = slot
+                    .as_mut()
+                    .map(CaptureShortcuts::take_system_takeover)
+                    .unwrap_or_default();
+                Ok(json!({
+                    "disable_symbolic_hotkeys": takeover.macos_symbolic_hotkeys,
+                    "takeover_errors": takeover.errors,
+                }))
             }
             Request::Enabled { enabled } => {
                 slot.as_ref()

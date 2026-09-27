@@ -147,6 +147,7 @@ impl CardAction {
     pub const fn tooltip(self) -> Option<&'static str> {
         match self {
             Self::Restore => Some("Bring this screenshot back as a floating preview"),
+            Self::SaveFile => Some("Save a permanent copy to your Captures folder"),
             _ => None,
         }
     }
@@ -537,6 +538,11 @@ mod tests {
             Some("Bring this screenshot back as a floating preview")
         );
         assert_eq!(ACTION_FEEDBACK_MS, 2_500);
+        // Shipping History recording `Save file` title (App.tsx).
+        assert_eq!(
+            CardAction::SaveFile.tooltip(),
+            Some("Save a permanent copy to your Captures folder")
+        );
         for action in CardAction::ALL {
             if let Some(icon) = action.icon() {
                 assert!(
@@ -546,6 +552,8 @@ mod tests {
             }
             if action != CardAction::Restore {
                 assert_eq!(action.done_label(), None);
+            }
+            if !matches!(action, CardAction::Restore | CardAction::SaveFile) {
                 assert_eq!(action.tooltip(), None);
             }
         }

@@ -87,6 +87,14 @@ final class LiveCaptureController: NSObject {
     private let selectorGenerationChanged: (UInt64?) -> Void
     private let recordingControlsVisibilityChanged: (Bool) -> Void
     private let reportError: (String) -> Void
+    /// Shipping Screen Recording recovery for a denied capture. Returns true
+    /// when it handled the failure (the host offers Restart & Retry).
+    private let screenPermissionDenied: (StillCaptureKind, String) -> Bool
+    /// The still capture a failure would retry after a relaunch. New Capture
+    /// and recordings retry as Region, like shipping `report_capture_error`.
+    private var captureAttemptKind: StillCaptureKind?
+    /// A retry that waits for the display list after a permission relaunch.
+    private var pendingRetryKind: StillCaptureKind?
     private weak var miniPreviews: MiniPreviewController?
     private weak var miniPreviewActions: MiniPreviewActions?
     private let initialSelectionID: String?
@@ -253,6 +261,7 @@ final class LiveCaptureController: NSObject {
          selectorGenerationChanged: @escaping (UInt64?) -> Void = { _ in },
          recordingControlsVisibilityChanged: @escaping (Bool) -> Void = { _ in },
          reportError: @escaping (String) -> Void = { _ in },
+         screenPermissionDenied: @escaping (StillCaptureKind, String) -> Bool = { _, _ in false },
          showPermissions: @escaping () -> Void = {},
          showPreferenceSetting: @escaping (String) -> Void = { _ in },
          showPreferences: @escaping () -> Void) {
@@ -268,6 +277,7 @@ final class LiveCaptureController: NSObject {
         self.selectorGenerationChanged = selectorGenerationChanged
         self.recordingControlsVisibilityChanged = recordingControlsVisibilityChanged
         self.reportError = reportError
+        self.screenPermissionDenied = screenPermissionDenied
         super.init(); build(); loadInitial()
     }
 
@@ -563,6 +573,9 @@ final class LiveCaptureController: NSObject {
 
     private func loadDisplays() {
         status.stringValue = "Refreshing displays…"
+        // Listing displays is not a capture: its failures never offer a retry
+        // unless a relaunched retry is waiting on this list.
+        captureAttemptKind = nil
         run({ [transport] in
             let result = try transport.request(["operation": "displays"])
             guard let values = result["displays"] as? [[String: Any]] else { throw AppBridgeError.invalidResponse }
@@ -574,8 +587,19 @@ final class LiveCaptureController: NSObject {
             switch result { case .success(let values):
                 self.displays = values; self.displayMenu.removeAllItems(); self.displayMenu.addItems(withTitles: values.map(\.title))
                 self.status.stringValue = values.isEmpty ? "No displays are available. Screen access may be required." : self.historyStatus()
-            case .failure(let error): self.showError("Couldn’t list displays", error) }
+            case .failure(let error):
+                if let retry = self.pendingRetryKind {
+                    // The relaunched retry fails here, as shipping's retried capture would.
+                    self.pendingRetryKind = nil
+                    self.captureAttemptKind = retry
+                }
+                self.showError("Couldn’t list displays", error)
+            }
             self.updateActions()
+            if case .success = result, let retry = self.pendingRetryKind, !self.displays.isEmpty {
+                self.pendingRetryKind = nil
+                DispatchQueue.main.async { [weak self] in _ = self?.capture(retry) }
+            }
         }
     }
 
@@ -1063,6 +1087,7 @@ final class LiveCaptureController: NSObject {
         guard !capturing, !recoveryBusy, !recordingRetiring,
               !externalOpenPending, !permissionsVisible,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
+        captureAttemptKind = kind
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]; setBusy(true, message: "Preparing capture…")
         run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self] result in
@@ -1110,6 +1135,7 @@ final class LiveCaptureController: NSObject {
         guard !capturing, !recoveryBusy, !recordingRetiring,
               !externalOpenPending, !permissionsVisible,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
+        captureAttemptKind = .region
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]
         unifiedControlsState = .initial
@@ -2415,7 +2441,19 @@ final class LiveCaptureController: NSObject {
         let message = "\(context): \(error.localizedDescription)"
         status.stringValue = message
         status.textColor = tokens.color("danger-text")
+        if let kind = captureAttemptKind, screenPermissionDenied(kind, message) {
+            captureAttemptKind = nil
+            return
+        }
         reportError(message)
+    }
+
+    /// Runs the capture a Screen Recording relaunch scheduled, once the
+    /// display list is ready (shipping retries right after setup).
+    func retryCaptureAfterRestart(_ kind: StillCaptureKind) {
+        guard displays.isEmpty else { _ = capture(kind); return }
+        pendingRetryKind = kind
+        loadDisplays()
     }
     private func updateActions() {
         let busy = historyBusy
