@@ -232,7 +232,16 @@ def main():
             portal_name = dbus.service.BusName("org.freedesktop.portal.Desktop", bus=bus, do_not_queue=True)
             portal = PortalSettings(portal_name, "/org/freedesktop/portal/desktop")
             settings = output / "motion-settings.json"
+            # A complete existing profile, so the live root is Capture History.
+            # (Missing required fields make the settings malformed, and the
+            # root stays the setup window with a load error.)
             settings.write_text(json.dumps({"settings_schema_version": 5, "onboarding_completed": True,
+                                            "output_directory": str(output / "exports"),
+                                            "launch_at_login": False,
+                                            "region_shortcut": "Ctrl+Shift+F7",
+                                            "window_shortcut": "Ctrl+Shift+F8",
+                                            "display_shortcut": "Ctrl+Shift+F9",
+                                            "new_capture_shortcut": "Ctrl+Shift+F10",
                                             "appearance": "dark", "theme": "mustard"}))
             original = settings.read_bytes()
             app = spawn("motion", [str(binary), "--live", "--settings-file", str(settings),
