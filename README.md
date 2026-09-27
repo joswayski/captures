@@ -381,8 +381,8 @@ immutable 12-frame source-relative thumbnail strip and stage the same numeric va
 without seeking; loading can be canceled or retried without disabling editing, and
 Apply remains explicit. Play/Pause presents bounded accepted-edit motion frames and
 a source-relative playhead without changing the accepted preview, edits, History or
-source. It is silent by default, with optional Sound preview of the accepted MP4 mix
-on the default device; GIF and inaudible mixes stay silent without opening a device.
+source. Like the shipping preview it plays the accepted MP4 mix with Sound on by
+default, on the default device; GIF and inaudible mixes stay silent without opening a device.
 Optional Loop preview repeats the accepted trim without changing
 exports or dirty state; each lap reopens the decoders and is not gapless.
 **Adjust crop** loads one immutable full-source frame at the accepted position, then

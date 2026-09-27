@@ -462,6 +462,20 @@ final class CaptureControlsTests: XCTestCase {
         }
     }
 
+    func testTargetSegmentsUseTheSharedShippingTargetGlyphs() throws {
+        _ = NSApplication.shared
+        let view = makeView()
+        for target in UnifiedCaptureTarget.allCases {
+            let button = try XCTUnwrap(buttons(in: view.controls).first { $0.title == target.title })
+            guard case .shipping(let name)? = button.icon else {
+                return XCTFail("\(target.title) must draw a shared shipping glyph")
+            }
+            XCTAssertEqual(name, "target-\(target.rawValue)",
+                           "\(target.title) uses its own CaptureTargetIcon, not the camera")
+            XCTAssertFalse(ShippingIcons.polylines(name).isEmpty, "\(name) is in the shared set")
+        }
+    }
+
     func testPanelIsExcludedFromCapturedPixels() throws {
         _ = NSApplication.shared
         let screen = try XCTUnwrap(NSScreen.main)

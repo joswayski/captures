@@ -30,6 +30,8 @@ struct CapturePreferences {
     let miniPreviewPlacement: String
     let includeMiniPreviewsInCaptures: Bool
     let includeRecordingControlsInCaptures: Bool
+    /// Saved New Capture shortcut (blank means the default), for notices.
+    let newCaptureShortcut: String
     let recording: RecordingPreferences
 
     init(_ settings: [String: Any]) throws {
@@ -54,6 +56,7 @@ struct CapturePreferences {
         self.showMiniPreviews = showMiniPreviews; self.miniPreviewPlacement = miniPreviewPlacement
         self.includeMiniPreviewsInCaptures = includeMiniPreviewsInCaptures
         includeRecordingControlsInCaptures = settings["include_recording_controls_in_captures"] as? Bool ?? false
+        newCaptureShortcut = settings["new_capture_shortcut"] as? String ?? ""
         recording = try RecordingPreferences(settings["recording"] as? [String: Any] ?? [:])
     }
 

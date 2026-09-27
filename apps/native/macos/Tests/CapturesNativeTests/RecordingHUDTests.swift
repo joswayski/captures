@@ -234,11 +234,32 @@ final class RecordingHUDTests: XCTestCase {
     func testHiddenNoticeIsFixedGlassNoninteractiveAndExplainsRestoration() throws {
         _ = NSApplication.shared
         let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let copy = RecordingHUDPolicy.hiddenNotice(shortcut: "CommandOrControl+Shift+Space")
+        XCTAssertEqual(copy.title, "Recording controls hidden")
+        XCTAssertEqual(copy.beforeKeys, "Open Captures from the menu bar, or press")
+        XCTAssertEqual(copy.keys, ["Cmd", "Shift", "Space"])
+        XCTAssertEqual(copy.afterKeys, "to bring them back.")
+        XCTAssertEqual(copy.size, NSSize(width: 418, height: 74))
         let notice = RecordingControlsHiddenNoticeView(
-            frame: NSRect(x: 0, y: 0, width: 360, height: 96), tokens: tokens)
+            frame: NSRect(origin: .zero, size: copy.size), tokens: tokens, notice: copy)
         let labels = notice.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
         XCTAssertTrue(labels.contains("Recording controls hidden"))
-        XCTAssertTrue(labels.contains { $0.contains("menu bar") && $0.contains("New Capture") })
+        XCTAssertTrue(try XCTUnwrap(notice.accessibilityLabel()).contains("menu bar, or press Cmd Shift Space"))
+        // Shipping layout: a 34 pt accent tile, then left-aligned title and copy
+        // whose shortcut keys are chips that stay inside the card.
+        let padding = tokens.number("s-5")
+        XCTAssertEqual(notice.tile.frame, NSRect(x: padding, y: 20, width: 34, height: 34))
+        XCTAssertEqual(notice.tile.glyph, "capture")
+        XCTAssertEqual(notice.titleLabel.frame.minX, notice.tile.frame.maxX + padding)
+        let first = try XCTUnwrap(notice.bodyItems.first)
+        XCTAssertEqual(first.text, copy.beforeKeys)
+        XCTAssertEqual(first.frame.minX, notice.titleLabel.frame.minX, "copy is left-aligned")
+        XCTAssertEqual(notice.bodyItems.filter(\.chip).map(\.text), copy.keys)
+        XCTAssertEqual(notice.bodyItems.last?.text, copy.afterKeys)
+        for item in notice.bodyItems {
+            XCTAssertTrue(notice.bounds.insetBy(dx: padding - 1, dy: 1).contains(item.frame),
+                          "\(item.text) stays inside the card")
+        }
         let background = try XCTUnwrap(notice.layer?.backgroundColor.flatMap(NSColor.init(cgColor:))?
             .usingColorSpace(.deviceRGB))
         let expected = try XCTUnwrap(tokens.color(RecordingHUDColorToken.glassStrong.rawValue)

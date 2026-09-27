@@ -103,6 +103,42 @@ final class RecordingSavedNoticeTests: XCTestCase {
         }
     }
 
+    func testNoticeIsOneRowOfCheckTileCopyAndIconButtonWithAQuietDismiss() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let view = RecordingSavedNoticeView(frame: NSRect(x: 0, y: 0, width: 440, height: 116), tokens: tokens)
+        let padding = tokens.number("s-5")
+        XCTAssertEqual(view.tile.frame, NSRect(x: padding, y: 39, width: 38, height: 38))
+        XCTAssertEqual(view.tile.glyph, "check")
+        XCTAssertFalse(view.subviews.contains { ($0 as? NSTextField)?.stringValue == "●" },
+                       "the check tile replaces the text glyph")
+        for state: RecordingSavedNoticeState in [.ready, .saved(path: "/Captures/movie.mp4"),
+                                                 .error(message: "Folder is unavailable", retry: .save)] {
+            view.update(state)
+            let button = view.primaryButton.frame
+            XCTAssertEqual(button.midY, view.bounds.midY, accuracy: 0.5, "one row: the button is centred")
+            XCTAssertEqual(button.maxX, view.bounds.width - 38, accuracy: 0.5)
+            XCTAssertEqual(button.height, tokens.number("h-md"))
+            let copy = view.subviews.compactMap { $0 as? NSTextField }
+            for label in copy {
+                XCTAssertGreaterThanOrEqual(label.frame.minX, view.tile.frame.maxX + padding - 0.5)
+                XCTAssertLessThanOrEqual(label.frame.maxX, button.minX - padding + 0.5,
+                                         "\(label.stringValue) stays left of the button")
+            }
+            guard case .shipping(let name)? = view.primaryButton.icon else {
+                return XCTFail("the action button leads with a shipping icon")
+            }
+            XCTAssertEqual(name, state == .ready || state == .error(message: "Folder is unavailable", retry: .save)
+                ? "save" : "folder")
+        }
+        XCTAssertEqual(view.dismissButton.frame, NSRect(x: 406, y: 10, width: 24, height: 24))
+        XCTAssertTrue(view.dismissButton.iconOnly)
+        guard case .shipping("close")? = view.dismissButton.icon else {
+            return XCTFail("dismiss is the shipping ×, not a Dismiss text button")
+        }
+        XCTAssertEqual(view.dismissButton.accessibilityLabel(), "Dismiss recording notice")
+    }
+
     func testPanelIsTopRightNonactivatingAndNeverShared() throws {
         _ = NSApplication.shared
         let screen = try XCTUnwrap(NSScreen.main)

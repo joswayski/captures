@@ -457,6 +457,9 @@ enum UnifiedCaptureTarget: String, CaseIterable {
         case .display: return "Full screen"
         }
     }
+
+    /// The shared shipping icon (`captures_icon_polylines_v1`) for the segment.
+    var iconName: String { "target-\(rawValue)" }
 }
 
 enum UnifiedCaptureMode: String, Equatable {
@@ -778,7 +781,8 @@ final class CaptureControlsView: NSView {
             }
             button.setAccessibilityRole(.radioButton)
             button.setAccessibilityLabel(mode.title)
-            button.icon = mode == .window ? .window : mode == .display ? .display : .capture
+            // Shipping `CaptureTargetIcon`, from the shared icon set.
+            button.icon = .shipping(mode.iconName)
             button.enterActionBlock = { [weak self] in self?.confirm() }
             targetButtons[mode] = button
             x += width + 4
