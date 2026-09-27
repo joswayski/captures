@@ -414,7 +414,8 @@ final class RecordingEditorTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         XCTAssertEqual(worker.comparisonCalls, 0, "a paused transient frame is not compared")
         XCTAssertTrue(controller.compareView.isHidden)
-        XCTAssertEqual(try slider("Recording frame position", in: controller.root).doubleValue, 400)
+        XCTAssertEqual(try slider("Recording frame position", in: controller.root).doubleValue, 650,
+                       "pausing keeps the paused position until the worker accepts a still")
     }
 
     func testRealEncodedComparisonIsReadOnlyAndFramesOutliveOwner() throws {

@@ -308,9 +308,10 @@ final class OpenImageTests: XCTestCase {
             let canonical = try XCTUnwrap(source.path.withCString { realpath($0, nil) })
             defer { free(canonical) }
             XCTAssertEqual(entry["saved_path"] as? String, String(cString: canonical))
-            XCTAssertFalse(try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
-                .first { $0.title == "Replace original…" }).isEnabled,
-                "external references must not offer destructive replacement")
+            let saveAsNew = try XCTUnwrap(descendants(controls).compactMap { $0 as? NSSwitch }
+                .first { $0.accessibilityLabel() == "Save as new file" })
+            XCTAssertEqual(saveAsNew.state, .on, "external references always save a new file")
+            XCTAssertFalse(saveAsNew.isEnabled, "external references must not offer destructive replacement")
             if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"],
                container != "webm" {
                 try capture(controls, to: URL(fileURLWithPath: output)
