@@ -14,6 +14,7 @@ use std::{
     ffi::c_char,
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
+    ptr,
     sync::Arc,
 };
 
@@ -172,14 +173,51 @@ pub unsafe extern "C" fn captures_editor_estimate_v1(
     })
 }
 
+/// Encode a retained frame exactly as Save would, off the session worker, for
+/// the automatic before/after comparison. Returns independently owned bytes
+/// (read with captures_editor_export_bytes_v1, free with
+/// captures_editor_export_free_v1) and writes an owned `{length}` or error
+/// JSON response to `output`. No I/O.
+///
+/// # Safety
+/// Non-null frame is a live handle from captures_editor_frame_v1 retained for
+/// the call; it may be used from any thread. Input is readable UTF-8.
+/// Non-null output is aligned writable pointer storage; free its JSON with
+/// captures_settings_free_v1. Null output refuses the operation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_frame_encode_v1(
+    frame: *const Arc<RgbaImage>,
+    options_json: *const c_char,
+    output: *mut *mut c_char,
+) -> *mut Vec<u8> {
+    if output.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains readable input and a live immutable frame.
+        let options = serde_json::from_str::<ExportOptions>(unsafe { text(options_json) }?)
+            .map_err(|error| error.to_string())?;
+        let frame = unsafe { frame.as_ref() }.ok_or("editor frame is null")?;
+        captures_app::compression_compare::encode(frame, options)
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    let (handle, value) = match result {
+        Ok(bytes) => {
+            let value = json!({"ok":true,"result":{"length":bytes.len()}});
+            (Box::into_raw(Box::new(bytes)), value)
+        }
+        Err(error) => (ptr::null_mut(), json!({"ok":false,"error":error})),
+    };
+    // SAFETY: caller supplies aligned writable pointer storage.
+    unsafe { output.write(response(value)) };
+    handle
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use captures_app::editor_session::OpenRequest;
-    use std::{
-        ffi::{CStr, CString},
-        ptr,
-    };
+    use std::ffi::{CStr, CString};
 
     unsafe fn take_json(value: *mut c_char) -> serde_json::Value {
         // SAFETY: tests pass only live Rust-owned response strings.
@@ -220,6 +258,14 @@ mod tests {
             view["hint"],
             "Save keeps original quality as PNG and overwrites the original."
         );
+        assert_eq!(view["compresses"], false);
+        assert_eq!(view["quality_modes"][1]["label"], "Compress");
+        assert_eq!(
+            view["quality_presets"][0]["description"],
+            "Smallest PNG with the most visible dithering."
+        );
+        assert_eq!(view["quality_presets"][4]["value"], 98);
+        assert!(view["maximum_help"].as_str().unwrap().contains("PNG"));
 
         let renamed = bar(&json!({
             "target": first["result"]["target"], "action": {"kind": "set_stem", "stem": "Other"},
@@ -321,6 +367,34 @@ mod tests {
             assert_eq!(
                 take_json(captures_editor_estimate_v1(ptr::null(), estimate.as_ptr()))["ok"],
                 false
+            );
+            let options_text = CString::new(options.to_string()).unwrap();
+            let mut response = ptr::null_mut();
+            let encoded =
+                captures_editor_frame_encode_v1(frame, options_text.as_ptr(), &mut response);
+            let length = take_json(response)["result"]["length"].as_u64().unwrap();
+            let mut bytes = crate::editor::EditorBytes {
+                data: ptr::null(),
+                length: 0,
+            };
+            assert!(crate::editor::captures_editor_export_bytes_v1(
+                encoded, &mut bytes
+            ));
+            assert_eq!(bytes.length as u64, length);
+            assert_eq!(
+                std::slice::from_raw_parts(bytes.data, bytes.length),
+                std::fs::read(&destination).unwrap()
+            );
+            crate::editor::captures_editor_export_free_v1(encoded);
+            let mut refused = ptr::null_mut();
+            assert!(
+                captures_editor_frame_encode_v1(ptr::null(), options_text.as_ptr(), &mut refused)
+                    .is_null()
+            );
+            assert_eq!(take_json(refused)["ok"], false);
+            assert!(
+                captures_editor_frame_encode_v1(frame, options_text.as_ptr(), ptr::null_mut())
+                    .is_null()
             );
             drop(Box::from_raw(frame));
         }

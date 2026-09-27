@@ -2,7 +2,10 @@
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use captures_app::recording_editor_ui::{self, EstimateInput};
+use captures_app::{
+    compression_compare,
+    recording_editor_ui::{self, EstimateInput},
+};
 use captures_media::ExportStage;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -46,6 +49,12 @@ enum Request {
         gif: bool,
         base_width: u32,
         base_height: u32,
+    },
+    CompressionCompare {
+        before_bytes: Option<u64>,
+        after_bytes: Option<u64>,
+        #[serde(default)]
+        processing: bool,
     },
 }
 
@@ -99,6 +108,17 @@ fn respond(bytes: &[u8]) -> Result<Value, String> {
                 base_width,
                 base_height,
             } => json!(recording_editor_ui::menus(gif, base_width, base_height)),
+            Request::CompressionCompare {
+                before_bytes,
+                after_bytes,
+                processing,
+            } => json!({
+                "badges": compression_compare::badges(before_bytes, after_bytes, processing),
+                "copy": compression_compare::COPY,
+                "min_split": compression_compare::MIN_SPLIT,
+                "max_split": compression_compare::MAX_SPLIT,
+                "refresh_delay_ms": compression_compare::REFRESH_DELAY_MS,
+            }),
         },
     )
 }
@@ -187,6 +207,23 @@ mod tests {
             "Original — 640 × 360"
         );
         assert_eq!(menus["result"]["quality_presets"][2]["label"], "Balanced");
+        let compare = call(
+            json!({"operation":"compression_compare","before_bytes":2000,
+            "after_bytes":500}),
+        );
+        assert_eq!(compare["result"]["badges"]["before"], "Before · 2.0 KB");
+        assert_eq!(compare["result"]["badges"]["after"], "After · 500 B");
+        assert_eq!(compare["result"]["badges"]["savings"], " · 75% smaller");
+        assert_eq!(compare["result"]["copy"]["dismiss"], "Hide");
+        assert_eq!(compare["result"]["min_split"], 0.06);
+        let processing = call(
+            json!({"operation":"compression_compare","before_bytes":null,
+            "after_bytes":null,"processing":true}),
+        );
+        assert_eq!(
+            processing["result"]["badges"]["after"],
+            "After · Processing…"
+        );
         assert_eq!(call(json!({"operation":"unknown"}))["ok"], false);
         let pointer = unsafe { captures_recording_editor_ui_v1(std::ptr::null()) };
         let value: Value =

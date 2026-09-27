@@ -10,8 +10,11 @@ use std::{
         mpsc::{self, Receiver, Sender},
     },
     thread,
+    time::{Duration, Instant},
 };
 
+use captures_app::compression_compare as compare;
+use captures_app::editor_export::FileSizeUnit;
 use captures_app::recording_editor::{
     RecordingEditorOpenRequest, RecordingEditorRequestV2 as RecordingEditorRequest,
     RecordingEditorSession, RecordingExportComparison, RecordingSaveRequest,
@@ -91,6 +94,18 @@ impl From<RecordingExportComparison> for Comparison {
     }
 }
 
+type ComparisonKey = (u64, u64, ExportSpec);
+
+/// The comparison divider, centred until moved.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Split(f64);
+
+impl Default for Split {
+    fn default() -> Self {
+        Self(compare::DEFAULT_SPLIT)
+    }
+}
+
 struct ComparisonPreview {
     result: Comparison,
     textures: [egui::TextureHandle; 2],
@@ -141,81 +156,26 @@ struct ReplacementConfirmation {
     export: ExportSpec,
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum FileSizeUnit {
-    Kb,
-    #[default]
-    Mb,
-    Gb,
-}
-
-impl FileSizeUnit {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Kb => "KB",
-            Self::Mb => "MB",
-            Self::Gb => "GB",
-        }
-    }
-
-    fn digits(self) -> usize {
-        match self {
-            Self::Kb => 3,
-            Self::Mb => 6,
-            Self::Gb => 9,
-        }
-    }
-
-    fn bytes(self, value: &str) -> Option<u64> {
-        // Decimal units, floored to whole bytes without floating-point rounding
-        // at the 100 KB boundary or when switching units.
-        let value = value.trim();
-        let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
-        if whole.is_empty() && fraction.is_empty()
-            || !whole
-                .bytes()
-                .chain(fraction.bytes())
-                .all(|c| c.is_ascii_digit())
-        {
-            return None;
-        }
-        let whole = if whole.is_empty() {
-            0
-        } else {
-            whole.parse::<u64>().ok()?
-        };
-        let fraction = &fraction[..fraction.len().min(self.digits())];
-        let part = if fraction.is_empty() {
-            0
-        } else {
-            fraction.parse::<u64>().ok()?
-        };
-        whole
-            .checked_mul(10_u64.pow(self.digits() as u32))?
-            .checked_add(part * 10_u64.pow((self.digits() - fraction.len()) as u32))
-    }
-
-    fn value(self, bytes: u64) -> String {
-        let factor = 10_u64.pow(self.digits() as u32);
-        let fraction = format!("{:0width$}", bytes % factor, width = self.digits());
-        let fraction = fraction.trim_end_matches('0');
-        if fraction.is_empty() {
-            (bytes / factor).to_string()
-        } else {
-            format!("{}.{}", bytes / factor, fraction)
-        }
-    }
-}
-
 #[derive(Default)]
 struct View {
     presented: Option<Presented>,
     texture: Option<egui::TextureHandle>,
     source_texture: Option<egui::TextureHandle>,
     comparison: Option<ComparisonPreview>,
-    comparison_split: f32,
+    comparison_split: Split,
     comparison_generation: u64,
     comparing: Option<u64>,
+    /// Hide was chosen; Show before / after or a new quality mode returns it.
+    comparison_dismissed: bool,
+    /// The accepted identity the automatic comparison last encoded (or
+    /// failed to), so a failure or cancellation does not loop.
+    comparison_attempt: Option<ComparisonKey>,
+    /// The refresh delay for the identity waiting to be encoded.
+    comparison_due: Option<(ComparisonKey, Instant)>,
+    comparison_error: Option<String>,
+    /// Shipping's "Save as new file" (`makeCopy`): off saves over the
+    /// original through the confirmed Replace original operation.
+    save_as_new: bool,
     preview_actual_size: bool,
     adjusting_crop: bool,
     crop_gesture: Option<CropGesture>,
@@ -407,9 +367,15 @@ impl View {
             && !self.picker
             && !self.closed
             && !self.confirm_close
-            && !self.requires_reopen
             && !self.unapplied()
             && !self.adjusting_crop
+            && self.replace_supported()
+    }
+
+    /// The accepted output can replace the saved original: a same-format
+    /// MP4/GIF with a known path (shipping's `formatRequiresCopy` is false).
+    fn replace_supported(&self) -> bool {
+        !self.requires_reopen
             && self.presented.as_ref().is_some_and(|p| {
                 let extension = match (p.source.mime_type.as_str(), p.export.format) {
                     ("video/mp4", ExportFormat::Mp4) => "mp4",
@@ -422,6 +388,11 @@ impl View {
                         .is_some_and(|value| value.eq_ignore_ascii_case(extension))
                 })
             })
+    }
+
+    /// Save writes a new copy: chosen, or required by the format or source.
+    fn saving_copy(&self) -> bool {
+        self.save_as_new || !self.replace_supported()
     }
 
     fn begin_replace(&mut self) {
@@ -540,6 +511,73 @@ impl View {
         let cancel = CancelToken::default();
         self.cancel = Some(cancel.clone());
         self.send(tx, Job::Compare(self.comparison_generation, cancel));
+    }
+
+    /// Shipping's automatic comparison: Compress or Maximum accepted, the
+    /// preview paused on the accepted still, and not hidden.
+    fn comparison_applies(&self) -> bool {
+        self.presented.as_ref().is_some_and(|p| {
+            compare::recording_visible(
+                QualityMode::of(p.export.quality, p.export.max_size_bytes.is_some())
+                    != QualityMode::Preserve,
+                self.playing || self.playback_position_ms.is_some(),
+                self.comparison_dismissed,
+            )
+        }) && !self.adjusting_crop
+            && !self.unapplied()
+    }
+
+    /// Encode a sample once the accepted still settles (shipping's 350 ms
+    /// refresh), then keep it until the accepted identity changes.
+    fn drive_comparison(&mut self, ctx: &egui::Context, tx: &Sender<Job>) {
+        if !self.comparison_applies() || self.comparison.is_some() || self.comparing.is_some() {
+            self.comparison_due = None;
+            return;
+        }
+        let Some(p) = &self.presented else {
+            return;
+        };
+        let key = (p.revision, p.position_ms, p.preview_export.clone());
+        if self.comparison_attempt.as_ref() == Some(&key) || !self.can_compare() {
+            self.comparison_due = None;
+            return;
+        }
+        let now = Instant::now();
+        let due = match &self.comparison_due {
+            Some((pending, due)) if *pending == key => *due,
+            _ => {
+                let due = now + Duration::from_millis(compare::REFRESH_DELAY_MS);
+                self.comparison_due = Some((key.clone(), due));
+                due
+            }
+        };
+        if now < due {
+            ctx.request_repaint_after(due - now);
+            return;
+        }
+        self.comparison_due = None;
+        self.comparison_attempt = Some(key);
+        self.request_comparison(ctx, tx);
+    }
+
+    /// Staged edits hide the sample; once they are undone the same accepted
+    /// identity may encode again (a failure or cancellation still does not loop).
+    fn drop_comparison_if_unapplied(&mut self) {
+        if self.unapplied() && self.comparison.take().is_some() {
+            self.comparison_attempt = None;
+        }
+    }
+
+    /// Before is the original file, After the accepted estimate or the
+    /// Maximum cap (shipping's recording badges).
+    fn comparison_badges(&self) -> compare::Badges {
+        let p = self.presented.as_ref();
+        compare::badges(
+            p.map(|p| p.source.size_bytes).filter(|bytes| *bytes > 0),
+            p.and_then(|p| p.export.max_size_bytes)
+                .or_else(|| self.estimate.as_ref().map(|estimate| estimate.size_bytes)),
+            self.comparing.is_some() || self.comparison_due.is_some(),
+        )
     }
 
     fn request_thumbnails(&mut self, tx: &Sender<Job>) {
@@ -681,11 +719,8 @@ impl View {
                 // Automatic source thumbnails must not erase the preceding
                 // replacement result while refreshing the rebased timeline.
                 if !loading_thumbnails {
-                    self.status = if comparing.is_some() {
-                        Some("Encoding accepted frame comparison…".into())
-                    } else {
-                        loading_source.then(|| "Loading uncropped source frame…".into())
-                    };
+                    // The comparison frame shows its own Processing state.
+                    self.status = loading_source.then(|| "Loading uncropped source frame…".into());
                 }
             }
             Err(_) => {
@@ -898,27 +933,34 @@ impl View {
                     .is_none_or(|cancel| cancel.is_cancelled());
                 self.comparison = None;
                 if cancelled {
-                    self.error = Some("Encoded comparison cancelled.".into());
+                    self.comparison_error = Some("Comparison cancelled.".into());
                 } else {
                     match result {
-                        Ok(result) if self.can_compare() && self.presented.as_ref().is_some_and(|p|
-                            result.revision == p.revision && result.position_ms == p.position_ms
-                                && result.export == p.preview_export) => {
+                        Ok(result)
+                            if self.can_compare()
+                                && self.presented.as_ref().is_some_and(|p| {
+                                    result.revision == p.revision
+                                        && result.position_ms == p.position_ms
+                                        && result.export == p.preview_export
+                                }) =>
+                        {
                             let textures = std::array::from_fn(|index| {
                                 let pixels = &result.frames[index];
                                 ctx.load_texture(
                                     format!("recording-comparison-{index}"),
                                     egui::ColorImage::from_rgba_unmultiplied(
-                                        [pixels.width() as usize, pixels.height() as usize], pixels.as_raw()),
+                                        [pixels.width() as usize, pixels.height() as usize],
+                                        pixels.as_raw(),
+                                    ),
                                     egui::TextureOptions::LINEAR,
                                 )
                             });
                             self.comparison = Some(ComparisonPreview { result, textures });
-                            self.comparison_split = 0.5;
-                            self.error = None;
+                            self.comparison_error = None;
                         }
-                        Ok(_) => self.error = Some("Encoded comparison no longer matches the accepted frame. Retry after applying edits.".into()),
-                        Err(error) => self.error = Some(format!("Encoded comparison failed: {error}")),
+                        // A newer accepted identity encodes on its own.
+                        Ok(_) => self.comparison_attempt = None,
+                        Err(error) => self.comparison_error = Some(error),
                     }
                 }
             }
@@ -1054,7 +1096,8 @@ impl View {
     }
 
     fn title(&self) -> &'static str {
-        if self.busy {
+        // The automatic comparison's refresh delay leads straight into work.
+        if self.busy || self.comparison_due.is_some() {
             "Recording editor — Working…"
         } else {
             "Recording editor"
@@ -2489,6 +2532,7 @@ fn show(
     if probe_env() || PROBE.with_borrow(Option::is_some) {
         PROBE.with_borrow_mut(|controls| *controls = Some(BTreeMap::new()));
     }
+    view.drive_comparison(ui.ctx(), tx);
     show_footer(ui, tokens, view, tx, events, viewport);
     egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(tokens.color("surface-canvas")))
@@ -2517,9 +2561,7 @@ fn show(
                 },
             );
         });
-    if view.unapplied() {
-        view.comparison = None;
-    }
+    view.drop_comparison_if_unapplied();
     if probe_env() {
         let controls = PROBE.with_borrow(Clone::clone);
         if controls.is_some() && controls != view.probe_emitted {
@@ -2773,6 +2815,14 @@ fn show_filename(
     );
     if gif != old {
         view.gif = gif;
+        // Shipping `updateOutputFormat`: another format always saves a new file.
+        if view
+            .presented
+            .as_ref()
+            .is_some_and(|p| (p.source.mime_type == "image/gif") != gif)
+        {
+            view.save_as_new = true;
+        }
         // Shipping offers Preserve quality only for MP4 and switches a GIF to
         // Compress; Maximum keeps its remembered preset.
         if gif && !view.maximum_size && view.quality == QualityPreset::Preserve {
@@ -2811,16 +2861,23 @@ fn show_save_actions(
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_enabled_ui(editable, |ui| {
+                let copy = view.saving_copy();
                 let save = ui
                     .add_enabled(
                         view.presented.is_some() && !view.unapplied(),
-                        primary_button(tokens, "Save new copy"),
+                        primary_button(tokens, "Save"),
                     )
-                    .on_hover_text(
-                        "Creates a separate copy. The original and existing files are never replaced.",
-                    );
-                probe(ui, "Save new copy", save.rect);
-                if save.clicked() {
+                    .on_hover_text(if copy {
+                        "Creates a separate copy. The original and existing files are never replaced."
+                    } else {
+                        "Replace the saved original and matching History recovery copy after confirmation. Only same-format MP4/GIF; apply edits first. A saved path is only a hint: the backend checks both files before writing."
+                    });
+                probe(ui, "Save", save.rect);
+                // What Save does now, for the smoke tests' named targets.
+                probe(ui, if copy { "Save new copy" } else { "Replace original…" }, save.rect);
+                if save.clicked() && !copy {
+                    view.begin_replace();
+                } else if save.clicked() {
                     if let Some(error) = recording_editor_ui::filename_error(&view.stem) {
                         view.error = Some(error.into());
                     } else {
@@ -2850,16 +2907,6 @@ fn show_save_actions(
                     );
                 }
                 if view.cancel.is_none() {
-                    let replace = ui
-                        .add_enabled(
-                            view.can_replace(),
-                            egui::Button::new("Replace original…").min_size(egui::vec2(0., tokens.number("h-md"))),
-                        )
-                        .on_hover_text("Replace the saved original and matching History recovery copy after confirmation. Only same-format MP4/GIF; apply edits first. A saved path is only a hint: the backend checks both files before writing.");
-                    probe(ui, "Replace original…", replace.rect);
-                    if replace.clicked() {
-                        view.begin_replace();
-                    }
                     // `.recording-show-in-folder`: after a save, until the next one.
                     if let Some(path) = view.saved_path.clone() {
                         let reveal = ui
@@ -2901,14 +2948,32 @@ fn show_save_actions(
                     cancel.cancel();
                 }
             }
+            // `.recording-make-copy`: checked and locked when the format or
+            // source requires a new file.
+            let supported = view.replace_supported();
+            let mut copy = view.saving_copy();
+            let toggle = ui
+                .add_enabled_ui(editable && supported, |ui| {
+                    crate::editor::export_switch(ui, tokens, &mut copy, "Save as new file")
+                })
+                .inner
+                .on_hover_text(if supported {
+                    "Save as a new file and leave the original untouched"
+                } else {
+                    "Changing formats always creates a new file"
+                });
+            probe(ui, "Save as new file", toggle.rect);
+            if toggle.changed() {
+                view.save_as_new = copy;
+                view.saved_path = None;
+                view.error = None;
+            }
         });
     });
 }
 
 fn show_page(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
-    if view.unapplied() {
-        view.comparison = None;
-    }
+    view.drop_comparison_if_unapplied();
     let gap = tokens.number("s-5");
     ui.spacing_mut().item_spacing.y = gap;
     let title = view
@@ -3032,21 +3097,6 @@ fn show_preview_card(
         {
             view.preview_loop.store(!looping, Ordering::Relaxed);
         }
-        let compare = toolbar_toggle(
-            ui,
-            tokens,
-            if view.comparison.is_some() { "Hide compare" } else { "Compare" },
-            view.comparison.is_some(),
-            view.can_compare(),
-        )
-        .on_hover_text("Encode a sample at the accepted still frame, not the paused playback position. Before is spatially edited; Encoded includes compression, GIF palette and cadence. First attempt only: a Maximum-size save may differ. Apply staged edits and seek inside the accepted trim first.");
-        if compare.clicked() {
-            if view.comparison.is_some() {
-                view.comparison = None;
-            } else {
-                view.request_comparison(ui.ctx(), tx);
-            }
-        }
         if toolbar_toggle(
             ui,
             tokens,
@@ -3118,6 +3168,7 @@ fn show_preview_card(
         );
         viewport.shrink_clip_rect(inner);
         let mut image_rect_out = None;
+        let mut image_frame_out = None;
         let mut paint = |ui: &mut egui::Ui, image_rect: egui::Rect| {
             ui.painter().add(
                 egui::epaint::RectShape::filled(
@@ -3138,66 +3189,15 @@ fn show_preview_card(
             );
             probe(ui, "Preview image", image_rect);
             image_rect_out = Some(image_rect.intersect(ui.clip_rect()));
+            image_frame_out = Some((image_rect, ui.clip_rect()));
             if let Some(comparison) = &view.comparison {
-                let response = ui
-                    .interact(
-                        image_rect.intersect(ui.clip_rect()),
-                        ui.scope_id().with("encoded-comparison-divider"),
-                        egui::Sense::click_and_drag(),
-                    )
-                    .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
-                if (response.clicked() || response.dragged())
-                    && let Some(pos) = response.interact_pointer_pos()
-                {
-                    view.comparison_split =
-                        ((pos.x - image_rect.left()) / image_rect.width()).clamp(0., 1.);
-                }
-                let split = image_rect.left() + image_rect.width() * view.comparison_split;
-                let encoded_rect =
-                    egui::Rect::from_min_max(egui::pos2(split, image_rect.top()), image_rect.max);
-                ui.painter()
-                    .with_clip_rect(ui.clip_rect().intersect(encoded_rect))
-                    .image(
-                        comparison.textures[1].id(),
-                        image_rect,
-                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                        egui::Color32::WHITE,
-                    );
-                ui.painter().line_segment(
-                    [
-                        egui::pos2(split, image_rect.top()),
-                        egui::pos2(split, image_rect.bottom()),
-                    ],
-                    egui::Stroke::new(tokens.number("s-1"), tokens.color("text")),
+                crate::compare_overlay::paint_after(
+                    ui,
+                    image_rect,
+                    ui.clip_rect(),
+                    Some(&comparison.textures[1]),
+                    view.comparison_split.0,
                 );
-                // Before / Encoded badges on the media, like shipping's
-                // CompressionPreview labels.
-                for (label, align, anchor) in [
-                    (
-                        "Before",
-                        egui::Align2::LEFT_TOP,
-                        image_rect.left_top() + egui::vec2(8., 8.),
-                    ),
-                    (
-                        "Encoded",
-                        egui::Align2::RIGHT_TOP,
-                        image_rect.right_top() + egui::vec2(-8., 8.),
-                    ),
-                ] {
-                    let painter = ui.painter();
-                    let galley = painter.layout_no_wrap(
-                        label.to_owned(),
-                        egui::FontId::proportional(tokens.number("text-2xs")),
-                        tokens.color("glass-text"),
-                    );
-                    let badge = align.anchor_size(anchor, galley.size() + egui::vec2(12., 6.));
-                    painter.rect_filled(badge, tokens.number("r-xs"), tokens.color("glass-strong"));
-                    painter.galley(
-                        badge.min + egui::vec2(6., 3.),
-                        galley,
-                        egui::Color32::PLACEHOLDER,
-                    );
-                }
             }
             if source_mode {
                 show_crop_overlay(ui, tokens, view, image_rect);
@@ -3230,6 +3230,45 @@ fn show_preview_card(
                 &mut viewport,
                 egui::Rect::from_center_size(bounds.center(), size * scale),
             );
+        }
+        if let Some((frame, clip)) = image_frame_out
+            && view.comparison_applies()
+        {
+            let badges = view.comparison_badges();
+            let error = view.comparison_error.clone();
+            let processing = view.comparing.is_some() || view.comparison_due.is_some();
+            let mut split = view.comparison_split.0;
+            let shown = crate::compare_overlay::show_chrome(
+                ui,
+                tokens,
+                crate::compare_overlay::Overlay {
+                    id: egui::Id::unique("recording-compression-comparison"),
+                    frame,
+                    clip,
+                    after: view
+                        .comparison
+                        .as_ref()
+                        .map(|comparison| &comparison.textures[1]),
+                    badges,
+                    processing,
+                    error: error.as_deref(),
+                    range_enabled: true,
+                    after_hint: None,
+                },
+                &mut split,
+            );
+            view.comparison_split.0 = split;
+            if let Some(rect) = shown.handle {
+                probe(ui, compare::HANDLE_LABEL, rect);
+            }
+            if let Some(rect) = shown.dismiss {
+                probe(ui, compare::DISMISS_LABEL, rect);
+            }
+            if shown.dismissed {
+                view.comparison_dismissed = true;
+                view.comparison = None;
+                view.comparison_due = None;
+            }
         }
         if !view.adjusting_crop
             && let Some(image) = image_rect_out
@@ -3283,33 +3322,18 @@ fn show_preview_card(
             "text-subtle",
         ));
     } else if let Some(comparison) = &view.comparison {
-        caption.horizontal(|ui| {
-            ui.label(text(tokens, "Before", "text-xs", "text-subtle"));
-            let mut percent = (f64::from(view.comparison_split) * 100.).round();
-            let split = crate::primitives::RangeSlider::new(
-                "encoded-split",
-                "Encoded split",
-                160.,
-                0. ..=100.,
-                format!("{percent:.0}%"),
-            )
-            .show(ui, tokens, &mut percent);
-            if split.changed() {
-                view.comparison_split = (percent / 100.) as f32;
-            }
-            probe(ui, "Encoded split", split.rect);
-            ui.label(text(
-                tokens,
-                format!(
-                    "Encoded · accepted {} · {} × {}",
-                    time(comparison.result.position_ms),
-                    comparison.result.frames[0].width(),
-                    comparison.result.frames[0].height()
-                ),
-                "text-xs",
-                "text-subtle",
-            ));
-        });
+        // The divider and its bottom strip set the split over the media.
+        caption.label(text(
+            tokens,
+            format!(
+                "Encoded · accepted {} · {} × {}",
+                time(comparison.result.position_ms),
+                comparison.result.frames[0].width(),
+                comparison.result.frames[0].height()
+            ),
+            "text-xs",
+            "text-subtle",
+        ));
         caption
             .label(text(
                 tokens,
@@ -3718,6 +3742,12 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
             );
         }
         if select(ui, tokens, "Quality mode", width, &mut mode, &options) && mode != current {
+            // Shipping: a new quality mode shows a hidden comparison again.
+            view.comparison_dismissed = false;
+            view.comparison_attempt = None;
+            if mode == QualityMode::Preserve {
+                view.comparison_split = Split::default();
+            }
             match mode {
                 QualityMode::Preserve => {
                     view.maximum_size = false;
@@ -3751,6 +3781,23 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
                 view.compress_quality = Some(quality);
             }
         }
+        let accepted_compresses = view.presented.as_ref().is_some_and(|p| {
+            QualityMode::of(p.export.quality, p.export.max_size_bytes.is_some())
+                != QualityMode::Preserve
+        });
+        if mode != QualityMode::Preserve && accepted_compresses && view.comparison_dismissed {
+            ui.add_space(tokens.number("s-2"));
+            field_label(ui, tokens, compare::SHOW_CAPTION);
+            let show = ui.add(
+                egui::Button::new(text(tokens, compare::SHOW, "text-sm", "text"))
+                    .min_size(egui::vec2(0., tokens.number("h-md"))),
+            );
+            probe(ui, compare::SHOW, show.rect);
+            if show.clicked() {
+                view.comparison_dismissed = false;
+                view.comparison_attempt = None;
+            }
+        }
         if mode == QualityMode::Maximum {
             ui.add_space(tokens.number("s-2"));
             field_label(ui, tokens, "Maximum file size");
@@ -3767,8 +3814,7 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
                     "File size unit",
                     64.,
                     &mut unit,
-                    &[FileSizeUnit::Kb, FileSizeUnit::Mb, FileSizeUnit::Gb]
-                        .map(|choice| (choice, choice.label().to_owned(), "")),
+                    &FileSizeUnit::ALL.map(|choice| (choice, choice.label().to_owned(), "")),
                 );
                 if unit != view.maximum_unit {
                     view.set_maximum_unit(unit);
@@ -4246,9 +4292,9 @@ mod tests {
                         "Filename",
                         "Saving to",
                         "Change…",
-                        "Replace original…",
+                        "Save as new file",
                         "Apply edits",
-                        "Save new copy",
+                        "Save",
                     ]
                 };
                 let mut rects = Vec::new();
@@ -4324,7 +4370,7 @@ mod tests {
         assert!(Arc::ptr_eq(&preview.result.frames[1], &frames[1]));
         assert_ne!(preview.textures[0].id(), preview.textures[1].id());
         assert_eq!(preview.result.position_ms, 700);
-        assert_eq!(view.comparison_split, 0.5);
+        assert_eq!(view.comparison_split.0, 0.5);
         assert!(!view.busy && view.cancel.is_none() && !view.dirty() && !view.history_changed);
         assert!(Arc::ptr_eq(
             &accepted,
@@ -4376,7 +4422,13 @@ mod tests {
                 view.comparison.is_none() && !view.busy && view.cancel.is_none(),
                 "case {invalid}"
             );
-            assert!(view.error.is_some() && !view.history_changed);
+            // Failures stay in the comparison frame, never the save status.
+            assert_eq!(
+                view.comparison_error.is_some(),
+                invalid == 0 || invalid == 6,
+                "case {invalid}"
+            );
+            assert!(view.error.is_none() && !view.history_changed);
             view.gif = false;
             view.closed = false;
             view.request_comparison(&ctx, &tx);
@@ -4436,12 +4488,102 @@ mod tests {
         assert!(matches!(jobs.recv().unwrap(), Job::Play(..)));
     }
 
+    /// An accepted Compress export, so the automatic comparison applies.
+    fn compressing() -> View {
+        let mut view = opened();
+        view.quality = QualityPreset::Standard;
+        let export = view.export_spec();
+        view.saved_export = Some(export.clone());
+        let p = view.presented.as_mut().unwrap();
+        p.export = export.clone();
+        p.preview_export = export;
+        view
+    }
+
+    #[test]
+    fn comparison_appears_automatically_after_the_refresh_delay_and_hide_keeps_it_away() {
+        let ctx = egui::Context::default();
+        let (tx, jobs) = mpsc::channel();
+        // Preserve never compares.
+        let mut view = opened();
+        view.drive_comparison(&ctx, &tx);
+        assert!(view.comparison_due.is_none() && jobs.try_recv().is_err());
+        let mut view = compressing();
+        view.drive_comparison(&ctx, &tx);
+        let (_, due) = view.comparison_due.clone().unwrap();
+        assert!(
+            due > Instant::now() && jobs.try_recv().is_err(),
+            "waits 350 ms"
+        );
+        assert!(view.comparison_badges().after.ends_with("Processing…"));
+        view.comparison_due.as_mut().unwrap().1 = Instant::now();
+        view.drive_comparison(&ctx, &tx);
+        let Job::Compare(generation, _) = jobs.recv().unwrap() else {
+            panic!("automatic comparison")
+        };
+        assert!(
+            view.status.is_none(),
+            "the frame shows Processing, not the footer"
+        );
+        view.drive_comparison(&ctx, &tx);
+        assert!(jobs.try_recv().is_err(), "one encode at a time");
+        let result = comparison(&view);
+        view.receive(&ctx, Event::Compared(generation, Ok(result)));
+        assert!(view.comparison.is_some());
+        view.estimate = Some(ExportEstimate {
+            size_bytes: 10,
+            exact: true,
+        });
+        let badges = view.comparison_badges();
+        assert_eq!(
+            (badges.before.as_str(), badges.after.as_str()),
+            ("Before · 40 B", "After · 10 B")
+        );
+        assert_eq!(badges.savings.as_deref(), Some(" · 75% smaller"));
+        // A failure is not retried for the same accepted identity.
+        view.comparison = None;
+        view.comparison_attempt = None;
+        view.comparison_due = Some((
+            {
+                let p = view.presented.as_ref().unwrap();
+                (p.revision, p.position_ms, p.preview_export.clone())
+            },
+            Instant::now(),
+        ));
+        view.drive_comparison(&ctx, &tx);
+        let Job::Compare(generation, _) = jobs.recv().unwrap() else {
+            panic!("retry")
+        };
+        view.receive(
+            &ctx,
+            Event::Compared(generation, Err("encoder missing".into())),
+        );
+        assert_eq!(view.comparison_error.as_deref(), Some("encoder missing"));
+        view.drive_comparison(&ctx, &tx);
+        assert!(view.comparison_due.is_none() && jobs.try_recv().is_err());
+        // Hide keeps it away until a new quality mode or Show before / after.
+        view.comparison_dismissed = true;
+        view.comparison_attempt = None;
+        assert!(!view.comparison_applies());
+        view.drive_comparison(&ctx, &tx);
+        assert!(view.comparison_due.is_none());
+        view.comparison_dismissed = false;
+        view.playing = true;
+        assert!(!view.comparison_applies(), "playback hides it");
+        view.playing = false;
+        view.playback_position_ms = Some(900);
+        assert!(
+            !view.comparison_applies(),
+            "a paused transient frame is not the accepted still"
+        );
+    }
+
     #[test]
     fn comparison_split_controls_and_clip_follow_input_at_minimum_size() {
         for (name, tokens) in crate::tokens::load() {
             let ctx = egui::Context::default();
             tokens.apply(&ctx, name.contains("light"));
-            let mut view = opened();
+            let mut view = compressing();
             let (tx, jobs) = mpsc::channel();
             let (events, _) = mpsc::channel();
             view.request_comparison(&ctx, &tx);
@@ -4478,14 +4620,13 @@ mod tests {
             for label in [
                 "Loop preview",
                 "Sound",
-                "Hide compare",
                 "Fit",
                 "100%",
-                "Before",
-                // The split RangeSlider's readout.
-                "50%",
+                "Before · 40 B",
+                "After",
+                compare::DISMISS,
                 "Encoded · accepted 0:00.700 · 4 × 2",
-                "Save new copy",
+                "Save",
             ] {
                 let rect = output
                     .shapes
@@ -4509,35 +4650,39 @@ mod tests {
                 }
                 rects.push(rect);
             }
+            assert!(
+                !output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.job.text == "Compare")),
+                "the manual Compare toggle is gone"
+            );
             let bounds = output
                 .shapes
                 .iter()
                 .find_map(|shape| textured(shape, ids[0]).map(|(bounds, _)| bounds))
                 .unwrap();
-            let pointer = egui::pos2(bounds.left() + bounds.width() * 0.25, bounds.center().y);
+            // The bottom strip moves the split.
+            let pointer = egui::pos2(bounds.left() + bounds.width() * 0.25, bounds.bottom() - 4.);
             render(&mut view, vec![egui::Event::PointerMoved(pointer)]);
             render(&mut view, vec![trim_pointer(pointer, true)]);
             render(&mut view, vec![trim_pointer(pointer, false)]);
-            assert!((view.comparison_split - 0.25).abs() < 0.001);
+            assert!((view.comparison_split.0 - 0.25).abs() < 0.001);
             let output = render(&mut view, vec![]);
             let encoded_clip = output
                 .shapes
                 .iter()
-                .find_map(|shape| textured(shape, ids[1]).map(|(_, clip)| clip))
+                .find_map(|shape| {
+                    textured(shape, ids[1])
+                        .filter(|(_, clip)| clip.width() < bounds.width())
+                        .map(|(_, clip)| clip)
+                })
                 .unwrap();
             assert!((encoded_clip.left() - pointer.x).abs() < 0.1);
             assert!((encoded_clip.right() - bounds.right()).abs() < 0.1);
-            // The track runs under the right-aligned readout: 14 pt readout row,
-            // 2 pt gap, then the 20 pt track.
-            let slider = egui::pos2(rects[6].right() - 60., rects[6].center().y + 19.);
-            render(&mut view, vec![egui::Event::PointerMoved(slider)]);
-            render(&mut view, vec![trim_pointer(slider, true)]);
-            render(&mut view, vec![trim_pointer(slider, false)]);
-            let before_key = view.comparison_split;
+            let before_key = view.comparison_split.0;
             render(&mut view, vec![trim_key(egui::Key::ArrowRight)]);
             assert!(
-                view.comparison_split > before_key,
-                "focused split slider accepts arrow input"
+                view.comparison_split.0 > before_key,
+                "the focused split accepts arrow input"
             );
             assert!(!view.dirty() && !view.history_changed && jobs.try_recv().is_err());
             view.gif = true;
@@ -4552,7 +4697,85 @@ mod tests {
                 view.comparison.is_none(),
                 "undoing staging does not restore stale pixels"
             );
+            // Hide dismisses it, and the Save quality card offers it back.
+            view.request_comparison(&ctx, &tx);
+            let Job::Compare(generation, _) = jobs.recv().unwrap() else {
+                panic!("comparison")
+            };
+            view.receive(&ctx, Event::Compared(generation, Ok(comparison(&view))));
+            assert!(view.comparison.is_some());
+            render(&mut view, vec![]);
+            let hide = probed(
+                &output_controls(&ctx, &tokens, &mut view),
+                compare::DISMISS_LABEL,
+            );
+            render(&mut view, vec![egui::Event::PointerMoved(hide.center())]);
+            render(&mut view, vec![trim_pointer(hide.center(), true)]);
+            render(&mut view, vec![trim_pointer(hide.center(), false)]);
+            assert!(view.comparison_dismissed && view.comparison.is_none());
+            let (_, cards) = probe_frame(&ctx, &tokens, &mut view, egui::vec2(760., 1800.), vec![]);
+            assert!(cards.contains_key(compare::SHOW), "{name}");
         }
+    }
+
+    fn output_controls(ctx: &egui::Context, tokens: &Tokens, view: &mut View) -> ProbeRects {
+        probe_frame(ctx, tokens, view, egui::vec2(760., 580.), vec![]).1
+    }
+
+    #[test]
+    fn save_as_new_file_switches_save_between_confirmed_replacement_and_a_new_copy() {
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        view.original_path = Some("/recordings/original.mp4".into());
+        view.stem = "copy".into();
+        let (tx, jobs) = mpsc::channel();
+        let (sender, _) = mpsc::channel();
+        let size = egui::vec2(960., 900.);
+        let click = |view: &mut View, name: &str| {
+            // The footer settles its height after the first frame.
+            probe_frame_with(&ctx, &tokens, view, &tx, &sender, size, vec![]);
+            let (_, controls) = probe_frame_with(&ctx, &tokens, view, &tx, &sender, size, vec![]);
+            let at = probed(&controls, name).center();
+            for events in [
+                vec![egui::Event::PointerMoved(at)],
+                vec![trim_pointer(at, true)],
+                vec![trim_pointer(at, false)],
+                vec![],
+            ] {
+                probe_frame_with(&ctx, &tokens, view, &tx, &sender, size, events);
+            }
+        };
+        // Shipping's default: Save replaces a same-format original, after
+        // the exact-path confirmation.
+        assert!(view.replace_supported() && !view.saving_copy());
+        click(&mut view, "Save");
+        assert!(view.confirm_replace.is_some() && jobs.try_recv().is_err());
+        view.confirm_replace = None;
+        click(&mut view, "Save as new file");
+        assert!(view.save_as_new && view.saving_copy());
+        click(&mut view, "Save new copy");
+        let Ok(Job::Save(request, _)) = jobs.try_recv() else {
+            panic!("new copy")
+        };
+        assert_eq!(request.destination, view.destination());
+        assert!(view.confirm_replace.is_none());
+        view.receive(&ctx, Event::Saved(Err("stopped".into())));
+        // Another format always saves a new file; the switch stays on.
+        view.save_as_new = false;
+        view.gif = true;
+        view.save_as_new |= view
+            .presented
+            .as_ref()
+            .is_some_and(|p| (p.source.mime_type == "image/gif") != view.gif);
+        assert!(view.save_as_new);
+        view.gif = false;
+        view.save_as_new = false;
+        view.original_path = None;
+        assert!(
+            !view.replace_supported() && view.saving_copy(),
+            "no known original"
+        );
     }
 
     #[test]
@@ -6109,14 +6332,13 @@ mod tests {
                         &[
                             "Play preview",
                             "Sound",
-                            "Compare",
                             "Loop preview",
                             "Fit",
                             "100%",
                             "Show in Folder",
-                            "Replace original…",
+                            "Save as new file",
                             "Apply edits",
-                            "Save new copy",
+                            "Save",
                         ][..],
                         580.,
                     ),

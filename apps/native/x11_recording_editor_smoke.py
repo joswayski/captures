@@ -253,6 +253,24 @@ def main():
         idle(window)
         click(window, *center(window, name, prefix))
 
+    def save_copy(window):
+        # "Save as new file" turns the primary Save into a new copy; it is
+        # off by default for a same-format original, as in shipping.
+        idle(window)
+        if "Save new copy" not in controls(window):
+            press(window, "Save as new file")
+        press(window, "Save new copy")
+
+    def preview_control(window, name):
+        # Comparison chrome is probed only while the preview is on screen.
+        visible_rect(window, "Preview viewport")
+        return control(window, name)
+
+    def press_preview(window, name):
+        idle(window)
+        preview_control(window, name)
+        press(window, name)
+
     def fill(window, name, value):
         press(window, name)
         run("xdotool", "key", "ctrl+a")
@@ -490,7 +508,10 @@ def main():
                 "windowsize", "--sync", mp4_editor, "960", "900", "sleep", ".5")
             shot(mp4_editor, "external-mp4-decoded")
             dominant(output / "external-mp4-decoded.png", 0, window=mp4_editor)
-            press(mp4_editor, "Replace original…")
+            # A reference cannot replace its source: Save always makes a copy.
+            idle(mp4_editor)
+            assert "Replace original…" not in controls(mp4_editor)
+            assert "Save new copy" in controls(mp4_editor)
             shot(mp4_editor, "external-mp4-replace-disabled")
             webm_allowed.touch()
             entries = wait(lambda: values if len(values := opened_entries()) == 4 else None,
@@ -513,7 +534,7 @@ def main():
             press(editor, "Apply edits")
             trimmed = exports / "external-gif-trim.mp4"
             set_destination(editor, trimmed)
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(lambda: len(opened_entries()) == 5, "trimmed GIF source exported to new MP4")
             probe = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(trimmed)))
             assert abs(float(probe["format"]["duration"]) - 1.9) <= .15, probe
@@ -543,11 +564,13 @@ def main():
             assert next(value["id"] for value in opened_entries() if value["saved_path"] == str(webm)) == webm_id
             # A reference has no retained recovery copy, so Replace original is
             # disabled even though saved_path points to a writable external file.
-            press(editor, "Replace original…")
+            idle(editor)
+            assert "Replace original…" not in controls(editor)
+            assert "Save new copy" in controls(editor)
             shot(editor, "external-reference-replace-disabled")
             destination = exports / "webm-as-mp4.mp4"
             set_destination(editor, destination)
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(lambda: len(opened_entries()) == 6, "WebM exported to a distinct MP4 History artifact")
             probe = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(destination)))
             assert "mp4" in probe["format"]["format_name"].split(","), probe
@@ -677,7 +700,7 @@ def main():
             dominant(output / "replace-seek.png", 2)
             copy = exports / "after-replace.mp4"
             set_destination(editor, copy)
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(copy.exists, "same-session save after replacement")
             wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "same-session copy published in History")
             info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(copy)))
@@ -705,70 +728,75 @@ def main():
             print("PASS replacement: confirmation, cancel, source/History rebase, real edited pixels and same-session save")
             return
         if args.comparison:
-            press(editor, "Compare")
+            # Compress shows the before/after comparison automatically once
+            # the accepted still settles; there is no Compare button.
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            choose(editor, "Quality mode", "Compress")
+            press(editor, "Apply edits")
             shot(editor, "comparison-mp4")
-            assert started.exists(), "Compare must invoke the real media tool"
+            assert started.exists(), "the comparison must invoke the real media tool"
+            preview_control(editor, "Drag to compare before and after")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "comparison-minimum")
-            press(editor, "Hide compare")  # Hide restores the accepted still and ordinary toolbar.
-            missing = output / "temporarily-moved.mp4"
-            source.rename(missing)
-            try:
-                press(editor, "Compare")
-                shot(editor, "comparison-error-minimum")
-            finally:
-                missing.rename(source)
-            press(editor, "Compare")
-            shot(editor, "comparison-retry-minimum")
-            press(editor, "Hide compare")
-            run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
+            press_preview(editor, "Hide compression comparison")
+            shot(editor, "comparison-hidden-minimum")
+            assert "Drag to compare before and after" not in controls(editor)
+            press(editor, "Show before / after")  # The Save quality card offers it back.
+            shot(editor, "comparison-shown-minimum")
+            preview_control(editor, "Drag to compare before and after")
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
             calls = len(started.read_text().splitlines())
             allowed.unlink()
-            press(editor, "Compare")
+            fill(editor, "Position (ms)", 900)
+            raw_press(editor, "Seek")  # A new accepted still re-encodes the sample.
             wait(lambda: len(started.read_text().splitlines()) > calls, "comparison child starts")
+            time.sleep(1)
             run("import", "-window", editor, str(output / "comparison-pending.png"))
             # Bypass idle: cancellation interrupts the running tool process.
-            cancel_x, cancel_y = center(editor, "Cancel comparison")
-            run("xdotool", "mousemove", "--window", editor, str(cancel_x), str(cancel_y), "mousedown", "1",
-                "sleep", ".15", "mouseup", "1")
-            idle(editor)
+            raw_press(editor, "Cancel comparison")
             allowed.touch()
-            shot(editor, "comparison-cancelled")
+            shot(editor, "comparison-cancelled")  # The frame explains; no automatic loop.
+            calls = len(started.read_text().splitlines())
+            time.sleep(1)
+            assert len(started.read_text().splitlines()) == calls, "a cancelled sample is not retried on its own"
+            press_preview(editor, "Hide compression comparison")
+            press(editor, "Show before / after")
+            shot(editor, "comparison-retried")
+            assert len(started.read_text().splitlines()) > calls
             choose(editor, "Format", ".gif")
             press(editor, "Apply edits")
-            press(editor, "Compare")
             shot(editor, "comparison-gif")
             press(editor, "100%")  # 100% avoids interpolation in the pixel oracle.
-            click(editor, *image_point(editor, .02, .4))
+            # The bottom strip moves the divider to the shipping 6 % / 94 % bounds.
+            click(editor, *image_point(editor, .02, .97))
             shot(editor, "comparison-gif-encoded")
-            click(editor, *image_point(editor, .98, .4))
+            click(editor, *image_point(editor, .98, .97))
             shot(editor, "comparison-gif-before")
-            # Sample one side only: clear of the divider, the corner badges and
-            # the play button that sits below center while comparing.
+            # Sample one side only: clear of the divider, the Hide pill, the
+            # size badges and the play button that sits below center.
             x0, y0, x1, y1 = visible_rect(editor, "Preview image")
-            width, height = x1 - x0 - 32, y1 - y0 - 140
+            span = x1 - x0
             colors = {}
-            for side in ("before", "encoded"):
+            for side, left, right in (("before", x0 + 16, x0 + int(span * .9)),
+                                      ("encoded", x0 + int(span * .1), x1 - 16)):
+                width, height = right - left, y1 - y0 - 150
                 pixels = run("convert", str(output / f"comparison-gif-{side}.png"),
-                             "-crop", f"{width}x{height}+{x0 + 16}+{y0 + 30}", "-depth", "8", "rgb:-")
+                             "-crop", f"{width}x{height}+{left}+{y0 + 44}", "-depth", "8", "rgb:-")
                 assert len(pixels) == width * height * 3
                 colors[side] = len(set(zip(pixels[0::3], pixels[1::3], pixels[2::3])))
             assert colors["before"] > colors["encoded"] and colors["encoded"] <= 256, colors
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             press(editor, "Fit")  # Fit
-            click(editor, *image_point(editor, .1, .4))
             shot(editor, "comparison-gif-minimum")
-            press(editor, "Hide compare")
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
             choose(editor, "Format", ".mp4")
             press(editor, "Apply edits")
             choose(editor, "Quality mode", "Maximum file size")
             press(editor, "Apply edits")
-            press(editor, "Compare")
             shot(editor, "comparison-maximum")
+            preview_control(editor, "Drag to compare before and after")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             shot(editor, "comparison-maximum-minimum")
-            press(editor, "Hide compare")
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             assert len(list(history.glob("*/metadata.json"))) == 1 and not list(exports.iterdir())
@@ -781,10 +809,10 @@ def main():
             wait(lambda: app.poll() is not None, "comparison quit")
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
-                "displayed_colors": colors, "checks": ["mp4", "gif-palette-pixels", "split-pointer", "100-percent",
-                    "minimum-controls", "missing-source-retry", "running-child-cancel", "maximum-first-attempt-label",
+                "displayed_colors": colors, "checks": ["automatic-mp4", "hide-and-show", "gif-palette-pixels", "split-strip-bounds", "100-percent",
+                    "minimum-controls", "running-child-cancel-no-loop", "maximum-first-attempt-label",
                     "immutable-source-history", "no-export-publication", "dirty-close-retained"]}, indent=2) + "\n")
-            print(f"PASS encoded comparison: displayed colors {colors}, cancel/retry, Maximum, immutable source and History")
+            print(f"PASS automatic comparison: displayed colors {colors}, hide/show, cancel/retry, Maximum, immutable source and History")
             return
         if not (args.maximum_size or args.gif_quality):
             dominant(output / "original.png", 0)
@@ -913,11 +941,11 @@ def main():
                     click(editor, *center(editor, f"Maximum width/{maximum} px"))
                 destination = exports / f"width-{maximum}.gif"
                 set_destination(editor, destination)
-                press(editor, "Save new copy")
+                save_copy(editor)
                 assert not destination.exists(), "staged width cannot save"
                 press(editor, "Apply edits")
                 shot(editor, f"gif-width-{maximum}-accepted")
-                press(editor, "Save new copy")
+                save_copy(editor)
                 wait(destination.exists, f"{maximum}px GIF export")
                 idle(editor)
                 stream = json.loads(run("ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -928,7 +956,7 @@ def main():
             press(editor, "Apply edits")
             mp4 = exports / "restored.mp4"
             set_destination(editor, mp4)
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(mp4.exists, "uncapped MP4 export")
             idle(editor)
             stream = json.loads(run("ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -938,7 +966,7 @@ def main():
             press(editor, "Apply edits")
             restored = exports / "restored.gif"
             set_destination(editor, restored)
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(restored.exists, "remembered GIF width export")
             idle(editor)
             restored_stream = json.loads(run("ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -977,11 +1005,11 @@ def main():
                 click(editor, *center(editor, f"Quality/{label}"))
                 destination = exports / f"{quality}.gif"
                 set_destination(editor, destination)
-                press(editor, "Save new copy")
+                save_copy(editor)
                 assert not destination.exists(), "staged quality cannot save"
                 press(editor, "Apply edits")
                 shot(editor, f"gif-quality-{quality}-accepted")
-                press(editor, "Save new copy")
+                save_copy(editor)
                 wait(destination.exists, f"{quality} GIF export")
                 idle(editor)  # Destination publication precedes History completion.
                 pixels = run("ffmpeg", "-v", "error", "-i", str(destination), "-frames:v", "1",
@@ -1011,10 +1039,10 @@ def main():
             click(editor, *center(editor, "Frame rate/8 FPS"))  # 8 FPS.
             eight = exports / "eight.gif"
             set_destination(editor, eight)
-            press(editor, "Save new copy")
+            save_copy(editor)
             assert not eight.exists(), "staged format/FPS cannot save"
             press(editor, "Apply edits")
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(eight.exists, "8 FPS GIF export")
             shot(editor, "gif-frame-rate-eight")
             press(editor, "Frame rate")
@@ -1027,12 +1055,12 @@ def main():
                 press(editor, "Apply edits")
                 shot(editor, "gif-frame-rate-failed-apply")
                 dominant(output / "gif-frame-rate-failed-apply.png", 0)
-                press(editor, "Save new copy")
+                save_copy(editor)
                 assert not twenty_four.exists(), "failed FPS Apply cannot save staged settings"
             finally:
                 missing.rename(source)
             press(editor, "Apply edits")
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(twenty_four.exists, "24 FPS GIF export after retry")
             shot(editor, "gif-frame-rate-twenty-four")
             cadences = {}
@@ -1086,7 +1114,7 @@ def main():
             shot(editor, "maximum-accepted")
             limited = exports / "limited.mp4"
             set_destination(editor, limited)
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(limited.exists, "capped MP4 export")
             assert limited.stat().st_size <= 100_000
             choose(editor, "Format", ".gif")
@@ -1095,7 +1123,7 @@ def main():
             click(editor, *center(editor, "Frame rate/30 FPS"))  # 30 FPS requested; budget retries can lower it.
             press(editor, "Apply edits")
             shot(editor, "maximum-gif-accepted")
-            press(editor, "Save new copy")
+            save_copy(editor)
             gif = limited.with_suffix(".gif")
             wait(gif.exists, "capped GIF retry export")
             assert gif.stat().st_size <= 100_000
@@ -1116,7 +1144,7 @@ def main():
             set_destination(editor, cancelled)
             attempts_before = len(started.read_text().splitlines())
             allowed.unlink()
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(lambda: len(started.read_text().splitlines()) > attempts_before, "blocked export attempt")
             time.sleep(1)
             run("import", "-window", editor, str(output / "maximum-cancelling.png"))
@@ -1130,7 +1158,7 @@ def main():
             press(editor, "Apply edits")
             failed = exports / "unattainable.gif"
             set_destination(editor, failed)
-            press(editor, "Save new copy")
+            save_copy(editor)
             idle(editor)
             shot(editor, "maximum-unattainable")
             assert not failed.exists()
@@ -1311,7 +1339,7 @@ def main():
             preview_shot("crop-source-staged")
             destination = exports / "graphical-crop.mp4"
             set_destination(editor, destination)
-            press(editor, "Save new copy")
+            save_copy(editor)
             assert not destination.exists() and len(list(history.glob("*/metadata.json"))) == 1
             press(editor, "Adjust crop")  # Done restores the unchanged accepted crop.
             preview_shot("crop-done-accepted")
@@ -1326,7 +1354,7 @@ def main():
                 missing.rename(source)
             press(editor, "Apply edits")
             shot(editor, "crop-applied")
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "graphical crop export")
             info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(destination)))
             video = next(s for s in info["streams"] if s["codec_type"] == "video")
@@ -1507,7 +1535,7 @@ def main():
             press(editor, "Keep editing")
             destination = exports / "playback-trim.mp4"
             set_destination(editor, destination)
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "save after playback")
             info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-of", "json", str(destination)))
             assert abs(float(info["format"]["duration"]) - 3) < .15, info
@@ -1570,14 +1598,14 @@ def main():
             dominant(output / "timeline-staged.png", 0)
             destination = exports / "timeline.mp4"
             set_destination(editor, destination)
-            press(editor, "Save new copy")
+            save_copy(editor)
             assert not destination.exists() and len(list(history.glob("*/metadata.json"))) == 1
             press(editor, "Apply edits")
             fill(editor, "Position (ms)", 1500)
             press(editor, "Seek")
             shot(editor, "timeline-applied")
             dominant(output / "timeline-applied.png", 1)
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "timeline export published")
             info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-of", "json", str(destination)))
             expected_seconds = (end - start) / 1000
@@ -1587,7 +1615,7 @@ def main():
             dominant(destination, 2, 1.0)
             choose(editor, "Format", ".gif")
             press(editor, "Apply edits")
-            press(editor, "Save new copy")
+            save_copy(editor)
             gif = destination.with_suffix(".gif")
             wait(lambda: len(list(history.glob("*/metadata.json"))) == 3, "timeline GIF published")
             dominant(gif, 1, .1)
@@ -1643,7 +1671,7 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
             destination = exports / "delta.gif"
             set_destination(editor, destination)
-            press(editor, "Save new copy")
+            save_copy(editor)
             wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "delta export in History")
             idle(editor)  # History publication precedes accepted save identity on the UI thread.
             size = destination.stat().st_size
@@ -1696,12 +1724,12 @@ def main():
             def save_crop(name, expected):
                 path = exports / f"{name}.mp4"
                 set_destination(editor, path)
-                press(editor, "Save new copy")
+                save_copy(editor)
                 assert not path.exists(), "unapplied crop gates save"
                 press(editor, "Apply edits")
                 shot(editor, f"{name}-preview")
                 count = len(list(history.glob("*/metadata.json")))
-                press(editor, "Save new copy")
+                save_copy(editor)
                 wait(lambda: len(list(history.glob("*/metadata.json"))) == count + 1, name)
                 info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)))
                 stream = next(s for s in info["streams"] if s["codec_type"] == "video")
@@ -1766,7 +1794,7 @@ def main():
         run("xdotool", "windowminimize", root, "sleep", ".5")
         destination = exports / "trimmed.mp4"
         set_destination(editor, destination)
-        press(editor, "Save new copy")
+        save_copy(editor)
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 2, "export published in History")
         info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(destination)))
         assert abs(float(info["format"]["duration"]) - 1.2) < .15, info
@@ -1778,20 +1806,20 @@ def main():
         saved_bytes = destination.read_bytes()
         if args.estimate:
             estimate_expectations["estimate-trimmed.png"] = expected_estimate(len(saved_bytes))
-        press(editor, "Save new copy")
+        save_copy(editor)
         shot(editor, "collision")
         assert destination.read_bytes() == saved_bytes and len(list(history.glob("*/metadata.json"))) == 2
         choose(editor, "Format", ".gif")
         if args.estimate:
             press(editor, "Estimate size")  # Unapplied GIF must not reuse the MP4 estimate.
             shot(editor, "estimate-staged-format")
-        press(editor, "Save new copy")  # Format changes cannot save unaccepted preview settings.
+        save_copy(editor)  # Format changes cannot save unaccepted preview settings.
         assert not destination.with_suffix(".gif").exists()
         press(editor, "Apply edits")
         if args.estimate:
             press(editor, "Estimate size")
             shot(editor, "estimate-gif")
-        press(editor, "Save new copy")
+        save_copy(editor)
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 3, "GIF published in History")
         gif = destination.with_suffix(".gif")
         if args.estimate:
@@ -1815,7 +1843,7 @@ def main():
         crop_destination = exports / "cropped.mp4"
         choose(editor, "Format", ".mp4")  # MP4.
         set_destination(editor, crop_destination)
-        press(editor, "Save new copy")  # Save remains gated while the crop is unapplied.
+        save_copy(editor)  # Save remains gated while the crop is unapplied.
         assert not crop_destination.exists() and len(list(history.glob("*/metadata.json"))) == 3
         fill(editor, "Crop width", 160)
         choose(editor, "Output resolution", "Custom")  # Custom output size.
@@ -1838,11 +1866,11 @@ def main():
         shot(editor, "minimum-crop-controls")
         run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
         run("xdotool", "mousemove", "--window", editor, "690", "380", "click", "--repeat", "20", "--delay", "60", "4", "sleep", ".5")
-        press(editor, "Save new copy")
+        save_copy(editor)
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 4, "cropped MP4 in History")
         choose(editor, "Format", ".gif")
         press(editor, "Apply edits")
-        press(editor, "Save new copy")
+        save_copy(editor)
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 5, "cropped GIF in History")
         for path in (crop_destination, crop_destination.with_suffix(".gif")):
             info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)))
@@ -1875,15 +1903,15 @@ def main():
         set_destination(editor, large_destination)
         press(editor, "Apply edits")
         shot(editor, "mp4-encoder-preview")
-        press(editor, "Save new copy")
+        save_copy(editor)
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 6, "encoder-sized MP4 in History")
         choose(editor, "Format", ".gif")
-        press(editor, "Save new copy")
+        save_copy(editor)
         assert not large_destination.with_suffix(".gif").exists()
         shot(editor, "format-staged")
         press(editor, "Apply edits")
         shot(editor, "gif-sized-preview")
-        press(editor, "Save new copy")
+        save_copy(editor)
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 7, "width-capped GIF in History")
         for path, width, height in ((large_destination, 3840, 576), (large_destination.with_suffix(".gif"), 800, 120)):
             info = json.loads(run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)))
@@ -1912,7 +1940,7 @@ def main():
             shot(editor, "audio-staged")
             pending = exports / "pending-audio.mp4"
             set_destination(editor, pending)
-            press(editor, "Save new copy")
+            save_copy(editor)
             assert not pending.exists(), "unapplied audio must gate save"
             press(editor, "Apply edits")
             shot(editor, "audio-applied")
@@ -1921,7 +1949,7 @@ def main():
                 path = exports / filename
                 count = len(list(history.glob("*/metadata.json")))
                 set_destination(editor, path)
-                press(editor, "Save new copy")
+                save_copy(editor)
                 wait(lambda: len(list(history.glob("*/metadata.json"))) == count + 1, filename)
                 info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)))
                 return path, [s for s in info["streams"] if s["codec_type"] == "audio"]
@@ -1999,12 +2027,12 @@ def main():
                 click(editor, *center(editor, f"Output resolution/{label}", prefix=True))
                 path = exports / f"preset-{name}.mp4"
                 set_destination(editor, path)
-                press(editor, "Save new copy")
+                save_copy(editor)
                 assert not path.exists(), "unapplied preset must gate save"
                 press(editor, "Apply edits")
                 shot(editor, f"preset-{name}-preview")
                 count = len(list(history.glob("*/metadata.json")))
-                press(editor, "Save new copy")
+                save_copy(editor)
                 wait(lambda: len(list(history.glob("*/metadata.json"))) == count + 1, name)
                 info = json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)))
                 stream = next(s for s in info["streams"] if s["codec_type"] == "video")

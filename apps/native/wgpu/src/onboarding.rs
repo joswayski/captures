@@ -1,6 +1,7 @@
 //! First-run setup and permission recovery, styled like the shipping Tauri
 //! setup window (`Onboarding.tsx` + `windows.css`). Copy and per-state
 //! decisions come from `captures_app::onboarding`, shared with AppKit.
+use captures_app::motion::{Motion, ONBOARDING_CTA_SPREAD};
 use captures_app::onboarding::{self as shared, Presentation, Status};
 use eframe::egui::{
     self, Align, FontId, Layout, Pos2, Rect, RichText, Stroke, Vec2, accesskit::Role,
@@ -260,9 +261,10 @@ fn status_pill(ui: &mut egui::Ui, t: &Tokens, status: Status) {
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, status.label));
 }
 
-/// Neutral high-contrast action (`.onboarding-primary-button`). A static
-/// `--surface-active` halo stands in for the shipping CTA pulse, so there is
-/// no motion to reduce.
+/// Neutral high-contrast action (`.onboarding-primary-button`). With
+/// `emphasis` the ready button plays shipping's `onboarding-cta-pulse`: a
+/// `--surface-active` halo that swells to 5 pt and fades, which rests
+/// invisible under reduced motion.
 pub fn primary_button(
     ui: &mut egui::Ui,
     t: &Tokens,
@@ -281,13 +283,33 @@ pub fn primary_button(
     .corner_radius(t.number("r-md") as u8)
     .min_size(Vec2::new(148., t.number("h-xl")));
     let response = ui.add_enabled(enabled, button);
+    let since_id = response.id.with("cta-pulse-since");
     if enabled && emphasis {
-        ui.painter().rect_stroke(
-            response.rect.expand(3.),
-            t.number("r-md") + 3.,
-            Stroke::new(3., t.color("surface-active")),
-            egui::StrokeKind::Outside,
-        );
+        let now = ui.input(|input| input.time);
+        let since = ui.data_mut(|data| *data.get_temp_mut_or_insert_with(since_id, || now));
+        let reduced = crate::motion::reduced(ui.ctx());
+        let pose = t
+            .motion(Motion::OnboardingCtaPulse)
+            .pose_repeating((now - since) * 1000., reduced);
+        let spread = (ONBOARDING_CTA_SPREAD * pose.opacity) as f32;
+        if spread > 0.01 {
+            // `box-shadow: 0 0 0 <spread> <colour>` sits flush outside the button.
+            ui.painter().rect_stroke(
+                response.rect,
+                t.number("r-md"),
+                Stroke::new(
+                    spread,
+                    t.color("surface-active")
+                        .gamma_multiply(pose.opacity as f32),
+                ),
+                egui::StrokeKind::Outside,
+            );
+        }
+        if !reduced {
+            ui.ctx().request_repaint();
+        }
+    } else {
+        ui.data_mut(|data| data.remove::<f64>(since_id));
     }
     response.clicked()
 }
@@ -546,6 +568,47 @@ mod tests {
                 .nodes
                 .iter()
                 .any(|(_, node)| node.role() == Role::Alert)
+        );
+    }
+
+    #[test]
+    fn ready_start_pulses_its_halo_and_rests_without_it_under_reduced_motion() {
+        let t = crate::tokens::load().remove("light-mustard").unwrap();
+        let halo = |reduced: bool, emphasis: bool, frames: usize| {
+            let ctx = egui::Context::default();
+            let mut widths = Vec::new();
+            for _ in 0..frames {
+                let mut output = ctx.run_ui(Default::default(), |ui| {
+                    crate::motion::set_reduced(ui.ctx(), reduced);
+                    primary_button(ui, &t, shared::START, true, emphasis);
+                });
+                output.textures_delta.clear();
+                widths = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.stroke.width > 0.
+                                && rect.stroke_kind == egui::StrokeKind::Outside =>
+                        {
+                            Some(rect.stroke.width)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+            }
+            widths
+        };
+        // The halo grows from nothing toward the 5 pt spread.
+        let pulsing = halo(false, true, 1);
+        assert!(pulsing.iter().all(|width| *width <= 5.), "{pulsing:?}");
+        assert!(
+            halo(true, true, 2).is_empty(),
+            "reduced motion rests invisible"
+        );
+        assert!(
+            halo(false, false, 2).is_empty(),
+            "no halo until setup is ready"
         );
     }
 

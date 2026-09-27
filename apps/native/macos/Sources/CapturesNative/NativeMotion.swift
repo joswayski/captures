@@ -191,6 +191,20 @@ enum NativeMotion {
         return last
     }
 
+    /// The pose of an `infinite` animation `elapsed` seconds in: after its
+    /// delay it restarts every duration. Under reduced motion shipping's
+    /// 0.01 ms iterations rest on the final keyframe.
+    static func poseRepeating(_ name: String, at elapsed: Double, tokens: Tokens,
+                              reduced: Bool = NativeMotion.reduceMotion) -> MotionKeyframes.Frame? {
+        guard let spec = catalog.keyframes[name] else { return nil }
+        let duration = seconds(spec.duration, tokens: tokens)
+        if reduced || duration <= 0 { return spec.frames.last }
+        let delay = spec.delayMs / 1000
+        guard elapsed >= delay else { return spec.frames.first }
+        let phase = (elapsed - delay).truncatingRemainder(dividingBy: duration)
+        return pose(name, at: delay + phase, tokens: tokens, reduced: false)
+    }
+
     /// Seconds `name` runs, including its delay (0 under reduced motion).
     static func duration(_ name: String, tokens: Tokens, reduced: Bool = NativeMotion.reduceMotion) -> Double {
         guard let spec = catalog.keyframes[name], !reduced else { return 0 }

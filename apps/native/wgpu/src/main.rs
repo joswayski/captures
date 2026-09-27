@@ -2,6 +2,7 @@ mod accessibility;
 mod capture_controls;
 mod clipboard_input;
 mod clipboard_revision;
+mod compare_overlay;
 mod countdown;
 mod diagnostics;
 mod editor;
