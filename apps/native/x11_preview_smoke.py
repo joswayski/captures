@@ -1212,7 +1212,7 @@ def main():
 
                 # Measured Preferences-window client positions, not fixture
                 # coordinates. Normal and focused states share the row geometry.
-                rows = [281, 317, 353, 389, 425, 461, 497]
+                rows = [294, 330, 366, 402, 438, 474, 510]
                 recorder_x = 709  # Recorders are right-aligned, as in shipping.
                 paths = [("new_capture_shortcut",), ("region_shortcut",),
                          ("window_shortcut",), ("display_shortcut",),

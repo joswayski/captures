@@ -114,7 +114,17 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
             json!({"window":format!("{window_id:?}"),"kind":kind,"value":value})
         });
         match &event {
-            WindowEvent::Focused(true) => self.focused_window = Some(window_id),
+            WindowEvent::Focused(true) => {
+                // Focus can arrive before the previous window's blur.
+                if self
+                    .focused_window
+                    .is_some_and(|focused| focused != window_id)
+                {
+                    self.shortcut_input.blur();
+                    self.shortcuts.resume_after_root_blur();
+                }
+                self.focused_window = Some(window_id);
+            }
             WindowEvent::Focused(false) | WindowEvent::Destroyed
                 if self.focused_window == Some(window_id) =>
             {
