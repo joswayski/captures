@@ -65,8 +65,9 @@ field-styled selects with shipping labels (PNG, Off, 1 second, 1080p…), the
 Recording and GIF select grids, `<kbd>` recorder chips on both hosts, and find
 washes with a ringed current match. Rows that cannot work in a native build say
 why: Check Now stays disabled (signed updates are not connected), the system
-screenshot-shortcut row explains that native builds do not unbind the system keys
-yet and opens keyboard settings in live mode, and fixtures show the login item as
+screenshot-shortcut row shows the shipping takeover copy (live hosts unbind the
+overlapping system keys) and opens keyboard settings in live mode, and fixtures
+show the login item as
 unavailable. Rendering was checked on X11 only; AppKit is covered by XCTest, and
 Windows, Wayland and screen-reader acceptance remain open.
 
@@ -1200,7 +1201,9 @@ native flow. Local capture remains signed-out and never uploads automatically.
   never installed settings/history. Fixture launches do not request capture
   access. Live captures register temporary global Escape for cancellation and
   persisted New Capture and region/window/display screenshot/recording launch
-  shortcuts. OS shortcut takeover and update installation are not connected yet.
+  shortcuts, unbinding overlapping OS screenshot keys like shipping (unit-tested
+  only; not yet checked on a physical macOS, Windows, GNOME or KDE session).
+  Update installation is not connected yet.
   Production data migration requires backup, version checks and rollback tests.
 
 ## Reviewable stages and exit gates
@@ -1536,8 +1539,8 @@ visible close-to-quit fallback. The private-X11 `--lifecycle` test uses real Xfc
 SNI/DBusMenu and global input, not fake tray dispatch. AppKit has native menu,
 focus, restoration and ordered-cleanup tests. Windows compilation/fixtures do
 not replace real tray/input testing; physical Mac, Windows, Wayland, mixed-DPI
-and accessibility acceptance remain open. Login items, OS shortcut takeover and
-the other lifecycle checklist requirements remain open.
+and accessibility acceptance remain open. Login items, physical OS shortcut
+takeover acceptance and the other lifecycle checklist requirements remain open.
 
 The live single-instance slice elects one native process per canonical History
 root before starting UI, capture workers or global keys. Shared Rust uses an OS

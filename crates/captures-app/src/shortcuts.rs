@@ -8,7 +8,7 @@ pub use recording::{
 use captures_settings::AppSettings;
 use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
-    hotkey::{Code, HotKey},
+    hotkey::{Code, HotKey, Modifiers},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -152,6 +152,44 @@ pub(crate) fn install_dispatcher() {
     INSTALL.call_once(|| GlobalHotKeyEvent::set_event_handler(Some(dispatch)));
 }
 
+/// Win/Super+Shift+S. Explorer/Snipping Tool own it before `RegisterHotKey`
+/// on Windows, so shipping (`skip_windows_os_owned_super_shift_s`) never
+/// registers it there and a low-level hook routes the chord instead.
+fn super_shift_s() -> HotKey {
+    HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyS)
+}
+
+fn os_owned(key: &HotKey, windows: bool) -> bool {
+    windows && key.id() == super_shift_s().id()
+}
+
+fn on_win_shift_s(phase: captures_session::WinShiftSPhase) {
+    let state = match phase {
+        captures_session::WinShiftSPhase::Pressed => HotKeyState::Pressed,
+        captures_session::WinShiftSPhase::Released => HotKeyState::Released,
+    };
+    dispatch(GlobalHotKeyEvent {
+        id: super_shift_s().id(),
+        state,
+    });
+}
+
+/// Enable the Win+Shift+S interceptor exactly while that chord is a live
+/// binding (never while Preferences has suspended registration). No-op off
+/// Windows: the `captures_session` hook is a stub there.
+fn sync_win_shift_s_takeover(registered: &Bindings) {
+    let takeover = cfg!(target_os = "windows") && registered.contains_key(&super_shift_s().id());
+    captures_session::set_win_shift_s_takeover_enabled(takeover);
+    if !takeover {
+        captures_session::set_win_shift_s_handler(None);
+        return;
+    }
+    captures_session::set_win_shift_s_handler(Some(on_win_shift_s));
+    if let Err(error) = captures_session::ensure_win_shift_s_takeover() {
+        eprintln!("could not take over Win+Shift+S from Snipping Tool: {error}");
+    }
+}
+
 fn dispatch(event: GlobalHotKeyEvent) {
     if event.id == HotKey::new(None, Code::Escape).id() && event.state == HotKeyState::Pressed {
         crate::capture_flow::escape();
@@ -188,18 +226,35 @@ trait Registration {
         result
     }
 }
+/// OS-owned chords are routed by a hook, never registered with the manager.
+fn os_registrable(keys: &[HotKey]) -> Vec<HotKey> {
+    let windows = cfg!(target_os = "windows");
+    keys.iter()
+        .copied()
+        .filter(|key| !os_owned(key, windows))
+        .collect()
+}
+
 impl Registration for GlobalHotKeyManager {
     fn register(&self, key: HotKey) -> Result<(), String> {
-        GlobalHotKeyManager::register(self, key).map_err(|error| error.to_string())
+        Registration::register_all(self, &[key])
     }
     fn unregister(&self, key: HotKey) -> Result<(), String> {
-        GlobalHotKeyManager::unregister(self, key).map_err(|error| error.to_string())
+        Registration::unregister_all(self, &[key])
     }
     fn register_all(&self, keys: &[HotKey]) -> Result<(), String> {
-        GlobalHotKeyManager::register_all(self, keys).map_err(|error| error.to_string())
+        let keys = os_registrable(keys);
+        if keys.is_empty() {
+            return Ok(());
+        }
+        GlobalHotKeyManager::register_all(self, &keys).map_err(|error| error.to_string())
     }
     fn unregister_all(&self, keys: &[HotKey]) -> Result<(), String> {
-        GlobalHotKeyManager::unregister_all(self, keys).map_err(|error| error.to_string())
+        let keys = os_registrable(keys);
+        if keys.is_empty() {
+            return Ok(());
+        }
+        GlobalHotKeyManager::unregister_all(self, &keys).map_err(|error| error.to_string())
     }
 }
 
@@ -306,11 +361,14 @@ fn suspend_routes(
 
 /// One live host owns this object on the AppKit/winit event-loop thread. OS
 /// callbacks only queue an action and call `wake`; invoke `next_action` on the
-/// host thread. Never configure fixture scenes or change OS screenshot settings.
+/// host thread. Never construct it for fixture scenes: like shipping, it
+/// unbinds overlapping OS screenshot keys ([`crate::system_shortcuts`]) at
+/// startup and whenever the bindings change.
 pub struct CaptureShortcuts {
     manager: GlobalHotKeyManager,
     dispatcher: Arc<Dispatcher>,
     registered: Bindings,
+    takeover: crate::system_shortcuts::Takeover,
     _event_loop_thread: PhantomData<Rc<()>>,
 }
 
@@ -338,6 +396,7 @@ impl CaptureShortcuts {
             manager,
             dispatcher,
             registered: Bindings::new(),
+            takeover: crate::system_shortcuts::Takeover::default(),
             _event_loop_thread: PhantomData,
         };
         shortcuts.update(settings)?;
@@ -359,7 +418,10 @@ impl CaptureShortcuts {
             routes.clear();
             (enabled, routes.suspended)
         };
+        // Shipping frees overlapping system keys before claiming the chords.
+        self.takeover = crate::system_shortcuts::take_over_current_os(settings);
         let result = sync_bindings(&self.manager, &mut self.registered, &next, suspended);
+        sync_win_shift_s_takeover(&self.registered);
         let mut routes = self.dispatcher.routes.lock().unwrap();
         if result.is_ok() {
             routes.bindings = next;
@@ -372,12 +434,14 @@ impl CaptureShortcuts {
     /// can receive existing chords. Keep desired bindings across edits, then
     /// restore them on blur. Failure leaves routing suspended and is retryable.
     pub fn set_suspended(&mut self, suspended: bool) -> Result<(), String> {
-        suspend_routes(
+        let result = suspend_routes(
             &self.manager,
             &mut self.registered,
             &self.dispatcher.routes,
             suspended,
-        )?;
+        );
+        sync_win_shift_s_takeover(&self.registered);
+        result?;
         let pending = {
             let routes = self.dispatcher.routes.lock().unwrap();
             !routes.suspended && routes.pending.is_some()
@@ -422,6 +486,12 @@ impl CaptureShortcuts {
             .set_selector_generation(generation);
     }
 
+    /// The latest system-key takeover, once. AppKit also disables the
+    /// returned macOS symbolic hotkeys live; errors are informational.
+    pub fn take_system_takeover(&mut self) -> crate::system_shortcuts::Takeover {
+        std::mem::take(&mut self.takeover)
+    }
+
     pub fn next_action(&self) -> Option<CaptureShortcut> {
         let mut routes = self.dispatcher.routes.lock().unwrap();
         let pending = routes.pending.take();
@@ -439,6 +509,8 @@ impl Drop for CaptureShortcuts {
     fn drop(&mut self) {
         self.set_enabled(false);
         *DISPATCHER.lock().unwrap() = None;
+        // Hand Win+Shift+S back to Snipping Tool once nothing routes it.
+        sync_win_shift_s_takeover(&Bindings::new());
         // Explicitly unregister before manager teardown; X11 manager Drop only
         // queues connection shutdown rather than waiting for its worker to exit.
         // Do not hold a callback's mutex while waiting for the X11 worker.
@@ -461,6 +533,25 @@ mod tests {
             display_shortcut: "Ctrl+Shift+3".into(),
             ..AppSettings::default()
         }
+    }
+
+    #[test]
+    fn windows_routes_win_shift_s_through_the_hook_not_registration() {
+        let key = "Super+Shift+S".parse::<HotKey>().unwrap();
+        assert_eq!(key.id(), super_shift_s().id());
+        assert!(os_owned(&key, true));
+        assert!(
+            !os_owned(&key, false),
+            "other platforms register it normally"
+        );
+        let other = "Ctrl+Shift+S".parse::<HotKey>().unwrap();
+        assert!(!os_owned(&other, true));
+        let expected = if cfg!(target_os = "windows") {
+            vec![other]
+        } else {
+            vec![key, other]
+        };
+        assert_eq!(os_registrable(&[key, other]), expected);
     }
 
     #[test]

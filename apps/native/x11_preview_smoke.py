@@ -50,6 +50,8 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     env = {**os.environ, "WGPU_BACKEND": "gl", "WINIT_X11_SCALE_FACTOR": "1", "XDG_SESSION_TYPE": "x11"}
+    # Live hosts must never unbind the developer's real OS screenshot keys.
+    env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
     env.pop("WAYLAND_DISPLAY", None)
     # Every process in this private desktop must use the disposable trash on
     # the same filesystem as exports. Never allow a smoke run to reach the
@@ -911,7 +913,12 @@ def main():
                     time.sleep(.35)
                     # Independent CSS blend: rear depth1=.13748 over the
                     # known asymmetric capture, glass-strong-solid=(15,15,18).
-                    rear_y = 220 if placement.startswith("top") else 44
+                    # Sample mid-peek of the posed rear card. At a placement
+                    # corner (gravity ±1) collapsed_card_pose has no spin but
+                    # scales the rear card ~0.9516 and shifts it ~10.7 px, so
+                    # its peek spans y212..218.8 (top) or y45.2..52 (bottom)
+                    # while the front card covers y52..212.
+                    rear_y = 215 if placement.startswith("top") else 48
                     source = BACKGROUNDS[0][2 if placement.startswith("top") else 0]
                     expected_rear = [round(s * (1 - .13748) + tint * .13748)
                                      for s, tint in zip(source, (15, 15, 18))]

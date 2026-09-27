@@ -42,6 +42,8 @@ def main():
     common = ["--history-root", str(history)]
     log = output / "primary.log"
     env = {**os.environ, "NSUnbufferedIO": "YES"}
+    # Live hosts must never unbind the developer's real OS screenshot keys.
+    env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
     command = ["open", "-n", "-W", "-a", str(bundle), "--stdout", str(log), "--stderr", str(log),
                str(files[0]), "--args", *common, "--settings-file", str(settings), "--quit-after", "35"]
     primary = subprocess.Popen(command, env=env)

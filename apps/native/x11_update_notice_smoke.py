@@ -38,6 +38,8 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     env = {**os.environ, "WGPU_BACKEND": "gl", "WINIT_X11_SCALE_FACTOR": "1", "XDG_SESSION_TYPE": "x11"}
+    # Live hosts must never unbind the developer's real OS screenshot keys.
+    env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
     env.pop("WAYLAND_DISPLAY", None)
     children = []
     with (output / "processes.log").open("w") as log:
