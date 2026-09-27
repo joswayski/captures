@@ -2080,7 +2080,7 @@ final class ScreenshotEditorTests: XCTestCase {
         worker.importLayerID = "returned-id"
         worker.importedSnapshot = snapshot(id: "shot", unsaved: true,
                                            layers: [background, selected, imported])
-        var pickerCompletion: ((URL?) -> Void)?
+        var pickerCompletion: (([URL]) -> Void)?
         let bytes = Data([11, 29, 47, 61, 73, 89, 101, 127, 131, 149, 167, 191,
                           193, 211, 223, 239, 17, 37, 59, 83, 97, 109, 137, 251])
         let controller = ScreenshotEditorController(
@@ -2097,7 +2097,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
         try button("Add image layer", in: controller.root).performClick(nil)
         XCTAssertFalse(controller.state.busy, "the picker does not occupy the session worker")
-        pickerCompletion?(URL(fileURLWithPath: "/tmp/asymmetric.png"))
+        pickerCompletion?([URL(fileURLWithPath: "/tmp/asymmetric.png")])
         waitUntil { worker.imports.count == 1 && !controller.state.busy }
 
         let call = try XCTUnwrap(worker.imports.first)
@@ -2109,10 +2109,10 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
 
         let panel = ScreenshotEditorController.imagePanel()
-        XCTAssertEqual(panel.title, "Choose image")
-        XCTAssertEqual(panel.message, "Choose an image to add as a new layer")
+        XCTAssertEqual(panel.title, "Choose images")
+        XCTAssertEqual(panel.message, "Choose images to add as new layers")
         XCTAssertTrue(panel.canChooseFiles); XCTAssertFalse(panel.canChooseDirectories)
-        XCTAssertFalse(panel.allowsMultipleSelection)
+        XCTAssertTrue(panel.allowsMultipleSelection, "shipping's file input is multiple")
     }
 
     func testDecodedImportWaitsBehindAcceptedEditAndLateOrCancelledPickerRepliesAreIgnored() throws {
@@ -2129,7 +2129,7 @@ final class ScreenshotEditorTests: XCTestCase {
                                            layers: [background, selected, imported])
         let decodeStarted = DispatchSemaphore(value: 0)
         let allowDecode = DispatchSemaphore(value: 0)
-        var pickerCompletion: ((URL?) -> Void)?
+        var pickerCompletion: (([URL]) -> Void)?
         let controller = ScreenshotEditorController(
             tokens: Tokens.variants["light-mustard"]!, worker: worker,
             imagePicker: { _, completion in pickerCompletion = completion },
@@ -2143,12 +2143,12 @@ final class ScreenshotEditorTests: XCTestCase {
         try showLayers(in: controller.root)
 
         try button("Add image layer", in: controller.root).performClick(nil)
-        pickerCompletion?(nil)
+        pickerCompletion?([])
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertTrue(worker.imports.isEmpty, "picker cancellation has no editor side effect")
 
         try button("Add image layer", in: controller.root).performClick(nil)
-        pickerCompletion?(URL(fileURLWithPath: "/tmp/queued.png"))
+        pickerCompletion?([URL(fileURLWithPath: "/tmp/queued.png")])
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(decodeStarted.wait(timeout: .now() + 2), .success)
         worker.deferRequests = true
@@ -2164,7 +2164,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
         let lateStarted = DispatchSemaphore(value: 0)
         let allowLate = DispatchSemaphore(value: 0)
-        var lateCompletion: ((URL?) -> Void)?
+        var lateCompletion: (([URL]) -> Void)?
         let lateWorker = FakeEditorWorker(snapshot: snapshot(id: "late"))
         let late = ScreenshotEditorController(
             tokens: Tokens.variants["dark-mustard"]!, worker: lateWorker,
@@ -2178,7 +2178,7 @@ final class ScreenshotEditorTests: XCTestCase {
         late.present(artifact: artifact(id: "late"), historyRoot: "/native/History")
         try showLayers(in: late.root)
         try button("Add image layer", in: late.root).performClick(nil)
-        lateCompletion?(URL(fileURLWithPath: "/tmp/late.png"))
+        lateCompletion?([URL(fileURLWithPath: "/tmp/late.png")])
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(lateStarted.wait(timeout: .now() + 2), .success)
         XCTAssertFalse(late.windowShouldClose(late.window))
@@ -2804,7 +2804,7 @@ final class ScreenshotEditorTests: XCTestCase {
             worker.importLayerID = "imported"
             worker.importedSnapshot = snapshot(id: "shot", unsaved: true,
                                                layers: [background, imported])
-            var pickerCompletion: ((URL?) -> Void)?
+            var pickerCompletion: (([URL]) -> Void)?
             var decodeError: String?
             let controller = ScreenshotEditorController(
                 tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker,
@@ -2824,7 +2824,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-import-normal-\(appearance)")
 
             try button("Add image layer", in: controller.root).performClick(nil)
-            pickerCompletion?(URL(fileURLWithPath: "/tmp/import.png"))
+            pickerCompletion?([URL(fileURLWithPath: "/tmp/import.png")])
             waitUntil { worker.imports.count == 1 && !controller.state.busy }
             try scrollLayersTop(in: controller.root)
             try render(controller.root, name: "screenshot-editor-import-success-\(appearance)")
@@ -2832,14 +2832,14 @@ final class ScreenshotEditorTests: XCTestCase {
             try scrollLayerPropertiesEnd(in: controller.root)
             decodeError = "The selected file does not contain a decodable still image."
             try button("Add image layer", in: controller.root).performClick(nil)
-            pickerCompletion?(URL(fileURLWithPath: "/tmp/not-an-image.txt"))
+            pickerCompletion?([URL(fileURLWithPath: "/tmp/not-an-image.png")])
             waitUntil { labels(in: controller.root).contains { $0.contains("decodable still image") } }
             try render(controller.root, name: "screenshot-editor-import-error-\(appearance)")
 
             decodeError = nil; worker.failImport = true
             worker.failureMessage = "The decoded image exceeds the retained editor asset budget. The current draft, layer selection, undo history, and previously imported pixels remain open and recoverable."
             try button("Add image layer", in: controller.root).performClick(nil)
-            pickerCompletion?(URL(fileURLWithPath: "/tmp/too-large.png"))
+            pickerCompletion?([URL(fileURLWithPath: "/tmp/too-large.png")])
             waitUntil { !controller.state.busy && labels(in: controller.root).contains {
                 $0.contains("retained editor asset budget")
             } }
@@ -7407,10 +7407,20 @@ extension ScreenshotEditorTests {
         XCTAssertEqual(action.frame.midY, image.minY + 300 * scale, accuracy: 1)
         let expectedX = min(image.maxX + 22, overlay.bounds.maxX - 4 - action.frame.width / 2)
         XCTAssertEqual(action.frame.midX, expectedX, accuracy: 1)
+        overlay.reducedMotion = { false }
         overlay.updateHover(at: CGPoint(x: action.frame.midX, y: action.frame.midY))
         XCTAssertTrue(overlay.expandArmed, "hovering the action shows the ghost")
+        XCTAssertTrue(overlay.isExpandAnimating, "the armed ghost breathes with blooms and particles")
+        overlay.display()
         overlay.updateHover(at: nil)
         XCTAssertFalse(overlay.expandArmed)
+        XCTAssertFalse(overlay.isExpandAnimating)
+        overlay.reducedMotion = { true }
+        overlay.updateHover(at: CGPoint(x: action.frame.midX, y: action.frame.midY))
+        XCTAssertTrue(overlay.expandArmed)
+        XCTAssertFalse(overlay.isExpandAnimating, "reduced motion holds the ghost still")
+        overlay.display()
+        overlay.updateHover(at: nil)
         action.performClick(nil)
         waitUntil { worker.requests.count == 1 && !controller.state.busy }
         let request = try XCTUnwrap(worker.requests.last)
@@ -7504,6 +7514,115 @@ extension ScreenshotEditorTests {
         XCTAssertEqual(first.x, guide.point.x, accuracy: 0.001)
         XCTAssertEqual(first.y, guide.point.y, accuracy: 0.001)
         XCTAssertNil(worker.imports.last?.point, "later files stack below the previous import")
+    }
+}
+
+// MARK: - Add images multi-select and animated drop / Expand canvas edges
+
+extension ScreenshotEditorTests {
+    func testAddImagesImportsEverySelectedImageLikeACanvasDrop() throws {
+        _ = NSApplication.shared
+        let background = layer(id: "background", name: "Original", x: 0, y: 0,
+                               visible: true, locked: true, opacity: 100)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [background]))
+        var pickerCompletion: (([URL]) -> Void)?
+        var decoded: [URL] = []
+        let controller = ScreenshotEditorController(
+            tokens: Tokens.variants["dark-mustard"]!, worker: worker,
+            imagePicker: { _, completion in pickerCompletion = completion },
+            imageDecoder: { url in
+                decoded.append(url)
+                return EditorDecodedImage(data: Data(repeating: 200, count: 16), width: 2, height: 2,
+                                          bytesPerRow: 8, name: url.lastPathComponent)
+            })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showLayers(in: controller.root)
+
+        try button("Add image layer", in: controller.root).performClick(nil)
+        pickerCompletion?([URL(fileURLWithPath: "/tmp/first.png"), URL(fileURLWithPath: "/tmp/notes.txt"),
+                           URL(fileURLWithPath: "/tmp/second.JPG")])
+        waitUntil { worker.imports.count == 2 && !controller.state.busy }
+        XCTAssertEqual(decoded.map(\.lastPathComponent), ["first.png", "second.JPG"],
+                       "unsupported files are skipped and the rest import in order")
+        XCTAssertTrue(worker.imports.allSatisfy { $0.point == nil },
+                      "the first takes the default placement and later ones stack below it")
+
+        try button("Add image layer", in: controller.root).performClick(nil)
+        pickerCompletion?([URL(fileURLWithPath: "/tmp/notes.txt")])
+        waitUntil { labels(in: controller.root).contains("Drop PNG, JPEG, WebP, or TIFF image files.") }
+        XCTAssertEqual(worker.imports.count, 2)
+        XCTAssertEqual(decoded.count, 2)
+    }
+
+    func testDropAndExpandEdgesBreatheAndHoldStillUnderReducedMotion() throws {
+        _ = NSApplication.shared
+        let tokens = Tokens.variants["light-mustard"]!
+        // `drop-snap-bloom-breathe 1.6s`: 0.82 ↔ 1 opacity, 1 ↔ 1.04 scale.
+        let start = NativeEdgeEffects.bloomPose(at: 0, tokens: tokens, reduced: false)
+        XCTAssertEqual(start.opacity, 0.82, accuracy: 0.01)
+        XCTAssertEqual(start.scale, 1, accuracy: 0.001)
+        let peak = NativeEdgeEffects.bloomPose(at: 0.8, tokens: tokens, reduced: false)
+        XCTAssertEqual(peak.opacity, 1, accuracy: 0.01)
+        XCTAssertEqual(peak.scale, 1.04, accuracy: 0.001)
+        let rest = NativeEdgeEffects.bloomPose(at: 0.8, tokens: tokens, reduced: true)
+        XCTAssertEqual(rest.opacity, 0.95, accuracy: 0.001, "reduced motion rests on the bloom's own opacity")
+        XCTAssertEqual(rest.scale, 1)
+        XCTAssertEqual(NativeEdgeEffects.loopOpacity("snap_edge_pulse", at: 0.7, tokens: tokens, reduced: false),
+                       0.88, accuracy: 0.01)
+        XCTAssertEqual(NativeEdgeEffects.loopOpacity("expand_ghost_breathe", at: 0, tokens: tokens, reduced: false),
+                       0.88, accuracy: 0.01)
+        XCTAssertEqual(NativeEdgeEffects.loopOpacity("snap_edge_pulse", at: 0.7, tokens: tokens, reduced: true), 1)
+        XCTAssertEqual(NativeEditorPreviewPaint.snapBloomStops.first?.1 ?? 0, 0.55, accuracy: 0.001)
+
+        // The drop guide's bloom overhangs each end by 8 % and scales about its center.
+        let target = CGRect(x: 100, y: 100, width: 200, height: 50)
+        let band = NativeEdgeEffects.bloomBand(target, edge: .top, depth: 21, overhang: 0.08, scale: 1)
+        XCTAssertEqual(band.minX, 84, accuracy: 0.001); XCTAssertEqual(band.width, 232, accuracy: 0.001)
+        XCTAssertEqual(band.minY, 79, accuracy: 0.001); XCTAssertEqual(band.maxY, 100, accuracy: 0.001)
+        let grown = NativeEdgeEffects.bloomBand(target, edge: .right, depth: 96, overhang: 0, scale: 1.04)
+        XCTAssertEqual(grown.midX, 348, accuracy: 0.001)
+        XCTAssertEqual(grown.width, 96 * 1.04, accuracy: 0.001)
+        XCTAssertEqual(grown.height, 50 * 1.04, accuracy: 0.001)
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 240),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        let content = try XCTUnwrap(window.contentView)
+        let view = EditorDropGuideView()
+        view.frame = content.bounds
+        content.addSubview(view)
+        view.motionTokens = tokens
+        view.canvasSize = NSSize(width: 640, height: 360)
+        view.imageRect = { NSRect(x: 40, y: 40, width: 320, height: 180) }
+        view.reducedMotion = { false }
+        let top = try XCTUnwrap(NativeEditorDropGuide([
+            "placement": "top", "label": "Place above",
+            "target": ["x": 0.0, "y": 0.0, "width": 640.0, "height": 360.0],
+            "point": ["x": 320.0, "y": 0.0], "focus": ["x": 0.0, "y": 0.0, "width": 640.0, "height": 360.0],
+        ]))
+        view.guide = top
+        XCTAssertFalse(view.isAnimating, "no loop until a file drag is over the canvas")
+        view.active = true
+        XCTAssertEqual(view.glowingEdge, .top)
+        XCTAssertTrue(view.isAnimating, "the edge bloom, pulse and particles run while dragging")
+        view.display()
+        let stack = try XCTUnwrap(NativeEditorDropGuide([
+            "placement": "stack", "label": "Place on top",
+            "target": ["x": 0.0, "y": 0.0, "width": 640.0, "height": 360.0],
+            "point": ["x": 320.0, "y": 180.0], "focus": ["x": 200.0, "y": 120.0, "width": 240.0, "height": 120.0],
+        ]))
+        view.guide = stack
+        XCTAssertNil(view.glowingEdge)
+        XCTAssertFalse(view.isAnimating, "the stack light has no edge loop")
+        view.active = false
+        view.reducedMotion = { true }
+        view.guide = top
+        view.active = true
+        XCTAssertFalse(view.isAnimating, "reduced motion schedules no redraws")
+        view.display()
+        view.active = false; view.guide = nil
+        XCTAssertTrue(view.isHidden)
     }
 }
 

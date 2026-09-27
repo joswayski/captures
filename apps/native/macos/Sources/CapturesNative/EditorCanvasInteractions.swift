@@ -178,9 +178,22 @@ enum NativeEditorCanvas {
 /// Never takes pointer events; the gesture views below keep the drag session.
 final class EditorDropGuideView: NSView {
     override var isFlipped: Bool { true }
-    var guide: NativeEditorDropGuide? { didSet { isHidden = guide == nil && !active; needsDisplay = true } }
+    var guide: NativeEditorDropGuide? { didSet { guideChanged() } }
     /// A file drag is over the canvas even when no guide could be computed.
-    var active = false { didSet { isHidden = guide == nil && !active; needsDisplay = true } }
+    var active = false { didSet { guideChanged() } }
+    /// Resolves the bloom breathing and edge pulse; nil holds them still.
+    var motionTokens: Tokens?
+    var reducedMotion: () -> Bool = { NativeMotion.reduceMotion } {
+        didSet { effectClock.reducedMotion = reducedMotion }
+    }
+    private lazy var effectClock = NativeEdgeEffectClock(view: self)
+    /// True while the edge bloom, pulse and particles schedule redraws.
+    var isAnimating: Bool { effectClock.isAnimating }
+    /// The side the image joins while an edge snap (not a stack) shows.
+    var glowingEdge: NativeCanvasExpand.Edge? {
+        guard active, let guide else { return nil }
+        return NativeCanvasExpand.Edge(rawValue: guide.placement)
+    }
     var imageRect: () -> NSRect = { .zero }
     var canvasSize = NSSize.zero
     var accent = NSColor.controlAccentColor
@@ -189,6 +202,12 @@ final class EditorDropGuideView: NSView {
     var toastLabel: String { guide?.label ?? NativeEditorCanvas.dropImage }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    private func guideChanged() {
+        isHidden = guide == nil && !active
+        effectClock.update(running: glowingEdge != nil)
+        needsDisplay = true
+    }
 
     func project(_ rect: CGRect) -> CGRect {
         let image = imageRect()
@@ -217,8 +236,15 @@ final class EditorDropGuideView: NSView {
                 let plate = NSBezierPath(roundedRect: target, xRadius: 3, yRadius: 3)
                 plate.fill()
                 accent.withAlphaComponent(0.78).setStroke(); plate.lineWidth = 1; plate.stroke()
-                if let edge = NativeCanvasExpand.Edge(rawValue: guide.placement) {
-                    Self.drawEdgeGlow(target, edge: edge, accent: accent)
+                if let edge = NativeCanvasExpand.Edge(rawValue: guide.placement),
+                   let context = NSGraphicsContext.current?.cgContext {
+                    // `min(96px, 42%)` deep, overhanging each end by 8 %.
+                    let across = edge == .top || edge == .bottom ? target.height : target.width
+                    let depth = min(NativeEditorPreviewPaint.snap("bloom", 96),
+                                    NativeEditorPreviewPaint.snap("bloom_fraction", 0.42) * max(0, across))
+                    NativeEdgeEffects.drawAccentEdge(context, target: target, edge: edge, depth: depth,
+                        overhang: NativeEditorPreviewPaint.snap("bloom_overhang", 0.08), accent: accent,
+                        tokens: motionTokens, elapsed: effectClock.elapsed, reduced: reducedMotion())
                 }
             }
         }
@@ -234,23 +260,6 @@ final class EditorDropGuideView: NSView {
         let size = text.size(withAttributes: [.font: font])
         text.draw(at: CGPoint(x: toast.minX + 44, y: toast.midY - size.height / 2),
                   withAttributes: [.font: font, .foregroundColor: glassText])
-    }
-
-    /// Outward glow bands and a solid bar straddling one edge; static, so it
-    /// already respects reduced motion.
-    static func drawEdgeGlow(_ target: CGRect, edge: NativeCanvasExpand.Edge, accent: NSColor) {
-        func band(_ outward: CGFloat, _ inward: CGFloat) -> CGRect {
-            switch edge {
-            case .top: return CGRect(x: target.minX, y: target.minY - outward, width: target.width, height: outward + inward)
-            case .bottom: return CGRect(x: target.minX, y: target.maxY - inward, width: target.width, height: outward + inward)
-            case .left: return CGRect(x: target.minX - outward, y: target.minY, width: outward + inward, height: target.height)
-            case .right: return CGRect(x: target.maxX - inward, y: target.minY, width: outward + inward, height: target.height)
-            }
-        }
-        for (outward, alpha) in [(CGFloat(24), 0.05), (14, 0.08), (6, 0.14)] {
-            accent.withAlphaComponent(alpha).setFill(); NSBezierPath(rect: band(outward, 0)).fill()
-        }
-        accent.setFill(); NSBezierPath(roundedRect: band(2, 2), xRadius: 2, yRadius: 2).fill()
     }
 
     private func drawStackLight(_ focus: CGRect) {

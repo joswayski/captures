@@ -497,7 +497,7 @@ struct View {
     export_job: bool,
     folder_picker: Option<Receiver<Option<PathBuf>>>,
     output_notice: Option<String>,
-    import_picker: Option<Receiver<Option<PathBuf>>>,
+    import_picker: Option<Receiver<Option<Vec<PathBuf>>>>,
     /// Image files dragged over or dropped on the canvas.
     drop: canvas::DropState,
     /// When Trim edges gained hover or keyboard focus while it can trim
@@ -1271,13 +1271,15 @@ impl View {
         // Picking is independent of the session worker: quit and draft saves
         // never wait for a dialog. Decode and import happen on the worker later.
         thread::spawn(move || {
+            // Shipping's `<input type="file" multiple>`: every chosen image
+            // becomes a layer through the canvas-drop import queue.
             let selected = rfd::FileDialog::new()
-                .set_title("Import image")
+                .set_title("Import images")
                 .add_filter(
                     "Images (PNG, JPEG, WebP, TIFF)",
                     &["png", "jpg", "jpeg", "webp", "tif", "tiff"],
                 )
-                .pick_file();
+                .pick_files();
             let _ = tx.send(selected);
             wake(&ctx, viewport);
         });
@@ -1323,15 +1325,22 @@ impl View {
         }
         self.import_picker = None;
         match result {
-            Ok(Some(path)) => {
-                self.submit_job(
-                    tx,
-                    Job::Import {
-                        path,
-                        selected_id: self.selected_layer.clone(),
-                        point: None,
-                    },
-                );
+            Ok(Some(paths)) => {
+                // Like a canvas drop without a pointer: the first image takes
+                // shipping's default placement and later ones stack below the
+                // layer the previous one created, one edit at a time.
+                let paths: Vec<PathBuf> = paths
+                    .into_iter()
+                    .filter(|path| captures_app::editor_session::is_supported_image_path(path))
+                    .collect();
+                if paths.is_empty() {
+                    self.error = Some(captures_app::editor_session::DROP_UNSUPPORTED.into());
+                } else {
+                    self.drop
+                        .queue
+                        .extend(paths.into_iter().map(|path| (path, None)));
+                    canvas::drain_drops(self, tx);
+                }
             }
             Ok(None) => {}
             Err(_) => self.error = Some("Image selection failed. Try again.".into()),
@@ -10201,7 +10210,9 @@ mod tests {
         let (jobs, queued) = mpsc::channel();
         let (selection, picked) = mpsc::channel();
         view.import_picker = Some(picked);
-        selection.send(Some(PathBuf::from("photo.png"))).unwrap();
+        selection
+            .send(Some(vec![PathBuf::from("photo.png")]))
+            .unwrap();
         view.pending = true;
         assert!(!view.receive_import(&jobs));
         assert!(queued.try_recv().is_err() && view.import_picker.is_some());
@@ -10225,12 +10236,59 @@ mod tests {
         for closed in [false, true] {
             let (selection, picked) = mpsc::channel();
             view.import_picker = Some(picked);
-            selection.send(Some(PathBuf::from("stale.png"))).unwrap();
+            selection
+                .send(Some(vec![PathBuf::from("stale.png")]))
+                .unwrap();
             view.closed = closed;
             view.close_requested = !closed;
             assert!(!view.receive_import(&jobs));
             assert!(view.import_picker.is_none() && queued.try_recv().is_err());
         }
+    }
+
+    #[test]
+    fn import_picker_imports_every_selected_image_through_the_drop_queue() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(false)));
+        let (jobs, queued) = mpsc::channel();
+        let (selection, picked) = mpsc::channel();
+        view.import_picker = Some(picked);
+        selection
+            .send(Some(vec![
+                PathBuf::from("first.png"),
+                PathBuf::from("notes.txt"),
+                PathBuf::from("second.JPG"),
+            ]))
+            .unwrap();
+        assert!(view.receive_import(&jobs));
+        assert!(
+            matches!(queued.try_recv().unwrap(), Job::Import { path, point: None, .. }
+            if path == Path::new("first.png"))
+        );
+        assert!(view.pending && queued.try_recv().is_err());
+        // Later images wait for the previous import, then stack below it.
+        assert!(!canvas::drain_drops(&mut view, &jobs));
+        view.pending = false;
+        assert!(canvas::drain_drops(&mut view, &jobs));
+        assert!(
+            matches!(queued.try_recv().unwrap(), Job::Import { path, point: None, .. }
+            if path == Path::new("second.JPG"))
+        );
+        view.pending = false;
+        assert!(!canvas::drain_drops(&mut view, &jobs) && view.drop.queue.is_empty());
+
+        let (selection, picked) = mpsc::channel();
+        view.import_picker = Some(picked);
+        selection
+            .send(Some(vec![PathBuf::from("notes.txt")]))
+            .unwrap();
+        assert!(view.receive_import(&jobs));
+        assert!(!view.pending && queued.try_recv().is_err());
+        assert_eq!(
+            view.error.as_deref(),
+            Some(captures_app::editor_session::DROP_UNSUPPORTED)
+        );
     }
 
     #[test]
@@ -10416,7 +10474,7 @@ mod tests {
         receive(&editor, &ctx);
         let (selection, picked) = mpsc::channel();
         editor.view.lock().unwrap().import_picker = Some(picked);
-        selection.send(Some(path.clone())).unwrap();
+        selection.send(Some(vec![path.clone()])).unwrap();
         editor.flush(&ctx).unwrap();
         {
             let view = editor.view.lock().unwrap();

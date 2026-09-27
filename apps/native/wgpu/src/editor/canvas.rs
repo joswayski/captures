@@ -22,6 +22,9 @@ use eframe::egui::{Color32, FontFamily, FontId, Stroke, StrokeKind, pos2, vec2};
 #[derive(Default)]
 pub(super) struct DropState {
     pub hovering: bool,
+    /// `input.time` when the current hover began: the drop guide's bloom,
+    /// edge pulse and particles run from here.
+    pub since: Option<f64>,
     pub queue: std::collections::VecDeque<(PathBuf, Option<Point>)>,
 }
 
@@ -74,15 +77,17 @@ pub(super) fn receive_drops(ctx: &egui::Context, view: &mut View, preview: Optio
     if ctx.current_pass_index() != 0 {
         return;
     }
-    let (hovering, dropped, pointer) = ctx.input(|input| {
+    let (hovering, dropped, pointer, now) = ctx.input(|input| {
         (
             !input.raw.hovered_files.is_empty(),
             input.raw.dropped_files.clone(),
             input.pointer.latest_pos(),
+            input.time,
         )
     });
     let accepting = view.presented.is_some() && !view.closed && !view.close_requested;
     view.drop.hovering = hovering && accepting;
+    view.drop.since = view.drop.hovering.then(|| view.drop.since.unwrap_or(now));
     if dropped.is_empty() || !accepting {
         return;
     }
@@ -101,6 +106,7 @@ pub(super) fn receive_drops(ctx: &egui::Context, view: &mut View, preview: Optio
         return;
     }
     view.drop.hovering = false;
+    view.drop.since = None;
     for (index, path) in paths.into_iter().enumerate() {
         view.drop
             .queue
@@ -162,6 +168,9 @@ pub(super) fn paint_drop_guide(
     let painter = ui
         .painter()
         .with_clip_rect(available.intersect(ui.clip_rect()));
+    let reduced = crate::motion::reduced(ui.ctx());
+    let now = ui.input(|input| input.time);
+    let elapsed = (now - view.drop.since.unwrap_or(now)) * 1000.;
     let label = match drop_guide(view, pointer) {
         Some(guide) => {
             let target = project_rect(preview, bounds, guide.target);
@@ -175,7 +184,20 @@ pub(super) fn paint_drop_guide(
                     Stroke::new(1., accent(tokens, 0.78)),
                     StrokeKind::Inside,
                 );
-                paint_edge_bloom(&painter, tokens, target, guide.placement);
+                if let Some(edge) = placement_edge(guide.placement) {
+                    let across = match edge {
+                        CanvasEdge::Top | CanvasEdge::Bottom => target.height(),
+                        CanvasEdge::Left | CanvasEdge::Right => target.width(),
+                    };
+                    let glow = EdgeGlow {
+                        depth: canvas::drop_bloom_depth(f64::from(across)) as f32,
+                        overhang: canvas::SNAP_BLOOM_OVERHANG as f32,
+                    };
+                    glow.paint(&painter, tokens, target, edge, elapsed, reduced);
+                    if !reduced {
+                        ui.ctx().request_repaint();
+                    }
+                }
             }
             guide.label
         }
@@ -221,49 +243,152 @@ pub(super) fn paint_drop_guide(
     );
 }
 
-/// The bright edge bar with its outward bloom on the side the image joins.
-fn paint_edge_bloom(
-    painter: &egui::Painter,
-    tokens: &Tokens,
-    target: egui::Rect,
-    placement: ImportPlacement,
-) {
-    let edge = match placement {
-        ImportPlacement::Top => CanvasEdge::Top,
-        ImportPlacement::Right => CanvasEdge::Right,
-        ImportPlacement::Bottom => CanvasEdge::Bottom,
-        ImportPlacement::Left => CanvasEdge::Left,
-        ImportPlacement::Stack => return,
-    };
-    paint_edge_glow(painter, tokens, target, edge);
+/// The side of the drop target an image joins, or `None` for a stack.
+fn placement_edge(placement: ImportPlacement) -> Option<CanvasEdge> {
+    match placement {
+        ImportPlacement::Top => Some(CanvasEdge::Top),
+        ImportPlacement::Right => Some(CanvasEdge::Right),
+        ImportPlacement::Bottom => Some(CanvasEdge::Bottom),
+        ImportPlacement::Left => Some(CanvasEdge::Left),
+        ImportPlacement::Stack => None,
+    }
 }
 
-/// Shared by the drop guide and the Expand canvas hint: layered glow outward
-/// from one edge (static; the shipping pulse is decorative).
-fn paint_edge_glow(painter: &egui::Painter, tokens: &Tokens, target: egui::Rect, edge: CanvasEdge) {
-    // Bands grow outward from the edge; the solid bar straddles it.
-    let band = |outward: f32, inward: f32| match edge {
+/// The looping poses shared by every glowing canvas edge: the bloom's
+/// `drop-snap-bloom-breathe` (opacity, scale) and the bar's pulse. The loops
+/// have no fill mode, so reduced motion rests on each element's own style.
+fn bloom_pose(tokens: &Tokens, elapsed: f64, reduced: bool) -> (f64, f32) {
+    if reduced {
+        return (captures_app::motion::SNAP_BLOOM_REST_OPACITY, 1.);
+    }
+    let pose = tokens
+        .motion(Motion::SnapBloomBreathe)
+        .pose_repeating(elapsed, false);
+    (pose.opacity, pose.scale as f32)
+}
+
+fn loop_opacity(tokens: &Tokens, motion: Motion, elapsed: f64, reduced: bool) -> f64 {
+    if reduced {
+        1.
+    } else {
+        tokens.motion(motion).pose_repeating(elapsed, false).opacity
+    }
+}
+
+/// Shipping's accent edge snap (`.screenshot-drop-snap-guide.edge-*` and
+/// `.screenshot-canvas-expand-edge`): a breathing outward bloom, a pulsing
+/// bar straddling the edge, and `DROP_SNAP_PARTICLES` streaming outward.
+/// Under reduced motion the bloom and bar hold still and no particles show.
+struct EdgeGlow {
+    /// Bloom depth outward from the edge, in points.
+    depth: f32,
+    /// Bloom overhang past each end of the edge, as a fraction of its length.
+    overhang: f32,
+}
+
+impl EdgeGlow {
+    fn paint(
+        &self,
+        painter: &egui::Painter,
+        tokens: &Tokens,
+        target: egui::Rect,
+        edge: CanvasEdge,
+        elapsed: f64,
+        reduced: bool,
+    ) {
+        let color = |alpha: f64| accent(tokens, alpha.clamp(0., 1.) as f32);
+        let (strength, scale) = bloom_pose(tokens, elapsed, reduced);
+        paint_bloom(
+            painter,
+            &Bloom {
+                rect: target,
+                edge,
+                depth: self.depth,
+                overhang: self.overhang,
+                stops: &canvas::SNAP_BLOOM_STOPS,
+                strength,
+                scale,
+            },
+            &color,
+        );
+        let bar = edge_strip(target, edge, canvas::SNAP_EDGE_BAR as f32);
+        let pulse = loop_opacity(tokens, Motion::SnapEdgePulse, elapsed, reduced);
+        // `0 0 8px .95, 0 0 20px .65, 0 0 36px .4` around the pill.
+        paint_edge_bar(
+            painter,
+            bar,
+            &[(16., 0.08), (9., 0.16), (3.5, 0.36)],
+            pulse,
+            &color,
+        );
+        paint_particles(painter, target, edge, elapsed, reduced, &color);
+    }
+}
+
+/// A bar `thickness` thick centered on one side of `rect`, running 1 point
+/// past each end.
+fn edge_strip(rect: egui::Rect, edge: CanvasEdge, thickness: f32) -> egui::Rect {
+    let half = thickness / 2.;
+    match edge {
         CanvasEdge::Top => egui::Rect::from_min_max(
-            pos2(target.left(), target.top() - outward),
-            pos2(target.right(), target.top() + inward),
+            pos2(rect.left() - 1., rect.top() - half),
+            pos2(rect.right() + 1., rect.top() + half),
         ),
         CanvasEdge::Bottom => egui::Rect::from_min_max(
-            pos2(target.left(), target.bottom() - inward),
-            pos2(target.right(), target.bottom() + outward),
+            pos2(rect.left() - 1., rect.bottom() - half),
+            pos2(rect.right() + 1., rect.bottom() + half),
         ),
         CanvasEdge::Left => egui::Rect::from_min_max(
-            pos2(target.left() - outward, target.top()),
-            pos2(target.left() + inward, target.bottom()),
+            pos2(rect.left() - half, rect.top() - 1.),
+            pos2(rect.left() + half, rect.bottom() + 1.),
         ),
         CanvasEdge::Right => egui::Rect::from_min_max(
-            pos2(target.right() - inward, target.top()),
-            pos2(target.right() + outward, target.bottom()),
+            pos2(rect.right() - half, rect.top() - 1.),
+            pos2(rect.right() + half, rect.bottom() + 1.),
         ),
-    };
-    for (outward, alpha) in [(24., 0.05), (14., 0.08), (6., 0.14)] {
-        painter.rect_filled(band(outward, 0.), 0., accent(tokens, alpha));
     }
-    painter.rect_filled(band(2., 2.), 2., tokens.color("theme-accent"));
+}
+
+/// A pill with layered `(grow, alpha)` glows, all scaled by `opacity`.
+fn paint_edge_bar(
+    painter: &egui::Painter,
+    strip: egui::Rect,
+    halos: &[(f32, f64)],
+    opacity: f64,
+    color: &dyn Fn(f64) -> Color32,
+) {
+    let radius = strip.width().min(strip.height()) / 2.;
+    for (grow, alpha) in halos {
+        painter.rect_filled(strip.expand(*grow), radius + grow, color(alpha * opacity));
+    }
+    painter.rect_filled(strip, radius, color(opacity));
+}
+
+/// `DROP_SNAP_PARTICLES` streaming outward from one side of `rect`.
+fn paint_particles(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    edge: CanvasEdge,
+    elapsed: f64,
+    reduced: bool,
+    color: &dyn Fn(f64) -> Color32,
+) {
+    for particle in captures_app::motion::SNAP_PARTICLES {
+        let Some(pose) = particle.pose(elapsed, reduced) else {
+            continue;
+        };
+        let along = particle.along as f32;
+        let outward = pose.outward as f32;
+        let center = match edge {
+            CanvasEdge::Top => pos2(rect.left() + along * rect.width(), rect.top() - outward),
+            CanvasEdge::Bottom => pos2(rect.left() + along * rect.width(), rect.bottom() + outward),
+            CanvasEdge::Left => pos2(rect.left() - outward, rect.top() + along * rect.height()),
+            CanvasEdge::Right => pos2(rect.right() + outward, rect.top() + along * rect.height()),
+        };
+        let size = (particle.size * pose.scale) as f32;
+        painter.circle_filled(center, size / 2. + 3., color(0.25 * pose.opacity));
+        painter.circle_filled(center, size / 2., color(pose.opacity));
+    }
 }
 
 /// `.screenshot-drop-snap-stack-light`: warm pool, contact shadow and white rim
@@ -391,26 +516,48 @@ pub(super) fn show_expand(
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, true, canvas::EXPAND_CANVAS)
     });
+    let armed_id = ui.scope_id().with("canvas-expand-armed");
     if response.hovered() {
         // `.screenshot-canvas-expand-ghost`: dashed post-release canvas with
-        // brighter crossed sides and their edge glow.
+        // brighter crossed sides, breathing, plus each crossed side's glow.
+        let now = ui.input(|input| input.time);
+        let since = ui
+            .ctx()
+            .data_mut(|data| *data.get_temp_mut_or_insert_with(armed_id, || now));
+        let elapsed = (now - since) * 1000.;
+        let reduced = crate::motion::reduced(ui.ctx());
+        let breathe = loop_opacity(tokens, Motion::ExpandGhostBreathe, elapsed, reduced) as f32;
         let ghost = project_rect(preview, bounds, expand.rect);
-        let corners = [
-            ghost.left_top(),
-            ghost.right_top(),
-            ghost.right_bottom(),
-            ghost.left_bottom(),
-            ghost.left_top(),
+        let sides = [
+            (CanvasEdge::Top, ghost.left_top(), ghost.right_top()),
+            (CanvasEdge::Right, ghost.right_top(), ghost.right_bottom()),
+            (
+                CanvasEdge::Bottom,
+                ghost.right_bottom(),
+                ghost.left_bottom(),
+            ),
+            (CanvasEdge::Left, ghost.left_bottom(), ghost.left_top()),
         ];
-        painter.extend(egui::Shape::dashed_line(
-            &corners,
-            Stroke::new(1.5, accent(tokens, 0.42)),
-            6.,
-            4.,
-        ));
-        for edge in &expand.edges {
-            paint_edge_glow(&painter, tokens, ghost, *edge);
+        for (edge, from, to) in sides {
+            let stroke = if expand.edges.contains(&edge) {
+                Stroke::new(2., accent(tokens, 0.82 * breathe))
+            } else {
+                Stroke::new(1.5, accent(tokens, 0.42 * breathe))
+            };
+            painter.extend(egui::Shape::dashed_line(&[from, to], stroke, 6., 4.));
         }
+        let glow = EdgeGlow {
+            depth: canvas::SNAP_BLOOM as f32,
+            overhang: 0.,
+        };
+        for edge in &expand.edges {
+            glow.paint(&painter, tokens, ghost, *edge, elapsed, reduced);
+        }
+        if !reduced {
+            ui.ctx().request_repaint();
+        }
+    } else {
+        ui.ctx().data_mut(|data| data.remove::<f64>(armed_id));
     }
     let fill = if response.hovered() {
         tokens.color("theme-accent-hover")
@@ -680,33 +827,57 @@ fn trim_color(alpha: f64) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, (alpha.clamp(0., 1.) * 255.).round() as u8)
 }
 
-/// A gradient strip outward from one side of `keep`: `stops` fade across it
-/// (0 at the edge) and shipping's 12 %/88 % mask fades it along the edge.
-fn paint_trim_bloom(
-    painter: &egui::Painter,
-    keep: egui::Rect,
+/// One edge bloom: a gradient strip outward from one side of `rect`.
+struct Bloom<'a> {
+    rect: egui::Rect,
     edge: CanvasEdge,
     depth: f32,
+    /// Extra length past each end, as a fraction of the edge.
+    overhang: f32,
+    /// `(offset from the edge, alpha)` across the strip.
+    stops: &'a [(f64, f64)],
+    /// The breathing opacity.
     strength: f64,
-) {
+    /// The breathing scale about the strip's center.
+    scale: f32,
+}
+
+/// Paint `bloom`: `stops` fade across it (0 at the edge) and shipping's
+/// 12 %/88 % mask fades it along the edge.
+fn paint_bloom(painter: &egui::Painter, bloom: &Bloom, color: &dyn Fn(f64) -> Color32) {
+    let Bloom {
+        rect,
+        edge,
+        depth,
+        overhang,
+        stops,
+        strength,
+        scale,
+    } = *bloom;
     let along = [(0., 0.), (0.12, 1.), (0.88, 1.), (1., 0.)];
+    // Scale about the strip's center: along its length and across its depth.
+    let span = |s: f32| 0.5 + ((s * (1. + 2. * overhang) - overhang) - 0.5) * scale;
+    let deep = |t: f32| depth * (0.5 + (t - 0.5) * scale);
     let place = |s: f32, t: f32| match edge {
-        CanvasEdge::Top => pos2(keep.left() + s * keep.width(), keep.top() - t * depth),
-        CanvasEdge::Bottom => pos2(keep.left() + s * keep.width(), keep.bottom() + t * depth),
-        CanvasEdge::Left => pos2(keep.left() - t * depth, keep.top() + s * keep.height()),
-        CanvasEdge::Right => pos2(keep.right() + t * depth, keep.top() + s * keep.height()),
+        CanvasEdge::Top => pos2(rect.left() + span(s) * rect.width(), rect.top() - deep(t)),
+        CanvasEdge::Bottom => pos2(
+            rect.left() + span(s) * rect.width(),
+            rect.bottom() + deep(t),
+        ),
+        CanvasEdge::Left => pos2(rect.left() - deep(t), rect.top() + span(s) * rect.height()),
+        CanvasEdge::Right => pos2(rect.right() + deep(t), rect.top() + span(s) * rect.height()),
     };
     let mut mesh = egui::Mesh::default();
     let columns = along.len() as u32;
-    for (across, alpha) in canvas::TRIM_BLOOM_STOPS {
+    for (across, alpha) in stops {
         for (s, mask) in along {
             mesh.colored_vertex(
-                place(s as f32, across as f32),
-                trim_color(alpha * mask * strength),
+                place(s as f32, *across as f32),
+                color(alpha * mask * strength),
             );
         }
     }
-    for row in 0..canvas::TRIM_BLOOM_STOPS.len() as u32 - 1 {
+    for row in 0..stops.len().saturating_sub(1) as u32 {
         for column in 0..columns - 1 {
             let a = row * columns + column;
             mesh.add_triangle(a, a + 1, a + columns);
@@ -793,56 +964,31 @@ pub(super) fn paint_trim_preview(
         4.5,
         3.,
     ));
-    let bar = canvas::TRIM_EDGE_BAR as f32;
+    let (bloom_strength, bloom_scale) = bloom_pose(tokens, elapsed, reduced);
     for edge in &trim.edges {
-        paint_trim_bloom(&painter, keep, *edge, canvas::TRIM_BLOOM as f32, 1.);
-        let strip = match edge {
-            CanvasEdge::Top => egui::Rect::from_min_max(
-                pos2(keep.left() - 1., keep.top() - bar / 2.),
-                pos2(keep.right() + 1., keep.top() + bar / 2.),
-            ),
-            CanvasEdge::Bottom => egui::Rect::from_min_max(
-                pos2(keep.left() - 1., keep.bottom() - bar / 2.),
-                pos2(keep.right() + 1., keep.bottom() + bar / 2.),
-            ),
-            CanvasEdge::Left => egui::Rect::from_min_max(
-                pos2(keep.left() - bar / 2., keep.top() - 1.),
-                pos2(keep.left() + bar / 2., keep.bottom() + 1.),
-            ),
-            CanvasEdge::Right => egui::Rect::from_min_max(
-                pos2(keep.right() - bar / 2., keep.top() - 1.),
-                pos2(keep.right() + bar / 2., keep.bottom() + 1.),
-            ),
-        };
+        paint_bloom(
+            &painter,
+            &Bloom {
+                rect: keep,
+                edge: *edge,
+                depth: canvas::TRIM_BLOOM as f32,
+                overhang: 0.,
+                stops: &canvas::TRIM_BLOOM_STOPS,
+                strength: bloom_strength,
+                scale: bloom_scale,
+            },
+            &trim_color,
+        );
+        let strip = edge_strip(keep, *edge, canvas::TRIM_EDGE_BAR as f32);
         // `0 0 8px .95, 0 0 20px .55, 0 0 32px .32` around the pill.
-        for (grow, alpha) in [(14., 0.06), (8., 0.12), (3., 0.3)] {
-            painter.rect_filled(
-                strip.expand(grow),
-                bar / 2. + grow,
-                trim_color(alpha * edge_alpha),
-            );
-        }
-        painter.rect_filled(strip, bar / 2., trim_color(edge_alpha));
-        for particle in captures_app::motion::SNAP_PARTICLES {
-            let Some(pose) = particle.pose(elapsed, reduced) else {
-                continue;
-            };
-            let along = particle.along as f32;
-            let outward = pose.outward as f32;
-            let center = match edge {
-                CanvasEdge::Top => pos2(keep.left() + along * keep.width(), keep.top() - outward),
-                CanvasEdge::Bottom => {
-                    pos2(keep.left() + along * keep.width(), keep.bottom() + outward)
-                }
-                CanvasEdge::Left => pos2(keep.left() - outward, keep.top() + along * keep.height()),
-                CanvasEdge::Right => {
-                    pos2(keep.right() + outward, keep.top() + along * keep.height())
-                }
-            };
-            let size = (particle.size * pose.scale) as f32;
-            painter.circle_filled(center, size / 2. + 3., trim_color(0.25 * pose.opacity));
-            painter.circle_filled(center, size / 2., trim_color(pose.opacity));
-        }
+        paint_edge_bar(
+            &painter,
+            strip,
+            &[(14., 0.06), (8., 0.12), (3., 0.3)],
+            edge_alpha,
+            &trim_color,
+        );
+        paint_particles(&painter, keep, *edge, elapsed, reduced, &trim_color);
     }
     if !reduced {
         ui.ctx().request_repaint();

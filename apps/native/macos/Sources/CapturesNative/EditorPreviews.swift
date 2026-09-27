@@ -42,6 +42,11 @@ enum NativeEditorPreviewPaint {
         previewNumber(group("trim")[key]) ?? fallback
     }
 
+    /// Image-drop snap and Expand canvas edge metrics (`snap`).
+    static func snap(_ key: String, _ fallback: CGFloat) -> CGFloat {
+        previewNumber(group("snap")[key]) ?? fallback
+    }
+
     static func wandLoupe(_ key: String, _ fallback: CGFloat) -> CGFloat {
         previewNumber(group("wand_loupe")[key]) ?? fallback
     }
@@ -62,6 +67,14 @@ enum NativeEditorPreviewPaint {
             stop.count == 2 ? (CGFloat(stop[0].doubleValue), CGFloat(stop[1].doubleValue)) : nil
         }
         return stops.isEmpty ? [(0, 0.5), (0.38, 0.2), (0.72, 0.06), (1, 0)] : stops
+    }
+
+    /// `snap.bloom_stops`: the accent drop/expand bloom (offset, alpha).
+    static var snapBloomStops: [(CGFloat, CGFloat)] {
+        let stops = (group("snap")["bloom_stops"] as? [[NSNumber]] ?? []).compactMap { stop -> (CGFloat, CGFloat)? in
+            stop.count == 2 ? (CGFloat(stop[0].doubleValue), CGFloat(stop[1].doubleValue)) : nil
+        }
+        return stops.isEmpty ? [(0, 0.55), (0.38, 0.22), (0.72, 0.06), (1, 0)] : stops
     }
 
     static func loupeChecker(dark: Bool) -> NSColor {
@@ -212,6 +225,9 @@ struct NativeSnapParticles {
     let easing: CAMediaTimingFunction
     let opacity: [(Double, Double)]
     let scale: (CGFloat, CGFloat)
+    /// `snap_bloom.rest_opacity`: the blooms' own opacity, shown while the
+    /// breathing loop does not run (reduced motion).
+    let bloomRestOpacity: CGFloat
 
     static let shipping = NativeSnapParticles(
         (try? SettingsBridge().request(["operation": "motion"]))?["motion"] as? [String: Any])
@@ -236,6 +252,7 @@ struct NativeSnapParticles {
         opacity = frames.count >= 2 ? frames : [(0, 0), (0.12, 1), (0.7, 0.55), (1, 0)]
         let scales = (value["scale"] as? [NSNumber] ?? []).map { CGFloat($0.doubleValue) }
         scale = scales.count == 2 ? (scales[0], scales[1]) : (0.55, 0.2)
+        bloomRestOpacity = previewNumber((motion?["snap_bloom"] as? [String: Any])?["rest_opacity"]) ?? 0.95
     }
 
     /// One particle `elapsed` seconds into its edge's glow, or nil while it is
@@ -257,6 +274,189 @@ struct NativeSnapParticles {
         }
         guard alpha > 0.001 else { return nil }
         return (seed.travel * travel * moved, scale.0 + (scale.1 - scale.0) * moved, CGFloat(alpha))
+    }
+}
+
+/// Drives a looping canvas-edge effect: redraws `view` at 60 Hz while the
+/// effect runs, the view is in a window and motion is not reduced.
+final class NativeEdgeEffectClock {
+    private weak var view: NSView?
+    private var timer: Timer?
+    private(set) var started: CFTimeInterval?
+    var reducedMotion: () -> Bool = { NativeMotion.reduceMotion }
+
+    init(view: NSView) { self.view = view }
+
+    deinit { timer?.invalidate() }
+
+    var isAnimating: Bool { timer != nil }
+
+    /// Seconds since the effect started, or 0 while idle.
+    var elapsed: Double { started.map { CACurrentMediaTime() - $0 } ?? 0 }
+
+    /// Start (keeping an existing start time) or stop the loop.
+    func update(running: Bool) {
+        guard running else { started = nil; stop(); return }
+        if started == nil { started = CACurrentMediaTime() }
+        guard timer == nil, view?.window != nil, !reducedMotion() else { return }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            guard let self, let view = self.view, view.window != nil, !self.reducedMotion() else {
+                self?.stop(); return
+            }
+            view.needsDisplay = true
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    func stop() {
+        timer?.invalidate(); timer = nil
+    }
+}
+
+/// Shipping's glowing canvas edges (`.screenshot-drop-snap-guide.edge-*`,
+/// `.screenshot-canvas-expand-edge`, `.screenshot-canvas-trim-edge`): a
+/// breathing outward bloom, a pulsing bar and `DROP_SNAP_PARTICLES`. The
+/// loops have no fill mode, so reduced motion rests on each element's own
+/// style and shows no particles.
+enum NativeEdgeEffects {
+    /// `drop-snap-bloom-breathe` (opacity, scale) `elapsed` seconds in.
+    static func bloomPose(at elapsed: Double, tokens: Tokens?, reduced: Bool) -> (opacity: CGFloat, scale: CGFloat) {
+        guard !reduced, let tokens,
+              let pose = NativeMotion.poseRepeating("snap_bloom_breathe", at: elapsed, tokens: tokens, reduced: false)
+        else { return (NativeSnapParticles.shipping.bloomRestOpacity, 1) }
+        return (CGFloat(pose.opacity), CGFloat(pose.scale))
+    }
+
+    /// Opacity of a looping catalog animation, 1 when it does not run.
+    static func loopOpacity(_ name: String, at elapsed: Double, tokens: Tokens?, reduced: Bool) -> CGFloat {
+        guard !reduced, let tokens else { return 1 }
+        return CGFloat(NativeMotion.poseRepeating(name, at: elapsed, tokens: tokens, reduced: false)?.opacity ?? 1)
+    }
+
+    /// A bar `thickness` thick centered on one side of `rect`, 1 point past each end.
+    static func strip(_ rect: CGRect, edge: NativeCanvasExpand.Edge, thickness: CGFloat) -> CGRect {
+        switch edge {
+        case .top: return CGRect(x: rect.minX - 1, y: rect.minY - thickness / 2, width: rect.width + 2, height: thickness)
+        case .bottom: return CGRect(x: rect.minX - 1, y: rect.maxY - thickness / 2, width: rect.width + 2, height: thickness)
+        case .left: return CGRect(x: rect.minX - thickness / 2, y: rect.minY - 1, width: thickness, height: rect.height + 2)
+        case .right: return CGRect(x: rect.maxX - thickness / 2, y: rect.minY - 1, width: thickness, height: rect.height + 2)
+        }
+    }
+
+    /// The bloom's band outward from one side of `rect`, `overhang` of the
+    /// edge's length past each end, scaled by `scale` about its center.
+    static func bloomBand(_ rect: CGRect, edge: NativeCanvasExpand.Edge, depth: CGFloat,
+                          overhang: CGFloat, scale: CGFloat) -> CGRect {
+        let band: CGRect
+        switch edge {
+        case .top:
+            band = CGRect(x: rect.minX - overhang * rect.width, y: rect.minY - depth,
+                          width: rect.width * (1 + 2 * overhang), height: depth)
+        case .bottom:
+            band = CGRect(x: rect.minX - overhang * rect.width, y: rect.maxY,
+                          width: rect.width * (1 + 2 * overhang), height: depth)
+        case .left:
+            band = CGRect(x: rect.minX - depth, y: rect.minY - overhang * rect.height,
+                          width: depth, height: rect.height * (1 + 2 * overhang))
+        case .right:
+            band = CGRect(x: rect.maxX, y: rect.minY - overhang * rect.height,
+                          width: depth, height: rect.height * (1 + 2 * overhang))
+        }
+        return band.insetBy(dx: -band.width * (scale - 1) / 2, dy: -band.height * (scale - 1) / 2)
+    }
+
+    /// A gradient across the band (`stops`, 0 at the edge) faded along the
+    /// edge by shipping's 12 %/88 % mask.
+    static func drawBloom(_ context: CGContext, rect: CGRect, edge: NativeCanvasExpand.Edge, depth: CGFloat,
+                          overhang: CGFloat, stops: [(CGFloat, CGFloat)], strength: CGFloat, scale: CGFloat,
+                          color: (CGFloat) -> NSColor) {
+        let band = bloomBand(rect, edge: edge, depth: depth, overhang: overhang, scale: scale)
+        let start: CGPoint, end: CGPoint, alongStart: CGPoint, alongEnd: CGPoint
+        switch edge {
+        case .top:
+            start = CGPoint(x: band.minX, y: band.maxY); end = CGPoint(x: band.minX, y: band.minY)
+            alongStart = CGPoint(x: band.minX, y: 0); alongEnd = CGPoint(x: band.maxX, y: 0)
+        case .bottom:
+            start = CGPoint(x: band.minX, y: band.minY); end = CGPoint(x: band.minX, y: band.maxY)
+            alongStart = CGPoint(x: band.minX, y: 0); alongEnd = CGPoint(x: band.maxX, y: 0)
+        case .left:
+            start = CGPoint(x: band.maxX, y: band.minY); end = CGPoint(x: band.minX, y: band.minY)
+            alongStart = CGPoint(x: 0, y: band.minY); alongEnd = CGPoint(x: 0, y: band.maxY)
+        case .right:
+            start = CGPoint(x: band.minX, y: band.minY); end = CGPoint(x: band.maxX, y: band.minY)
+            alongStart = CGPoint(x: 0, y: band.minY); alongEnd = CGPoint(x: 0, y: band.maxY)
+        }
+        guard band.width > 0, band.height > 0, !stops.isEmpty,
+              let space = CGColorSpace(name: CGColorSpace.sRGB) else { return }
+        guard let across = CGGradient(colorsSpace: space,
+                                      colors: stops.map { color($0.1 * strength).cgColor } as CFArray,
+                                      locations: stops.map { $0.0 }),
+              let mask = CGGradient(colorsSpace: space,
+                                    colors: [0.0, 1, 1, 0].map { NSColor(white: 0, alpha: $0).cgColor } as CFArray,
+                                    locations: [0, 0.12, 0.88, 1]) else { return }
+        context.saveGState()
+        context.clip(to: band)
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+        context.drawLinearGradient(across, start: start, end: end, options: [])
+        context.setBlendMode(.destinationIn)
+        context.drawLinearGradient(mask, start: alongStart, end: alongEnd, options: [])
+        context.endTransparencyLayer()
+        context.restoreGState()
+    }
+
+    /// A pill with layered `(grow, alpha)` glows, all scaled by `opacity`.
+    static func drawBar(_ strip: CGRect, halos: [(CGFloat, CGFloat)], opacity: CGFloat,
+                        color: (CGFloat) -> NSColor) {
+        let radius = min(strip.width, strip.height) / 2
+        for (grow, alpha) in halos {
+            color(alpha * opacity).setFill()
+            NSBezierPath(roundedRect: strip.insetBy(dx: -grow, dy: -grow),
+                         xRadius: radius + grow, yRadius: radius + grow).fill()
+        }
+        color(opacity).setFill()
+        NSBezierPath(roundedRect: strip, xRadius: radius, yRadius: radius).fill()
+    }
+
+    /// `DROP_SNAP_PARTICLES` streaming outward from one side of `rect`.
+    static func drawParticles(_ rect: CGRect, edge: NativeCanvasExpand.Edge, elapsed: Double, reduced: Bool,
+                              color: (CGFloat) -> NSColor) {
+        let particles = NativeSnapParticles.shipping
+        for seed in particles.seeds {
+            guard let particle = particles.pose(seed, at: elapsed, reduced: reduced) else { continue }
+            let center: CGPoint
+            switch edge {
+            case .top: center = CGPoint(x: rect.minX + seed.along * rect.width, y: rect.minY - particle.outward)
+            case .bottom: center = CGPoint(x: rect.minX + seed.along * rect.width, y: rect.maxY + particle.outward)
+            case .left: center = CGPoint(x: rect.minX - particle.outward, y: rect.minY + seed.along * rect.height)
+            case .right: center = CGPoint(x: rect.maxX + particle.outward, y: rect.minY + seed.along * rect.height)
+            }
+            let size = seed.size * particle.scale
+            color(0.25 * particle.opacity).setFill()
+            NSBezierPath(ovalIn: CGRect(x: center.x - size / 2 - 3, y: center.y - size / 2 - 3,
+                                        width: size + 6, height: size + 6)).fill()
+            color(particle.opacity).setFill()
+            NSBezierPath(ovalIn: CGRect(x: center.x - size / 2, y: center.y - size / 2,
+                                        width: size, height: size)).fill()
+        }
+    }
+
+    /// The accent edge of an image-drop snap or an armed Expand canvas side:
+    /// bloom `depth` deep, pulsing 5 pt bar with `0 0 8px .95, 0 0 20px .65,
+    /// 0 0 36px .4` glows, and particles.
+    static func drawAccentEdge(_ context: CGContext, target: CGRect, edge: NativeCanvasExpand.Edge,
+                               depth: CGFloat, overhang: CGFloat, accent: NSColor, tokens: Tokens?,
+                               elapsed: Double, reduced: Bool) {
+        let color: (CGFloat) -> NSColor = { accent.withAlphaComponent(max(0, min(1, $0))) }
+        let bloom = bloomPose(at: elapsed, tokens: tokens, reduced: reduced)
+        drawBloom(context, rect: target, edge: edge, depth: depth, overhang: overhang,
+                  stops: NativeEditorPreviewPaint.snapBloomStops, strength: bloom.opacity,
+                  scale: bloom.scale, color: color)
+        let bar = strip(target, edge: edge, thickness: NativeEditorPreviewPaint.snap("edge_bar", 5))
+        drawBar(bar, halos: [(16, 0.08), (9, 0.16), (3.5, 0.36)],
+                opacity: loopOpacity("snap_edge_pulse", at: elapsed, tokens: tokens, reduced: reduced),
+                color: color)
+        drawParticles(target, edge: edge, elapsed: elapsed, reduced: reduced, color: color)
     }
 }
 
@@ -374,86 +574,17 @@ final class EditorTrimPreviewView: NSView {
 
         let bar = paint.trim("edge_bar", 4)
         let depth = paint.trim("bloom", 96)
+        let bloom = NativeEdgeEffects.bloomPose(at: elapsed, tokens: tokens, reduced: reduced)
+        let color: (CGFloat) -> NSColor = { paint.trimColor($0) }
         for edge in trimPreview.edges {
-            drawBloom(context, keep: keep, edge: edge, depth: depth)
-            let strip: CGRect
-            switch edge {
-            case .top: strip = CGRect(x: keep.minX - 1, y: keep.minY - bar / 2, width: keep.width + 2, height: bar)
-            case .bottom: strip = CGRect(x: keep.minX - 1, y: keep.maxY - bar / 2, width: keep.width + 2, height: bar)
-            case .left: strip = CGRect(x: keep.minX - bar / 2, y: keep.minY - 1, width: bar, height: keep.height + 2)
-            case .right: strip = CGRect(x: keep.maxX - bar / 2, y: keep.minY - 1, width: bar, height: keep.height + 2)
-            }
+            NativeEdgeEffects.drawBloom(context, rect: keep, edge: edge, depth: depth, overhang: 0,
+                                        stops: paint.trimBloomStops, strength: bloom.opacity,
+                                        scale: bloom.scale, color: color)
             // `0 0 8px .95, 0 0 20px .55, 0 0 32px .32` around the pill.
-            for (grow, alpha) in [(CGFloat(14), CGFloat(0.06)), (8, 0.12), (3, 0.3)] {
-                paint.trimColor(alpha * pose.edge).setFill()
-                NSBezierPath(roundedRect: strip.insetBy(dx: -grow, dy: -grow),
-                             xRadius: bar / 2 + grow, yRadius: bar / 2 + grow).fill()
-            }
-            paint.trimColor(pose.edge).setFill()
-            NSBezierPath(roundedRect: strip, xRadius: bar / 2, yRadius: bar / 2).fill()
-            let particles = NativeSnapParticles.shipping
-            for seed in particles.seeds {
-                guard let particle = particles.pose(seed, at: elapsed, reduced: reduced) else { continue }
-                let center: CGPoint
-                switch edge {
-                case .top: center = CGPoint(x: keep.minX + seed.along * keep.width, y: keep.minY - particle.outward)
-                case .bottom: center = CGPoint(x: keep.minX + seed.along * keep.width, y: keep.maxY + particle.outward)
-                case .left: center = CGPoint(x: keep.minX - particle.outward, y: keep.minY + seed.along * keep.height)
-                case .right: center = CGPoint(x: keep.maxX + particle.outward, y: keep.minY + seed.along * keep.height)
-                }
-                let size = seed.size * particle.scale
-                paint.trimColor(0.25 * particle.opacity).setFill()
-                NSBezierPath(ovalIn: CGRect(x: center.x - size / 2 - 3, y: center.y - size / 2 - 3,
-                                            width: size + 6, height: size + 6)).fill()
-                paint.trimColor(particle.opacity).setFill()
-                NSBezierPath(ovalIn: CGRect(x: center.x - size / 2, y: center.y - size / 2,
-                                            width: size, height: size)).fill()
-            }
+            NativeEdgeEffects.drawBar(NativeEdgeEffects.strip(keep, edge: edge, thickness: bar),
+                                      halos: [(14, 0.06), (8, 0.12), (3, 0.3)], opacity: pose.edge, color: color)
+            NativeEdgeEffects.drawParticles(keep, edge: edge, elapsed: elapsed, reduced: reduced, color: color)
         }
-    }
-
-    /// `.screenshot-canvas-trim-bloom`: a gradient outward from one side of
-    /// the kept area, faded along the edge by shipping's 12 %/88 % mask.
-    private func drawBloom(_ context: CGContext, keep: CGRect, edge: NativeCanvasExpand.Edge, depth: CGFloat) {
-        let band: CGRect
-        let start: CGPoint
-        let end: CGPoint
-        let alongStart: CGPoint
-        let alongEnd: CGPoint
-        switch edge {
-        case .top:
-            band = CGRect(x: keep.minX, y: keep.minY - depth, width: keep.width, height: depth)
-            start = CGPoint(x: keep.minX, y: keep.minY); end = CGPoint(x: keep.minX, y: keep.minY - depth)
-            alongStart = CGPoint(x: keep.minX, y: 0); alongEnd = CGPoint(x: keep.maxX, y: 0)
-        case .bottom:
-            band = CGRect(x: keep.minX, y: keep.maxY, width: keep.width, height: depth)
-            start = CGPoint(x: keep.minX, y: keep.maxY); end = CGPoint(x: keep.minX, y: keep.maxY + depth)
-            alongStart = CGPoint(x: keep.minX, y: 0); alongEnd = CGPoint(x: keep.maxX, y: 0)
-        case .left:
-            band = CGRect(x: keep.minX - depth, y: keep.minY, width: depth, height: keep.height)
-            start = CGPoint(x: keep.minX, y: keep.minY); end = CGPoint(x: keep.minX - depth, y: keep.minY)
-            alongStart = CGPoint(x: 0, y: keep.minY); alongEnd = CGPoint(x: 0, y: keep.maxY)
-        case .right:
-            band = CGRect(x: keep.maxX, y: keep.minY, width: depth, height: keep.height)
-            start = CGPoint(x: keep.maxX, y: keep.minY); end = CGPoint(x: keep.maxX + depth, y: keep.minY)
-            alongStart = CGPoint(x: 0, y: keep.minY); alongEnd = CGPoint(x: 0, y: keep.maxY)
-        }
-        guard band.width > 0, band.height > 0, let space = CGColorSpace(name: CGColorSpace.sRGB) else { return }
-        let stops = NativeEditorPreviewPaint.trimBloomStops
-        guard let across = CGGradient(colorsSpace: space,
-                                      colors: stops.map { NativeEditorPreviewPaint.trimColor($0.1).cgColor } as CFArray,
-                                      locations: stops.map { $0.0 }),
-              let mask = CGGradient(colorsSpace: space,
-                                    colors: [0.0, 1, 1, 0].map { NSColor(white: 0, alpha: $0).cgColor } as CFArray,
-                                    locations: [0, 0.12, 0.88, 1]) else { return }
-        context.saveGState()
-        context.clip(to: band)
-        context.beginTransparencyLayer(auxiliaryInfo: nil)
-        context.drawLinearGradient(across, start: start, end: end, options: [])
-        context.setBlendMode(.destinationIn)
-        context.drawLinearGradient(mask, start: alongStart, end: alongEnd, options: [])
-        context.endTransparencyLayer()
-        context.restoreGState()
     }
 }
 
