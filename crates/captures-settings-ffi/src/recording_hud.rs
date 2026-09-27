@@ -5,6 +5,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use captures_app::{
     recording_hud::{self, ErrorEvent, ErrorLine, Input},
+    shortcuts::ShortcutPlatform,
     tray_notice::LogicalRect,
 };
 use serde::Deserialize;
@@ -31,6 +32,11 @@ enum Request {
         progress: f64,
         bounds: LogicalRect,
     },
+    HiddenNotice {
+        #[serde(default)]
+        shortcut: String,
+        platform: ShortcutPlatform,
+    },
 }
 
 fn finite(values: &[f64]) -> bool {
@@ -51,6 +57,18 @@ fn respond(bytes: &[u8]) -> Result<Value, String> {
             let changed = line.apply(event);
             let text = line.line(session_error.as_deref());
             Ok(json!({"line": line, "text": text, "changed": changed}))
+        }
+        Request::HiddenNotice { shortcut, platform } => {
+            let copy = recording_hud::hidden_notice_copy(&shortcut, platform);
+            Ok(json!({
+                "title": copy.title,
+                "before_keys": copy.before_keys,
+                "keys": copy.keys,
+                "after_keys": copy.after_keys,
+                "detail": copy.detail(),
+                "width": recording_hud::HIDDEN_NOTICE_WIDTH,
+                "height": recording_hud::HIDDEN_NOTICE_HEIGHT,
+            }))
         }
         Request::TooltipFrame {
             anchor,
@@ -166,6 +184,20 @@ mod tests {
             "bounds":{"x":0,"y":0,"width":430,"height":102}}"#,
         );
         assert_eq!(frame["result"]["x"], 334.0);
+
+        let hidden = call(
+            r#"{"operation":"hidden_notice","shortcut":"CommandOrControl+Shift+Space","platform":"macos"}"#,
+        );
+        let hidden = &hidden["result"];
+        assert_eq!(hidden["title"], "Recording controls hidden");
+        assert_eq!(
+            hidden["before_keys"],
+            "Open Captures from the menu bar, or press"
+        );
+        assert_eq!(hidden["keys"], json!(["Cmd", "Shift", "Space"]));
+        assert_eq!(hidden["after_keys"], "to bring them back.");
+        assert_eq!(hidden["width"], 418.0);
+        assert_eq!(hidden["height"], 74.0);
 
         for request in [
             r#"{"operation":"present","state":"nope"}"#,

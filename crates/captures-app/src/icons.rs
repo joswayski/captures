@@ -15,6 +15,23 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
             "M9 4H7a3 3 0 0 0-3 3v2M15 4h2a3 3 0 0 1 3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2",
             "M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z",
         ],
+        // Capture menu targets (`CaptureTargetIcon`). Its `h.01` title-bar
+        // dots are written as tiny circles so hosts without round caps still
+        // draw them.
+        "target-region" => &[
+            "M5 9V6a1 1 0 0 1 1-1h3M15 5h3a1 1 0 0 1 1 1v3M19 15v3a1 1 0 0 1-1 1h-3M9 19H6a1 1 0 0 1-1-1v-3",
+            "M10 9h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1Z",
+        ],
+        "target-window" => &[
+            "M6.5 6h11a2.5 2.5 0 0 1 2.5 2.5v8a2.5 2.5 0 0 1 -2.5 2.5h-11a2.5 2.5 0 0 1 -2.5 -2.5v-8a2.5 2.5 0 0 1 2.5 -2.5Z",
+            "M4 10h16",
+            "M6.8 8a0.2 0.2 0 1 0 0.4 0a0.2 0.2 0 1 0 -0.4 0",
+            "M9.8 8a0.2 0.2 0 1 0 0.4 0a0.2 0.2 0 1 0 -0.4 0",
+        ],
+        "target-display" => &[
+            "M5.5 4h13a2.5 2.5 0 0 1 2.5 2.5v9a2.5 2.5 0 0 1 -2.5 2.5h-13a2.5 2.5 0 0 1 -2.5 -2.5v-9a2.5 2.5 0 0 1 2.5 -2.5Z",
+            "M9 21h6M12 18v3",
+        ],
         "microphone" => &[
             "M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z",
             "M6 11a6 6 0 0 0 11.4 2.6M12 18v3M9 21h6",
@@ -508,6 +525,9 @@ mod tests {
             "resume",
             "restart",
             "capture",
+            "target-region",
+            "target-window",
+            "target-display",
             "microphone",
             "microphone-muted",
             "trash",

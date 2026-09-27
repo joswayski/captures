@@ -39,7 +39,7 @@ def main():
     parser.add_argument("--timeline", action="store_true", help="Exercise graphical trim staging, keyboard input and export")
     parser.add_argument("--thumbnails", action="store_true", help="Exercise source thumbnails, cancellation, failure/retry and trim")
     parser.add_argument("--playback", action="store_true", help="Exercise silent motion, pause/resume, trim EOF, failure and close")
-    parser.add_argument("--sound", action="store_true", help="Exercise opt-in playback through an isolated PulseAudio sink (not physical audio acceptance)")
+    parser.add_argument("--sound", action="store_true", help="Exercise default-on playback through an isolated PulseAudio sink (not physical audio acceptance)")
     parser.add_argument("--graphical-crop", action="store_true", help="Exercise source-view crop handles, cache, staging and export")
     parser.add_argument("--preview-scale", action="store_true", help="Exercise display-only Fit/100% and bounded preview scrolling")
     parser.add_argument("--gif-frame-rate", action="store_true", help="Exercise staged GIF cadence and real exported frame counts")
@@ -857,17 +857,15 @@ def main():
                 wait(playing, "playback started")
                 time.sleep(1)
                 inputs = run("pactl", "list", "short", "sink-inputs").splitlines()
-                assert len(inputs) == (0 if name == "sound-default-off" else 1), inputs
+                assert len(inputs) == (0 if name == "sound-off" else 1), inputs
                 run("import", "-window", editor, str(output / f"{name}-running.png"))
                 idle(editor)
                 assert not run("pactl", "list", "short", "sink-inputs").strip(), "EOF releases audio output"
                 assert monitor.wait(timeout=15) == 0
                 return array("f", pcm.read_bytes())
 
-            silent = capture_playback("sound-default-off")
-            assert silent and max(abs(v) for v in silent) < .00001, "Sound defaults off"
-            press(editor, "Sound")
-            audible = capture_playback("sound-on")
+            # Shipping previews through an unmuted <video>: Sound starts on.
+            audible = capture_playback("sound-default-on")
             assert max(abs(v) for v in audible) > .05, "Sound reaches the default virtual sink"
             # Independently measure both asymmetric source tones, rather than accepting noise.
             measured = []
@@ -883,6 +881,10 @@ def main():
             shot(editor, "sound-ended")
             dominant(output / "sound-ended.png", 2)
             assert max(abs(v) for v in audible[-48000:]) < .00001, "short audio drains to silence"
+            press(editor, "Sound")
+            silent = capture_playback("sound-off")
+            assert silent and max(abs(v) for v in silent) < .00001, "Sound off plays silently"
+            press(editor, "Sound")
 
             press(editor, "Loop preview")  # Loop reopens audio only after decoder/output teardown.
             motion_click()
@@ -941,11 +943,11 @@ def main():
             shot(editor, "sound-close-confirmation")
             (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
                 "virtual_sink_tone_amplitudes": measured,
-                "checks": ["default-silent", "opt-in-real-output", "both-source-tones", "short-audio-video-eof",
+                "checks": ["default-sound-real-output", "explicit-silent", "both-source-tones", "short-audio-video-eof",
                     "audible-loop-reopen", "one-output-stream", "pause-eof-release-output",
                     "device-failure", "explicit-silent-retry", "minimum-layout", "gif-no-device",
                     "immutable-source-history", "no-export"]}, indent=2) + "\n")
-            print("PASS Sound preview: default-off, virtual audio output, EOF, device error/retry and GIF without a device")
+            print("PASS Sound preview: default-on virtual audio output, explicit silence, EOF, device error/retry and GIF without a device")
             return
         if args.gif_width:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")

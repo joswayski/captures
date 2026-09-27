@@ -324,8 +324,8 @@ the last displayed frame; reaching the trim end makes Play restart that range.
 Editing and export controls wait for playback to stop. Losing focus or minimizing
 pauses playback. **Loop preview**, off by default, repeats the accepted trim until
 paused. It can be switched on or off during playback and never changes the export.
-**Sound**, off by default and changeable while stopped, previews the accepted MP4
-audio mix on the default output device. GIF and mixes with no audible tracks stay
+**Sound**, on by default like the shipping preview and changeable while stopped,
+plays the accepted MP4 audio mix on the default output device. GIF and mixes with no audible tracks stay
 silent without opening a device. Device failures are visible; turn Sound off to
 retry silently. Loop reopens the decoders each lap and is not gapless. Physical
 audio routing and A/V synchronization acceptance remain open.

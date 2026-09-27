@@ -338,14 +338,12 @@ impl CaptureControls {
                         ui.spacing_mut().item_spacing.y = tokens.number("s-3");
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
-                                if ui
-                                    .button("×")
+                                if close_button(ui, tokens)
                                     .on_hover_text("Close capture controls (Esc)")
                                     .clicked()
                                 {
                                     action = Some(Action::Cancel);
                                 }
-                                ui.separator();
                                 // Shipping `.capture-action-switch` indicator.
                                 let action_switch = SlidingIndicator::begin(
                                     ui,
@@ -356,28 +354,26 @@ impl CaptureControls {
                                     ui,
                                     tokens,
                                     self.action_mode == ActionMode::Screenshot,
+                                    true,
                                     "Screenshot",
+                                    SegmentGlyph::Icon("capture"),
                                 );
                                 if screenshot.clicked() {
                                     self.action_mode = ActionMode::Screenshot;
                                 }
-                                let record = ui
-                                    .add_enabled(
-                                        view.recording_available,
-                                        egui::Button::new(
-                                            RichText::new("Record").color(tokens.color(
-                                                if self.action_mode == ActionMode::Recording {
-                                                    "glass-text"
-                                                } else {
-                                                    "glass-text-muted"
-                                                },
-                                            )),
-                                        )
-                                        .fill(Color32::TRANSPARENT),
-                                    )
-                                    .on_disabled_hover_text(view.recording_unavailable_reason.unwrap_or(
+                                let record = segment(
+                                    ui,
+                                    tokens,
+                                    self.action_mode == ActionMode::Recording,
+                                    view.recording_available,
+                                    "Record",
+                                    SegmentGlyph::RecordDot,
+                                )
+                                .on_disabled_hover_text(
+                                    view.recording_unavailable_reason.unwrap_or(
                                         "Screen recording is unavailable in this desktop session",
-                                    ));
+                                    ),
+                                );
                                 if record.clicked() {
                                     self.action_mode = ActionMode::Recording;
                                 }
@@ -391,7 +387,7 @@ impl CaptureControls {
                                         screenshot.rect
                                     },
                                 );
-                                ui.separator();
+                                divider(ui, tokens);
                                 // Shipping `.recording-target-switch` indicator.
                                 let target_switch = SlidingIndicator::begin(
                                     ui,
@@ -399,12 +395,19 @@ impl CaptureControls {
                                     ui.min_rect().min,
                                 );
                                 let mut selected_segment = None;
-                                for (mode, label) in [
-                                    (TargetMode::Region, "Region"),
-                                    (TargetMode::Window, "Window"),
-                                    (TargetMode::Display, "Full screen"),
+                                for (mode, label, icon) in [
+                                    (TargetMode::Region, "Region", "target-region"),
+                                    (TargetMode::Window, "Window", "target-window"),
+                                    (TargetMode::Display, "Full screen", "target-display"),
                                 ] {
-                                    let response = segment(ui, tokens, self.mode == mode, label);
+                                    let response = segment(
+                                        ui,
+                                        tokens,
+                                        self.mode == mode,
+                                        true,
+                                        label,
+                                        SegmentGlyph::Icon(icon),
+                                    );
                                     if self.mode == mode {
                                         selected_segment = Some(response.rect);
                                     }
@@ -412,8 +415,7 @@ impl CaptureControls {
                                         let same = self.mode == mode;
                                         self.mode = mode;
                                         if mode == TargetMode::Display && view.auto_start {
-                                            action =
-                                                Some(self.action_for_target(Target::Display));
+                                            action = Some(self.action_for_target(Target::Display));
                                         } else if same
                                             && view.auto_start
                                             && let Some(target) = self.current_target()
@@ -426,10 +428,8 @@ impl CaptureControls {
                                     paint_indicator(ui, tokens, target_switch, rect);
                                 }
                                 if self.mode == TargetMode::Region {
-                                    ui.separator();
                                     self.region.show_aspect_picker(ui, tokens, bounds);
                                 } else if self.mode == TargetMode::Display {
-                                    ui.separator();
                                     let mut display_id = view.display.id.clone();
                                     let mut selected = display_label(view.display).to_owned();
                                     if content_rect.width() <= 800. {
@@ -444,11 +444,7 @@ impl CaptureControls {
                                                 display_label(display),
                                                 display.width,
                                                 display.height,
-                                                if display.is_primary {
-                                                    " (Primary)"
-                                                } else {
-                                                    ""
-                                                }
+                                                if display.is_primary { " (Primary)" } else { "" }
                                             )
                                         })
                                         .collect();
@@ -482,27 +478,39 @@ impl CaptureControls {
                                     }
                                 }
                                 if !primary.hidden {
-                                    ui.separator();
+                                    // `.recording-start { margin-left: var(--s-2) }`.
+                                    ui.add_space(tokens.number("s-2"));
                                     let target = self.current_target();
-                                    let label = RichText::new(primary.label)
-                                        .color(tokens.color("theme-accent-ink"));
+                                    let ink = tokens.color("theme-accent-ink");
+                                    let label = RichText::new(primary.label).color(ink);
                                     let recording = self.action_mode == ActionMode::Recording;
-                                    // `.capture-record-dot` before Start recording.
-                                    let dot = egui::IdSalt::new("capture-record-dot");
-                                    let button = if recording {
-                                        egui::Button::new((
-                                            egui::Atom::custom(dot, egui::Vec2::splat(10.)),
-                                            label,
-                                        ))
-                                    } else {
-                                        egui::Button::new(label)
-                                    }
+                                    // `.capture-record-dot` before Start recording,
+                                    // `CaptureIcon` before Take screenshot.
+                                    let glyph = egui::IdSalt::new("capture-primary-glyph");
+                                    let button = egui::Button::new((
+                                        egui::Atom::custom(
+                                            glyph,
+                                            egui::Vec2::splat(if recording { 10. } else { 16. }),
+                                        ),
+                                        label,
+                                    ))
+                                    .gap(tokens.number("s-3"))
                                     .fill(tokens.color("theme-accent"))
                                     .stroke(Stroke::NONE);
                                     let shown = ui
-                                        .add_enabled_ui(target.is_some(), |ui| button.atom_ui(ui))
+                                        .add_enabled_ui(target.is_some(), |ui| {
+                                            let shown = button.atom_ui(ui);
+                                            if let Some(rect) = shown.rect(glyph)
+                                                && !recording
+                                            {
+                                                paint_icon(ui.painter(), "capture", rect, 1.8, ink);
+                                            }
+                                            shown
+                                        })
                                         .inner;
-                                    if let Some(rect) = shown.rect(dot) {
+                                    if let Some(rect) = shown.rect(glyph)
+                                        && recording
+                                    {
                                         paint_record_dot(ui, tokens, rect, target.is_some());
                                     }
                                     if shown
@@ -539,7 +547,8 @@ impl CaptureControls {
                             } else {
                                 self.recording_options_since = None;
                             }
-                            if let Some(target) = self.show_note(ui, tokens, menu_mode, view.auto_start)
+                            if let Some(target) =
+                                self.show_note(ui, tokens, menu_mode, view.auto_start)
                             {
                                 action = Some(Action::OpenPreference(target));
                             }
@@ -1194,17 +1203,135 @@ fn window_target(target: SelectionTarget) -> Target {
     }
 }
 
+/// A segment's leading glyph: a shared shipping icon, or `.capture-record-dot`.
+#[derive(Clone, Copy)]
+enum SegmentGlyph {
+    Icon(&'static str),
+    RecordDot,
+}
+
 /// One segment; its raised fill is the switch's [`SlidingIndicator`].
-fn segment(ui: &mut egui::Ui, tokens: &Tokens, selected: bool, label: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(RichText::new(label).color(tokens.color(if selected {
-            "glass-text"
-        } else {
-            "glass-text-muted"
-        })))
-        .fill(Color32::TRANSPARENT)
-        .stroke(Stroke::NONE),
-    )
+/// Shipping segment icons are 15 px with a 1.7 stroke; the record dot is 9 px.
+fn segment(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    selected: bool,
+    enabled: bool,
+    label: &str,
+    glyph: SegmentGlyph,
+) -> egui::Response {
+    let color = tokens.color(if selected {
+        "glass-text"
+    } else {
+        "glass-text-muted"
+    });
+    let id = egui::IdSalt::new("capture-segment-glyph");
+    let side = match glyph {
+        SegmentGlyph::Icon(_) => 15.,
+        SegmentGlyph::RecordDot => 9.,
+    };
+    let button = egui::Button::new((
+        egui::Atom::custom(id, egui::Vec2::splat(side)),
+        RichText::new(label).color(color),
+    ))
+    .gap(tokens.number("s-3"))
+    .fill(Color32::TRANSPARENT)
+    .stroke(Stroke::NONE);
+    // Paint inside the enabled scope so a disabled segment fades its glyph too.
+    ui.add_enabled_ui(enabled, |ui| {
+        let shown = button.atom_ui(ui);
+        if let Some(rect) = shown.rect(id) {
+            match glyph {
+                SegmentGlyph::Icon(name) => paint_icon(ui.painter(), name, rect, 1.7, color),
+                SegmentGlyph::RecordDot => {
+                    ui.painter().circle_filled(
+                        rect.center(),
+                        side / 2.,
+                        tokens.color("theme-signal"),
+                    );
+                }
+            }
+        }
+        shown.response
+    })
+    .inner
+}
+
+/// Stroke a shared shipping icon (24-unit grid) into `rect`. `CaptureIcon`'s
+/// spark is filled (`.capture-icon-spark`), like the shipping menu.
+pub(crate) fn paint_icon(
+    painter: &egui::Painter,
+    name: &str,
+    rect: egui::Rect,
+    width: f32,
+    color: Color32,
+) {
+    let scale = rect.width() / 24.;
+    let at = |[x, y]: [f32; 2]| rect.min + egui::vec2(x * scale, y * scale);
+    let stroke = Stroke::new(width * scale, color);
+    let paths = captures_app::icons::paths(name).unwrap_or_default();
+    for (index, d) in paths.iter().enumerate() {
+        for line in captures_app::icons::flatten(d) {
+            let points: Vec<egui::Pos2> = line.iter().copied().map(at).collect();
+            if name == "capture" && index == 1 && points.len() > 2 {
+                // The spark is star-shaped about its centre: fan-fill it.
+                let centre = at([12., 12.]);
+                let mut mesh = egui::Mesh::default();
+                mesh.colored_vertex(centre, color);
+                for point in &points {
+                    mesh.colored_vertex(*point, color);
+                }
+                for i in 1..points.len() as u32 {
+                    mesh.add_triangle(0, i, i + 1);
+                }
+                painter.add(mesh);
+            } else {
+                painter.add(egui::Shape::line(points, stroke));
+            }
+        }
+    }
+}
+
+/// Shipping `.capture-selector-close`: a 32 px quiet button with a 15 px ×.
+fn close_button(ui: &mut egui::Ui, tokens: &Tokens) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(32.), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close capture controls")
+    });
+    let hovered = response.hovered();
+    let painter = ui.painter();
+    if hovered {
+        painter.rect_filled(rect, tokens.number("r-md"), tokens.color("glass-hover"));
+    }
+    if response.has_focus() {
+        crate::primitives::focus_indicated(ui.ctx());
+        painter.rect_stroke(
+            rect.expand(2.),
+            tokens.number("r-md"),
+            Stroke::new(2., tokens.color("theme-accent")),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let color = tokens.color(if hovered {
+        "glass-text"
+    } else {
+        "glass-text-subtle"
+    });
+    paint_icon(
+        painter,
+        "close",
+        egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(15.)),
+        2.,
+        color,
+    );
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Shipping `.capture-selector-divider`: a 1 × 24 px `--glass-border` rule.
+fn divider(ui: &mut egui::Ui, tokens: &Tokens) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1., 24.), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 0., tokens.color("glass-border"));
 }
 
 /// The selected segment's `glass-raised` pill, sliding over `--dur-4`.

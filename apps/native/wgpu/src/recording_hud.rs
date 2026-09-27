@@ -40,6 +40,144 @@ pub struct View<'a> {
     pub reduced_motion: bool,
 }
 
+/// The recording controls window (shipping `RECORDING_HUD_*`).
+pub const SIZE: Vec2 = Vec2::new(430., 102.);
+
+/// Shipping `.recording-controls-hidden-notice`: an accent capture tile, then
+/// left-aligned copy whose New Capture shortcut is drawn as `<kbd>` chips that
+/// wrap with the sentence (`flex-wrap`, `gap: var(--s-2)`).
+pub fn show_hidden_notice(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    copy: &captures_app::recording_hud::HiddenNoticeCopy,
+) {
+    let card = ui.max_rect();
+    let painter = ui.painter();
+    let radius = tokens.number("r-xl");
+    painter.rect_filled(card, radius, tokens.color("glass-strong"));
+    painter.rect_stroke(
+        card,
+        radius,
+        Stroke::new(1., tokens.color("glass-border")),
+        StrokeKind::Inside,
+    );
+    let padding = tokens.number("s-5");
+    let tile = Rect::from_min_size(
+        egui::pos2(card.left() + padding, card.center().y - 17.),
+        Vec2::splat(34.),
+    );
+    painter.rect_filled(tile, tokens.number("r-lg"), tokens.color("theme-accent"));
+    crate::capture_controls::paint_icon(
+        painter,
+        "capture",
+        Rect::from_center_size(tile.center(), Vec2::splat(20.)),
+        1.8,
+        tokens.color("theme-accent-ink"),
+    );
+
+    let left = tile.right() + padding;
+    let width = (card.right() - padding - left).max(0.);
+    let semibold = egui::FontFamily::Name("semibold".into());
+    let title = painter.layout_no_wrap(
+        copy.title.to_owned(),
+        egui::FontId::new(tokens.number("text-sm"), semibold.clone()),
+        tokens.color("glass-text"),
+    );
+    let gap = tokens.number("s-2");
+    let text_font = egui::FontId::proportional(tokens.number("text-xs"));
+    let chip_font = egui::FontId::new(tokens.number("text-2xs"), semibold);
+    enum Item {
+        Text(std::sync::Arc<egui::Galley>),
+        Chip(std::sync::Arc<egui::Galley>),
+    }
+    let text = |value: &str| {
+        Item::Text(painter.layout_no_wrap(
+            value.to_owned(),
+            text_font.clone(),
+            tokens.color("glass-text-muted"),
+        ))
+    };
+    let mut items = vec![text(&copy.before_keys)];
+    items.extend(copy.keys.iter().map(|key| {
+        Item::Chip(painter.layout_no_wrap(
+            key.clone(),
+            chip_font.clone(),
+            tokens.color("glass-text"),
+        ))
+    }));
+    items.push(text(copy.after_keys));
+    // `kbd`: 2px × 5px padding, 20px minimum width, a 2px bottom border.
+    let size = |item: &Item| match item {
+        Item::Text(galley) => galley.size(),
+        Item::Chip(galley) => egui::vec2(
+            (galley.size().x + 10. + 2.).max(20.),
+            galley.size().y + 4. + 3.,
+        ),
+    };
+    let line_height = items.iter().map(|item| size(item).y).fold(0., f32::max);
+    let mut lines: Vec<Vec<(f32, &Item)>> = vec![Vec::new()];
+    let mut x = 0.;
+    for item in &items {
+        let item_width = size(item).x;
+        if x > 0. && x + item_width > width {
+            lines.push(Vec::new());
+            x = 0.;
+        }
+        lines.last_mut().unwrap().push((x, item));
+        x += item_width + gap;
+    }
+    let body_height = lines.len() as f32 * line_height + (lines.len() - 1) as f32 * gap;
+    let top = card.center().y - (title.size().y + 3. + body_height) / 2.;
+    painter.galley(
+        egui::pos2(left, top),
+        title.clone(),
+        tokens.color("glass-text"),
+    );
+    let mut y = top + title.size().y + 3.;
+    for line in lines {
+        for (x, item) in line {
+            let item_size = size(item);
+            let min = egui::pos2(left + x, y + (line_height - item_size.y) / 2.);
+            match item {
+                Item::Text(galley) => {
+                    painter.galley(min, galley.clone(), tokens.color("glass-text-muted"));
+                }
+                Item::Chip(galley) => {
+                    let chip = Rect::from_min_size(min, item_size);
+                    let chip_radius = tokens.number("r-xs");
+                    let border = tokens.color("glass-border-strong");
+                    painter.rect(
+                        chip,
+                        chip_radius,
+                        egui::Color32::from_white_alpha(20),
+                        Stroke::new(1., border),
+                        StrokeKind::Inside,
+                    );
+                    painter.line_segment(
+                        [
+                            chip.left_bottom() + egui::vec2(chip_radius, -1.5),
+                            chip.right_bottom() + egui::vec2(-chip_radius, -1.5),
+                        ],
+                        Stroke::new(1., border),
+                    );
+                    painter.galley(
+                        egui::pos2(chip.center().x - galley.size().x / 2., chip.top() + 1. + 2.),
+                        galley.clone(),
+                        tokens.color("glass-text"),
+                    );
+                }
+            }
+        }
+        y += line_height + gap;
+    }
+    // Shipping `role="status"`.
+    crate::accessibility::set_group(
+        ui,
+        egui::accesskit::Role::Status,
+        &format!("{}. {}", copy.title, copy.detail()),
+    );
+}
+
 fn control_rects_id() -> egui::Id {
     egui::Id::unique("recording-hud-control-rects")
 }
@@ -577,6 +715,96 @@ mod tests {
                 .collect();
             assert_eq!(fills, if width == 0. { vec![] } else { vec![width] });
         }
+    }
+
+    #[test]
+    fn hidden_notice_leads_with_an_accent_tile_and_wraps_key_chips_with_the_copy() {
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let ctx = egui::Context::default();
+        tokens.apply(&ctx, false);
+        ctx.enable_accesskit();
+        let copy = captures_app::recording_hud::hidden_notice_copy(
+            "CommandOrControl+Shift+Space",
+            captures_app::shortcuts::ShortcutPlatform::Linux,
+        );
+        let size = Vec2::new(
+            captures_app::recording_hud::HIDDEN_NOTICE_WIDTH as f32,
+            captures_app::recording_hud::HIDDEN_NOTICE_HEIGHT as f32,
+        );
+        let card = Rect::from_min_size(egui::Pos2::ZERO, size);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(card),
+                ..Default::default()
+            },
+            |ui| show_hidden_notice(ui, &tokens, &copy),
+        );
+        output.textures_delta.clear();
+        let shapes: Vec<_> = output.shapes.into_iter().map(|shape| shape.shape).collect();
+        let tile = shapes
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Rect(rect) if rect.fill == tokens.color("theme-accent") => {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("accent capture tile");
+        assert_eq!(tile.size(), Vec2::splat(34.));
+        assert_eq!(tile.left(), tokens.number("s-5"));
+        assert!((tile.center().y - card.center().y).abs() < 0.5);
+        let texts: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Text(text) => Some((text.galley.job.text.clone(), text.pos)),
+                _ => None,
+            })
+            .collect();
+        let at = |value: &str| {
+            texts
+                .iter()
+                .find(|(text, _)| text == value)
+                .map(|(_, pos)| *pos)
+                .unwrap_or_else(|| panic!("{value} in {texts:?}"))
+        };
+        let title = at("Recording controls hidden");
+        let before = at("Open Captures from the tray, or press");
+        assert_eq!(title.x, before.x, "left-aligned copy");
+        assert!(title.x >= tile.right() + tokens.number("s-5") - 0.5);
+        for key in &copy.keys {
+            let chip = at(key);
+            assert!(
+                chip.x > before.x && chip.x < card.right(),
+                "{key} chip in the card"
+            );
+        }
+        let chips = shapes
+            .iter()
+            .filter(|shape| {
+                matches!(shape, egui::Shape::Rect(rect)
+                    if rect.stroke.color == tokens.color("glass-border-strong"))
+            })
+            .count();
+        assert_eq!(chips, copy.keys.len(), "one kbd chip per key");
+        assert!(at("to bring them back.").x < card.right());
+        let labels: Vec<String> = output
+            .platform_output
+            .accesskit_update
+            .map(|update| {
+                update
+                    .nodes
+                    .iter()
+                    .filter_map(|(_, node)| node.label().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.contains("Recording controls hidden")
+                    && label.contains("Ctrl Shift Space")),
+            "{labels:?}"
+        );
     }
 
     fn render(view: View<'_>) -> (Vec<egui::Shape>, Vec<String>) {
