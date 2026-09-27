@@ -118,6 +118,16 @@ fn copy() -> Value {
             "window": guidance(GuidanceTarget::Window, false),
             "display": guidance(GuidanceTarget::Display, false),
         },
+        // Direct Region/Window overlay chip; motion is in the `motion` catalog
+        // (`capture_guidance_fade`, `capture_guidance_slide`,
+        // `capture_guidance_nudge`).
+        "guidance_chip": {
+            "top_fraction": capture_menu::GUIDANCE_TOP_FRACTION,
+            "enter_offset": capture_menu::GUIDANCE_ENTER_OFFSET,
+            "row_gap": capture_menu::GUIDANCE_ROW_GAP,
+            "feedback_ms": capture_menu::GUIDANCE_FEEDBACK.as_millis() as u64,
+            "feedback_border_alpha": capture_menu::GUIDANCE_FEEDBACK_BORDER_ALPHA,
+        },
         "separator": capture_menu::NOTE_SEPARATOR,
         "confirm": capture_menu::CONFIRM_NOTE,
         "auto_start": capture_menu::AUTO_START_NOTE,
@@ -310,6 +320,12 @@ mod tests {
             copy["result"]["guidance"]["display"]["title"],
             "Click to capture this display"
         );
+        let chip = &copy["result"]["guidance_chip"];
+        assert_eq!(
+            (chip["top_fraction"].as_f64(), chip["enter_offset"].as_f64()),
+            (Some(0.16), Some(-6.))
+        );
+        assert_eq!(chip["feedback_ms"], 1_800);
         assert_eq!(copy["result"]["toggles"][1]["key"], "highlight_clicks");
         let toggle = call(json!({"operation": "toggle", "changed": "highlight_clicks",
             "show_cursor": false, "highlight_clicks": true}));

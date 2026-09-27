@@ -49,6 +49,7 @@ private final class RegionCanvas: NSView {
     override func mouseDown(with event: NSEvent) { selector?.mouseDown(with: event) }
     override func mouseDragged(with event: NSEvent) { selector?.mouseDragged(with: event) }
     override func mouseUp(with event: NSEvent) { selector?.mouseUp(with: event) }
+    override func mouseMoved(with event: NSEvent) { selector?.mouseMoved(with: event) }
 }
 
 /// Same retained image/canvas/native-button tree in live selection and CI fixtures.
@@ -59,7 +60,7 @@ final class RegionSelectionView: NSView {
     private(set) var selection: RegionSelection
     private let canvas = RegionCanvas()
     private let toolbar = NSView()
-    private let hint: NSTextField
+    private let guidance: CaptureGuidanceChip
     private let dimensions = NSTextField(labelWithString: "")
     private var aspectButtons: [CaptureButton] = []
     private var captureButton: CaptureButton!
@@ -71,8 +72,7 @@ final class RegionSelectionView: NSView {
     init(frame: NSRect, image: CGImage?, tokens: Tokens, autoStart: Bool,
          confirm: @escaping (CapturesSelectionRect) -> Void, cancel: @escaping () -> Void) {
         self.tokens = tokens; self.autoStart = autoStart; self.confirm = confirm; self.cancel = cancel
-        hint = NSTextField(labelWithString: CaptureGuidanceCopy.directHint(
-            CaptureGuidanceCopy.regionTitle, CaptureGuidanceCopy.regionHint, confirm: !autoStart))
+        guidance = CaptureGuidanceChip(tokens: tokens)
         selection = RegionSelection(bounds: CapturesSelectionBounds(width: frame.width, height: frame.height))
         super.init(frame: frame)
         wantsLayer = true
@@ -113,11 +113,10 @@ final class RegionSelectionView: NSView {
             width: buttonWidth, height: height), tokens: tokens, glass: true) { [weak self] in self?.cancel() }
         close.keyEquivalent = "\u{1b}"; close.keyEquivalentModifierMask = []
         toolbar.addSubview(close)
-        hint.font = .systemFont(ofSize: tokens.number("text-md")); hint.textColor = tokens.color("glass-text")
-        hint.alignment = .center; hint.wantsLayer = true
-        hint.layer?.backgroundColor = tokens.color("glass-strong").cgColor; hint.layer?.cornerRadius = tokens.number("r-sm")
-        hint.frame = NSRect(x: toolbar.frame.minX, y: toolbar.frame.minY - height - gap, width: width, height: height)
-        addSubview(hint)
+        // Shipping `CaptureGuidance`, 16% from the top; hidden while dragging.
+        addSubview(guidance)
+        setGuidanceCopy(feedback: false)
+        guidance.setPresent(true)
         dimensions.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-xs"), weight: .semibold)
         dimensions.textColor = tokens.color("theme-accent-ink"); dimensions.alignment = .center
         dimensions.wantsLayer = true; dimensions.layer?.backgroundColor = tokens.color("theme-accent").cgColor
@@ -141,26 +140,42 @@ final class RegionSelectionView: NSView {
     }
 
     private var feedbackToken = 0
-    /// Shipping `showSelectionFeedback`: a click without a region swaps the
-    /// title for "Click and drag to select a region" for 1.8 seconds.
+    /// Shipping `showSelectionFeedback`: a click without a region re-keys the
+    /// chip with "Click and drag to select a region", the accent border and
+    /// the nudge for 1.8 seconds, then re-keys it back.
     private func showSelectionFeedback() {
         feedbackToken &+= 1
         let token = feedbackToken
-        hint.stringValue = CaptureGuidanceCopy.directHint(CaptureGuidanceCopy.regionFeedbackTitle,
-            CaptureGuidanceCopy.regionHint, confirm: false)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in
+        setGuidanceCopy(feedback: true)
+        guidance.mount(feedback: true)
+        let seconds = CaptureMenuPolicy.copy.chip.feedbackSeconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
             guard let self, self.feedbackToken == token else { return }
-            self.hint.stringValue = CaptureGuidanceCopy.directHint(CaptureGuidanceCopy.regionTitle,
-                CaptureGuidanceCopy.regionHint, confirm: false)
+            self.setGuidanceCopy(feedback: false)
+            self.guidance.mount(feedback: false)
         }
     }
 
-    var guidanceText: String { hint.stringValue }
+    private func setGuidanceCopy(feedback: Bool) {
+        var hint = CaptureGuidanceCopy.regionHint
+        if !autoStart { hint += " · " + CaptureGuidanceCopy.confirm }
+        guidance.setCopy(title: feedback ? CaptureGuidanceCopy.regionFeedbackTitle : CaptureGuidanceCopy.regionTitle,
+            hint: hint, in: bounds)
+    }
+
+    var guidanceText: String { guidance.guidanceText }
+    var guidanceChip: CaptureGuidanceChip { guidance }
+    var isGuidanceVisible: Bool { guidance.isShowing }
     func confirmSelection() { if selection.capturable && selection.mode == nil { confirm(selection.rect) } }
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self); begin(convert(event.locationInWindow, from: nil), shift: event.modifierFlags.contains(.shift))
     }
-    override func mouseDragged(with event: NSEvent) { drag(convert(event.locationInWindow, from: nil), shift: event.modifierFlags.contains(.shift)) }
+    override func mouseDragged(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guidance.duck(at: point)
+        drag(point, shift: event.modifierFlags.contains(.shift))
+    }
+    override func mouseMoved(with event: NSEvent) { guidance.duck(at: convert(event.locationInWindow, from: nil)) }
     override func mouseUp(with event: NSEvent) { drag(convert(event.locationInWindow, from: nil), shift: event.modifierFlags.contains(.shift)); end() }
     override func flagsChanged(with event: NSEvent) { selection.recompute(shift: event.modifierFlags.contains(.shift)); update() }
     override func keyDown(with event: NSEvent) {
@@ -172,6 +187,7 @@ final class RegionSelectionView: NSView {
 
     private func update() {
         canvas.needsDisplay = true
+        guidance.setSuppressed(selection.mode != nil)
         captureButton.isEnabled = selection.capturable && selection.mode == nil
         for (index, button) in aspectButtons.enumerated() {
             button.selected = selection.aspect == RegionSelection.presets[index].1
@@ -224,7 +240,7 @@ final class RegionSelectionPanel: NSPanel {
         super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear; hasShadow = false
         level = .screenSaver; collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        sharingType = .none; contentView = selector
+        sharingType = .none; acceptsMouseMovedEvents = true; contentView = selector
         makeFirstResponder(selector)
     }
 }

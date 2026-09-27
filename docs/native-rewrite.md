@@ -172,9 +172,10 @@ and its glass title chip. Over the desktop the screen stays clear, with an inset
 outline and an "Entire display" chip at the top left. AppKit takes the outline's
 corner radius from the screen's outline, like shipping. wgpu has no display radius
 on Windows or Linux, and shipping uses 0 there too. New Capture uses the same shades
-and frame hairlines, and keeps its handles and centered badge. Guidance chip styling
-for the direct overlays, the shade fade-in and New Capture's desktop-hover dim still
-differ from shipping. Rendering was checked on X11. AppKit is covered by XCTest only.
+and frame hairlines, and keeps its handles and centered badge. The direct overlays
+now share New Capture's guidance chip (see the overlay guidance slice below). The
+shade fade-in and New Capture's desktop-hover dim still differ from shipping.
+Rendering was checked on X11. AppKit is covered by XCTest only.
 
 Shortcut, tray and New Capture flows now start on the display under the pointer,
 like the shipping `capture_display_at_point`: wgpu resolves it through the shared
@@ -2232,6 +2233,23 @@ Record row arrives as shipped (see the motion slice below); wgpu segment icons,
 the Full screen display icon and Wayland remain open.
 Verified with Rust/XCTest source tests and private-X11 capture/recording smokes;
 AppKit compiles and runs only in macOS CI, and Windows presentation is unverified.
+
+The overlay guidance slice gives the direct Region and Window overlays the shipping
+`CaptureGuidance` chip that New Capture already drew, one implementation per host
+(AppKit `CaptureGuidanceChip`, wgpu `capture_controls::paint_guidance`). The
+two-row glass chip sits 16% from the top, fades and slides in from 6 points higher,
+hides while a region is dragged out and fades within 28 points of the pointer
+(12-point leave slack). The window overlay switches to "Click to capture this
+display" over the desktop or shell chrome. A click without a drag re-keys the chip
+like shipping: the "Click and drag" copy, an 80% accent border and the sideways
+nudge for 1.8 s. Placement, feedback timing and the pure pose model
+(`capture_menu::GuidanceChip`) live in `captures-app`; the fade, slide and nudge
+are `motion` catalog entries, so reduced motion lands every change at once. The
+manual (confirm with Enter) fixture mode adds "Press Enter to confirm" to the hint
+row on both hosts. The glass shadow is not drawn yet. Verified with Rust unit tests,
+XCTest sources and the private-X11 capture smoke, which checks the chip's 16% top
+edge and ducking with settled pixels; AppKit runs only in macOS CI, and Windows and
+Wayland presentation are unverified.
 
 The motion slice moves shipping animation into `captures_app::motion`: each
 shipping `@keyframes` rule with its `animation` timing, and each `transition`,

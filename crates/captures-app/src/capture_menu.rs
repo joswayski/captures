@@ -5,6 +5,7 @@
 //!
 //! Everything here is pure: hosts own layout, drawing and input.
 
+use crate::motion::{Animation, Motion, MotionTokens, Transition, Tween};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -416,6 +417,183 @@ pub fn pointer_over_guidance(
     x >= left - pad && x <= right + pad && y >= top - pad && y <= bottom + pad
 }
 
+/// Shipping `.capture-guidance { top: 16% }`: the chip's resting top edge, as
+/// a fraction of the overlay height.
+pub const GUIDANCE_TOP_FRACTION: f64 = 0.16;
+/// The chip's entrance offset before `data-ready` (`translate(-50%, -6px)`),
+/// in points, negative upward.
+pub const GUIDANCE_ENTER_OFFSET: f64 = -6.0;
+/// Gap between the title and hint rows (`gap: 2px`).
+pub const GUIDANCE_ROW_GAP: f64 = 2.0;
+/// Shipping `showSelectionFeedback`: how long "Click and drag to select a
+/// region", the accent border and the nudge last after a click without a drag.
+pub const GUIDANCE_FEEDBACK: Duration = Duration::from_millis(1_800);
+/// The feedback border: `rgba(var(--theme-accent-rgb), 0.8)`.
+pub const GUIDANCE_FEEDBACK_BORDER_ALPHA: f64 = 0.8;
+
+/// The chip's resting top edge in an overlay `height` points tall.
+pub fn guidance_top(height: f64) -> f64 {
+    height * GUIDANCE_TOP_FRACTION
+}
+
+/// The direct overlays' hint row. Shipping commits on release or click; the
+/// manual (confirm with Enter) mode appends the confirm note.
+pub fn direct_hint(target: GuidanceTarget, confirm: bool) -> String {
+    let hint = guidance(target, false).hint;
+    if confirm {
+        format!("{hint} {NOTE_SEPARATOR} {CONFIRM_NOTE}")
+    } else {
+        hint.into()
+    }
+}
+
+/// Where the guidance chip is drawn this frame, relative to its resting
+/// frame. `translate_x` is the feedback nudge and `translate_y` the entrance
+/// slide, both in points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GuidancePose {
+    pub opacity: f64,
+    pub translate_x: f64,
+    pub translate_y: f64,
+    /// Feedback state: accent border at [`GUIDANCE_FEEDBACK_BORDER_ALPHA`].
+    pub accent: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Leg {
+    from: f64,
+    to: f64,
+    at_ms: f64,
+}
+
+/// Shipping `CaptureGuidance` motion for hosts that sample poses per frame.
+///
+/// The chip mounts transparent and 6 points high, then fades and slides in.
+/// While `shown` is false (a region drag, or the pointer within
+/// [`GUIDANCE_APPROACH_PAD`]) it fades out in place; showing again fades back.
+/// Like a CSS transition, a change mid-flight restarts from the current
+/// value. Shipping re-keys the component whenever the feedback attempt
+/// changes, so [`GuidanceChip::remount`] replays the entrance, and a feedback
+/// mount also plays [`Motion::CaptureGuidanceNudge`]. Under reduced motion
+/// every change lands at once and the nudge rests.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GuidanceChip {
+    fade: Tween,
+    slide: Tween,
+    nudge: Animation,
+    reduced: bool,
+    shown: bool,
+    feedback: bool,
+    mounted_ms: f64,
+    opacity: Leg,
+    offset: Leg,
+}
+
+impl GuidanceChip {
+    /// Mount at `now_ms`. `None` names a missing motion token.
+    pub fn new(
+        tokens: &impl MotionTokens,
+        reduced: bool,
+        now_ms: f64,
+        shown: bool,
+        feedback: bool,
+    ) -> Option<Self> {
+        let mut chip = Self {
+            fade: Transition::CaptureGuidanceFade.resolve(tokens)?,
+            slide: Transition::CaptureGuidanceSlide.resolve(tokens)?,
+            nudge: Motion::CaptureGuidanceNudge.resolve(tokens)?,
+            reduced,
+            shown,
+            feedback,
+            mounted_ms: now_ms,
+            opacity: Leg {
+                from: 0.,
+                to: 0.,
+                at_ms: now_ms,
+            },
+            offset: Leg {
+                from: GUIDANCE_ENTER_OFFSET,
+                to: GUIDANCE_ENTER_OFFSET,
+                at_ms: now_ms,
+            },
+        };
+        chip.remount(now_ms, shown, feedback);
+        Some(chip)
+    }
+
+    /// Shipping's re-key: start over from the entrance.
+    pub fn remount(&mut self, now_ms: f64, shown: bool, feedback: bool) {
+        self.mounted_ms = now_ms;
+        self.feedback = feedback;
+        self.shown = shown;
+        // `data-ready` lands on the next frame; both faded and shown states
+        // settle the slide at rest.
+        self.opacity = Leg {
+            from: 0.,
+            to: if shown { 1. } else { 0. },
+            at_ms: now_ms,
+        };
+        self.offset = Leg {
+            from: GUIDANCE_ENTER_OFFSET,
+            to: 0.,
+            at_ms: now_ms,
+        };
+    }
+
+    /// Fade in or out from wherever the chip is now.
+    pub fn set_shown(&mut self, shown: bool, now_ms: f64) {
+        if shown == self.shown {
+            return;
+        }
+        self.shown = shown;
+        let opacity = self.opacity_at(now_ms);
+        self.opacity = Leg {
+            from: opacity,
+            to: if shown { 1. } else { 0. },
+            at_ms: now_ms,
+        };
+    }
+
+    pub fn shown(&self) -> bool {
+        self.shown
+    }
+
+    pub fn feedback(&self) -> bool {
+        self.feedback
+    }
+
+    fn opacity_at(&self, now_ms: f64) -> f64 {
+        let leg = self.opacity;
+        self.fade
+            .value(leg.from, leg.to, now_ms - leg.at_ms, self.reduced)
+    }
+
+    pub fn pose(&self, now_ms: f64) -> GuidancePose {
+        let leg = self.offset;
+        GuidancePose {
+            opacity: self.opacity_at(now_ms).clamp(0., 1.),
+            translate_x: if self.feedback {
+                self.nudge
+                    .pose_at(now_ms - self.mounted_ms, self.reduced)
+                    .translate_x
+            } else {
+                0.
+            },
+            translate_y: self
+                .slide
+                .value(leg.from, leg.to, now_ms - leg.at_ms, self.reduced),
+            accent: self.feedback,
+        }
+    }
+
+    /// True while a host must keep painting frames.
+    pub fn animating(&self, now_ms: f64) -> bool {
+        self.fade.running(now_ms - self.opacity.at_ms, self.reduced)
+            || self.slide.running(now_ms - self.offset.at_ms, self.reduced)
+            || (self.feedback && self.nudge.running(now_ms - self.mounted_ms, self.reduced))
+    }
+}
+
 /// Full-screen display identity: name, then "W × H" (and "· N FPS" in Record).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DisplayIdentity {
@@ -643,6 +821,114 @@ mod tests {
         assert!(over(72., false));
         assert!(over(61., true), "leave slack keeps a faded chip hidden");
         assert!(!over(59., true));
+    }
+
+    /// The shipping `shared/design.css` motion tokens the chip uses.
+    struct Shipping;
+    impl MotionTokens for Shipping {
+        fn duration_ms(&self, token: &str) -> Option<f64> {
+            Some(match token {
+                "dur-3" => 200.,
+                "dur-4" => 280.,
+                _ => return None,
+            })
+        }
+        fn easing(&self, token: &str) -> Option<[f64; 4]> {
+            Some(match token {
+                "ease-out" => [0.16, 1., 0.3, 1.],
+                "ease-standard" => [0.2, 0.8, 0.2, 1.],
+                _ => return None,
+            })
+        }
+    }
+
+    #[test]
+    fn guidance_chip_sits_at_sixteen_percent_with_direct_confirm_hint() {
+        assert_eq!(guidance_top(900.), 144.);
+        assert_eq!(GUIDANCE_FEEDBACK, Duration::from_millis(1_800));
+        assert_eq!(
+            direct_hint(GuidanceTarget::Region, false),
+            "Shift for square · Esc to cancel"
+        );
+        assert_eq!(
+            direct_hint(GuidanceTarget::Window, true),
+            "Esc to cancel · Press Enter to confirm"
+        );
+    }
+
+    #[test]
+    fn guidance_chip_fades_in_ducks_and_nudges_like_shipping() {
+        let mut chip = GuidanceChip::new(&Shipping, false, 1_000., true, false).unwrap();
+        let start = chip.pose(1_000.);
+        assert_eq!(
+            (
+                start.opacity,
+                start.translate_x,
+                start.translate_y,
+                start.accent
+            ),
+            (0., 0., GUIDANCE_ENTER_OFFSET, false),
+            "mounts transparent and 6 points high"
+        );
+        assert!(chip.animating(1_100.));
+        let mid = chip.pose(1_100.);
+        assert!(mid.opacity > 0. && mid.opacity < 1. && mid.translate_y < 0.);
+        let rest = chip.pose(1_200.);
+        assert_eq!((rest.opacity, rest.translate_y), (1., 0.));
+        assert!(!chip.animating(1_200.), "an idle chip schedules nothing");
+
+        // Pointer nearby: fade out in place, then back from mid-flight.
+        chip.set_shown(false, 2_000.);
+        assert!(chip.animating(2_050.));
+        let ducking = chip.pose(2_050.).opacity;
+        assert!(ducking > 0. && ducking < 1.);
+        assert_eq!(chip.pose(2_050.).translate_y, 0., "ducking does not slide");
+        assert_eq!(chip.pose(2_200.).opacity, 0.);
+        chip.set_shown(true, 2_300.);
+        chip.set_shown(false, 2_350.);
+        let reversed = chip.pose(2_350.).opacity;
+        assert!(
+            reversed > 0. && reversed < 1.,
+            "retargets from the current value"
+        );
+        assert!(chip.pose(2_400.).opacity < reversed);
+
+        // An empty click re-keys the chip: entrance again plus the nudge.
+        chip.remount(3_000., true, true);
+        assert!(chip.feedback() && chip.pose(3_000.).accent);
+        assert_eq!(chip.pose(3_000.).opacity, 0.);
+        assert!((chip.pose(3_070.).translate_x + 8.).abs() < 1e-6);
+        assert!((chip.pose(3_210.).translate_x - 8.).abs() < 1e-6);
+        assert!(chip.animating(3_250.), "the nudge outlasts the fade");
+        assert_eq!(chip.pose(3_280.).translate_x, 0.);
+        assert!(!chip.animating(3_280.));
+        chip.remount(4_800., true, false);
+        assert!(!chip.pose(4_800.).accent);
+    }
+
+    #[test]
+    fn guidance_chip_lands_at_once_under_reduced_motion() {
+        let mut chip = GuidanceChip::new(&Shipping, true, 0., true, true).unwrap();
+        let pose = chip.pose(0.);
+        assert_eq!(
+            (
+                pose.opacity,
+                pose.translate_x,
+                pose.translate_y,
+                pose.accent
+            ),
+            (1., 0., 0., true)
+        );
+        assert!(!chip.animating(0.));
+        chip.set_shown(false, 10.);
+        assert_eq!(chip.pose(10.).opacity, 0.);
+        assert!(!chip.animating(10.));
+        let hidden = GuidanceChip::new(&Shipping, true, 0., false, false).unwrap();
+        assert_eq!(
+            hidden.pose(0.).opacity,
+            0.,
+            "mounting under the pointer stays hidden"
+        );
     }
 
     #[test]

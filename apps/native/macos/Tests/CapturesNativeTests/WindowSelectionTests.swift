@@ -107,8 +107,9 @@ final class WindowSelectionTests: XCTestCase {
             view.hover(NSPoint(x: 900, y: 650))
             XCTAssertEqual(view.activeChoice, .display)
             XCTAssertEqual(view.accessibilityValue() as? String, "Entire display")
-            XCTAssertTrue(view.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
-                .contains("Select a window to continue · Esc to cancel · Press Enter to confirm"))
+            XCTAssertEqual(view.guidanceText,
+                "Click to capture this display · Esc to cancel · Press Enter to confirm",
+                "shipping switches to the display copy over the desktop")
             try render(view, window: window, name: "window-\(appearance)-display")
 
             let controls = view.subviews.flatMap(\.subviews).compactMap { $0 as? CaptureButton }
@@ -124,8 +125,7 @@ final class WindowSelectionTests: XCTestCase {
             tokens: Tokens.variants["dark-mustard"]!, autoStart: true,
             hitTest: { _ in 0 }, confirm: { _ in }, cancel: {})
         window.contentView = view; view.hover(NSPoint(x: 100, y: 100))
-        XCTAssertTrue(view.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
-            .contains("Select a window to continue · Esc to cancel"))
+        XCTAssertEqual(view.guidanceText, "Select a window to continue · Esc to cancel")
         try render(view, window: window, name: "window-dark-auto-start")
     }
 
@@ -174,6 +174,46 @@ final class WindowSelectionTests: XCTestCase {
         XCTAssertEqual(try alpha(bitmap, view, 6, 6), 0, accuracy: 0.05, "chip starts at the inset")
     }
 
+    func testDirectGuidanceChipSitsAtSixteenPercentSwitchesToDisplayCopyAndDucks() throws {
+        _ = NSApplication.shared
+        let frame = NSRect(x: 0, y: 0, width: 900, height: 500)
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; defer { window.close() }
+        let view = WindowSelectionView(frame: frame, image: nil, targets: targets,
+            tokens: Tokens.variants["dark-mustard"]!, autoStart: true,
+            hitTest: { $0.x < 600 && $0.y > 300 ? 0 : -1 }, confirm: { _ in }, cancel: {})
+        window.contentView = view
+        let chip = view.guidanceChip
+        XCTAssertTrue(chip.isShowing, "the chip mounts with the overlay")
+        XCTAssertEqual(chip.frame.minY, 80, accuracy: 0.5, "16% of the 500 pt overlay")
+        XCTAssertEqual(chip.frame.midX, 450, accuracy: 1, "centred")
+        XCTAssertGreaterThan(chip.hintFrame.minY, chip.titleFrame.maxY - 0.5, "hint row sits below the title")
+        XCTAssertTrue(chip.bounds.insetBy(dx: -0.5, dy: -0.5).contains(chip.titleFrame))
+        XCTAssertTrue(chip.bounds.insetBy(dx: -0.5, dy: -0.5).contains(chip.hintFrame))
+        XCTAssertEqual(view.guidanceText, "Select a window to continue · Esc to cancel")
+
+        view.mouseMoved(with: try mouseEvent(.mouseMoved, window: window, x: 800, y: 450, height: 500))
+        XCTAssertEqual(view.activeChoice, .display)
+        XCTAssertEqual(view.guidanceText, "Click to capture this display · Esc to cancel")
+        XCTAssertEqual(chip.frame.minY, 80, accuracy: 0.5, "the copy change keeps the chip at 16%")
+        XCTAssertEqual(chip.frame.midX, 450, accuracy: 1)
+
+        let rest = chip.frame
+        view.mouseMoved(with: try mouseEvent(.mouseMoved, window: window,
+            x: rest.midX, y: rest.maxY + 20, height: 500))
+        XCTAssertTrue(chip.isDucked, "the chip fades within 28 points of the pointer")
+        XCTAssertFalse(chip.isShowing)
+        XCTAssertEqual(chip.alphaValue, 0, accuracy: 0.001, "the model alpha settles at once")
+        view.mouseMoved(with: try mouseEvent(.mouseMoved, window: window,
+            x: rest.midX, y: rest.maxY + 35, height: 500))
+        XCTAssertTrue(chip.isDucked, "the leave slack keeps a faded chip hidden")
+        view.mouseMoved(with: try mouseEvent(.mouseMoved, window: window,
+            x: rest.midX, y: rest.maxY + 45, height: 500))
+        XCTAssertFalse(chip.isDucked)
+        XCTAssertEqual(chip.alphaValue, 1, accuracy: 0.001)
+        XCTAssertEqual(chip.frame, rest, "ducking never moves the model frame")
+    }
+
     func testDisplayCornerRadiusComesFromOnPathOutlinePoints() {
         let frame = NSRect(x: 0, y: 0, width: 800, height: 500)
         let rounded = NSBezierPath(roundedRect: frame, xRadius: 12, yRadius: 12)
@@ -211,9 +251,9 @@ final class WindowSelectionTests: XCTestCase {
     }
 
     private func mouseEvent(_ type: NSEvent.EventType, window: NSWindow,
-                            x: CGFloat, y: CGFloat) throws -> NSEvent {
+                            x: CGFloat, y: CGFloat, height: CGFloat? = nil) throws -> NSEvent {
         try XCTUnwrap(NSEvent.mouseEvent(with: type,
-            location: NSPoint(x: x, y: frame.height - y), modifierFlags: [],
+            location: NSPoint(x: x, y: (height ?? frame.height) - y), modifierFlags: [],
             timestamp: 0, windowNumber: window.windowNumber, context: nil,
             eventNumber: 1, clickCount: 1, pressure: 1))
     }

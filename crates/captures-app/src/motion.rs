@@ -300,6 +300,27 @@ const RECORD_READY_PING: &[Keyframe] = &[
     frame(1., Pose::with(0., 0., 2.)),
 ];
 
+/// `capture-guidance-nudge`: the guidance chip's `margin-left` shake after a
+/// click that selected nothing (0 → −8 → +8 → 0 points).
+const GUIDANCE_NUDGE: &[Keyframe] = &[
+    frame(0., Pose::REST),
+    frame(
+        0.25,
+        Pose {
+            translate_x: -8.,
+            ..Pose::REST
+        },
+    ),
+    frame(
+        0.75,
+        Pose {
+            translate_x: 8.,
+            ..Pose::REST
+        },
+    ),
+    frame(1., Pose::REST),
+];
+
 /// Box-shadow spread of the onboarding CTA halo at full strength, in points.
 pub const ONBOARDING_CTA_SPREAD: f64 = 5.;
 
@@ -388,10 +409,14 @@ pub enum Motion {
     /// cubic-bezier(0, 0, 0.2, 1) infinite`, a signal copy of the Start
     /// recording dot that grows and fades.
     CaptureRecordReadyPing,
+    /// `.capture-guidance-feedback`: `capture-guidance-nudge var(--dur-4)
+    /// var(--ease-out)`, the Region/Window overlay chip's shake after a click
+    /// without a drag. Only `translate_x` moves.
+    CaptureGuidanceNudge,
 }
 
 impl Motion {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::UpdateNoticeIn,
         Self::UpdateNoticeRestartExit,
         Self::StartupNoticeIn,
@@ -419,6 +444,7 @@ impl Motion {
         Self::PreviewToolbarClear,
         Self::OnboardingCtaPulse,
         Self::CaptureRecordReadyPing,
+        Self::CaptureGuidanceNudge,
     ];
 
     /// Stable name used by the settings ABI.
@@ -451,6 +477,7 @@ impl Motion {
             Self::PreviewToolbarClear => "preview_toolbar_clear",
             Self::OnboardingCtaPulse => "onboarding_cta_pulse",
             Self::CaptureRecordReadyPing => "capture_record_ready_ping",
+            Self::CaptureGuidanceNudge => "capture_guidance_nudge",
         }
     }
 
@@ -540,6 +567,7 @@ impl Motion {
                 Bezier([0., 0., 0.2, 1.]),
                 RECORD_READY_PING,
             ),
+            Self::CaptureGuidanceNudge => spec(Dur("dur-4"), 0., Ease("ease-out"), GUIDANCE_NUDGE),
         }
     }
 
@@ -605,6 +633,12 @@ pub enum Transition {
     /// `thumbnail-delete-frame-fade`: a dissolving card's shadow and outline
     /// leave over `0.5s cubic-bezier(0.22, 0.1, 0.25, 1)`.
     PreviewDeleteFrameFade,
+    /// `.capture-guidance`: `opacity var(--dur-3) var(--ease-standard)`, the
+    /// overlay chip's entrance and pointer ducking.
+    CaptureGuidanceFade,
+    /// `.capture-guidance`: `transform var(--dur-3) var(--ease-out)`, the
+    /// chip's entrance slide from [`crate::capture_menu::GUIDANCE_ENTER_OFFSET`].
+    CaptureGuidanceSlide,
 }
 
 /// CSS `ease` keyword.
@@ -617,7 +651,7 @@ const LINEAR: Easing = Easing::Bezier([0., 0., 1., 1.]);
 const STANDARD_MOTION: Easing = Easing::Bezier([0.4, 0., 0.2, 1.]);
 
 impl Transition {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 17] = [
         Self::SegmentedIndicator,
         Self::HistoryCardHover,
         Self::Tooltip,
@@ -633,6 +667,8 @@ impl Transition {
         Self::PreviewStackSettle,
         Self::PreviewStackFly,
         Self::PreviewDeleteFrameFade,
+        Self::CaptureGuidanceFade,
+        Self::CaptureGuidanceSlide,
     ];
 
     pub fn name(self) -> &'static str {
@@ -652,6 +688,8 @@ impl Transition {
             Self::PreviewStackSettle => "preview_stack_settle",
             Self::PreviewStackFly => "preview_stack_fly",
             Self::PreviewDeleteFrameFade => "preview_delete_frame_fade",
+            Self::CaptureGuidanceFade => "capture_guidance_fade",
+            Self::CaptureGuidanceSlide => "capture_guidance_slide",
         }
     }
 
@@ -659,7 +697,8 @@ impl Transition {
         let token = |duration, easing| (Timing::Token(duration), Easing::Token(easing));
         let (duration, easing) = match self {
             Self::SegmentedIndicator => token("dur-4", "ease-standard"),
-            Self::HistoryCardHover => token("dur-3", "ease-standard"),
+            Self::HistoryCardHover | Self::CaptureGuidanceFade => token("dur-3", "ease-standard"),
+            Self::CaptureGuidanceSlide => token("dur-3", "ease-out"),
             Self::Tooltip => token("dur-1", "ease-standard"),
             Self::PreviewMediaFilter => (Timing::Millis(180.), CSS_EASE),
             Self::PreviewMediaScale | Self::PreviewEditorRing => (Timing::Millis(220.), CSS_EASE),
@@ -1238,6 +1277,35 @@ mod tests {
         assert_eq!(
             catalog["keyframes"]["capture_record_ready_ping"]["frames"][0]["opacity"],
             0.7
+        );
+    }
+
+    #[test]
+    fn capture_guidance_nudge_shakes_sideways_and_rests_under_reduced_motion() {
+        let nudge = Motion::CaptureGuidanceNudge.resolve(&Shipping).unwrap();
+        assert_eq!(nudge.duration_ms, 280.);
+        assert!(close(nudge.pose_at(70., false).translate_x, -8.));
+        assert!(close(nudge.pose_at(210., false).translate_x, 8.));
+        assert!(close(nudge.pose_at(280., false).translate_x, 0.));
+        let mid = nudge.pose_at(140., false);
+        assert!(mid.translate_x.abs() < 8. && close(mid.opacity, 1.) && close(mid.translate_y, 0.));
+        assert_eq!(nudge.pose_at(70., true), Pose::REST);
+        assert!(!nudge.running(0., true));
+        let fade = Transition::CaptureGuidanceFade.resolve(&Shipping).unwrap();
+        let slide = Transition::CaptureGuidanceSlide.resolve(&Shipping).unwrap();
+        assert_eq!((fade.duration_ms, slide.duration_ms), (200., 200.));
+        assert!(
+            slide.progress(50., false) > fade.progress(50., false),
+            "ease-out leads"
+        );
+        let catalog = catalog();
+        assert_eq!(
+            catalog["keyframes"]["capture_guidance_nudge"]["frames"][1]["translate_x"],
+            -8.
+        );
+        assert_eq!(
+            catalog["transitions"]["capture_guidance_slide"]["easing"]["token"],
+            "ease-out"
         );
     }
 }
