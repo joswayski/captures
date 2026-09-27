@@ -183,6 +183,26 @@ def main():
         left, top, scale = fit_geometry(size, window)
         pixel(name, round(left + x * scale), round(top + y * scale), expected, tolerance)
 
+    def settled_document_pixel(name, x, y, expected, tolerance=0):
+        """Re-shoot until the document pixel matches, for repaint-driven paint."""
+        def check():
+            shot(editor, name)
+            try:
+                document_pixel(name, x, y, expected, tolerance)
+                return True
+            except AssertionError:
+                return False
+        if not wait_quiet(check):
+            document_pixel(name, x, y, expected, tolerance)
+
+    def wait_quiet(predicate, seconds=10):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(.1)
+        return False
+
     def fixture_pixel(name, x, y, expected, tolerance=0):
         # Historical right-inspector fixtures used a document origin of (8, 89).
         document_pixel(name, x - 8, y - 89, expected, tolerance)
@@ -880,6 +900,13 @@ def main():
             type_text(value, 60)
             run("xdotool", "key", "Return", "sleep", ".2")
 
+        def swatch_at(first_row, color):
+            # Shipping ColorField swatch row: four 53.5 px columns across the
+            # inspector, 24 px tiles on a 32 px row pitch, then the custom tile.
+            # first_row is the inspector y of the first tile row's centres.
+            index = SWATCHES.index(color) if color in SWATCHES else len(SWATCHES)
+            inspector_click(round(8 + (index % 4 + .5) * 53.5), first_row + index // 4 * 32)
+
         draft = output / "editor-drafts" / artifact_id / "manifest.json"
 
         def saved(width, height, x, y):
@@ -1557,17 +1584,18 @@ def main():
 
         if args.drawing_defaults_only:
             # Taller than the historical 1001 so every shadow row stays visible
-            # below the DrawToolPreview card.
-            resize_editor(942, 1001 + DRAW_PREVIEW_ROWS)
+            # below the DrawToolPreview card and the Color swatch row.
+            resize_editor(942, 1001 + DRAW_PREVIEW_ROWS + 100)
             save(640, 360, 0, 0)
             before = draft_bytes()
             toolbar_click("draw")
             inspector_click(16, shape_row(308))  # Enable the initially disabled closed-shape stroke.
             shot(editor, "drawing-default-controls")
-            field(shape_row(382), "#123456", 145)
-            field(shape_row(426), "13", 77)
-            field(shape_row(470), "37", 87)
-            field(shape_row(586), "#abcdef", 145)
+            # Stroke color and Fill color are shipping swatch rows.
+            swatch_at(shape_row(388), "#111318")
+            field(shape_row(499), "13", 77)
+            field(shape_row(543), "37", 87)
+            swatch_at(shape_row(659), "#36c96b")
             shot(editor, "drawing-custom-controls")
             assert draft_bytes() == before, "default controls alone wrote a draft"
 
@@ -1580,12 +1608,12 @@ def main():
             run("xdotool", "mouseup", "1", "sleep", ".3")
             created = save_layers(lambda values: len(values) == 2, "styled rectangle created")[-1]
             assert created["opacity"] == 37 and created["style"]["strokeWidth"] == 13, created
-            assert created["style"]["color"] == "#123456" and created["style"]["fill"] == "#abcdef", created
+            assert created["style"]["color"] == "#111318" and created["style"]["fill"] == "#36c96b", created
             assert created["style"]["strokeEnabled"] is True
             shot(editor, "drawing-styled-committed")
-            # Independently blend 37% #abcdef / #123456 over the #286ea6 source.
-            document_pixel("drawing-styled-committed", 300, 95, (88, 145, 193), 1)
-            document_pixel("drawing-styled-committed", 300, 40, (32, 89, 136), 1)
+            # Independently blend 37% #36c96b / #111318 over the #286ea6 source.
+            document_pixel("drawing-styled-committed", 300, 95, (45, 144, 144), 1)
+            document_pixel("drawing-styled-committed", 300, 40, (31, 76, 113), 1)
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "one undo removes the new shape")
 
@@ -1599,19 +1627,19 @@ def main():
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
                 *map(str, end), "sleep", ".3")
             shot(editor, "drawing-line-transient")
-            document_pixel("drawing-line-transient", 300, 70, (32, 89, 136), 2)
+            document_pixel("drawing-line-transient", 300, 70, (31, 76, 113), 2)
             run("xdotool", "mouseup", "1", "sleep", ".3")
             line = save_layers(lambda values: len(values) == 2, "styled line created")[-1]
             assert line["shape"] == "line" and line["opacity"] == 37, line
-            assert line["style"]["color"] == "#123456" and line["style"]["strokeWidth"] == 13, line
+            assert line["style"]["color"] == "#111318" and line["style"]["strokeWidth"] == 13, line
             # Like Tauri, preserve the closed-only flag in metadata; open rendering ignores it.
             assert line["style"]["fill"] is None and line["style"]["strokeEnabled"] is False
             shot(editor, "drawing-line-committed")
-            document_pixel("drawing-line-committed", 300, 70, (32, 89, 136), 1)
+            document_pixel("drawing-line-committed", 300, 70, (31, 76, 113), 1)
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "undo line")
             toolbar_click("draw")
-            field(shape_row(426), "0", 87)  # Open-tool controls have no closed Stroke toggle.
+            field(shape_row(499), "0", 87)  # Open-tool controls have no closed Stroke toggle.
             start, end = document_point((250, 70)), document_point((370, 70))
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
@@ -1625,14 +1653,14 @@ def main():
             save_layers(lambda values: len(values) == 1, "undo invisible line")
             toolbar_click("draw")
             before = draft_bytes()
-            field(shape_row(426), "100", 87)
-            inspector_click(16, shape_row(467))  # Line's pre-placement Drop shadow.
+            field(shape_row(499), "100", 87)
+            inspector_click(16, shape_row(543))  # Line's pre-placement Drop shadow.
             shot(editor, "drawing-shadow-controls")
-            field(shape_row(538), "#f0c040", 145)
-            field(shape_row(582), "100", 145)
-            field(shape_row(626), "0", 70)
-            field(shape_row(670), "-23", 100)
-            field(shape_row(714), "31", 100)
+            field(shape_row(614), "#f0c040", 145)
+            field(shape_row(658), "100", 145)
+            field(shape_row(702), "0", 70)
+            field(shape_row(746), "-23", 100)
+            field(shape_row(790), "31", 100)
             shot(editor, "drawing-shadow-custom-controls")
             assert draft_bytes() == before, "shadow defaults alone wrote a draft"
             start, end = document_point((250, 70)), document_point((370, 70))
@@ -1640,7 +1668,7 @@ def main():
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
                 *map(str, end), "sleep", ".5")
             shot(editor, "drawing-shadow-transient")
-            document_pixel("drawing-shadow-transient", 300, 70, (18, 52, 86), 1)
+            document_pixel("drawing-shadow-transient", 300, 70, (17, 19, 24), 1)
             document_pixel("drawing-shadow-transient", 277, 101, (240, 192, 64), 1)
             assert draft_bytes() == before, "pixel preview wrote a draft"
             run("xdotool", "key", "Escape", "mouseup", "1", "sleep", ".3")
@@ -1656,12 +1684,12 @@ def main():
             custom = {"color": "#f0c040", "opacity": 100, "blur": 0, "offsetX": -23, "offsetY": 31}
             assert shadowed["style"]["dropShadowStyle"] == custom, shadowed
             shot(editor, "drawing-shadow-committed")
-            document_pixel("drawing-shadow-committed", 300, 70, (18, 52, 86), 1)
+            document_pixel("drawing-shadow-committed", 300, 70, (17, 19, 24), 1)
             document_pixel("drawing-shadow-committed", 277, 101, (240, 192, 64), 1)
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "one undo removes drawing and shadow")
             toolbar_click("draw")
-            inspector_click(16, shape_row(467))
+            inspector_click(16, shape_row(543))
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
                 *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
@@ -1671,7 +1699,7 @@ def main():
             shot(editor, "drawing-shadow-disabled")
             document_pixel("drawing-shadow-disabled", 277, 101, (40, 110, 166), 1)
             toolbar_click("draw")
-            inspector_click(16, shape_row(467))
+            inspector_click(16, shape_row(543))
             shot(editor, "drawing-shadow-retained")
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
@@ -2068,12 +2096,14 @@ def main():
             run("xdotool", "key", "Escape", "sleep", ".3")
             save_layers(lambda values: len(values) == 1, "blank input creates no layer")
 
+            # Shipping has no Done/Cancel: the box sits on the canvas in the
+            # layer's own style, clicking away commits and blank text discards.
             begin_input((80, 60))
             type_text("Discard this", 1)
-            shot(editor, "text-input-cancel")
-            x, y = document_point((80, 60))
-            click(editor, x + 100, y + 110)  # Cancel in the composing panel.
-            save_layers(lambda values: len(values) == 1, "Cancel restores the original document")
+            shot(editor, "text-input-inline")
+            run("xdotool", "key", "ctrl+a", "BackSpace", "sleep", ".3")
+            blur_click()
+            save_layers(lambda values: len(values) == 1, "clicking away from blank text adds no layer")
 
             before = draft_bytes()
             begin_input((80, 60))
@@ -2105,6 +2135,9 @@ def main():
             type_text("Beta", 1)
             time.sleep(.3)
             shot(editor, "text-input-typing")
+            # The session preview omits the typed layer; the inline editor
+            # paints its Rounded Box plate at the layer's own position.
+            settled_document_pixel("text-input-typing", 80, 57, (17, 19, 24), 2)
             assert draft_bytes() == before, "typing previews must not persist a draft"
             run("xdotool", "key", "Escape", "sleep", ".3")
             created = save_layers(lambda values: len(values) == 2, "multiline input finished")[-1]
@@ -2121,9 +2154,9 @@ def main():
             type_text("line two", 1)
             time.sleep(.3)
             shot(editor, "text-input-existing")
-            run("xdotool", "key", "Escape", "sleep", ".3")
+            blur_click()  # Clicking away commits, like shipping's textarea blur.
             revised = save_layers(lambda values: len(values) == 2 and values[-1]["text"] == "Revised\nline two",
-                                  "existing Text hit edits without another layer")[-1]
+                                  "existing Text hit edits and commits on click-away")[-1]
             assert revised["id"] == created["id"]
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "existing input single undo")[-1] == created
@@ -2174,9 +2207,9 @@ def main():
             assert (artifact / "capture.png").read_bytes() == original
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["blank-new-no-layer", "cancel-restores-document", "error-no-draft",
+                "checks": ["blank-new-no-layer", "click-away-blank-discards", "error-no-draft",
                            "error-recovery-one-undo", "preview-no-draft", "multiline-exact", "one-create-undo",
-                           "redo-exact", "existing-hit-same-id", "existing-one-undo", "minimum-input",
+                           "redo-exact", "existing-hit-same-id", "click-away-commits", "existing-one-undo", "minimum-input",
                            "select-double-click-same-id-position", "double-click-one-undo",
                            "blank-existing-delete", "delete-undo-redo", "quit-latest-buffer", "original-unchanged"],
             }, indent=2) + "\n")
@@ -2218,16 +2251,18 @@ def main():
             shot(editor, "text-defaults-menu")
             inspector_click(120, draw_row(622))  # Mono Box, before Rounded Box.
             field(draw_row(385), 37.5, x=59)
-            field(draw_row(455), "#2367ab", x=105)
+            swatch_at(draw_row(466), "#2d9cff")  # The Color swatch row below Size.
             shot(editor, "text-defaults-staged")
             assert draft_bytes() == before, "defaults must not write a draft"
             fixture_click((208, 169))  # Document (200,80), at actual-size scale.
             type_text("Native")
             shot(editor, "text-defaults-composing")
+            # The inline editor draws the Mono Box plate where the label lands.
+            settled_document_pixel("text-defaults-composing", 200, 76, (17, 19, 24), 2)
             run("xdotool", "key", "Escape", "sleep", ".3")
             text = save_layers(lambda values: len(values) == 2, "styled Text placed")[-1]
             assert text["kind"] == "text" and text["fontFamily"] == "mono"
-            assert text["fontSize"] == 37.5 and text["color"] == "#2367ab"
+            assert text["fontSize"] == 37.5 and text["color"] == "#2d9cff"
             assert text["text"] == "Native" and text["align"] == "center" and text["y"] == 80
             assert math.isclose(text["x"] + text["width"] / 2, 200, abs_tol=1e-6)
             assert text["background"] == "#111318" and text["autoWidth"]
@@ -2312,15 +2347,16 @@ def main():
             time.sleep(.2)
             save_layers(lambda values: values[-1]["text"] == "Readable native text"
                         and values[-1]["fontFamily"] == "serif", "plain text applied")
-            text_click(41, 573)   # Bold, on the row below Size.
-            text_click(97, 573)   # Italic.
+            text_click(26, 573)   # Bold: the first of five format buttons below Size.
+            text_click(71, 573)   # Italic.
             save_layers(lambda values: values[-1]["bold"] and values[-1]["italic"], "traits applied")
             shot(editor, "text-without-shadow")
-            text_click(92, 820)   # Drop shadow, leaving the plate off.
+            # Rows below the format buttons and Text color swatches.
+            text_click(92, 798)   # Drop shadow, leaving the plate off.
             save_layers(lambda values: values[-1].get("dropShadow") is True
                         and values[-1]["background"] is None, "glyph shadow applied")
-            for x, y, value in [(95, 891, "#3b82f6"), (128, 935, "65"),
-                                (60, 979, "3"), (80, 1023, "17.5"), (80, 1067, "-8")]:
+            for x, y, value in [(95, 869, "#3b82f6"), (128, 913, "65"),
+                                (60, 957, "3"), (80, 1001, "17.5"), (80, 1045, "-8")]:
                 text_click(x, y)
                 run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--", value)
                 run("xdotool", "key", "Return")
@@ -2337,11 +2373,11 @@ def main():
                 return run("convert", str(output / f"{name}.png"), "-crop", crop,
                            "-depth", "8", "rgba:-")
             assert text_pixels("text-glyph-shadow") != text_pixels("text-without-shadow")
-            text_click(170, 820)  # Outline shares the shadow row.
+            text_click(170, 798)  # Outline shares the shadow row.
             save_layers(lambda values: values[-1]["outlined"], "text outline applied")
             shot(editor, "text-outline")
             assert text_pixels("text-outline") != text_pixels("text-glyph-shadow")
-            text_click(92, 776)   # Background plate; the plate owns the shadow now.
+            text_click(92, 754)   # Background plate; the plate owns the shadow now.
             edited = save_layers(
                 lambda values: values[-1]["text"] == "Readable native text"
                 and values[-1]["bold"] and values[-1]["italic"]
@@ -2667,7 +2703,8 @@ def main():
             save_layers(lambda values: values[0]["src"] == edited["src"], "wand redo")
             toolbar_click("undo")
             save_layers(lambda values: values[0]["src"] == source, "undo before global removal")
-            inspector_click(150, draw_row(308 + ERASER_ROWS))  # Disable Contiguous below the mode row.
+            # Disable Contiguous below the mode row and the Tolerance slider.
+            inspector_click(60, draw_row(398 + ERASER_ROWS))
             fixture_click((108, 189))
             global_edit = save_layers(lambda values: values[0]["src"] != source, "global wand")[0]
             asset_pixel(global_edit, 100, 100, (0, 0, 0, 0))

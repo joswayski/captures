@@ -59,8 +59,7 @@ pub fn install(ctx: &egui::Context) {
     // bundled face; UI fallbacks cover glyphs that face lacks.
     for family in EDITOR_FAMILIES {
         for (bold, italic) in EDITOR_TRAITS {
-            let Some(bytes) = captures_app::editor_fonts::bundled_face(family, bold, italic)
-            else {
+            let Some(bytes) = captures_app::editor_fonts::bundled_face(family, bold, italic) else {
                 continue;
             };
             let name = editor_face_name(family, bold, italic);
@@ -70,14 +69,17 @@ pub fn install(ctx: &egui::Context) {
             );
             let mut stack = vec![name.clone()];
             stack.extend(fallbacks.iter().cloned());
-            fonts.families.insert(egui::FontFamily::Name(name.into()), stack);
+            fonts
+                .families
+                .insert(egui::FontFamily::Name(name.into()), stack);
         }
     }
     ctx.set_fonts(fonts);
 }
 
 const EDITOR_FAMILIES: [&str; 4] = ["sans", "serif", "mono", "rounded"];
-const EDITOR_TRAITS: [(bool, bool); 4] = [(false, false), (true, false), (false, true), (true, true)];
+const EDITOR_TRAITS: [(bool, bool); 4] =
+    [(false, false), (true, false), (false, true), (true, true)];
 
 fn editor_face_name(family: &str, bold: bool, italic: bool) -> String {
     format!(

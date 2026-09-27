@@ -36,11 +36,7 @@ pub(super) struct InlineText {
 }
 
 impl View {
-    pub(super) fn begin_inline(
-        &mut self,
-        tx: &Sender<Job>,
-        target: TextInputTarget,
-    ) {
+    pub(super) fn begin_inline(&mut self, tx: &Sender<Job>, target: TextInputTarget) {
         if self.pending || self.inline.is_some() || self.closed || self.close_requested {
             return;
         }
@@ -312,7 +308,14 @@ fn inline_geometry(
     };
     let frame = layout.frame;
     let accepted_width = frame.width as f32 * scale - left - right;
-    let galley = inline_galley(ctx, text, &format, halign, layout.auto_width, accepted_width);
+    let galley = inline_galley(
+        ctx,
+        text,
+        &format,
+        halign,
+        layout.auto_width,
+        accepted_width,
+    );
     // Auto-width labels grow with the typed buffer before the session refits
     // them; the accepted box keeps its left edge, centre or right edge.
     let content_width = if layout.auto_width {
@@ -367,7 +370,11 @@ fn inline_galley(
     wrap_width: f32,
 ) -> Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::single_section(text.to_owned(), format.clone());
-    job.wrap.max_width = if auto_width { f32::INFINITY } else { wrap_width };
+    job.wrap.max_width = if auto_width {
+        f32::INFINITY
+    } else {
+        wrap_width
+    };
     job.halign = halign;
     job.keep_trailing_whitespace = true;
     ctx.fonts_mut(|fonts| fonts.layout_job(job))
@@ -518,13 +525,14 @@ pub(super) fn show(
                 input.blocked = false;
             }
             lost_focus = field.lost_focus();
+            if field.has_focus() {
+                // The accent outline is the indicator (`outline: 0` on the textarea).
+                crate::primitives::focus_indicated(ui.ctx());
+            }
             if rotated {
                 let origin = output.galley_pos - egui::vec2(output.galley.rect.left(), 0.);
-                let mut shape = egui::epaint::TextShape::new(
-                    rotate(origin),
-                    output.galley.clone(),
-                    text_color,
-                );
+                let mut shape =
+                    egui::epaint::TextShape::new(rotate(origin), output.galley.clone(), text_color);
                 shape.override_text_color = Some(text_color);
                 shape.angle = geometry.angle;
                 painter.add(shape);
@@ -536,10 +544,7 @@ pub(super) fn show(
                         .pos_from_cursor(range.primary)
                         .translate(origin.to_vec2());
                     painter.line_segment(
-                        [
-                            rotate(caret.center_top()),
-                            rotate(caret.center_bottom()),
-                        ],
+                        [rotate(caret.center_top()), rotate(caret.center_bottom())],
                         egui::Stroke::new(
                             (geometry.format.font_id.size / 16.).clamp(1., 3.),
                             text_color,
@@ -577,10 +582,7 @@ mod tests {
         view.receive(&ctx, Ok(presented_text("label", "original")));
         view.output = Some((view.texture.as_ref().unwrap().clone(), 37));
         let (tx, rx) = mpsc::channel();
-        view.begin_inline(
-            &tx,
-            TextInputTarget::Existing { id: "label".into() },
-        );
+        view.begin_inline(&tx, TextInputTarget::Existing { id: "label".into() });
         assert!(matches!(
             rx.try_recv(),
             Ok(Job::Apply(Request::BeginTextInput { .. }))
@@ -593,6 +595,51 @@ mod tests {
         presented.active_text_input =
             Some((view.inline.as_ref().unwrap().id.clone(), "label".into()));
         view.receive(ctx, Ok(presented));
+    }
+
+    #[test]
+    fn inline_geometry_follows_the_layer_style_anchor_rotation_and_minimum() {
+        let ctx = egui::Context::default();
+        crate::ui_fonts::install(&ctx);
+        ctx.begin_pass(Default::default());
+        let Some(Element::Text(mut element)) = presented_text("label", "Wide label text")
+            .document
+            .elements
+            .last()
+            .cloned()
+        else {
+            unreachable!()
+        };
+        element.font_family = "sans".into();
+        element.align = "center".into();
+        element.background = Some("#111318".into());
+        element.rounded_background = true;
+        element.base.rotation = Some(0.5);
+        element.base.opacity = 50.;
+        let preview = egui::Rect::from_min_size(egui::pos2(100., 50.), egui::vec2(320., 180.));
+        let geometry = inline_geometry(&ctx, &element, "Wide label text", preview, 0.5).unwrap();
+        let layout = captures_app::editor_text::inline_editor_layout(&element).unwrap();
+        // Auto width keeps the accepted plate's centre while the buffer grows.
+        let accepted_center =
+            preview.left() + (layout.frame.x + layout.frame.width / 2.) as f32 * 0.5;
+        assert!((geometry.frame.center().x - accepted_center).abs() < 0.5);
+        assert!(
+            (geometry.frame.top() - (preview.top() + layout.frame.y as f32 * 0.5)).abs() < 1e-3
+        );
+        assert_eq!(geometry.angle, 0.5);
+        assert_eq!(geometry.halign, egui::Align::Center);
+        assert_eq!(geometry.format.font_id.size, 16.);
+        assert_ne!(
+            geometry.format.font_id.family,
+            egui::FontFamily::Proportional
+        );
+        let (plate, radius) = geometry.plate.unwrap();
+        assert!(plate.a() < 255 && radius > 0.);
+        assert!(geometry.content.width() < geometry.frame.width());
+        // Shipping's 48 × 28 minimum applies to a blank label.
+        let blank = inline_geometry(&ctx, &element, "", preview, 0.1).unwrap();
+        assert!(blank.frame.width() > 47.99 && blank.frame.height() > 27.99);
+        ctx.end_pass().textures_delta.clear();
     }
 
     #[test]

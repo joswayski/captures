@@ -2292,9 +2292,12 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
     }
     if view.draw_shape == DrawShape::Wand {
         use captures_app::editor_chrome::eraser as e;
-        let marks = e::TOLERANCE_MARKS.map(|(value, label)| crate::primitives::RangeMark { value, label });
+        let marks =
+            e::TOLERANCE_MARKS.map(|(value, label)| crate::primitives::RangeMark { value, label });
         // Slider values are the wand's 0–255 channel distance; shipping stops at 120.
-        view.wand_tolerance = view.wand_tolerance.clamp(e::TOLERANCE_RANGE.0, e::TOLERANCE_RANGE.1);
+        view.wand_tolerance = view
+            .wand_tolerance
+            .clamp(e::TOLERANCE_RANGE.0, e::TOLERANCE_RANGE.1);
         let text = e::tolerance_text(view.wand_tolerance);
         labelled_slider(
             ui,
@@ -2322,7 +2325,8 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             None,
             1.,
         );
-        let size_marks = e::SIZE_MARKS.map(|(value, label)| crate::primitives::RangeMark { value, label });
+        let size_marks =
+            e::SIZE_MARKS.map(|(value, label)| crate::primitives::RangeMark { value, label });
         let text = e::size_text(view.brush_size);
         labelled_slider(
             ui,
