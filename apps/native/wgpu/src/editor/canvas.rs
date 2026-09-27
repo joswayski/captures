@@ -8,10 +8,12 @@ use captures_app::{
     editor_canvas::{
         self as canvas, CanvasEdge, CanvasExpandPreview, CurveEdit, CurveHandle, CurveHandles,
     },
+    editor_image_background::{self as image_background, WandLoupe},
     editor_session::{
         DROP_IMAGE, DROP_UNSUPPORTED, ImageDropGuide, ImportPlacement, image_drop_guide,
         is_supported_image_path,
     },
+    motion::Motion,
 };
 use eframe::egui::{Color32, FontFamily, FontId, Stroke, StrokeKind, pos2, vec2};
 
@@ -670,4 +672,424 @@ pub(super) fn show_curve_controls(
         submit_curve(view, tx, shape.base.id.clone(), CurveEdit::Straighten);
     }
     ui.small(canvas::CURVE_HELP);
+}
+
+/// `rgba(var(--trim-rgb), alpha)`.
+fn trim_color(alpha: f64) -> Color32 {
+    let [r, g, b] = canvas::TRIM_RGB;
+    Color32::from_rgba_unmultiplied(r, g, b, (alpha.clamp(0., 1.) * 255.).round() as u8)
+}
+
+/// A gradient strip outward from one side of `keep`: `stops` fade across it
+/// (0 at the edge) and shipping's 12 %/88 % mask fades it along the edge.
+fn paint_trim_bloom(
+    painter: &egui::Painter,
+    keep: egui::Rect,
+    edge: CanvasEdge,
+    depth: f32,
+    strength: f64,
+) {
+    let along = [(0., 0.), (0.12, 1.), (0.88, 1.), (1., 0.)];
+    let place = |s: f32, t: f32| match edge {
+        CanvasEdge::Top => pos2(keep.left() + s * keep.width(), keep.top() - t * depth),
+        CanvasEdge::Bottom => pos2(keep.left() + s * keep.width(), keep.bottom() + t * depth),
+        CanvasEdge::Left => pos2(keep.left() - t * depth, keep.top() + s * keep.height()),
+        CanvasEdge::Right => pos2(keep.right() + t * depth, keep.top() + s * keep.height()),
+    };
+    let mut mesh = egui::Mesh::default();
+    let columns = along.len() as u32;
+    for (across, alpha) in canvas::TRIM_BLOOM_STOPS {
+        for (s, mask) in along {
+            mesh.colored_vertex(
+                place(s as f32, across as f32),
+                trim_color(alpha * mask * strength),
+            );
+        }
+    }
+    for row in 0..canvas::TRIM_BLOOM_STOPS.len() as u32 - 1 {
+        for column in 0..columns - 1 {
+            let a = row * columns + column;
+            mesh.add_triangle(a, a + 1, a + columns);
+            mesh.add_triangle(a + 1, a + columns + 1, a + columns);
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// Shipping `.screenshot-canvas-trim-hint`, shown while Trim edges is hovered
+/// or focused: the discarded margins tinted red, a dashed outline of the kept
+/// area, and pulsing cut edges with blooms and particles streaming into the
+/// discard strips. Under reduced motion the hint is static and particle-free.
+pub(super) fn paint_trim_preview(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    view: &View,
+    available: egui::Rect,
+    preview: egui::Rect,
+) {
+    let Some(since) = view.trim_hover_since else {
+        return;
+    };
+    let (Some(presented), Some(bounds)) = (view.presented.as_ref(), document_bounds(view)) else {
+        return;
+    };
+    let Some(trim) = presented.document.trim_preview() else {
+        return;
+    };
+    let reduced = crate::motion::reduced(ui.ctx());
+    let elapsed = (ui.input(|input| input.time) - since) * 1000.;
+    // No fill mode: reduced motion rests on each element's own opacity (1).
+    let breathe = |motion: Motion| {
+        if reduced {
+            1.
+        } else {
+            tokens.motion(motion).pose_repeating(elapsed, false).opacity
+        }
+    };
+    let (region, keep_alpha, edge_alpha) = (
+        breathe(Motion::TrimRegionBreathe),
+        breathe(Motion::TrimKeepBreathe),
+        breathe(Motion::TrimEdgePulse),
+    );
+    let painter = ui
+        .painter()
+        .with_clip_rect(available.intersect(ui.clip_rect()));
+    for (_, rect) in &trim.regions {
+        let rect = project_rect(preview, bounds, *rect);
+        painter.rect_filled(rect, 0., trim_color(canvas::TRIM_REGION_ALPHA * region));
+        // `inset 0 0 24px rgba(trim, 0.12)`.
+        for (width, alpha) in [(12., 0.04), (5., 0.05)] {
+            painter.rect_stroke(
+                rect,
+                0.,
+                Stroke::new(width, trim_color(alpha * region)),
+                StrokeKind::Inside,
+            );
+        }
+    }
+    let keep = project_rect(preview, bounds, trim.keep);
+    let radius = canvas::TRIM_KEEP_RADIUS as f32;
+    for (grow, alpha) in [(11., 0.03), (6., 0.06), (1., 0.1)] {
+        painter.rect_stroke(
+            keep.expand(grow / 2.),
+            radius + grow / 2.,
+            Stroke::new(grow, trim_color(alpha * keep_alpha)),
+            StrokeKind::Middle,
+        );
+    }
+    let corners = [
+        keep.left_top(),
+        keep.right_top(),
+        keep.right_bottom(),
+        keep.left_bottom(),
+        keep.left_top(),
+    ];
+    painter.extend(egui::Shape::dashed_line(
+        &corners,
+        Stroke::new(
+            canvas::TRIM_KEEP_WIDTH as f32,
+            trim_color(canvas::TRIM_KEEP_ALPHA * keep_alpha),
+        ),
+        4.5,
+        3.,
+    ));
+    let bar = canvas::TRIM_EDGE_BAR as f32;
+    for edge in &trim.edges {
+        paint_trim_bloom(&painter, keep, *edge, canvas::TRIM_BLOOM as f32, 1.);
+        let strip = match edge {
+            CanvasEdge::Top => egui::Rect::from_min_max(
+                pos2(keep.left() - 1., keep.top() - bar / 2.),
+                pos2(keep.right() + 1., keep.top() + bar / 2.),
+            ),
+            CanvasEdge::Bottom => egui::Rect::from_min_max(
+                pos2(keep.left() - 1., keep.bottom() - bar / 2.),
+                pos2(keep.right() + 1., keep.bottom() + bar / 2.),
+            ),
+            CanvasEdge::Left => egui::Rect::from_min_max(
+                pos2(keep.left() - bar / 2., keep.top() - 1.),
+                pos2(keep.left() + bar / 2., keep.bottom() + 1.),
+            ),
+            CanvasEdge::Right => egui::Rect::from_min_max(
+                pos2(keep.right() - bar / 2., keep.top() - 1.),
+                pos2(keep.right() + bar / 2., keep.bottom() + 1.),
+            ),
+        };
+        // `0 0 8px .95, 0 0 20px .55, 0 0 32px .32` around the pill.
+        for (grow, alpha) in [(14., 0.06), (8., 0.12), (3., 0.3)] {
+            painter.rect_filled(
+                strip.expand(grow),
+                bar / 2. + grow,
+                trim_color(alpha * edge_alpha),
+            );
+        }
+        painter.rect_filled(strip, bar / 2., trim_color(edge_alpha));
+        for particle in captures_app::motion::SNAP_PARTICLES {
+            let Some(pose) = particle.pose(elapsed, reduced) else {
+                continue;
+            };
+            let along = particle.along as f32;
+            let outward = pose.outward as f32;
+            let center = match edge {
+                CanvasEdge::Top => pos2(keep.left() + along * keep.width(), keep.top() - outward),
+                CanvasEdge::Bottom => {
+                    pos2(keep.left() + along * keep.width(), keep.bottom() + outward)
+                }
+                CanvasEdge::Left => pos2(keep.left() - outward, keep.top() + along * keep.height()),
+                CanvasEdge::Right => {
+                    pos2(keep.right() + outward, keep.top() + along * keep.height())
+                }
+            };
+            let size = (particle.size * pose.scale) as f32;
+            painter.circle_filled(center, size / 2. + 3., trim_color(0.25 * pose.opacity));
+            painter.circle_filled(center, size / 2., trim_color(pose.opacity));
+        }
+    }
+    if !reduced {
+        ui.ctx().request_repaint();
+    }
+}
+
+/// The Wand loupe's circular magnifier, rendered once per sampled pixel.
+pub(super) struct LoupeTexture {
+    key: (String, (u32, u32), u32),
+    texture: egui::TextureHandle,
+}
+
+/// Rasterize `paintWandColorLoupe` into a circle: checkerboard, nearest-
+/// neighbour tiles, the source-pixel grid and the highlighted center sample.
+pub(super) fn loupe_image(loupe: &WandLoupe, pixels_per_point: f32) -> egui::ColorImage {
+    let size_points = image_background::WAND_LOUPE_SIZE as f32;
+    let side = (size_points * pixels_per_point).round().max(1.) as usize;
+    let scale = side as f32 / size_points;
+    let (dark, light, check) = image_background::WAND_LOUPE_CHECKER;
+    let extent = loupe.extent.max(1) as usize;
+    let cell = size_points / extent as f32;
+    let half = (extent / 2) as f32;
+    let center = half * cell;
+    let grid = (image_background::WAND_LOUPE_GRID_ALPHA * 255.) as u16;
+    let mut image = egui::ColorImage::filled([side, side], Color32::TRANSPARENT);
+    let radius = side as f32 / 2.;
+    let over = |base: [u8; 3], top: [u8; 4]| {
+        let alpha = u16::from(top[3]);
+        std::array::from_fn::<u8, 3, _>(|index| {
+            ((u16::from(top[index]) * alpha + u16::from(base[index]) * (255 - alpha)) / 255) as u8
+        })
+    };
+    for py in 0..side {
+        for px in 0..side {
+            let distance =
+                ((px as f32 + 0.5 - radius).powi(2) + (py as f32 + 0.5 - radius).powi(2)).sqrt();
+            let coverage = (radius - distance + 0.5).clamp(0., 1.);
+            if coverage <= 0. {
+                continue;
+            }
+            let (x, y) = ((px as f32 + 0.5) / scale, (py as f32 + 0.5) / scale);
+            let checker =
+                if ((x / check as f32) as usize + (y / check as f32) as usize).is_multiple_of(2) {
+                    dark
+                } else {
+                    light
+                };
+            let column = ((x / cell) as usize).min(extent - 1);
+            let row = ((y / cell) as usize).min(extent - 1);
+            let mut rgb = match loupe.tiles.get(row * extent + column).copied().flatten() {
+                Some(tile) => over(checker, tile),
+                None => checker,
+            };
+            // One device pixel of grid at each interior tile boundary.
+            let on_grid = |value: f32, device: usize| {
+                let index = (value / cell).round();
+                index >= 1. && index < extent as f32 && ((index * cell * scale) as usize == device)
+            };
+            if on_grid(x, px) || on_grid(y, py) {
+                rgb = over(rgb, [0, 0, 0, grid as u8]);
+            }
+            // The keyed sample: a white 1.5 pt ring inside a black 1 pt ring.
+            let inside = |inset: f32| {
+                x >= center + inset
+                    && x <= center + cell - inset
+                    && y >= center + inset
+                    && y <= center + cell - inset
+            };
+            if inside(-0.5) && !inside(0.5) {
+                rgb = over(rgb, [0, 0, 0, 140]);
+            } else if inside(0.5) && !inside(2.) {
+                rgb = over(rgb, [255, 255, 255, 242]);
+            }
+            let alpha = (coverage * 255.).round() as u8;
+            image.pixels[py * side + px] =
+                Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], alpha);
+        }
+    }
+    image
+}
+
+/// Shipping `WandColorLoupe`: while the Wand hovers an image, a magnified
+/// circle of natural pixels beside the crosshair plus a swatch and hex pill.
+/// Returns false (and hides the loupe) when the pointer is off every image.
+pub(super) fn show_wand_loupe(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    preview: egui::Rect,
+    pointer: egui::Pos2,
+) -> bool {
+    let (Some(presented), Some(bounds)) = (view.presented.as_ref(), document_bounds(view)) else {
+        view.wand_loupe = None;
+        return false;
+    };
+    let point = image_point(pointer, preview, bounds);
+    let Some(loupe) = image_background::wand_loupe(
+        &presented.document,
+        |src| presented.image_assets.get(src).map(|asset| &**asset),
+        point,
+    ) else {
+        view.wand_loupe = None;
+        return false;
+    };
+    let ppp = ui.ctx().pixels_per_point();
+    let src = image_background::wand_target(&presented.document, point)
+        .map(|(_, image, _)| image.src.clone())
+        .unwrap_or_default();
+    let key = (src, loupe.pixel, ppp.to_bits());
+    if view
+        .wand_loupe
+        .as_ref()
+        .is_none_or(|cached| cached.key != key)
+    {
+        let texture = ui.ctx().load_texture(
+            "wand-loupe",
+            loupe_image(&loupe, ppp),
+            egui::TextureOptions::NEAREST,
+        );
+        view.wand_loupe = Some(LoupeTexture { key, texture });
+    }
+    let Some(cached) = view.wand_loupe.as_ref() else {
+        return true;
+    };
+    let viewport = ui.ctx().content_rect();
+    let size = image_background::WAND_LOUPE_SIZE as f32;
+    let origin = image_background::wand_loupe_position(
+        Point {
+            x: f64::from(pointer.x - viewport.left()),
+            y: f64::from(pointer.y - viewport.top()),
+        },
+        f64::from(viewport.width()),
+        f64::from(viewport.height()),
+    );
+    let circle = egui::Rect::from_min_size(
+        pos2(
+            viewport.left() + origin.x as f32,
+            viewport.top() + origin.y as f32,
+        ),
+        vec2(size, size),
+    );
+    let id = egui::Id::unique("screenshot-wand-loupe");
+    let painter = ui
+        .ctx()
+        .layer_painter(egui::LayerId::new(egui::Order::Tooltip, id));
+    // `drop-shadow(0 8px 18px rgba(0, 0, 0, 0.42))`.
+    for (grow, alpha) in [(9., 0.06), (5., 0.1), (2., 0.14)] {
+        painter.circle_filled(
+            circle.center() + vec2(0., 8.),
+            size / 2. + grow,
+            Color32::from_black_alpha((255. * alpha) as u8),
+        );
+    }
+    painter.image(
+        cached.texture.id(),
+        circle,
+        egui::Rect::from_min_max(pos2(0., 0.), pos2(1., 1.)),
+        Color32::WHITE,
+    );
+    // `.screenshot-wand-loupe-rim`: white 2 pt border, black hairlines.
+    let center = circle.center();
+    painter.circle_stroke(
+        center,
+        size / 2. - 1.,
+        Stroke::new(2., Color32::from_white_alpha(235)),
+    );
+    painter.circle_stroke(
+        center,
+        size / 2. + 0.5,
+        Stroke::new(1., Color32::from_black_alpha(140)),
+    );
+    painter.circle_stroke(
+        center,
+        size / 2. - 2.5,
+        Stroke::new(1., Color32::from_black_alpha(71)),
+    );
+    // `.screenshot-wand-loupe-meta`: swatch and hex in a glass pill below.
+    let font = FontId::new(tokens.number("text-sm"), FontFamily::Proportional);
+    let text = painter.layout_no_wrap(loupe.text.clone(), font, tokens.color("glass-text"));
+    let swatch = 14.;
+    let gap = tokens.number("s-3");
+    let pill_size = vec2(
+        4. + swatch + gap + text.size().x + 7.,
+        swatch.max(text.size().y) + 6.,
+    );
+    let pill = egui::Rect::from_min_size(
+        pos2(
+            center.x - pill_size.x / 2.,
+            circle.bottom() + image_background::WAND_LOUPE_META_GAP as f32,
+        ),
+        pill_size,
+    );
+    painter.rect(
+        pill,
+        pill.height() / 2.,
+        tokens.color("glass-strong"),
+        Stroke::new(1., tokens.color("glass-border")),
+        StrokeKind::Inside,
+    );
+    let swatch_center = pos2(pill.left() + 4. + swatch / 2., pill.center().y);
+    if loupe.transparent {
+        let (dark, light, _) = image_background::WAND_LOUPE_CHECKER;
+        painter.circle_filled(
+            swatch_center,
+            swatch / 2.,
+            Color32::from_rgb(light[0], light[1], light[2]),
+        );
+        for (dx, dy) in [(-1., -1.), (1., 1.)] {
+            painter.circle_filled(
+                swatch_center + vec2(dx * swatch / 4.5, dy * swatch / 4.5),
+                swatch / 5.,
+                Color32::from_rgb(dark[0], dark[1], dark[2]),
+            );
+        }
+    } else {
+        let [r, g, b, _] = loupe.color;
+        painter.circle_filled(swatch_center, swatch / 2., Color32::from_rgb(r, g, b));
+    }
+    painter.circle_stroke(
+        swatch_center,
+        swatch / 2. - 0.5,
+        Stroke::new(1., Color32::from_white_alpha(140)),
+    );
+    painter.circle_stroke(
+        swatch_center,
+        swatch / 2. - 1.5,
+        Stroke::new(1., Color32::from_black_alpha(89)),
+    );
+    painter.galley(
+        pos2(
+            swatch_center.x + swatch / 2. + gap,
+            pill.center().y - text.size().y / 2.,
+        ),
+        text,
+        tokens.color("glass-text"),
+    );
+    // `role="tooltip"` with the sample's `aria-label`, in a non-interactive
+    // layer so it never takes the canvas pointer.
+    egui::Area::new(id.with("label"))
+        .order(egui::Order::Tooltip)
+        .interactable(false)
+        .fixed_pos(circle.min)
+        .show(ui.ctx(), |ui| {
+            let (_, response) = ui.allocate_exact_size(circle.size(), egui::Sense::hover());
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &loupe.accessible_label)
+            });
+        });
+    true
 }

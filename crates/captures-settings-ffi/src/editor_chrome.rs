@@ -227,7 +227,11 @@ fn handle(request: ChromeRequest) -> Result<Value, String> {
             json!(chrome::draw_preview::brush(size, softness))
         }
         ChromeRequest::WandLoupePosition { cursor, viewport } => {
-            if !cursor.iter().chain(&viewport).all(|value| value.is_finite()) {
+            if !cursor
+                .iter()
+                .chain(&viewport)
+                .all(|value| value.is_finite())
+            {
                 return Err("invalid loupe position".into());
             }
             json!(captures_app::editor_image_background::wand_loupe_position(
@@ -327,8 +331,10 @@ mod tests {
         assert_eq!(result["wand_loupe"]["size"], 84.);
         assert_eq!(result["wand_loupe"]["extent"], 11);
         assert_eq!(result["draw_preview"]["height"], 88.);
-        let stroke = call(json!({"operation": "draw_tool_preview", "tool": "rectangle",
-            "stroke_width": 8., "stroke_enabled": true}));
+        let stroke = call(
+            json!({"operation": "draw_tool_preview", "tool": "rectangle",
+            "stroke_width": 8., "stroke_enabled": true}),
+        );
         assert_eq!(stroke["result"]["label"], "Stroke preview");
         assert_eq!(stroke["result"]["shapes"][0]["kind"], "rounded_rect");
         assert_eq!(stroke["result"]["shapes"][0]["radius"], 6.);

@@ -237,7 +237,8 @@ pub const WAND_LOUPE_OFFSET: f64 = 18.;
 pub const WAND_LOUPE_MARGIN: f64 = 8.;
 /// `paintWandColorLoupe`'s checkerboard (dark, light, cell) behind
 /// transparent samples; shipping hard-codes these literals.
-pub const WAND_LOUPE_CHECKER: ([u8; 3], [u8; 3], f64) = ([0xc4, 0xc4, 0xc8], [0xec, 0xec, 0xee], 6.);
+pub const WAND_LOUPE_CHECKER: ([u8; 3], [u8; 3], f64) =
+    ([0xc4, 0xc4, 0xc8], [0xec, 0xec, 0xee], 6.);
 /// Alpha of the black grid between magnified source pixels.
 pub const WAND_LOUPE_GRID_ALPHA: f64 = 0.18;
 /// `.screenshot-wand-loupe-meta`: the swatch + hex pill sits this far below
@@ -331,7 +332,11 @@ pub fn wand_loupe<'a>(
         color,
         tiles,
         extent,
-        text: if transparent { "empty".into() } else { hex.clone() },
+        text: if transparent {
+            "empty".into()
+        } else {
+            hex.clone()
+        },
         transparent,
         accessible_label: if transparent {
             "Sample color: transparent".into()
@@ -404,7 +409,10 @@ mod loupe_tests {
         assert_eq!(empty.accessible_label, "Sample color: transparent");
 
         assert_eq!(wand_loupe(&document, asset, Point { x: 25., y: 4. }), None);
-        assert_eq!(wand_loupe(&document, |_| None, Point { x: 3., y: 4. }), None);
+        assert_eq!(
+            wand_loupe(&document, |_| None, Point { x: 3., y: 4. }),
+            None
+        );
         assert_eq!(rgba_hex([1, 2, 255, 0]), "#0102ff");
     }
 }

@@ -1481,7 +1481,11 @@ mod tests {
         assert_eq!(cta.duration_ms, 2_400.);
         assert!(close(cta.pose_repeating(0., false).opacity, 0.));
         assert!(close(cta.pose_repeating(1_200., false).opacity, 1.));
-        assert_eq!(cta.pose_repeating(1_200., true).opacity, 0., "no halo when reduced");
+        assert_eq!(
+            cta.pose_repeating(1_200., true).opacity,
+            0.,
+            "no halo when reduced"
+        );
 
         let region = Motion::TrimRegionBreathe.resolve(&Shipping).unwrap();
         assert_eq!(region.duration_ms, 1_700.);
@@ -1493,9 +1497,15 @@ mod tests {
         assert_eq!(edge.duration_ms, 1_400.);
         assert!(close(edge.pose_repeating(700., false).opacity, 0.9));
         let catalog = catalog();
-        assert_eq!(catalog["keyframes"]["trim_edge_pulse"]["duration"]["millis"], 1_400.);
+        assert_eq!(
+            catalog["keyframes"]["trim_edge_pulse"]["duration"]["millis"],
+            1_400.
+        );
         assert_eq!(catalog["editor_cta"]["alpha"], 0.22);
-        assert_eq!(catalog["snap_particles"]["seeds"].as_array().unwrap().len(), 14);
+        assert_eq!(
+            catalog["snap_particles"]["seeds"].as_array().unwrap().len(),
+            14
+        );
     }
 
     #[test]

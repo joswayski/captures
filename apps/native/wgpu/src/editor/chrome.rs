@@ -828,6 +828,7 @@ fn canvas_toolbar(
         vec2(width, height),
     );
     if width <= 0. {
+        view.trim_hover_since = None;
         return rect;
     }
     let clip = rect.intersect(ui.clip_rect());
@@ -873,6 +874,12 @@ fn canvas_toolbar(
         pos2(x, center - 14.),
         vec2(if full { trim_full } else { compact_tool }, 28.),
     );
+    // Shipping `disabled={!canTrimEdges}`: nothing to trim greys it out.
+    let can_trim = enabled
+        && view
+            .presented
+            .as_ref()
+            .is_some_and(|presented| presented.document.can_trim_to_content());
     let response = canvas_tool(
         ui,
         tokens,
@@ -880,10 +887,16 @@ fn canvas_toolbar(
         trim,
         clip,
         "canvas-trim",
-        enabled,
+        can_trim,
         false,
     );
-    let ink = canvas_tool_ink(tokens, &response, enabled, false);
+    // Hover or keyboard focus previews the cut on the canvas.
+    let previewing = can_trim && (response.hovered() || response.has_focus());
+    if previewing != view.trim_hover_since.is_some() {
+        view.trim_hover_since = previewing.then(|| ui.input(|input| input.time));
+        ui.ctx().request_repaint();
+    }
+    let ink = canvas_tool_ink(tokens, &response, can_trim, false);
     let icon_center = if full {
         pos2(trim.left() + pad + 6.5, center)
     } else {
@@ -1545,4 +1558,259 @@ pub(super) fn properties_heading(ui: &mut egui::Ui, tokens: &Tokens, view: &View
         tokens.color("text"),
     );
     ui.add_space(tokens.number("s-4"));
+}
+
+/// Shipping `DrawToolPreview` (`.screenshot-draw-preview`): an 88 pt
+/// checkerboard card sampling the new stroke/shape or eraser brush with the
+/// current colour, fill and opacity. Geometry is `editor_chrome::draw_preview`.
+pub(super) fn draw_tool_preview(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    preview: &model::draw_preview::Preview,
+    color: Color32,
+    fill: Option<Color32>,
+    opacity: f32,
+) {
+    use model::draw_preview::{self as geometry, Shape};
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(ui.available_width(), geometry::HEIGHT as f32),
+        Sense::hover(),
+    );
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, preview.label));
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let radius = tokens.number("r-md");
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    painter.rect_filled(rect, radius, tokens.color("canvas-checker-b"));
+    let inner = rect.shrink(1.);
+    let square = geometry::CHECKER as f32;
+    let checker = painter.with_clip_rect(inner.shrink(radius / 3.).intersect(ui.clip_rect()));
+    let (columns, rows) = (
+        (inner.width() / square).ceil() as i32,
+        (inner.height() / square).ceil() as i32,
+    );
+    for row in 0..rows {
+        for column in (row % 2..columns).step_by(2) {
+            checker.rect_filled(
+                egui::Rect::from_min_size(
+                    pos2(
+                        inner.left() + column as f32 * square,
+                        inner.top() + row as f32 * square,
+                    ),
+                    vec2(square, square),
+                ),
+                0.,
+                tokens.color("canvas-checker-a"),
+            );
+        }
+    }
+    let (scale, left, top) = geometry::fit(f64::from(inner.width()), f64::from(inner.height()));
+    let scale = scale as f32;
+    let place = |point: captures_app::editor::Point| {
+        pos2(
+            inner.left() + left as f32 + point.x as f32 * scale,
+            inner.top() + top as f32 + point.y as f32 * scale,
+        )
+    };
+    let color = color.gamma_multiply(opacity);
+    let fill = fill.map(|fill| fill.gamma_multiply(opacity));
+    let stroke = Stroke::new(preview.stroke_width as f32 * scale, color);
+    let visible_stroke = preview.stroke_width > 0.;
+    for shape in &preview.shapes {
+        match shape {
+            Shape::RoundedRect { rect, radius } => {
+                let area = egui::Rect::from_min_max(
+                    place(captures_app::editor::Point {
+                        x: rect.x,
+                        y: rect.y,
+                    }),
+                    place(captures_app::editor::Point {
+                        x: rect.x + rect.width,
+                        y: rect.y + rect.height,
+                    }),
+                );
+                let corner = *radius as f32 * scale;
+                if let Some(fill) = fill {
+                    painter.rect_filled(area, corner, fill);
+                }
+                if visible_stroke {
+                    painter.rect_stroke(area, corner, stroke, StrokeKind::Middle);
+                }
+            }
+            Shape::Ellipse { rect } => {
+                let center = place(captures_app::editor::Point {
+                    x: rect.x + rect.width / 2.,
+                    y: rect.y + rect.height / 2.,
+                });
+                let radii = vec2(rect.width as f32, rect.height as f32) * scale / 2.;
+                if let Some(fill) = fill {
+                    painter.add(egui::Shape::ellipse_filled(center, radii, fill));
+                }
+                if visible_stroke {
+                    painter.add(egui::Shape::ellipse_stroke(center, radii, stroke));
+                }
+            }
+            Shape::Path { points, closed } => {
+                let points: Vec<_> = points.iter().copied().map(place).collect();
+                if points.len() < 2 {
+                    continue;
+                }
+                if *closed && let Some(fill) = fill {
+                    // Fan from the centroid: every shipping polygon (the
+                    // star included) is star-shaped about its center.
+                    let center = points
+                        .iter()
+                        .fold(vec2(0., 0.), |sum, point| sum + point.to_vec2())
+                        / points.len() as f32;
+                    let mut mesh = egui::Mesh::default();
+                    mesh.colored_vertex(center.to_pos2(), fill);
+                    for point in &points {
+                        mesh.colored_vertex(*point, fill);
+                    }
+                    let count = points.len() as u32;
+                    for index in 0..count {
+                        mesh.add_triangle(0, 1 + index, 1 + (index + 1) % count);
+                    }
+                    painter.add(egui::Shape::mesh(mesh));
+                }
+                if visible_stroke {
+                    if *closed {
+                        painter.add(egui::Shape::closed_line(points.clone(), stroke));
+                    } else {
+                        painter.add(egui::Shape::line(points.clone(), stroke));
+                    }
+                    // `stroke-linecap/linejoin: round`.
+                    let dot = stroke.width / 2.;
+                    let joints = if *closed {
+                        &points[..]
+                    } else {
+                        &points[1..points.len() - 1]
+                    };
+                    for point in joints {
+                        painter.circle_filled(*point, dot, color);
+                    }
+                    if !*closed {
+                        painter.circle_filled(points[0], dot, color);
+                        painter.circle_filled(points[points.len() - 1], dot, color);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(brush) = preview.brush {
+        // Radial gradient in `--solid`: opaque to the hard stop, clear at the rim.
+        let center = place(brush.center);
+        let outer = brush.radius as f32 * scale;
+        let solid = tokens.color("solid").gamma_multiply(opacity);
+        let rings = [
+            (0., 1.),
+            (brush.hard_stop as f32, 1.),
+            ((1. + brush.hard_stop as f32) / 2., 0.5),
+            (1., 0.),
+        ];
+        let segments = 64u32;
+        let mut mesh = egui::Mesh::default();
+        mesh.colored_vertex(center, solid);
+        for (fraction, alpha) in &rings[1..] {
+            for segment in 0..segments {
+                let angle = segment as f32 / segments as f32 * std::f32::consts::TAU;
+                mesh.colored_vertex(
+                    center + vec2(angle.cos(), angle.sin()) * outer * *fraction,
+                    solid.gamma_multiply(*alpha),
+                );
+            }
+        }
+        for segment in 0..segments {
+            let next = (segment + 1) % segments;
+            mesh.add_triangle(0, 1 + segment, 1 + next);
+            for ring in 0..rings.len() as u32 - 2 {
+                let inner_ring = 1 + ring * segments;
+                let outer_ring = inner_ring + segments;
+                mesh.add_triangle(
+                    inner_ring + segment,
+                    outer_ring + segment,
+                    outer_ring + next,
+                );
+                mesh.add_triangle(inner_ring + segment, outer_ring + next, inner_ring + next);
+            }
+        }
+        painter.add(egui::Shape::mesh(mesh));
+    }
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        Stroke::new(1., tokens.color("border-subtle")),
+        StrokeKind::Inside,
+    );
+}
+
+/// Shipping `.screenshot-property-actions button.primary`: an accent action.
+/// With `pulse` it plays `screenshot-cta-pulse` (Apply crop while a crop is
+/// staged): an accent halo that swells to 5 pt and fades, and rests
+/// invisible under reduced motion.
+pub(super) fn primary_action(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    label: &str,
+    enabled: bool,
+    pulse: bool,
+) -> egui::Response {
+    let fill = tokens.color("theme-accent");
+    let button = egui::Button::new(
+        egui::RichText::new(label)
+            .size(tokens.number("text-sm"))
+            .color(tokens.color("theme-accent-ink"))
+            .strong(),
+    )
+    .fill(fill)
+    .stroke(Stroke::NONE)
+    .corner_radius(tokens.number("r-md") as u8)
+    .min_size(vec2(0., tokens.number("h-md")));
+    let response = ui.add_enabled(enabled, button);
+    if enabled && response.hovered() {
+        ui.painter().rect_filled(
+            response.rect,
+            tokens.number("r-md"),
+            tokens.color("theme-accent-hover"),
+        );
+        ui.painter().text(
+            response.rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            FontId::new(tokens.number("text-sm"), egui::FontFamily::Proportional),
+            tokens.color("theme-accent-ink"),
+        );
+    }
+    let since_id = response.id.with("cta-pulse-since");
+    if enabled && pulse {
+        let now = ui.input(|input| input.time);
+        let since = ui.data_mut(|data| *data.get_temp_mut_or_insert_with(since_id, || now));
+        let reduced = crate::motion::reduced(ui.ctx());
+        let pose = tokens
+            .motion(captures_app::motion::Motion::EditorCtaPulse)
+            .pose_repeating((now - since) * 1000., reduced);
+        let spread = (captures_app::motion::EDITOR_CTA_SPREAD * pose.opacity) as f32;
+        if spread > 0.01 {
+            // `box-shadow: 0 0 0 <spread> rgba(accent, 0.22)` flush outside.
+            ui.painter().rect_stroke(
+                response.rect,
+                tokens.number("r-md"),
+                Stroke::new(
+                    spread,
+                    fill.gamma_multiply(
+                        (captures_app::motion::EDITOR_CTA_ALPHA * pose.opacity) as f32,
+                    ),
+                ),
+                StrokeKind::Outside,
+            );
+        }
+        if !reduced {
+            ui.ctx().request_repaint();
+        }
+    } else {
+        ui.data_mut(|data| data.remove::<f64>(since_id));
+    }
+    response
 }

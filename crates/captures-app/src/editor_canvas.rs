@@ -864,7 +864,10 @@ mod tests {
     #[test]
     fn trim_rule_and_margin_preview_match_shipping() {
         let mut document = Document::new_capture("fixture:base", 100., 80., None);
-        assert!(!document.can_trim_to_content(), "a tight canvas has nothing to trim");
+        assert!(
+            !document.can_trim_to_content(),
+            "a tight canvas has nothing to trim"
+        );
         assert_eq!(document.trim_preview(), None);
 
         document.resize_canvas(150., 100.);
@@ -902,8 +905,14 @@ mod tests {
                 CanvasEdge::Left
             ]
         );
-        assert_eq!(preview.regions[0], (CanvasEdge::Top, rect(0., 0., 150., 5.)));
-        assert_eq!(preview.regions[3], (CanvasEdge::Left, rect(0., 5., 10., 80.)));
+        assert_eq!(
+            preview.regions[0],
+            (CanvasEdge::Top, rect(0., 0., 150., 5.))
+        );
+        assert_eq!(
+            preview.regions[3],
+            (CanvasEdge::Left, rect(0., 5., 10., 80.))
+        );
         let mut trimmed = document.clone();
         trimmed.trim_to_content().unwrap();
         assert_eq!((trimmed.width, trimmed.height), (101., 80.));

@@ -87,6 +87,9 @@ struct Presented {
     document: Arc<Document>,
     /// Live Layers-row previews by layer ID (`captures_app::editor_layers`).
     thumbnails: BTreeMap<String, Arc<RgbaImage>>,
+    /// Natural pixels of each visible image layer by source, shared with the
+    /// session, so the Wand loupe samples on the UI thread.
+    image_assets: BTreeMap<String, Arc<RgbaImage>>,
     pixels: Arc<RgbaImage>,
     original_export_path: Option<PathBuf>,
     initial_text_size: f64,
@@ -128,6 +131,7 @@ impl Presented {
                 })
                 .collect(),
             document: Arc::new(snapshot.document.clone()),
+            image_assets: session.visible_image_assets(),
             pixels: session.pixels(),
             original_export_path: snapshot.original_export_path.map(Path::to_owned),
             initial_text_size: snapshot.initial_text_size,
@@ -186,6 +190,20 @@ enum DrawShape {
 }
 
 impl DrawShape {
+    /// `editor_chrome::draw_preview::stroke` tool key.
+    fn preview_key(self) -> &'static str {
+        match self {
+            Self::Rectangle => "rectangle",
+            Self::Ellipse => "ellipse",
+            Self::Line => "line",
+            Self::Arrow => "arrow",
+            Self::Triangle => "triangle",
+            Self::Diamond => "diamond",
+            Self::Star => "star",
+            Self::Freehand | Self::Text | Self::Wand | Self::Erase | Self::Restore => "pen",
+        }
+    }
+
     fn is_grouped(self) -> bool {
         self.closed_kind().is_some() || self == Self::Line
     }
@@ -482,6 +500,11 @@ struct View {
     import_picker: Option<Receiver<Option<PathBuf>>>,
     /// Image files dragged over or dropped on the canvas.
     drop: canvas::DropState,
+    /// When Trim edges gained hover or keyboard focus while it can trim
+    /// (egui seconds); the canvas previews the cut while set.
+    trim_hover_since: Option<f64>,
+    /// The Wand loupe's rendered magnifier, keyed by sampled source/pixel.
+    wand_loupe: Option<canvas::LoupeTexture>,
     /// Curve slider value while dragging, committed once on release.
     curve_bend: Option<(String, f64)>,
     history_changed: bool,
@@ -592,6 +615,8 @@ impl Default for View {
             output_notice: None,
             import_picker: None,
             drop: canvas::DropState::default(),
+            trim_hover_since: None,
+            wand_loupe: None,
             curve_bend: None,
             history_changed: false,
             original_replaced: false,
@@ -1909,7 +1934,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                         match view.section {
                             Section::Layers => show_layer_properties(ui, tokens, view, tx),
                             Section::Draw => show_draw_properties(ui, tokens, view),
-                            Section::Geometry => show_crop_properties(ui, view, tx),
+                            Section::Geometry => show_crop_properties(ui, tokens, view, tx),
                         }
                     });
                 },
@@ -1965,7 +1990,9 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 && !view.close_requested
                 && !view.confirm_discard
             {
-                show_shape(ui, view, tx, available, preview, intercepted);
+                show_shape(ui, tokens, view, tx, available, preview, intercepted);
+            } else {
+                view.wand_loupe = None;
             }
             if view.section == Section::Layers
                 && view.inline.is_none()
@@ -1983,6 +2010,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             {
                 canvas::show_expand(ui, tokens, view, tx, available, preview);
             }
+            canvas::paint_trim_preview(ui, tokens, view, available, preview);
             canvas::paint_drop_guide(ui, tokens, view, available, preview);
             text_input::show(ui, tokens, view, available, preview);
             if comparing && view.compare_visible() {
@@ -2125,6 +2153,14 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
         ui.label("Click an image to remove pixels matching that color. Transparent areas still select the frontmost visible image.");
         ui.small("Tolerance controls the color range. Contiguous limits removal to the connected area around the click.");
     } else if matches!(view.draw_shape, DrawShape::Erase | DrawShape::Restore) {
+        chrome::draw_tool_preview(
+            ui,
+            tokens,
+            &captures_app::editor_chrome::draw_preview::brush(view.brush_size, view.brush_softness),
+            egui::Color32::WHITE,
+            None,
+            1.,
+        );
         ui.horizontal(|ui| {
             ui.label("Diameter");
             ui.add(
@@ -2175,6 +2211,26 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
         );
     } else {
         let closed = view.draw_shape.closed_kind().is_some();
+        let style = &view.new_annotation_style;
+        chrome::draw_tool_preview(
+            ui,
+            tokens,
+            &captures_app::editor_chrome::draw_preview::stroke(
+                view.draw_shape.preview_key(),
+                style.stroke_width,
+                !closed || style.has_stroke(),
+            ),
+            egui::Color32::from_hex(&style.color).unwrap_or(egui::Color32::BLACK),
+            closed
+                .then(|| {
+                    style
+                        .fill
+                        .as_deref()
+                        .and_then(|fill| egui::Color32::from_hex(fill).ok())
+                })
+                .flatten(),
+            (view.new_annotation_opacity / 100.).clamp(0., 1.) as f32,
+        );
         let style = &mut view.new_annotation_style;
         if closed {
             let mut stroke = style.has_stroke();
@@ -2238,7 +2294,7 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
 }
 
 /// Shipping Crop properties: coordinates, Apply crop and the aspect menu.
-fn show_crop_properties(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
+fn show_crop_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     ui.label("Coordinates in image pixels");
     egui::Grid::new("crop-fields").show(ui, |ui| {
         for (label, value) in ["X", "Y", "Width", "Height"]
@@ -2251,10 +2307,9 @@ fn show_crop_properties(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
         }
     });
     ui.horizontal(|ui| {
-        if ui
-            .add_enabled(!view.pending, egui::Button::new("Apply crop"))
-            .clicked()
-        {
+        // Shipping pulses the primary Apply crop while a crop is staged.
+        let staged = view.crop_previous.is_some();
+        if chrome::primary_action(ui, tokens, "Apply crop", !view.pending, staged).clicked() {
             let [x, y, width, height] = view.crop;
             view.crop_previous = None;
             view.crop_drag = None;
@@ -3381,8 +3436,16 @@ fn show_layer_canvas(
     }
 }
 
+/// One shared token table for UI tests that drive canvas painters directly.
+#[cfg(test)]
+fn test_tokens() -> &'static Tokens {
+    static TOKENS: std::sync::OnceLock<Tokens> = std::sync::OnceLock::new();
+    TOKENS.get_or_init(|| crate::tokens::load().into_values().next().unwrap())
+}
+
 fn show_shape(
     ui: &mut egui::Ui,
+    tokens: &Tokens,
     view: &mut View,
     tx: &Sender<Job>,
     available: egui::Rect,
@@ -3460,9 +3523,30 @@ fn show_shape(
         }
         return;
     }
+    if view.draw_shape != DrawShape::Wand {
+        view.wand_loupe = None;
+    }
     if view.draw_shape == DrawShape::Wand {
-        if response.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        // Shipping's crosshair plus the colour loupe over an image, and
+        // `not-allowed` elsewhere; panning hides both.
+        let pointer = response
+            .hover_pos()
+            .filter(|pointer| preview.contains(*pointer) && available.contains(*pointer));
+        match pointer {
+            Some(pointer) if view.viewport_pan.is_none() && !view.pending => {
+                let over_image = canvas::show_wand_loupe(ui, tokens, view, preview, pointer);
+                ui.ctx().set_cursor_icon(if over_image {
+                    egui::CursorIcon::Crosshair
+                } else {
+                    egui::CursorIcon::NotAllowed
+                });
+            }
+            _ => {
+                view.wand_loupe = None;
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                }
+            }
         }
         if first_pass
             && !view.pending
@@ -7558,7 +7642,15 @@ mod tests {
                         let tokens = crate::tokens::load().into_values().next().unwrap();
                         show_layer_canvas(&mut ui, &tokens, view, &tx, area, preview, intercepted);
                     } else {
-                        show_shape(&mut ui, view, &tx, area, preview, intercepted);
+                        show_shape(
+                            &mut ui,
+                            test_tokens(),
+                            view,
+                            &tx,
+                            area,
+                            preview,
+                            intercepted,
+                        );
                     }
                     if ctx.current_pass_index() == 0 {
                         ctx.request_discard("viewport multipass");
@@ -7716,6 +7808,7 @@ mod tests {
         Presented {
             document: Arc::new(Document::new_capture("fixture", 7., 3., None)),
             thumbnails: BTreeMap::new(),
+            image_assets: BTreeMap::new(),
             pixels: Arc::new(RgbaImage::new(7, 3)),
             original_export_path: None,
             initial_text_size: 24.,
@@ -8062,7 +8155,7 @@ mod tests {
                         egui::Id::unique("text-placement-test"),
                         egui::UiBuilder::new().max_rect(area),
                     );
-                    show_shape(&mut ui, view, &tx, area, area, false);
+                    show_shape(&mut ui, test_tokens(), view, &tx, area, area, false);
                     if discard && ctx.current_pass_index() == 0 {
                         ctx.request_discard("verify text placement is one command");
                     }
@@ -9070,7 +9163,7 @@ mod tests {
                         egui::Id::unique("freehand-test"),
                         egui::UiBuilder::new().max_rect(screen),
                     );
-                    show_shape(&mut ui, view, &tx, screen, preview, false);
+                    show_shape(&mut ui, test_tokens(), view, &tx, screen, preview, false);
                     if ctx.current_pass_index() == 0 {
                         ctx.request_discard("exercise multipass event replay");
                     }
@@ -9306,7 +9399,15 @@ mod tests {
                         egui::Id::unique("wand-test"),
                         egui::UiBuilder::new().max_rect(screen),
                     );
-                    show_shape(&mut ui, view, &tx, screen, preview, intercepted);
+                    show_shape(
+                        &mut ui,
+                        test_tokens(),
+                        view,
+                        &tx,
+                        screen,
+                        preview,
+                        intercepted,
+                    );
                     if ctx.current_pass_index() == 0 {
                         ctx.request_discard("exercise wand multipass event replay");
                     }
@@ -9397,7 +9498,15 @@ mod tests {
                         egui::Id::unique("background-brush-test"),
                         egui::UiBuilder::new().max_rect(screen),
                     );
-                    show_shape(&mut ui, view, &tx, screen, preview, intercepted);
+                    show_shape(
+                        &mut ui,
+                        test_tokens(),
+                        view,
+                        &tx,
+                        screen,
+                        preview,
+                        intercepted,
+                    );
                     if ctx.current_pass_index() == 0 {
                         ctx.request_discard("exercise brush multipass event replay");
                     }
@@ -9627,7 +9736,7 @@ mod tests {
                 egui::Id::unique("shape-test"),
                 egui::UiBuilder::new().max_rect(screen),
             );
-            show_shape(&mut ui, view, &tx, screen, preview, false);
+            show_shape(&mut ui, test_tokens(), view, &tx, screen, preview, false);
             let mut output = ctx.end_pass();
             output.textures_delta.clear();
         };
@@ -9767,7 +9876,7 @@ mod tests {
                 egui::Id::unique("shape-grow-test"),
                 egui::UiBuilder::new().max_rect(screen),
             );
-            show_shape(&mut ui, view, &tx, screen, preview, false);
+            show_shape(&mut ui, test_tokens(), view, &tx, screen, preview, false);
             let mut output = ctx.end_pass();
             output.textures_delta.clear();
         };
@@ -10644,6 +10753,129 @@ mod tests {
             },
         );
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn trim_preview_paints_only_while_trim_edges_is_hovered() {
+        let ctx = egui::Context::default();
+        let mut value = presented(false);
+        // The 7×3 capture on a 10×3 canvas: Trim edges would cut 3 px on the right.
+        Arc::make_mut(&mut value.document).width = 10.;
+        value.pixels = Arc::new(RgbaImage::new(10, 3));
+        let mut view = View::default();
+        view.receive(&ctx, Ok(value));
+        view.pending = false;
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
+        let preview = egui::Rect::from_min_size(egui::pos2(50., 100.), egui::vec2(300., 90.));
+        let frame = |view: &View, reduced: bool| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                },
+                |_| {
+                    let ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("trim-preview-test"),
+                        egui::UiBuilder::new().max_rect(screen),
+                    );
+                    crate::motion::set_reduced(ui.ctx(), reduced);
+                    canvas::paint_trim_preview(&ui, test_tokens(), view, screen, preview);
+                },
+            );
+            let repaint = output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .is_some_and(|viewport| viewport.repaint_delay.is_zero());
+            output.textures_delta.clear();
+            (output.shapes.len(), repaint)
+        };
+        let (idle, _) = frame(&view, false);
+        // Mid-loop, so the particle stream is under way.
+        view.trim_hover_since = Some(-0.6);
+        let (hovered, repaint) = frame(&view, false);
+        assert!(hovered > idle + 10, "{idle} → {hovered}");
+        assert!(repaint, "the breathing hint and particles animate");
+        let (reduced, _) = frame(&view, true);
+        assert!(
+            reduced > idle && reduced < hovered,
+            "reduced motion keeps the static hint without particles ({reduced} of {hovered})"
+        );
+        // A tight canvas has nothing to preview even while hovered.
+        Arc::make_mut(&mut view.presented.as_mut().unwrap().document).width = 7.;
+        assert_eq!(frame(&view, false).0, idle);
+    }
+
+    #[test]
+    fn wand_loupe_follows_image_pixels_and_hides_off_image() {
+        use captures_app::editor_image_background as background;
+        let ctx = egui::Context::default();
+        let mut value = presented(false);
+        let mut source = RgbaImage::from_pixel(7, 3, image::Rgba([40, 110, 166, 255]));
+        source.put_pixel(3, 1, image::Rgba([229, 179, 68, 255]));
+        value.pixels = Arc::new(RgbaImage::new(7, 3));
+        value
+            .image_assets
+            .insert("fixture".into(), Arc::new(source.clone()));
+        let mut view = View::default();
+        view.receive(&ctx, Ok(value));
+        view.pending = false;
+        view.section = Section::Draw;
+        view.draw_shape = DrawShape::Wand;
+        let (tx, _rx) = mpsc::channel();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
+        let preview = egui::Rect::from_min_size(egui::pos2(50., 100.), egui::vec2(70., 30.));
+        let hover_once = |view: &mut View, pos: egui::Pos2| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events: vec![egui::Event::PointerMoved(pos)],
+                    focused: true,
+                    ..Default::default()
+                },
+                |_| {
+                    let mut ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("wand-loupe-test"),
+                        egui::UiBuilder::new().max_rect(screen),
+                    );
+                    show_shape(&mut ui, test_tokens(), view, &tx, screen, preview, false);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        // egui hit-tests against the previous frame, so hover twice.
+        let hover = |view: &mut View, pos: egui::Pos2| {
+            for _ in 0..2 {
+                hover_once(view, pos);
+            }
+        };
+        // Document pixel (3, 1) is the yellow sample.
+        hover(&mut view, egui::pos2(85., 115.));
+        assert!(view.wand_loupe.is_some(), "the loupe shows over the image");
+        hover(&mut view, egui::pos2(300., 250.));
+        assert!(view.wand_loupe.is_none(), "off the image the loupe hides");
+        view.draw_shape = DrawShape::Erase;
+        hover(&mut view, egui::pos2(85., 115.));
+        assert!(view.wand_loupe.is_none(), "only the Wand has a loupe");
+
+        let document = Document::new_capture("fixture", 7., 3., None);
+        let loupe =
+            background::wand_loupe(&document, |_| Some(&source), Point { x: 3.5, y: 1.5 }).unwrap();
+        let image = canvas::loupe_image(&loupe, 2.);
+        let side = image.size[0];
+        assert_eq!(side, 168, "84 pt at 2× device pixels");
+        let centre = image.pixels[side / 2 * side + side / 2];
+        assert_eq!(
+            centre,
+            egui::Color32::from_rgb(229, 179, 68),
+            "the keyed sample is the centre tile"
+        );
+        assert_eq!(
+            image.pixels[0],
+            egui::Color32::TRANSPARENT,
+            "clipped to a circle"
+        );
     }
 
     #[test]

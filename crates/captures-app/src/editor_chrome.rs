@@ -486,10 +486,18 @@ pub mod draw_preview {
     #[derive(Clone, Debug, PartialEq, Serialize)]
     #[serde(tag = "kind", rename_all = "snake_case")]
     pub enum Shape {
-        RoundedRect { rect: Rect, radius: f64 },
-        Ellipse { rect: Rect },
+        RoundedRect {
+            rect: Rect,
+            radius: f64,
+        },
+        Ellipse {
+            rect: Rect,
+        },
         /// A polyline; `closed` paths take the fill colour.
-        Path { points: Vec<Point>, closed: bool },
+        Path {
+            points: Vec<Point>,
+            closed: bool,
+        },
     }
 
     /// The Erase/Restore brush dab: opaque to `hard_stop` (0...1 of the
@@ -528,9 +536,24 @@ pub mod draw_preview {
     /// `M22 48c18-28 28-32 38-12s18 16 36-16 22-8 42 8` into a polyline.
     fn pen_path() -> Vec<Point> {
         let segments = [
-            [point(22., 48.), point(40., 20.), point(50., 16.), point(60., 36.)],
-            [point(60., 36.), point(70., 56.), point(78., 52.), point(96., 20.)],
-            [point(96., 20.), point(114., -12.), point(118., 12.), point(138., 28.)],
+            [
+                point(22., 48.),
+                point(40., 20.),
+                point(50., 16.),
+                point(60., 36.),
+            ],
+            [
+                point(60., 36.),
+                point(70., 56.),
+                point(78., 52.),
+                point(96., 20.),
+            ],
+            [
+                point(96., 20.),
+                point(114., -12.),
+                point(118., 12.),
+                point(138., 28.),
+            ],
         ];
         let mut points = vec![segments[0][0]];
         for [p0, p1, p2, p3] in segments {

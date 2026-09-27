@@ -665,6 +665,13 @@ def main():
         # start below the Layers section and the Properties heading.
         return y + 44 + properties_top() + 75 - 332
 
+    # Shape tools show shipping's 88px DrawToolPreview card (plus one 12px
+    # item gap) above their rows; the Wand and Text rows have no preview.
+    DRAW_PREVIEW_ROWS = 100
+
+    def shape_row(y):
+        return draw_row(y + DRAW_PREVIEW_ROWS)
+
     def zoom_menu_x():
         # Preset menu rows, 44px apart from y=64, right-aligned to the preset.
         return header_controls(editor_width())[0]["zoom"] + 10
@@ -726,7 +733,7 @@ def main():
 
     try:
         env["DISPLAY"] = ":" + spawn("xvfb", ["Xvfb", "-displayfd", "1", "-screen", "0",
-            "1280x1600x24" if args.text_only else "1280x1200x24",
+            "1280x1600x24" if args.text_only or args.drawing_defaults_only else "1280x1200x24",
             "-dpi", "96", "-nolisten", "tcp"], True)
         address = spawn("dbus", ["dbus-daemon", "--session", "--nofork", "--print-address=1"], True)
         env["DBUS_SESSION_BUS_ADDRESS"] = env["DBUS_SYSTEM_BUS_ADDRESS"] = address
@@ -1498,16 +1505,18 @@ def main():
             return
 
         if args.drawing_defaults_only:
-            resize_editor(942, 1001)
+            # Taller than the historical 1001 so every shadow row stays visible
+            # below the DrawToolPreview card.
+            resize_editor(942, 1001 + DRAW_PREVIEW_ROWS)
             save(640, 360, 0, 0)
             before = draft.read_bytes()
             toolbar_click("draw")
-            inspector_click(16, draw_row(308))  # Enable the initially disabled closed-shape stroke.
+            inspector_click(16, shape_row(308))  # Enable the initially disabled closed-shape stroke.
             shot(editor, "drawing-default-controls")
-            field(draw_row(382), "#123456", 145)
-            field(draw_row(426), "13", 77)
-            field(draw_row(470), "37", 87)
-            field(draw_row(586), "#abcdef", 145)
+            field(shape_row(382), "#123456", 145)
+            field(shape_row(426), "13", 77)
+            field(shape_row(470), "37", 87)
+            field(shape_row(586), "#abcdef", 145)
             shot(editor, "drawing-custom-controls")
             assert draft.read_bytes() == before, "default controls alone wrote a draft"
 
@@ -1531,7 +1540,7 @@ def main():
 
             # A line must stroke despite the retained closed-shape toggle being off.
             toolbar_click("draw")
-            inspector_click(16, draw_row(308))
+            inspector_click(16, shape_row(308))
             draw_tool("line")
             shot(editor, "drawing-line-controls")
             start, end = document_point((250, 70)), document_point((370, 70))
@@ -1551,7 +1560,7 @@ def main():
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "undo line")
             toolbar_click("draw")
-            field(draw_row(426), "0", 87)  # Open-tool controls have no closed Stroke toggle.
+            field(shape_row(426), "0", 87)  # Open-tool controls have no closed Stroke toggle.
             start, end = document_point((250, 70)), document_point((370, 70))
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
@@ -1565,14 +1574,14 @@ def main():
             save_layers(lambda values: len(values) == 1, "undo invisible line")
             toolbar_click("draw")
             before = draft.read_bytes()
-            field(draw_row(426), "100", 87)
-            inspector_click(16, draw_row(467))  # Line's pre-placement Drop shadow.
+            field(shape_row(426), "100", 87)
+            inspector_click(16, shape_row(467))  # Line's pre-placement Drop shadow.
             shot(editor, "drawing-shadow-controls")
-            field(draw_row(538), "#f0c040", 145)
-            field(draw_row(582), "100", 145)
-            field(draw_row(626), "0", 70)
-            field(draw_row(670), "-23", 100)
-            field(draw_row(714), "31", 100)
+            field(shape_row(538), "#f0c040", 145)
+            field(shape_row(582), "100", 145)
+            field(shape_row(626), "0", 70)
+            field(shape_row(670), "-23", 100)
+            field(shape_row(714), "31", 100)
             shot(editor, "drawing-shadow-custom-controls")
             assert draft.read_bytes() == before, "shadow defaults alone wrote a draft"
             start, end = document_point((250, 70)), document_point((370, 70))
@@ -1601,7 +1610,7 @@ def main():
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "one undo removes drawing and shadow")
             toolbar_click("draw")
-            inspector_click(16, draw_row(467))
+            inspector_click(16, shape_row(467))
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
                 *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
@@ -1611,7 +1620,7 @@ def main():
             shot(editor, "drawing-shadow-disabled")
             document_pixel("drawing-shadow-disabled", 277, 101, (40, 110, 166), 1)
             toolbar_click("draw")
-            inspector_click(16, draw_row(467))
+            inspector_click(16, shape_row(467))
             shot(editor, "drawing-shadow-retained")
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
@@ -2459,6 +2468,12 @@ def main():
             save_layers(lambda values: values[0]["src"] == source, "restore without original is atomic")
             draw_tool("erase")  # Erase; keep shipping diameter/softness defaults.
             shot(editor, "brush-controls")
+            # Shipping's DrawToolPreview brush dab: opaque `--solid` at its centre,
+            # in the 88px card below the Eraser mode row.
+            dab = run("convert", str(output / "brush-controls.png"), "-crop",
+                      f"1x1+{inspector_x(115)}+{properties_top() + ERASER_MODE_ROW + 16 + 12 + 44}",
+                      "-depth", "8", "rgb:-")
+            assert (min(dab) >= 200) if args.appearance == "dark" else (max(dab) <= 60), dab
             before = draft.read_bytes()
             brush_start = fixture_point((108, 189))
             brush_end = fixture_point((208, 229))
@@ -2529,7 +2544,8 @@ def main():
             close(root)
             wait(lambda: app.poll() is not None, "brush suite quits")
             assert app.returncode == 0
-            checks = ["restore-missing-original-retry", "brush-preview-no-write-and-cancel",
+            checks = ["brush-draw-tool-preview", "restore-missing-original-retry",
+                      "brush-preview-no-write-and-cancel",
                       "erase-locked-image-interpolated-pixels", "brush-feathered-alpha",
                       "brush-single-undo-redo", "restore-retained-original", "brush-minimum-draft-reopen",
                       "brush-clipboard-alpha-original-unchanged"]
@@ -2546,6 +2562,27 @@ def main():
             toolbar_click("draw")
             draw_tool("wand")
             shot(editor, "wand-controls")
+            # Shipping's colour loupe: hovering the image magnifies its natural
+            # pixels beside the crosshair; the centre tile is the keyed sample.
+            hover = fixture_point((108, 189))
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, hover), "sleep", ".3")
+            loupe_center = (hover[0] + 18 + 42, hover[1] + 18 + 42)
+
+            def loupe_shows(expected):
+                def check():
+                    shot(editor, "wand-loupe")
+                    try:
+                        pixel("wand-loupe", *loupe_center, expected, 3)
+                        return True
+                    except AssertionError:
+                        return False
+                return check
+
+            wait(loupe_shows((229, 179, 68)), "Wand loupe magnifies the sampled colour")
+            blue = fixture_point((58, 139))  # Document (50, 50): the #286ea6 capture.
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, blue), "sleep", ".3")
+            loupe_center = (blue[0] + 18 + 42, blue[1] + 18 + 42)
+            wait(loupe_shows((40, 110, 166)), "Wand loupe follows the pointer")
             # Pick authored document point (100,100). Original capture stays locked.
             fixture_click((108, 189))
             edited = save_layers(lambda values: values[0]["src"] != source, "wand edit")[0]
@@ -2594,7 +2631,8 @@ def main():
             close(root)
             wait(lambda: app.poll() is not None, "wand suite quits")
             assert app.returncode == 0
-            checks = ["wand-locked-contiguous-exact-pixels", "wand-no-match-preserves-state",
+            checks = ["wand-loupe-magnified-sample", "wand-locked-contiguous-exact-pixels",
+                      "wand-no-match-preserves-state",
                       "wand-undo-redo", "wand-global-disconnected-pixels", "wand-retains-original",
                       "wand-minimum-draft-reopen", "wand-clipboard-alpha-original-unchanged"]
             (output / "result.json").write_text(json.dumps({
@@ -2605,13 +2643,63 @@ def main():
 
         if args.trim_only:
             run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
+
+            def document_rgb(name, point):
+                window, size = shot_layouts[name]
+                left, top, scale = fit_geometry(size, window)
+                x, y = round(left + point[0] * scale), round(top + point[1] * scale)
+                return run("convert", str(output / f"{name}.png"), "-crop", f"1x1+{x}+{y}",
+                           "-depth", "8", "rgb:-")
+
+            def hover_trim():
+                run("xdotool", "mousemove", "--sync", "--window", editor,
+                    *map(str, canvas_toolbar_point("trim")), "sleep", ".3")
+
+            def leave_trim():
+                run("xdotool", "mousemove", "--sync", "--window", editor,
+                    *map(str, document_point((320, 180))), "sleep", ".3")
+
+            # A tight capture has nothing to trim: shipping disables the button,
+            # so hovering previews nothing and clicking edits nothing.
+            save(640, 360, 0, 0)
+            leave_trim()
+            shot(editor, "trim-tight")
+            hover_trim()
+            shot(editor, "trim-disabled-hover")
+            for probe in ((630, 180), (320, 5), (5, 180)):
+                assert document_rgb("trim-disabled-hover", probe) == document_rgb("trim-tight", probe), probe
+            canvas_click("trim")
+            save(640, 360, 0, 0)
             canvas_field("width", 720)
             save(720, 360, 0, 0)
             canvas_field("height", 420)
             save(720, 420, 0, 0)
+            leave_trim()
             shot(editor, "trim-before")
+            margin = (680, 390)
+            before = document_rgb("trim-before", margin)
+            kept = document_rgb("trim-before", (320, 180))
+
+            def tinted():
+                # The hint breathes, so poll until the red margin tint shows.
+                shot(editor, "trim-hover")
+                actual = document_rgb("trim-hover", margin)
+                return (before[1] - actual[1] >= 12 and before[2] - actual[2] >= 10
+                        and actual[0] + 8 >= before[0]
+                        and document_rgb("trim-hover", (320, 180)) == kept)
+
+            hover_trim()
+            wait(tinted, "Trim edges hover tints the discarded margins red")
+            leave_trim()
+            wait(lambda: (shot(editor, "trim-left"), document_rgb("trim-left", margin) == before)[1],
+                 "leaving Trim edges clears the preview")
             canvas_click("trim")
             save(640, 360, 0, 0)
+            leave_trim()
+            shot(editor, "trim-applied-hover-clear")
+            hover_trim()
+            shot(editor, "trim-applied-disabled")
+            assert document_rgb("trim-applied-disabled", (630, 350)) == document_rgb("trim-applied-hover-clear", (630, 350))
             shot(editor, "trim-applied")
             toolbar_click("undo")
             save(720, 420, 0, 0)
@@ -2637,7 +2725,8 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["trim-locked-capture-bounds", "trim-undo-redo", "trim-draft-reopen",
+                "checks": ["trim-disabled-when-tight", "trim-hover-margin-preview",
+                           "trim-locked-capture-bounds", "trim-undo-redo", "trim-draft-reopen",
                            "trim-minimum-scroll", "trim-clipboard-dimensions-pixels-original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native trim: canvas bounds, undo/redo, draft, minimum, clipboard pixels")
@@ -3551,10 +3640,25 @@ def main():
         shot(editor, "crop-cancelled")
         save(640, 360, 0, 0)  # Escape must not crop or mutate the document.
         before_selection = draft.read_bytes()
+        # Shipping's `cta-pulse` on Apply crop: an accent halo swells just
+        # outside the button only while a crop is staged.
+        halo = (inspector_x(50), properties_top() + 335 - 47 - 16 - 3)
+
+        def halo_rgb(name):
+            return run("convert", str(output / f"{name}.png"), "-crop",
+                       f"1x1+{halo[0]}+{halo[1]}", "-depth", "8", "rgb:-")
+
+        resting = halo_rgb("crop-cancelled")
         crop_click(159, 335)
         drag((278, 119), (438, 219), shift=True)
         shot(editor, "crop-shift-square")
         assert draft.read_bytes() == before_selection
+
+        def pulsing():
+            shot(editor, "crop-apply-pulse")
+            return max(abs(a - b) for a, b in zip(halo_rgb("crop-apply-pulse"), resting)) >= 12
+
+        wait(pulsing, "Apply crop pulses while a crop is staged")
         crop_click(50, 335)
         save(160, 160, -40, -30)
         toolbar_click("undo")
