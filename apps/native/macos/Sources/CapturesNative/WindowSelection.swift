@@ -176,7 +176,7 @@ final class WindowSelectionView: NSView {
     private let canvas = WindowSelectionCanvas()
     private let toolbar = NSView()
     private let targetName = NSTextField(labelWithString: "")
-    private let hint: NSTextField
+    private let guidance: CaptureGuidanceChip
     private var captureButton: CaptureButton!
     private(set) var hoveredIndex: Int64 = -1
     /// Shipping leaves the screen clear until the pointer resolves a target.
@@ -193,8 +193,7 @@ final class WindowSelectionView: NSView {
         self.tokens = tokens; self.autoStart = autoStart; self.targets = targets
         self.displayCornerRadius = max(0, displayCornerRadius)
         self.hitTest = hitTest; self.confirm = confirm; self.cancel = cancel
-        hint = NSTextField(labelWithString: CaptureGuidanceCopy.directHint(
-            CaptureGuidanceCopy.windowTitle, CaptureGuidanceCopy.hint, confirm: !autoStart))
+        guidance = CaptureGuidanceChip(tokens: tokens)
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -234,13 +233,9 @@ final class WindowSelectionView: NSView {
         close.keyEquivalent = "\u{1b}"; close.keyEquivalentModifierMask = []
         toolbar.addSubview(close)
 
-        hint.font = .systemFont(ofSize: tokens.number("text-md")); hint.textColor = tokens.color("glass-text")
-        hint.alignment = .center; hint.wantsLayer = true
-        hint.layer?.backgroundColor = tokens.color("glass-strong").cgColor
-        hint.layer?.cornerRadius = tokens.number("r-sm")
-        hint.frame = NSRect(x: toolbar.frame.minX, y: toolbar.frame.minY - controlHeight - gap,
-            width: toolbarWidth, height: controlHeight)
-        addSubview(hint)
+        // Shipping `CaptureGuidance`, 16% from the top.
+        addSubview(guidance)
+        guidance.setPresent(true)
         setAccessibilityRole(.group); setAccessibilityLabel("Capture window selector")
         update()
     }
@@ -282,7 +277,9 @@ final class WindowSelectionView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        hover(convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        hover(point)
+        guidance.duck(at: point)
     }
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
@@ -301,7 +298,18 @@ final class WindowSelectionView: NSView {
         setAccessibilityValue(choiceName)
         canvas.needsDisplay = true
         captureButton.isEnabled = choice != nil; captureButton.needsDisplay = true
+        // Shipping: the desktop and shell chrome switch to the display copy.
+        var hint = CaptureGuidanceCopy.hint
+        if !autoStart { hint += " · " + CaptureGuidanceCopy.confirm }
+        let overDisplay = hasHoverTarget && activeChoice == .display
+        let title = overDisplay ? CaptureGuidanceCopy.displayTitle : CaptureGuidanceCopy.windowTitle
+        if guidance.titleText != title || guidance.hintText != hint {
+            guidance.setCopy(title: title, hint: hint, in: bounds)
+        }
     }
+
+    var guidanceText: String { guidance.guidanceText }
+    var guidanceChip: CaptureGuidanceChip { guidance }
 
     private var choiceName: String {
         guard case .window(let index, _) = activeChoice else { return "Entire display" }

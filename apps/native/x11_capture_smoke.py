@@ -26,6 +26,9 @@ BACKGROUNDS = (
     ((113, 40, 60), (27, 134, 93), (180, 91, 35), (71, 53, 149)),
 )
 
+# Where the direct overlays' guidance chip settles: centred, top edge at 16%.
+GUIDANCE_CROP = "600x80+340+140"
+
 
 class WindowFixture:
     """Ordinary WM-managed X11 client; an owned background pixmap survives expose.
@@ -192,6 +195,46 @@ def main():
     def screenshot(window, name):
         run("import", "-window", window, str(output / f"{name}.png"))
 
+    def pixels(window, crop):
+        return run("import", "-window", window, "-crop", crop, "-depth", "8", "RGB:-")
+
+    def colors(rgb):
+        return len({rgb[i:i + 3] for i in range(0, len(rgb), 3)})
+
+    def settled(window, crop, predicate, description):
+        # Two identical reads 100 ms apart: never judge a fade mid-flight.
+        previous = [None]
+
+        def probe():
+            current = pixels(window, crop)
+            stable, previous[0] = current == previous[0], current
+            if not stable:
+                time.sleep(.1)
+            return stable and predicate(current)
+        return wait(probe, description)
+
+    def verify_guidance(selector, prefix):
+        # Shipping CaptureGuidance: a glass chip whose top edge sits 16% down
+        # the 900 px overlay (144 px), ducking within 28 px of the pointer.
+        settled(selector, GUIDANCE_CROP, lambda rgb: colors(rgb) > 16, "guidance chip settles")
+        column = pixels(selector, "1x120+640+100")
+        rows = [column[i:i + 3] for i in range(0, len(column), 3)]
+        top = 100 + next(i for i, row in enumerate(rows)
+                         if max(abs(a - b) for a, b in zip(row, rows[0])) > 8)
+        assert 143 <= top <= 145, f"guidance chip top edge at {top}px, not 16% of 900px"
+        row = pixels(selector, f"640x1+320+{top + 10}")
+        pixels_in_row = [row[i:i + 3] for i in range(0, len(row), 3)]
+        right = 320 + max(i for i, pixel in enumerate(pixels_in_row)
+                          if max(abs(a - b) for a, b in zip(pixel, pixels_in_row[-1])) > 8)
+        screenshot(selector, f"{prefix}-guidance")
+        run("xdotool", "mousemove", "--window", selector, str(right + 20), str(top + 10))
+        settled(selector, GUIDANCE_CROP, lambda rgb: colors(rgb) <= 4,
+                "guidance chip ducks within 28px of the pointer")
+        screenshot(selector, f"{prefix}-guidance-ducked")
+        run("xdotool", "mousemove", "--window", selector, "640", "600")
+        settled(selector, GUIDANCE_CROP, lambda rgb: colors(rgb) > 16,
+                "guidance chip returns once the pointer leaves")
+
     def background(index):
         colors = [bytes(color) for color in BACKGROUNDS[index]]
         # Deliberately asymmetric quadrants, split at desktop pixel (300,270).
@@ -276,7 +319,7 @@ def main():
                 else:
                     click(selector, {"region": 492, "window": 568, "display": 653}[target], 811)
 
-            def begin_selection(full_display=False, select=True):
+            def begin_selection(full_display=False, select=True, check_guidance=False):
                 nonlocal checked_toolbar_drag
                 # History header buttons under the token fonts: New Capture, Capture region, Capture window.
                 click(root, 380 if args.controls else (636 if mode == "region" else 769), 171)
@@ -285,11 +328,15 @@ def main():
                     raise RuntimeError("capture workspace was not hidden")
                 # Mapping precedes the first GL paint. Do not inject a complete
                 # drag into an unpainted window during cold texture preparation.
-                # Direct region shows centered guidance and no toolbar.
-                paint_crop = ("1280x96+0+804" if args.controls else
-                              "640x120+320+390" if mode == "region" else "1280x120+0+0")
+                # Direct overlays show only the guidance chip 16% from the top;
+                # park the pointer away from it first, since it ducks nearby.
+                if not args.controls:
+                    run("xdotool", "mousemove", "--window", selector, "640", "600")
+                paint_crop = "1280x96+0+804" if args.controls else GUIDANCE_CROP
                 wait(lambda: int(run("import", "-window", selector, "-crop", paint_crop,
                                      "-format", "%k", "info:")) > 16, "selector controls paint")
+                if check_guidance and not args.controls:
+                    verify_guidance(selector, prefix)
                 if args.controls and mode == "region" and not checked_toolbar_drag:
                     previous = entries()
                     # The trailing footer is noninteractive. Drag to both
@@ -370,7 +417,7 @@ def main():
                 background(capture_index)
                 if fixture:
                     fixture.paint(capture_index)
-                selector = begin_selection()
+                selector = begin_selection(check_guidance=capture_index == 0)
                 screenshot(selector, f"{capture_prefix}-selection")
                 if mode == "window" and not commits:
                     # Confirm the clicked target, not the later hovered desktop.

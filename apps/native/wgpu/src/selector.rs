@@ -1,7 +1,7 @@
 use captures_app::capture_menu::{self, GuidanceTarget};
 use captures_app::selection::{self, Bounds, DragMode, DragOptions, Point, Rect};
 use eframe::egui::{
-    self, Align2, Color32, FontId, Pos2, RichText, Sense, Stroke, StrokeKind, TextureHandle,
+    self, Color32, FontId, Pos2, RichText, Sense, Stroke, StrokeKind, TextureHandle,
 };
 
 use crate::tokens::Tokens;
@@ -67,7 +67,7 @@ pub enum Action {
 }
 
 /// Shipping empty-click feedback duration (`showSelectionFeedback`).
-const SELECTION_FEEDBACK: std::time::Duration = std::time::Duration::from_millis(1_800);
+const SELECTION_FEEDBACK: std::time::Duration = capture_menu::GUIDANCE_FEEDBACK;
 
 #[derive(Default)]
 pub struct Selector {
@@ -76,6 +76,10 @@ pub struct Selector {
     drag: Option<Drag>,
     /// "Click and drag to select a region" after a click that selected nothing.
     feedback_until: Option<std::time::Instant>,
+    /// Shipping `selectionFeedback`: counts empty clicks while the feedback
+    /// lasts; each one re-keys the guidance chip (nudge again), 0 is none.
+    feedback_attempt: u32,
+    guidance: crate::capture_controls::GuidanceState,
 }
 
 impl Selector {
@@ -205,14 +209,17 @@ impl Selector {
         let auto_confirm = drag_stopped && created && capturable && auto_start;
         if auto_start && (response.clicked() || (drag_stopped && created && !capturable)) {
             self.feedback_until = Some(std::time::Instant::now() + SELECTION_FEEDBACK);
+            self.feedback_attempt = self.feedback_attempt.saturating_add(1);
         } else if response.drag_started() {
             self.feedback_until = None;
+            self.feedback_attempt = 0;
         }
 
         if let Some(until) = self.feedback_until {
             let remaining = until.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
                 self.feedback_until = None;
+                self.feedback_attempt = 0;
             } else {
                 ui.ctx().request_repaint_after(remaining);
             }
@@ -235,9 +242,11 @@ impl Selector {
             self.rect,
             SurfaceState {
                 dragging: self.drag.is_some(),
-                feedback: self.feedback_until.is_some(),
+                feedback: self.feedback_attempt,
                 menu,
+                confirm: !menu && !auto_start,
             },
+            &mut self.guidance,
         );
         auto_confirm.then_some(Action::Confirm)
     }
@@ -455,10 +464,13 @@ fn hit_test(rect: Rect, point: Point) -> DragMode {
 #[derive(Clone, Copy)]
 struct SurfaceState {
     dragging: bool,
-    /// The shipping 1.8 s "Click and drag" nudge after an empty click.
-    feedback: bool,
-    /// New Capture: guidance chip instead of centered direct-overlay copy.
+    /// The shipping 1.8 s "Click and drag" feedback attempt after an empty
+    /// click (0 when none).
+    feedback: u32,
+    /// New Capture's rounded, handled marquee instead of the direct box.
     menu: bool,
+    /// Direct overlay in the manual mode: the hint adds "Press Enter to confirm".
+    confirm: bool,
 }
 
 fn paint_surface(
@@ -468,11 +480,13 @@ fn paint_surface(
     frozen: Option<&TextureHandle>,
     selection: Option<Rect>,
     state: SurfaceState,
+    guidance: &mut crate::capture_controls::GuidanceState,
 ) {
     let SurfaceState {
         dragging,
         feedback,
         menu,
+        confirm,
     } = state;
     let surface = coordinates.surface;
     let painter = ui.painter();
@@ -503,40 +517,26 @@ fn paint_surface(
             painter.rect_filled(outside, 0., veil);
         }
         paint_marquee(painter, tokens, surface, rect, selection, menu);
-    } else if menu {
-        painter.rect_filled(surface, 0., veil);
-    } else if !dragging {
-        painter.rect_filled(surface, 0., veil);
-        painter.text(
-            surface.center() - egui::vec2(0., 28.),
-            Align2::CENTER_CENTER,
-            if feedback {
-                "Click and drag to select a region"
-            } else {
-                "Drag to select a region"
-            },
-            FontId::proportional(tokens.number("text-xl")),
-            tokens.color("glass-text"),
-        );
-        painter.text(
-            surface.center(),
-            Align2::CENTER_CENTER,
-            "Shift for square · Esc to cancel",
-            FontId::proportional(tokens.number("text-sm")),
-            tokens.color("glass-text-muted"),
-        );
     } else {
         painter.rect_filled(surface, 0., veil);
     }
-    if menu {
-        crate::capture_controls::paint_guidance(
-            ui,
-            tokens,
-            surface,
-            capture_menu::guidance(GuidanceTarget::Region, feedback),
-            dragging,
-        );
-    }
+    // Shipping `CaptureGuidance`, for the direct overlay and New Capture alike:
+    // hidden while dragging out a region.
+    let copy = capture_menu::guidance(GuidanceTarget::Region, feedback > 0);
+    let hint = if confirm {
+        capture_menu::direct_hint(GuidanceTarget::Region, true)
+    } else {
+        copy.hint.into()
+    };
+    crate::capture_controls::paint_guidance(
+        ui,
+        tokens,
+        surface,
+        guidance,
+        (copy.title, &hint),
+        dragging,
+        feedback,
+    );
 }
 
 /// Shipping marquee: a 1.5 px accent border between a 1 px dark outer
@@ -702,9 +702,11 @@ mod tests {
             selection,
             SurfaceState {
                 dragging: false,
-                feedback: false,
+                feedback: 0,
                 menu,
+                confirm: false,
             },
+            &mut crate::capture_controls::GuidanceState::default(),
         );
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
@@ -797,6 +799,163 @@ mod tests {
         assert!((inside.top() - (11.5 + tokens.number("s-3"))).abs() < 0.01);
     }
 
+    /// One direct-overlay frame at `seconds`, returning the painted shapes.
+    fn direct_frame(
+        ctx: &egui::Context,
+        selector: &mut Selector,
+        seconds: f64,
+        events: Vec<egui::Event>,
+    ) -> Vec<egui::Shape> {
+        let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        ctx.begin_pass(egui::RawInput {
+            time: Some(seconds),
+            ..raw(screen, events)
+        });
+        let mut ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::unique("selector-chip-test"),
+            egui::UiBuilder::new().max_rect(screen),
+        );
+        selector.show(&mut ui, &tokens, None, None);
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        output
+            .shapes
+            .into_iter()
+            .map(|clipped| clipped.shape)
+            .collect()
+    }
+
+    use crate::capture_controls::painted_guidance_chip as guidance_chip;
+
+    fn texts(shapes: &[egui::Shape]) -> Vec<String> {
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn direct_overlay_guidance_chip_fades_in_at_sixteen_percent_ducks_and_nudges() {
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let ctx = egui::Context::default();
+        let mut selector = Selector::default();
+        let far = egui::Event::PointerMoved(egui::pos2(100., 500.));
+        assert!(
+            guidance_chip(
+                &direct_frame(&ctx, &mut selector, 1., vec![far.clone()]),
+                &tokens
+            )
+            .is_none(),
+            "mounts transparent"
+        );
+        let entering = direct_frame(&ctx, &mut selector, 1.05, vec![]);
+        let (moving, _) = guidance_chip(&entering, &tokens).expect("fading in");
+        assert!(moving.top() < 96., "slides down from 6 points higher");
+        let settled = direct_frame(&ctx, &mut selector, 1.3, vec![]);
+        let (chip, border) = guidance_chip(&settled, &tokens).expect("chip");
+        assert!((chip.top() - 96.).abs() < 0.01, "16% of 600: {chip:?}");
+        assert!((chip.center().x - 400.).abs() < 0.01);
+        assert_eq!(border, tokens.color("glass-border-strong"));
+        let copy = texts(&settled);
+        assert!(
+            copy.contains(&"Drag to select a region".to_owned()),
+            "{copy:?}"
+        );
+        assert!(copy.contains(&"Shift for square · Esc to cancel".to_owned()));
+
+        // Within 28 points the chip fades out; it returns past the leave slack.
+        let near = egui::pos2(chip.left() - 20., chip.center().y);
+        direct_frame(
+            &ctx,
+            &mut selector,
+            2.,
+            vec![egui::Event::PointerMoved(near)],
+        );
+        assert!(
+            guidance_chip(&direct_frame(&ctx, &mut selector, 2.3, vec![]), &tokens).is_none(),
+            "ducks from the pointer"
+        );
+        let slack = egui::pos2(chip.left() - 35., chip.center().y);
+        direct_frame(
+            &ctx,
+            &mut selector,
+            2.4,
+            vec![egui::Event::PointerMoved(slack)],
+        );
+        assert!(guidance_chip(&direct_frame(&ctx, &mut selector, 2.7, vec![]), &tokens).is_none());
+        direct_frame(&ctx, &mut selector, 3., vec![far]);
+        let (back, _) = guidance_chip(&direct_frame(&ctx, &mut selector, 3.3, vec![]), &tokens)
+            .expect("restores once the pointer leaves");
+        assert!((back.top() - 96.).abs() < 0.01, "ducking never slides");
+
+        // A click without a drag re-keys it with the accent border and nudge.
+        let at = egui::pos2(100., 500.);
+        direct_frame(
+            &ctx,
+            &mut selector,
+            4.,
+            vec![pointer(at, true, egui::Modifiers::NONE)],
+        );
+        direct_frame(
+            &ctx,
+            &mut selector,
+            4.01,
+            vec![pointer(at, false, egui::Modifiers::NONE)],
+        );
+        let shaking = direct_frame(&ctx, &mut selector, 4.08, vec![]);
+        let (nudged, _) = guidance_chip(&shaking, &tokens).expect("feedback chip");
+        assert!(nudged.center().x < 399., "nudges left first: {nudged:?}");
+        assert!(texts(&shaking).contains(&"Click and drag to select a region".to_owned()));
+        let (rested, accent) =
+            guidance_chip(&direct_frame(&ctx, &mut selector, 4.5, vec![]), &tokens)
+                .expect("feedback chip at rest");
+        assert!((rested.center().x - 400.).abs() < 0.01);
+        assert_eq!(
+            accent,
+            tokens
+                .color("theme-accent")
+                .gamma_multiply(capture_menu::GUIDANCE_FEEDBACK_BORDER_ALPHA as f32),
+            "accent border while the feedback lasts"
+        );
+    }
+
+    #[test]
+    fn direct_overlay_guidance_hides_while_dragging_and_lands_under_reduced_motion() {
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let ctx = egui::Context::default();
+        crate::motion::set_reduced(&ctx, true);
+        let mut selector = Selector::default();
+        let first = direct_frame(
+            &ctx,
+            &mut selector,
+            1.,
+            vec![egui::Event::PointerMoved(egui::pos2(100., 500.))],
+        );
+        let (chip, _) = guidance_chip(&first, &tokens).expect("no entrance under reduced motion");
+        assert!((chip.top() - 96.).abs() < 0.01);
+        direct_frame(
+            &ctx,
+            &mut selector,
+            1.1,
+            vec![pointer(egui::pos2(100., 500.), true, egui::Modifiers::NONE)],
+        );
+        let dragging = direct_frame(
+            &ctx,
+            &mut selector,
+            1.2,
+            vec![egui::Event::PointerMoved(egui::pos2(300., 560.))],
+        );
+        assert!(
+            guidance_chip(&dragging, &tokens).is_none(),
+            "hidden while dragging out a region"
+        );
+    }
+
     #[test]
     fn starts_blank_then_uses_shared_geometry_for_create_move_and_resize() {
         let mut selector = Selector::default();
@@ -829,7 +988,7 @@ mod tests {
             }),
             aspect: Aspect::SixteenNine,
             drag: None,
-            feedback_until: None,
+            ..Default::default()
         };
         selector.apply_aspect(BOUNDS);
         let preset = selector.rect().unwrap();
@@ -869,7 +1028,7 @@ mod tests {
             }),
             aspect: Aspect::SixteenNine,
             drag: None,
-            feedback_until: None,
+            ..Default::default()
         };
         selector.begin(Point { x: 30., y: 40. });
         selector.clear_selection();

@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import CCapturesSettings
 
 /// Shipping New Capture copy and presentation policy from
@@ -43,6 +44,18 @@ enum CaptureMenuPolicy {
         let enabled: Bool
     }
 
+    /// Shipping `.capture-guidance` placement and feedback, from
+    /// `captures_app::capture_menu`. Motion comes from the `motion` catalog.
+    struct ChipLayout: Equatable {
+        /// Resting top edge as a fraction of the overlay height (16%).
+        let topFraction: CGFloat
+        /// Entrance offset in points, negative upward.
+        let enterOffset: CGFloat
+        let rowGap: CGFloat
+        let feedbackSeconds: TimeInterval
+        let feedbackBorderAlpha: CGFloat
+    }
+
     struct Copy {
         let fpsLabel: String
         let fpsAccessibilityLabel: String
@@ -58,6 +71,7 @@ enum CaptureMenuPolicy {
         let confirm: String
         let autoStart: String
         let highlightSeconds: TimeInterval
+        let chip: ChipLayout
     }
 
     static func request(_ object: [String: Any]) throws -> [String: Any] {
@@ -91,7 +105,13 @@ enum CaptureMenuPolicy {
               let separator = value["separator"] as? String,
               let confirm = value["confirm"] as? String,
               let autoStart = value["auto_start"] as? String,
-              let highlight = value["highlight_ms"] as? Double
+              let highlight = value["highlight_ms"] as? Double,
+              let chip = value["guidance_chip"] as? [String: Any],
+              let topFraction = chip["top_fraction"] as? Double,
+              let enterOffset = chip["enter_offset"] as? Double,
+              let rowGap = chip["row_gap"] as? Double,
+              let feedbackMs = chip["feedback_ms"] as? Double,
+              let feedbackBorderAlpha = chip["feedback_border_alpha"] as? Double
         else { throw AppBridgeError.invalidResponse }
         let decodedToggles = toggles.compactMap { toggle -> Toggle? in
             guard let key = toggle["key"] as? String, let label = toggle["label"] as? String,
@@ -116,7 +136,10 @@ enum CaptureMenuPolicy {
             microphoneLabel: microphone, fpsOptions: fpsOptions, resolutionValues: values,
             resolutionLabels: labels, toggles: decodedToggles, guidance: decodedGuidance,
             separator: separator, confirm: confirm, autoStart: autoStart,
-            highlightSeconds: highlight / 1000)
+            highlightSeconds: highlight / 1000,
+            chip: ChipLayout(topFraction: CGFloat(topFraction), enterOffset: CGFloat(enterOffset),
+                rowGap: CGFloat(rowGap), feedbackSeconds: feedbackMs / 1000,
+                feedbackBorderAlpha: CGFloat(feedbackBorderAlpha)))
     }
 
     static func guidance(_ key: String) -> Guidance {
@@ -237,6 +260,188 @@ enum CaptureGuidanceCopy {
     /// and the manual selection mode.
     static func directHint(_ title: String, _ hint: String, confirm: Bool) -> String {
         ([title, hint] + (confirm ? [Self.confirm] : [])).joined(separator: " · ")
+    }
+}
+
+/// Shipping `CaptureGuidance`: the two-row glass chip New Capture and the
+/// direct Region/Window overlays show 16% from the top.
+///
+/// It mounts transparent and 6 points high, then fades and slides to rest. It
+/// fades out in place while suppressed (a region drag) or while the pointer
+/// is within 28 points, restoring only past a 12-point leave slack. Shipping
+/// re-keys the chip on every feedback change, so `mount(feedback:)` replays
+/// the entrance; a feedback mount adds the accent border and the sideways
+/// nudge. Motion is presentation-only (the model frame and alpha settle at
+/// once) and reduced motion lands every change immediately.
+final class CaptureGuidanceChip: NSView {
+    static let fadeKey = "captures.guidance.fade"
+    static let slideKey = "captures.guidance.slide"
+    static let nudgeKey = "captures.guidance.nudge"
+
+    private let tokens: Tokens
+    private let reducedMotion: () -> Bool
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let hintLabel = NSTextField(labelWithString: "")
+    private var pendingEntrance = false
+    private(set) var isDucked = false
+    private(set) var isSuppressed = false
+    private(set) var isFeedback = false
+    override var isFlipped: Bool { true }
+
+    init(tokens: Tokens, reducedMotion: @escaping () -> Bool = { NativeMotion.reduceMotion }) {
+        self.tokens = tokens
+        self.reducedMotion = reducedMotion
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = tokens.color("glass-strong").cgColor
+        layer?.cornerRadius = tokens.number("r-xl")
+        layer?.borderWidth = 1
+        layer?.borderColor = tokens.color("glass-border-strong").cgColor
+        for (label, size, weight, color) in [
+            (titleLabel, tokens.number("text-md"), NSFont.Weight.semibold, "glass-text"),
+            (hintLabel, tokens.number("text-xs"), NSFont.Weight.medium, "glass-text-muted"),
+        ] {
+            label.alignment = .center
+            label.font = .systemFont(ofSize: size, weight: weight)
+            label.textColor = tokens.color(color)
+            label.setAccessibilityElement(false)
+            addSubview(label)
+        }
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        // Unmounted until `setPresent(true)`.
+        isHidden = true
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    var titleText: String { titleLabel.stringValue }
+    var hintText: String { hintLabel.stringValue }
+    var guidanceText: String { "\(titleText) · \(hintText)" }
+    var titleFrame: NSRect { titleLabel.frame }
+    var hintFrame: NSRect { hintLabel.frame }
+    /// Mounted, not suppressed by a drag and not ducked from the pointer.
+    var isShowing: Bool { !isHidden && !isSuppressed && !isDucked }
+    private var chipLayout: CaptureMenuPolicy.ChipLayout { CaptureMenuPolicy.copy.chip }
+
+    /// Set both rows and re-centre the chip in `container` (the overlay bounds,
+    /// in the flipped superview's coordinates).
+    func setCopy(title: String, hint: String, in container: NSRect) {
+        titleLabel.stringValue = title
+        hintLabel.stringValue = hint
+        setAccessibilityLabel([title, hint].filter { !$0.isEmpty }.joined(separator: ". "))
+        place(in: container)
+    }
+
+    /// Resting frame: centred, its top edge 16% down `container`.
+    func place(in container: NSRect) {
+        titleLabel.sizeToFit()
+        hintLabel.sizeToFit()
+        let padX = tokens.number("s-6"), padY = tokens.number("s-4")
+        let gap = chipLayout.rowGap
+        let chipWidth = ceil(max(titleLabel.frame.width, hintLabel.frame.width)) + padX * 2
+        let chipHeight = ceil(titleLabel.frame.height + gap + hintLabel.frame.height) + padY * 2
+        frame = NSRect(x: (container.midX - chipWidth / 2).rounded(),
+            y: (container.minY + container.height * chipLayout.topFraction).rounded(),
+            width: chipWidth, height: chipHeight)
+        titleLabel.frame = NSRect(x: padX, y: padY, width: chipWidth - padX * 2,
+            height: titleLabel.frame.height)
+        hintLabel.frame = NSRect(x: padX, y: titleLabel.frame.maxY + gap, width: chipWidth - padX * 2,
+            height: hintLabel.frame.height)
+    }
+
+    /// Mount or unmount. Mounting (again) plays the entrance once the chip is
+    /// in a window; unmounting forgets the pointer state, like a new component.
+    func setPresent(_ present: Bool) {
+        guard present == isHidden else { return }
+        isHidden = !present
+        isDucked = false
+        if present { mount(feedback: isFeedback) } else { pendingEntrance = false }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil && pendingEntrance { mount(feedback: isFeedback) }
+    }
+
+    /// Shipping mount and re-key: start transparent and 6 points high, then
+    /// fade and slide to rest. `feedback` adds the accent border and nudge.
+    func mount(feedback: Bool) {
+        isFeedback = feedback
+        let border = feedback
+            ? tokens.color("theme-accent").withAlphaComponent(chipLayout.feedbackBorderAlpha)
+            : tokens.color("glass-border-strong")
+        layer?.borderColor = border.cgColor
+        guard !isHidden else { return }
+        guard window != nil else { pendingEntrance = true; return }
+        pendingEntrance = false
+        layer?.removeAnimation(forKey: Self.slideKey)
+        layer?.removeAnimation(forKey: Self.nudgeKey)
+        applyOpacity(from: 0)
+        guard !reducedMotion(), let layer else { return }
+        let flipped = layer.superlayer?.contentsAreFlipped() ?? superview?.isFlipped ?? true
+        let slide = NativeMotion.transition("capture_guidance_slide", tokens: tokens, reduced: false)
+        if slide.duration > 0 {
+            let animation = CABasicAnimation(keyPath: "transform.translation.y")
+            animation.fromValue = (flipped ? 1 : -1) * chipLayout.enterOffset
+            animation.toValue = 0
+            animation.isAdditive = true
+            animation.duration = slide.duration
+            animation.timingFunction = slide.timing
+            layer.add(animation, forKey: Self.slideKey)
+        }
+        guard feedback, let nudge = NativeMotion.catalog.keyframes["capture_guidance_nudge"] else { return }
+        let seconds = NativeMotion.seconds(nudge.duration, tokens: tokens)
+        guard seconds > 0 else { return }
+        let shake = CAKeyframeAnimation(keyPath: "transform.translation.x")
+        shake.values = nudge.frames.map { NSNumber(value: $0.translateX) }
+        shake.keyTimes = nudge.frames.map { NSNumber(value: $0.offset) }
+        let timing = NativeMotion.timingFunction(nudge.easing, tokens: tokens)
+        shake.timingFunctions = Array(repeating: timing, count: max(0, nudge.frames.count - 1))
+        shake.duration = seconds
+        shake.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) + nudge.delayMs / 1000
+        shake.fillMode = .backwards
+        shake.isAdditive = true
+        layer.add(shake, forKey: Self.nudgeKey)
+    }
+
+    /// Region drags hide the chip (shipping `hidden`), fading in place.
+    func setSuppressed(_ suppressed: Bool) {
+        guard suppressed != isSuppressed else { return }
+        isSuppressed = suppressed
+        applyOpacity(from: nil)
+    }
+
+    /// Shipping ducking with enter/leave hysteresis; `point` is in the
+    /// superview's flipped coordinates. Returns whether the chip is ducked.
+    @discardableResult
+    func duck(at point: NSPoint) -> Bool {
+        let ducked = !isHidden && point.x.isFinite && point.y.isFinite
+            && CaptureMenuPolicy.pointerOverGuidance(point, chip: frame, currentlyOver: isDucked)
+        guard ducked != isDucked else { return isDucked }
+        isDucked = ducked
+        applyOpacity(from: nil)
+        return ducked
+    }
+
+    /// Settles the model alpha at once and fades the presentation from
+    /// `start` (or wherever it is now), like a CSS opacity transition.
+    private func applyOpacity(from start: Float?) {
+        let target: Float = isShowing ? 1 : 0
+        let current = start ?? layer?.presentation()?.opacity ?? Float(alphaValue)
+        alphaValue = CGFloat(target)
+        setAccessibilityElement(isShowing)
+        guard let layer else { return }
+        let fade = NativeMotion.transition("capture_guidance_fade", tokens: tokens, reduced: reducedMotion())
+        guard fade.duration > 0, current != target, window != nil else {
+            layer.removeAnimation(forKey: Self.fadeKey)
+            return
+        }
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = current
+        animation.toValue = target
+        animation.duration = fade.duration
+        animation.timingFunction = fade.timing
+        layer.add(animation, forKey: Self.fadeKey)
     }
 }
 
@@ -987,9 +1192,7 @@ final class UnifiedCaptureSelectionView: NSView {
     private(set) var aspectIndex = 0
     let controls: CaptureControlsView
     private let selectionLabel = NSTextField(labelWithString: "")
-    private let guidance = Surface()
-    private let guidanceTitle = NSTextField(labelWithString: "")
-    private let guidanceDetail = NSTextField(labelWithString: "")
+    private let guidance: CaptureGuidanceChip
     private let identityName = NSTextField(labelWithString: "")
     private let identityDetail = NSTextField(labelWithString: "")
     private let displayIdentity: CaptureDisplayIdentity?
@@ -997,7 +1200,7 @@ final class UnifiedCaptureSelectionView: NSView {
     private var regionGestureActive = false
     /// Window mode pointer is over the desktop or shell chrome.
     private var hoveringDisplay = false
-    private(set) var isGuidanceDucked = false
+    var isGuidanceDucked: Bool { guidance.isDucked }
     var confirm: (WindowSelectionChoice) -> Void
     var cancel: () -> Void
     var changeDisplay: (Int) -> Void
@@ -1021,6 +1224,7 @@ final class UnifiedCaptureSelectionView: NSView {
         self.tokens = tokens; self.autoStart = autoStart; self.targets = targets
         self.hitTest = hitTest; self.confirm = confirm; self.cancel = cancel
         self.changeDisplay = changeDisplay; self.displayIdentity = displayIdentity
+        guidance = CaptureGuidanceChip(tokens: tokens)
         currentDisplayTitle = displayTitles.indices.contains(selectedDisplay)
             ? displayTitles[selectedDisplay] : "Full screen"
         region = RegionSelection(bounds: CapturesSelectionBounds(width: frame.width, height: frame.height))
@@ -1040,18 +1244,6 @@ final class UnifiedCaptureSelectionView: NSView {
         }
         canvas.frame = bounds; canvas.selector = self; canvas.setAccessibilityElement(false)
         addSubview(canvas)
-        guidance.wantsLayer = true
-        guidance.layer?.backgroundColor = tokens.color("glass-strong").cgColor
-        guidance.layer?.cornerRadius = tokens.number("r-xl")
-        guidance.layer?.borderWidth = 1
-        guidance.layer?.borderColor = tokens.color("glass-border-strong").cgColor
-        guidanceTitle.alignment = .center
-        guidanceTitle.font = .systemFont(ofSize: tokens.number("text-md"), weight: .semibold)
-        guidanceTitle.textColor = tokens.color("glass-text")
-        guidanceDetail.alignment = .center
-        guidanceDetail.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
-        guidanceDetail.textColor = tokens.color("glass-text-subtle")
-        guidance.addSubview(guidanceTitle); guidance.addSubview(guidanceDetail)
         addSubview(guidance)
         // Shipping `recording-display-identity`: shadowed text, no chip.
         for (label, size, weight, color) in [
@@ -1087,9 +1279,10 @@ final class UnifiedCaptureSelectionView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    var isGuidanceVisible: Bool { !guidance.isHidden }
-    var guidanceText: String { "\(guidanceTitle.stringValue) · \(guidanceDetail.stringValue)" }
+    var isGuidanceVisible: Bool { !guidance.isHidden && !guidance.isSuppressed }
+    var guidanceText: String { guidance.guidanceText }
     var guidanceFrame: NSRect { guidance.frame }
+    var guidanceChip: CaptureGuidanceChip { guidance }
     var isDisplayIdentityVisible: Bool { !identityName.isHidden }
     var displayIdentityText: String { "\(identityName.stringValue) · \(identityDetail.stringValue)" }
     var controlsState: UnifiedCaptureControlsState {
@@ -1221,16 +1414,7 @@ final class UnifiedCaptureSelectionView: NSView {
     /// Shipping guidance ducking: fade when the pointer nears the chip (28 pt),
     /// restore only once it leaves the wider 40 pt zone.
     func duckGuidance(at point: NSPoint) {
-        let ducked = !guidance.isHidden && point.x.isFinite && point.y.isFinite
-            && CaptureMenuPolicy.pointerOverGuidance(point, chip: guidance.frame,
-                currentlyOver: isGuidanceDucked)
-        guard ducked != isGuidanceDucked else { return }
-        isGuidanceDucked = ducked
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = Double(tokens.number("dur-3")) / 1000
-            guidance.animator().alphaValue = ducked ? 0 : 1
-        }
-        guidance.setAccessibilityElement(!ducked)
+        guidance.duck(at: point)
     }
     override func flagsChanged(with event: NSEvent) {
         if target == .region {
@@ -1274,29 +1458,13 @@ final class UnifiedCaptureSelectionView: NSView {
         case .display:
             label = ""; rect = nil
         }
-        // Region guidance hides while a selection gesture is active.
-        guidance.isHidden = guidanceCopy == nil || (target == .region && region.mode != nil)
+        // Shipping unmounts the chip once a window is selected (or on Full
+        // screen); region guidance fades while a selection gesture is active.
         if let guidanceCopy {
-            guidanceTitle.stringValue = guidanceCopy.title
-            guidanceDetail.stringValue = guidanceCopy.hint
+            guidance.setCopy(title: guidanceCopy.title, hint: guidanceCopy.hint, in: bounds)
         }
-        guidanceTitle.sizeToFit(); guidanceDetail.sizeToFit()
-        let padding = NSSize(width: tokens.number("s-6"), height: tokens.number("s-4"))
-        let guidanceWidth = ceil(max(guidanceTitle.frame.width, guidanceDetail.frame.width))
-            + padding.width * 2
-        let guidanceHeight = ceil(guidanceTitle.frame.height + 2 + guidanceDetail.frame.height)
-            + padding.height * 2
-        guidance.frame = NSRect(x: ((bounds.width - guidanceWidth) / 2).rounded(),
-            y: (bounds.height * 0.16).rounded(), width: guidanceWidth, height: guidanceHeight)
-        guidanceTitle.frame = NSRect(x: padding.width, y: padding.height,
-            width: guidanceWidth - padding.width * 2, height: guidanceTitle.frame.height)
-        guidanceDetail.frame = NSRect(x: padding.width, y: guidanceTitle.frame.maxY + 2,
-            width: guidanceWidth - padding.width * 2, height: guidanceDetail.frame.height)
-        guidance.setAccessibilityLabel([guidanceTitle.stringValue, guidanceDetail.stringValue]
-            .filter { !$0.isEmpty }.joined(separator: ". "))
-        if guidance.isHidden && isGuidanceDucked {
-            isGuidanceDucked = false; guidance.alphaValue = 1
-        }
+        guidance.setPresent(guidanceCopy != nil)
+        guidance.setSuppressed(target == .region && region.mode != nil)
         updateDisplayIdentity()
         selectionLabel.stringValue = label
         selectionLabel.isHidden = label.isEmpty
