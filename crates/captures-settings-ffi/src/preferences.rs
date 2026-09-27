@@ -76,6 +76,7 @@ fn copy(platform: ShortcutPlatform) -> Value {
             "accessibility_label": preferences::theme_accessibility_label(theme),
         })).collect::<Vec<_>>(),
         "theme_columns": preferences::THEME_COLUMNS,
+        "theme_columns_compact": preferences::THEME_COLUMNS_COMPACT,
         "custom_theme": {
             "title": custom.title, "description": custom.description, "reset": custom.reset,
             "fields": custom.fields.iter().map(|(key, label, description)| json!({

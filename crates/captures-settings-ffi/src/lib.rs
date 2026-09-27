@@ -221,6 +221,9 @@ enum Request {
     },
     HistoryGrid {
         width: f64,
+        /// The window is at or below the shipping 720 px breakpoint.
+        #[serde(default)]
+        compact: bool,
     },
     /// Shipping keyframes and transitions (`captures_app::motion`).
     Motion,
@@ -310,8 +313,8 @@ fn response(request: *const c_char) -> Value {
                 })
                 .collect::<Vec<_>>(),
         }),
-        Ok(Request::HistoryGrid { width }) => {
-            json!({"ok":true,"grid":captures_app::history_view::grid(width)})
+        Ok(Request::HistoryGrid { width, compact }) => {
+            json!({"ok":true,"grid":captures_app::history_view::grid_in_window(width, compact)})
         }
         Ok(Request::Motion) => {
             json!({"ok":true,"motion":captures_app::motion::catalog()})
@@ -494,6 +497,9 @@ mod tests {
         let grid = settings_request(json!({"operation":"history_grid","width":952.0}));
         assert_eq!(grid["ok"], true);
         assert_eq!(grid["grid"]["columns"], 3);
+        let compact =
+            settings_request(json!({"operation":"history_grid","width":588.0,"compact":true}));
+        assert_eq!(compact["grid"]["columns"], 1);
         assert_eq!(
             grid["grid"]["card_height"],
             captures_app::history_view::CARD_HEIGHT

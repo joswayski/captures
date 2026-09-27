@@ -351,6 +351,25 @@ pub fn grid(available_width: f64) -> Grid {
     }
 }
 
+/// The grid in a window that may be compact: shipping's
+/// `@media (max-width: 720px)` uses one full-width card column.
+pub fn grid_in_window(available_width: f64, compact: bool) -> Grid {
+    let grid = grid(available_width);
+    if compact {
+        Grid {
+            columns: 1,
+            card_width: if available_width.is_finite() {
+                available_width.max(0.0)
+            } else {
+                0.0
+            },
+            ..grid
+        }
+    } else {
+        grid
+    }
+}
+
 impl Grid {
     pub fn rows(&self, count: usize) -> usize {
         count.div_ceil(self.columns)
@@ -547,6 +566,16 @@ mod tests {
         assert_eq!(dropped_frames_warning(0), None);
         assert_eq!(load_error("x"), "Couldn’t load capture history: x");
         assert_eq!(clear_error("x"), "Couldn’t delete capture history: x");
+    }
+
+    #[test]
+    fn compact_windows_use_one_full_width_column() {
+        // A 700 px window's 588 px content would fit two cards.
+        assert_eq!(grid_in_window(588.0, false).columns, 2);
+        let compact = grid_in_window(588.0, true);
+        assert_eq!((compact.columns, compact.card_width), (1, 588.0));
+        assert_eq!(grid_in_window(952.0, false), grid(952.0));
+        assert_eq!(grid_in_window(f64::NAN, true).card_width, 0.0);
     }
 
     #[test]
