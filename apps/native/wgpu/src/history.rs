@@ -56,104 +56,150 @@ pub enum HeaderEvent {
 
 /// `.history-header`: eyebrow, title and lede, with Delete all on the right.
 pub fn header(ui: &mut egui::Ui, t: &Tokens, delete_all: DeleteAll) -> Option<HeaderEvent> {
+    header_layout(ui, t, delete_all).0
+}
+
+/// The header, plus the heading column's and the actions' rects.
+fn header_layout(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    delete_all: DeleteAll,
+) -> (Option<HeaderEvent>, Rect, Rect) {
     let copy = shared::copy();
+    let mut heading = Rect::NOTHING;
+    let mut actions_rect = Rect::NOTHING;
     let mut event = None;
+    // `.history-header` is a flex row: the heading column wraps inside the
+    // space the actions leave, so the lede never runs under Delete all in a
+    // narrow window.
+    let actions = if delete_all.visible {
+        let label = if delete_all.busy {
+            copy.delete_all_busy
+        } else if delete_all.confirming {
+            copy.delete_all_confirm
+        } else {
+            copy.delete_all
+        };
+        let delete = text_width(ui, label, t.number("text-sm"))
+            + 15.
+            + t.number("s-3")
+            + 2. * t.number("s-5");
+        let cancel = if delete_all.confirming {
+            t.number("s-3")
+                + text_width(ui, copy.cancel, t.number("text-sm"))
+                + 2. * t.number("s-5")
+        } else {
+            0.
+        };
+        delete + cancel + t.number("s-6")
+    } else {
+        0.
+    };
+    let heading_width = (ui.available_width() - actions).max(0.);
     ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = t.number("s-3");
-            ui.label(
-                RichText::new(copy.eyebrow.to_uppercase())
-                    .size(t.number("text-2xs"))
-                    .color(t.color("text-subtle"))
-                    .extra_letter_spacing(0.6)
-                    .strong(),
-            );
-            ui.label(
-                RichText::new(copy.title)
-                    .size(t.number("text-3xl"))
-                    .color(t.color("text"))
-                    .strong(),
-            );
-            ui.label(
-                RichText::new(copy.lede)
-                    .size(t.number("text-md"))
-                    .color(t.color("text-subtle")),
-            );
-        });
+        heading = ui
+            .vertical(|ui| {
+                ui.set_max_width(heading_width);
+                ui.spacing_mut().item_spacing.y = t.number("s-3");
+                ui.label(
+                    RichText::new(copy.eyebrow.to_uppercase())
+                        .size(t.number("text-2xs"))
+                        .color(t.color("text-subtle"))
+                        .extra_letter_spacing(0.6)
+                        .strong(),
+                );
+                ui.label(
+                    RichText::new(copy.title)
+                        .size(t.number("text-3xl"))
+                        .color(t.color("text"))
+                        .strong(),
+                );
+                ui.label(
+                    RichText::new(copy.lede)
+                        .size(t.number("text-md"))
+                        .color(t.color("text-subtle")),
+                );
+            })
+            .response
+            .rect;
         if !delete_all.visible {
             return;
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {
-            let label = if delete_all.busy {
-                copy.delete_all_busy
-            } else if delete_all.confirming {
-                copy.delete_all_confirm
-            } else {
-                copy.delete_all
-            };
-            let style = if delete_all.confirming {
-                ButtonStyle::Confirm
-            } else {
-                ButtonStyle::Danger
-            };
-            let width = text_width(ui, label, t.number("text-sm"))
-                + 15.
-                + t.number("s-3")
-                + 2. * t.number("s-5");
-            let (rect, _) =
-                ui.allocate_exact_size(Vec2::new(width, t.number("h-md")), Sense::hover());
-            let response = button(
-                ui,
-                t,
-                rect,
-                Id::unique("history-delete-all"),
-                label,
-                Some(Glyph::Trash),
-                style,
-                delete_all.enabled && !delete_all.busy,
-            );
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::Button,
-                    delete_all.enabled && !delete_all.busy,
-                    if delete_all.confirming {
-                        copy.delete_all_confirm_label
-                    } else {
-                        copy.delete_all_label
-                    },
-                )
-            });
-            if response.clicked() {
-                event = Some(HeaderEvent::DeleteAll);
-            }
-            if delete_all.confirming {
-                let width = text_width(ui, copy.cancel, t.number("text-sm")) + 2. * t.number("s-5");
+        actions_rect = ui
+            .with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {
+                let label = if delete_all.busy {
+                    copy.delete_all_busy
+                } else if delete_all.confirming {
+                    copy.delete_all_confirm
+                } else {
+                    copy.delete_all
+                };
+                let style = if delete_all.confirming {
+                    ButtonStyle::Confirm
+                } else {
+                    ButtonStyle::Danger
+                };
+                let width = text_width(ui, label, t.number("text-sm"))
+                    + 15.
+                    + t.number("s-3")
+                    + 2. * t.number("s-5");
                 let (rect, _) =
                     ui.allocate_exact_size(Vec2::new(width, t.number("h-md")), Sense::hover());
-                let cancel = button(
+                let response = button(
                     ui,
                     t,
                     rect,
-                    Id::unique("history-delete-all-cancel"),
-                    copy.cancel,
-                    None,
-                    ButtonStyle::Ghost,
-                    !delete_all.busy,
+                    Id::unique("history-delete-all"),
+                    label,
+                    Some(Glyph::Trash),
+                    style,
+                    delete_all.enabled && !delete_all.busy,
                 );
-                cancel.widget_info(|| {
+                response.widget_info(|| {
                     egui::WidgetInfo::labeled(
                         egui::WidgetType::Button,
-                        !delete_all.busy,
-                        copy.cancel_label,
+                        delete_all.enabled && !delete_all.busy,
+                        if delete_all.confirming {
+                            copy.delete_all_confirm_label
+                        } else {
+                            copy.delete_all_label
+                        },
                     )
                 });
-                if cancel.clicked() {
-                    event = Some(HeaderEvent::Cancel);
+                if response.clicked() {
+                    event = Some(HeaderEvent::DeleteAll);
                 }
-            }
-        });
+                if delete_all.confirming {
+                    let width =
+                        text_width(ui, copy.cancel, t.number("text-sm")) + 2. * t.number("s-5");
+                    let (rect, _) =
+                        ui.allocate_exact_size(Vec2::new(width, t.number("h-md")), Sense::hover());
+                    let cancel = button(
+                        ui,
+                        t,
+                        rect,
+                        Id::unique("history-delete-all-cancel"),
+                        copy.cancel,
+                        None,
+                        ButtonStyle::Ghost,
+                        !delete_all.busy,
+                    );
+                    cancel.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            !delete_all.busy,
+                            copy.cancel_label,
+                        )
+                    });
+                    if cancel.clicked() {
+                        event = Some(HeaderEvent::Cancel);
+                    }
+                }
+                ui.min_rect()
+            })
+            .inner;
     });
-    event
+    (event, heading, actions_rect)
 }
 
 /// `.history-filters` pills. `counts` pairs each label with its count.
@@ -914,6 +960,61 @@ fn glyph(painter: &egui::Painter, glyph: Glyph, rect: Rect, stroke: Stroke) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn header_lede_wraps_beside_delete_all_down_to_the_minimum_window() {
+        // Token fonts differ by platform; compare rects, not pixel positions.
+        let ctx = egui::Context::default();
+        crate::ui_fonts::install(&ctx);
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        tokens.apply(&ctx, true);
+        let history = captures_app::app_windows::HISTORY;
+        for width in [history.width, history.min_width] {
+            for confirming in [false, true] {
+                let mut layout = (Rect::NOTHING, Rect::NOTHING, Rect::NOTHING);
+                for _ in 0..2 {
+                    // The first pass loads the fonts.
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(width, history.min_height),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let margin = tokens.number("s-8");
+                            egui::Frame::new().inner_margin(margin).show(ui, |ui| {
+                                let available = ui.max_rect();
+                                let (_, heading, actions) = header_layout(
+                                    ui,
+                                    &tokens,
+                                    DeleteAll {
+                                        visible: true,
+                                        confirming,
+                                        busy: false,
+                                        enabled: true,
+                                    },
+                                );
+                                layout = (available, heading, actions);
+                            });
+                        },
+                    )
+                    .textures_delta
+                    .clear();
+                }
+                let (available, heading, actions) = layout;
+                assert!(
+                    heading.right() <= actions.left(),
+                    "{width}: heading {heading:?} runs under {actions:?}"
+                );
+                assert!(
+                    actions.right() <= available.right() + 0.5,
+                    "{width}: actions {actions:?} run past {available:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn thumbnails_fit_inside_the_card_image_like_object_fit_contain() {

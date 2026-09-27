@@ -2,6 +2,7 @@ use std::{path::PathBuf, time::Duration};
 
 pub const USAGE: &str = "Captures wgpu native host\n\
   --live [--history-root PATH] [--open-media PATH (repeatable; --open-image alias)]\n\
+  --live --open-preferences (also open the Preferences window at launch)\n\
   --live -- FILE... (Open With; everything after -- is a local path)\n\
   --scene preferences|history|hud|preview|editor|capture-controls|region|window|update|countdown|idle\n\
   --update-state available|single|closing|manual|downloading|restarting|error|checking|up-to-date\n\
@@ -109,6 +110,8 @@ pub struct Options {
     pub permission_dialog: Option<String>,
     pub update_state: Option<String>,
     pub update_tray: Option<crate::update_notice::FixtureTray>,
+    /// Open the Preferences window beside Capture History once setup is done.
+    pub open_preferences: bool,
 }
 
 impl Options {
@@ -135,6 +138,7 @@ impl Options {
             permission_dialog: None,
             update_state: None,
             update_tray: None,
+            open_preferences: false,
         };
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
@@ -148,6 +152,7 @@ impl Options {
                     }
                 }
                 "--live" => options.live = true,
+                "--open-preferences" => options.open_preferences = true,
                 "--permission-dialog" => {
                     let value = args.next().ok_or("Missing permission dialog state")?;
                     if !matches!(value.as_str(), "ready" | "error") {
@@ -278,6 +283,9 @@ impl Options {
         {
             return Err("--live cannot be combined with fixture scenes or exercise options".into());
         }
+        if options.open_preferences && (!options.live || options.scene == Scene::Idle) {
+            return Err("--open-preferences requires a visible --live launch".into());
+        }
         if options.history_root.is_some() && !options.live {
             return Err("--history-root requires --live".into());
         }
@@ -399,7 +407,14 @@ mod tests {
                 .history_root,
             Some(PathBuf::from("/tmp/captures"))
         );
+        assert!(
+            parse(&["--live", "--open-preferences"])
+                .unwrap()
+                .open_preferences
+        );
         for args in [
+            vec!["--open-preferences"],
+            vec!["--live", "--scene", "idle", "--open-preferences"],
             vec!["--live", "--exercise"],
             vec!["--live", "--scene", "history"],
             vec!["--history-root", "/tmp/captures"],

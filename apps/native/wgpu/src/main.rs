@@ -17,6 +17,7 @@ mod options;
 mod outbound_drag;
 mod preferences;
 mod preferences_widgets;
+mod preferences_window;
 mod primitives;
 mod recording;
 mod recording_editor;
@@ -77,8 +78,9 @@ struct InputApplication<'a> {
     root_repaints: root_repaint::Pending,
     #[cfg(target_os = "windows")]
     root_suspended: bool,
-    root_window: Option<WindowId>,
-    root_focused: bool,
+    /// The Captures window that owns keyboard focus. Shortcut recording
+    /// happens in the Preferences window, which is not the root.
+    focused_window: Option<WindowId>,
     modifiers: ModifiersState,
 }
 
@@ -111,38 +113,38 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
             };
             json!({"window":format!("{window_id:?}"),"kind":kind,"value":value})
         });
-        let root_window = *self.root_window.get_or_insert(window_id);
-        if window_id == root_window {
-            match &event {
-                WindowEvent::Focused(focused) => {
-                    self.root_focused = *focused;
-                    if !focused {
-                        self.shortcut_input.blur();
-                        self.shortcuts.resume_after_root_blur();
-                    }
-                }
-                WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
-                WindowEvent::KeyboardInput { event, .. }
-                    if self.root_focused && self.shortcut_input.is_active() =>
-                {
-                    let code = match event.physical_key {
-                        PhysicalKey::Code(code) => shortcut_input::physical_code(code),
-                        PhysicalKey::Unidentified(_) => "Unidentified".into(),
-                    };
-                    self.shortcut_input.key(
-                        code,
-                        event.state,
-                        event.repeat,
-                        shortcut_input::Modifiers {
-                            ctrl: self.modifiers.control_key(),
-                            shift: self.modifiers.shift_key(),
-                            alt: self.modifiers.alt_key(),
-                            meta: self.modifiers.super_key(),
-                        },
-                    );
-                }
-                _ => {}
+        match &event {
+            WindowEvent::Focused(true) => self.focused_window = Some(window_id),
+            WindowEvent::Focused(false) | WindowEvent::Destroyed
+                if self.focused_window == Some(window_id) =>
+            {
+                self.focused_window = None;
+                self.shortcut_input.blur();
+                self.shortcuts.resume_after_root_blur();
             }
+            WindowEvent::ModifiersChanged(modifiers) if self.focused_window == Some(window_id) => {
+                self.modifiers = modifiers.state();
+            }
+            WindowEvent::KeyboardInput { event, .. }
+                if self.focused_window == Some(window_id) && self.shortcut_input.is_active() =>
+            {
+                let code = match event.physical_key {
+                    PhysicalKey::Code(code) => shortcut_input::physical_code(code),
+                    PhysicalKey::Unidentified(_) => "Unidentified".into(),
+                };
+                self.shortcut_input.key(
+                    code,
+                    event.state,
+                    event.repeat,
+                    shortcut_input::Modifiers {
+                        ctrl: self.modifiers.control_key(),
+                        shift: self.modifiers.shift_key(),
+                        alt: self.modifiers.alt_key(),
+                        meta: self.modifiers.super_key(),
+                    },
+                );
+            }
+            _ => {}
         }
         self.outbound_drag.begin_event(window_id, &event);
         self.paste_input.begin_event(window_id, &event);
@@ -375,7 +377,9 @@ fn main() -> eframe::Result {
     };
     let floating = options.floating;
     let idle = options.scene == Scene::Idle;
-    let size = if floating && options.scene == Scene::Hud {
+    let size = if options.live {
+        captures_app::app_windows::HISTORY.size()
+    } else if floating && options.scene == Scene::Hud {
         [430., 102.]
     } else if floating {
         [640., 620.]
@@ -384,7 +388,9 @@ fn main() -> eframe::Result {
     } else {
         [1000., 720.]
     };
-    let minimum_size = if options.scene == Scene::CaptureControls {
+    let minimum_size = if options.live {
+        captures_app::app_windows::HISTORY.min_size()
+    } else if options.scene == Scene::CaptureControls {
         [640., 480.]
     } else {
         size
@@ -392,13 +398,16 @@ fn main() -> eframe::Result {
     let native = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
+            // The live root is the Capture History window; first-run setup
+            // retitles and resizes it until setup completes (workbench.rs).
             .with_title(if options.live {
-                "Captures"
+                captures_app::app_windows::HISTORY.title
             } else {
                 "Captures — wgpu fixture workbench"
             })
             .with_inner_size(size)
             .with_min_inner_size(minimum_size)
+            .with_resizable(true)
             .with_visible(!idle)
             .with_active(!idle)
             // eframe's wgpu painter takes its alpha capability from the root,
@@ -463,8 +472,7 @@ fn main() -> eframe::Result {
         root_repaints: root_repaint::Pending::default(),
         #[cfg(target_os = "windows")]
         root_suspended: false,
-        root_window: None,
-        root_focused: false,
+        focused_window: None,
         modifiers: ModifiersState::default(),
     };
     event_loop.run_app(&mut application)?;

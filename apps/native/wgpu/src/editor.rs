@@ -650,11 +650,13 @@ impl View {
         self.viewport_pan = None;
     }
 
+    /// Shipping's window title. The " — Working…" suffix while a job runs is
+    /// a native addition that the X11 exercises wait on.
     fn title(&self) -> &'static str {
         if self.pending {
-            "Screenshot editor — Captures — Working…"
+            "Captures Screenshot Editor — Working…"
         } else {
-            "Screenshot editor — Captures"
+            captures_app::app_windows::SCREENSHOT_EDITOR_TITLE
         }
     }
 

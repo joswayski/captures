@@ -1176,6 +1176,11 @@ pub struct Live {
     opening_media: bool,
     media_open_errors: Vec<String>,
     capture_waiting_for_hide: bool,
+    /// A capture has hidden the workspace windows (History and Preferences)
+    /// and has not restored them yet.
+    workspace_hidden: bool,
+    /// The host's Preferences window is still shown.
+    companion_visible: bool,
     hide_started: Option<Instant>,
     hidden_since: Option<Instant>,
     capture_in_flight: bool,
@@ -1472,6 +1477,8 @@ impl Live {
             opening_media: false,
             media_open_errors: Vec::new(),
             capture_waiting_for_hide: false,
+            workspace_hidden: false,
+            companion_visible: false,
             hide_started: None,
             hidden_since: None,
             capture_in_flight: false,
@@ -1708,6 +1715,17 @@ impl Live {
 
     pub fn set_permission_recovery_visible(&mut self, visible: bool) {
         self.permission_recovery_visible = visible;
+    }
+
+    /// While true the host hides its other workspace windows too.
+    pub fn workspace_hidden(&self) -> bool {
+        self.workspace_hidden
+    }
+
+    /// Whether the host's Preferences window is still on screen. A capture
+    /// waits for it to hide as well as the root.
+    pub fn set_companion_visible(&mut self, visible: bool) {
+        self.companion_visible = visible;
     }
 
     pub fn recording_controls_hidden(&self) -> bool {
@@ -2049,6 +2067,7 @@ impl Live {
 
     fn begin_root_hide(&mut self, ctx: &egui::Context) {
         self.capture_waiting_for_hide = true;
+        self.workspace_hidden = true;
         self.hide_started = Some(Instant::now());
         self.hidden_since = None;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -3456,7 +3475,7 @@ impl Live {
         }
         if self.capture_waiting_for_hide {
             let visible = frame.winit_window().and_then(|window| window.is_visible());
-            if visible == Some(false) {
+            if visible == Some(false) && !self.companion_visible {
                 self.hidden_since.get_or_insert_with(Instant::now);
             } else {
                 self.hidden_since = None;
@@ -3468,6 +3487,7 @@ impl Live {
                 self.capture_waiting_for_hide = false;
                 let Some(display_id) = self.display_id.clone() else {
                     self.flow = None;
+                    self.workspace_hidden = false;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     return;
                 };
@@ -4341,6 +4361,7 @@ impl Live {
         self.window_texture = None;
         self.window_selector.lock().unwrap().reset();
         self.controls.lock().unwrap().reset();
+        self.workspace_hidden = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.restore_root_visible));
         request_hidden_root_paint(ctx);
         ctx.request_repaint();
@@ -7245,7 +7266,7 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn history_capture_actions_wrap_inside_the_root_window() {
+    fn history_capture_actions_wrap_inside_the_history_window() {
         // Token fonts (DejaVu Sans on Linux CI) are wider than egui's default.
         let ctx = egui::Context::default();
         crate::ui_fonts::install(&ctx);
@@ -7290,16 +7311,18 @@ mod tests {
             }
             layout
         };
-        // The root window's fixed minimum size: whether the row wraps here
-        // depends on the platform font, but it never runs past the margin.
-        let (available, row) = layout(1000.);
-        assert_eq!(available.right(), 1000. - side);
+        // The Capture History window's default size: whether the row wraps
+        // here depends on the platform font, but it never runs past the margin.
+        let history = captures_app::app_windows::HISTORY;
+        let (available, row) = layout(history.width);
+        assert_eq!(available.right(), history.width - side);
         assert!(
             row.right() <= available.right(),
             "row {row:?} runs past {available:?}"
         );
-        // Narrower than the actions in any font: the row must wrap.
-        let (available, row) = layout(700.);
+        // The window's minimum width is narrower than the actions in any
+        // font: the row must wrap.
+        let (available, row) = layout(history.min_width);
         assert!(
             row.right() <= available.right(),
             "row {row:?} runs past {available:?}"
