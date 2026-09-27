@@ -305,9 +305,9 @@ def main():
 
     # The ⋯ layer settings popover: 280 px beside the sidebar, top-aligned with
     # the ⋯ button. Offsets are from its top-left corner; annotation layers have
-    # no 132 px Transform section.
+    # no 132 px Transform section. The popover shifts up to stay on screen.
     LAYER_MENU = {
-        "blend": (140, 70), "opacity": (140, 142),
+        "blend": (140, 70), "opacity": (143, 142),
         "rotate-left": (80, 222), "rotate-right": (208, 222),
         "flip-horizontal": (80, 266), "flip-vertical": (208, 266),
         "bring-front": (100, 354), "send-back": (100, 390),
@@ -315,10 +315,13 @@ def main():
         "duplicate": (100, 610), "delete": (100, 648),
     }
 
+    LAYER_MENU_HEIGHT = 674
+
     def layer_menu_point(index, item, image=True):
         height = window_size()[1]
         top = layer_quick(index, "more")[1] - 14
-        top = max(8, min(top, height - 8 - min(height - 16, 560)))
+        menu_height = LAYER_MENU_HEIGHT - (0 if image else 132)
+        top = max(8, min(top, height - 8 - min(height - 16, menu_height)))
         dx, dy = LAYER_MENU[item]
         if not image and dy > 300:
             dy -= 132
@@ -332,6 +335,11 @@ def main():
         run("xdotool", "key", "Escape", "sleep", ".2")
         layer_click(index, "more")
         layer_menu_click(index, item, image)
+
+    # Crop properties rows were authored at former inspector y's (Draw crop /
+    # Cancel at 335); the section now starts at properties_top().
+    def crop_click(x, y):
+        prop_click(x, y - 47)
 
     def prop_click(x, offset):
         click(editor, inspector_x(x), properties_top() + offset)
@@ -349,9 +357,15 @@ def main():
         x, offset = IMAGE_FIELDS[name]
         prop_field(offset, value, x)
 
+    def double_click_layer(index):
+        # Select first and let the frame settle, so the double-click's two
+        # presses reach egui within its 0.3 s window even on a slow debug build.
+        layer_click(index)
+        run("xdotool", "sleep", ".5", "click", "--repeat", "2", "--delay", "40", "1", "sleep", ".3")
+
     def rename_layer(index, name):
-        run("xdotool", "mousemove", "--window", editor, *map(str, layer_row(index)),
-            "click", "--repeat", "2", "--delay", "80", "1", "sleep", ".3", "key", "ctrl+a")
+        double_click_layer(index)
+        run("xdotool", "key", "ctrl+a")
         type_text(name, 30)
         run("xdotool", "key", "Return", "sleep", ".2")
 
@@ -637,6 +651,11 @@ def main():
         run("xdotool", "mousemove", "--window", editor, str(inspector_x(x)),
             str(y + INSPECTOR_SHIFT), *tail)
 
+    def properties_move(*tail):
+        # Wheel over Properties (below the Layers section) to scroll it.
+        run("xdotool", "mousemove", "--window", editor, str(inspector_x(180)),
+            str(properties_top() + 120), *tail)
+
     def window_move(point, *tail):
         run("xdotool", "mousemove", "--window", editor, *map(str, point), *tail)
 
@@ -645,7 +664,9 @@ def main():
         # Its content used to end with a 125px development footer; without it,
         # a bottom-clamped scroll leaves every row 125px lower in the window.
         # The export bar below the inspector adds 80px more to a taller window.
-        return y + 125 + 80 - INSPECTOR_SHIFT
+        # They were authored for a 1004 px window; the live rotation-snap tail
+        # ends 7 px lower. Bottom-clamped rows follow the window's bottom edge.
+        return y + 125 + 80 + 7 - INSPECTOR_SHIFT + window_size()[1] - 1004
 
     def canvas_point(point):
         # Existing authored gestures describe points in the fixture screenshot.
@@ -1354,7 +1375,7 @@ def main():
             toolbar_click("redo")
             save_layers(lambda values: len(values) == 2, "redo after saving the adopted copy")
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
-            inspector_move(180, 400, "click", "--repeat", "25", "5")
+            properties_move("click", "--repeat", "25", "5")
             shot(editor, "overwrite-minimum")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "overwritten editor closes")
@@ -1412,7 +1433,7 @@ def main():
             save_layers(lambda values: math.isclose(values[0].get("rotation", 0), angle, abs_tol=1e-12),
                         "custom rotation redo")
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
-            inspector_move(180, 400, "click", "--repeat", "14", "5")
+            properties_move("click", "--repeat", "14", "5")
             shot(editor, "rotation-snap-minimum")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "custom rotation closes")
@@ -1608,7 +1629,7 @@ def main():
             fixture_pixel("polygon-star-committed", 508, 409, (46, 158, 113))
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "polygon-minimum")
-            inspector_move(180, 400, "click", "--repeat", "5", "5")
+            properties_move("click", "--repeat", "5", "5")
             shot(editor, "polygon-minimum-scrolled")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "polygon draft closes")
@@ -2059,9 +2080,9 @@ def main():
             toolbar_click("draw")
             resize_editor(760, 540)
             shot(editor, "text-defaults-rounded-minimum")
-            inspector_move(120, 430, "click", "--repeat", "3", "5", "sleep", ".3")
+            properties_move("click", "--repeat", "3", "5", "sleep", ".3")
             shot(editor, "text-defaults-rounded-minimum-controls")
-            inspector_move(120, 430, "click", "--repeat", "10", "4", "sleep", ".3")
+            properties_move("click", "--repeat", "10", "4", "sleep", ".3")
             resize_editor(1000, 1001)
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "default rounded creation single undo")
@@ -2269,10 +2290,10 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, f"text-minimum-reopened-{args.appearance}")
             before_scroll = draft.read_bytes()
-            inspector_move(120, 440,
+            properties_move(
                 "click", "--repeat", "7", "--delay", "80", "5", "sleep", ".3")
             shot(editor, f"text-minimum-controls-{args.appearance}")
-            inspector_move(120, 440,
+            properties_move(
                 "click", "--repeat", "4", "--delay", "80", "5", "sleep", ".3")
             shot(editor, f"text-minimum-shadow-controls-{args.appearance}")
             assert draft.read_bytes() == before_scroll, "scrolling text controls must not edit"
@@ -2544,7 +2565,7 @@ def main():
             editor = reopen()
             save(640, 360, 0, 0)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
-            inspector_move(180, 400, "click", "--repeat", "16", "5")
+            properties_move("click", "--repeat", "16", "5")
             shot(editor, "trim-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
             preview_encoded()
@@ -2615,7 +2636,7 @@ def main():
             editor = reopen()
             assert background_is(None)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
-            inspector_move(180, 400, "click", "--repeat", "12", "5")
+            properties_move("click", "--repeat", "12", "5")
             shot(editor, "background-transparent-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
             preview_encoded()  # Preview PNG, then copy the edited frame.
@@ -2921,10 +2942,10 @@ def main():
         discard_confirm()
         wait(lambda: not draft.exists(), "discard open-shape edits")
 
-        # Leave room below the annotation form for rotation-snap controls. This
-        # preserves the bottom-scrolled form's coordinates; the narrow/minimum-size
-        # scroll path is exercised below.
-        resize_editor(942, 923)
+        # Leave room below the annotation form for rotation-snap controls, and
+        # above it for the Layers section, so the bottom-scrolled form fits in
+        # Properties; the narrow/minimum-size scroll path is exercised below.
+        resize_editor(942, 1029)  # A 1110 px window.
         toolbar_click("draw")
         draw_tool("rectangle")
         drag((320, 250), (480, 370))
@@ -2932,7 +2953,7 @@ def main():
         toolbar_click("layers")
         layer_click(0, "lock")
         save_layers(lambda values: values[-1]["locked"], "locked annotation remains style editable")
-        inspector_move(180, 400, "click", "--repeat", "20", "5")
+        properties_move("click", "--repeat", "20", "5")
         shot(editor, "annotation-fields")
 
         # Stroke, fill and shadow colors use the shipping swatch row: four 53.5 px
@@ -2943,7 +2964,7 @@ def main():
             inspector_click(round(8 + (index % 4 + .5) * 53.5), bottom(first_row + index // 4 * 32))
 
         def scroll_inspector_end():
-            inspector_move(180, 400, "click", "--repeat", "25", "5")
+            properties_move("click", "--repeat", "25", "5")
 
         unchanged = draft.read_bytes()
         inspector_click(50, bottom(503))  # Unchanged Apply is disabled.
@@ -3004,11 +3025,11 @@ def main():
         shot(editor, "annotation-shadow-off")
         fixture_pixel("annotation-shadow-off", 279, 310, (40, 110, 166))
         inspector_click(15, bottom(459))
-        inspector_move(180, 400, "click", "--repeat", "25", "5")
+        properties_move("click", "--repeat", "25", "5")
         inspector_click(50, bottom(503))
         save_layers(lambda values: values[-1]["style"] == styled["style"], "shadow settings restored")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
-        inspector_move(180, 400, "click", "--repeat", "25", "5")
+        properties_move("click", "--repeat", "25", "5")
         shot(editor, "annotation-minimum")
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "styled editor closes")
@@ -3066,21 +3087,20 @@ def main():
         fixture_pixel("imported-canvas", 293, 468, (60, 179, 113))
         fixture_pixel("imported-canvas", 370, 514, (45, 100, 189))
         toolbar_click("layers")
-        inspector_move(180, 400, "click", "--repeat", "25", "4")
+        properties_move("click", "--repeat", "25", "4")
         shot(editor, "imported-selected-layer")
         # Double-click renames inline; Escape keeps the full, intact name.
-        run("xdotool", "mousemove", "--window", editor, *map(str, layer_row(0)),
-            "click", "--repeat", "2", "--delay", "80", "1", "sleep", ".3")
+        double_click_layer(0)
         shot(editor, "imported-rename-field")
         run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
         assert run("xclip", "-selection", "clipboard", "-o").decode() == imported_path.name
         run("xdotool", "key", "Escape")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "imported-minimum")
-        inspector_move(180, 400, "click", "--repeat", "8", "5")
+        properties_move("click", "--repeat", "8", "5")
         shot(editor, "imported-minimum-scrolled")
         resize_editor(1000, 701)
-        inspector_move(180, 400, "click", "--repeat", "12", "4")
+        properties_move("click", "--repeat", "12", "4")
         assert imported_path.read_bytes() == imported_bytes
         imported_path.unlink()  # A saved import must no longer depend on its source file.
         toolbar_click("undo")
@@ -3381,10 +3401,10 @@ def main():
         fixture_pixel("layers-reopened", 361, 277, (134, 144, 117), tolerance=1)
         assert layers()[-1]["name"] == long_name
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
-        inspector_move(180, 400, "click", "--repeat", "8", "5")
+        properties_move("click", "--repeat", "8", "5")
         shot(editor, "layers-small-scrolled")
         resize_editor(1000, 701)
-        inspector_move(180, 400, "click", "--repeat", "12", "4")
+        properties_move("click", "--repeat", "12", "4")
         layer_click(1)  # Select and explicitly unlock the original.
         layer_click(1, "lock")
         save_layers(lambda values: not values[0]["locked"], "unlock original")
@@ -3474,43 +3494,44 @@ def main():
         shot(editor, "crop-cancelled")
         save(640, 360, 0, 0)  # Escape must not crop or mutate the document.
         before_selection = draft.read_bytes()
-        inspector_click(159, 335)
+        crop_click(159, 335)
         drag((278, 119), (438, 219), shift=True)
         shot(editor, "crop-shift-square")
         assert draft.read_bytes() == before_selection
-        inspector_click(50, 335)
+        crop_click(50, 335)
         save(160, 160, -40, -30)
         toolbar_click("undo")
         save(640, 360, 0, 0)
-        inspector_click(159, 335)
+        crop_click(159, 335)
         drag((638, 500), (278, 119))  # Starts below the image; clamps to y=360.
         shot(editor, "crop-outside-start")
-        inspector_click(50, 335)
+        crop_click(50, 335)
         save(360, 330, -40, -30)
         toolbar_click("undo")
         save(640, 360, 0, 0)
-        inspector_click(159, 335)
-        inspector_click(125, 379)
+        crop_click(159, 335)
+        crop_click(125, 379)
         shot(editor, "crop-aspect-menu")
         run("xdotool", "key", "Escape", "sleep", ".2")
-        inspector_click(125, 379)
-        inspector_click(106, 507)  # 4:3 preset takes precedence over Shift's square.
+        crop_click(125, 379)
+        # The aspect popup opens above its box; 4:3 takes precedence over Shift's square.
+        prop_click(106, 213)
         drag((278, 119), (438, 219), shift=True)
         shot(editor, "crop-preset-four-three")
-        inspector_click(50, 335)
+        crop_click(50, 335)
         save(160, 120, -40, -30)
         toolbar_click("undo")
         save(640, 360, 0, 0)
-        inspector_click(159, 335)
-        inspector_click(125, 379)
-        inspector_click(106, 419)  # Free for the following asymmetric crop.
+        crop_click(159, 335)
+        crop_click(125, 379)
+        prop_click(106, 125)  # Free for the following asymmetric crop.
         drag((638, 359), (278, 119))
-        inspector_click(159, 335)  # Cancel restores numeric fields as well as pixels.
-        inspector_click(50, 335)
+        crop_click(159, 335)  # Cancel restores numeric fields as well as pixels.
+        crop_click(50, 335)
         save(640, 360, 0, 0)
-        inspector_click(159, 335)
+        crop_click(159, 335)
         drag((638, 359), (278, 119))
-        inspector_click(50, 335)
+        crop_click(50, 335)
         resize_editor(1000, 701)
         save(360, 240, -40, -30)
         shot(editor, "editor-cropped")
@@ -3708,7 +3729,7 @@ def main():
         shot(editor, "editor-quit-error")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "editor-small-error")
-        inspector_move(180, 400, "click", "--repeat", "8", "5")
+        properties_move("click", "--repeat", "8", "5")
         shot(editor, "editor-small-scrolled")
         drafts.unlink()
         close(root)

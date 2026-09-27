@@ -2144,13 +2144,15 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.requests.last?["id"] as? String, "foreground")
 
         // Geometry applies live; each field's burst shares one undo key.
-        typeLive("29.5", into: try field("Layer X", in: controller.root), controller: controller)
+        let layerX = try field("Layer X", in: controller.root)
+        typeLive("29.5", into: layerX, controller: controller)
         let move = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual(move["action"] as? String, "geometry")
         XCTAssertEqual(move["x"] as? Double, 29.5)
         XCTAssertNil(move["y"])
         XCTAssertEqual(worker.liveKeys.last, "geometry:foreground:x")
-        typeLive("4.75", into: try field("Layer Y", in: controller.root), controller: controller)
+        let layerY = try field("Layer Y", in: controller.root)
+        typeLive("4.75", into: layerY, controller: controller)
         XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["y"] as? Double, 4.75)
         XCTAssertEqual(worker.liveKeys.last, "geometry:foreground:y")
         XCTAssertNil(descendants(in: controller.root).compactMap { $0 as? CaptureButton }
@@ -5603,7 +5605,8 @@ final class ScreenshotEditorTests: XCTestCase {
         typeLive("invalid", into: blur, controller: controller)
         XCTAssertEqual(worker.requests.count, count, "invalid numbers never enter the worker")
         blur.stringValue = "14.96"
-        typeLive("invalid", into: try field("Text shadow color", in: controller.root), controller: controller)
+        let shadowColor = try field("Text shadow color", in: controller.root)
+        typeLive("invalid", into: shadowColor, controller: controller)
         XCTAssertEqual(worker.requests.count, count, "invalid colors never enter the worker")
         try field("Text shadow color", in: controller.root).stringValue = "#123456"
         y.stringValue = "6.75"

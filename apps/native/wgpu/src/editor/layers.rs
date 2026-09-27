@@ -899,264 +899,294 @@ fn settings_menu(
     let content = ui.ctx().content_rect();
     let sidebar_left = ui.max_rect().left() - 8.;
     let left = (sidebar_left - MENU_WIDTH - 8.).max(content.left() + 8.);
-    let max_height = (content.height() - 16.).min(560.);
+    // Keep the whole popover on screen: clamp with last frame's measured
+    // height, and scroll the body once it is taller than the window.
+    let area_id = ui.scope_id().with("layer-settings");
+    let max_height = content.height() - 16.;
+    let height = ui
+        .ctx()
+        .memory(|memory| memory.area_rect(area_id))
+        .map_or(0., |rect| rect.height().min(max_height));
     let top = anchor
         .top()
-        .min(content.bottom() - 8. - max_height)
+        .min(content.bottom() - 8. - height)
         .max(content.top() + 8.);
     let enabled = !view.pending && view.inline.is_none();
     let mut select_open = false;
     let mut close = false;
     let dark = ui.visuals().dark_mode;
-    let area = egui::Area::new(ui.scope_id().with("layer-settings"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(pos2(left, top))
-        .constrain(false)
-        .show(ui.ctx(), |ui| {
-            egui::Frame::new()
-                .fill(tokens.color("surface-overlay"))
-                .stroke(Stroke::new(1., tokens.color("border")))
-                .corner_radius(tokens.number("r-lg"))
-                .shadow(crate::primitives::shadow_lg(dark))
-                .show(ui, |ui| {
-                    ui.set_width(MENU_WIDTH);
-                    ui.set_max_height(max_height);
-                    ui.spacing_mut().item_spacing = vec2(0., tokens.number("s-4"));
-                    let pad = tokens.number("s-5");
-                    let inner = MENU_WIDTH - 2. * pad;
-                    let section = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
-                        egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
-                            ui.set_width(inner);
-                            add(ui);
-                        });
-                        let y = ui.cursor().top();
-                        ui.painter().hline(
-                            ui.max_rect().x_range(),
-                            y - 0.5,
-                            Stroke::new(1., tokens.color("border-subtle")),
-                        );
-                    };
-                    ui.add_enabled_ui(enabled, |ui| {
-                        section(ui, &mut |ui| {
-                            section_title(ui, tokens, copy::APPEARANCE);
-                            field_label(ui, tokens, copy::BLEND_MODE);
-                            let options: Vec<_> = shared::BLEND_MODES
-                                .iter()
-                                .map(|(value, label)| {
-                                    crate::primitives::SelectOption::new(value.to_string(), label)
-                                })
-                                .collect();
-                            let output = crate::primitives::Select::new(
-                                "layer-blend-mode",
-                                copy::BLEND_MODE,
-                                inner,
-                            )
-                            .show(
-                                ui,
-                                tokens,
-                                &options,
-                                &base.blend_mode,
-                            );
-                            select_open |= output.open;
-                            if let Some(blend_mode) = output.chosen {
-                                view.submit(
-                                    tx,
-                                    Request::Layer {
-                                        id: base.id.clone(),
-                                        edit: LayerEdit::BlendMode { blend_mode },
-                                    },
-                                );
-                            }
-                            field_label(ui, tokens, copy::OPACITY);
-                            let mut opacity = view.layer_opacity;
-                            let slider = crate::primitives::RangeSlider::new(
-                                "layer-opacity",
-                                copy::OPACITY_LABEL,
-                                inner,
-                                0. ..=100.,
-                                format!("{}%", opacity.round()),
-                            )
-                            .show(ui, tokens, &mut opacity);
-                            if slider.changed() {
-                                view.layer_opacity = opacity;
-                                view.live_edit(
-                                    tx,
-                                    format!("opacity:{}", base.id),
-                                    Request::Layer {
-                                        id: base.id.clone(),
-                                        edit: LayerEdit::Opacity { opacity },
-                                    },
-                                );
-                            }
-                        });
-                        if let Element::Image(_) = element {
-                            section(ui, &mut |ui| {
-                                section_title(ui, tokens, copy::TRANSFORM);
-                                let gap = tokens.number("s-3");
-                                let width = (inner - gap) / 2.;
-                                let tiles = [
-                                    (
-                                        "rotate-counterclockwise",
-                                        copy::ROTATE_LEFT,
-                                        copy::ROTATE_LEFT_TIP,
-                                        ImageTransform::RotateCounterclockwise,
-                                    ),
-                                    (
-                                        "rotate-clockwise",
-                                        copy::ROTATE_RIGHT,
-                                        copy::ROTATE_RIGHT_TIP,
-                                        ImageTransform::RotateClockwise,
-                                    ),
-                                    (
-                                        "flip-horizontal",
-                                        copy::FLIP_HORIZONTAL,
-                                        copy::FLIP_HORIZONTAL_TIP,
-                                        ImageTransform::FlipHorizontal,
-                                    ),
-                                    (
-                                        "flip-vertical",
-                                        copy::FLIP_VERTICAL,
-                                        copy::FLIP_VERTICAL_TIP,
-                                        ImageTransform::FlipVertical,
-                                    ),
-                                ];
-                                for pair in tiles.chunks(2) {
-                                    ui.horizontal(|ui| {
-                                        ui.spacing_mut().item_spacing.x = gap;
-                                        for (glyph, label, tip, transform) in pair {
-                                            if menu_tile(ui, tokens, glyph, label, tip, width) {
+    let area =
+        egui::Area::new(area_id)
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos2(left, top))
+            .constrain(false)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(tokens.color("surface-overlay"))
+                    .stroke(Stroke::new(1., tokens.color("border")))
+                    .corner_radius(tokens.number("r-lg"))
+                    .shadow(crate::primitives::shadow_lg(dark))
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(max_height - 2.)
+                            .min_scrolled_height(max_height - 2.)
+                            .show(ui, |ui| {
+                                ui.set_width(MENU_WIDTH);
+                                ui.spacing_mut().item_spacing = vec2(0., tokens.number("s-4"));
+                                let pad = tokens.number("s-5");
+                                let inner = MENU_WIDTH - 2. * pad;
+                                let section =
+                                    |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
+                                        egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
+                                            ui.set_width(inner);
+                                            add(ui);
+                                        });
+                                        let y = ui.cursor().top();
+                                        ui.painter().hline(
+                                            ui.max_rect().x_range(),
+                                            y - 0.5,
+                                            Stroke::new(1., tokens.color("border-subtle")),
+                                        );
+                                    };
+                                ui.add_enabled_ui(enabled, |ui| {
+                                    section(ui, &mut |ui| {
+                                        section_title(ui, tokens, copy::APPEARANCE);
+                                        field_label(ui, tokens, copy::BLEND_MODE);
+                                        let options: Vec<_> = shared::BLEND_MODES
+                                            .iter()
+                                            .map(|(value, label)| {
+                                                crate::primitives::SelectOption::new(
+                                                    value.to_string(),
+                                                    label,
+                                                )
+                                            })
+                                            .collect();
+                                        let output = crate::primitives::Select::new(
+                                            "layer-blend-mode",
+                                            copy::BLEND_MODE,
+                                            inner,
+                                        )
+                                        .show(ui, tokens, &options, &base.blend_mode);
+                                        select_open |= output.open;
+                                        if let Some(blend_mode) = output.chosen {
+                                            view.submit(
+                                                tx,
+                                                Request::Layer {
+                                                    id: base.id.clone(),
+                                                    edit: LayerEdit::BlendMode { blend_mode },
+                                                },
+                                            );
+                                        }
+                                        field_label(ui, tokens, copy::OPACITY);
+                                        let mut opacity = view.layer_opacity;
+                                        let slider = crate::primitives::RangeSlider::new(
+                                            "layer-opacity",
+                                            copy::OPACITY_LABEL,
+                                            inner,
+                                            0. ..=100.,
+                                            format!("{}%", opacity.round()),
+                                        )
+                                        .show(ui, tokens, &mut opacity);
+                                        if slider.changed() {
+                                            view.layer_opacity = opacity;
+                                            view.live_edit(
+                                                tx,
+                                                format!("opacity:{}", base.id),
+                                                Request::Layer {
+                                                    id: base.id.clone(),
+                                                    edit: LayerEdit::Opacity { opacity },
+                                                },
+                                            );
+                                        }
+                                    });
+                                    if let Element::Image(_) = element {
+                                        section(ui, &mut |ui| {
+                                            section_title(ui, tokens, copy::TRANSFORM);
+                                            let gap = tokens.number("s-3");
+                                            let width = (inner - gap) / 2.;
+                                            let tiles = [
+                                                (
+                                                    "rotate-counterclockwise",
+                                                    copy::ROTATE_LEFT,
+                                                    copy::ROTATE_LEFT_TIP,
+                                                    ImageTransform::RotateCounterclockwise,
+                                                ),
+                                                (
+                                                    "rotate-clockwise",
+                                                    copy::ROTATE_RIGHT,
+                                                    copy::ROTATE_RIGHT_TIP,
+                                                    ImageTransform::RotateClockwise,
+                                                ),
+                                                (
+                                                    "flip-horizontal",
+                                                    copy::FLIP_HORIZONTAL,
+                                                    copy::FLIP_HORIZONTAL_TIP,
+                                                    ImageTransform::FlipHorizontal,
+                                                ),
+                                                (
+                                                    "flip-vertical",
+                                                    copy::FLIP_VERTICAL,
+                                                    copy::FLIP_VERTICAL_TIP,
+                                                    ImageTransform::FlipVertical,
+                                                ),
+                                            ];
+                                            for pair in tiles.chunks(2) {
+                                                ui.horizontal(|ui| {
+                                                    ui.spacing_mut().item_spacing.x = gap;
+                                                    for (glyph, label, tip, transform) in pair {
+                                                        if menu_tile(
+                                                            ui, tokens, glyph, label, tip, width,
+                                                        ) {
+                                                            view.submit(
+                                                                tx,
+                                                                Request::Layer {
+                                                                    id: base.id.clone(),
+                                                                    edit:
+                                                                        LayerEdit::ImageTransform {
+                                                                            transform: *transform,
+                                                                        },
+                                                                },
+                                                            );
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        });
+                                    }
+                                    section(ui, &mut |ui| {
+                                        section_title(ui, tokens, copy::ARRANGE);
+                                        ui.spacing_mut().item_spacing.y = 2.;
+                                        for (glyph, label, tip, front) in [
+                                            (
+                                                "bring-front",
+                                                copy::BRING_FRONT,
+                                                copy::BRING_FRONT_TIP,
+                                                true,
+                                            ),
+                                            (
+                                                "send-back",
+                                                copy::SEND_BACK,
+                                                copy::SEND_BACK_TIP,
+                                                false,
+                                            ),
+                                        ] {
+                                            if menu_action(
+                                                ui,
+                                                tokens,
+                                                glyph,
+                                                label,
+                                                tip,
+                                                shared::can_arrange(document, &base.id, front),
+                                                false,
+                                                false,
+                                            ) {
                                                 view.submit(
                                                     tx,
                                                     Request::Layer {
                                                         id: base.id.clone(),
-                                                        edit: LayerEdit::ImageTransform {
-                                                            transform: *transform,
-                                                        },
+                                                        edit: LayerEdit::Arrange { front },
                                                     },
                                                 );
                                             }
                                         }
                                     });
-                                }
-                            });
-                        }
-                        section(ui, &mut |ui| {
-                            section_title(ui, tokens, copy::ARRANGE);
-                            ui.spacing_mut().item_spacing.y = 2.;
-                            for (glyph, label, tip, front) in [
-                                (
-                                    "bring-front",
-                                    copy::BRING_FRONT,
-                                    copy::BRING_FRONT_TIP,
-                                    true,
-                                ),
-                                ("send-back", copy::SEND_BACK, copy::SEND_BACK_TIP, false),
-                            ] {
-                                if menu_action(
-                                    ui,
-                                    tokens,
-                                    glyph,
-                                    label,
-                                    tip,
-                                    shared::can_arrange(document, &base.id, front),
-                                    false,
-                                    false,
-                                ) {
-                                    view.submit(
-                                        tx,
-                                        Request::Layer {
-                                            id: base.id.clone(),
-                                            edit: LayerEdit::Arrange { front },
-                                        },
-                                    );
-                                }
-                            }
-                        });
-                        section(ui, &mut |ui| {
-                            section_title(ui, tokens, copy::COMBINE);
-                            ui.spacing_mut().item_spacing.y = 2.;
-                            for (glyph, label, tip, action) in [
-                                (
-                                    "merge-down",
-                                    copy::MERGE_DOWN,
-                                    copy::MERGE_DOWN_TIP,
-                                    LayerAction::MergeDown,
-                                ),
-                                (
-                                    "merge-visible",
-                                    copy::MERGE_VISIBLE,
-                                    copy::MERGE_VISIBLE_TIP,
-                                    LayerAction::MergeVisible,
-                                ),
-                                (
-                                    "flatten",
-                                    copy::FLATTEN,
-                                    copy::FLATTEN_TIP,
-                                    LayerAction::Flatten,
-                                ),
-                            ] {
-                                let allowed = layer_action_enabled(view, action, Some(&base.id));
-                                if menu_action(ui, tokens, glyph, label, tip, allowed, false, false)
-                                {
-                                    dispatch_layer_action(view, tx, action, Some(base.id.clone()));
-                                    close = true;
-                                }
-                            }
-                        });
-                        egui::Frame::NONE
-                            .fill(tokens.color("surface-sunken"))
-                            .inner_margin(tokens.number("s-4"))
-                            .corner_radius(egui::CornerRadius {
-                                nw: 0,
-                                ne: 0,
-                                sw: tokens.number("r-lg") as u8,
-                                se: tokens.number("r-lg") as u8,
-                            })
-                            .show(ui, |ui| {
-                                ui.set_width(MENU_WIDTH - 2. * tokens.number("s-4"));
-                                ui.spacing_mut().item_spacing.y = tokens.number("s-2");
-                                if menu_action(
-                                    ui,
-                                    tokens,
-                                    "duplicate",
-                                    copy::DUPLICATE,
-                                    copy::DUPLICATE_TIP,
-                                    true,
-                                    true,
-                                    false,
-                                ) {
-                                    dispatch_layer_action(
-                                        view,
-                                        tx,
-                                        LayerAction::Duplicate,
-                                        Some(base.id.clone()),
-                                    );
-                                    close = true;
-                                }
-                                let deletable =
-                                    layer_action_enabled(view, LayerAction::Delete, Some(&base.id));
-                                if menu_action(
-                                    ui,
-                                    tokens,
-                                    "trash",
-                                    copy::DELETE,
-                                    copy::DELETE_TIP,
-                                    deletable,
-                                    true,
-                                    true,
-                                ) {
-                                    dispatch_layer_action(
-                                        view,
-                                        tx,
-                                        LayerAction::Delete,
-                                        Some(base.id.clone()),
-                                    );
-                                    close = true;
-                                }
+                                    section(ui, &mut |ui| {
+                                        section_title(ui, tokens, copy::COMBINE);
+                                        ui.spacing_mut().item_spacing.y = 2.;
+                                        for (glyph, label, tip, action) in [
+                                            (
+                                                "merge-down",
+                                                copy::MERGE_DOWN,
+                                                copy::MERGE_DOWN_TIP,
+                                                LayerAction::MergeDown,
+                                            ),
+                                            (
+                                                "merge-visible",
+                                                copy::MERGE_VISIBLE,
+                                                copy::MERGE_VISIBLE_TIP,
+                                                LayerAction::MergeVisible,
+                                            ),
+                                            (
+                                                "flatten",
+                                                copy::FLATTEN,
+                                                copy::FLATTEN_TIP,
+                                                LayerAction::Flatten,
+                                            ),
+                                        ] {
+                                            let allowed =
+                                                layer_action_enabled(view, action, Some(&base.id));
+                                            if menu_action(
+                                                ui, tokens, glyph, label, tip, allowed, false,
+                                                false,
+                                            ) {
+                                                dispatch_layer_action(
+                                                    view,
+                                                    tx,
+                                                    action,
+                                                    Some(base.id.clone()),
+                                                );
+                                                close = true;
+                                            }
+                                        }
+                                    });
+                                    egui::Frame::NONE
+                                        .fill(tokens.color("surface-sunken"))
+                                        .inner_margin(tokens.number("s-4"))
+                                        .corner_radius(egui::CornerRadius {
+                                            nw: 0,
+                                            ne: 0,
+                                            sw: tokens.number("r-lg") as u8,
+                                            se: tokens.number("r-lg") as u8,
+                                        })
+                                        .show(ui, |ui| {
+                                            ui.set_width(MENU_WIDTH - 2. * tokens.number("s-4"));
+                                            ui.spacing_mut().item_spacing.y = tokens.number("s-2");
+                                            if menu_action(
+                                                ui,
+                                                tokens,
+                                                "duplicate",
+                                                copy::DUPLICATE,
+                                                copy::DUPLICATE_TIP,
+                                                true,
+                                                true,
+                                                false,
+                                            ) {
+                                                dispatch_layer_action(
+                                                    view,
+                                                    tx,
+                                                    LayerAction::Duplicate,
+                                                    Some(base.id.clone()),
+                                                );
+                                                close = true;
+                                            }
+                                            let deletable = layer_action_enabled(
+                                                view,
+                                                LayerAction::Delete,
+                                                Some(&base.id),
+                                            );
+                                            if menu_action(
+                                                ui,
+                                                tokens,
+                                                "trash",
+                                                copy::DELETE,
+                                                copy::DELETE_TIP,
+                                                deletable,
+                                                true,
+                                                true,
+                                            ) {
+                                                dispatch_layer_action(
+                                                    view,
+                                                    tx,
+                                                    LayerAction::Delete,
+                                                    Some(base.id.clone()),
+                                                );
+                                                close = true;
+                                            }
+                                        });
+                                });
                             });
                     });
-                });
-        });
+            });
     area.response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Other, true, copy::settings_label(&name))
     });

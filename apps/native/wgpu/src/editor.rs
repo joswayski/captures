@@ -5453,8 +5453,15 @@ mod tests {
             view.live_edit(&tx, "geometry:x".into(), x(value));
         }
         view.live_edit(&tx, "opacity".into(), x(7.));
-        assert!(rx.try_recv().is_err(), "live edits wait for the running job");
-        assert_eq!(view.live_queue.len(), 2, "the newest edit per key waits, in order");
+        assert!(
+            rx.try_recv().is_err(),
+            "live edits wait for the running job"
+        );
+        assert_eq!(
+            view.live_queue.len(),
+            2,
+            "the newest edit per key waits, in order"
+        );
         view.receive(&ctx, Ok(presented(false)));
         view.flush_live(&tx);
         let Ok(Job::Apply(Request::Live { key, request })) = rx.try_recv() else {
@@ -5468,7 +5475,10 @@ mod tests {
         view.flush_live(&tx);
         assert!(rx.try_recv().is_err(), "one job at a time");
         view.receive(&ctx, Err("rejected".into()));
-        assert!(view.live_queue.is_empty(), "a rejected edit drops the rest of its burst");
+        assert!(
+            view.live_queue.is_empty(),
+            "a rejected edit drops the rest of its burst"
+        );
     }
 
     #[test]
@@ -5545,7 +5555,13 @@ mod tests {
             "double-clicking an image row renames it inline"
         );
         frame(&mut view, vec![]);
-        assert_eq!(view.layers.rename.as_ref().map(|rename| rename.value.as_str()), Some("Front"));
+        assert_eq!(
+            view.layers
+                .rename
+                .as_ref()
+                .map(|rename| rename.value.as_str()),
+            Some("Front")
+        );
         view.layers.rename.as_mut().unwrap().value = "Renamed".into();
         // Leaving the field (a click elsewhere) commits, like shipping's blur.
         press(&mut view, egui::pos2(250., 650.), true);
@@ -5584,7 +5600,10 @@ mod tests {
                         placement: LayerPlacement::After,
                     },
             })) => {
-                assert_eq!((id.as_str(), target_id.as_str()), ("front", "capture-background"));
+                assert_eq!(
+                    (id.as_str(), target_id.as_str()),
+                    ("front", "capture-background")
+                );
             }
             _ => panic!("expected one reorder below the back row"),
         }
@@ -5595,7 +5614,13 @@ mod tests {
         view.layers.menu = Some("front".into());
         frame(&mut view, vec![]); // A new popover area measures itself first.
         let output = frame(&mut view, vec![]);
-        for label in ["Blend mode", "Bring to front", "Send to back", "Merge visible", "Duplicate"] {
+        for label in [
+            "Blend mode",
+            "Bring to front",
+            "Send to back",
+            "Merge visible",
+            "Duplicate",
+        ] {
             position(&output, label);
         }
     }
