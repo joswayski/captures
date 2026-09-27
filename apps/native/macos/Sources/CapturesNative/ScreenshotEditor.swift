@@ -1241,10 +1241,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     let drawOverlay = EditorDrawOverlay()
     let selectionOverlay = EditorSelectionOverlay()
     let cropOverlay = EditorCropOverlay()
-    private let inlineTextScroll = NSScrollView()
+    /// Shipping `.screenshot-inline-text-frame`: the canvas text box, in the
+    /// layer's own face, colour, plate and rotation (`updateInlineTextFrame`).
+    private var inlineTextFrame: EditorInlineTextFrame!
     private let inlineTextEditor = EditorInlineTextView()
-    private var inlineTextDoneButton: CaptureButton!
-    private var inlineTextCancelButton: CaptureButton!
     /// Shipping image Width/Height/X/Y: live number fields.
     private let layerWidth = TokenNumberField()
     private let layerHeight = TokenNumberField()
@@ -1337,42 +1337,50 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var draftDismissButton: CaptureButton!
     /// Shipping's "Restored unsaved edits" notice for a draft found at open.
     private(set) var draftRestored = false
-    private let wandTolerance = NSTextField()
-    private let wandContiguous = NSButton(checkboxWithTitle: "Contiguous only", target: nil, action: nil)
-    private var wandToleranceLabel: NSTextField!
-    private let brushSize = NSTextField()
-    private let brushSoftness = NSTextField()
-    private var brushSizeLabel: NSTextField!
-    private var brushSoftnessLabel: NSTextField!
+    /// Shipping Eraser `RangeSlider`s: Wand Tolerance (the wand's own 0–255
+    /// channel distance, stopped at 120), brush Size and Softness.
+    private var wandTolerance: EditorMarkedSlider!
+    private let wandContiguous = NSButton(checkboxWithTitle: EditorInspectorCopy.eraser("contiguous"),
+                                          target: nil, action: nil)
+    private var brushSize: EditorMarkedSlider!
+    private var brushSoftness: EditorMarkedSlider!
     private var drawHelper: NSTextField!
     private let createTextPreset = NSPopUpButton()
     private let createTextSize = NSTextField()
-    private let createTextColor = NSTextField()
+    private var createTextColor: ColorSwatchRow!
     private var createTextControls: [NSView] = []
     private var createTextDefaultsPublished = false
     private let drawingStroke = NSButton(checkboxWithTitle: "Stroke", target: nil, action: nil)
     private let drawingFill = NSButton(checkboxWithTitle: "Fill", target: nil, action: nil)
-    private let drawingStrokeColor = NSTextField()
-    private let drawingFillColor = NSTextField()
+    private var drawingStrokeColor: ColorSwatchRow!
+    private var drawingFillColor: ColorSwatchRow!
+    private var drawingStrokeColorLabel: NSTextField!
     private let drawingStrokeWidth = NSTextField()
     private let drawingOpacity = NSTextField()
     private var drawingDefaultControls: [NSView] = []
+    /// Bottom of the closed-shape Fill color row (before the preview shift).
+    private var drawingFillBottom: CGFloat = 0
     private var drawingFillControls: [NSView] = []
     private var drawingDefaultsArtifactID: String?
     private let drawingDropShadow = NSButton(checkboxWithTitle: "Drop shadow", target: nil, action: nil)
     private var drawingShadowControls: [NSView] = []
     private var drawingShadowFields: [String: NSTextField] = [:]
+    private var drawingShadowLabels: [String: NSTextField] = [:]
     private var drawingShadowCustomized = false
     private let textEditor = NSTextView()
     private let textSize = NSTextField()
-    private let textColor = NSTextField()
+    private var textColor: ColorSwatchRow!
     private let textFamily = NSPopUpButton()
-    private let textTraits = NSSegmentedControl(labels: ["Bold", "Italic"], trackingMode: .selectAny,
-                                                target: nil, action: nil)
-    private let textAlignment = NSSegmentedControl(labels: ["Left", "Center", "Right"], trackingMode: .selectOne,
-                                                   target: nil, action: nil)
+    private var textFormat: EditorTextFormatButtons!
     private let textPlate = NSPopUpButton()
-    private let textPlateColor = NSTextField()
+    private var textPlateColor: ColorSwatchRow!
+    private var textPlateColorLabel: NSTextField!
+    /// Text property rows laid out top to bottom by `layoutTextControls`.
+    private var textFamilyLabel: NSTextField!
+    private var textContentLabel: NSTextField!
+    private var textContentScroll: NSScrollView!
+    private var textSizeLabel: NSTextField!
+    private var textColorLabel: NSTextField!
     private let textShadow = NSButton(checkboxWithTitle: "Drop shadow", target: nil, action: nil)
     private let textOutline = NSButton(checkboxWithTitle: "Outline", target: nil, action: nil)
     private let textPreset = NSPopUpButton(frame: .zero, pullsDown: true)
@@ -1400,6 +1408,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         var finishInFlight = false
     }
     private var inlineTextInput: InlineTextInput?
+    /// The style last applied to the inline editor's text storage.
+    private var inlineTextStyleKey: String?
     private var closeAfterTextInput = false
     private var outputFormat: NSPopUpButton!
     private var outputQuality: ClosurePopUpButton!
@@ -2100,40 +2110,25 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         dropGuideView.isHidden = true
         dropGuideView.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         viewportInput.addSubview(dropGuideView)
-        inlineTextScroll.isHidden = true
-        inlineTextScroll.borderType = .lineBorder
-        inlineTextScroll.hasVerticalScroller = true
-        inlineTextScroll.useTokenScrollers(tokens)
-        inlineTextScroll.drawsBackground = true
-        inlineTextScroll.backgroundColor = tokens.color("surface-raised")
-        inlineTextScroll.wantsLayer = true
-        inlineTextScroll.layer?.cornerRadius = tokens.number("r-sm")
-        inlineTextScroll.layer?.borderColor = tokens.color("theme-accent").cgColor
-        inlineTextScroll.layer?.borderWidth = 2
+        let inlineFrame = EditorInlineTextFrame(tokens: tokens)
+        inlineFrame.isHidden = true
         inlineTextEditor.isRichText = false
+        inlineTextEditor.drawsBackground = false
         inlineTextEditor.isHorizontallyResizable = false
-        inlineTextEditor.isVerticallyResizable = true
+        inlineTextEditor.isVerticallyResizable = false
         inlineTextEditor.allowsUndo = true
         inlineTextEditor.delegate = self
-        inlineTextEditor.textContainer?.widthTracksTextView = true
-        inlineTextEditor.textContainerInset = NSSize(width: tokens.number("s-2"),
-                                                      height: tokens.number("s-2"))
-        inlineTextEditor.setAccessibilityLabel("Inline screenshot text")
+        inlineTextEditor.textContainerInset = .zero
+        inlineTextEditor.textContainer?.lineFragmentPadding = 0
+        inlineTextEditor.textContainer?.widthTracksTextView = false
+        inlineTextEditor.focusRingType = .none
+        inlineTextEditor.setAccessibilityLabel(EditorInspectorCopy.textFormat("inline_label"))
+        // Shipping: Escape and clicking away commit; Return inserts a line.
         inlineTextEditor.onEscape = { [weak self] in self?.finishInlineTextInput(commit: true) }
         inlineTextEditor.onBlur = { [weak self] in self?.finishInlineTextInput(commit: true) }
-        inlineTextScroll.documentView = inlineTextEditor
-        viewportInput.addSubview(inlineTextScroll)
-        inlineTextDoneButton = button("Done", frame: .zero, parent: viewportInput) { [weak self] in
-            self?.finishInlineTextInput(commit: true)
-        }
-        inlineTextDoneButton.primary = true
-        inlineTextDoneButton.setAccessibilityLabel("Finish inline screenshot text")
-        inlineTextCancelButton = button("Cancel", frame: .zero, parent: viewportInput) { [weak self] in
-            self?.finishInlineTextInput(commit: false)
-        }
-        inlineTextCancelButton.glass = true
-        inlineTextCancelButton.setAccessibilityLabel("Cancel inline screenshot text")
-        inlineTextDoneButton.isHidden = true; inlineTextCancelButton.isHidden = true
+        inlineFrame.addSubview(inlineTextEditor)
+        viewportInput.addSubview(inlineFrame)
+        inlineTextFrame = inlineFrame
         for view in [viewportInput, drawOverlay, selectionOverlay, cropOverlay] { configureViewportGestures(view) }
         drawOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         selectionOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
@@ -2500,29 +2495,38 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         eraserMode.setAccessibilityLabel("Eraser mode")
         eraserMode.isHidden = true
         content.addSubview(eraserMode)
-        wandToleranceLabel = panelFieldLabel("Tolerance", x: 0, y: 146, parent: content)
-        configure(wandTolerance, frame: NSRect(x: 0, y: 168, width: 252, height: 30),
-                  label: "Wand color tolerance", parent: content)
-        let formatter = NumberFormatter(); formatter.numberStyle = .decimal
-        formatter.maximumFractionDigits = 0; formatter.minimum = 0; formatter.maximum = 255
-        wandTolerance.formatter = formatter; wandTolerance.stringValue = "36"
-        wandContiguous.frame = NSRect(x: 0, y: 208, width: 252, height: 24)
+        // Shipping Eraser sliders (`editor_chrome::eraser`): Tolerance values
+        // are the wand's 0–255 channel distance, stopped at 120 like shipping.
+        let tolerance = EditorMarkedSlider(
+            tokens: tokens, title: EditorInspectorCopy.eraser("tolerance"),
+            accessibilityLabel: EditorInspectorCopy.eraser("tolerance_label"),
+            range: EditorInspectorCopy.eraserRange("tolerance_range", fallback: 0...120), value: 36,
+            marks: EditorInspectorCopy.eraserMarks("tolerance_marks")) { "\(Int($0))" }
+        tolerance.frame = NSRect(x: 0, y: 146, width: 252, height: EditorMarkedSlider.height)
+        content.addSubview(tolerance); wandTolerance = tolerance
+        wandContiguous.frame = NSRect(x: 0, y: 216, width: 252, height: 24)
         wandContiguous.state = .on; wandContiguous.setAccessibilityLabel("Wand contiguous only")
+        wandContiguous.target = self; wandContiguous.action = #selector(wandContiguousChanged)
         content.addSubview(wandContiguous)
-        brushSizeLabel = panelFieldLabel("Brush diameter", x: 0, y: 146, parent: content)
-        configure(brushSize, frame: NSRect(x: 0, y: 168, width: 252, height: 30),
-                  label: "Brush diameter", parent: content)
-        let sizeFormatter = NumberFormatter(); sizeFormatter.numberStyle = .decimal
-        sizeFormatter.maximumFractionDigits = 0; sizeFormatter.minimum = 4; sizeFormatter.maximum = 120
-        brushSize.formatter = sizeFormatter; brushSize.stringValue = "28"; brushSize.delegate = self
-        brushSoftnessLabel = panelFieldLabel("Softness", x: 0, y: 208, parent: content)
-        configure(brushSoftness, frame: NSRect(x: 0, y: 230, width: 252, height: 30),
-                  label: "Brush softness", parent: content)
-        let softnessFormatter = NumberFormatter(); softnessFormatter.numberStyle = .decimal
-        softnessFormatter.maximumFractionDigits = 0; softnessFormatter.minimum = 0
-        softnessFormatter.maximum = 100
-        brushSoftness.formatter = softnessFormatter; brushSoftness.stringValue = "18"
-        brushSoftness.delegate = self
+        let size = EditorMarkedSlider(
+            tokens: tokens, title: EditorInspectorCopy.eraser("size"),
+            accessibilityLabel: EditorInspectorCopy.eraser("size_label"),
+            range: EditorInspectorCopy.eraserRange("size_range", fallback: 4...120), value: 28,
+            marks: EditorInspectorCopy.eraserMarks("size_marks")) { "\(Int($0)) px" }
+        size.frame = NSRect(x: 0, y: 146, width: 252, height: EditorMarkedSlider.height)
+        size.changed = { [weak self] value in
+            self?.drawOverlay.brushDiameter = CGFloat(value)
+            self?.refreshDrawToolPreview()
+        }
+        content.addSubview(size); brushSize = size
+        let softness = EditorMarkedSlider(
+            tokens: tokens, title: EditorInspectorCopy.eraser("softness"),
+            accessibilityLabel: EditorInspectorCopy.eraser("softness_label"),
+            range: EditorInspectorCopy.eraserRange("softness_range", fallback: 0...100), value: 18,
+            marks: EditorInspectorCopy.eraserMarks("softness_marks")) { "\(Int($0))%" }
+        softness.frame = NSRect(x: 0, y: 218, width: 252, height: EditorMarkedSlider.height)
+        softness.changed = { [weak self] _ in self?.refreshDrawToolPreview() }
+        content.addSubview(softness); brushSoftness = softness
         drawHelper = panelLabel("Other tools create one annotation layer on release.",
                                 frame: NSRect(x: 0, y: 408, width: 252, height: 42), muted: true,
                                 parent: content)
@@ -2544,33 +2548,58 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// The preview's height plus one row gap.
     private var drawPreviewShift: CGFloat { EditorDrawToolPreviewView.height + 12 }
 
+    /// Height of a full-width shipping `ColorField` swatch grid in Properties.
+    private var panelSwatchHeight: CGFloat { ColorSwatchRow.height(width: 252, compact: false, tokens: tokens) }
+
+    /// A shipping `ColorField` in Properties: the legend, then the swatch row.
+    private func panelColorField(_ legend: String, y: CGFloat, parent: NSView,
+                                 changed: @escaping (String) -> Void) -> (NSTextField, ColorSwatchRow) {
+        let label = panelFieldLabel(legend, x: 0, y: y, parent: parent)
+        label.frame.size.width = 252
+        label.setAccessibilityElement(false)
+        let swatches = ColorSwatchRow(tokens: tokens, label: legend, compact: false)
+        swatches.frame = NSRect(x: 0, y: y + 22, width: 252, height: panelSwatchHeight)
+        swatches.changed = changed
+        parent.addSubview(swatches)
+        return (label, swatches)
+    }
+
     private func buildDrawingDefaultControls(in content: NSView) {
-        let strokeColorLabel = panelFieldLabel("Stroke color", x: 0, y: 146, parent: content)
-        let fillColorLabel = panelFieldLabel("Fill color", x: 132, y: 146, parent: content)
-        configure(drawingStrokeColor, frame: NSRect(x: 0, y: 168, width: 120, height: 30),
-                  label: "New drawing stroke color", parent: content)
-        configure(drawingFillColor, frame: NSRect(x: 132, y: 168, width: 120, height: 30),
-                  label: "New drawing fill color", parent: content)
-        drawingStrokeColor.formatter = nil; drawingFillColor.formatter = nil
-        let widthLabel = panelFieldLabel("Width (2–40)", x: 0, y: 208, parent: content)
-        let opacityLabel = panelFieldLabel("Opacity (0–100)", x: 132, y: 208, parent: content)
-        configure(drawingStrokeWidth, frame: NSRect(x: 0, y: 230, width: 120, height: 30),
+        // Shipping order: Stroke color (Color for open tools), Size and
+        // Opacity, the Stroke/Fill toggles, Fill color, then Drop shadow.
+        let swatchRow = 22 + panelSwatchHeight + 8
+        let (strokeColorLabel, strokeSwatches) = panelColorField(
+            EditorColors.text("stroke_color"), y: 146, parent: content) { [weak self] _ in
+            self?.updateDrawingPreviewStyle()
+        }
+        drawingStrokeColor = strokeSwatches; drawingStrokeColorLabel = strokeColorLabel
+        let numbersY = 146 + swatchRow
+        let widthLabel = panelFieldLabel("Width (2–40)", x: 0, y: numbersY, parent: content)
+        let opacityLabel = panelFieldLabel("Opacity (0–100)", x: 132, y: numbersY, parent: content)
+        configure(drawingStrokeWidth, frame: NSRect(x: 0, y: numbersY + 22, width: 120, height: 30),
                   label: "New drawing stroke width", parent: content)
-        configure(drawingOpacity, frame: NSRect(x: 132, y: 230, width: 120, height: 30),
+        configure(drawingOpacity, frame: NSRect(x: 132, y: numbersY + 22, width: 120, height: 30),
                   label: "New drawing opacity", parent: content)
-        [drawingStrokeColor, drawingFillColor, drawingStrokeWidth, drawingOpacity].forEach { $0.delegate = self }
-        drawingStroke.frame = NSRect(x: 0, y: 270, width: 120, height: 24)
-        drawingFill.frame = NSRect(x: 132, y: 270, width: 120, height: 24)
+        [drawingStrokeWidth, drawingOpacity].forEach { $0.delegate = self }
+        let togglesY = numbersY + 62
+        drawingStroke.frame = NSRect(x: 0, y: togglesY, width: 120, height: 24)
+        drawingFill.frame = NSRect(x: 132, y: togglesY, width: 120, height: 24)
         drawingStroke.setAccessibilityLabel("New drawing stroke")
         drawingFill.setAccessibilityLabel("New drawing fill")
         drawingStroke.target = self; drawingStroke.action = #selector(drawingDefaultsChanged(_:))
         drawingFill.target = self; drawingFill.action = #selector(drawingDefaultsChanged(_:))
         content.addSubview(drawingStroke); content.addSubview(drawingFill)
-        drawingDefaultControls = [strokeColorLabel, fillColorLabel, drawingStrokeColor, drawingFillColor,
+        let (fillColorLabel, fillSwatches) = panelColorField(
+            EditorColors.text("fill_color"), y: togglesY + 32, parent: content) { [weak self] _ in
+            self?.updateDrawingPreviewStyle()
+        }
+        drawingFillColor = fillSwatches
+        drawingDefaultControls = [strokeColorLabel, fillColorLabel, strokeSwatches, fillSwatches,
                                   widthLabel, opacityLabel, drawingStrokeWidth, drawingOpacity,
                                   drawingStroke, drawingFill]
-        drawingFillControls = [fillColorLabel, drawingFillColor, drawingFill]
-        drawingDropShadow.frame = NSRect(x: 0, y: 302, width: 252, height: 24)
+        drawingFillControls = [fillColorLabel, fillSwatches, drawingFill]
+        drawingFillBottom = togglesY + 32 + swatchRow
+        drawingDropShadow.frame = NSRect(x: 0, y: drawingFillBottom, width: 252, height: 24)
         drawingDropShadow.setAccessibilityLabel("New drawing drop shadow")
         drawingDropShadow.target = self; drawingDropShadow.action = #selector(drawingDefaultsChanged(_:))
         content.addSubview(drawingDropShadow)
@@ -2579,13 +2608,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                               ("blur", "Blur (0–100)"), ("offsetX", "X offset"),
                               ("offsetY", "Y offset")].enumerated() {
             let x = CGFloat(index % 2) * 132
-            let y = CGFloat(index / 2) * 62 + 336
+            let y = CGFloat(index / 2) * 62 + drawingFillBottom + 34
             let label = panelFieldLabel(item.1, x: x, y: y, parent: content)
             let field = NSTextField()
             configure(field, frame: NSRect(x: x, y: y + 22, width: 120, height: 30),
                       label: "New drawing shadow \(item.0)", parent: content)
             field.formatter = nil; field.delegate = self
             drawingShadowFields[item.0] = field
+            drawingShadowLabels[item.0] = label
             drawingShadowControls.append(contentsOf: [label, field])
         }
     }
@@ -2593,8 +2623,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func publishInitialDrawingDefaults(_ snapshot: NativeEditorSnapshot) {
         guard drawingDefaultsArtifactID != snapshot.artifactID, let style = snapshot.initialAnnotationStyle else { return }
         drawingDefaultsArtifactID = snapshot.artifactID
-        drawingStrokeColor.stringValue = style.color
-        drawingFillColor.stringValue = style.fill ?? style.color
+        drawingStrokeColor?.selectedHex = style.color
+        drawingFillColor?.selectedHex = style.fill ?? style.color
         drawingStrokeWidth.stringValue = format(style.strokeWidth)
         drawingOpacity.stringValue = "100"
         drawingStroke.state = style.strokeEnabled ? .on : .off
@@ -2605,16 +2635,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     @objc private func drawingDefaultsChanged(_ sender: Any? = nil) {
-        if sender as? NSButton === drawingFill, drawingFill.state == .on {
-            drawingFillColor.stringValue = drawingStrokeColor.stringValue
+        if sender as? NSButton === drawingFill, drawingFill.state == .on, let stroke = drawingStrokeColor {
+            drawingFillColor?.selectedHex = stroke.selectedHex
         }
         updateDrawingPreviewStyle()
         publishDrawToolControls()
     }
 
     private func updateDrawingPreviewStyle() {
-        if let color = NSColor(hex: drawingStrokeColor.stringValue) { drawOverlay.strokeColor = color }
-        if let color = NSColor(hex: drawingFillColor.stringValue) { drawOverlay.fillColor = color }
+        if let color = drawingStrokeColor.flatMap({ NSColor(hex: $0.selectedHex) }) { drawOverlay.strokeColor = color }
+        if let color = drawingFillColor.flatMap({ NSColor(hex: $0.selectedHex) }) { drawOverlay.fillColor = color }
         if let width = number(drawingStrokeWidth), (2...40).contains(width) {
             drawOverlay.annotationStrokeWidth = CGFloat(width)
             if !drawingShadowCustomized, let shadow = try? NativeDrawingStyle.defaultShadow(strokeWidth: width) {
@@ -2640,16 +2670,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         content.addSubview(createTextPreset)
         let sizeLabel = panelFieldLabel("Size (8–512)", x: 0, y: 208, parent: content)
         sizeLabel.frame.size.width = 118
-        let colorLabel = panelFieldLabel("Color", x: 134, y: 208, parent: content)
-        colorLabel.frame.size.width = 118
         configure(createTextSize, frame: NSRect(x: 0, y: 230, width: 118, height: 30),
                   label: "New text size", parent: content)
         createTextSize.stringValue = format(24)
-        configure(createTextColor, frame: NSRect(x: 134, y: 230, width: 118, height: 30),
-                  label: "New text color", parent: content)
-        createTextColor.formatter = nil; createTextColor.stringValue = "#ff3b5c"
+        // Shipping `ColorField label="Color"` for new text.
+        let (colorLabel, colorSwatches) = panelColorField(EditorColors.text("color"), y: 268,
+                                                          parent: content) { _ in }
+        colorSwatches.selectedHex = "#ff3b5c"
+        createTextColor = colorSwatches
         createTextControls = [styleLabel, createTextPreset, sizeLabel, colorLabel,
-                              createTextSize, createTextColor]
+                              createTextSize, colorSwatches]
     }
 
     private func publishCreateTextDefaults() {
@@ -2682,12 +2712,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textPreset.setAccessibilityLabel("Text style preset")
         textPreset.target = self; textPreset.action = #selector(stageTextPreset)
         content.addSubview(textPreset)
-        let familyLabel = panelFieldLabel("Font", x: 0, y: 356, parent: content)
+        textFamilyLabel = panelFieldLabel("Font", x: 0, y: 356, parent: content)
         textFamily.frame = NSRect(x: 0, y: 378, width: 252, height: 30)
         textFamily.setAccessibilityLabel("Text font")
         textFamily.target = self; textFamily.action = #selector(textControlToggled)
         content.addSubview(textFamily)
-        let contentLabel = panelFieldLabel("Content", x: 0, y: 416, parent: content)
+        textContentLabel = panelFieldLabel("Content", x: 0, y: 416, parent: content)
         let textScroll = NSScrollView(frame: NSRect(x: 0, y: 438, width: 252, height: 82))
         textScroll.hasVerticalScroller = true; textScroll.borderType = .lineBorder
         textScroll.useTokenScrollers(tokens)
@@ -2697,34 +2727,37 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textEditor.isHorizontallyResizable = false; textEditor.textContainer?.widthTracksTextView = true
         textEditor.delegate = self
         textEditor.setAccessibilityLabel("Text content"); textScroll.documentView = textEditor
-        content.addSubview(textScroll)
-        let sizeLabel = panelFieldLabel("Size (8–512)", x: 0, y: 528, parent: content)
+        content.addSubview(textScroll); textContentScroll = textScroll
+        textSizeLabel = panelFieldLabel("Size (8–512)", x: 0, y: 528, parent: content)
         configure(textSize, frame: NSRect(x: 0, y: 550, width: 78, height: 30), label: "Text size", parent: content)
         textSize.formatter = nil; textSize.stringValue = "32"; textSize.delegate = self
-        textTraits.frame = NSRect(x: 86, y: 550, width: 166, height: 30)
-        textTraits.target = self; textTraits.action = #selector(textControlToggled)
-        textTraits.setAccessibilityLabel("Text traits"); content.addSubview(textTraits)
-        textAlignment.frame = NSRect(x: 0, y: 588, width: 252, height: 30)
-        textAlignment.target = self; textAlignment.action = #selector(textControlToggled)
-        textAlignment.setAccessibilityLabel("Text alignment"); content.addSubview(textAlignment)
-        let colorLabel = panelFieldLabel("Text color", x: 0, y: 626, parent: content)
-        colorLabel.frame.size.width = 118
-        textOutline.frame = NSRect(x: 126, y: 623, width: 126, height: 22)
+        // Shipping `.screenshot-format-buttons`: B, I and the alignment icons.
+        let format = EditorTextFormatButtons(tokens: tokens)
+        format.frame = NSRect(x: 0, y: 588, width: 252, height: 32)
+        format.changed = { [weak self] in self?.textControlsChanged(field: nil) }
+        content.addSubview(format); textFormat = format
+        let colorField = panelColorField(EditorColors.text("text_color"), y: 628, parent: content) {
+            [weak self] _ in self?.textControlsChanged(field: "color")
+        }
+        textColorLabel = colorField.0; textColor = colorField.1
+        textColorLabel.frame.size.width = 118
+        textOutline.frame = NSRect(x: 126, y: 625, width: 126, height: 22)
         textOutline.target = self; textOutline.action = #selector(textControlToggled)
         textOutline.setAccessibilityLabel("Text outline"); content.addSubview(textOutline)
-        configure(textColor, frame: NSRect(x: 0, y: 648, width: 118, height: 30), label: "Text color", parent: content)
-        textColor.formatter = nil; textColor.stringValue = "#111111"; textColor.delegate = self
-        textPlate.frame = NSRect(x: 126, y: 648, width: 126, height: 30)
+        textPlate.frame = NSRect(x: 0, y: 740, width: 120, height: 30)
         textPlate.addItems(withTitles: ["No plate", "Square plate", "Rounded plate"])
         textPlate.target = self; textPlate.action = #selector(textControlToggled)
         textPlate.setAccessibilityLabel("Text plate"); content.addSubview(textPlate)
-        configure(textPlateColor, frame: NSRect(x: 0, y: 686, width: 118, height: 30),
-                  label: "Text plate color", parent: content)
-        textPlateColor.formatter = nil; textPlateColor.stringValue = "#ffffff"; textPlateColor.delegate = self
-        textShadow.frame = NSRect(x: 126, y: 686, width: 126, height: 30)
+        // Shipping `ColorField label="Background color"` under a plate.
+        let plateField = panelColorField(EditorColors.text("background"), y: 778, parent: content) {
+            [weak self] _ in self?.textControlsChanged(field: "background")
+        }
+        textPlateColorLabel = plateField.0; textPlateColor = plateField.1
+        textPlateColor.selectedHex = "#ffffff"
+        textShadow.frame = NSRect(x: 132, y: 740, width: 120, height: 30)
         textShadow.setAccessibilityLabel("Text drop shadow"); content.addSubview(textShadow)
         textShadow.target = self; textShadow.action = #selector(textShadowChanged)
-        textShadowPanel.frame = NSRect(x: 0, y: 724, width: 252, height: 0)
+        textShadowPanel.frame = NSRect(x: 0, y: 900, width: 252, height: 0)
         content.addSubview(textShadowPanel)
         for (index, row) in [("color", "Shadow color"), ("opacity", "Shadow opacity"),
                              ("blur", "Shadow blur"), ("offsetX", "Shadow X"),
@@ -2738,9 +2771,32 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             field.formatter = nil; field.delegate = self
             textShadowFields[row.0] = field
         }
-        textControls = [textPreset, familyLabel, textFamily, contentLabel, textScroll, sizeLabel, textSize,
-                        textTraits, textAlignment, colorLabel, textColor, textPlate, textPlateColor,
-                        textShadow, textOutline, textShadowPanel]
+        textControls = [textPreset, textFamilyLabel, textFamily, textContentLabel, textScroll, textSizeLabel,
+                        textSize, format, textColorLabel, colorField.1, textPlate, textPlateColorLabel,
+                        plateField.1, textShadow, textOutline, textShadowPanel]
+    }
+
+    /// Shipping text properties top to bottom from `top`; the Background
+    /// color row shows only under a plate. Returns the last row's bottom.
+    private func layoutTextControls(top: CGFloat) -> CGFloat {
+        guard let textFormat, let textColor, let textPlateColor else { return top }
+        var y = top
+        textPreset.frame.origin.y = y; y += 34
+        textFamilyLabel?.frame.origin.y = y; textFamily.frame.origin.y = y + 22; y += 60
+        textContentLabel?.frame.origin.y = y; textContentScroll?.frame.origin.y = y + 22; y += 112
+        textSizeLabel?.frame.origin.y = y; textSize.frame.origin.y = y + 22; y += 60
+        textFormat.frame.origin.y = y; y += 40
+        textColorLabel?.frame.origin.y = y; textOutline.frame.origin.y = y - 3
+        textColor.frame.origin.y = y + 22; y += 22 + panelSwatchHeight + 8
+        textPlate.frame.origin.y = y; textShadow.frame.origin.y = y; y += 38
+        let plated = textPlate.indexOfSelectedItem != 0 && !textPlate.isHidden
+        textPlateColorLabel?.isHidden = !plated; textPlateColor.isHidden = !plated
+        if plated {
+            textPlateColorLabel?.frame.origin.y = y; textPlateColor.frame.origin.y = y + 22
+            y += 22 + panelSwatchHeight + 8
+        }
+        textShadowPanel.frame.origin.y = y
+        return max(y - 8, textShadowPanel.isHidden ? 0 : textShadowPanel.frame.maxY)
     }
 
     /// Shipping bottom export bar: a settings disclosure with a live summary,
@@ -3542,6 +3598,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
     }
 
+    @objc private func wandContiguousChanged() { publishDrawToolControls() }
+
     private func publishDrawToolControls() {
         guard let eraserMode else { return }
         let shape = drawShape
@@ -3554,10 +3612,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         eraserMode.selectedSegment = wand ? 0 : shape == .erase ? 1 : shape == .restore ? 2 : -1
         let creatingText = shape == .text
         let creatingDrawing = !wand && !brush && !creatingText
-        wandToleranceLabel?.isHidden = !wand
-        wandTolerance.isHidden = !wand; wandContiguous.isHidden = !wand
-        brushSizeLabel?.isHidden = !brush; brushSize.isHidden = !brush
-        brushSoftnessLabel?.isHidden = !brush; brushSoftness.isHidden = !brush
+        wandTolerance?.isHidden = !wand; wandContiguous.isHidden = !wand
+        brushSize?.isHidden = !brush; brushSoftness?.isHidden = !brush
         createTextControls.forEach { $0.isHidden = !creatingText }
         drawingDefaultControls.forEach { $0.isHidden = !creatingDrawing }
         let closed = [.rectangle, .ellipse, .triangle, .diamond, .star].contains(shape)
@@ -3565,10 +3621,24 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawingFillControls.forEach { $0.isHidden = !creatingDrawing || !closed }
         let drawingShadowVisible = creatingDrawing && drawingDropShadow.state == .on
         drawingShadowControls.forEach { $0.isHidden = !drawingShadowVisible }
+        // Shipping names the stroke color "Color" for open tools.
+        let strokeLegend = EditorColors.text(closed ? "stroke_color" : "color")
+        drawingStrokeColorLabel?.stringValue = strokeLegend
+        drawingStrokeColor?.relabel(strokeLegend)
+        // Open tools have no Fill row: Drop shadow and its fields move up.
+        let fillHeight = closed ? 0 : 22 + panelSwatchHeight + 8
+        let shadowBase = drawingFillBottom - fillHeight
+        drawControlBaseY[ObjectIdentifier(drawingDropShadow)] = shadowBase
+        for (index, key) in ["color", "opacity", "blur", "offsetX", "offsetY"].enumerated() {
+            guard let field = drawingShadowFields[key] else { continue }
+            let y = CGFloat(index / 2) * 62 + shadowBase + 34
+            if let label = drawingShadowLabels[key] { drawControlBaseY[ObjectIdentifier(label)] = y }
+            drawControlBaseY[ObjectIdentifier(field)] = y + 22
+        }
         drawHelper.stringValue = wand
-            ? "Wand removes matching pixels from the frontmost visible image."
+            ? EditorInspectorCopy.eraser(wandContiguous.state == .on ? "wand_contiguous_hint" : "wand_everywhere_hint")
             : brush
-                ? "Pixels preview while dragging. Release commits one undo step; Escape cancels."
+                ? EditorInspectorCopy.eraser(shape == .erase ? "erase_hint" : "restore_hint")
                 : shape == .text
                     ? "Click once to create empty auto-width text, then type on the canvas."
                     : drawingShadowVisible ? "Drawing pixels update in the background while dragging."
@@ -3583,8 +3653,20 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         refreshDrawToolPreview()
         if shape != .wand { hideWandLoupe() }
-        // Other tools need no Wand/brush/text-default fields; collapse their space.
-        drawHelper.frame.origin.y = (drawingShadowVisible ? 526 : creatingDrawing ? 338 : 278) + shift
+        // Each tool's rows end at a fixed, font-independent offset.
+        let helperY: CGFloat
+        if wand {
+            helperY = 216 + 24 + 8
+        } else if brush {
+            helperY = 218 + EditorMarkedSlider.height + 8
+        } else if creatingText {
+            helperY = 290 + panelSwatchHeight + 8
+        } else if drawingShadowVisible {
+            helperY = shadowBase + 34 + 3 * 62
+        } else {
+            helperY = shadowBase + 32
+        }
+        drawHelper.frame.origin.y = helperY + shift
         drawHelper.superview?.frame.size.height = drawHelper.frame.maxY + 8
     }
 
@@ -3594,8 +3676,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let shape = drawShape
         guard !drawToolPreview.isHidden else { return }
         if shape.isBackgroundBrush {
-            let size = min(120, max(4, number(brushSize) ?? 28))
-            let softness = min(100, max(0, number(brushSoftness) ?? 18))
+            let size = brushSize?.value ?? 28
+            let softness = brushSoftness?.value ?? 18
             drawToolPreview.update(NativeDrawToolPreview.brush(size: size, softness: softness),
                                    stroke: .white, fill: nil, opacity: 1)
             return
@@ -3607,8 +3689,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawToolPreview.update(
             NativeDrawToolPreview.stroke(tool: tool, strokeWidth: width,
                                          strokeEnabled: !closed || drawingStroke.state == .on),
-            stroke: NSColor(hex: drawingStrokeColor.stringValue) ?? tokens.color("text"),
-            fill: closed && drawingFill.state == .on ? NSColor(hex: drawingFillColor.stringValue) : nil,
+            stroke: drawingStrokeColor.flatMap({ NSColor(hex: $0.selectedHex) }) ?? tokens.color("text"),
+            fill: closed && drawingFill.state == .on ? drawingFillColor.flatMap({ NSColor(hex: $0.selectedHex) }) : nil,
             opacity: CGFloat(opacity / 100))
     }
 
@@ -3744,7 +3826,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             layerGeometryChanged(field)
             return
         }
-        if [textSize, textColor, textPlateColor].contains(where: { $0 === field })
+        if field === textSize
             || textShadowFields.values.contains(where: { $0 === field }) {
             textControlsChanged(field: field.accessibilityLabel() ?? "field")
             return
@@ -3753,20 +3835,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             drawingShadowCustomized = true
             return
         }
-        if [drawingStrokeColor, drawingFillColor, drawingStrokeWidth, drawingOpacity]
-            .contains(where: { $0 === field }) {
+        if [drawingStrokeWidth, drawingOpacity].contains(where: { $0 === field }) {
             updateDrawingPreviewStyle()
             return
         }
         if [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) {
             publishCropSelection()
-            return
-        }
-        if field === brushSize || field === brushSoftness {
-            if field === brushSize, let value = Double(field.stringValue), value.isFinite {
-                drawOverlay.brushDiameter = CGFloat(min(120, max(4, value)))
-            }
-            refreshDrawToolPreview()
             return
         }
         if field === outputWidth || field === outputHeight {
@@ -4451,16 +4525,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func drawingRequestStyle(shape: EditorDrawOverlay.Shape, reportErrors: Bool) -> [String: Any]? {
-        guard let color = PreferencesController.normalizeHex(drawingStrokeColor.stringValue),
+        guard let color = PreferencesController.normalizeHex(drawingStrokeColor?.selectedHex ?? ""),
               let width = number(drawingStrokeWidth), (2...40).contains(width) else {
-            if reportErrors { showError("Enter drawing colors as #RGB or #RRGGBB and stroke width from 2 to 40.") }
+            if reportErrors { showError("Choose a drawing color and enter a stroke width from 2 to 40.") }
             return nil
         }
         let closed = [.rectangle, .ellipse, .triangle, .diamond, .star].contains(shape)
         var fill: Any = NSNull()
         if closed && drawingFill.state == .on {
-            guard let color = PreferencesController.normalizeHex(drawingFillColor.stringValue) else {
-                if reportErrors { showError("Enter drawing fill color as #RGB or #RRGGBB.") }
+            guard let color = PreferencesController.normalizeHex(drawingFillColor?.selectedHex ?? "") else {
+                if reportErrors { showError("Choose a drawing fill color.") }
                 return nil
             }
             fill = color
@@ -4495,14 +4569,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard let size = number(createTextSize), (8...512).contains(size) else {
             showError("Text size must be from 8 to 512."); return
         }
-        guard !createTextColor.stringValue.isEmpty else {
+        guard let color = createTextColor?.selectedHex, !color.isEmpty else {
             showError("Enter a text color."); return
         }
         let families = state.snapshot?.fontFamilies ?? [:]
         let family = families["sans"] != nil ? "sans" : families.keys.sorted().first ?? "sans"
         var create: [String: Any] = [
             "point": ["x": point.x, "y": point.y], "text": "",
-            "fontSize": size, "fontFamily": family, "color": createTextColor.stringValue,
+            "fontSize": size, "fontFamily": family, "color": color,
         ]
         if let preset = createTextPreset.selectedItem?.representedObject as? String {
             create["stylePreset"] = preset
@@ -4569,7 +4643,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     _ = self.state.fail(generation: generation)
                     current.finishRequested = nil
                     self.inlineTextInput = current
-                    self.showError("Couldn’t start inline text input: invalid shared response. Retry or Cancel.")
+                    self.showError("Couldn’t start inline text input: invalid shared response. Press Escape to retry.")
                     self.updateControls()
                     return
                 }
@@ -4596,7 +4670,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 }
                 current.finishRequested = nil
                 self.inlineTextInput = current
-                self.showError("Couldn’t start inline text input: \(error.localizedDescription). Retry or Cancel.")
+                self.showError("Couldn’t start inline text input: \(error.localizedDescription). Press Escape to retry.")
                 self.showInlineTextEditor()
             }
             self.updateControls()
@@ -4612,6 +4686,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
               var input = inlineTextInput, !input.finishInFlight else { return }
         input.bufferedText = inlineTextEditor.string
         inlineTextInput = input
+        updateInlineTextFrame() // Auto-width boxes grow as you type.
         sendBufferedTextUpdateIfNeeded()
     }
 
@@ -4641,7 +4716,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     guard self.state.fail(generation: generation) else { return }
                     current.finishRequested = nil
                     self.inlineTextInput = current
-                    self.showError("Inline text preview returned a stale token. Retry or Cancel.")
+                    self.showError("Inline text preview returned a stale token. Press Escape to retry.")
                     self.showInlineTextEditor(); self.updateControls()
                     return
                 }
@@ -4659,7 +4734,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 guard self.state.fail(generation: generation) else { return }
                 if current.finishRequested == true { current.finishRequested = nil }
                 self.inlineTextInput = current
-                self.showError("Inline text preview failed: \(error.localizedDescription). Retry or Cancel.")
+                self.showError("Inline text preview failed: \(error.localizedDescription). Press Escape to retry.")
                 if current.finishRequested == false { self.sendFinishTextInput() }
                 else { self.window.makeFirstResponder(self.inlineTextEditor) }
             }
@@ -4677,7 +4752,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineTextInput = input
         if input.requestInFlight { return }
         if input.layerID == nil {
-            if commit { sendBeginTextInput() }
+            // Shipping has no Cancel: after a failed Begin, finishing retries
+            // unless the box is blank, which leaves the document untouched.
+            let blank = input.bufferedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if commit && !blank { sendBeginTextInput() }
             else { dismissPendingTextInput() }
             return
         }
@@ -4710,7 +4788,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     guard self.state.fail(generation: generation) else { return }
                     current.finishRequested = nil
                     self.inlineTextInput = current
-                    self.showError("Inline text finish returned an active token. Retry or Cancel.")
+                    self.showError("Inline text finish returned an active token. Press Escape to retry.")
                     self.showInlineTextEditor(); self.updateControls()
                     return
                 }
@@ -4732,7 +4810,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 guard self.state.fail(generation: generation) else { return }
                 current.finishRequested = nil
                 self.inlineTextInput = current
-                self.showError("Couldn’t finish inline text: \(error.localizedDescription). Retry or Cancel.")
+                self.showError("Couldn’t finish inline text: \(error.localizedDescription). Press Escape to retry.")
                 self.showInlineTextEditor()
                 self.updateControls()
             }
@@ -4756,12 +4834,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         } ?? true)
         return shadowMatches && textEditor.string == style.text && textSize.stringValue == format(style.fontSize)
             && (textFamily.selectedItem?.representedObject as? String) == style.fontFamily
-            && textColor.stringValue == style.color
-            && textTraits.isSelected(forSegment: 0) == style.bold
-            && textTraits.isSelected(forSegment: 1) == style.italic
-            && textAlignment.selectedSegment == ["left", "center", "right"].firstIndex(of: style.align)
+            && textColor?.selectedHex == style.color
+            && textFormat?.bold == style.bold && textFormat?.italic == style.italic
+            && textFormat?.align == style.align
             && textPlate.indexOfSelectedItem == (style.background == nil ? 0 : style.roundedBackground ? 2 : 1)
-            && (style.background == nil || textPlateColor.stringValue == style.background)
+            && (style.background == nil || textPlateColor?.selectedHex == style.background)
             && (textPlate.indexOfSelectedItem != 0 || (textPresetRounded ?? style.roundedBackground) == style.roundedBackground)
             && (textShadow.state == .on) == style.dropShadow
             && (textOutline.state == .on) == style.outlined
@@ -4774,7 +4851,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     /// Menus, segments and checkboxes: each change is its own undo step.
-    @objc private func textControlToggled() { textControlsChanged(field: nil) }
+    @objc private func textControlToggled() {
+        layoutLayerInspectorTail()
+        textControlsChanged(field: nil)
+    }
 
     @objc private func stageTextPreset() {
         let index = textPreset.indexOfSelectedItem - 1
@@ -4786,7 +4866,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }) else { return }
         textFamily.selectItem(at: family)
         if let color = preset.background {
-            if textPlate.indexOfSelectedItem == 0 { textPlateColor.stringValue = color }
+            if textPlate.indexOfSelectedItem == 0 { textPlateColor?.selectedHex = color }
             textPlate.selectItem(at: preset.roundedBackground ? 2 : 1)
         } else { textPlate.selectItem(at: 0) }
         textOutline.state = preset.outlined ? .on : .off
@@ -4797,6 +4877,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             createTextPreset.selectItem(at: choice)
         }
         textPreset.selectItem(at: 0)
+        layoutLayerInspectorTail()
         textControlsChanged(field: nil)
     }
 
@@ -4832,10 +4913,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         if textEditor.string != style.text && window.firstResponder !== textEditor { textEditor.string = style.text }
         show(textSize, format(style.fontSize))
-        show(textColor, style.color); show(textPlateColor, style.background ?? "#ffffff")
-        textTraits.setSelected(style.bold, forSegment: 0)
-        textTraits.setSelected(style.italic, forSegment: 1)
-        textAlignment.selectedSegment = ["left", "center", "right"].firstIndex(of: style.align) ?? 0
+        textColor?.selectedHex = style.color
+        textPlateColor?.selectedHex = style.background ?? "#ffffff"
+        textFormat?.bold = style.bold; textFormat?.italic = style.italic
+        textFormat?.align = style.align
         textPlate.selectItem(at: style.background == nil ? 0 : style.roundedBackground ? 2 : 1)
         textShadow.state = style.dropShadow ? .on : .off
         textOutline.state = style.outlined ? .on : .off
@@ -4876,23 +4957,23 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard let style = selectedLayer?.textStyle else { return nil }
         guard let size = Double(textSize.stringValue), size.isFinite,
               size == style.fontSize || (8...512).contains(size) else { return nil }
-        guard PreferencesController.normalizeHex(textColor.stringValue) != nil
-                || textColor.stringValue == style.color else { return nil }
+        let color = textColor?.selectedHex ?? style.color
+        guard PreferencesController.normalizeHex(color) != nil || color == style.color else { return nil }
         var patch: [String: Any] = [:]
         if textEditor.string != style.text { patch["text"] = textEditor.string }
         if size != style.fontSize { patch["fontSize"] = size }
         if let family = textFamily.selectedItem?.representedObject as? String, family != style.fontFamily {
             patch["fontFamily"] = family
         }
-        if textTraits.isSelected(forSegment: 0) != style.bold { patch["bold"] = !style.bold }
-        if textTraits.isSelected(forSegment: 1) != style.italic { patch["italic"] = !style.italic }
-        let align = ["left", "center", "right"][max(0, textAlignment.selectedSegment)]
-        if align != style.align { patch["align"] = align }
-        if textColor.stringValue != style.color { patch["color"] = textColor.stringValue }
-        let background = textPlate.indexOfSelectedItem == 0 ? nil : textPlateColor.stringValue
+        if let bold = textFormat?.bold, bold != style.bold { patch["bold"] = bold }
+        if let italic = textFormat?.italic, italic != style.italic { patch["italic"] = italic }
+        if let align = textFormat?.align, align != style.align { patch["align"] = align }
+        if color != style.color { patch["color"] = color }
+        let plateColor = textPlateColor?.selectedHex ?? style.background ?? "#ffffff"
+        let background = textPlate.indexOfSelectedItem == 0 ? nil : plateColor
         if background != nil {
-            guard PreferencesController.normalizeHex(textPlateColor.stringValue) != nil
-                    || textPlateColor.stringValue == style.background else { return nil }
+            guard PreferencesController.normalizeHex(plateColor) != nil
+                    || plateColor == style.background else { return nil }
         }
         if background != style.background {
             if let background { patch["background"] = background }
@@ -4923,12 +5004,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func removeImageBackground(at point: NSPoint) {
         guard !state.busy else { return }
-        guard let value = Double(wandTolerance.stringValue),
-              value >= 0, value <= 255, value == value.rounded() else {
-            showError("Wand tolerance must be a whole number from 0 to 255."); return
-        }
-        let tolerance = value.rounded()
-        wandTolerance.stringValue = String(Int(tolerance))
+        // The slider's whole-number value is the wand's own 0–255 channel
+        // distance; shipping stops the slider at 120.
+        let tolerance = wandTolerance?.value ?? 36
         command(["operation": "remove_image_background",
                  "point": ["x": point.x, "y": point.y],
                  "tolerance": tolerance, "contiguous": wandContiguous.state == .on],
@@ -4943,19 +5021,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func backgroundBrushRequest(mode: EditorDrawOverlay.Shape, points: [NSPoint],
                                         reportErrors: Bool) -> [String: Any]? {
-        guard let size = Double(brushSize.stringValue), size >= 4, size <= 120,
-              size == size.rounded() else {
-            if reportErrors { showError("Brush diameter must be a whole number from 4 to 120.") }
-            return nil
-        }
-        guard let softness = Double(brushSoftness.stringValue), softness >= 0, softness <= 100,
-              softness == softness.rounded() else {
-            if reportErrors { showError("Brush softness must be a whole number from 0 to 100.") }
-            return nil
-        }
-        if reportErrors {
-            brushSize.stringValue = String(Int(size)); brushSoftness.stringValue = String(Int(softness))
-        }
+        // The sliders only produce whole numbers inside the shipping ranges.
+        let size = brushSize?.value ?? 28
+        let softness = brushSoftness?.value ?? 18
         drawOverlay.brushDiameter = CGFloat(size)
         return ["operation": "paint_image_background", "points": points.map { ["x": $0.x, "y": $0.y] },
                 "size": size, "softness": softness, "mode": mode.rawValue]
@@ -5185,23 +5253,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func publishTextInputPresentation(_ presentation: EditorPresentation) {
         publish(presentation, resetCrop: false)
+        updateInlineTextFrame()
     }
 
     private func showInlineTextEditor(selectAtEnd: Bool = false) {
-        guard let input = inlineTextInput else { return }
-        let layer = input.layerID.flatMap { id in state.snapshot?.layers.first(where: { $0.id == id }) }
-        let style = layer?.textStyle
-        let scale = presentedImageRect.width / max(1, CGFloat(state.snapshot?.width ?? 1))
-        // Pinned font bytes live inside the shared Rust session and are not an
-        // AppKit bundle resource. The native responder intentionally uses the
-        // system editing face for caret/IME ownership; shared preview/final pixels
-        // remain authoritative for family, traits, shaping and glyph coverage.
-        inlineTextEditor.font = .systemFont(ofSize: min(96, max(13, CGFloat(style?.fontSize ?? input.fontSize) * scale)))
-        inlineTextEditor.textColor = tokens.color("text")
-        inlineTextEditor.alignment = style?.align == "center" ? .center
-            : style?.align == "right" ? .right : .left
-        inlineTextScroll.isHidden = false
-        inlineTextDoneButton.isHidden = false; inlineTextCancelButton.isHidden = false
+        guard inlineTextInput != nil, let inlineTextFrame else { return }
+        inlineTextFrame.isHidden = false
         updateInlineTextFrame()
         publishComparison() // Inline text fades the comparison away.
         window.makeFirstResponder(inlineTextEditor)
@@ -5212,59 +5269,123 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func hideInlineTextEditor() {
         defer { publishComparison() }
-        inlineTextScroll.isHidden = true
-        inlineTextDoneButton.isHidden = true
-        inlineTextCancelButton.isHidden = true
+        inlineTextFrame?.isHidden = true
+        inlineTextStyleKey = nil
     }
 
-    private func updateInlineTextFrame() {
-        guard !inlineTextScroll.isHidden, let input = inlineTextInput else { return }
-        let layer = input.layerID.flatMap { id in state.snapshot?.layers.first(where: { $0.id == id }) }
-        let image = presentedImageRect
-        let visible = viewportInput.bounds.standardized
-        guard image.width > 0, image.height > 0, visible.width > 0, visible.height > 0,
-              image.minX.isFinite, image.minY.isFinite, image.width.isFinite, image.height.isFinite,
-              visible.minX.isFinite, visible.minY.isFinite,
-              visible.width.isFinite, visible.height.isFinite,
-              let snapshot = state.snapshot else { return }
-        let scale = image.width / CGFloat(snapshot.width)
-        let bounds: NSRect
-        if let outline = layer?.selectionOutline, !outline.isEmpty {
-            let xs = outline.map(\.x), ys = outline.map(\.y)
-            bounds = NSRect(x: xs.min()!, y: ys.min()!,
-                            width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
-        } else {
-            let fontSize = CGFloat(layer?.textStyle?.fontSize ?? input.fontSize)
-            let x = layer.map { CGFloat($0.x) } ?? input.anchor.x
-            let y = layer.map { CGFloat($0.y) } ?? input.anchor.y
-            bounds = NSRect(x: x, y: y,
-                            width: max(160, fontSize * 8), height: max(44, fontSize * 1.6))
+    /// The layer the inline editor draws: the session's transient layer once
+    /// Begin is accepted, else the existing layer or the layer a Text click
+    /// creates (`inline_text_layout`, shared with the wgpu host).
+    private func inlineTextLayout() -> NativeInlineTextLayout? {
+        guard let input = inlineTextInput else { return nil }
+        let target = input.beginTarget
+        let existing = target?["kind"] as? String == "existing" ? target?["id"] as? String : nil
+        if let id = input.layerID ?? existing, let element = documentTextElement(id),
+           let layout = NativeInlineTextLayout.resolve(element: element) {
+            return layout
         }
-        // The native responder is intentionally not a WYSIWYG text layer. Keep
-        // its usable minimum and actions in the viewport even when a narrow
-        // image, zoom, or pan moves the authoritative shared preview offscreen.
-        // Intersecting with an offscreen image can produce CGRect.null, whose
-        // infinite origin must never be assigned to an AppKit view frame.
-        let desiredWidth = min(visible.width, max(220, bounds.width * scale + 12))
-        let desiredHeight = min(visible.height, max(96, bounds.height * scale + 12))
-        let desiredX = image.minX + bounds.minX * scale - 6
-        let desiredY = image.minY + bounds.minY * scale - 6
-        let editorFrame = NSRect(
-            x: min(max(visible.minX, desiredX), visible.maxX - desiredWidth),
-            y: min(max(visible.minY, desiredY), visible.maxY - desiredHeight),
-            width: desiredWidth, height: desiredHeight)
-        inlineTextScroll.frame = editorFrame
-        let buttonWidth: CGFloat = 68, buttonHeight: CGFloat = 28, gap: CGFloat = 6
-        let buttonsWidth = buttonWidth * 2 + gap
-        let candidateY = editorFrame.maxY + gap + buttonHeight <= visible.maxY
-            ? editorFrame.maxY + gap : editorFrame.minY - gap - buttonHeight
-        let buttonsY = min(max(visible.minY, candidateY), visible.maxY - buttonHeight)
-        let buttonsX = min(max(visible.minX, editorFrame.maxX - buttonsWidth),
-                           visible.maxX - buttonsWidth)
-        inlineTextCancelButton.frame = NSRect(x: buttonsX, y: buttonsY,
-                                              width: buttonWidth, height: buttonHeight)
-        inlineTextDoneButton.frame = NSRect(x: buttonsX + buttonWidth + gap, y: buttonsY,
-                                            width: buttonWidth, height: buttonHeight)
+        if let create = target?["create"] as? [String: Any], let layout = NativeInlineTextLayout.resolve(create: create) {
+            return layout
+        }
+        // A layer the shared layout cannot read still gets a usable box at
+        // the click, in the default face.
+        return NativeInlineTextLayout.resolve(create: [
+            "point": ["x": Double(input.anchor.x), "y": Double(input.anchor.y)], "text": "",
+            "fontSize": min(512, max(8, input.fontSize)), "fontFamily": "sans", "color": "#111318",
+        ])
+    }
+
+    private func documentTextElement(_ id: String) -> [String: Any]? {
+        guard let json = state.snapshot?.documentJSON,
+              let document = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+              let elements = document["elements"] as? [[String: Any]] else { return nil }
+        return elements.first { $0["id"] as? String == id && $0["kind"] as? String == "text" }
+    }
+
+    /// Shipping inline editor geometry: the layer's plate or glyph box (at
+    /// least 48 × 28 pt) scaled to the canvas, its padding, face, colour,
+    /// outline and alignment, rotated about the frame centre. The published
+    /// preview omits this layer while the input is active.
+    private func updateInlineTextFrame() {
+        guard let inlineTextFrame, !inlineTextFrame.isHidden, let snapshot = state.snapshot,
+              let layout = inlineTextLayout() else { return }
+        let image = presentedImageRect
+        guard image.width > 0, image.height > 0, snapshot.width > 0,
+              image.minX.isFinite, image.minY.isFinite, image.width.isFinite else { return }
+        let scale = image.width / CGFloat(snapshot.width)
+        let pad = layout.padding.map { $0 * scale } // top, right, bottom, left
+        let alpha = min(1, max(0, layout.opacity / 100))
+        let color = NSColor(hex: String(layout.color.prefix(7))) ?? tokens.color("text")
+        let font = EditorTextFaces.font(family: layout.fontFamily, name: snapshot.fontFamilies[layout.fontFamily],
+                                        bold: layout.bold, italic: layout.italic,
+                                        size: max(1, layout.fontSize * scale))
+        let lineHeight = max(1, layout.lineHeight * scale)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = layout.align == "center" ? .center : layout.align == "right" ? .right : .left
+        paragraph.minimumLineHeight = lineHeight; paragraph.maximumLineHeight = lineHeight
+        paragraph.lineBreakMode = layout.autoWidth ? .byClipping : .byWordWrapping
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: font, .paragraphStyle: paragraph,
+            // CSS line-height centres the glyphs in each line box.
+            .baselineOffset: max(0, (lineHeight - (font.ascender - font.descender)) / 2),
+            .foregroundColor: layout.outlined ? NSColor.clear : color.withAlphaComponent(alpha),
+        ]
+        if layout.outlined, layout.fontSize > 0 {
+            // `-webkit-text-stroke` over a transparent fill; a positive width strokes only.
+            attributes[.strokeColor] = color.withAlphaComponent(alpha)
+            attributes[.strokeWidth] = layout.outlineWidth / layout.fontSize * 100
+        }
+        let text = inlineTextEditor.string
+        let measured = NSAttributedString(string: text.isEmpty ? " " : text, attributes: attributes)
+        let acceptedWidth = max(0, layout.frame.width * scale - pad[1] - pad[3])
+        let wrapWidth = layout.autoWidth ? CGFloat.greatestFiniteMagnitude : max(1, acceptedWidth)
+        let bounds = measured.boundingRect(with: NSSize(width: wrapWidth, height: .greatestFiniteMagnitude),
+                                           options: [.usesLineFragmentOrigin])
+        // Auto-width labels grow with the buffer before the session refits
+        // them; the accepted box keeps its left edge, centre or right edge.
+        let contentWidth = layout.autoWidth ? ceil(bounds.width) + 2 : acceptedWidth
+        let trailingLine: CGFloat = text.hasSuffix("\n") ? lineHeight : 0
+        let contentHeight = max(lineHeight, ceil(bounds.height) + trailingLine)
+        let width = max(48, contentWidth + pad[1] + pad[3])
+        let height = max(28, contentHeight + pad[0] + pad[2])
+        let acceptedLeft = image.minX + layout.frame.minX * scale
+        let acceptedRight = acceptedLeft + layout.frame.width * scale
+        let left: CGFloat
+        if layout.autoWidth && layout.align == "center" {
+            left = (acceptedLeft + acceptedRight) / 2 - width / 2
+        } else if layout.autoWidth && layout.align == "right" {
+            left = acceptedRight - width
+        } else {
+            left = acceptedLeft
+        }
+        let textFrame = NSRect(x: left, y: image.minY + layout.frame.minY * scale, width: width, height: height)
+        guard textFrame.minX.isFinite, textFrame.minY.isFinite else { return }
+        let outset = inlineTextFrame.outset
+        inlineTextFrame.frameCenterRotation = 0
+        inlineTextFrame.frame = textFrame.insetBy(dx: -outset, dy: -outset)
+        // The superview is flipped (y down), so a positive angle turns
+        // clockwise like the document's rotation.
+        inlineTextFrame.frameCenterRotation = layout.rotation * 180 / .pi
+        inlineTextFrame.plateColor = layout.background
+            .flatMap { NSColor(hex: String($0.prefix(7))) }?.withAlphaComponent(alpha)
+        inlineTextFrame.plateRadius = layout.plateRadius * scale
+        let editorFrame = NSRect(x: outset + pad[3], y: outset + pad[0],
+                                 width: max(1, width - pad[1] - pad[3]), height: max(1, height - pad[0] - pad[2]))
+        inlineTextEditor.frame = editorFrame
+        inlineTextEditor.textContainer?.containerSize = NSSize(width: editorFrame.width,
+                                                               height: CGFloat.greatestFiniteMagnitude)
+        inlineTextEditor.insertionPointColor = color
+        inlineTextEditor.selectedTextAttributes = [
+            .backgroundColor: tokens.color("theme-accent").withAlphaComponent(0.2),
+        ]
+        // Restyling the storage would end an IME composition; wait for it.
+        let key = "\(font.fontName):\(font.pointSize):\(lineHeight):\(layout.align):\(layout.color):"
+            + "\(layout.outlined):\(alpha)"
+        inlineTextEditor.typingAttributes = attributes
+        if key != inlineTextStyleKey, !inlineTextEditor.hasMarkedText(), let storage = inlineTextEditor.textStorage {
+            storage.setAttributes(attributes, range: NSRange(location: 0, length: storage.length))
+            inlineTextStyleKey = key
+        }
     }
 
     private func updateDrawing() {
@@ -5279,10 +5400,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let active = sectionControl?.selectedSegment == Section.draw
             && state.snapshot != nil && !state.busy && inputResolved
         eraserMode?.isEnabled = state.snapshot != nil && !state.busy && inputResolved
-        wandTolerance.isEnabled = active; wandContiguous.isEnabled = active
-        brushSize.isEnabled = active; brushSoftness.isEnabled = active
+        wandTolerance?.isEnabled = active; wandContiguous.isEnabled = active
+        brushSize?.isEnabled = active; brushSoftness?.isEnabled = active
         createTextPreset.isEnabled = active && createTextPreset.numberOfItems > 1
-        createTextSize.isEnabled = active; createTextColor.isEnabled = active
+        createTextSize.isEnabled = active; createTextColor?.isEnabled = active
         // Selected text edits live under Select and stay editable while an
         // edit applies; changes made meanwhile queue (see `liveEdit`).
         let textReady = sectionControl?.selectedSegment == Section.layers && state.snapshot != nil
@@ -5290,16 +5411,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textEditor.isEditable = textReady
         textFamily.isEnabled = textReady && textFamily.numberOfItems > 1
         textPreset.isEnabled = textReady && textPreset.numberOfItems > 1
-        let textFields: [NSControl] = [textSize, textColor, textTraits,
-                                       textAlignment, textPlate, textPlateColor, textShadow, textOutline]
+        let textFields: [NSControl] = [textSize, textPlate, textShadow, textOutline]
         textFields.forEach { $0.isEnabled = textReady }
+        textFormat?.isEnabled = textReady
+        textColor?.isEnabled = textReady; textPlateColor?.isEnabled = textReady
         textShadowFields.values.forEach { $0.isEnabled = textReady }
-        let inlineReady = inlineTextInput != nil && inlineTextInput?.finishInFlight != true
         // Freeze the native responder only during an accepted Finish and restore
         // its normal state once that input has resolved.
         inlineTextEditor.isEditable = inlineTextInput?.finishInFlight != true
-        inlineTextDoneButton?.isEnabled = inlineReady
-        inlineTextCancelButton?.isEnabled = inlineReady
         drawOverlay.drawingEnabled = active
         if !active || drawShape != .wand { hideWandLoupe() }
         selectionOverlay.selectionEnabled = sectionControl?.selectedSegment == Section.layers
@@ -5332,11 +5451,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         let text = layer?.kind == .text
         for control in textControls where control !== textShadowPanel { control.isHidden = !text }
-        if text, let first = textControls.first {
-            let offset = y - first.frame.minY
-            for control in textControls { control.frame.origin.y += offset }
+        if text {
             updateTextShadowControls()
-            y = max(textShadow.frame.maxY, textShadowPanel.frame.maxY) + 12
+            y = layoutTextControls(top: y) + 12
         } else {
             textShadowPanel.isHidden = true
         }
@@ -6252,11 +6369,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textEditor.textColor = tokens.color("text")
         textEditor.insertionPointColor = tokens.color("text")
         textEditor.font = .systemFont(ofSize: tokens.number("text-md"))
-        inlineTextScroll.backgroundColor = tokens.color("surface-raised")
-        inlineTextScroll.layer?.borderColor = tokens.color("theme-accent").cgColor
-        inlineTextEditor.backgroundColor = tokens.color("surface-raised")
-        inlineTextEditor.textColor = tokens.color("text")
-        inlineTextEditor.insertionPointColor = tokens.color("text")
+        // The inline editor draws in the layer's own style; only its outline
+        // and selection follow the theme.
+        inlineTextFrame?.tokens = tokens
+        inlineTextStyleKey = nil
+        updateInlineTextFrame()
+        for slider in [wandTolerance, brushSize, brushSoftness] { slider?.tokens = tokens }
+        textFormat?.tokens = tokens
+        for swatches in [createTextColor, drawingStrokeColor, drawingFillColor, textColor, textPlateColor] {
+            swatches?.tokens = tokens
+        }
         cropOverlay.tokens = tokens
         drawOverlay.fillColor = tokens.color("theme-accent").withAlphaComponent(0.22)
         drawOverlay.strokeColor = tokens.color("theme-accent")

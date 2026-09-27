@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, sync::Arc};
 use captures_app::{
     editor::{Element, Rect, TextElement},
     editor_text::{
-        FONT_FAMILY_LABELS, TEXT_STYLE_PRESETS, fit_auto_width, font_family_options, layout,
-        resize, selection_bounds,
+        FONT_FAMILY_LABELS, TEXT_STYLE_PRESETS, fit_auto_width, font_family_options,
+        inline_editor_layout, layout, resize, selection_bounds,
     },
 };
 use captures_image::text::{TextRenderer, TextStyle};
@@ -289,5 +289,53 @@ fn invalid_input_and_measurement_fail_without_mutating_the_element() {
         .unwrap()
         .width,
         188.
+    );
+}
+
+#[test]
+fn inline_editor_layout_matches_shipping_frame_padding_radius_and_rotation() {
+    let mut element: TextElement = serde_json::from_value(serde_json::json!({
+        "id": "label", "kind": "text", "x": 40.0, "y": 30.0, "visible": true, "locked": false,
+        "opacity": 100, "blendMode": "source-over", "text": "Hello\nworld", "fontSize": 20.0,
+        "width": 120.0, "fontFamily": "sans", "bold": false, "italic": false, "align": "left",
+        "color": "#ff3b5c", "background": null, "outlined": false, "roundedBackground": false
+    }))
+    .unwrap();
+    let plain = inline_editor_layout(&element).unwrap();
+    // No plate: the glyph box, two 1.25-em rows, and only the optical nudge.
+    assert_eq!(
+        plain.frame,
+        Rect {
+            x: 40.,
+            y: 30.,
+            width: 120.,
+            height: 50.
+        }
+    );
+    assert!((plain.padding[0] - 1.4).abs() < 1e-9);
+    assert_eq!(plain.padding[1..], [0., 0., 0.]);
+    assert_eq!(
+        (plain.plate_radius, plain.outline_width, plain.rotation),
+        (0., 0., 0.)
+    );
+    assert!(!plain.auto_width);
+
+    element.background = Some("#111318".into());
+    element.rounded_background = true;
+    element.outlined = true;
+    element.auto_width = Some(true);
+    element.base.rotation = Some(0.5);
+    let plate = inline_editor_layout(&element).unwrap();
+    // textBackgroundPad: 0.36 em sideways, 0.22 em vertically, around the box.
+    assert!((plate.frame.x - 32.8).abs() < 1e-9 && (plate.frame.y - 25.6).abs() < 1e-9);
+    assert!((plate.frame.width - 134.4).abs() < 1e-9 && (plate.frame.height - 58.8).abs() < 1e-9);
+    let [top, right, bottom, left] = plate.padding;
+    assert!((top - 5.8).abs() < 1e-9 && (bottom - 3.0).abs() < 1e-9);
+    assert!((right - 7.2).abs() < 1e-9 && (left - 7.2).abs() < 1e-9);
+    // min(shortest × 0.28, size × 0.34, shortest / 2).
+    assert!((plate.plate_radius - 6.8).abs() < 1e-9);
+    assert_eq!(
+        (plate.outline_width, plate.rotation, plate.auto_width),
+        (1.6, 0.5, true)
     );
 }

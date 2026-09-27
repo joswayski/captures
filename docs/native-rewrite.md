@@ -546,7 +546,10 @@ the last solid color (initially `#f7f7f5`). The shared renderer composites benea
 existing layers. Color changes participate in undo/redo and draft reopen; copy/export
 use the newly rendered pixels. These are canvas fills, not image-background removal
 or text backgrounds. Stroke, fill and shadow colors in Layers → Annotation style use
-the same swatch row and apply at once. Text style menus show the shipping
+the same swatch row and apply at once, as do selected text's Text color and
+Background color, the new-text Color and the drawing defaults' Stroke color (Color
+for open tools) and Fill color; selected text shows shipping's five-column B, I and
+alignment icon buttons (`editor_chrome::text_format`). Text style menus show the shipping
 preview chips, preset labels use shipping title case (Mono Box, Rounded Box) and
 the font menu lists Sans serif, Serif, Monospace and Rounded rather than pinned
 asset names. AppKit Geometry scrolls to keep
@@ -560,8 +563,9 @@ one undoable render-before-publish transaction. Invalid/no-match requests leave
 history and assets unchanged; retained originals survive draft reopen. The existing
 100-million decoded-pixel asset budget also counts retained edits/undo sources.
 Both native Draw panels now bind Wand clicks through the existing viewport mapping
-and serialized worker. Tolerance defaults to 36, matching Tauri, and accepts the
-engine's full 0–255 range; contiguous removal defaults on. Pan and off-image clicks do not submit edits.
+and serialized worker. Tolerance defaults to 36 on shipping's `RangeSlider`
+(0–120 with 0/36/80/120 marks; values are the engine's 0–255 channel distance,
+unscaled, as in Tauri); contiguous removal defaults on. Pan and off-image clicks do not submit edits.
 AppKit's Draw panel scrolls at minimum size. X11 coverage exercises exact alpha,
 disconnected-color global removal, locked images, no-match recovery, undo/redo,
 draft reopen and copied PNG pixels; AppKit has bridge and rendered-state tests.
@@ -575,8 +579,8 @@ scaling, and matches Tauri's pixel-center stamps, feathering, interpolation and 
 rounding. Changed strokes publish one undoable owned asset, retain the first original,
 and clear canvas fill; no-op strokes preserve fill, pixels and redo. Restore reads
 that retained original, including after draft reopen. Shared Rust/TypeScript vectors
-check exact pixels. Both native Draw panels now connect Erase/Restore with diameter
-28 (4–120) and softness 18 (0–100). They sample press/movement/release into one
+check exact pixels. Both native Draw panels now connect Erase/Restore with shipping's
+Size (28 px, 4–120) and Softness (18%, Hard/50%/Soft marks) sliders and hint copy. They sample press/movement/release into one
 worker command, including stationary release stamps that affect soft-edge alpha.
 Both hosts render live brush pixels on the serialized worker from the complete
 gesture and published assets, with one in-flight render and one replaceable pending
@@ -779,31 +783,38 @@ and a later new-text Style choice wins. Selection, snapshots, undo and reopening
 do not carry this choice.
 AppKit now starts an on-canvas native multiline responder when Text places a new
 layer or hits an existing visible, unlocked text layer; double-clicking such a
-layer from Select starts the same transaction. The responder retains local typing,
+layer from Select starts the same transaction. Like Tauri's
+`.screenshot-inline-text-frame`, an `NSTextView` sits on the canvas in the layer's
+bundled face (registered from `captures_editor_chrome_v1` `text_face`), size, colour,
+opacity, outline stroke, plate, padding and alignment, and `frameCenterRotation`
+turns it with the layer; `inline_text_layout` supplies the shared frame. The
+session preview omits that layer while it is typed. The responder retains local typing,
 selection, clipboard and marked-text ownership while shared preview rendering is in
 flight, coalescing replacements to the newest buffer. Return inserts a newline;
-Done, Escape or focus loss commits one undo step, while Cancel restores the complete
-pre-input document. Blank new input is discarded and blank existing input removes
-the layer. Save, copy, import and unrelated document actions remain blocked until
+Escape or clicking away commits one undo step, as shipping has no Done/Cancel.
+Blank new input is discarded and blank existing input removes the layer; after a
+failed Begin, Escape retries and a cleared box is dismissed. Save, copy, import and unrelated document actions remain blocked until
 the transaction resolves. Begin/update/finish failures keep retryable input, and
-close/quit drain accepted work, preserving either the latest commit buffer or a
-pending cancellation before draft handling. Shared pinned-font
-layout and pixels remain authoritative: the AppKit composing field intentionally
-uses the UI font and an axis-aligned clipped box, so exact family glyphs, text
-effects, blending and rotated composing-field geometry remain parity work. Existing
-inspector styling remains staged outside active composition. Automated macOS
+close/quit drain accepted work, preserving the latest commit buffer before draft
+handling. TextKit line layout approximates CSS line boxes; blend modes and a
+draft's own non-bundled font (which falls back to the system face) remain parity
+work. Existing inspector styling remains staged outside active composition. Automated macOS
 fixtures cover light/dark normal, 760×540 and failure states, but physical macOS
 IME, VoiceOver, keyboard layout and mixed-scale acceptance remain unverified.
 No host text parity gate is closed.
 The Windows/Linux candidate now connects a multiline on-canvas composing field
 to the shared transient text transaction. New placement and existing Text-tool hits
 retain a local typing buffer while one worker update fits/renders at a time.
-Done/Escape/outside-click/close finish one undoable edit; Cancel restores the prior
-document, selection and encoded output. Empty new text creates nothing; empty
-existing text removes that layer. Quit drains the latest buffer before draft saving,
-and failed updates retain it for retry/cancellation. Output actions cannot publish
-unfinished pixels. The bounded composing field is unrotated and uses the UI font,
-not exact document typography; shared pinned-font pixels remain authoritative.
+Escape, outside clicks and close finish one undoable edit (shipping has no
+Done/Cancel). The box is painted in the layer's transform: bundled face, size,
+colour, opacity, plate, padding, alignment and rotation, with the accent outline
+`--s-3` outside it, while the session preview omits that layer. Rotated labels
+rotate their glyphs, plate and caret, but egui keeps the selection highlight and
+pointer caret placement unrotated; outlined labels draw filled glyphs. Empty new
+text creates nothing; empty existing text removes that layer, and a cleared box
+after a failed Begin is dismissed. Quit drains the latest buffer before draft
+saving, and failed updates retain it for retry. Output actions cannot publish
+unfinished pixels.
 Private X11/software-GL exercises are implementation evidence, not Windows,
 Wayland, physical input, IME or accessibility acceptance. AppKit composition is a
 separate host slice. This does not close screenshot-editor or visual parity.

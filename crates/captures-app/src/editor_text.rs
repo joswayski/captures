@@ -452,3 +452,80 @@ pub fn fit_auto_width(
     }
     Ok(fitted)
 }
+
+/// Shipping `.screenshot-inline-text-frame` / `inlineTextLayout`: where a
+/// host draws the text it is typing, in unscaled document units. The frame is
+/// the painted plate or glyph box (`textLayoutBounds`, shadow excluded) and
+/// rotates about its centre, like the canvas paint. Hosts scale it by the
+/// display scale and keep shipping's 48 × 28 px minimum.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct InlineEditorLayout {
+    pub frame: Rect,
+    /// Textarea padding: plate inset plus the optical-centre nudge
+    /// (`TEXT_OPTICAL_CENTER_NUDGE_RATIO`), top/right/bottom/left.
+    pub padding: [f64; 4],
+    /// Radians, clockwise in the y-down document, about the frame centre.
+    pub rotation: f64,
+    /// `TEXT_LINE_HEIGHT_RATIO` × font size.
+    pub line_height: f64,
+    /// Rounded Box corner radius, or 0.
+    pub plate_radius: f64,
+    /// `textOutlineWidth` for outlined labels, else 0.
+    pub outline_width: f64,
+    /// Auto-width labels grow instead of wrapping (`white-space: pre`).
+    pub auto_width: bool,
+}
+
+/// Shipping inline editor minimum (`Math.max(48, …)`, `Math.max(28, …)`), in
+/// screen pixels after display scaling.
+pub const INLINE_EDITOR_MIN_SIZE: (f64, f64) = (48., 28.);
+
+/// Geometry for the host-drawn inline text editor. Uses the same estimated
+/// wrapping as shipping's layout box; hosts wrap glyphs with real metrics.
+pub fn inline_editor_layout(element: &TextElement) -> Result<InlineEditorLayout, String> {
+    validate(element)?;
+    let size = element.font_size;
+    let width = element.width.max(minimum_width(size));
+    let rows = wrap(&element.text, width, &mut |line| estimate(line, size))?;
+    let line_height = size * 1.25;
+    let content_height = rows.len().max(1) as f64 * line_height;
+    let plate = element
+        .background
+        .as_deref()
+        .is_some_and(|color| !color.is_empty());
+    let (pad_x, pad_y) = if plate {
+        (size * 0.36, size * 0.22)
+    } else {
+        (0., 0.)
+    };
+    let frame = Rect {
+        x: element.base.x - pad_x,
+        y: element.base.y - pad_y,
+        width: width + pad_x * 2.,
+        height: content_height + pad_y * 2.,
+    };
+    let optical = size * 0.07;
+    let shortest = frame.width.min(frame.height);
+    let plate_radius = if plate && element.rounded_background && shortest > 0. {
+        (shortest * 0.28).min(size * 0.34).min(shortest / 2.)
+    } else {
+        0.
+    };
+    let rotation = element.base.rotation();
+    if !rotation.is_finite() {
+        return Err("Text rotation must be finite.".into());
+    }
+    Ok(InlineEditorLayout {
+        frame,
+        padding: [pad_y + optical, pad_x, (pad_y - optical).max(0.), pad_x],
+        rotation,
+        line_height,
+        plate_radius,
+        outline_width: if element.outlined {
+            (size * 0.08).max(1.5)
+        } else {
+            0.
+        },
+        auto_width: element.uses_auto_width(),
+    })
+}

@@ -50,6 +50,10 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         ],
         "close" => &["m6 6 12 12M18 6 6 18"],
         "check" => &["m5 12 4 4L19 6"],
+        // Text alignment (`EditorIcon` `align-*`).
+        "align-left" => &["M5 6h14M5 10h10M5 14h14M5 18h10"],
+        "align-center" => &["M5 6h14M8 10h8M5 14h14M8 18h8"],
+        "align-right" => &["M5 6h14M9 10h10M5 14h14M9 18h10"],
         "restore" => &["M4 12a8 8 0 1 0 2.3-5.7L4 8", "M4 4v4h4"],
         "copy" => &[
             "M10 8h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z",
@@ -541,6 +545,9 @@ mod tests {
             "edit",
             "chevron-up",
             "chevron-down",
+            "align-left",
+            "align-center",
+            "align-right",
         ] {
             let lines = polylines(name).unwrap();
             assert!(!lines.is_empty(), "{name}");

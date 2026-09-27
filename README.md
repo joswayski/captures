@@ -492,12 +492,15 @@ saved rounded face.
 In both native editors, explicitly choosing a named style for selected text also makes that
 style the next new-text choice for this editor. Undo or a failed edit does not
 undo that future choice; size, color and manual font edits do not carry forward.
-The Windows/Linux candidate and AppKit host separately connect on-canvas native
-multiline composing fields to the same shared transaction. Typing previews text
-without saving or adding undo steps; finishing commits one edit, while Cancel
-restores the previous document. The composing fields use each host's UI font and
-an unrotated box, not the Tauri editor's styled inline layout. Physical macOS,
-Windows, Wayland, IME and accessibility acceptance remain unverified.
+The Windows/Linux candidate and AppKit host separately connect an on-canvas native
+multiline text box to the same shared transaction, drawn like Tauri's inline editor
+in the layer's own bundled face, size, colour, plate and position. Typing previews text
+without saving or adding undo steps; clicking away or Escape commits one edit, Return
+inserts a line, and clearing the box discards it. AppKit rotates the box with the
+layer; the Windows/Linux box rotates its glyphs, plate and caret but keeps selection
+highlights and pointer caret placement unrotated, and both draw outlined labels
+approximately. Physical macOS, Windows, Wayland, IME and accessibility acceptance
+remain unverified.
 This is not Tauri system-font equivalence or universal Unicode coverage:
 missing glyphs remain errors, and fonts are never discovered or downloaded automatically.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
@@ -693,22 +696,24 @@ The button is disabled when there is nothing to trim; hovering or focusing it
 previews the cut: the discarded margins turn red, a dashed outline marks the
 kept area and the cut edges pulse (static under reduced motion).
 Both hosts also connect **Draw → Wand**: click an image to remove similar colors,
-using a 0–255 tolerance and either a contiguous region or all matching pixels.
+using a color tolerance and either a contiguous region or all matching pixels.
 The frontmost visible image is editable even when locked; transparent pixels do
 not let clicks reach images underneath. While the Wand hovers an image, a colour
 loupe beside the crosshair magnifies the image pixels and shows the sampled hex. Each edit clears the canvas fill, keeps
 the original image pixels, and supports undo/redo and draft restore. The original
-History capture remains unchanged. **Erase** and **Restore** use adjustable brush
-diameter and softness; Restore paints from the retained original image. The brush
+History capture remains unchanged. The Tolerance slider runs from 0 to 120 like
+Tauri's. **Erase** and **Restore** use brush Size and Softness sliders; Restore
+paints from the retained original image. The brush
 ring shows size while shared-renderer pixels preview the stroke during dragging.
 Release commits one undo step; Escape, focus loss or changing tools cancels the
 preview without editing. Properties shows a stroke or brush preview for drawing
 tools and Erase/Restore, and Apply crop pulses while a crop is staged. The shipping brush cursor design and physical-platform
 input acceptance remain parity work.
 Text controls support multiline content, pinned font families (listed as Sans serif,
-Serif, Monospace and Rounded), size, bold/italic,
-alignment, color, square/rounded background plates, outlines and a Drop shadow toggle.
-Apply changes the document in one undo step; Cancel restores accepted values.
+Serif, Monospace and Rounded), size, bold/italic and alignment buttons, swatch-row
+text and background colors, square/rounded background plates, outlines and a Drop
+shadow toggle. New-text and drawing default colors use the same swatch rows.
+Changes apply as you make them; a typing burst in one field is one undo step.
 Custom shadows and pinned-font named styles are connected, including style/size/color
 choices for new text. Font import and physical input/IME/accessibility acceptance
 remain open.
