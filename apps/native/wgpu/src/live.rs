@@ -7150,8 +7150,8 @@ fn load_history(root: &Path) -> Result<Vec<Artifact>, String> {
             let image_path = if entry.kind == captures_history::ArtifactKind::Screenshot {
                 directory.join(captures_history::HISTORY_IMAGE_FILE)
             } else {
-                // Native recording editing is not connected yet. The History
-                // canvas renders the persisted poster and never decodes media.mp4.
+                // The History canvas renders the persisted poster and never
+                // decodes media.mp4; the recording editor opens the media itself.
                 preview_path.clone()
             };
             Ok(Artifact {

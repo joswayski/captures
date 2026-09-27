@@ -451,8 +451,8 @@ image pixel, or ten with Shift, through shared `LayerEdit::Translate`. Hidden
 layers remain editable; keyboard movement neither snaps nor expands the canvas.
 Each accepted nudge retains normal undo and output invalidation. AppKit protects
 field/selector/slider responders; wgpu reserves arrows for any focused widget.
-Clipboard-layer paste remains open, as does physical keyboard/IME/accessibility
-acceptance on macOS, Windows, X11 and Wayland.
+Both hosts copy and paste layers. Physical keyboard/IME/accessibility
+acceptance on macOS, Windows, X11 and Wayland remains open.
 Both hosts connect Tauri's tool keys to their existing tools: V Select, C Crop,
 T Text, R Rectangle, O Ellipse, L Line, D Diamond, S Star, A Arrow, P Pen and
 B background removal. B recalls Wand/Erase/Restore, initially Wand. These
@@ -1553,7 +1553,8 @@ the front or expanded images. AppKit uses a clipped native view overlay; wgpu
 paints the same token over the retained image without altering source pixels.
 This connects translation and depth shading: the shipping 3D depth,
 rotation, scale and per-card 16 ms stagger,
-dust/sway/expand effects and cross-display reanchoring remain open. Physical
+dust/sway/expand effects remain open. Shipping keeps the pile on the primary
+monitor; both hosts already open it on the capture display. Physical
 AppKit, Windows and Wayland presentation/interaction are unverified; private X11
 provides the Linux rendering/input evidence. The effects parity gate remains open.
 
