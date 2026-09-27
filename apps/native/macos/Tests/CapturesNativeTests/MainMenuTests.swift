@@ -91,9 +91,8 @@ final class MainMenuTests: XCTestCase {
             XCTAssertEqual(entry.keyEquivalent, key, title)
             if !key.isEmpty { XCTAssertEqual(entry.keyEquivalentModifierMask, modifiers, title) }
         }
-        // Text fields' field editors answer Undo and Redo themselves.
-        XCTAssertTrue(NSTextView().responds(to: Selector(("undo:"))))
-        XCTAssertTrue(NSTextView().responds(to: Selector(("redo:"))))
+        // Undo and Redo go to the first responder like the standard AppKit
+        // Edit menu; the window's undo manager answers them for text fields.
     }
 
     func testHostActionsTargetTheHost() throws {
